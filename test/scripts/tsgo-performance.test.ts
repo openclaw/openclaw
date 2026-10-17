@@ -144,6 +144,8 @@ describe("managed compiler evidence", () => {
       cwd,
       directory,
       command,
+      run: (overrides: Partial<Parameters<typeof runManagedCommand>[0]> = {}, output = directory) =>
+        runMeasuredTsgoCommand({ ...command, ...overrides }, output),
       evidence: () => {
         const [artifact] = fs.readdirSync(directory);
         if (!artifact) {
@@ -160,7 +162,7 @@ describe("managed compiler evidence", () => {
   ] as const)(
     "preserves managed outcome $exitCode and its evidence",
     async ({ exitCode, signal }) => {
-      const { cwd, directory, command, evidence } = fixture();
+      const { cwd, command, run, evidence } = fixture();
       const onReady = vi.fn();
       const onSignal = vi.fn();
       vi.mocked(runManagedCommand).mockImplementationOnce(async (options) => {
@@ -183,25 +185,19 @@ describe("managed compiler evidence", () => {
         child.emit("exit", signal ? null : exitCode, signal);
         return exitCode;
       });
-      expect(
-        await runMeasuredTsgoCommand(
-          { ...command, ...(signal ? { onSignal } : { onReady }) },
-          directory,
-        ),
-      ).toBe(exitCode);
+      expect(await run(signal ? { onSignal } : { onReady })).toBe(exitCode);
+      expect(evidence().outcome).toMatchObject({
+        exitCode,
+        errorCode: null,
+        exitSignal: signal,
+        forwardedSignal: signal,
+      });
       if (signal) {
         expect(onSignal).toHaveBeenCalledWith(signal);
-        expect(evidence().outcome).toMatchObject({
-          exitCode,
-          errorCode: null,
-          exitSignal: signal,
-          forwardedSignal: signal,
-        });
         return;
       }
       expect(onReady).toHaveBeenCalledOnce();
       expect(evidence()).toMatchObject({
-        outcome: { exitCode: 2, errorCode: null, exitSignal: null, forwardedSignal: null },
         command: { args: command.args },
         pprofDir: "profiles",
         graph: { totalFiles: 2, rootFiles: 1, transitiveFiles: 1 },
@@ -213,22 +209,22 @@ describe("managed compiler evidence", () => {
   );
 
   it("never replaces a managed failure with an evidence result", async () => {
-    const { directory, command, evidence } = fixture();
+    const { run, evidence } = fixture();
     const code = "EPROCESSGROUP_CLEANUP_FAILED";
     const error = Object.assign(new Error("compiler failure"), { code });
     vi.mocked(runManagedCommand).mockRejectedValueOnce(error);
-    await expect(runMeasuredTsgoCommand(command, directory)).rejects.toBe(error);
+    await expect(run()).rejects.toBe(error);
     expect(evidence().outcome).toMatchObject({ exitCode: null, errorCode: code });
   });
 
   it.each(["setup", "write"] as const)(
     "preserves compiler outcomes when evidence %s fails",
     async (phase) => {
-      const { cwd, directory, command } = fixture();
+      const { cwd, directory, run } = fixture();
       if (phase === "write") {
         vi.mocked(runManagedCommand).mockResolvedValue(0);
-        await runMeasuredTsgoCommand(command, directory);
-        await runMeasuredTsgoCommand(command, directory);
+        await run();
+        await run();
         expect(fs.readdirSync(directory)).toHaveLength(2);
       }
       const warn = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -241,10 +237,7 @@ describe("managed compiler evidence", () => {
       });
       const calls = vi.mocked(runManagedCommand).mock.calls.length;
       expect(
-        await runMeasuredTsgoCommand(
-          command,
-          phase === "setup" ? path.join(cwd, "package.json", "metrics") : directory,
-        ),
+        await run({}, phase === "setup" ? path.join(cwd, "package.json", "metrics") : directory),
       ).toBe(exitCode);
       expect(vi.mocked(runManagedCommand).mock.calls.length - calls).toBe(1);
       expect(warn).toHaveBeenCalledWith(

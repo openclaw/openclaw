@@ -1,10 +1,9 @@
-// Covers bundling rules encoded in the root tsdown config.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import type { TsdownPluginOption } from "tsdown";
+import type { Rolldown, TsdownPluginOption, UserConfig } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPluginSdkPackageExports } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
@@ -16,12 +15,9 @@ import tsdownConfig, {
 import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 
 type TsdownConfigEntry = {
-  deps?: {
-    alwaysBundle?: string[] | ((id: string) => boolean);
-    neverBundle?: string[] | ((id: string) => boolean);
-  };
+  deps?: UserConfig["deps"];
   entry?: Record<string, string> | string[];
-  inputOptions?: TsdownInputOptions;
+  inputOptions?: (options: Rolldown.InputOptions) => Rolldown.InputOptions | undefined;
   dts?: boolean | { emitDtsOnly?: boolean };
   define?: Record<string, unknown>;
   outputOptions?: { codeSplitting?: boolean; chunkFileNames?: string };
@@ -29,34 +25,6 @@ type TsdownConfigEntry = {
   outDir?: string;
   plugins?: TsdownPluginOption;
 };
-
-type TsdownLog = {
-  code?: string;
-  message?: string;
-  id?: string;
-  importer?: string;
-  plugin?: string;
-};
-
-type TsdownOnLog = (
-  level: string,
-  log: TsdownLog,
-  defaultHandler: (level: string, log: TsdownLog) => void,
-) => void;
-
-type TsdownInputOptions = (
-  options: { external?: TsdownExternalOption; onLog?: TsdownOnLog },
-  format?: unknown,
-  context?: unknown,
-) => { external?: TsdownExternalOption; onLog?: TsdownOnLog } | undefined;
-
-type TsdownExternalOption = string | RegExp | Array<string | RegExp> | TsdownExternalFunction;
-
-type TsdownExternalFunction = (
-  id: string,
-  parentId: string | undefined,
-  isResolved: boolean,
-) => boolean | null | undefined;
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
@@ -77,18 +45,10 @@ async function resolvePluginNames(plugins: TsdownPluginOption): Promise<string[]
   return [resolved.name];
 }
 
-function entryKeys(config: TsdownConfigEntry): string[] {
-  if (!config.entry || Array.isArray(config.entry)) {
-    return [];
-  }
-  return Object.keys(config.entry);
-}
+const entryKeys = (config: TsdownConfigEntry) => Object.keys(entrySources(config));
 
 function entrySources(config: TsdownConfigEntry): Record<string, string> {
-  if (!config.entry || Array.isArray(config.entry)) {
-    return {};
-  }
-  return config.entry;
+  return config.entry && !Array.isArray(config.entry) ? config.entry : {};
 }
 
 function requireStandaloneRuntimeGraph(entry: string): TsdownConfigEntry {
@@ -101,23 +61,7 @@ function requireStandaloneRuntimeGraph(entry: string): TsdownConfigEntry {
   return expectDefined(graphs[0], `${entry} standalone graph`);
 }
 
-function bundledEntry(pluginId: string): string {
-  return `${bundledPluginRoot(pluginId)}/index`;
-}
-
-function unifiedDistGraph(): TsdownConfigEntry | undefined {
-  return asConfigArray(tsdownConfig).find((config) =>
-    entryKeys(config).includes("plugins/runtime/index"),
-  );
-}
-
-function requireUnifiedDistGraph(): TsdownConfigEntry {
-  const distGraph = unifiedDistGraph();
-  if (!distGraph) {
-    throw new Error("expected unified dist graph");
-  }
-  return distGraph;
-}
+const requireUnifiedDistGraph = () => requireStandaloneRuntimeGraph("plugins/runtime/index");
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -143,15 +87,10 @@ describe("tsdown config", () => {
     },
   );
 
-  it.each([
-    {
-      exportName: "OPENCLAW_STATE_SCHEMA_SQL",
-      modulePath: "src/state/openclaw-state-schema.ts",
-      schemaPath: "src/state/openclaw-state-schema.sql",
-      sourceValue: OPENCLAW_STATE_SCHEMA_SQL,
-    },
-  ])("inlines canonical schema bytes for $modulePath", (schema) => {
+  it("inlines canonical state schema bytes", () => {
     const rootDir = process.cwd();
+    const modulePath = path.resolve(rootDir, "src/state/openclaw-state-schema.ts");
+    const schemaPath = path.resolve(rootDir, "src/state/openclaw-state-schema.sql");
     const watchedPaths: string[] = [];
     const plugin = createStateSchemaInlinePlugin(rootDir);
     let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
@@ -162,22 +101,17 @@ describe("tsdown config", () => {
     });
     const result = plugin.load.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
-      path.resolve(rootDir, schema.modulePath),
+      modulePath,
     );
-    const schemaPath = path.resolve(rootDir, schema.schemaPath);
     const canonicalSql = readFileSync(schemaPath, "utf8");
 
     expect(result).not.toBeNull();
-    const match = result?.code.match(
-      new RegExp(`^export const ${schema.exportName} = (.*);\\n$`, "su"),
-    );
+    const match = result?.code.match(/^export const OPENCLAW_STATE_SCHEMA_SQL = (.*);\n$/su);
     expect(match?.[1]).toBeDefined();
     expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
-    expect(schema.sourceValue).toBe(canonicalSql);
+    expect(OPENCLAW_STATE_SCHEMA_SQL).toBe(canonicalSql);
     expect(watchedPaths).toEqual([schemaPath]);
-    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, schema.modulePath) })).toBe(
-      canonicalSql,
-    );
+    expect(cacheKeyGenerator?.({ id: modulePath })).toBe(canonicalSql);
     expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
@@ -275,7 +209,7 @@ describe("tsdown config", () => {
       "web-fetch/runtime",
       "mcp/openclaw-tools-serve",
       "mcp/plugin-tools-serve",
-      bundledEntry("active-memory"),
+      `${bundledPluginRoot("active-memory")}/index`,
       "bundled/boot-md/handler",
     ]) {
       expect(keys).toContain(entry);
@@ -376,8 +310,8 @@ describe("tsdown config", () => {
   });
 
   it("suppresses unresolved imports from extension source", () => {
-    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
-    const handled: TsdownLog[] = [];
+    const configured = requireUnifiedDistGraph().inputOptions?.({})?.onLog;
+    const handled: Rolldown.RolldownLog[] = [];
 
     configured?.(
       "warn",

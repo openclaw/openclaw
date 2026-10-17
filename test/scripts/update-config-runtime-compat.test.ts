@@ -12,12 +12,33 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
-async function candidateFixture(prefix: string, source: string) {
+const moduleUrl = (file: string, query = "") => JSON.stringify(pathToFileURL(file).href + query);
+const diagnosticsScript = `const diagnostics = { warnings: [], errors: [] };
+for (const [method, key] of [["warn", "warnings"], ["error", "errors"]]) {
+  console[method] = (...args) => diagnostics[key].push(args.join(" "));
+}`;
+const simpleRuntime = (snapshot: string, prelude = "", snapshotMethod = false) => `${prelude}
+const snapshot = () => (${snapshot});
+export function createConfigIO() { return { loadConfig: snapshot${snapshotMethod ? ", readConfigFileSnapshot: async () => snapshot()" : ""} }; }
+export async function readConfigFileSnapshot() { return snapshot(); }
+export function readCurrentConfigForPolicyCheck() { return snapshot(); }
+`;
+async function candidateFixture(
+  prefix: string,
+  source: string,
+  files: Record<string, string> = {},
+) {
   const root = tempDirs.make(`openclaw-update-config-${prefix}-`);
   const dist = path.join(root, "dist");
-  await fs.mkdir(dist);
-  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
-  await fs.writeFile(path.join(dist, "io.runtime-Candidate.mjs"), source);
+  for (const [name, contents] of Object.entries({
+    "package.json": '{"type":"module"}',
+    "dist/io.runtime-Candidate.mjs": source,
+    ...files,
+  })) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, contents);
+  }
   return { root, dist };
 }
 
@@ -25,35 +46,35 @@ function runScript(
   script: string,
   options: { root?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {},
 ) {
-  return spawnSync(node, ["--input-type=module", "--eval", script], {
+  const program = `import assert from "node:assert/strict";\n${script}`;
+  const result = spawnSync(node, ["--input-type=module", "--eval", program], {
     cwd: options.root,
     encoding: "utf8",
     timeout: options.timeout ?? 30_000,
     env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_UPDATE_IN_PROGRESS: "1", ...options.env },
   });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toBe("");
+  return result.stdout;
 }
 
 it("imports the reader once without spawning when a loader strips URL queries", async () => {
   const { root, dist } = await candidateFixture(
     "child",
-    `globalThis.readerImports = (globalThis.readerImports ?? 0) + 1;
-export function createConfigIO() { return { loadConfig: () => ({ valid: true }) }; }
-export async function readConfigFileSnapshot() { return { valid: true }; }
-export function readCurrentConfigForPolicyCheck() { return { valid: true }; }
-`,
+    simpleRuntime(
+      "{ valid: true }",
+      "globalThis.readerImports = (globalThis.readerImports ?? 0) + 1;",
+    ),
   );
   writeStableRootRuntimeAliases({ rootDir: root });
   const alias = path.join(dist, "io.runtime.js");
   const parentAlias = path.join(dist, "parent.runtime.js");
   await fs.copyFile(alias, parentAlias);
   const script = `
-import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 let spawns = 0;
-const diagnostics = { warnings: [], errors: [] };
-console.warn = (...args) => diagnostics.warnings.push(args.join(" "));
-console.error = (...args) => diagnostics.errors.push(args.join(" "));
+${diagnosticsScript}
 childProcess.spawn = childProcess.spawnSync = () => {
   spawns++;
   throw new Error("Unexpected recursive config reader");
@@ -68,9 +89,9 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   }
   return result;
 } });
-const parent = await import(${JSON.stringify(pathToFileURL(parentAlias).href)});
+const parent = await import(${moduleUrl(parentAlias)});
 process.env.OPENCLAW_CONFIG_READ_CHILD = "1";
-const reader = await import(${JSON.stringify(`${pathToFileURL(alias).href}?openclaw-config-read=1`)});
+const reader = await import(${moduleUrl(alias, "?openclaw-config-read=1")});
 assert.deepEqual(await reader.readConfigFileSnapshot(), { valid: true });
 assert.deepEqual(reader.createConfigIO().loadConfig(), { valid: true });
 assert.deepEqual(reader.readCurrentConfigForPolicyCheck(), { valid: true });
@@ -88,72 +109,58 @@ console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns, di
       OPENCLAW_CONFIG_READ_CHILD: "",
     },
   });
-  expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({
+  expect(JSON.parse(result)).toEqual({
     readerImports: 1,
     spawns: 0,
     diagnostics: {
-      warnings: [
+      warnings: Array(2).fill(
         "[update:warning:candidate-config-read-recursion] A config reader child cannot launch another reader.",
-        "[update:warning:candidate-config-read-recursion] A config reader child cannot launch another reader.",
-      ],
+      ),
       errors: [],
     },
   });
-  expect(result.stderr).toBe("");
 });
 
 it("returns candidate reads larger than the reader's stdout buffer intact", async () => {
   // About 1 MB: well past macOS pipe and Linux socketpair buffers.
   const { root, dist } = await candidateFixture(
     "large",
-    `const snapshot = () => ({ valid: true, text: "🦞 café ".repeat(100_000) });
-export function createConfigIO() { return { loadConfig: snapshot, readConfigFileSnapshot: async () => snapshot() }; }
-export async function readConfigFileSnapshot() { return snapshot(); }
-export function readCurrentConfigForPolicyCheck() { return snapshot(); }
-`,
+    simpleRuntime('{ valid: true, text: "🦞 café ".repeat(100_000) }', "", true),
   );
   writeStableRootRuntimeAliases({ rootDir: root });
   const script = `
-import assert from "node:assert/strict";
 const expected = { valid: true, text: "🦞 café ".repeat(100_000) };
-const reader = await import(${JSON.stringify(pathToFileURL(path.join(dist, "io.runtime.js")).href)});
+const reader = await import(${moduleUrl(path.join(dist, "io.runtime.js"))});
 assert.deepEqual(await reader.readConfigFileSnapshot(), expected);
 assert.deepEqual(await reader.createConfigIO().readConfigFileSnapshot(), expected);
 assert.deepEqual(reader.readCurrentConfigForPolicyCheck(), expected);
 assert.deepEqual(reader.createConfigIO().loadConfig(), expected);
 `;
-  const result = runScript(script);
-  expect(result.stderr).toBe("");
-  expect(result.status).toBe(0);
+  runScript(script);
 });
 
 it("reports a reader exit without a result while withholding the reader's stderr", async () => {
   const { root, dist } = await candidateFixture(
     "exit",
-    `if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
+    simpleRuntime(
+      "{ valid: true }",
+      `if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
   process.stderr.write("synthetic-config-secret\\n");
   process.exit(7);
-}
-export function createConfigIO() { return { loadConfig: () => ({ valid: true }) }; }
-export async function readConfigFileSnapshot() { return { valid: true }; }
-export function readCurrentConfigForPolicyCheck() { return { valid: true }; }
-`,
+}`,
+    ),
   );
   writeStableRootRuntimeAliases({ rootDir: root });
   const script = `
-import assert from "node:assert/strict";
 const warnings = [];
 console.warn = (...args) => warnings.push(args.join(" "));
-const reader = await import(${JSON.stringify(pathToFileURL(path.join(dist, "io.runtime.js")).href)});
+const reader = await import(${moduleUrl(path.join(dist, "io.runtime.js"))});
 await assert.rejects(reader.readConfigFileSnapshot(), { code: "candidate-config-read-failed" });
 assert.throws(() => reader.readCurrentConfigForPolicyCheck(), { code: "candidate-config-read-failed" });
 console.log(JSON.stringify(warnings));
 `;
   const result = runScript(script, { timeout: 10_000 });
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).toBe("");
-  expect(JSON.parse(result.stdout)).toEqual(
+  expect(JSON.parse(result)).toEqual(
     Array.from(
       { length: 2 },
       () =>
@@ -163,20 +170,8 @@ console.log(JSON.stringify(warnings));
 });
 
 it("reads candidate config after a package swap without reusing the driver's dependencies", async () => {
-  const root = tempDirs.make("openclaw-update-config-runtime-");
-  const dist = path.join(root, "dist");
-  const dependency = path.join(root, "node_modules", "handoff-dependency");
-  await fs.mkdir(dist);
-  await fs.mkdir(dependency, { recursive: true });
-  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
-  await fs.writeFile(
-    path.join(dependency, "package.json"),
-    JSON.stringify({ type: "module", exports: { "./advanced": "./advanced.js" } }),
-  );
-  const dependencyFile = path.join(dependency, "advanced.js");
-  await fs.writeFile(dependencyFile, "export const generation = 1;\n");
-  await fs.writeFile(
-    path.join(dist, "io.runtime-Candidate.mjs"),
+  const { root, dist } = await candidateFixture(
+    "runtime",
     `import { probePathCaseInsensitiveSync } from "handoff-dependency/advanced";
 if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
   console.log("reader stdout diagnostic");
@@ -195,54 +190,46 @@ export function createConfigIO(options = {}) {
     loadConfig: () => ({ generation: probePathCaseInsensitiveSync() }),
   };
 }
-export async function readConfigFileSnapshot() {
-  return createConfigIO().readConfigFileSnapshot();
-}
-export function readCurrentConfigForPolicyCheck() {
-  return createConfigIO().loadConfig();
-}
+export async function readConfigFileSnapshot() { return createConfigIO().readConfigFileSnapshot(); }
+export function readCurrentConfigForPolicyCheck() { return createConfigIO().loadConfig(); }
 export function normalRuntimeApi() { return process.pid; }
 `,
-  );
-  const currentEntry = path.join(dist, "current-consumer.mjs");
-  await fs.writeFile(
-    currentEntry,
-    'export { createConfigIO } from "./io.runtime-Candidate.mjs";\n',
-  );
-  rewriteRootRuntimeImportsToStableAliases({ rootDir: root });
-  writeStableRootRuntimeAliases({ rootDir: root });
-  await fs.writeFile(
-    path.join(dist, "previous-runtime.mjs"),
-    `import { generation } from "handoff-dependency/advanced";
+    {
+      "node_modules/handoff-dependency/package.json": JSON.stringify({
+        type: "module",
+        exports: { "./advanced": "./advanced.js" },
+      }),
+      "node_modules/handoff-dependency/advanced.js": "export const generation = 1;\n",
+      "dist/current-consumer.mjs": 'export { createConfigIO } from "./io.runtime-Candidate.mjs";\n',
+      "dist/previous-runtime.mjs": `import { generation } from "handoff-dependency/advanced";
      export function createConfigIO() {
        return { readBestEffortConfig: async () => ({ generation }) };
      }
      export async function readConfigFileSnapshot() { return { generation }; }`,
+    },
   );
+  const dependencyFile = path.join(root, "node_modules", "handoff-dependency", "advanced.js");
+  const currentEntry = path.join(dist, "current-consumer.mjs");
+  rewriteRootRuntimeImportsToStableAliases({ rootDir: root });
+  writeStableRootRuntimeAliases({ rootDir: root });
 
   const script = `
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-const dependency = ${JSON.stringify(pathToFileURL(dependencyFile).href)};
+const dependency = ${moduleUrl(dependencyFile)};
 const aliasPath = ${JSON.stringify(path.join(dist, "io.runtime.js"))};
 const candidatePath = ${JSON.stringify(path.join(dist, "io.runtime-Candidate.mjs"))};
 const aliasBytes = await fs.readFile(aliasPath);
 const candidateBytes = await fs.readFile(candidatePath);
-const diagnostics = { warnings: [], errors: [] };
-console.warn = (...args) => diagnostics.warnings.push(args.join(" "));
-console.error = (...args) => diagnostics.errors.push(args.join(" "));
+${diagnosticsScript}
 const driverDependency = await import(dependency);
 assert.equal(driverDependency.generation, 1);
 await fs.writeFile(new URL(dependency), "export const generation = 2; export function probePathCaseInsensitiveSync() { return generation; }\\n");
 process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-const runtime = await import(${JSON.stringify(pathToFileURL(path.join(dist, "io.runtime.js")).href)});
+const runtime = await import(${moduleUrl(path.join(dist, "io.runtime.js"))});
 const io = runtime.createConfigIO({ env: { ...process.env, OPENCLAW_CONFIG_PATH: "synthetic-config-selection" } });
-const result = await io.readBestEffortConfig();
-assert.equal(result.generation, 2);
-assert.notEqual(result.pid, process.pid);
-assert.equal(result.cwd, ${JSON.stringify(root)});
-assert.equal(result.selection, "synthetic-config-selection");
-assert.equal(result.text, "🦞 café");
+const { pid, ...config } = await io.readBestEffortConfig();
+assert.notEqual(pid, process.pid);
+assert.deepEqual(config, { generation: 2, cwd: ${JSON.stringify(root)}, selection: "synthetic-config-selection", text: "🦞 café" });
 assert.equal((await runtime.readConfigFileSnapshot()).generation, 2);
 assert.equal((await io.readConfigFileSnapshot()).valid, true);
 assert.equal(io.loadConfig().generation, 2);
@@ -272,9 +259,7 @@ console.log(JSON.stringify(diagnostics));
       NODE_DISABLE_COMPILE_CACHE: "1",
     },
   });
-  expect(result.status).toBe(0);
-  expect(result.stderr).toBe("");
-  expect(JSON.parse(result.stdout)).toEqual({
+  expect(JSON.parse(result)).toEqual({
     warnings: [
       `[update:warning:candidate-config-read-failed] Candidate config read failed: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '${dependencyFile}' imported from ${path.join(dist, "io.runtime-Candidate.mjs")}. The existing service definition was left unchanged. After the update finishes, run openclaw gateway install --force with the same --profile or --dev option as this update to refresh it.`,
     ],
@@ -285,9 +270,8 @@ console.log(JSON.stringify(diagnostics));
     { marker: "0", entry: path.join(dist, "io.runtime.js") },
     { marker: "1", entry: currentEntry },
   ]) {
-    const normal = runScript(
-      `import assert from "node:assert/strict";
-       const runtime = await import(${JSON.stringify(pathToFileURL(entry).href)});
+    runScript(
+      `const runtime = await import(${moduleUrl(entry)});
        const result = await runtime.createConfigIO().readBestEffortConfig();
        assert.equal(result.generation, 2);
        if (${JSON.stringify(marker)} === "0") {
@@ -303,7 +287,5 @@ console.log(JSON.stringify(diagnostics));
         },
       },
     );
-    expect(normal.stderr).toBe("");
-    expect(normal.status).toBe(0);
   }
 });

@@ -1,4 +1,9 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcess,
+  type SpawnSyncOptionsWithStringEncoding,
+} from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -45,7 +50,15 @@ afterAll(async () => {
   await receipts.close();
 });
 
-function copyUiFixture(root: string): void {
+function writeFiles(root: string, files: Record<string, string>): void {
+  for (const [file, bytes] of Object.entries(files)) {
+    const destination = path.join(root, file);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, bytes);
+  }
+}
+
+function copyUiFixture(root: string, extra: string[] = []): void {
   for (const file of [
     "scripts/ui.js",
     "scripts/ui.mts",
@@ -66,6 +79,7 @@ function copyUiFixture(root: string): void {
     "packages/normalization-core/src/record-coerce.ts",
     "packages/normalization-core/src/string-coerce.ts",
     "packages/normalization-core/src/utf16-slice.ts",
+    ...extra,
   ]) {
     const destination = path.join(root, file);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -80,19 +94,16 @@ function copyUiFixture(root: string): void {
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
   const directory = path.join(modules, name);
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(
-    path.join(directory, "package.json"),
-    JSON.stringify({
+  writeFiles(directory, {
+    "package.json": JSON.stringify({
       name,
       type: "module",
       exports: { ".": "./entry.mjs", "./package.json": "./package.json" },
       bin: { [name]: "./entry.mjs" },
     }),
-  );
-  const entry = path.join(directory, "entry.mjs");
-  fs.writeFileSync(entry, source);
-  return entry;
+    "entry.mjs": source,
+  });
+  return path.join(directory, "entry.mjs");
 }
 
 const buildEnvironment = {
@@ -104,6 +115,64 @@ const validatorNames = [
   "check-control-ui-precompressed-assets.mts",
   "check-control-ui-performance.mts",
 ];
+
+function runNode(
+  root: string,
+  args: string[],
+  options: Partial<SpawnSyncOptionsWithStringEncoding> = {},
+) {
+  return spawnSync(testNodeExecPath, args, {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 10_000,
+    ...options,
+  });
+}
+
+function expectExit(result: ReturnType<typeof runNode>, status = 0): void {
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(status);
+}
+
+function outputLines(result: ReturnType<typeof runNode>) {
+  return result.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
+function processFixture(label: string) {
+  // Outside Vitest's disposable namespace: retain until every process has stopped.
+  const root = fs.mkdtempSync(path.join(path.dirname(os.tmpdir()), `openclaw-ui-${label}-`));
+  const files = {
+    ready: path.join(root, "ready"),
+    runnerPid: path.join(root, "runner.pid"),
+    descendantPid: path.join(root, "descendant.pid"),
+    release: path.join(root, "release"),
+    signaled: path.join(root, "signaled"),
+    captureFailed: path.join(root, "capture-failed"),
+  };
+  const runner = path.join(root, "pnpm.mjs");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    npm_execpath: runner,
+    READY_FILE: files.ready,
+    RUNNER_PID_FILE: files.runnerPid,
+    DESCENDANT_PID_FILE: files.descendantPid,
+    RELEASE_FILE: files.release,
+    SIGNALED_FILE: files.signaled,
+  };
+  return { root, files, runner, env };
+}
+
+function startWrapper(env: NodeJS.ProcessEnv) {
+  const wrapper = spawn(testNodeExecPath, ["scripts/ui.js", "install"], {
+    cwd: path.resolve("."),
+    env,
+    stdio: "ignore",
+  });
+  return { wrapper, completion: waitForExit(wrapper) };
+}
 
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
@@ -203,76 +272,46 @@ async function withUiProcessCleanup(
 }
 
 describe("scripts/ui", () => {
-  it("reuses the runtime identity for the documented standalone UI rebuild", () => {
-    const commit = "0123456789abcdef0123456789abcdef01234567";
+  it.each([
+    ["standalone rebuild", "a", false, true],
+    ["different source revision", "b", false, false],
+    ["non-release metadata for release build", "a", true, false],
+  ] as const)("chooses the runtime identity for %s", (_label, revision, release, reuse) => {
+    const commit = "a".repeat(40);
     const firstBuild = normalizeControlUiBuildInfo({
       version: "2026.8.1",
       commit,
       builtAt: "2026-08-14T23:00:00.000Z",
+      release: false,
     });
-
     const env = resolveUiBuildEnvironment({
-      env: {},
+      env: release ? { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1" } : {},
       now: () => new Date("2026-08-14T23:05:00.000Z"),
       readBuildInfo: () => firstBuild,
-      readGitCommit: () => commit,
+      readGitCommit: () => revision.repeat(40),
       readPackageVersion: () => "2026.8.1",
     });
-    const rebuiltUi = normalizeControlUiBuildInfo({
-      version: "2026.8.1",
-      commit: env.GIT_COMMIT,
-      builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
-      buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
-    });
-
-    expect(rebuiltUi).toMatchObject({
-      builtAt: firstBuild.builtAt,
-      buildId: firstBuild.buildId,
-      commit: firstBuild.commit,
-      version: firstBuild.version,
-    });
-  });
-
-  it("does not reuse build info from a different source revision", () => {
-    const env = resolveUiBuildEnvironment({
-      env: {},
-      now: () => new Date("2026-08-14T23:05:00.000Z"),
-      readBuildInfo: () => ({
-        version: "2026.8.1",
-        commit: "a".repeat(40),
-        builtAt: "2026-08-14T23:00:00.000Z",
-      }),
-      readGitCommit: () => "b".repeat(40),
-      readPackageVersion: () => "2026.8.1",
-    });
-
-    expect(env).toMatchObject({
-      GIT_COMMIT: "b".repeat(40),
-      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
-    });
-    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
-  });
-
-  it("does not reuse non-release build info for a release UI build", () => {
-    const commit = "a".repeat(40);
-    const env = resolveUiBuildEnvironment({
-      env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1" },
-      now: () => new Date("2026-08-14T23:05:00.000Z"),
-      readBuildInfo: () => ({
-        version: "2026.8.1",
-        commit,
-        builtAt: "2026-08-14T23:00:00.000Z",
-        release: false,
-      }),
-      readGitCommit: () => commit,
-      readPackageVersion: () => "2026.8.1",
-    });
-
-    expect(env).toMatchObject({
-      GIT_COMMIT: commit,
-      OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
-    });
-    expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+    if (reuse) {
+      expect(
+        normalizeControlUiBuildInfo({
+          version: "2026.8.1",
+          commit: env.GIT_COMMIT,
+          builtAt: env.OPENCLAW_BUILD_TIMESTAMP,
+          buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
+        }),
+      ).toMatchObject({
+        builtAt: firstBuild.builtAt,
+        buildId: firstBuild.buildId,
+        commit: firstBuild.commit,
+        version: firstBuild.version,
+      });
+    } else {
+      expect(env).toMatchObject({
+        GIT_COMMIT: revision.repeat(40),
+        OPENCLAW_BUILD_TIMESTAMP: "2026-08-14T23:05:00.000Z",
+      });
+      expect(env.OPENCLAW_CONTROL_UI_BUILD_ID).toBeUndefined();
+    }
   });
 
   it("rejects unsafe Windows pnpm shim arguments before launch", () => {
@@ -294,30 +333,21 @@ describe("scripts/ui", () => {
     const tempDir = tempDirs.make("openclaw-pnpm-runner-");
     const npmExecPath = path.join(tempDir, "pnpm.mjs");
     fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+    const env = { npm_execpath: npmExecPath, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
 
     expect(
-      resolvePnpmSpawnCall(
-        ["run", "build"],
-        {
-          npm_execpath: npmExecPath,
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        },
-        {
-          cwd: "C:\\repo\\ui",
-          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-          platform: "win32",
-        },
-      ),
+      resolvePnpmSpawnCall(["run", "build"], env, {
+        cwd: "C:\\repo\\ui",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        platform: "win32",
+      }),
     ).toEqual({
       command: "C:\\Program Files\\nodejs\\node.exe",
       args: [npmExecPath, "run", "build"],
       options: {
         cwd: "C:\\repo\\ui",
         stdio: "inherit",
-        env: {
-          npm_execpath: npmExecPath,
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        },
+        env,
         shell: false,
         windowsVerbatimArguments: undefined,
       },
@@ -338,13 +368,7 @@ describe("scripts/ui", () => {
     const modules = path.join(ui, "node_modules");
     const forwarded = ["--help", "--mode", "fixture with spaces & symbols"];
     copyUiFixture(root);
-    for (const name of [
-      "vite",
-      "vitest",
-      "dompurify",
-      "@vitest/browser-playwright",
-      "playwright",
-    ]) {
+    for (const name of ["vite", "dompurify"]) {
       writeUiPackageBin(
         modules,
         name,
@@ -357,9 +381,7 @@ process.exitCode = 0;\n`,
     }
     const pnpm = path.join(root, "pnpm.cjs");
     fs.writeFileSync(pnpm, 'throw new Error("Installed UI tools must not need package shims");\n');
-    const result = spawnSync(testNodeExecPath, ["scripts/ui.js", "build", ...forwarded], {
-      cwd: root,
-      encoding: "utf8",
+    const result = runNode(root, ["scripts/ui.js", "build", ...forwarded], {
       env: mergeProcessEnv([
         process.env,
         {
@@ -368,10 +390,8 @@ process.exitCode = 0;\n`,
           ...buildEnvironment,
         },
       ]),
-      timeout: 10_000,
     });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
+    expectExit(result);
     expect(JSON.parse(result.stdout)).toEqual({
       args: ["build", ...forwarded],
       cwd: ui,
@@ -387,19 +407,14 @@ process.exitCode = 0;\n`,
   it("invalidates a warm required-plugin cache when source metadata promises a new owner", () => {
     // Preload module URLs must preserve spaces and URL fragment characters.
     const root = fs.realpathSync(tempDirs.make("openclaw-ui-required-cache #"));
-    copyUiFixture(root);
-    for (const file of [
+    copyUiFixture(root, [
       "scripts/lib/build-artifact-cache.mts",
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "scripts/lib/bundled-plugin-paths.mjs",
       "scripts/lib/optional-bundled-clusters.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "src/shared/non-packaged-plugin-dirs.ts",
-    ]) {
-      const destination = path.join(root, file);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.copyFileSync(file, destination);
-    }
+    ]);
     const modules = path.join(root, "node_modules");
     fs.symlinkSync(
       path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
@@ -434,10 +449,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
     }
     const run = () => {
-      const result = spawnSync(testNodeExecPath, ["scripts/ui.js", "build"], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
+      const result = runNode(root, ["scripts/ui.js", "build"], {
         env: {
           ...process.env,
           BUILD_ALL_CACHE_ROOT: path.join(root, "cache"),
@@ -447,25 +459,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
         },
       });
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expectExit(result);
       return result.stdout;
     };
     expect(run()).toContain("fixture-bundler-ran");
     expect(run()).toContain("reused content cache");
     const plugin = path.join(root, "extensions/new-board");
     fs.mkdirSync(plugin);
-    fs.writeFileSync(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
+    writeFiles(plugin, {
+      "package.json": JSON.stringify({
         name: "@openclaw/new-board",
         openclaw: { controlUi: "browser.ts" },
       }),
-    );
-    fs.writeFileSync(
-      path.join(plugin, "openclaw.plugin.json"),
-      JSON.stringify({ id: "new-board" }),
-    );
+      "openclaw.plugin.json": JSON.stringify({ id: "new-board" }),
+    });
     expect(run()).toContain("fixture-bundler-ran");
   });
 
@@ -490,14 +497,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     },
     {
       label: "f: interrupted swap restored before a failed retry",
-      prior: false,
       retiredOnly: true,
       viteExit: 1,
     },
   ])(
     "publishes only validated complete output ($label)",
     ({
-      prior = true,
       retiredOnly = false,
       viteExit = 0,
       seedSiblings = false,
@@ -522,15 +527,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         "assets/index.js": `console.log(${JSON.stringify(id)});`,
         "assets/lazy.js": `export default ${JSON.stringify(id)};`,
       });
-      if (prior || retiredOnly) {
-        const priorOutput = retiredOnly
-          ? path.join(root, "dist", `control-ui.build-${deadPid}-x.retired`)
-          : output;
-        for (const [file, bytes] of Object.entries(buildFiles("stale-runtime"))) {
-          fs.mkdirSync(path.dirname(path.join(priorOutput, file)), { recursive: true });
-          fs.writeFileSync(path.join(priorOutput, file), bytes);
-        }
-      }
+      writeFiles(
+        retiredOnly ? path.join(root, "dist", `control-ui.build-${deadPid}-x.retired`) : output,
+        buildFiles("stale-runtime"),
+      );
       if (retiredOnly) {
         const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
         fs.mkdirSync(unfinished);
@@ -615,18 +615,14 @@ require("node:module").syncBuiltinESMExports();
           fs.writeFileSync(path.join(root, "dist", name, "sentinel"), name);
         }
       }
-      const result = spawnSync(testNodeExecPath, args, {
-        cwd: root,
-        encoding: "utf8",
+      const result = runNode(root, args, {
         env: {
           ...process.env,
           ...buildEnvironment,
           OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
         },
-        timeout: 10_000,
       });
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(expectedExit);
+      expectExit(result, expectedExit);
       expect(JSON.parse(fs.readFileSync(waitsFile, "utf8"))).toEqual(expectedWaits);
       expect(inspectControlUiRootAssets(output, buildId).kind).toBe(expectedHealth);
       const expected = buildFiles(expectedOutputId);
@@ -661,10 +657,7 @@ require("node:module").syncBuiltinESMExports();
             expect(stat.mode & 0o777, entry).toBe(stat.isDirectory() ? 0o755 : 0o644);
           }
         }
-        const calls = result.stdout
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
+        const calls = outputLines(result);
         const staging = calls[0].out;
         expect(path.dirname(staging)).toBe(path.join(root, "dist"));
         expect(staging).not.toBe(output);
@@ -703,13 +696,7 @@ require("node:module").syncBuiltinESMExports();
       ["check-control-ui-precompressed-assets.mts", staging],
       ["check-control-ui-performance.mts", "--report-only", "--dist", staging],
     ] as const) {
-      const result = spawnSync(testNodeExecPath, [path.resolve("scripts", script), ...args], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expectExit(runNode(root, [path.resolve("scripts", script), ...args]));
     }
   });
 
@@ -846,31 +833,19 @@ require("node:module").syncBuiltinESMExports();
       },
     ]);
 
-    const control = spawnSync(
-      testNodeExecPath,
+    const control = runNode(
+      root,
       ["--eval", `require("node:fs").readdirSync(${JSON.stringify(cacheRoots[0])})`],
-      { cwd: root, encoding: "utf8", env, timeout: 10_000 },
+      { env },
     );
-    expect(control.error).toBeUndefined();
-    expect(control.status).toBe(1);
+    expectExit(control, 1);
     // Check the cache guard without starting the compiler service it protects against.
     expect(fs.readFileSync(accessLog, "utf8").trim()).toBe("readdirSync");
     fs.unlinkSync(accessLog);
-    const result = spawnSync(testNodeExecPath, ["--require", capture, "scripts/ui.js", "build"], {
-      cwd: root,
-      encoding: "utf8",
-      env,
-      timeout: 10_000,
-    });
-    expect(result.error).toBeUndefined();
+    const result = runNode(root, ["--require", capture, "scripts/ui.js", "build"], { env });
+    expectExit(result);
     expect(fs.existsSync(accessLog), result.stderr).toBe(false);
-    expect(result.status, result.stderr).toBe(0);
-    expect(
-      result.stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual(
+    expect(outputLines(result)).toEqual(
       validators.map((validator) => ({
         validator,
         reportOnly: validator === "check-control-ui-performance.mts",
@@ -883,33 +858,12 @@ require("node:module").syncBuiltinESMExports();
   });
 
   it.runIf(process.platform !== "win32").for([
-    {
-      label: "acknowledged SIGTERM",
-      requested: "SIGTERM",
-      childSignal: null,
-      code: 143,
-      signal: null,
-    },
-    {
-      label: "raw SIGKILL",
-      requested: "SIGTERM",
-      childSignal: "SIGKILL",
-      code: null,
-      signal: "SIGKILL",
-    },
+    ["acknowledged SIGTERM", null, 143, null],
+    ["raw SIGKILL", "SIGKILL", null, "SIGKILL"],
   ] as const)(
-    "preserves $label after UI wrapper shutdown",
-    async ({ requested, childSignal, code, signal }, { signal: testSignal }) => {
-      // Keep the release outside the disposable Vitest namespace until every
-      // fixture process is confirmed stopped, including on an assertion failure.
-      const tempDir = fs.mkdtempSync(
-        path.join(path.dirname(os.tmpdir()), "openclaw-ui-wrapper-signals-"),
-      );
-      const runnerPath = path.join(tempDir, "pnpm.mjs");
-      const readyFile = path.join(tempDir, "ready");
-      const runnerPidFile = path.join(tempDir, "runner.pid");
-      const signaledFile = path.join(tempDir, "signaled");
-      const releaseFile = path.join(tempDir, "release");
+    "preserves %s after UI wrapper shutdown",
+    async ([_label, childSignal, code, signal], { signal: testSignal }) => {
+      const { root, files, runner, env } = processFixture("wrapper-signals");
       const childOutcome = childSignal
         ? `process.kill(process.pid, '${childSignal}');`
         : "setTimeout(() => process.exit(0), 25);";
@@ -920,7 +874,7 @@ require("node:module").syncBuiltinESMExports();
         "});",
       ]);
       fs.writeFileSync(
-        runnerPath,
+        runner,
         [
           "import fs from 'node:fs';",
           fixtureReceiptClientSource(receipts.endpoint),
@@ -931,30 +885,18 @@ require("node:module").syncBuiltinESMExports();
           "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
         ].join("\n"),
       );
-      const wrapper = spawn(testNodeExecPath, ["scripts/ui.js", "install"], {
-        cwd: path.resolve("."),
-        env: {
-          ...process.env,
-          npm_execpath: runnerPath,
-          READY_FILE: readyFile,
-          RUNNER_PID_FILE: runnerPidFile,
-          RELEASE_FILE: releaseFile,
-          SIGNALED_FILE: signaledFile,
-        },
-        stdio: "ignore",
-      });
-      const completion = waitForExit(wrapper);
-      await withUiProcessCleanup(wrapper, completion, tempDir, [runnerPidFile], async () => {
+      const { wrapper, completion } = startWrapper(env);
+      await withUiProcessCleanup(wrapper, completion, root, [files.runnerPid], async () => {
         await withinTest(
-          fixtureReadyBeforeExit(readyFile, "UI runner readiness", completion),
+          fixtureReadyBeforeExit(files.ready, "UI runner readiness", completion),
           testSignal,
         );
-        expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
-        const runnerPid = Number(fs.readFileSync(runnerPidFile, "utf8"));
-        wrapper.kill(requested);
+        expect(fs.readFileSync(files.ready, "utf8")).toBe("install");
+        const runnerPid = Number(fs.readFileSync(files.runnerPid, "utf8"));
+        wrapper.kill("SIGTERM");
         const exit = await withinTest(completion, testSignal);
         expect(exit).toEqual({ code, signal });
-        expect(fs.readFileSync(signaledFile, "utf8")).toBe(requested);
+        expect(fs.readFileSync(files.signaled, "utf8")).toBe("SIGTERM");
         expect(pidAlive(runnerPid), "UI wrapper returned before its child stopped").toBe(false);
       });
     },
@@ -963,15 +905,7 @@ require("node:module").syncBuiltinESMExports();
   it.runIf(process.platform !== "win32").for([false, true])(
     "keeps resistant-descendant cleanup raw with failed capture=%s",
     async (failedCapture, { signal }) => {
-      const tempDir = fs.mkdtempSync(
-        path.join(path.dirname(os.tmpdir()), "openclaw-ui-wrapper-tree-"),
-      );
-      const runnerPath = path.join(tempDir, "pnpm.mjs");
-      const readyFile = path.join(tempDir, "ready");
-      const runnerPidFile = path.join(tempDir, "runner.pid");
-      const descendantPidFile = path.join(tempDir, "descendant.pid");
-      const releaseFile = path.join(tempDir, "release");
-      const failedCaptureFile = path.join(tempDir, "capture-failed");
+      const { root, files, runner, env } = processFixture("wrapper-tree");
       const descendantSource = [
         "import fs from 'node:fs';",
         fixtureReceiptClientSource(receipts.endpoint),
@@ -981,7 +915,7 @@ require("node:module").syncBuiltinESMExports();
         "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
       ].join("\n");
       fs.writeFileSync(
-        runnerPath,
+        runner,
         [
           "import { spawn } from 'node:child_process';",
           "import fs from 'node:fs';",
@@ -993,16 +927,8 @@ require("node:module").syncBuiltinESMExports();
           "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
         ].join("\n"),
       );
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        DESCENDANT_PID_FILE: descendantPidFile,
-        RUNNER_PID_FILE: runnerPidFile,
-        RELEASE_FILE: releaseFile,
-        npm_execpath: runnerPath,
-        READY_FILE: readyFile,
-      };
       if (failedCapture) {
-        const bin = path.join(tempDir, "bin");
+        const bin = path.join(root, "bin");
         fs.mkdirSync(bin);
         fs.writeFileSync(
           path.join(bin, "ps"),
@@ -1010,32 +936,31 @@ require("node:module").syncBuiltinESMExports();
           { mode: 0o755 },
         );
         env.PATH = `${bin}${path.delimiter}${env.PATH ?? ""}`;
-        env.PS_FAILURE_FILE = failedCaptureFile;
+        env.PS_FAILURE_FILE = files.captureFailed;
       }
-      const wrapper = spawn(testNodeExecPath, ["scripts/ui.js", "install"], {
-        cwd: path.resolve("."),
-        env,
-        stdio: "ignore",
-      });
-      const completion = waitForExit(wrapper);
+      const { wrapper, completion } = startWrapper(env);
       await withUiProcessCleanup(
         wrapper,
         completion,
-        tempDir,
-        [runnerPidFile, descendantPidFile],
+        root,
+        [files.runnerPid, files.descendantPid],
         async () => {
           // The descendant publishes only after its resistant handler is installed.
           await withinTest(
-            fixtureReadyBeforeExit(descendantPidFile, "UI runner descendant readiness", completion),
+            fixtureReadyBeforeExit(
+              files.descendantPid,
+              "UI runner descendant readiness",
+              completion,
+            ),
             signal,
           );
-          const descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
+          const descendantPid = Number(fs.readFileSync(files.descendantPid, "utf8"));
           wrapper.kill("SIGTERM");
           const exit = await withinTest(completion, signal);
           expect(exit).toEqual({ code: null, signal: failedCapture ? "SIGTERM" : "SIGKILL" });
           expect(pidAlive(descendantPid)).toBe(failedCapture);
           if (failedCapture) {
-            expect(fs.readFileSync(failedCaptureFile, "utf8")).toBe("failed");
+            expect(fs.readFileSync(files.captureFailed, "utf8")).toBe("failed");
           }
         },
       );
