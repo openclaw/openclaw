@@ -395,6 +395,8 @@ In **Connectors**, administrators can select **Add MCP server…** and choose a 
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
+Switching capability views focuses the first menu item after the new view renders, while preserving any newer focus choice you make.
+
 ## Emoji shortcodes
 
 In Chat and New Session, type a colon followed by an emoji name, such as

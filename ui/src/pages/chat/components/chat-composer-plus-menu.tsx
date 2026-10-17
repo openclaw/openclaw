@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createUniqueId, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createUniqueId, onSettled, Show, untrack } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
@@ -353,10 +353,18 @@ function handleMenuSelection(
     return;
   }
   const changeView = (view: ChatComposerPlusMenuView) => {
+    const focused = surface.ownerDocument.activeElement;
     props.onViewChange(view);
-    requestAnimationFrame(() =>
-      surface.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus(),
-    );
+    onSettled(() => {
+      const active = surface.ownerDocument.activeElement;
+      // A retained Back row must not reclaim focus from a newer interaction.
+      if (
+        surface.matches(":popover-open") &&
+        (active === focused || (active === surface.ownerDocument.body && !focused?.isConnected))
+      ) {
+        surface.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
+      }
+    });
   };
   const toggleCapability = (
     group: "skills" | "mcpServers",
