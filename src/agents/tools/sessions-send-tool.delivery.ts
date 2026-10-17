@@ -102,11 +102,6 @@ export async function notifySessionsSendSession(params: {
   });
 }
 
-function isRunScopedAgentSessionKey(sessionKey: string): boolean {
-  const parsed = parseAgentSessionKey(sessionKey);
-  return Boolean(parsed && /(?:^|:)run:[^:]+(?::|$)/.test(parsed.rest));
-}
-
 function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
   if (!isCronRunSessionKey(sessionKey)) {
     return undefined;
@@ -168,10 +163,7 @@ export async function trySessionsSendActiveRunDelivery(
     selection.assertCurrent();
     let fallbackSessionKey: string | undefined;
     const activeRunSessionId =
-      params.mode === "steer" ||
-      (params.mode !== "followup" &&
-        params.allowActiveRunQueueDelivery &&
-        (ownChild || isRunScopedAgentSessionKey(params.sessionKey)))
+      params.mode === "steer" || (params.mode !== "followup" && params.allowActiveRunQueueDelivery)
         ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
         : undefined;
     if (params.mode === "steer" && !activeRunSessionId) {
@@ -187,7 +179,7 @@ export async function trySessionsSendActiveRunDelivery(
     ) {
       throw new Error("active run session incarnation changed");
     }
-    const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
+    const { inputProvenance, message: messageText } = params.sendParams;
     if (activeRunSessionId && messageText) {
       const queue = async (
         assertCurrent: () => void,
@@ -218,9 +210,7 @@ export async function trySessionsSendActiveRunDelivery(
               }
             : {}),
           // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
-          ...(params.mode === "steer" || ownChild
-            ? { waitForTranscriptCommit: false }
-            : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
+          waitForTranscriptCommit: false,
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
@@ -257,13 +247,7 @@ export async function trySessionsSendActiveRunDelivery(
               )
             : queueEmbeddedAgentMessageWithOutcomeAsync(activeRunSessionId, messageText, options);
         assertInputCurrent();
-        let outcome = await dispatchQueue(queueOptions);
-        if (!outcome.queued && outcome.reason === "transcript_commit_wait_unsupported") {
-          const bestEffortQueueOptions = { ...queueOptions };
-          delete bestEffortQueueOptions.waitForTranscriptCommit;
-          outcome = await dispatchQueue(bestEffortQueueOptions);
-        }
-        return outcome;
+        return await dispatchQueue(queueOptions);
       };
       const queueOutcome = selection.operatorAuthority
         ? await queueSessionsSendSteeringWithCustody(
@@ -279,6 +263,20 @@ export async function trySessionsSendActiveRunDelivery(
           targetDisposition: "steered",
           steeredRunId: queueOutcome.runId,
         };
+      }
+      // Ordinary nonblocking messages can retain their original same-session
+      // followup path when the active runtime cannot steer. Authority refusals
+      // and ambiguous backend failures remain errors, never fallback admission.
+      if (
+        params.mode === undefined &&
+        params.allowActiveRunQueueDelivery &&
+        !isCronRunSessionKey(params.sessionKey) &&
+        (queueOutcome.reason === "not_streaming" ||
+          queueOutcome.reason === "no_active_run" ||
+          queueOutcome.reason === "stale_run" ||
+          queueOutcome.reason === "compacting")
+      ) {
+        return {};
       }
       fallbackSessionKey = ownChild
         ? undefined

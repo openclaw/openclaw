@@ -86,7 +86,7 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
     expect(describeSessionsSendTool()).toContain("neither proves target completion");
     expect(describeSessionsSendTool()).toContain(
-      "With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery.",
+      "With timeoutSeconds:0, another running session is steered into its active run (admission only, no separate completion turn; use mode:followup for one); an idle recipient or a default self-send starts a new turn.",
     );
   });
 });

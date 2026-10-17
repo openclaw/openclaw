@@ -263,6 +263,15 @@ describe("sessions tools", () => {
       error: expect.stringContaining("no active run"),
     });
     expect(calls.some((request) => request.method === "agent")).toBe(false);
+    const defaultIdle = await tool.execute("idle-default", {
+      sessionKey: targetKey,
+      message: "Start synthetic idle work",
+      timeoutSeconds: 0,
+    });
+    expect(defaultIdle.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
+    await continuations.settle();
+    expect(calls.filter((request) => request.method === "agent")).toHaveLength(1);
+    calls.length = 0;
     const queueMessage = activeRun(targetKey, {
       sessionId: "active-target",
       sourceReplyDeliveryMode: "automatic",
@@ -718,27 +727,14 @@ describe("sessions tools", () => {
       rejects: true,
       reason: "runtime_rejected",
     },
-    {
-      name: "delivery mode mismatch",
-      key: "agent:leasing-ops:cron:monthly-utility:run:run-fast",
-      deliveryMode: "automatic" as const,
-      reason: "source_reply_delivery_mode_mismatch",
-    },
-    {
-      name: "non-Cron run-looking key",
-      key: "agent:leasing-ops:slack:channel:c-room:run:run-fast",
-      streaming: false,
-      reason: "not_streaming",
-    },
   ])(
     "rejects $name without durable-session fallback",
-    async ({ key, rejects, deliveryMode, streaming, reason }) => {
+    async ({ key, rejects, streaming, reason }) => {
       await seedSession("agent:re-portal:main");
       await seedSession(key, "caller-active-session");
       const queueMessage = activeRun(key, {
         rejects,
         streaming,
-        sourceReplyDeliveryMode: deliveryMode,
       });
       mockGatewayResponses({
         agent: { runId: "fallback-run", status: "accepted", acceptedAt: 2000 },
@@ -776,8 +772,7 @@ describe("sessions tools", () => {
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: 30_000,
-          waitForTranscriptCommit: true,
-          sourceReplyDeliveryMode: "message_tool_only",
+          waitForTranscriptCommit: false,
           onQueueAccepted: expect.any(Function),
           userTurnTranscriptRecorder: expect.any(Object),
         });
@@ -884,46 +879,170 @@ describe("sessions tools", () => {
     }
   });
 
-  it("sessions_send keeps ordinary active session targets on the gateway agent path", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    const ordinaryActiveKey = "agent:main:main";
-    await seedSession("agent:re-portal:main");
-    await seedSession(ordinaryActiveKey, "ordinary-active-session");
-    const queueMessage = activeRun(ordinaryActiveKey, {
-      sessionId: "ordinary-active-session",
-      sourceReplyDeliveryMode: "automatic",
-    });
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        return { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 };
+  it.each([undefined, "steer"] as const)(
+    "sessions_send preserves self-send mode=$mode",
+    async (mode) => {
+      const key = "agent:main:dashboard:self-send";
+      await seedSession(key, "self-send-session");
+      const queueMessage = activeRun(key, { sessionId: "self-send-session" });
+      mockGatewayResponses({
+        agent: { runId: "self-followup", status: "accepted" },
+        "agent.wait": { status: "ok", terminalReply: { disposition: "empty" } },
+      });
+      const tool = createSessionsSendTool({
+        agentSessionKey: key,
+        requesterOrigin: {
+          channel: "telegram",
+          accountId: "synthetic-account",
+          to: "synthetic-chat",
+          threadId: "synthetic-thread",
+        },
+        config: cloneTestConfig(),
+        callGateway: callGatewayMock,
+      });
+      const result = await tool.execute("self-send", {
+        sessionKey: key,
+        message: "synthetic self followup",
+        timeoutSeconds: 0,
+        mode,
+      });
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        targetDisposition: mode ? "steered" : "queued",
+      });
+      if (mode) {
+        expect(queueMessage).toHaveBeenCalledOnce();
+      } else {
+        expect(queueMessage).not.toHaveBeenCalled();
       }
-      return {};
-    });
+      const admissions = callGatewayMock.mock.calls.filter(
+        ([request]) => request.method === "agent",
+      );
+      expect(admissions).toHaveLength(mode ? 0 : 1);
+      if (!mode) {
+        expect(admissions[0]?.[0].params).toMatchObject({
+          sessionKey: key,
+          channel: "telegram",
+          accountId: "synthetic-account",
+          to: "synthetic-chat",
+          threadId: "synthetic-thread",
+        });
+      }
+      await continuations.settle();
+    },
+  );
 
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: "agent:re-portal:main",
-      agentChannel: "telegram",
-      config: cloneTestConfig(),
-    });
+  it.each([
+    { target: "agent:main:main", unconfirmed: false },
+    { target: "main", unconfirmed: false },
+    { target: "agent:main:main", unconfirmed: true },
+  ])(
+    "sessions_send steers a busy sibling ($target, unconfirmed=$unconfirmed)",
+    async ({ target, unconfirmed }) => {
+      const calls: Array<{ method?: string; params?: unknown }> = [];
+      const ordinaryActiveKey = "agent:main:main";
+      await seedSession("agent:main:dashboard:sibling-sender");
+      await seedSession(ordinaryActiveKey, "ordinary-active-session");
+      const queueMessage = activeRun(ordinaryActiveKey, {
+        sessionId: "ordinary-active-session",
+        sourceReplyDeliveryMode: "automatic",
+      });
+      queueMessage.mockImplementationOnce(async (_text, options) => {
+        expect(options?.waitForTranscriptCommit).toBe(false);
+        if (unconfirmed) {
+          options?.onQueueAccepted?.(true);
+          throw new Error("synthetic consumption confirmation unavailable after acceptance");
+        }
+      });
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 };
+        }
+        return {};
+      });
 
-    const result = await tool.execute("call-ordinary-active", {
-      sessionKey: ordinaryActiveKey,
-      message: "ordinary active target should stay gateway routed",
-      timeoutSeconds: 0,
-    });
+      const tool = getSessionTool("sessions_send", {
+        agentSessionKey: "agent:main:dashboard:sibling-sender",
+        agentChannel: "telegram",
+        config: cloneTestConfig(),
+      });
 
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "ordinary-agent-run",
-      sessionKey: ordinaryActiveKey,
-    });
-    expect(queueMessage).not.toHaveBeenCalled();
-    const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(1);
-    expect(agentParams(agentCalls[0] ?? {}).sessionKey).toBe(ordinaryActiveKey);
-  });
+      const result = await tool.execute("call-ordinary-active", {
+        sessionKey: target,
+        message: "synthetic sibling update",
+        timeoutSeconds: 0,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        sessionKey: target,
+        targetDisposition: "steered",
+        delivery: { status: "skipped" },
+      });
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(queueMessage).toHaveBeenCalledWith(
+        expect.stringContaining("synthetic sibling update"),
+        expect.objectContaining({ waitForTranscriptCommit: false }),
+      );
+      expect(calls.filter((call) => call.method === "agent")).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    { reason: "compacting" as const, followup: true, mode: undefined },
+    { reason: "not_streaming" as const, followup: true, mode: undefined },
+    { reason: "no_active_run" as const, followup: true, mode: undefined },
+    { reason: "stale_run" as const, followup: true, mode: undefined },
+    { reason: "tool_authority_mismatch" as const, followup: false, mode: undefined },
+    { reason: "guarded_injection_unsupported" as const, followup: false, mode: undefined },
+    { reason: "runtime_rejected" as const, followup: false, mode: undefined },
+    { reason: "compacting" as const, followup: false, mode: "steer" as const },
+  ])(
+    "sessions_send handles unaccepted sibling steering: $reason, mode=$mode",
+    async ({ reason, followup, mode }) => {
+      const key = "agent:main:dashboard:sibling-rejection";
+      await seedSession(key, "sibling-rejection-session");
+      activeRun(key, { sessionId: "sibling-rejection-session" });
+      const queue = vi
+        .spyOn(embeddedRuns, "queueGuardedEmbeddedAgentMessageWithOutcomeAsync")
+        .mockResolvedValueOnce({
+          queued: false,
+          sessionId: "sibling-rejection-session",
+          reason,
+          gatewayHealth: "live",
+        });
+      mockGatewayResponses({
+        agent: { runId: "sibling-followup", status: "accepted" },
+        "agent.wait": { status: "ok", terminalReply: { disposition: "empty" } },
+      });
+      try {
+        const result = await getSessionTool("sessions_send", {
+          agentSessionKey: "agent:main:dashboard:sibling-sender",
+        }).execute("unaccepted-sibling", {
+          sessionKey: key,
+          message: "synthetic update",
+          timeoutSeconds: 0,
+          mode,
+        });
+        expect(result.details).toMatchObject(
+          followup ? { status: "accepted", targetDisposition: "queued" } : { status: "error" },
+        );
+        const admissions = callGatewayMock.mock.calls.filter(
+          ([request]) => request.method === "agent",
+        );
+        expect(admissions).toHaveLength(followup ? 1 : 0);
+        if (followup) {
+          expect(admissions[0]?.[0].params).toMatchObject({ sessionKey: key });
+        }
+        expect(queue).toHaveBeenCalledOnce();
+      } finally {
+        await continuations.settle();
+        queue.mockRestore();
+      }
+    },
+  );
 
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
