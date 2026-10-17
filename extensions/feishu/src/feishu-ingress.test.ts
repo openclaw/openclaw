@@ -63,7 +63,7 @@ function createLifecycle(
 }
 
 function createReplayClaim(key: string, commit: () => Promise<boolean> = async () => true) {
-  return { keys: [key], commit: vi.fn(commit), release: vi.fn() };
+  return { keys: [key] as const, commit: vi.fn(commit), release: vi.fn() };
 }
 
 const failAdoption = async () => {

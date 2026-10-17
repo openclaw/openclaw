@@ -12,14 +12,13 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import { createModel, outputMessage } from "./openai-responses-prompt-observer.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
   completedResponse,
   outputItem,
   userMessage,
-  wireMessage,
   wireCall,
 } from "./openai-stream-cases.test-support.js";
 
@@ -87,7 +86,7 @@ it("preserves terminal reasoning bytes from warm continuation through cold trans
         reasoningItem(`rs_${id}`, `encrypted_${id}`),
         requests.length % 3 !== 0
           ? wireCall(id, "cache_probe")
-          : wireMessage(`msg_${id}`, "Synthetic answer."),
+          : outputMessage("Synthetic answer.", `msg_${id}`),
       ];
       history.set(id, [...effectiveInput, ...output]);
       const events = [

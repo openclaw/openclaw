@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { runFfmpeg, runFfprobe } from "openclaw/plugin-sdk/media-runtime";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -10,19 +11,43 @@ import {
   shouldSuppressFeishuTextForVoiceMedia,
 } from "./media.js";
 
+type FileUploadData = {
+  file: Buffer;
+  file_name: string;
+  file_type: string;
+  duration?: number;
+};
+type MessageData = { msg_type: string; content: string; receive_id: string };
+type ResourceRequest = { params: { type: string }; path: { file_key: string; message_id: string } };
+
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
-const loadWebMediaMock = vi.hoisted(() => vi.fn());
-const runFfmpegMock = vi.hoisted(() => vi.fn());
-const runFfprobeMock = vi.hoisted(() => vi.fn());
+const loadWebMediaMock = vi.hoisted(() =>
+  vi.fn<(url: string, options: { localRoots?: readonly string[] }) => Promise<unknown>>(),
+);
+const runFfmpegMock = vi.hoisted(() => vi.fn<typeof runFfmpeg>());
+const runFfprobeMock = vi.hoisted(() => vi.fn<typeof runFfprobe>());
 
-const fileCreateMock = vi.hoisted(() => vi.fn());
+const fileCreateMock = vi.hoisted(() =>
+  vi.fn<(request: { data: FileUploadData }) => Promise<unknown>>(),
+);
 const imageCreateMock = vi.hoisted(() => vi.fn());
-const messageCreateMock = vi.hoisted(() => vi.fn());
-const messageResourceGetMock = vi.hoisted(() => vi.fn());
-const messageReplyMock = vi.hoisted(() => vi.fn());
+const messageCreateMock = vi.hoisted(() =>
+  vi.fn<(request: { data: MessageData }) => Promise<unknown>>(),
+);
+const messageResourceGetMock = vi.hoisted(() =>
+  vi.fn<(request: ResourceRequest) => Promise<unknown>>(),
+);
+const messageReplyMock = vi.hoisted(() =>
+  vi.fn<
+    (request: {
+      path: { message_id: string };
+      data: { msg_type: string; content: string; reply_in_thread?: boolean };
+    }) => Promise<unknown>
+  >(),
+);
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
@@ -62,31 +87,25 @@ const webMedia = (fileName: string, contentType: string, bytes: string) => ({
   contentType,
 });
 const mp3Media = webMedia("reply.mp3", "audio/mpeg", "remote-mp3");
-const uploadData = () =>
-  callData<{ file: Buffer; file_name: string; file_type: string; duration?: number }>(
-    fileCreateMock,
-  );
-const messageData = () =>
-  callData<{ msg_type: string; content: string; receive_id: string }>(messageCreateMock);
-type ResourceRequest = { params: { type: string }; path: { file_key: string; message_id: string } };
-const resourceRequest = (callIndex: number) =>
-  mockCallArg<ResourceRequest>(messageResourceGetMock, callIndex);
+const uploadData = () => mockCallArgs(fileCreateMock)[0].data;
+const messageData = () => mockCallArgs(messageCreateMock)[0].data;
+const resourceRequest = (callIndex: number) => mockCallArgs(messageResourceGetMock, callIndex)[0];
 const resourceResponse = (data: string | Buffer[], headers?: Record<string, string>) => ({
   getReadableStream: () => Readable.from(typeof data === "string" ? [Buffer.from(data)] : data),
   headers,
 });
 
-function mockCallArg<T>(mock: { mock: { calls: unknown[][] } }, callIndex = 0, argIndex = 0): T {
-  return mock.mock.calls[callIndex][argIndex] as T;
-}
-
-function callData<T>(mock: { mock: { calls: unknown[][] } }, callIndex = 0): T {
-  return mockCallArg<{ data: T }>(mock, callIndex).data;
+function mockCallArgs<T extends unknown[]>(mock: { mock: { calls: T[] } }, callIndex = 0): T {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call;
 }
 
 function expectMediaLoad(url: string, localRoots: readonly string[], extra = {}) {
-  expect(mockCallArg(loadWebMediaMock)).toBe(url);
-  const options = mockCallArg<{ localRoots: readonly string[] }>(loadWebMediaMock, 0, 1);
+  const [loadedUrl, options] = mockCallArgs(loadWebMediaMock);
+  expect(loadedUrl).toBe(url);
   expect(options).toEqual({
     maxBytes: expect.any(Number),
     optimizeImages: false,
@@ -196,7 +215,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     await sendMedia({ mediaUrl: "https://example.com/video" });
 
     expect(uploadData()).toMatchObject({ file_type: "mp4", duration: 6789 });
-    expect(mockCallArg<string[]>(runFfprobeMock).at(-1)).toMatch(/input\.mp4$/);
+    expect(mockCallArgs(runFfprobeMock)[0].at(-1)).toMatch(/input\.mp4$/);
     expect(messageData().msg_type).toBe("media");
   });
 
@@ -222,10 +241,10 @@ describe("sendMediaFeishu msg_type routing", () => {
       expect(messageData().msg_type).toBe(degraded ? "file" : "audio");
       if (warnSpy) {
         expect(result.voiceIntentDegradedToFile).toBe(true);
-        expect(mockCallArg<string>(warnSpy)).toContain("audioAsVoice transcode failed");
-        expect(mockCallArg<unknown>(warnSpy, 0, 1)).toBeInstanceOf(Error);
+        expect(mockCallArgs(warnSpy)[0]).toContain("audioAsVoice transcode failed");
+        expect(mockCallArgs(warnSpy)[1]).toBeInstanceOf(Error);
       } else {
-        const args = mockCallArg<string[]>(runFfmpegMock);
+        const [args] = mockCallArgs(runFfmpegMock);
         for (const arg of ["-c:a", "libopus", "-ar", "48000", "-b:a", "64k", "-f", "ogg"]) {
           expect(args).toContain(arg);
         }
@@ -267,7 +286,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyInThread: true,
     });
 
-    const { path, data } = mockCallArg<{ path: unknown; data: unknown }>(messageReplyMock);
+    const [{ path, data }] = mockCallArgs(messageReplyMock);
     expect(path).toEqual({ message_id: "om_parent" });
     expect(data).toMatchObject({ msg_type: "media", reply_in_thread: true });
   });

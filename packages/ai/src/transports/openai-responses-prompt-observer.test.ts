@@ -64,6 +64,11 @@ const nativeModel = () =>
 const invalidEncryptedContent = () =>
   Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" });
 const identity = { sessionId: "observer-session", authProfileId: "observer-profile" };
+function compactionCase(): { model: Model<"openai-responses">; context: Context };
+function compactionCase<TApi extends Api>(
+  model: Model<TApi>,
+  includeReasoning?: boolean,
+): { model: Model<TApi>; context: Context };
 function compactionCase(model: Model = fixtures.createModel(), includeReasoning = false) {
   return { model, context: fixtures.createCompactionContext(model, identity, includeReasoning) };
 }

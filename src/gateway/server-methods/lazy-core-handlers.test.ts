@@ -25,6 +25,7 @@ vi.mock("./chat.js", () => {
   throw new Error("Chat history handlers are unavailable");
 });
 
+// mock-isolation: detect eager sandbox loading without initializing a real sandbox.
 vi.mock("../../agents/sandbox/context.js", () => {
   optionalMediaRuntimesLoaded("sandbox-context");
   return {
@@ -33,6 +34,7 @@ vi.mock("../../agents/sandbox/context.js", () => {
   };
 });
 
+// mock-isolation: detect eager media loading without staging files or starting sandbox runtimes.
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => {
   optionalMediaRuntimesLoaded("stage-sandbox-media");
   return {

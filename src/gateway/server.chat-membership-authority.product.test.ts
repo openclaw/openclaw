@@ -42,8 +42,11 @@ import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
-const operatorScopes = ["operator.read", "operator.write"];
-const adminScopes = ["operator.admin"];
+const operatorScopes: Array<"operator.read" | "operator.write"> = [
+  "operator.read",
+  "operator.write",
+];
+const adminScopes: Array<"operator.admin"> = ["operator.admin"];
 const resetHistory = {
   sessionKey: "global",
   messages: [
@@ -505,10 +508,11 @@ it(
       });
       expect(JSON.stringify(await loadTranscriptEvents(profile))).not.toContain(steeringMessage);
       linkEmail(aliasEmail, replacement.id);
-      expect(readResidentUserProfileIdentity(aliasSource.id)).toMatchObject({
+      const mergedIdentity = readResidentUserProfileIdentity(aliasSource.id);
+      expect(mergedIdentity).toMatchObject({
         profileId: replacement.id,
-        aliases: expect.arrayContaining([aliasSource.id]),
       });
+      expect(mergedIdentity?.aliases.has(aliasSource.id)).toBe(true);
       expect(await profileId(client)).toBe(replacement.id);
       const steeringTerminal = waitForRun(administrator, steering.runId);
       backingHold.resume.resolve();

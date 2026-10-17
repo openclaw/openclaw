@@ -83,6 +83,7 @@ export function resetFeishuLifecycleTestMocks(): void {
   mocks.sendCardFeishuMock.mockResolvedValue(sendResult("om_card"));
 }
 
+// mock-isolation: Lifecycle fixtures must not create real Feishu clients or SDK interceptors.
 vi.mock("./client.js", () => ({
   FEISHU_HTTP_TIMEOUT_ENV_VAR: "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS",
   FEISHU_HTTP_TIMEOUT_MAX_MS: 300_000,
@@ -99,19 +100,23 @@ vi.mock("./client.js", () => ({
   setFeishuClientRuntimeForTest: vi.fn(),
 }));
 
+// mock-isolation: Lifecycle fixtures control transport completion without opening sockets or routes.
 vi.mock("./monitor.transport.js", () => ({
   monitorWebSocket: mocks.monitorWebSocketMock,
   monitorWebhook: mocks.monitorWebhookMock,
 }));
 
+// mock-isolation: Synthetic bindings must not register account managers in process-global state.
 vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: mocks.createFeishuThreadBindingManagerMock,
 }));
 
+// mock-isolation: Capture reply lifecycle callbacks without starting live delivery or typing work.
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: mocks.createFeishuReplyDispatcherMock,
 }));
 
+// mock-isolation: Fixture message history and send receipts replace remote Feishu requests.
 vi.mock("./send.js", () => ({
   sendCardFeishu: mocks.sendCardFeishuMock,
   getMessageFeishu: mocks.getMessageFeishuMock,

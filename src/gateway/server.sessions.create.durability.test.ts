@@ -120,7 +120,10 @@ async function matchingTranscript(scope: Parameters<typeof loadTranscriptEvents>
   );
 }
 
-async function accepted<T>(request: ReturnType<typeof rpcReq<T>>, payload: Partial<T> = {}) {
+async function accepted<T extends Record<string, unknown>>(
+  request: ReturnType<typeof rpcReq<T>>,
+  payload: Partial<T> = {},
+) {
   const reply = await request;
   expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, payload });
   return expectDefined(reply.payload, "successful RPC payload");
@@ -162,7 +165,7 @@ async function inputFixture(key: string, options?: Parameters<typeof openClient>
 }
 
 async function expectUncommittedInput(
-  target: Parameters<typeof loadSessionEntry>[0],
+  target: { agentId: string; sessionKey: string; storePath: string },
   entry: NonNullable<ReturnType<typeof loadSessionEntry>>,
 ) {
   expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();

@@ -5,7 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 // Route tests mock the public facade in shared workers; exercise the real owners here.
 import {
   clickChromeMcpCoords,
@@ -63,16 +63,17 @@ vi.mock("./chrome-mcp-connect.js", async (importOriginal) => {
 });
 
 type ChromeMcpSession = ReturnType<ChromeMcpSessionFactory>;
+type CloseMock = MockInstance<ChromeMcpSession["client"]["close"]>;
 
 const fakeTarget = { profileName: "chrome-live", targetId: FAKE_TARGET_1 };
 
 function installFakeSessions(
-  configure: (session: ChromeMcpSession, call: number, close: ReturnType<typeof vi.fn>) => void,
+  configure: (session: ChromeMcpSession, call: number, close: CloseMock) => void,
 ) {
-  const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+  const closeMocks: CloseMock[] = [];
   const factory = vi.fn<ChromeMcpSessionFactory>(() => {
     const session = createFakeSession();
-    const close = vi.mocked(session.client.close);
+    const close = vi.spyOn(session.client, "close");
     closeMocks.push(close);
     configure(session, closeMocks.length, close);
     return session;
@@ -92,7 +93,7 @@ function processSnapshot(pid: number, ppid: number, identity = `start-${pid}`) {
 function installProcessSession() {
   const session = createFakeSession();
   session.processCleanup = { status: "open" };
-  const closeMock = vi.mocked(session.client.close);
+  const closeMock = vi.spyOn(session.client, "close");
   const factory = vi.fn(() => session);
   setChromeMcpSessionFactoryForTest(factory);
   return { session, closeMock, factory };
@@ -165,7 +166,7 @@ describe("chrome MCP page parsing", () => {
     await listChromeMcpTabs("chrome-live");
 
     expect(factory).toHaveBeenCalledTimes(2);
-    expect(first.client.close).toHaveBeenCalledOnce();
+    expect(vi.spyOn(first.client, "close")).toHaveBeenCalledOnce();
   });
 
   it("retires a closed target and issues a new handle when Chrome reuses its page id", async () => {
@@ -506,7 +507,7 @@ describe("chrome MCP page parsing", () => {
       args: [refA, refB],
     });
 
-    const calls = vi.mocked(session.client.callTool).mock.calls.map(([call]) => call);
+    const calls = vi.spyOn(session.client, "callTool").mock.calls.map(([call]) => call);
     expect(Object.fromEntries(calls.map((call) => [call.name, call.arguments]))).toMatchObject({
       take_screenshot: { pageId: 1, uid: "uid-a" },
       fill: { pageId: 1, uid: "uid-a", value: "x" },
@@ -892,7 +893,7 @@ describe("chrome MCP page parsing", () => {
     });
 
     expect(clickedUid).toBe("uid-a");
-    const calls = vi.mocked(session.client.callTool).mock.calls.map(([call]) => call.name);
+    const calls = vi.spyOn(session.client, "callTool").mock.calls.map(([call]) => call.name);
     expect(calls).toEqual(["list_pages", "take_snapshot", "list_pages", "new_page", "click"]);
   });
 
@@ -904,7 +905,7 @@ describe("chrome MCP page parsing", () => {
       }
       throw new Error(`unexpected tool ${name}`);
     });
-    session.client.callTool = callTool as typeof session.client.callTool;
+    session.client.callTool = callTool;
     setChromeMcpSessionFactoryForTest(() => session);
 
     await clickChromeMcpCoords({
@@ -971,7 +972,7 @@ describe("chrome MCP page parsing", () => {
           }
           throw new Error(`unexpected tool ${name}`);
         });
-        session.client.callTool = callTool as typeof session.client.callTool;
+        session.client.callTool = callTool;
       }
     });
 
@@ -1196,7 +1197,7 @@ describe("chrome MCP page parsing", () => {
           );
         }
         return fakeListPagesResult();
-      }) as typeof session.client.callTool;
+      });
     });
 
     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
@@ -1220,7 +1221,7 @@ describe("chrome MCP page parsing", () => {
     });
 
     const navigateCall = vi
-      .mocked(session.client.callTool)
+      .spyOn(session.client, "callTool")
       .mock.calls.find(([call]) => call.name === "navigate_page");
     expect(navigateCall).toMatchObject([
       { arguments: { timeout: 120_000 } },
@@ -1246,7 +1247,7 @@ describe("chrome MCP page parsing", () => {
               );
             });
           },
-        ) as typeof session.client.callTool;
+        );
       }
     });
 

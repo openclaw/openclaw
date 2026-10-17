@@ -19,26 +19,28 @@ class ScriptedResponsesServer {
   }
 
   async listen(): Promise<string> {
-    this.server = createServer(async (req, res) => {
+    this.server = createServer((req, res) => {
       let body = "";
       req.setEncoding("utf8");
-      for await (const chunk of req) {
+      req.on("data", (chunk) => {
         body += chunk;
-      }
-      const parsed = JSON.parse(body) as Record<string, unknown>;
-      const index = this.requests.length;
-      this.requests.push(parsed);
-      const frame = this.script[index];
-      if (!frame) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({ error: { message: `no scripted response for request ${index}` } }),
-        );
-        return;
-      }
-      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-      res.write(`data: ${frame}\n\n`);
-      res.end();
+      });
+      req.on("end", () => {
+        const parsed = JSON.parse(body) as Record<string, unknown>;
+        const index = this.requests.length;
+        this.requests.push(parsed);
+        const frame = this.script[index];
+        if (!frame) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({ error: { message: `no scripted response for request ${index}` } }),
+          );
+          return;
+        }
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        res.write(`data: ${frame}\n\n`);
+        res.end();
+      });
     });
     await new Promise<void>((resolve) => {
       this.server?.listen(0, "127.0.0.1", resolve);

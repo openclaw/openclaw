@@ -140,10 +140,10 @@ export function createUpdateCliConfigFixtures(deps: {
   createCaseDir: (prefix: string) => string;
 }) {
   const fixtures = {
-    mockNpmPluginOutcomes(outcomes: unknown[], changed = false, config = deps.baseConfig) {
+    mockNpmPluginOutcomes: (outcomes: unknown[], changed = false, config = deps.baseConfig) => {
       deps.updateNpmInstalledPlugins.mockResolvedValueOnce({ changed, config, outcomes });
     },
-    mockNoopPostUpdatePluginConvergence() {
+    mockNoopPostUpdatePluginConvergence: () => {
       deps.syncPluginsForUpdateChannel.mockImplementation(async ({ config }) =>
         pluginSyncResult(config),
       );
@@ -151,10 +151,10 @@ export function createUpdateCliConfigFixtures(deps: {
         npmPluginUpdateResult(config),
       );
     },
-    configSnapshot(
+    configSnapshot: (
       config: OpenClawConfig,
       overrides: Partial<ConfigFileSnapshot> = {},
-    ): ConfigFileSnapshot {
+    ): ConfigFileSnapshot => {
       return {
         ...deps.baseSnapshot,
         parsed: config,
@@ -165,11 +165,11 @@ export function createUpdateCliConfigFixtures(deps: {
         ...overrides,
       };
     },
-    mockPostDoctorSnapshot(
+    mockPostDoctorSnapshot: (
       configPath: string,
       config: OpenClawConfig,
       options: { preserveParsed?: boolean } = {},
-    ) {
+    ) => {
       vi.mocked(deps.readConfigFileSnapshot).mockResolvedValue(
         fixtures.configSnapshot(config, {
           path: configPath,
@@ -179,7 +179,7 @@ export function createUpdateCliConfigFixtures(deps: {
         }),
       );
     },
-    async useFileBackedConfig(): Promise<void> {
+    useFileBackedConfig: async (): Promise<void> => {
       const configPath = resolveConfigPath();
       const previous = await fs.readFile(configPath, "utf8").catch((error: unknown) => {
         if (!isMissingPathError(error)) {
@@ -205,13 +205,13 @@ export function createUpdateCliConfigFixtures(deps: {
         }),
       );
     },
-    async setupPostCoreConfigFixture(params: {
+    setupPostCoreConfigFixture: async (params: {
       backupConfig?: OpenClawConfig;
       postDoctorConfig: OpenClawConfig;
       preUpdateConfig?: OpenClawConfig;
       snapshotSuffix?: ".bak" | ".pre-update";
       preserveParsed?: boolean;
-    }) {
+    }) => {
       const tempDir = deps.createCaseDir("openclaw-update");
       const configPath = path.join(tempDir, "openclaw.json");
       await fs.mkdir(tempDir, { recursive: true });

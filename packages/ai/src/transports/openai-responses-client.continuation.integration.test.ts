@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { Context, Model, StreamOptions, Tool } from "@openclaw/llm-core";
+import type { Context, Model, SimpleStreamOptions, StreamOptions, Tool } from "@openclaw/llm-core";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, onTestFinished } from "vitest";
@@ -79,7 +79,7 @@ function responseEvents(
 
 async function respond(
   context: Context,
-  options: OpenAIResponsesOptions,
+  options: SimpleStreamOptions & OpenAIResponsesOptions,
   model: Model = responsesLoopbackModel,
 ) {
   const stream = await createOpenAIResponsesTransportStreamFn()(model, context, options);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, type MockInstance, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import type { AssistantMessageEventStreamLike, Context, StreamOptions } from "../types.js";
@@ -71,9 +71,6 @@ function createStream(options: StreamOptions): AssistantMessageEventStreamLike {
   }
   return stream;
 }
-
-const settleWithin = <T>(promise: Promise<T>) =>
-  withTestTimeout(promise, 250, "response hook lifecycle timed out");
 
 let previousHost: ReturnType<typeof getAiTransportHost>;
 
@@ -166,7 +163,7 @@ it.each(["response hook", "acceptance observer"])(
   },
 );
 
-it("applies the first-event timeout while the hook is pending", async () => {
+it("applies the first-event timeout while the hook is pending", async ({ signal }) => {
   const lifecycle = installResponse();
   const onFirstEventTimeout = vi.fn();
   const onResponse = vi.fn(() => new Promise<void>(() => {}));
@@ -177,7 +174,7 @@ it("applies the first-event timeout while the hook is pending", async () => {
     onResponse,
   });
   const consume = collectEventTypes(stream);
-  const result = await settleWithin(stream.result());
+  const result = await withinTest(stream.result(), signal);
   const events = await consume;
 
   expect(onResponse).toHaveBeenCalledOnce();
@@ -193,7 +190,7 @@ it("applies the first-event timeout while the hook is pending", async () => {
   lifecycle.assertListenersRemoved();
 });
 
-it("keeps caller cancellation terminal after a late hook rejection", async () => {
+it("keeps caller cancellation terminal after a late hook rejection", async ({ signal }) => {
   const lifecycle = installResponse();
   const controller = new AbortController();
   const pendingHook = createDeferred();
@@ -209,7 +206,7 @@ it("keeps caller cancellation terminal after a late hook rejection", async () =>
     code: "CALLER_ABORTED",
   });
   controller.abort(abortReason);
-  const result = await settleWithin(stream.result());
+  const result = await withinTest(stream.result(), signal);
   const events = await consume;
   expect(result).toMatchObject({
     stopReason: "aborted",

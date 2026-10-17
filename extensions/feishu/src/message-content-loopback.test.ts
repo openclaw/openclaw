@@ -219,7 +219,7 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
         for (const [messageId, content] of [
           ["om_loopback_valid_text", "safe message"],
           ["om_loopback_empty_text", ""],
-        ]) {
+        ] as const) {
           await readMessage(messageId, { contentType: "text", content });
         }
 

@@ -60,7 +60,12 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
         expect(await page.evaluate(() => document.activeElement?.id)).toBe("focus");
         await clickChromeMcpCoords({ ...target, x: 230, y: 35 });
         await clickChromeMcpCoords({ ...target, x: 430, y: 35 });
-        expect(await page.evaluate(() => ({ ...document.body.dataset }))).toMatchObject({
+        expect(
+          await page.evaluate(() => ({
+            frame: document.body.dataset.frame,
+            shadow: document.body.dataset.shadow,
+          })),
+        ).toMatchObject({
           frame: "true",
           shadow: "true",
         });

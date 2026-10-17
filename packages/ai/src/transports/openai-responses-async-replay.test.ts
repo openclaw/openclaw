@@ -256,7 +256,13 @@ it.each([
 
     for (const target of [
       { ...model, id: "gpt-5.6-luna" },
-      { ...model, id: "claude-sonnet-4-6", provider: "anthropic", api: "anthropic-messages" },
+      createModel<"anthropic-messages">({
+        ...model,
+        id: "claude-sonnet-4-6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        compat: undefined,
+      }),
     ]) {
       const switched = transformProviderMessages(context.messages, target);
       expect(switched).toMatchObject([

@@ -34,7 +34,7 @@ function gated<T>(result: () => T) {
     run: async () => {
       started.resolve();
       await gate.promise;
-      return result();
+      return await result();
     },
   };
 }
@@ -345,7 +345,11 @@ describe("Feishu account replay work ownership", () => {
             expect(mocks.handleMessage).not.toHaveBeenCalled();
             lookup.release();
             await processingFinished.promise;
-            await expect(mocks.handleMessage.mock.results[0].value).resolves.toBeUndefined();
+            const dispatchResult = mocks.handleMessage.mock.results[0];
+            if (!dispatchResult) {
+              throw new Error("Expected broadcast message dispatch");
+            }
+            await expect(dispatchResult.value).resolves.toBeUndefined();
             await nextTurn();
             expectRunning();
             broadcastAdoption = Promise.resolve(broadcastLane?.onAdopted());

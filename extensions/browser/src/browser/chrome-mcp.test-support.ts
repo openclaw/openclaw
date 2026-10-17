@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as chromeMcpConnect from "./chrome-mcp-connect.js";
 import type {
@@ -56,9 +57,11 @@ export type ToolCallMock = {
 };
 
 export function fakeListPagesResult() {
-  return {
-    content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-  };
+  return textResult("## Pages\n1: https://example.com [selected]");
+}
+
+export function textResult(text: string, isError = false): CallToolResult {
+  return { ...(isError ? { isError } : {}), content: [{ type: "text", text }] };
 }
 
 export type SessionPage = { id: number; url: string; selected?: boolean };

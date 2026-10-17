@@ -1,4 +1,4 @@
-import type { AssistantMessageEventStreamLike } from "@openclaw/llm-core";
+import type { AssistantMessageEventStreamLike, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
@@ -58,7 +58,7 @@ function queueEvents(...events: unknown[]) {
   });
 }
 
-function run(options: OpenAIResponsesOptions = {}) {
+function run(options: SimpleStreamOptions & OpenAIResponsesOptions = {}) {
   return createOpenAIResponsesTransportStreamFn()(
     model,
     { messages: [], tools: [] },

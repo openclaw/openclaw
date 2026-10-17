@@ -76,10 +76,10 @@ function expectCatalogFailure(
   plugins: typeof catalog.plugins,
   message = "Build the plugin",
 ) {
-  expect(catalog).toEqual({
-    plugins,
-    diagnostics: [{ pluginId: "native-ui", message: expect.stringContaining(message) }],
-  });
+  expect(catalog.plugins).toEqual(plugins);
+  expect(catalog.diagnostics).toEqual([
+    { pluginId: "native-ui", message: expect.stringContaining(message) },
+  ]);
 }
 
 function assetServer(basePath = "", resolvedAuth = AUTH_TOKEN) {

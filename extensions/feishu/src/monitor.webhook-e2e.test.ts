@@ -278,7 +278,8 @@ describe("Feishu webhook signed-request e2e", () => {
         runtime: runtimes[index],
       });
     };
-    const monitors = [start(0, "first-key"), start(1, "second-key")];
+    const firstMonitor = start(0, "first-key");
+    const monitors = [firstMonitor, start(1, "second-key")];
     const rawBody = JSON.stringify({ schema: "2.0", event: {} });
     const post = (encryptKey: string, body = rawBody) =>
       postSigned(`http://127.0.0.1:${port}${path}`, body, encryptKey);
@@ -303,7 +304,8 @@ describe("Feishu webhook signed-request e2e", () => {
       );
       expect(runtimes[0].error).not.toHaveBeenCalled();
 
-      monitors.push(start(2, "second-key"));
+      const thirdMonitor = start(2, "second-key");
+      monitors.push(thirdMonitor);
       expect((await post("second-key")).status).toBe(401);
       expect(dispatchers[1]).toHaveBeenCalledTimes(2);
       expect(dispatchers[2]).not.toHaveBeenCalled();
@@ -315,8 +317,8 @@ describe("Feishu webhook signed-request e2e", () => {
       legacyListener.value = { port: 3001 };
       expect((await post("second-key")).status).toBe(404);
       legacyListener.value = undefined;
-      await monitors[2]();
-      await monitors[0]();
+      await thirdMonitor();
+      await firstMonitor();
       const removedKey = await post("first-key");
       await expectText(removedKey, 401, "Invalid signature");
       expect((await post("second-key")).status).toBe(200);
