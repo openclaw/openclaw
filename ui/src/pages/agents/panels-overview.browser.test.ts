@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
@@ -6,6 +6,9 @@ import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import { Agents } from "./view.tsx";
 
 it("opens agent avatar selection from the keyboard and respects the busy state", async () => {
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  onTestFinished(() => page.viewport(viewport.width, viewport.height));
+  await page.viewport(1365, 900);
   const container = document.createElement("div");
   container.style.cssText = "position:fixed;inset:0;overflow:auto";
   document.body.append(container);
