@@ -163,6 +163,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   reuseRuntimeIntegrity = false,
   admittedSchema = false,
   integrityCheck?: "quick" | "full",
+  integrityTables?: readonly string[],
 ): SqliteIntegrityOperation<boolean> {
   if (reuseRuntimeIntegrity && admittedSchema) {
     if (diagnostics) {
@@ -222,7 +223,10 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         validateUnchanged: validateSchema,
         diagnostics,
         reuseIntegrity,
-        integrity: integrityCheck ? integrity : undefined,
+        // Current-schema callbacks do not repeat historical migration table coverage.
+        integrity: integrityCheck
+          ? { ...integrity, tables: integrityTables ?? integrity.tables }
+          : undefined,
       },
     );
     if (rebuiltIndexes.length > 0) {

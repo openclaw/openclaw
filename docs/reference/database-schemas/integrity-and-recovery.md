@@ -195,6 +195,15 @@ migration finalizer keeps its data and foreign-key checks. This changes
 candidate-side Doctor and schema preparation; the installed updater still runs
 first under its own version's behavior.
 
+Once the schema is current, later Doctor admissions scope table integrity to
+their own repair callback. Read-only admissions do not inherit historical
+migration tables. Within one QUICK maintenance operation, passing table checks
+reuse the existing physical write receipt until a write occurs. Transaction-local
+checks also expire on row writes, DDL, or rollback and never authorize another
+connection. This reuse is conservative: an unrelated write can require another
+table check. Explicit FULL, foreign-key checks, private-image certification, and
+rollback validation retain their existing coverage.
+
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the

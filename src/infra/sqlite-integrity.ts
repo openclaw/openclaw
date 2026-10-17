@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
+import { getMaintenanceSqliteTableChecks } from "./sqlite-table-integrity-cache.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -213,7 +214,12 @@ export function assertSqliteTableIntegrity(
   databaseLabel: string,
   tableName: string,
 ): void {
+  const checked = getMaintenanceSqliteTableChecks(database);
+  if (checked?.has(tableName)) {
+    return;
+  }
   runSqliteCheck(database, `${databaseLabel} table ${tableName}`, "integrity_check", tableName);
+  checked?.add(tableName);
 }
 
 function runSqliteCheck(

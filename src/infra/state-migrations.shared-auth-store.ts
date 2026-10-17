@@ -100,7 +100,7 @@ async function readSourceSnapshot(params: {
       },
       {
         operationLabel: "state-migration.shared-auth-source-read",
-        repairAdmission: { integrityCheck: params.integrityCheck ?? "quick" },
+        repairAdmission: { integrityCheck: params.integrityCheck ?? "quick", integrityTables: [] },
       },
     );
     closeAuthProfileReadPool({ kind: "database", databasePath: params.sourcePath });
@@ -456,7 +456,10 @@ async function cleanupSourceRows(params: {
       },
       {
         operationLabel: "state-migration.shared-auth-cleanup",
-        repairAdmission: { integrityCheck: params.integrityCheck ?? "quick" },
+        repairAdmission: {
+          integrityCheck: params.integrityCheck ?? "quick",
+          integrityTables: ["auth_profile_store", "auth_profile_state"],
+        },
       },
     );
     closeAuthProfileReadPool({ kind: "database", databasePath: params.sourcePath });
