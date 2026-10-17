@@ -1,10 +1,14 @@
 // Msteams tests cover attachments.graph plugin behavior.
+import {
+  useAttachmentTestTransport,
+  type AttachmentTestTransport,
+} from "./attachments/transport.test-support.js";
+const installAttachmentTestTransport = useAttachmentTestTransport();
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
-import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
+import { downloadMSTeamsGraphMedia as downloadGraphMedia } from "./attachments/graph.js";
 import { encodeGraphShareId } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
@@ -70,7 +74,12 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
-type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
+type DownloadGraphMediaParams = Parameters<typeof downloadGraphMedia>[0] & AttachmentTestTransport;
+
+function downloadMSTeamsGraphMedia({ fetchFn, resolveFn, ...params }: DownloadGraphMediaParams) {
+  installAttachmentTestTransport({ fetchFn, resolveFn });
+  return downloadGraphMedia(params);
+}
 type DownloadGraphMediaOverrides = Partial<
   Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider">
 >;
@@ -136,11 +145,8 @@ const downloadGraphMediaWithMockOptions = async (
 };
 
 describe("msteams graph attachments", () => {
-  let ssrfMock: { mockRestore: () => void } | undefined;
-
   beforeEach(() => {
-    ssrfMock?.mockRestore();
-    ssrfMock = mockPinnedHostnameResolution();
+    installAttachmentTestTransport({});
     detectMimeMock.mockClear();
     saveResponseMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
