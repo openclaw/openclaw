@@ -14,53 +14,23 @@ import { buildCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
 vi.unmock("./exec-approvals.js");
 vi.unmock("./exec-approvals-effective.js");
 
-let collectExecPolicyScopeSnapshots: typeof import("./exec-approvals-effective.js").collectExecPolicyScopeSnapshots;
-let resolveExecPolicyScopeSnapshot: typeof import("./exec-approvals-effective.js").resolveExecPolicyScopeSnapshot;
-let evaluateExecAllowlist: typeof import("./exec-approvals.js").evaluateExecAllowlist;
-let hasDurableExecApproval: typeof import("./exec-approvals.js").hasDurableExecApproval;
-let requireValidExecTarget: typeof import("./exec-approvals.js").requireValidExecTarget;
-let normalizeExecMode: typeof import("./exec-approvals.js").normalizeExecMode;
-let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
-let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
-let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
-let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").normalizeExecApprovalUnavailableDecisions;
-let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
-let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
-let resolveExactExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExactExecModeFromPolicy;
-let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
-let resolveExecPolicyForMode: typeof import("./exec-approvals.js").resolveExecPolicyForMode;
+let execApprovals: typeof import("./exec-approvals.js");
+let effective: typeof import("./exec-approvals-effective.js");
 
 async function loadActualExecApprovalModules(): Promise<void> {
   vi.resetModules();
-  const execApprovals =
+  execApprovals =
     await vi.importActual<typeof import("./exec-approvals.js")>("./exec-approvals.js");
-  const effective = await vi.importActual<typeof import("./exec-approvals-effective.js")>(
+  effective = await vi.importActual<typeof import("./exec-approvals-effective.js")>(
     "./exec-approvals-effective.js",
   );
-  collectExecPolicyScopeSnapshots = effective.collectExecPolicyScopeSnapshots;
-  resolveExecPolicyScopeSnapshot = effective.resolveExecPolicyScopeSnapshot;
-  evaluateExecAllowlist = execApprovals.evaluateExecAllowlist;
-  hasDurableExecApproval = execApprovals.hasDurableExecApproval;
-  requireValidExecTarget = execApprovals.requireValidExecTarget;
-  normalizeExecMode = execApprovals.normalizeExecMode;
-  normalizeExecTarget = execApprovals.normalizeExecTarget;
-  normalizeExecSecurity = execApprovals.normalizeExecSecurity;
-  requiresExecApproval = execApprovals.requiresExecApproval;
-  normalizeExecApprovalUnavailableDecisions =
-    execApprovals.normalizeExecApprovalUnavailableDecisions;
-  resolveExecApprovalUnavailableDecisions = execApprovals.resolveExecApprovalUnavailableDecisions;
-  resolveExecApprovalRequestAllowedDecisions =
-    execApprovals.resolveExecApprovalRequestAllowedDecisions;
-  resolveExactExecModeFromPolicy = execApprovals.resolveExactExecModeFromPolicy;
-  resolveExecModePolicy = execApprovals.resolveExecModePolicy;
-  resolveExecPolicyForMode = execApprovals.resolveExecPolicyForMode;
 }
 
 function summarizeExecPolicyScopeSnapshot(
-  params: Parameters<typeof resolveExecPolicyScopeSnapshot>[0],
-): Omit<ReturnType<typeof resolveExecPolicyScopeSnapshot>, "allowedDecisions"> {
+  params: Parameters<typeof effective.resolveExecPolicyScopeSnapshot>[0],
+): Omit<ReturnType<typeof effective.resolveExecPolicyScopeSnapshot>, "allowedDecisions"> {
   const { allowedDecisions: _allowedDecisions, ...summary } =
-    resolveExecPolicyScopeSnapshot(params);
+    effective.resolveExecPolicyScopeSnapshot(params);
   return summary;
 }
 
@@ -71,20 +41,14 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   const approvals = {
     version: 1,
-    defaults: {
-      ask: "always",
-    },
+    defaults: { ask: "always" },
     agents: {
-      runner: {
-        ask: agentAsk,
-      },
+      runner: { ask: agentAsk },
     },
   } as unknown as ExecApprovalsFile;
   const summary = summarizeExecPolicyScopeSnapshot({
     approvals,
-    globalExecConfig: {
-      ask: "off",
-    },
+    globalExecConfig: { ask: "off" },
     configPath: "agents.entries.runner.tools.exec",
     scopeLabel: "agent:runner",
     agentId: "runner",
@@ -108,18 +72,18 @@ describe("exec approvals policy helpers", () => {
   it.each([{ raw: " auto ", expected: "auto" }])(
     "normalizes exec target value %j",
     ({ raw, expected }) => {
-      expect(normalizeExecTarget(raw)).toBe(expected);
+      expect(execApprovals.normalizeExecTarget(raw)).toBe(expected);
     },
   );
 
   it("requires direct exec target requests to use the closed host set", () => {
-    expect(requireValidExecTarget(" gateway ")).toBe("gateway");
-    expect(requireValidExecTarget("")).toBe(null);
-    expect(requireValidExecTarget(undefined)).toBe(null);
-    expect(() => requireValidExecTarget("spark-ff13")).toThrow(
+    expect(execApprovals.requireValidExecTarget(" gateway ")).toBe("gateway");
+    expect(execApprovals.requireValidExecTarget("")).toBe(null);
+    expect(execApprovals.requireValidExecTarget(undefined)).toBe(null);
+    expect(() => execApprovals.requireValidExecTarget("spark-ff13")).toThrow(
       'Invalid exec host "spark-ff13". Allowed values: auto, sandbox, gateway, node.',
     );
-    expect(() => requireValidExecTarget(42)).toThrow(
+    expect(() => execApprovals.requireValidExecTarget(42)).toThrow(
       "Invalid exec host value type number. Allowed values: auto, sandbox, gateway, node.",
     );
   });
@@ -128,14 +92,14 @@ describe("exec approvals policy helpers", () => {
     { raw: "FULL", expected: "full" },
     { raw: "unknown", expected: null },
   ])("normalizes exec security value %j", ({ raw, expected }) => {
-    expect(normalizeExecSecurity(raw)).toBe(expected);
+    expect(execApprovals.normalizeExecSecurity(raw)).toBe(expected);
   });
 
   it.each([
     { raw: " auto ", expected: "auto" },
     { raw: "maybe", expected: null },
   ])("normalizes exec mode value %j", ({ raw, expected }) => {
-    expect(normalizeExecMode(raw)).toBe(expected);
+    expect(execApprovals.normalizeExecMode(raw)).toBe(expected);
   });
 
   it.each([
@@ -143,7 +107,7 @@ describe("exec approvals policy helpers", () => {
     { security: "full" as const, ask: "on-miss" as const, expected: null },
     { security: "full" as const, ask: "always" as const, expected: null },
   ])("resolves the exact exec mode for legacy policy %j", ({ security, ask, expected }) => {
-    expect(resolveExactExecModeFromPolicy({ security, ask })).toBe(expected);
+    expect(execApprovals.resolveExactExecModeFromPolicy({ security, ask })).toBe(expected);
   });
 
   it.each([
@@ -160,16 +124,11 @@ describe("exec approvals policy helpers", () => {
       expected: { security: "full" as const, ask: "off" as const, autoReview: false },
     },
   ])("maps explicit exec mode to effective policy %j", ({ mode, expected }) => {
-    expect(resolveExecPolicyForMode(mode)).toEqual(expected);
+    expect(execApprovals.resolveExecPolicyForMode(mode)).toEqual(expected);
   });
 
   it("preserves legacy security and ask when no explicit mode is set", () => {
-    expect(
-      resolveExecModePolicy({
-        security: "full",
-        ask: "always",
-      }),
-    ).toEqual({
+    expect(execApprovals.resolveExecModePolicy({ security: "full", ask: "always" })).toEqual({
       mode: "ask",
       security: "full",
       ask: "always",
@@ -179,22 +138,27 @@ describe("exec approvals policy helpers", () => {
 
   it("treats unavailable request decisions as optional approvals only", () => {
     expect(
-      normalizeExecApprovalUnavailableDecisions(["allow-once", "deny", "allow-always", "bad"]),
+      execApprovals.normalizeExecApprovalUnavailableDecisions([
+        "allow-once",
+        "deny",
+        "allow-always",
+        "bad",
+      ]),
     ).toEqual(["allow-always"]);
     expect(
-      resolveExecApprovalRequestAllowedDecisions({
+      execApprovals.resolveExecApprovalRequestAllowedDecisions({
         ask: "on-miss",
         unavailableDecisions: ["allow-always"],
       }),
     ).toEqual(["allow-once", "deny"]);
     expect(
-      resolveExecApprovalRequestAllowedDecisions({
+      execApprovals.resolveExecApprovalRequestAllowedDecisions({
         ask: "on-miss",
         unavailableDecisions: ["allow-once", "deny", "allow-always", "bad"],
       }),
     ).toEqual(["allow-once", "deny"]);
     expect(
-      resolveExecApprovalRequestAllowedDecisions({
+      execApprovals.resolveExecApprovalRequestAllowedDecisions({
         ask: "always",
         unavailableDecisions: ["allow-always"],
       }),
@@ -202,10 +166,12 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("derives unavailable optional decisions from effective approval policy", () => {
-    expect(resolveExecApprovalUnavailableDecisions({ ask: "on-miss" })).toEqual([]);
-    expect(resolveExecApprovalUnavailableDecisions({ ask: "always" })).toEqual(["allow-always"]);
+    expect(execApprovals.resolveExecApprovalUnavailableDecisions({ ask: "on-miss" })).toEqual([]);
+    expect(execApprovals.resolveExecApprovalUnavailableDecisions({ ask: "always" })).toEqual([
+      "allow-always",
+    ]);
     expect(
-      resolveExecApprovalUnavailableDecisions({
+      execApprovals.resolveExecApprovalUnavailableDecisions({
         ask: "on-miss",
         allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
       }),
@@ -222,20 +188,15 @@ describe("exec approvals policy helpers", () => {
       expected: true,
     },
   ])("requiresExecApproval respects ask mode and allowlist satisfaction for %j", (testCase) => {
-    expect(requiresExecApproval(testCase)).toBe(testCase.expected);
+    expect(execApprovals.requiresExecApproval(testCase)).toBe(testCase.expected);
   });
 
   it("treats exact-command allow-always approvals as durable trust", () => {
     expect(
-      hasDurableExecApproval({
+      execApprovals.hasDurableExecApproval({
         analysisOk: false,
         segmentAllowlistEntries: [],
-        allowlist: [
-          {
-            pattern: "=command:613b5a60181648fd",
-            source: "allow-always",
-          },
-        ],
+        allowlist: [{ pattern: "=command:613b5a60181648fd", source: "allow-always" }],
         commandText: 'powershell -NoProfile -Command "Write-Output hi"',
       }),
     ).toBe(true);
@@ -255,16 +216,14 @@ describe("exec approvals policy helpers", () => {
         source: "allow-always" as const,
       },
     ];
-    const result = evaluateExecAllowlist({
+    const result = execApprovals.evaluateExecAllowlist({
       analysis: {
         ok: true,
         segments: [
           {
             raw: "/usr/bin/echo ok",
             argv: ["/usr/bin/echo", "ok"],
-            resolution: makeMockCommandResolution({
-              execution: executable,
-            }),
+            resolution: makeMockCommandResolution({ execution: executable }),
           },
           {
             raw: "/bin/sh -lc whoami",
@@ -291,7 +250,7 @@ describe("exec approvals policy helpers", () => {
     expectFields(result.segmentAllowlistEntries[0], { pattern: "/usr/bin/echo" });
     expect(result.segmentAllowlistEntries[1]).toBeNull();
     expect(
-      hasDurableExecApproval({
+      execApprovals.hasDurableExecApproval({
         analysisOk: true,
         segmentAllowlistEntries: result.segmentAllowlistEntries,
         allowlist,
@@ -301,12 +260,8 @@ describe("exec approvals policy helpers", () => {
 
   it("maps normalized requested mode into policy snapshots", () => {
     const summary = summarizeExecPolicyScopeSnapshot({
-      approvals: {
-        version: 1,
-      },
-      scopeExecConfig: {
-        mode: "auto",
-      },
+      approvals: { version: 1 },
+      scopeExecConfig: { mode: "auto" },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
     });
@@ -331,16 +286,9 @@ describe("exec approvals policy helpers", () => {
 
   it("lets narrower legacy policy override a global normalized mode in snapshots", () => {
     const summary = summarizeExecPolicyScopeSnapshot({
-      approvals: {
-        version: 1,
-      },
-      globalExecConfig: {
-        mode: "deny",
-      },
-      scopeExecConfig: {
-        security: "full",
-        ask: "off",
-      },
+      approvals: { version: 1 },
+      globalExecConfig: { mode: "deny" },
+      scopeExecConfig: { security: "full", ask: "off" },
       configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
@@ -367,13 +315,9 @@ describe("exec approvals policy helpers", () => {
       const summary = summarizeExecPolicyScopeSnapshot({
         approvals: {
           version: 1,
-          defaults: {
-            security: "allowlist",
-          },
+          defaults: { security: "allowlist" },
         },
-        scopeExecConfig: {
-          security: "full",
-        },
+        scopeExecConfig: { security: "full" },
         configPath: "tools.exec",
         scopeLabel: "tools.exec",
       });
@@ -394,13 +338,9 @@ describe("exec approvals policy helpers", () => {
     const summary = summarizeExecPolicyScopeSnapshot({
       approvals: {
         version: 1,
-        defaults: {
-          ask: "off",
-        },
+        defaults: { ask: "off" },
       },
-      scopeExecConfig: {
-        ask: "always",
-      },
+      scopeExecConfig: { ask: "always" },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
     });
@@ -417,16 +357,9 @@ describe("exec approvals policy helpers", () => {
     const summary = summarizeExecPolicyScopeSnapshot({
       approvals: {
         version: 1,
-        defaults: {
-          security: "full",
-          ask: "always",
-          askFallback: "full",
-        },
+        defaults: { security: "full", ask: "always", askFallback: "full" },
       },
-      scopeExecConfig: {
-        security: "allowlist",
-        ask: "always",
-      },
+      scopeExecConfig: { security: "allowlist", ask: "always" },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
     });
@@ -445,23 +378,12 @@ describe("exec approvals policy helpers", () => {
     const summary = summarizeExecPolicyScopeSnapshot({
       approvals: {
         version: 1,
-        defaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "full",
-        },
+        defaults: { security: "full", ask: "off", askFallback: "full" },
         agents: {
-          "*": {
-            security: "allowlist",
-            ask: "always",
-            askFallback: "deny",
-          },
+          "*": { security: "allowlist", ask: "always", askFallback: "deny" },
         },
       },
-      scopeExecConfig: {
-        security: "full",
-        ask: "off",
-      },
+      scopeExecConfig: { security: "full", ask: "off" },
       configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
@@ -487,11 +409,7 @@ describe("exec approvals policy helpers", () => {
       scopeExecConfig: { security: "full", ask: "off" },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
-      hostDefaults: {
-        security: "deny",
-        ask: "on-miss",
-        askFallback: "deny",
-      },
+      hostDefaults: { security: "deny", ask: "on-miss", askFallback: "deny" },
       hostDefaultSource: "node-reported resolved defaults",
     });
 
@@ -511,13 +429,10 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("collects global, configured-agent, and approvals-only agent scopes", () => {
-    const snapshots = collectExecPolicyScopeSnapshots({
+    const snapshots = effective.collectExecPolicyScopeSnapshots({
       cfg: {
         tools: {
-          exec: {
-            security: "full",
-            ask: "off",
-          },
+          exec: { security: "full", ask: "off" },
         },
         agents: {
           entries: { runner: {} },
@@ -526,12 +441,8 @@ describe("exec approvals policy helpers", () => {
       approvals: {
         version: 1,
         agents: {
-          runner: {
-            security: "allowlist",
-          },
-          batch: {
-            ask: "always",
-          },
+          runner: { security: "allowlist" },
+          batch: { ask: "always" },
         },
       },
     });
@@ -552,29 +463,22 @@ describe("exec approvals policy helpers", () => {
   });
 
   it("keeps the default agent scope when main has an explicit exec override", () => {
-    const snapshots = collectExecPolicyScopeSnapshots({
+    const snapshots = effective.collectExecPolicyScopeSnapshots({
       cfg: {
         tools: {
-          exec: {
-            security: "full",
-            ask: "off",
-          },
+          exec: { security: "full", ask: "off" },
         },
         agents: {
           entries: {
             [DEFAULT_AGENT_ID]: {
               tools: {
-                exec: {
-                  ask: "always",
-                },
+                exec: { ask: "always" },
               },
             },
           },
         },
       } satisfies OpenClawConfig,
-      approvals: {
-        version: 1,
-      },
+      approvals: { version: 1 },
     });
 
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:main"]);

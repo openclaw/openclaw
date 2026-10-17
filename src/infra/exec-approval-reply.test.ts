@@ -17,16 +17,15 @@ vi.mock("./exec-approval-surface.js", () => ({
         accountId && accountId !== "default"
           ? `channels.${channel}.accounts.${accountId}`
           : `channels.${channel}`;
-      if (channel === "matrix") {
-        return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${accountPrefix}.dm.allowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      if (!["matrix", "discord", "slack", "telegram"].includes(channel)) {
+        return null;
       }
-      if (channel === "discord" || channel === "slack") {
-        return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
-      }
-      if (channel === "telegram") {
-        return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-      }
-      return null;
+      const owner =
+        channel === "matrix" ? `${accountPrefix}.dm.allowFrom` : "commands.ownerAllowFrom";
+      const enabled = ["discord", "slack"].includes(channel)
+        ? `set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`
+        : `leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      return `Approve it from the Web UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${owner}\`; ${enabled}`;
     },
   ),
   listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
@@ -44,6 +43,26 @@ import {
   getExecApprovalReplyMetadata,
   parseExecApprovalCommandText,
 } from "./exec-approval-reply.js";
+
+function approvalButtons(approvalId: string, always = true) {
+  const buttons = [
+    { label: "Allow Once", decision: "allow-once", style: "success" },
+    ...(always ? [{ label: "Allow Always", decision: "allow-always", style: "primary" }] : []),
+    { label: "Deny", decision: "deny", style: "danger" },
+  ];
+  return {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: buttons.map(({ decision, ...button }) =>
+          Object.assign(button, {
+            action: { type: "approval", approvalId, approvalKind: "exec", decision },
+          }),
+        ),
+      },
+    ],
+  };
+}
 
 describe("exec approval reply helpers", () => {
   const invalidReplyMetadataCases = [
@@ -171,45 +190,7 @@ describe("exec approval reply helpers", () => {
         sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
       },
     });
-    expect(payload.presentation).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Allow Once",
-              action: {
-                type: "approval",
-                approvalId: "req-1",
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-              style: "success",
-            },
-            {
-              label: "Allow Always",
-              action: {
-                type: "approval",
-                approvalId: "req-1",
-                approvalKind: "exec",
-                decision: "allow-always",
-              },
-              style: "primary",
-            },
-            {
-              label: "Deny",
-              action: {
-                type: "approval",
-                approvalId: "req-1",
-                approvalKind: "exec",
-                decision: "deny",
-              },
-              style: "danger",
-            },
-          ],
-        },
-      ],
-    });
+    expect(payload.presentation).toEqual(approvalButtons("req-1"));
     expect(payload.interactive).toBeUndefined();
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
@@ -253,35 +234,7 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
     expect(payload.text).not.toContain("allow-always");
     expect(payload.text).toContain("Allow Always is unavailable for this command.");
-    expect(payload.presentation).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Allow Once",
-              action: {
-                type: "approval",
-                approvalId: "req-ask-always",
-                approvalKind: "exec",
-                decision: "allow-once",
-              },
-              style: "success",
-            },
-            {
-              label: "Deny",
-              action: {
-                type: "approval",
-                approvalId: "req-ask-always",
-                approvalKind: "exec",
-                decision: "deny",
-              },
-              style: "danger",
-            },
-          ],
-        },
-      ],
-    });
+    expect(payload.presentation).toEqual(approvalButtons("req-ask-always", false));
     expect(payload.interactive).toBeUndefined();
   });
 
@@ -339,27 +292,23 @@ describe("exec approval reply helpers", () => {
   });
 
   it("parses exec approval command text", () => {
-    expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
-      approvalId: "req-1",
-      decision: "deny",
-    });
-    expect(parseExecApprovalCommandText("approve req-1 allow-once")).toEqual({
-      approvalId: "req-1",
-      decision: "allow-once",
-    });
-    expect(parseExecApprovalCommandText("/approve@clover req-1 allow-once")).toEqual({
-      approvalId: "req-1",
-      decision: "allow-once",
-    });
-    expect(parseExecApprovalCommandText("  /approve req-1 always")).toEqual({
-      approvalId: "req-1",
-      decision: "allow-always",
-    });
-    expect(parseExecApprovalCommandText("/approve req-1 allow-always")).toEqual({
-      approvalId: "req-1",
-      decision: "allow-always",
-    });
-    expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
+    expect(
+      [
+        "/approve req-1 deny",
+        "approve req-1 allow-once",
+        "/approve@clover req-1 allow-once",
+        "  /approve req-1 always",
+        "/approve req-1 allow-always",
+        "/approve req-1 maybe",
+      ].map(parseExecApprovalCommandText),
+    ).toEqual([
+      { approvalId: "req-1", decision: "deny" },
+      { approvalId: "req-1", decision: "allow-once" },
+      { approvalId: "req-1", decision: "allow-once" },
+      { approvalId: "req-1", decision: "allow-always" },
+      { approvalId: "req-1", decision: "allow-always" },
+      null,
+    ]);
   });
 
   it("builds unavailable payloads for approver DMs", () => {
@@ -372,9 +321,7 @@ describe("exec approval reply helpers", () => {
     ).toEqual({
       text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
       channelData: {
-        execApprovalUnavailable: {
-          reason: "no-approval-route",
-        },
+        execApprovalUnavailable: { reason: "no-approval-route" },
       },
     });
   });

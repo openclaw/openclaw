@@ -188,35 +188,28 @@ describe("exec approvals policy schemas", () => {
 });
 
 describe("exec approvals invalid explicit policy fallback", () => {
-  it("treats invalid explicit agent fields as masked and falls back to defaults instead of wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
-        version: 1,
-        defaults: {
-          security: "deny",
-          ask: "on-miss",
-          askFallback: "deny",
-        },
-        agents: {
-          "*": {
-            security: "full",
-            ask: "always",
-            askFallback: "full",
-          },
-          runner: {
-            security: "foo" as unknown as ExecApprovalsAgent["security"],
-            ask: "Always" as unknown as ExecApprovalsAgent["ask"],
-            askFallback: "bar" as unknown as ExecApprovalsAgent["askFallback"],
-          },
-        },
-      },
+  function resolvePolicy(
+    runner: ExecApprovalsAgent,
+    defaults: ExecApprovalsAgent,
+    wildcard: ExecApprovalsAgent,
+  ) {
+    return resolveExecApprovalsFromFile({
+      file: { version: 1, defaults, agents: { "*": wildcard, runner } },
       agentId: "runner",
-      overrides: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-      },
+      overrides: { security: "full", ask: "off", askFallback: "full" },
     });
+  }
+
+  it("treats invalid explicit agent fields as masked and falls back to defaults instead of wildcard", () => {
+    const resolved = resolvePolicy(
+      {
+        security: "foo" as unknown as ExecApprovalsAgent["security"],
+        ask: "Always" as unknown as ExecApprovalsAgent["ask"],
+        askFallback: "bar" as unknown as ExecApprovalsAgent["askFallback"],
+      },
+      { security: "deny", ask: "on-miss", askFallback: "deny" },
+      { security: "full", ask: "always", askFallback: "full" },
+    );
 
     expect(resolved.agent.security).toBe("deny");
     expect(resolved.agent.ask).toBe("on-miss");
@@ -229,34 +222,15 @@ describe("exec approvals invalid explicit policy fallback", () => {
   });
 
   it("treats null explicit agent fields as unset and still considers wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
-        version: 1,
-        defaults: {
-          security: "full",
-          ask: "off",
-          askFallback: "full",
-        },
-        agents: {
-          "*": {
-            security: "deny",
-            ask: "always",
-            askFallback: "deny",
-          },
-          runner: {
-            security: null as unknown as ExecApprovalsAgent["security"],
-            ask: null as unknown as ExecApprovalsAgent["ask"],
-            askFallback: null as unknown as ExecApprovalsAgent["askFallback"],
-          },
-        },
+    const resolved = resolvePolicy(
+      {
+        security: null as unknown as ExecApprovalsAgent["security"],
+        ask: null as unknown as ExecApprovalsAgent["ask"],
+        askFallback: null as unknown as ExecApprovalsAgent["askFallback"],
       },
-      agentId: "runner",
-      overrides: {
-        security: "full",
-        ask: "off",
-        askFallback: "full",
-      },
-    });
+      { security: "full", ask: "off", askFallback: "full" },
+      { security: "deny", ask: "always", askFallback: "deny" },
+    );
 
     expect(resolved.agent.security).toBe("deny");
     expect(resolved.agent.ask).toBe("always");
@@ -290,21 +264,13 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
       allowlist: ["ls", { pattern: "/usr/bin/cat" }, "echo"],
       expectedPatterns: ["ls", "/usr/bin/cat", "echo"],
     },
-    {
-      name: "empty strings dropped",
-      allowlist: ["", "  ", "ls"],
-      expectedPatterns: ["ls"],
-    },
+    { name: "empty strings dropped", allowlist: ["", "  ", "ls"], expectedPatterns: ["ls"] },
     {
       name: "malformed objects dropped",
       allowlist: [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
       expectedPatterns: ["/usr/bin/ls", "echo"],
     },
-    {
-      name: "non-array dropped",
-      allowlist: "ls",
-      expectedPatterns: undefined,
-    },
+    { name: "non-array dropped", allowlist: "ls", expectedPatterns: undefined },
   ] satisfies ReadonlyArray<{
     name: string;
     allowlist: unknown;

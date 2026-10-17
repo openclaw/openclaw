@@ -21,6 +21,15 @@ import {
 import { buildCwdBoundHashedArgPattern, matchAllowlist } from "./exec-command-resolution.js";
 
 describe("allow-always pattern persistence", () => {
+  function evaluateArgv(
+    analysis: Parameters<typeof evaluateExecAllowlist>[0]["analysis"],
+    allowlist: Parameters<typeof evaluateExecAllowlist>[0]["allowlist"],
+    context: Pick<Parameters<typeof evaluateExecAllowlist>[0], "cwd" | "env" | "platform">,
+    safeBins = resolveSafeBins(undefined),
+  ) {
+    return evaluateExecAllowlist({ analysis, allowlist, safeBins, ...context });
+  }
+
   async function evaluateCommand(
     command: string,
     allowlist: Parameters<typeof evaluateShellAllowlistWithAuthorization>[0]["allowlist"],
@@ -112,7 +121,7 @@ describe("allow-always pattern persistence", () => {
     fs.mkdirSync(scriptsDir, { recursive: true });
     const script = path.join(scriptsDir, "save_crystal.sh");
     fs.writeFileSync(script, "echo ok\n");
-    return { ...fixture, scriptsDir, script, safeBins: resolveSafeBins(undefined) };
+    return { ...fixture, scriptsDir, script };
   }
 
   async function expectShellScriptFallbackRejected(command: string) {
@@ -291,12 +300,7 @@ describe("allow-always pattern persistence", () => {
       },
     ]);
 
-    const result = evaluateExecAllowlist({
-      analysis,
-      allowlist: [...entries],
-      safeBins: new Set(),
-      ...context,
-    });
+    const result = evaluateArgv(analysis, [...entries], context, new Set());
     expect(result.allowlistSatisfied).toBe(true);
   });
 
@@ -399,7 +403,6 @@ describe("allow-always pattern persistence", () => {
     const { dir, env } = createCommandFixture();
     const touch = makeExecutable(dir, "touch");
     makeExecutable(dir, "sh");
-    const safeBins = resolveSafeBins(undefined);
     const marker = path.join(dir, "marker");
     const platform = "linux";
     const context = { cwd: dir, env, platform };
@@ -416,12 +419,7 @@ describe("allow-always pattern persistence", () => {
     const expectedArgPattern = buildCwdBoundHashedArgPattern([touch, marker], dir, platform);
     expect(entries).toEqual([{ pattern: touch, argPattern: expectedArgPattern }]);
 
-    const allowed = evaluateExecAllowlist({
-      analysis,
-      allowlist: [...entries],
-      safeBins,
-      ...context,
-    });
+    const allowed = evaluateArgv(analysis, [...entries], context);
     expect(allowed.allowlistSatisfied).toBe(true);
 
     const changedAnalysis = analyzeArgvCommand({
@@ -429,12 +427,7 @@ describe("allow-always pattern persistence", () => {
       ...context,
     });
     expect(changedAnalysis.ok).toBe(true);
-    const denied = evaluateExecAllowlist({
-      analysis: changedAnalysis,
-      allowlist: [...entries],
-      safeBins,
-      ...context,
-    });
+    const denied = evaluateArgv(changedAnalysis, [...entries], context);
     expect(denied.allowlistSatisfied).toBe(false);
 
     const partial = analyzeArgvCommand({
@@ -564,12 +557,7 @@ describe("allow-always pattern persistence", () => {
     });
     expect(entries).toStrictEqual([]);
 
-    const result = evaluateExecAllowlist({
-      analysis,
-      allowlist: [{ pattern: safeTool, source: "allow-always" }],
-      safeBins: resolveSafeBins(undefined),
-      ...context,
-    });
+    const result = evaluateArgv(analysis, [{ pattern: safeTool, source: "allow-always" }], context);
 
     expect(result.allowlistSatisfied).toBe(false);
     expect(
@@ -613,22 +601,18 @@ describe("allow-always pattern persistence", () => {
       },
     ]);
 
-    const decoyResult = evaluateExecAllowlist({
+    const decoyResult = evaluateArgv(
       analysis,
-      allowlist: [{ pattern: decoy, source: "allow-always" }],
-      safeBins: resolveSafeBins(undefined),
-      ...context,
-    });
+      [{ pattern: decoy, source: "allow-always" }],
+      context,
+    );
     expect(decoyResult.allowlistSatisfied).toBe(false);
 
-    const scriptResult = evaluateExecAllowlist({
+    const scriptResult = evaluateArgv(
       analysis,
-      allowlist: entries.map((entry) =>
-        Object.assign({}, entry, { source: "allow-always" as const }),
-      ),
-      safeBins: resolveSafeBins(undefined),
-      ...context,
-    });
+      entries.map((entry) => Object.assign({}, entry, { source: "allow-always" as const })),
+      context,
+    );
     expect(scriptResult.allowlistSatisfied).toBe(true);
   });
 
@@ -714,7 +698,7 @@ describe("allow-always pattern persistence", () => {
   });
 
   it("matches package-manager shell-script arg patterns against inner argv", () => {
-    const { dir, script, env, safeBins } = createShellScriptFixture();
+    const { dir, script, env } = createShellScriptFixture();
     makeExecutable(dir, "pnpm");
     makeExecutable(dir, "bash");
     const platform = "win32";
@@ -736,24 +720,14 @@ describe("allow-always pattern persistence", () => {
       },
     ]);
 
-    const allowed = evaluateExecAllowlist({
-      analysis,
-      allowlist: [...entries],
-      safeBins,
-      ...context,
-    });
+    const allowed = evaluateArgv(analysis, [...entries], context);
     expect(allowed.allowlistSatisfied).toBe(true);
 
     const extraArgAnalysis = analyzeArgvCommand({
       argv: ["pnpm", "exec", "bash", script, "allowed", "extra"],
       ...context,
     });
-    const denied = evaluateExecAllowlist({
-      analysis: extraArgAnalysis,
-      allowlist: [...entries],
-      safeBins,
-      ...context,
-    });
+    const denied = evaluateArgv(extraArgAnalysis, [...entries], context);
     expect(denied.allowlistSatisfied).toBe(false);
     expect(
       requiresExecApproval({

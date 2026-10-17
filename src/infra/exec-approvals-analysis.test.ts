@@ -15,6 +15,15 @@ import {
 } from "./exec-approvals-test-helpers.js";
 import { analyzeWindowsShellCommand, windowsEscapeArg } from "./windows-shell-command.js";
 
+const analyzeWindows = (command: string) =>
+  analyzeWindowsShellCommand({ command, platform: "win32" });
+
+function expectWindowsArgv(command: string, argv: string[]) {
+  const result = analyzeWindows(command);
+  expect(result.ok).toBe(true);
+  expect(result.segments[0]?.argv).toEqual(argv);
+}
+
 describe("exec argv analysis", () => {
   it("rejects empty argv commands", () => {
     expect(analyzeArgvCommand({ argv: ["", "   "] })).toEqual({
@@ -65,7 +74,7 @@ describe("Windows shell analysis", () => {
     ];
 
     for (const command of cases) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
+      const res = analyzeWindows(command);
       expect(res.ok).toBe(true);
       expect(res.segments[0]?.argv[0]).toBe("node");
     }
@@ -82,18 +91,12 @@ describe("Windows shell analysis", () => {
     ];
 
     for (const command of cases) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(false);
+      expect(analyzeWindows(command).ok).toBe(false);
     }
   });
 
   it("allows bare $ not followed by identifier", () => {
-    const res = analyzeWindowsShellCommand({
-      command: 'net use "\\\\host\\C$"',
-      platform: "win32",
-    });
-
-    expect(res.ok).toBe(true);
+    expect(analyzeWindows('net use "\\\\host\\C$"').ok).toBe(true);
   });
 
   it("rejects metacharacters inside single-quoted arguments for cmd compatibility", () => {
@@ -106,45 +109,24 @@ describe("Windows shell analysis", () => {
     ];
 
     for (const command of unsafeSingleQuoteCommands) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(false);
+      expect(analyzeWindows(command).ok).toBe(false);
     }
   });
 
   it("tokenizes PowerShell single-quoted arguments", () => {
-    const res = analyzeWindowsShellCommand({
-      command: "node tool.js 'O''Brien'",
-      platform: "win32",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.segments[0]?.argv).toEqual(["node", "tool.js", "O'Brien"]);
+    expectWindowsArgv("node tool.js 'O''Brien'", ["node", "tool.js", "O'Brien"]);
   });
 
   it("preserves empty quoted args", () => {
-    const doubleQuoted = analyzeWindowsShellCommand({
-      command: 'node tool.js ""',
-      platform: "win32",
-    });
-    const singleQuoted = analyzeWindowsShellCommand({
-      command: "node tool.js ''",
-      platform: "win32",
-    });
-
-    expect(doubleQuoted.ok).toBe(true);
-    expect(doubleQuoted.segments[0]?.argv).toEqual(["node", "tool.js", ""]);
-    expect(singleQuoted.ok).toBe(true);
-    expect(singleQuoted.segments[0]?.argv).toEqual(["node", "tool.js", ""]);
+    expectWindowsArgv('node tool.js ""', ["node", "tool.js", ""]);
+    expectWindowsArgv("node tool.js ''", ["node", "tool.js", ""]);
   });
 
   it("parses quoted executables", () => {
-    const res = analyzeWindowsShellCommand({
-      command: '"C:\\Program Files\\Tool\\tool.exe" --version',
-      platform: "win32",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.segments[0]?.argv).toEqual(["C:\\Program Files\\Tool\\tool.exe", "--version"]);
+    expectWindowsArgv('"C:\\Program Files\\Tool\\tool.exe" --version', [
+      "C:\\Program Files\\Tool\\tool.exe",
+      "--version",
+    ]);
   });
 
   it("unwraps PowerShell -Command payloads", () => {
@@ -160,9 +142,7 @@ describe("Windows shell analysis", () => {
     ];
 
     for (const [command, argv] of powershellCommandCases) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(true);
-      expect(res.segments[0]?.argv).toEqual(argv);
+      expectWindowsArgv(command, argv);
     }
   });
 });
