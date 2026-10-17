@@ -1,3 +1,4 @@
+import { getObserver } from "@solidjs/signals";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 
@@ -9,7 +10,12 @@ export function projectChatRun<T extends object>(host: T): T {
     const descriptor = Object.getOwnPropertyDescriptor(host, key)!;
     Object.defineProperty(host, key, {
       ...descriptor,
-      get: () => projection.read()[key],
+      get() {
+        if (getObserver()) {
+          projection.read();
+        }
+        return source.values[key];
+      },
     });
   }
   return host;

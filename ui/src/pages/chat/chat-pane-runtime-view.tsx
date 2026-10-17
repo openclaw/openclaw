@@ -2,8 +2,10 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  getOwner,
   onCleanup,
   onSettled,
+  runWithOwner,
   Show,
   untrack,
 } from "solid-js";
@@ -33,6 +35,7 @@ import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
+  const viewOwner = getOwner();
   const [ready, setReady] = createSignal(false);
   const [revision, setRevision] = createSignal(0);
   let disposed = false;
@@ -73,7 +76,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
 
   onSettled(() => {
     if (!runtime.isConnected) {
-      runtime.start();
+      // Startup creates projections that belong to this retained view, outside the settled callback.
+      runWithOwner(viewOwner, () => runtime.start());
     }
     runtime.invalidate();
     // Drain startup before mounting children, as the previous pane lifecycle did.
