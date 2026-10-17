@@ -6,19 +6,13 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { hashWorkerCredential } from "./credential.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import { REQUEST as SESSION, seedStartingPlacement } from "./placement-dispatch-test-fixtures.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-
-const SESSION: WorkerSessionPlacementIdentity = {
-  sessionId: "session-placement",
-  agentId: "main",
-  sessionKey: "agent:main:placement",
-};
 
 describe("worker session placement activation", () => {
   const tempDirs = useStateDatabaseTempDirs();
@@ -36,78 +30,21 @@ describe("worker session placement activation", () => {
     environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
   });
 
-  function credential(value: string, sessionId: string | null) {
-    return {
-      credentialHash: hashWorkerCredential(value),
-      sessionId,
-      rpcSetVersion: 1,
-      expiresAtMs: nowMs + 10_000,
-    };
-  }
-
-  async function createAttachedEnvironment() {
+  function createAttachedEnvironment() {
     const environmentId = `environment-${SESSION.sessionId}`;
-    await environments.createIntent({
+    seedAttachedPlacementEnvironment(database, {
       environmentId,
-      providerId: "test-provider",
-      profileId: "test-profile",
-      profileSnapshot: { settings: {} },
-      provisionOperationId: `provision:${environmentId}`,
+      sessionId: SESSION.sessionId,
+      ownerEpoch: 7,
     });
-    await environments.transition({ environmentId, from: "requested", to: "provisioning" });
-    await environments.transition({
-      environmentId,
-      from: "provisioning",
-      to: "ready",
-      patch: {
-        leaseId: `lease:${environmentId}`,
-        nodeDeviceId: `node:${environmentId}`,
-        bootstrapReceipt: {
-          bundleHash: "a".repeat(64),
-          openclawVersion: "2026.9.1",
-          protocolFeatures: ["worker-execution-context-v2"],
-        },
-        credential: credential(`ready:${environmentId}`, null),
-      },
-    });
-    return environments.transition({
-      environmentId,
-      from: "ready",
-      to: "attached",
-      patch: {
-        attachedSessionIds: [SESSION.sessionId],
-        credential: credential(`${environmentId}:${SESSION.sessionId}:${nowMs}`, SESSION.sessionId),
-      },
-    });
+    const environment = environments.get(environmentId);
+    if (!environment) {
+      throw new Error("expected attached fixture environment");
+    }
+    return environment;
   }
 
-  async function advanceToStarting() {
-    let placement = await store.startDispatch({ ...SESSION, executionMode: "worker-turn" });
-    const transitions = [
-      {
-        from: "requested",
-        to: "provisioning",
-        patch: { environmentId: `environment-${SESSION.sessionId}` },
-      },
-      { from: "provisioning", to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-      {
-        from: "syncing",
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-          remoteWorkspaceDir: `/workspace/${SESSION.sessionId}`,
-        },
-      },
-    ] as const;
-    for (const transition of transitions) {
-      placement = await store.transition({
-        ...transition,
-        sessionId: SESSION.sessionId,
-        expectedGeneration: placement.generation,
-      });
-    }
-    return placement;
-  }
+  const advanceToStarting = () => seedStartingPlacement(store, `environment-${SESSION.sessionId}`);
 
   async function activate(
     placement: Awaited<ReturnType<typeof advanceToStarting>>,
@@ -129,7 +66,7 @@ describe("worker session placement activation", () => {
   it.each(["epoch", "closing"])(
     "rolls back activation when the attached environment %s does not match",
     async (mismatch) => {
-      const environment = await createAttachedEnvironment();
+      const environment = createAttachedEnvironment();
       const starting = await advanceToStarting();
       const ownerEpoch = environment.ownerEpoch;
       if (mismatch === "closing") {
@@ -154,7 +91,7 @@ describe("worker session placement activation", () => {
   );
 
   it("retains activation time through claims, adoption, failure and retirement", async () => {
-    const environment = await createAttachedEnvironment();
+    const environment = createAttachedEnvironment();
     const starting = await advanceToStarting();
     expect(environments.get(environment.environmentId)?.lastActivatedAtMs).toBeNull();
     nowMs = 5_000;
