@@ -14,6 +14,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "./session-meta.js";
 
 it("inspects without creating state and conditionally updates only the proven current owner", async () => {
@@ -33,21 +34,20 @@ it("inspects without creating state and conditionally updates only the proven cu
         env,
         agentId,
         sessionKey: agentId === "free-harness" ? "agent:free-harness:acp:unrelated" : "global",
-        mutate: () => ({
-          backend: "acpx",
-          agent: "fixture",
-          mode: "persistent",
-          runtimeSessionName: `old-${agentId}`,
-          state: "idle",
-          lastActivityAt: 10,
-          identity: {
-            state: "resolved",
-            source: "ensure",
-            lastUpdatedAt: 10,
-            acpxRecordId: `record-${agentId}`,
-            acpxSessionId: `upstream-${agentId}`,
-          },
-        }),
+        mutate: () =>
+          createAcpMeta({
+            backend: "acpx",
+            agent: "fixture",
+            runtimeSessionName: `old-${agentId}`,
+            lastActivityAt: 10,
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              lastUpdatedAt: 10,
+              acpxRecordId: `record-${agentId}`,
+              acpxSessionId: `upstream-${agentId}`,
+            },
+          }),
       });
     }
     // Legacy JSON retains the first duplicate in its promoted column until rewritten.
@@ -157,58 +157,37 @@ it.each(["global", "shared-project"])(
         permissionMode: "deny-all",
         timeoutMs: 5000,
       });
-      const handle = await runtime.ensureSession({
-        sessionKey,
-        agent: "fixture",
-        mode: "persistent",
-      });
-      await runtime.close({ handle, reason: "offline-doctor" });
-      const meta = {
-        backend: "acpx",
-        agent: "fixture",
-        runtimeSessionName: handle.runtimeSessionName,
-        mode: "persistent" as const,
-        state: "idle" as const,
-        lastActivityAt: 1,
-        identity: {
-          state: "resolved" as const,
-          source: "ensure" as const,
-          lastUpdatedAt: 1,
-          acpxRecordId: handle.acpxRecordId,
-          acpxSessionId: handle.backendSessionId,
-        },
-      };
-      await upsertAcpSessionMeta({
-        cfg,
-        env: state.env,
-        agentId: "work",
-        sessionKey,
-        mutate: () => meta,
-      });
-      const freeHandle = await runtime.ensureSession({
-        sessionKey: "agent:free-harness:acp:unrelated",
-        agent: "fixture",
-        mode: "persistent",
-      });
-      await runtime.close({ handle: freeHandle, reason: "offline-doctor" });
-      const freeTarget = {
-        cfg,
-        env: state.env,
-        agentId: "free-harness",
-        sessionKey: "agent:free-harness:acp:unrelated",
-      };
-      await upsertAcpSessionMeta({
-        ...freeTarget,
-        mutate: () => ({
-          ...meta,
-          runtimeSessionName: freeHandle.runtimeSessionName,
+      const seedRuntime = async (agentId: string, key: string) => {
+        const handle = await runtime.ensureSession({
+          sessionKey: key,
+          agent: "fixture",
+          mode: "persistent",
+        });
+        await runtime.close({ handle, reason: "offline-doctor" });
+        const meta = createAcpMeta({
+          backend: "acpx",
+          agent: "fixture",
+          runtimeSessionName: handle.runtimeSessionName,
+          lastActivityAt: 1,
           identity: {
-            ...meta.identity,
-            acpxRecordId: freeHandle.acpxRecordId,
-            acpxSessionId: freeHandle.backendSessionId,
+            state: "resolved",
+            source: "ensure",
+            lastUpdatedAt: 1,
+            acpxRecordId: handle.acpxRecordId,
+            acpxSessionId: handle.backendSessionId,
           },
-        }),
-      });
+        });
+        await upsertAcpSessionMeta({
+          cfg,
+          env: state.env,
+          agentId,
+          sessionKey: key,
+          mutate: () => meta,
+        });
+        return handle;
+      };
+      const handle = await seedRuntime("work", sessionKey);
+      await seedRuntime("free-harness", "agent:free-harness:acp:unrelated");
       const scope = { pluginId: "acpx", config: cfg, env: state.env };
       const readOnly = createPluginDoctorStateMigrationContext(scope);
       const before = await readOnly.inspectAcpSessionClaims!();
@@ -291,14 +270,13 @@ it.each(["agent:retired:main", "agent:retired:acp:binding:configured", "global",
         env,
         agentId: "retired",
         sessionKey,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "fixture",
-          runtimeSessionName: "old",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 1,
-        }),
+        mutate: () =>
+          createAcpMeta({
+            backend: "acpx",
+            agent: "fixture",
+            runtimeSessionName: "old",
+            lastActivityAt: 1,
+          }),
       });
       const retired = { ...cfg, agents: { ...cfg.agents, entries: { main: {} } } };
       const evidence = await createPluginDoctorStateMigrationContext({

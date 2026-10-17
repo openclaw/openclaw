@@ -10,7 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -18,12 +18,12 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
+import { createAcpMeta, interceptAcpCommit } from "./session-meta-lifecycle.test-support.js";
 import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "./session-meta-reset.js";
 
@@ -70,14 +70,11 @@ it("retains incognito reset context until its memory owner closes", async () => 
   );
 });
 
-const META: SessionAcpMeta = {
-  backend: "fixture",
+const META = createAcpMeta({
   agent: "fixture",
   runtimeSessionName: "reset-runtime",
-  mode: "persistent",
-  state: "idle",
   lastActivityAt: 200,
-};
+});
 
 async function fixture(state: OpenClawTestState) {
   const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
@@ -115,28 +112,6 @@ async function fixture(state: OpenClawTestState) {
   };
 }
 
-function interceptCommit(intercept: (execute: () => Promise<unknown>) => Promise<unknown>) {
-  const original = stateWorker.runOpenClawStateWorkerOperation;
-  return vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      original(
-        context,
-        (worker) =>
-          operation({
-            ...worker,
-            execute: new Proxy(worker.execute, {
-              apply(execute, receiver, args: Parameters<typeof worker.execute>) {
-                const run = () => Reflect.apply(execute, receiver, args);
-                return args[0].type === "acp.commitMutation" ? intercept(run) : run();
-              },
-            }),
-          }),
-        options,
-      ),
-    );
-}
-
 it.each([
   { native: false, loseReply: false },
   { native: false, loseReply: true },
@@ -170,7 +145,7 @@ it.each([
           }
           return value;
         });
-        const intercepted = interceptCommit(commit);
+        const intercepted = interceptAcpCommit(commit);
         const afterEntryMutation = vi.fn<
           NonNullable<Parameters<typeof resetSessionEntryLifecycle>[0]["afterEntryMutation"]>
         >(async (mutation, context) => {
@@ -227,7 +202,7 @@ it.each(["foreign-lifecycle", "pinned-lifecycle", "in-process-writer", "authorit
         await resetSessionEntryLifecycle(f.reset);
         const reached = createDeferredCore();
         const release = createDeferredCore();
-        const intercepted = interceptCommit(async (execute) => {
+        const intercepted = interceptAcpCommit(async (execute) => {
           reached.resolve();
           await release.promise;
           return execute();

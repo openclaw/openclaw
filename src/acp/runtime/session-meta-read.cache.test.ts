@@ -6,7 +6,6 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
@@ -22,6 +21,7 @@ import {
   readPublishedAcpSessionRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
+import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
 import type { AcpSessionReadCommand } from "./session-meta-read.types.js";
 import {
   prepareAcpSessionMetadataRead,
@@ -57,14 +57,7 @@ function insert(db: DatabaseSync, name: string) {
       sessionKey: key,
       lifecycleRevision: "generation",
       updatedAt: 100,
-      meta: {
-        backend: "fixture",
-        agent: "main",
-        runtimeSessionName: name,
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 100,
-      },
+      meta: createAcpMeta({ runtimeSessionName: name }),
     }),
   );
 }
@@ -200,11 +193,8 @@ it("publishes decoded set and clear postimages without rereading metadata after 
     sessionKey: "agent:main:acp:cache",
     entry: { sessionId: "session", lifecycleRevision: "generation", updatedAt: 200 },
   };
-  const meta: SessionAcpMeta = {
-    backend: "fixture",
-    agent: "main",
+  const meta = createAcpMeta({
     runtimeSessionName: "returned-row",
-    mode: "persistent",
     state: "error",
     lastActivityAt: 200,
     identity: {
@@ -216,7 +206,7 @@ it("publishes decoded set and clear postimages without rereading metadata after 
     cwd: "/synthetic/workspace",
     runtimeOptions: { model: "fixture-model" },
     lastError: "synthetic error",
-  };
+  });
   const counter = trackSqliteStatementExecutions(writer, ["read", "write"], (sql) => {
     if (!/\bacp_sessions\b/iu.test(sql)) {
       return null;

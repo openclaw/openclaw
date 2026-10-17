@@ -25,22 +25,15 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareAcpSessionControlRead } from "./session-meta-control.js";
 import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey, selectAcpSessionRow } from "./session-meta-keys.js";
+import { createAcpMeta, interceptAcpCommit } from "./session-meta-lifecycle.test-support.js";
 import { readAcpSessionControlInWorker } from "./session-meta-source.worker.js";
 import { upsertAcpSessionMeta, upsertAcpSessionMetaForControl } from "./session-meta-write.js";
 
-const meta: SessionAcpMeta = {
-  backend: "fixture",
-  agent: "fixture",
-  runtimeSessionName: "fixture-runtime",
-  mode: "persistent",
-  state: "idle",
-  lastActivityAt: 100,
-};
+const meta = createAcpMeta({ agent: "fixture", runtimeSessionName: "fixture-runtime" });
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -250,30 +243,15 @@ it.each(["clear", "rebind", "same-binding", "runtime-rebind"] as const)(
       };
       const reached = createDeferredCore();
       const release = createDeferredCore();
-      const original = stateWorker.runOpenClawStateWorkerOperation;
       let paused = false;
-      const intercepted = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, operation, options) =>
-          original(
-            context,
-            (worker) =>
-              operation({
-                ...worker,
-                execute: new Proxy(worker.execute, {
-                  apply(execute, receiver, args: Parameters<typeof worker.execute>) {
-                    if (args[0].type === "acp.commitMutation" && !paused) {
-                      paused = true;
-                      reached.resolve();
-                      return release.promise.then(() => Reflect.apply(execute, receiver, args));
-                    }
-                    return Reflect.apply(execute, receiver, args);
-                  },
-                }),
-              }),
-            options,
-          ),
-        );
+      const intercepted = interceptAcpCommit(async (execute) => {
+        if (!paused) {
+          paused = true;
+          reached.resolve();
+          await release.promise;
+        }
+        return execute();
+      });
       const mutate = vi.fn((current: SessionAcpMeta | undefined) => {
         if (!current) {
           throw new Error("Expected a current ACP row at preparation");
