@@ -108,7 +108,7 @@ it.each([false, true])(
     );
     const options = toDatabaseOptions(scope());
     const database = openOpenClawAgentDatabase(options);
-    const token = (keys: string[]) =>
+    const token = (keys: Parameters<typeof readSqliteDatabaseScopedWriteTokenForPath>[1]) =>
       readSqliteDatabaseScopedWriteTokenForPath(database.path, keys);
     const admissions = () =>
       captureSqliteDatabaseAdmissions().filter((record) => record.location === database.path);

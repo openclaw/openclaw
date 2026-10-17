@@ -13,6 +13,7 @@ import {
 import { createEmptyPluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
   PluginHookRegistration,
 } from "./types.js";
@@ -443,7 +444,10 @@ it.each([
     const broken = vi.fn(() => {
       throw new Error("plugin crashed");
     });
-    const routing = (prefix: string, fallbacksOverride: string[] | undefined) => ({
+    const routing = (
+      prefix: string,
+      fallbacksOverride: string[] | undefined,
+    ): PluginHookBeforeModelResolveResult => ({
       modelOverride: `${prefix}-model`,
       providerOverride: `${prefix}-provider`,
       fallbacksOverride,

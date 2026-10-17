@@ -142,8 +142,8 @@ it("rejects shared identity before provisioning and warns once with the agent", 
   const { config } = await fixture({ shared: true, allowInSandbox: true });
   const warnings = createWarnLogCapture("sandbox-github-shared");
   const capture = createDiagnosticLogRecordCapture();
-  onTestFinished(warnings.cleanup);
-  onTestFinished(capture.cleanup);
+  onTestFinished(() => warnings.cleanup());
+  onTestFinished(() => capture.cleanup());
   await expect(resolve(config)).rejects.toThrow(/release.*shared/i);
   expect(backend).not.toHaveBeenCalled();
   expect((await warnings.findText("GitHub"))?.match(/release/g)).toHaveLength(1);

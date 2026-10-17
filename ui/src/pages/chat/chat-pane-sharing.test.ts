@@ -133,7 +133,7 @@ function deferredMutation(method: string) {
 function mutationFixture(method: string) {
   const { response, request } = deferredMutation(method);
   const sessions = reconciledSessions();
-  return { response, request, sessions, ...sharingFixture(request, sessions) };
+  return { response, request, ...sharingFixture(request, sessions) };
 }
 
 function sessionRow(): GatewaySessionRow {

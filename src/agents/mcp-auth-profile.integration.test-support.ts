@@ -580,10 +580,15 @@ async function runScopeScenario(root: string): Promise<void> {
       second.fixture.workspaceDir,
     );
     await Promise.all([pendingFirst, secondRequest()]);
-    assert.deepEqual(endpoint.requests.map((request) => request.headers.authorization).toSorted(), [
-      "Bearer first:first",
-      "Bearer second:first",
-    ]);
+    const authorizations = endpoint.requests.map((request) => {
+      const authorization = request.headers.authorization;
+      assert(authorization, "missing Authorization header on a scoped MCP request");
+      return authorization;
+    });
+    assert.deepEqual(
+      authorizations.toSorted((left, right) => left.localeCompare(right)),
+      ["Bearer first:first", "Bearer second:first"],
+    );
     fs.writeFileSync(first.fixture.credentialPath, "rotated");
     await firstRequest();
     assert.equal(endpoint.requests.at(-1)?.headers.authorization, "Bearer first:rotated");

@@ -473,7 +473,7 @@ describe("managed npm root", () => {
       dependencies: { plugin: "1.0.0" },
     });
 
-    const runCommand = mockPeerPlan(async (cwd, call) => {
+    const runCommand = mockPeerPlan(async (cwd, call): Promise<void | typeof successfulSpawn> => {
       if (call === 1) {
         return {
           ...successfulSpawn,

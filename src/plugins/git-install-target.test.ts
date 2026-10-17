@@ -152,7 +152,7 @@ describe("git install target ownership", () => {
     await fs.writeFile(path.join(installed.targetDir, "operator-note.txt"), operatorNote);
     const nextCommit = await commitPlugin("demo", "2.0.0");
     const updated = await install(
-      requestDeferredPluginInstall({ spec, mode: "update", expectedPluginId: "demo" }),
+      requestDeferredPluginInstall({ spec, mode: "update" as const, expectedPluginId: "demo" }),
     );
     expect(await head(updated.targetDir)).toBe(nextCommit);
     const transaction = expectDefined(resolvePluginInstallTransaction(updated), "deferred update");
