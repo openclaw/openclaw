@@ -755,6 +755,32 @@ describe("Control UI plugin and catalog icon routes", () => {
     });
   });
 
+  it("revalidates an installed icon after replacement at the same package path", async () => {
+    const rootPath = tempDirs.make("openclaw-icon-update-");
+    const iconPath = path.join(rootPath, "icon.png");
+    writeFileSync(iconPath, PNG_BYTES);
+    mocks.resolveIconSource.mockResolvedValue([{ kind: "file", path: iconPath, rootPath }]);
+    mocks.encodeImage.mockResolvedValueOnce({ data: PNG_BYTES });
+    const first = await request("/__openclaw__/plugin-icon/firecrawl");
+    const etag = first.headers.get("etag") ?? "";
+    const cached = await request("/__openclaw__/plugin-icon/firecrawl", {
+      headers: { "If-None-Match": etag },
+    });
+    const replacement = path.join(rootPath, "replacement.png");
+    writeFileSync(replacement, PNG_BYTES);
+    renameSync(replacement, iconPath);
+    const updated = await request("/__openclaw__/plugin-icon/firecrawl", {
+      headers: { "If-None-Match": etag },
+    });
+
+    expect(first.headers.get("cache-control")).toBe("private, no-cache");
+    expect(cached.status).toBe(304);
+    expect(updated.status).toBe(200);
+    expect(updated.headers.get("etag")).not.toBe(etag);
+    expect(Buffer.from(await updated.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
+    expect(mocks.encodeImage).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes cached icon bytes after the cache lifetime", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {

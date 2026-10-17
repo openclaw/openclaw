@@ -1,5 +1,6 @@
 // Authenticated same-origin proxy for Gateway-owned Control UI icons.
 import { closeSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { fileTypeFromBuffer } from "file-type";
@@ -150,13 +151,25 @@ async function normalizeIconPayload(params: {
   return createHttpImageRepresentation(normalized.data, "image/png");
 }
 
+// Package updates replace files at the same path. Include filesystem identity
+// without weakening the root-scoped validation that owns the actual read.
+async function packageIconRevision(iconPath: string): Promise<string> {
+  try {
+    const stat = await lstat(iconPath, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch {
+    return "missing";
+  }
+}
+
 async function loadPackageIcon(params: {
   cacheScope: string;
   iconPath: string;
   rootPath: string;
   activity?: boolean;
 }): Promise<HttpImageRepresentation | null> {
-  const cacheKey = `${params.cacheScope}\0file:${params.rootPath}\0${params.iconPath}`;
+  const revision = await packageIconRevision(params.iconPath);
+  const cacheKey = `${params.cacheScope}\0file:${params.rootPath}\0${params.iconPath}\0${revision}`;
   const now = Date.now();
   const cached = readCachedIcon(cacheKey, now);
   if (cached) {
@@ -274,7 +287,12 @@ async function loadPluginIcon(
   cacheScope: string,
   sources: Awaited<ReturnType<typeof resolveManagedPluginIconSources>>,
 ): Promise<HttpImageRepresentation | null> {
-  const cacheKey = `${cacheScope}\0sources:${JSON.stringify(sources)}`;
+  const revisions = await Promise.all(
+    sources.map((source) =>
+      source.kind === "file" ? packageIconRevision(source.path) : Promise.resolve(""),
+    ),
+  );
+  const cacheKey = `${cacheScope}\0sources:${JSON.stringify(sources)}\0${revisions.join("\0")}`;
   const cached = pluginIconCache.peek(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return await cached.promise;
@@ -440,6 +458,7 @@ export async function handlePluginIconHttpRequest(
     req,
     res,
     image: icon,
+    ...(pluginId ? { cacheControl: "private, no-cache" } : {}),
     filename: faviconHostname
       ? "link-favicon"
       : activityRequest.matched
