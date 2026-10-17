@@ -56,6 +56,12 @@ function generate(overrides: Partial<GenerateImageParams> = {}) {
   });
 }
 
+function xaiConfig(overrides: { apiKey?: string; baseUrl?: string }) {
+  return {
+    models: { providers: { xai: { baseUrl: "https://api.x.ai/v1", models: [], ...overrides } } },
+  };
+}
+
 function mockImage(mime_type?: string, b64_json = Buffer.from("testpng").toString("base64")) {
   http.postJsonRequest.mockResolvedValue({
     response: Response.json({
@@ -115,17 +121,7 @@ describe("xai image generation provider", () => {
     expect(await isConfigured({})).toBe(false);
     expect(
       await isConfigured({
-        cfg: {
-          models: {
-            providers: {
-              xai: {
-                apiKey: "xai-image-test-key",
-                baseUrl: "https://api.x.ai/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: xaiConfig({ apiKey: "xai-image-test-key" }),
       }),
     ).toBe(true);
   });
@@ -142,16 +138,7 @@ describe("xai image generation provider", () => {
       prompt: "test prompt",
       aspectRatio: "20:9",
       resolution: "2K",
-      cfg: {
-        models: {
-          providers: {
-            xai: {
-              baseUrl: "https://custom.x.ai/v1",
-              models: [],
-            },
-          },
-        },
-      },
+      cfg: xaiConfig({ baseUrl: "https://custom.x.ai/v1" }),
     });
 
     expect(auth.mock.calls[0]?.[0]).toMatchObject({ provider: "xai" });

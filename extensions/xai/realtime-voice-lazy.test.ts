@@ -53,6 +53,9 @@ function expectCalls(expected: Record<string, unknown[][]>) {
   expect(calls).toEqual(expect.objectContaining(expected));
 }
 
+const overflow = (kind: "user message" | "tool result") =>
+  new Error(`xAI realtime voice pending ${kind} overflow during lazy startup`);
+
 describe("xAI lazy realtime voice", () => {
   it("preserves voice startup ordering and waits to trigger the greeting", async () => {
     const connecting = defer(mocks.voiceConnect);
@@ -70,13 +73,7 @@ describe("xAI lazy realtime voice", () => {
     await vi.waitFor(() => expect(mocks.voiceConnect).toHaveBeenCalledOnce());
     bridge.sendAudio(second);
 
-    expectNoCalls(
-      mocks.voiceSetMediaTimestamp,
-      mocks.voiceSendAudio,
-      mocks.voiceSendUserMessage,
-      mocks.voiceSubmitToolResult,
-      mocks.voiceTriggerGreeting,
-    );
+    expect(forwarded).toEqual([]);
 
     connecting.resolve();
     await connectPromise;
@@ -156,33 +153,42 @@ describe("xAI lazy realtime voice", () => {
     expect(mocks.voiceSubmitToolResult).not.toHaveBeenCalled();
   });
 
-  it("keeps voice payloads byte-bounded until the underlying connect resolves", async () => {
-    const connecting = defer(mocks.voiceConnect);
-    const { bridge, callback: onError } = await observedVoice("onError");
-    const acceptedMessage = "a".repeat(200 * 1024);
-    const acceptedResult = { text: "b".repeat(200 * 1024) };
-
-    const connectPromise = bridge.connect();
-    await vi.waitFor(() => expect(mocks.voiceConnect).toHaveBeenCalledOnce());
-    bridge.sendUserMessage?.(acceptedMessage);
-    bridge.sendUserMessage?.("c".repeat(64 * 1024));
-    await bridge.submitToolResult("call-1", acceptedResult);
-    expect(() => bridge.submitToolResult("call-2", { text: "d".repeat(64 * 1024) })).toThrow(
-      "xAI realtime voice pending tool result overflow during lazy startup",
-    );
-
-    expectNoCalls(mocks.voiceSendUserMessage, mocks.voiceSubmitToolResult);
-    expect(onError.mock.calls.map(([error]) => (error as Error).message)).toEqual([
-      "xAI realtime voice pending user message overflow during lazy startup",
-      "xAI realtime voice pending tool result overflow during lazy startup",
-    ]);
-
-    connecting.resolve();
-    await connectPromise;
-
-    expect(mocks.voiceSendUserMessage).toHaveBeenCalledExactlyOnceWith(acceptedMessage);
-    expectToolResult("call-1", acceptedResult);
-  });
+  it.each(["connecting", "submitting"] as const)(
+    "keeps pending voice payloads byte-bounded while %s",
+    async (phase) => {
+      const waitingFor = phase === "connecting" ? mocks.voiceConnect : mocks.voiceSubmitToolResult;
+      const blocked = defer(waitingFor);
+      const { bridge, callback: onError } = await observedVoice("onError");
+      const acceptedMessage = "a".repeat(200 * 1024);
+      const acceptedResult = { text: "b".repeat(200 * 1024) };
+      if (phase === "submitting") {
+        await bridge.submitToolResult("call-1", acceptedResult);
+      }
+      const connectPromise = bridge.connect();
+      await vi.waitFor(() => expect(waitingFor).toHaveBeenCalledOnce());
+      if (phase === "connecting") {
+        bridge.sendUserMessage?.(acceptedMessage);
+        bridge.sendUserMessage?.("c".repeat(64 * 1024));
+        await bridge.submitToolResult("call-1", acceptedResult);
+        expectNoCalls(mocks.voiceSendUserMessage, mocks.voiceSubmitToolResult);
+      } else {
+        expect(mocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
+      }
+      expect(() => bridge.submitToolResult("call-2", { text: "d".repeat(64 * 1024) })).toThrow(
+        overflow("tool result"),
+      );
+      expect(onError.mock.calls).toEqual([
+        ...(phase === "connecting" ? [[overflow("user message")]] : []),
+        [overflow("tool result")],
+      ]);
+      blocked.resolve();
+      await connectPromise;
+      if (phase === "connecting") {
+        expect(mocks.voiceSendUserMessage).toHaveBeenCalledExactlyOnceWith(acceptedMessage);
+      }
+      expectToolResult("call-1", acceptedResult);
+    },
+  );
 
   it("drains voice input queued while an earlier tool result is submitting", async () => {
     const submitting = createDeferred<void>();
@@ -208,27 +214,6 @@ describe("xAI lazy realtime voice", () => {
       ["timestamp", 84],
       ["tool", "call-2", { text: "second" }, undefined],
     ]);
-  });
-
-  it("keeps an in-flight voice tool result charged against the startup byte cap", async () => {
-    const submitting = defer(mocks.voiceSubmitToolResult);
-    const { bridge, callback: onError } = await observedVoice("onError");
-
-    await bridge.submitToolResult("call-1", { text: "a".repeat(200 * 1024) });
-    const connectPromise = bridge.connect();
-    await vi.waitFor(() => expect(mocks.voiceSubmitToolResult).toHaveBeenCalledOnce());
-    expect(() => bridge.submitToolResult("call-2", { text: "b".repeat(64 * 1024) })).toThrow(
-      "xAI realtime voice pending tool result overflow during lazy startup",
-    );
-
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      new Error("xAI realtime voice pending tool result overflow during lazy startup"),
-    );
-    expect(mocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
-
-    submitting.resolve();
-    await connectPromise;
-    expect(mocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
   });
 
   it("forwards all voice input admitted during the final connect handoff exactly once", async () => {
