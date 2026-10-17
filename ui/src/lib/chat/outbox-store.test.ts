@@ -47,6 +47,49 @@ function seedStore(
   );
 }
 
+function seedSource(
+  target: ReturnType<typeof storageTargetForGateway>,
+  version: number,
+  sessions: Record<string, unknown>,
+) {
+  const key =
+    version === 1
+      ? target.legacyKey
+      : version === 2
+        ? target.previousKey
+        : version === 3
+          ? target.blobKey
+          : target.key;
+  const source = JSON.stringify({
+    version,
+    ...(version !== 1 ? { gatewayOwner: target.gatewayOwner } : {}),
+    ...(version === 4 ? { recovery: {} } : {}),
+    sessions,
+  });
+  sessionStorage.setItem(key, source);
+  return { key, source };
+}
+
+const recoveryRow = (
+  sourceScopeKey: string,
+  session: StoredComposerState["sessions"][string],
+  sourceVersion: 1 | 2 | 3 | 4 = 4,
+) => ({ sourceVersion, sourceScopeKey, session });
+function storageEvent(key: string | null) {
+  const event = new StorageEvent("storage", { key });
+  Object.defineProperty(event, "storageArea", { value: sessionStorage });
+  window.dispatchEvent(event);
+}
+
+const badge = (
+  sessionKey: string,
+  agentId: string | undefined,
+  hasComposerDraft: boolean,
+  outboxAttentionCount = 0,
+) => ({ agentId, sessionKey, hasComposerDraft, outboxAttentionCount });
+const globalAgents = { defaultId: "main", mainKey: "workspace", scope: "global" };
+const selectedWork = { assistantAgentId: "work", agentsList: globalAgents };
+
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
@@ -102,26 +145,19 @@ describe("stored outbox summaries", () => {
     "retires acknowledged v%i private input after source deletion fails without reimporting queues",
     (version) => {
       const target = storageTargetForGateway("ws://acknowledged-private.test");
-      const sourceKey =
-        version === 1 ? target.legacyKey : version === 2 ? target.previousKey : target.blobKey;
       const scopeKey = storedChatOutboxScopeKey({
         sessionKey: "agent:main:dashboard:incognito-acknowledged",
       });
-      const source = JSON.stringify({
-        version,
-        ...(version !== 1 ? { gatewayOwner: target.gatewayOwner } : {}),
-        sessions: {
-          [scopeKey]: {
-            draft: "@Alex private legacy input",
-            draftMentions: [{ profileId: "alex", start: 0, end: 5 }],
-            goalMode: { action: "start", sessionId: "private-goal" },
-            queue: [{ id: "submitted", text: "Submitted message", createdAt: 1 }],
-            updatedAt: 1,
-          },
-          "main\u0000agent:main": { draft: "Ambiguous input", updatedAt: 1 },
+      const { key: sourceKey, source } = seedSource(target, version, {
+        [scopeKey]: {
+          draft: "@Alex private legacy input",
+          draftMentions: [{ profileId: "alex", start: 0, end: 5 }],
+          goalMode: { action: "start", sessionId: "private-goal" },
+          queue: [{ id: "submitted", text: "Submitted message", createdAt: 1 }],
+          updatedAt: 1,
         },
+        "main\u0000agent:main": { draft: "Ambiguous input", updatedAt: 1 },
       });
-      sessionStorage.setItem(sourceKey, source);
       const remove = sessionStorage.removeItem.bind(sessionStorage);
       let sourceRemovalBlocked = true;
       vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
@@ -161,8 +197,6 @@ describe("stored outbox summaries", () => {
     "retires private input in a deferred v%i source without changing queued or ambiguous data",
     (version) => {
       const target = storageTargetForGateway("ws://deferred-private.test");
-      const sourceKey =
-        version === 1 ? target.legacyKey : version === 2 ? target.previousKey : target.blobKey;
       const scopeKey = storedChatOutboxScopeKey({
         sessionKey: "agent:main:dashboard:incognito-deferred",
       });
@@ -176,23 +210,19 @@ describe("stored outbox summaries", () => {
         updatedAt: 1,
         unknownMetadata: "preserve",
       };
-      const source = {
-        version,
-        ...(version !== 1 ? { gatewayOwner: target.gatewayOwner } : {}),
-        sessions: {
-          [scopeKey]: privateRow,
-          "agent:main:dashboard:incognito-draft-only\u0000agent:main": {
-            draft: "Private draft without an explicit revision",
-            updatedAt: 2,
-          },
-          "agent:main:dashboard:incognito-goal-only\u0000agent:main": {
-            goalMode: { action: "start", sessionId: "private-goal" },
-            updatedAt: 3,
-          },
-          "main\u0000agent:main": { draft: "Ambiguous input", updatedAt: 1 },
+      const sessions = {
+        [scopeKey]: privateRow,
+        "agent:main:dashboard:incognito-draft-only\u0000agent:main": {
+          draft: "Private draft without an explicit revision",
+          updatedAt: 2,
         },
+        "agent:main:dashboard:incognito-goal-only\u0000agent:main": {
+          goalMode: { action: "start", sessionId: "private-goal" },
+          updatedAt: 3,
+        },
+        "main\u0000agent:main": { draft: "Ambiguous input", updatedAt: 1 },
       };
-      sessionStorage.setItem(sourceKey, JSON.stringify(source));
+      const { key: sourceKey, source } = seedSource(target, version, sessions);
       const store = {
         version: 4,
         gatewayOwner: target.gatewayOwner,
@@ -200,11 +230,7 @@ describe("stored outbox summaries", () => {
         recovery: Object.fromEntries(
           Array.from({ length: 80 }, (_, index) => [
             `existing-${index}`,
-            {
-              sourceVersion: 4,
-              sourceScopeKey: "main\u0000agent:main",
-              session: { draft: `Existing ${index}`, updatedAt: 1 },
-            },
+            recoveryRow("main\u0000agent:main", { draft: `Existing ${index}`, updatedAt: 1 }),
           ]),
         ),
       };
@@ -214,10 +240,10 @@ describe("stored outbox summaries", () => {
       const retained = JSON.parse(sessionStorage.getItem(sourceKey)!);
       const { draft: _draft, draftMentions: _mentions, goalMode: _goal, ...preserved } = privateRow;
       expect(retained).toEqual({
-        ...source,
+        ...JSON.parse(source),
         sessions: {
           [scopeKey]: preserved,
-          "main\u0000agent:main": source.sessions["main\u0000agent:main"],
+          "main\u0000agent:main": sessions["main\u0000agent:main"],
         },
       });
       expect(JSON.parse(sessionStorage.getItem(target.key)!)).toEqual(store);
@@ -245,23 +271,19 @@ describe("stored outbox summaries", () => {
     const state = ownedState(target.gatewayOwner);
     const scopeKey = "global\u0000agent:main";
     const fence = { draftRevision: 100, updatedAt: 100 };
-    sessionStorage.setItem(
-      target.key,
-      JSON.stringify({
-        version: 4,
-        gatewayOwner: target.gatewayOwner,
-        sessions: { [scopeKey]: fence },
-        recovery: Object.fromEntries(
-          Array.from({ length: 80 }, (_, index) => [
-            "empty-" + index,
-            {
-              sourceVersion: 3,
-              sourceScopeKey: "old-" + index + "\u0000agent:main",
-              session: { draftRevision: index + 1, updatedAt: index + 1 },
-            },
-          ]),
-        ),
-      }),
+    seedStore(
+      target,
+      { [scopeKey]: fence },
+      Object.fromEntries(
+        Array.from({ length: 80 }, (_, index) => [
+          "empty-" + index,
+          recoveryRow(
+            "old-" + index + "\u0000agent:main",
+            { draftRevision: index + 1, updatedAt: index + 1 },
+            3,
+          ),
+        ]),
+      ),
     );
     const source = JSON.stringify({
       version: 3,
@@ -288,27 +310,17 @@ describe("stored outbox summaries", () => {
     const target = storageTargetForGateway("ws://private-recovery.test");
     const sessionKey = "agent:main:dashboard:incognito-recovery";
     const scopeKey = storedChatOutboxScopeKey({ sessionKey });
-    sessionStorage.setItem(
-      target.key,
-      JSON.stringify({
-        version: 4,
-        gatewayOwner: target.gatewayOwner,
-        sessions: {},
-        recovery: {
-          legacy: {
-            sourceVersion: 4,
-            sourceScopeKey: scopeKey,
-            session: {
-              draft: "private recovery input",
-              draftRevision: 4,
-              updatedAt: 1,
-              queue: [
-                { id: "submitted", text: "Submitted message", createdAt: 1, sendState: "held" },
-              ],
-            },
-          },
-        },
-      }),
+    seedStore(
+      target,
+      {},
+      {
+        legacy: recoveryRow(scopeKey, {
+          draft: "private recovery input",
+          draftRevision: 4,
+          updatedAt: 1,
+          queue: [{ id: "submitted", text: "Submitted message", createdAt: 1, sendState: "held" }],
+        }),
+      },
     );
     const state = {
       settings: { gatewayUrl: target.gatewayOwner },
@@ -356,28 +368,20 @@ describe("stored outbox summaries", () => {
       writeStoredOutboxStore(sessionStorage, target, store);
       mentions[0]!.profileId = "later-selection";
     } else {
-      sessionStorage.setItem(
-        target.key,
-        JSON.stringify({
-          version: 4,
-          gatewayOwner: target.gatewayOwner,
-          recovery: {},
-          sessions: {
-            [scopeKey]: {
-              queue: [
-                {
-                  id: "corrupt-mention",
-                  text: "@Alex review",
-                  mentions: invalid,
-                  createdAt: 1,
-                  sendState: "waiting-reconnect",
-                },
-              ],
-              updatedAt: 1,
+      seedSource(target, 4, {
+        [scopeKey]: {
+          queue: [
+            {
+              id: "corrupt-mention",
+              text: "@Alex review",
+              mentions: invalid,
+              createdAt: 1,
+              sendState: "waiting-reconnect",
             },
-          },
-        }),
-      );
+          ],
+          updatedAt: 1,
+        },
+      });
     }
     const restored = readStoredOutboxStore(sessionStorage, target).sessions[scopeKey];
     if (invalid === undefined) {
@@ -443,9 +447,7 @@ describe("stored outbox summaries", () => {
       expect(summary.hasSessionDraft("agent:main:summary")).toBe(false);
 
       sessionStorage.setItem(storageKey, stored(["first", "second"]));
-      const event = new StorageEvent("storage", { key: storageKey });
-      Object.defineProperty(event, "storageArea", { value: sessionStorage });
-      window.dispatchEvent(event);
+      storageEvent(storageKey);
       const refreshed = readProjectedOutboxStore(sessionStorage, target);
       expect(refreshed).not.toBe(first);
       expect(
@@ -472,22 +474,13 @@ describe("stored outbox summaries", () => {
     "retains the last v%i source when quota blocks verified retirement",
     (version) => {
       const target = storageTargetForGateway("ws://gateway.test/control");
-      const sourceKey =
-        version === 1 ? target.legacyKey : version === 2 ? target.previousKey : target.blobKey;
       const scopeKey = storedChatOutboxScopeKey({ sessionKey: "thread", agentId: "main" });
-      sessionStorage.setItem(
-        sourceKey,
-        JSON.stringify({
-          version,
-          ...(version !== 1 ? { gatewayOwner: target.gatewayOwner } : {}),
-          sessions: {
-            [scopeKey]: {
-              queue: [{ id: "queued", text: "retire me", createdAt: 1 }],
-              updatedAt: 1,
-            },
-          },
-        }),
-      );
+      const { key: sourceKey } = seedSource(target, version, {
+        [scopeKey]: {
+          queue: [{ id: "queued", text: "retire me", createdAt: 1 }],
+          updatedAt: 1,
+        },
+      });
       vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
         throw new DOMException("quota exceeded", "QuotaExceededError");
       });
@@ -507,27 +500,17 @@ describe("stored outbox summaries", () => {
     const unsubscribe = subscribeStoredChatOutboxChanges(listener);
     const gatewayUrls = ["ws://first.test/control", "ws://second.test/control"];
     for (const gatewayUrl of gatewayUrls) {
-      sessionStorage.setItem(
-        storageTargetForGateway(gatewayUrl, "summary-owner").key,
-        JSON.stringify({
-          version: 4,
-          recovery: {},
-          gatewayOwner: gatewayUrl,
-          sessions: {
-            "thread\u0000agent:main": {
-              queue: ownedQueue(gatewayUrl, [{ id: gatewayUrl, text: gatewayUrl, createdAt: 1 }]),
-              updatedAt: 1,
-            },
-          },
-        }),
-      );
+      seedStore(storageTargetForGateway(gatewayUrl, "summary-owner"), {
+        "thread\u0000agent:main": {
+          queue: ownedQueue(gatewayUrl, [{ id: gatewayUrl, text: gatewayUrl, createdAt: 1 }]),
+          updatedAt: 1,
+        },
+      });
       expect(createStoredChatOutboxReader().read(ownedState(gatewayUrl)).total).toBe(1);
     }
 
     sessionStorage.clear();
-    const storageEvent = new StorageEvent("storage", { key: null });
-    Object.defineProperty(storageEvent, "storageArea", { value: sessionStorage });
-    window.dispatchEvent(storageEvent);
+    storageEvent(null);
     unsubscribe();
 
     for (const gatewayUrl of gatewayUrls) {
@@ -652,30 +635,21 @@ describe("stored outbox summaries", () => {
     },
     {
       name: "raw global and qualified selected-agent aliases",
-      state: {
-        assistantAgentId: "work",
-        agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
-      },
+      state: selectedWork,
       storedKey: "global\u0000agent:work",
       present: ["global", "agent:work:main", "agent:work:workspace"],
       absent: ["main", "workspace", "agent:main:main", "agent:work:global"],
     },
     {
       name: "global default-main aliases with another agent selected",
-      state: {
-        assistantAgentId: "work",
-        agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
-      },
+      state: selectedWork,
       storedKey: "global\u0000agent:main",
       present: ["main", "workspace", "agent:main:main"],
       absent: ["global", "agent:work:main"],
     },
     {
       name: "qualified global-named session",
-      state: {
-        assistantAgentId: "work",
-        agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
-      },
+      state: selectedWork,
       storedKey: "agent:work:global\u0000agent:work",
       present: ["agent:work:global"],
       absent: ["global", "main", "agent:work:main"],
@@ -813,12 +787,7 @@ describe("stored outbox summaries", () => {
           { id: "held", text: "private queue", createdAt: 9, sendState: "held" },
           { id: "failed", text: "failed", createdAt: 10, sendState: "failed" },
           { id: "failed", text: "duplicate", createdAt: 11, sendState: "failed" },
-          {
-            id: "unconfirmed",
-            text: "unconfirmed",
-            createdAt: 12,
-            sendState: "unconfirmed",
-          },
+          { id: "unconfirmed", text: "unconfirmed", createdAt: 12, sendState: "unconfirmed" },
           {
             id: "unconfirmed",
             text: "duplicate uncertainty",
@@ -837,12 +806,7 @@ describe("stored outbox summaries", () => {
       },
       "thread-b\u0000agent:main": {
         queue: ownedQueue(gatewayUrl, [
-          {
-            id: "unconfirmed",
-            text: "other scope",
-            createdAt: 14,
-            sendState: "unconfirmed",
-          },
+          { id: "unconfirmed", text: "other scope", createdAt: 14, sendState: "unconfirmed" },
         ]),
         updatedAt: 14,
       },
@@ -851,24 +815,9 @@ describe("stored outbox summaries", () => {
     const summary = createStoredChatOutboxReader().read(ownedState(gatewayUrl));
     expect(summary.total).toBe(9);
     expect(summary.sessions).toEqual([
-      {
-        agentId: "main",
-        sessionKey: "agent:main:a",
-        hasComposerDraft: true,
-        outboxAttentionCount: 0,
-      },
-      {
-        agentId: "work",
-        sessionKey: "agent:work:b",
-        hasComposerDraft: false,
-        outboxAttentionCount: 4,
-      },
-      {
-        agentId: undefined,
-        sessionKey: "thread-b",
-        hasComposerDraft: false,
-        outboxAttentionCount: 1,
-      },
+      badge("agent:main:a", "main", true),
+      badge("agent:work:b", "work", false, 4),
+      badge("thread-b", undefined, false, 1),
     ]);
     expect(summary.attentionCountForSession("agent:work:b")).toBe(4);
     expect(summary.attentionCountForSession("thread-b")).toBe(1);
@@ -878,26 +827,20 @@ describe("stored outbox summaries", () => {
   it("derives badges and replay from the same migrated durable queue", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
-    sessionStorage.setItem(
-      legacyKey,
-      JSON.stringify({
-        version: 1,
-        sessions: {
-          "main\u0000agent:previous": {
-            queue: [
-              { id: "removed", text: "removed", createdAt: 1 },
-              { id: "shared", text: "older", createdAt: 2 },
-            ],
-            removedQueueItemIds: ["removed"],
-            updatedAt: 2,
-          },
-          "global\u0000agent:work": {
-            queue: [{ id: "shared", text: "newer", createdAt: 3 }],
-            updatedAt: 3,
-          },
-        },
-      }),
-    );
+    seedSource(storageTargetForGateway(gatewayUrl), 1, {
+      "main\u0000agent:previous": {
+        queue: [
+          { id: "removed", text: "removed", createdAt: 1 },
+          { id: "shared", text: "older", createdAt: 2 },
+        ],
+        removedQueueItemIds: ["removed"],
+        updatedAt: 2,
+      },
+      "global\u0000agent:work": {
+        queue: [{ id: "shared", text: "newer", createdAt: 3 }],
+        updatedAt: 3,
+      },
+    });
     const state = {
       ...ownedState(gatewayUrl),
       assistantAgentId: "work",

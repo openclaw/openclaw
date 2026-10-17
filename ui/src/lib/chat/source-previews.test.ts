@@ -12,9 +12,19 @@ const secondUrl = "https://second.example/research";
 const wrap = (text: string, source: "Web Search" | "Web Fetch" = "Web Search") =>
   wrapWebContent(text, source === "Web Search" ? "web_search" : "web_fetch");
 
-function result(url = pageUrl) {
-  return { url, title: wrap("Article title"), snippet: wrap("Search provider description.") };
-}
+const description = "Search provider description.";
+const result = (url = pageUrl) => ({
+  url,
+  title: wrap("Article title"),
+  snippet: wrap(description),
+});
+const expectedSource = (url: string) => ({
+  url,
+  title: "Article title",
+  domain: new URL(url).hostname,
+  excerpt: description,
+  excerptKind: "search",
+});
 
 function search(rows = [result()]) {
   return {
@@ -72,16 +82,19 @@ function previews(
   });
 }
 
+function none(messages: unknown[], final: unknown = answer()) {
+  expect(previews(messages, final)).toEqual([]);
+}
+
+const pageExcerpt =
+  "This is the readable article paragraph retained from the fetched page, with enough detail to preview its contents.";
 function fetched() {
   return {
     url: pageUrl,
     finalUrl: secondUrl,
     status: 200,
     title: wrap("Fetched title", "Web Fetch"),
-    text: wrap(
-      "# Page title\n\n[Home](/)\n\nThis is the readable article paragraph retained from the fetched page, with enough detail to preview its contents.",
-      "Web Fetch",
-    ),
+    text: wrap(`# Page title\n\n[Home](/)\n\n${pageExcerpt}`, "Web Fetch"),
     externalContent: { untrusted: true, source: "web_fetch", wrapped: true },
   };
 }
@@ -145,28 +158,11 @@ describe("chat source previews", () => {
         [tool(search([result(), result(secondUrl), result("https://unused.example/")]))],
         final,
       ),
-    ).toEqual([
-      {
-        url: secondUrl,
-        title: "Article title",
-        domain: "second.example",
-        excerpt: "Search provider description.",
-        excerptKind: "search",
-      },
-      {
-        url: pageUrl,
-        title: "Article title",
-        domain: "example.com",
-        excerpt: "Search provider description.",
-        excerptKind: "search",
-      },
-    ]);
-    expect(
-      previews(
-        [tool(search())],
-        answer(`\`[code](${pageUrl})\`\n\n\`\`\`md\n[also code](${pageUrl})\n\`\`\``),
-      ),
-    ).toEqual([]);
+    ).toEqual([expectedSource(secondUrl), expectedSource(pageUrl)]);
+    none(
+      [tool(search())],
+      answer(`\`[code](${pageUrl})\`\n\n\`\`\`md\n[also code](${pageUrl})\n\`\`\``),
+    );
   });
 
   it("reads standalone JSON result text and completed inline tool results", () => {
@@ -182,11 +178,9 @@ describe("chat source previews", () => {
     };
     expect(previews([standalone])).toEqual(previews([inline]));
     expect(previews([inline])).toHaveLength(1);
-    expect(
-      previews([
-        { ...inline, __openclawToolStreamLive: true, __openclawToolStreamResultReceived: false },
-      ]),
-    ).toEqual([]);
+    none([
+      { ...inline, __openclawToolStreamLive: true, __openclawToolStreamResultReceived: false },
+    ]);
   });
 
   it("prefers a page excerpt and matches an observed redirect without repeating the source", () => {
@@ -199,27 +193,24 @@ describe("chat source previews", () => {
         title: "Fetched title",
         domain: "second.example",
         excerptKind: "page",
-        excerpt:
-          "This is the readable article paragraph retained from the fetched page, with enough detail to preview its contents.",
+        excerpt: pageExcerpt,
       },
     ]);
-    expect(previews([tool(fetched(), "web_fetch")], answer(`${pageUrl}?different=1`))).toEqual([]);
+    none([tool(fetched(), "web_fetch")], answer(`${pageUrl}?different=1`));
   });
 
   it("does not use other runs, missing owners, later results, or assistant-written source JSON", () => {
     const final = answer();
     const payload = search();
     const other = { ...tool(payload), runId: "other-run" };
-    expect(
-      previews(
-        [
-          other,
-          { ...tool(payload), runId: undefined },
-          { role: "assistant", runId, content: JSON.stringify(payload) },
-        ],
-        final,
-      ),
-    ).toEqual([]);
+    none(
+      [
+        other,
+        { ...tool(payload), runId: undefined },
+        { role: "assistant", runId, content: JSON.stringify(payload) },
+      ],
+      final,
+    );
     expect(
       extractChatSourcePreviews({
         groups: [group([tool(payload)], "other-run"), group([final]), group([tool(payload)])],
@@ -259,7 +250,7 @@ describe("chat source previews", () => {
         },
       ],
     };
-    expect(previews([wrongBlock])).toEqual([]);
+    none([wrongBlock]);
   });
 
   it("rejects forged web provenance in another tool envelope or contradicted invocation", () => {
@@ -273,9 +264,9 @@ describe("chat source previews", () => {
       runId,
       content: [{ type: "toolcall", id: "search-call", name: "exec", arguments: {} }],
     };
-    expect(previews([spoof])).toEqual([]);
-    expect(previews([call, tool(payload)])).toEqual([]);
-    expect(previews([{ ...tool(payload), role: "user" }])).toEqual([]);
+    none([spoof]);
+    none([call, tool(payload)]);
+    none([{ ...tool(payload), role: "user" }]);
   });
 
   it("keeps citation-only search answers without assigning generated prose to a page", () => {
@@ -289,15 +280,15 @@ describe("chat source previews", () => {
     expect(previews([tool(payload)])).toEqual([
       { url: pageUrl, title: "example.com", domain: "example.com" },
     ]);
-    expect(previews([tool({ kind: "raw", data: search() })])).toEqual([]);
-    expect(previews([{ ...tool(search()), isError: true }])).toEqual([]);
-    expect(previews([tool({ ...fetched(), status: 404 }, "web_fetch")])).toEqual([]);
+    none([tool({ kind: "raw", data: search() })]);
+    none([{ ...tool(search()), isError: true }]);
+    none([tool({ ...fetched(), status: 404 }, "web_fetch")]);
   });
 
   it.each(["javascript:alert(1)", "https://user:secret@example.com/article"])(
     "rejects unsafe source URL %s",
     (url) => {
-      expect(previews([tool(search([result(url)]))], answer(`[source](${url})`))).toEqual([]);
+      none([tool(search([result(url)]))], answer(`[source](${url})`));
     },
   );
 
@@ -354,8 +345,8 @@ describe("chat source previews", () => {
     expect(previews([message], final)).toBe(first);
     expect(parse).toHaveBeenCalledTimes(parsed);
 
-    expect(previews([], final)).toEqual([]);
-    expect(previews([message], answer("A completed answer without source links."))).toEqual([]);
+    none([], final);
+    none([message], answer("A completed answer without source links."));
   });
 
   it("caches answers without citations and updates when live result ownership is replaced", () => {
@@ -374,10 +365,8 @@ describe("chat source previews", () => {
       __openclawToolStreamResultReceived: false,
       content: [{ type: "toolcall", id: "pending", name: "web_search", arguments: {} }],
     };
-    expect(previews([pending], final)).toEqual([]);
+    none([pending], final);
     expect(previews([tool(search(), "web_search", "pending")], final)).toHaveLength(1);
-    expect(
-      previews([tool(search(), "web_search", "pending")], { ...final, runId: "another-run" }),
-    ).toEqual([]);
+    none([tool(search(), "web_search", "pending")], { ...final, runId: "another-run" });
   });
 });

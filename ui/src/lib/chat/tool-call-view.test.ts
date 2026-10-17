@@ -1,7 +1,11 @@
 // @vitest-environment node
-// Control UI tests cover tool-call classification and view-model resolution.
 import { describe, expect, it } from "vitest";
 import { resolveToolCallView } from "./tool-call-view.ts";
+
+function resolve(name: string, args?: unknown, details?: unknown) {
+  return resolveToolCallView({ name, args, details });
+}
+const editArgs = { path: "/repo/a.ts", oldText: "old", newText: "new" };
 
 describe("tool detail kinds", () => {
   it.each([
@@ -13,42 +17,34 @@ describe("tool detail kinds", () => {
     ["run_shell", { command: "ls" }, "command"],
     ["run_shell", { command: "ls", a: 1, b: 2, c: 3 }, "generic"],
   ] as const)("classifies %s with args %o as %s", (name, args, expected) => {
-    expect(resolveToolCallView({ name, args }).kind).toBe(expected);
+    expect(resolve(name, args).kind).toBe(expected);
   });
 
   it.each(["str_replace_editor"])("keeps unsupported %s editor commands generic", (name) => {
     for (const args of [{}, { command: "rename" }]) {
-      expect(resolveToolCallView({ name, args }).kind).toBe("generic");
+      expect(resolve(name, args).kind).toBe("generic");
     }
   });
 });
 
 describe("shell command views", () => {
   it.each([["sh -lc 'echo hi'", "echo hi"]])("unwraps %s", (wrapped, expected) => {
-    expect(resolveToolCallView({ name: "bash", args: { command: wrapped } }).command).toBe(
-      expected,
-    );
+    expect(resolve("bash", { command: wrapped }).command).toBe(expected);
   });
 });
 
 describe("resolveToolCallView", () => {
   it.each(["str_replace_editor"])("resolves %s command-specific views", (name) => {
     expect(
-      resolveToolCallView({
-        name,
-        args: { command: "view", file_path: "/repo/view.ts", view_range: [10, 20] },
-      }),
+      resolve(name, { command: "view", file_path: "/repo/view.ts", view_range: [10, 20] }),
     ).toEqual({ kind: "read", target: "view.ts", targetDetail: "/repo" });
 
     expect(
-      resolveToolCallView({
-        name,
-        args: {
-          command: "str_replace",
-          file: "/repo/edit.ts",
-          old_str: "before",
-          new_str: "after",
-        },
+      resolve(name, {
+        command: "str_replace",
+        file: "/repo/edit.ts",
+        old_str: "before",
+        new_str: "after",
       }),
     ).toMatchObject({
       kind: "edit",
@@ -61,24 +57,14 @@ describe("resolveToolCallView", () => {
     });
 
     expect(
-      resolveToolCallView({
-        name,
-        args: { command: "create", filepath: "/repo/new.ts", file_text: "one\ntwo\n" },
-      }),
-    ).toMatchObject({
-      kind: "write",
-      target: "new.ts",
-      stat: { added: 2, removed: 0 },
-    });
+      resolve(name, { command: "create", filepath: "/repo/new.ts", file_text: "one\ntwo\n" }),
+    ).toMatchObject({ kind: "write", target: "new.ts", stat: { added: 2, removed: 0 } });
 
-    const insertion = resolveToolCallView({
-      name,
-      args: {
-        command: "insert",
-        filename: "/repo/insert.ts",
-        insert_line: 42,
-        insert_text: "x\ny",
-      },
+    const insertion = resolve(name, {
+      command: "insert",
+      filename: "/repo/insert.ts",
+      insert_line: 42,
+      insert_text: "x\ny",
     });
     expect(insertion).toMatchObject({
       kind: "edit",
@@ -91,57 +77,38 @@ describe("resolveToolCallView", () => {
     expect(insertion.stat).toBeUndefined();
 
     expect(
-      resolveToolCallView({
-        name,
-        args: {
-          command: "undo_edit",
-          path: "/repo/undo.ts",
-          old_str: "must not",
-          new_str: "render",
-        },
+      resolve(name, {
+        command: "undo_edit",
+        path: "/repo/undo.ts",
+        old_str: "must not",
+        new_str: "render",
       }),
     ).toEqual({ kind: "edit", target: "undo.ts", targetDetail: "/repo" });
   });
 
   it("omits exact stats for truncated persisted details diffs", () => {
-    const view = resolveToolCallView({
-      name: "edit",
-      args: { path: "/repo/a.ts", oldText: "old", newText: "new" },
-      details: { diff: "+12 detail new\n...(truncated)..." },
-    });
+    const result = resolve("edit", editArgs, { diff: "+12 detail new\n...(truncated)..." });
 
-    expect(view.diff).toEqual([
+    expect(result.diff).toEqual([
       { kind: "add", lineNo: 12, text: "detail new" },
       { kind: "skip", text: "" },
     ]);
-    expect(view.stat).toBeUndefined();
+    expect(result.stat).toBeUndefined();
   });
 
   it("falls back to arg diffs when the details diff is unparseable", () => {
-    const view = resolveToolCallView({
-      name: "edit",
-      args: { path: "/repo/a.ts", oldText: "old", newText: "new" },
-      details: { diff: "raw unnumbered text" },
-    });
+    const result = resolve("edit", editArgs, { diff: "raw unnumbered text" });
 
-    expect(view.diff).toEqual([
+    expect(result.diff).toEqual([
       { kind: "del", text: "old" },
       { kind: "add", text: "new" },
     ]);
   });
 
   it("keeps multi-file Codex patches separated and counts every target", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: src/a.ts",
-      "@@",
-      "-old a",
-      "+new a",
-      "*** Add File: src/b.ts",
-      "+new b",
-      "*** Delete File: src/c.ts",
-      "*** End Patch",
-    ].join("\n");
+    const patch =
+      "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old a\n+new a\n" +
+      "*** Add File: src/b.ts\n+new b\n*** Delete File: src/c.ts\n*** End Patch";
 
     const view = resolveToolCallView({ name: "apply_patch", args: { patch } });
 
@@ -161,15 +128,9 @@ describe("resolveToolCallView", () => {
   });
 
   it("retains source context for Codex moves", () => {
-    const patch = [
-      "*** Begin Patch",
-      "*** Update File: src/old.ts",
-      "*** Move to: src/new.ts",
-      "@@",
-      "-old",
-      "+new",
-      "*** End Patch",
-    ].join("\n");
+    const patch =
+      "*** Begin Patch\n*** Update File: src/old.ts\n" +
+      "*** Move to: src/new.ts\n@@\n-old\n+new\n*** End Patch";
 
     const view = resolveToolCallView({ name: "apply_patch", args: { patch } });
 
@@ -178,21 +139,10 @@ describe("resolveToolCallView", () => {
   });
 
   it("splits headerless multi-file unified diffs and numbers hunks", () => {
-    const patch = [
-      "--- a/src/a.ts",
-      "+++ b/src/a.ts",
-      "@@ -10,3 +10,4 @@",
-      " context",
-      "-old",
-      "+new",
-      "+extra",
-      " tail",
-      "--- a/src/b.ts",
-      "+++ b/src/b.ts",
-      "@@ -1 +1 @@",
-      "-before",
-      "+after",
-    ].join("\n");
+    const patch =
+      "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -10,3 +10,4 @@\n" +
+      " context\n-old\n+new\n+extra\n tail\n" +
+      "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-before\n+after";
 
     const view = resolveToolCallView({ name: "apply_patch", args: { patch } });
 
@@ -283,11 +233,7 @@ describe("resolveToolCallView", () => {
     const args = { path: "/repo/file.ts", content: "line 1\nline 2\n" };
 
     expect(
-      resolveToolCallView({
-        name: "write",
-        args,
-        details: { created: false, diff: "-4 old\n+4 replacement" },
-      }),
+      resolve("write", args, { created: false, diff: "-4 old\n+4 replacement" }),
     ).toMatchObject({
       diff: [
         { kind: "del", lineNo: 4, text: "old" },
@@ -296,21 +242,21 @@ describe("resolveToolCallView", () => {
       stat: { added: 1, removed: 1 },
     });
 
-    const created = resolveToolCallView({ name: "write", args, details: { created: true } });
+    const created = resolve("write", args, { created: true });
     expect(created.stat).toEqual({ added: 2, removed: 0 });
 
-    const overwrite = resolveToolCallView({ name: "write", args, details: { created: false } });
+    const overwrite = resolve("write", args, { created: false });
     expect(overwrite.diff).toEqual([
       { kind: "add", lineNo: 1, text: "line 1" },
       { kind: "add", lineNo: 2, text: "line 2" },
     ]);
     expect(overwrite.stat).toBeUndefined();
 
-    const unknown = resolveToolCallView({ name: "write", args, details: { changed: true } });
+    const unknown = resolve("write", args, { changed: true });
     expect(unknown.diff).toEqual(overwrite.diff);
     expect(unknown.stat).toBeUndefined();
 
-    expect(resolveToolCallView({ name: "write", args, details: { changed: false } })).toEqual({
+    expect(resolve("write", args, { changed: false })).toEqual({
       kind: "write",
       target: "file.ts",
       targetDetail: "/repo",
@@ -328,12 +274,8 @@ describe("resolveToolCallView", () => {
   it("rebuilds the cached view when result details arrive on the same args", () => {
     const args = { path: "/repo/a.md", edits: [{ oldText: "x", newText: "y" }] };
 
-    const before = resolveToolCallView({ name: "edit", args });
-    const after = resolveToolCallView({
-      name: "edit",
-      args,
-      details: { diff: "+12 hello", patch: "" },
-    });
+    const before = resolve("edit", args);
+    const after = resolve("edit", args, { diff: "+12 hello", patch: "" });
 
     expect(before.diff?.[0]?.lineNo).toBeUndefined();
     expect(after.diff?.[0]).toMatchObject({ kind: "add", lineNo: 12, text: "hello" });
@@ -348,19 +290,13 @@ describe("resolveToolCallView", () => {
   it("keeps tool-name presentation authoritative when different calls share args", () => {
     const args = { path: "/repo/a.ts", oldText: "before", newText: "after" };
 
-    expect(resolveToolCallView({ name: "read", args })).toMatchObject({
-      kind: "read",
-      target: "a.ts",
-    });
-    expect(resolveToolCallView({ name: "edit", args })).toMatchObject({
+    expect(resolve("read", args)).toMatchObject({ kind: "read", target: "a.ts" });
+    expect(resolve("edit", args)).toMatchObject({
       kind: "edit",
       target: "a.ts",
       stat: { added: 1, removed: 1 },
     });
-    expect(resolveToolCallView({ name: "write", args })).toMatchObject({
-      kind: "write",
-      target: "a.ts",
-    });
-    expect(resolveToolCallView({ name: "READ", args }).kind).toBe("read");
+    expect(resolve("write", args)).toMatchObject({ kind: "write", target: "a.ts" });
+    expect(resolve("READ", args).kind).toBe("read");
   });
 });

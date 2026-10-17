@@ -69,7 +69,8 @@ function fixture(kind: "queue" | "draft", sibling = false) {
     readChatOutboxRecovery(state).entries.find((row) => row.sourceScopeKey === sourceScope)!;
   const destination = (scope = firstScope) => captureChatOutboxRecoveryDestination(state, scope)!;
   const stored = () => readStoredOutboxStore(sessionStorage, storageTargetForComposer(state));
-  return { state, session, source, entry, destination, stored };
+  const entries = () => readChatOutboxRecovery(state).entries;
+  return { state, session, source, entry, destination, stored, entries };
 }
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {
@@ -110,10 +111,8 @@ it.each(["original-attempt", "original-attempt:user"])(
         __openclaw: { id: "delivered", idempotencyKey },
       },
     ];
-    expect(
-      retireDeliveredChatOutboxRecovery(f.state, readChatOutboxRecovery(f.state).entries),
-    ).toBe("retired");
-    expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+    expect(retireDeliveredChatOutboxRecovery(f.state, f.entries())).toBe("retired");
+    expect(f.entries()).toEqual([]);
     expect(f.stored().recovery).toEqual({});
     expect(f.stored().sessions).toEqual({});
     expect(f.state.chatQueue).toEqual([]);
@@ -159,9 +158,9 @@ it.each([
     writeStoredOutboxStore(sessionStorage, f.source, legacy);
   }
   const before = sessionStorage.getItem(f.source.key);
-  const entries = readChatOutboxRecovery(f.state).entries;
+  const entries = f.entries();
   expect(retireDeliveredChatOutboxRecovery(f.state, entries)).toBe("unchanged");
-  expect(readChatOutboxRecovery(f.state).entries).toEqual(entries);
+  expect(f.entries()).toEqual(entries);
   expect(sessionStorage.getItem(f.source.key)).toBe(before);
   expect(f.stored().recovery).toEqual({});
 });
@@ -186,13 +185,11 @@ it("retains the draft and unproven inputs when only one owned submission was del
   f.state.chatMessages = [
     { role: "user", __openclaw: { seq: 7, idempotencyKey: "original-attempt:user" } },
   ];
-  expect(retireDeliveredChatOutboxRecovery(f.state, readChatOutboxRecovery(f.state).entries)).toBe(
-    "retired",
-  );
-  expect(readChatOutboxRecovery(f.state).entries).toMatchObject([
+  expect(retireDeliveredChatOutboxRecovery(f.state, f.entries())).toBe("retired");
+  expect(f.entries()).toMatchObject([
     { id: "owned", session: { draft: "Keep this draft", queue: [{ id: "unsent" }] } },
   ]);
-  expect(readChatOutboxRecovery(f.state).entries[0]!.session.queue).toHaveLength(1);
+  expect(f.entries()[0]!.session.queue).toHaveLength(1);
 });
 
 it.each(["recovery", "history"] as const)(
@@ -202,7 +199,7 @@ it.each(["recovery", "history"] as const)(
     f.state.chatMessages = [
       { role: "user", __openclaw: { id: "delivered", idempotencyKey: "original-attempt" } },
     ];
-    const entries = readChatOutboxRecovery(f.state).entries;
+    const entries = f.entries();
     if (change === "recovery") {
       const legacy = readStoredOutboxStore(sessionStorage, f.source);
       legacy.sessions[sourceScope]!.draft = "Newer intent";
@@ -221,7 +218,7 @@ it.each(["recovery", "history"] as const)(
     if (change === "recovery") {
       expect(sessionStorage.getItem(f.source.key)).toBe(before);
     }
-    expect(readChatOutboxRecovery(f.state).entries[0]?.session.queue).toHaveLength(1);
+    expect(f.entries()[0]?.session.queue).toHaveLength(1);
   },
 );
 
@@ -236,9 +233,7 @@ it("does not offer clear fences as saved messages or erase canonical clear fence
   owned.recovery.cleared = { sourceVersion: 4, sourceScopeKey: sourceScope, session: fence };
   writeStoredOutboxStore(sessionStorage, storageTargetForComposer(f.state), owned);
   const before = sessionStorage.getItem(f.source.key);
-  expect(readChatOutboxRecovery(f.state).entries.map((entry) => entry.session.draft)).toEqual([
-    "Retained draft 雪",
-  ]);
+  expect(f.entries().map((entry) => entry.session.draft)).toEqual(["Retained draft 雪"]);
   expect(sessionStorage.getItem(f.source.key)).toBe(before);
   expect(f.stored().recovery.cleared).toBeUndefined();
   expect(
@@ -278,7 +273,7 @@ it("keeps textless attachment, goal, and reply recovery actionable", () => {
     },
   };
   writeStoredOutboxStore(sessionStorage, f.source, legacy);
-  expect(readChatOutboxRecovery(f.state).entries.map((entry) => entry.id)).toEqual([
+  expect(f.entries().map((entry) => entry.id)).toEqual([
     "legacy-recovery:attachment",
     "legacy-recovery:goal",
     "legacy-recovery:reply",
@@ -301,9 +296,7 @@ it.each(["queue", "draft"] as const)(
     expect(discardChatOutboxRecovery(f.state, entry)).toBe("discarded");
     expect(f.state.chatMessage).toBe("current input");
     expect(f.stored().sessions).toEqual(owned.sessions);
-    expect(readChatOutboxRecovery(f.state).entries.map((row) => row.session.draft)).toEqual([
-      "untouched",
-    ]);
+    expect(f.entries().map((row) => row.session.draft)).toEqual(["untouched"]);
     expect(discardChatOutboxRecovery(f.state, entry)).toBe("conflict");
   },
 );
@@ -365,7 +358,7 @@ it.each(["claim", "stage", "retire", "discard"] as const)(
     expect(f.stored().sessions).toEqual({});
     expect(f.entry().session).toEqual(f.session);
     expect(discardChatOutboxRecovery(f.state, f.entry())).toBe("discarded");
-    expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+    expect(f.entries()).toEqual([]);
   },
 );
 
@@ -379,7 +372,7 @@ it("retires attachment payloads only after the last recovery copy is discarded",
   ];
   writeStoredOutboxStore(sessionStorage, f.source, legacy);
   const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads").mockImplementation(async () => {
-    expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+    expect(f.entries()).toEqual([]);
   });
   expect(discardChatOutboxRecovery(f.state, f.entry())).toBe("discarded");
   expect(cleanup).toHaveBeenCalledExactlyOnceWith([reference]);
@@ -451,9 +444,7 @@ it.each(
     } else {
       expect(Object.keys(f.stored().sessions)).toEqual([]);
       expect(f.entry().session).toEqual(f.session);
-      expect(
-        readChatOutboxRecovery(f.state).entries.filter((row) => row.sourceScopeKey === sourceScope),
-      ).toHaveLength(1);
+      expect(f.entries().filter((row) => row.sourceScopeKey === sourceScope)).toHaveLength(1);
       expect(restoreChatOutboxRecovery(f.state, f.entry(), f.destination(secondScope))).toBe(
         "restored",
       );
@@ -475,11 +466,9 @@ it.each(
             ],
           },
     );
-    expect(
-      readChatOutboxRecovery(f.state).entries.filter((row) => row.sourceScopeKey === sourceScope),
-    ).toEqual([]);
+    expect(f.entries().filter((row) => row.sourceScopeKey === sourceScope)).toEqual([]);
     if (stage === "retire-write") {
-      expect(readChatOutboxRecovery(f.state).entries[0]?.session.draft).toBe("untouched");
+      expect(f.entries()[0]?.session.draft).toBe("untouched");
     }
   },
 );
@@ -526,7 +515,7 @@ it.each([
   removal.mockRestore();
   expect(changed).toBe(true);
   if (change === "account") {
-    expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+    expect(f.entries()).toEqual([]);
     f.state.client.recoveryScope = "account-a";
   }
   expect(f.entry().session).toEqual(f.session);
@@ -598,7 +587,7 @@ it.each([
       kind === "draft" ? { draft: f.session.draft } : { queue: [{ id: "original-input" }] },
     );
     expect(after[storedChatOutboxScopeKey(firstScope)]).toBeUndefined();
-    expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+    expect(f.entries()).toEqual([]);
   },
 );
 

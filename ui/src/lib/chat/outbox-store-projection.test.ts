@@ -24,6 +24,19 @@ const key = (name: string) => `agent:main:${name}`;
 const storedKey = (name: string) => storedChatOutboxScopeKey({ sessionKey: key(name) });
 const scope = (name: string) => ({ ...owner, scopeKey: `chat:v3:${storedKey(name)}` });
 const cleanups: (() => void)[] = [];
+const badge = (name: string) => ({
+  agentId: "main",
+  sessionKey: key(name),
+  hasComposerDraft: true,
+  outboxAttentionCount: 0,
+});
+
+function projection() {
+  const reader = createStoredChatOutboxReader();
+  const changes = subscribe(reader);
+  const host = state();
+  return { reader, changes, host };
+}
 
 function subscribe(reader: ReturnType<typeof createStoredChatOutboxReader>) {
   let change = Promise.withResolvers<void>();
@@ -104,9 +117,7 @@ describe("stored draft projection", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       await writeDraft("expired");
       const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
-      const reader = createStoredChatOutboxReader();
-      const changes = subscribe(reader);
-      const host = state();
+      const { reader, changes, host } = projection();
       reader.read(host);
       await changes.changed;
       expect(reader.read(host).hasSessionDraft(key("expired"))).toBe(true);
@@ -138,9 +149,7 @@ describe("stored draft projection", () => {
       if (initialLoad === "unavailable") {
         list.mockResolvedValueOnce({ status: "storage-failed" });
       }
-      const reader = createStoredChatOutboxReader();
-      const changes = subscribe(reader);
-      const host = state();
+      const { reader, changes, host } = projection();
       const initial = reader.read(host);
       await vi.dynamicImportSettled();
       expect(list).toHaveBeenCalledTimes(1);
@@ -194,25 +203,16 @@ describe("stored draft projection", () => {
           })
           .mockResolvedValue({ status: "ready", presence: new Map() });
       }
-      const reader = createStoredChatOutboxReader();
-      const changes = subscribe(reader);
+      const { reader, changes, host } = projection();
       const globalListener = vi.fn();
       cleanups.push(subscribeStoredChatOutboxChanges(globalListener));
-      const host = state();
       expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
       if (phase === "pending") {
         await started.promise;
       } else {
         await changes.changed;
         expect(reader.read(host).hasSessionDraft(key("b"))).toBe(true);
-        expect(reader.read(host).sessions).toEqual([
-          {
-            agentId: "main",
-            sessionKey: key("b"),
-            hasComposerDraft: true,
-            outboxAttentionCount: 0,
-          },
-        ]);
+        expect(reader.read(host).sessions).toEqual([badge("b")]);
         expect(globalListener).not.toHaveBeenCalled();
         const written = changes.next();
         await writeDraft("c");
@@ -251,9 +251,7 @@ describe("stored draft projection", () => {
       reply: { replyTarget: { messageId: "message-1", text: "quoted" }, updatedAt: 1 },
       "dashboard:incognito-tab": { draft: "private", updatedAt: 1 },
     });
-    const reader = createStoredChatOutboxReader();
-    const changes = subscribe(reader);
-    const host = state();
+    const { reader, changes, host } = projection();
     const initial = reader.read(host);
     expect(initial.hasSessionDraft(key("goal"))).toBe(true);
     expect(initial.hasSessionDraft(key("reply"))).toBe(true);
@@ -267,14 +265,7 @@ describe("stored draft projection", () => {
     ]) {
       expect(summary.hasSessionDraft(key(name)), name).toBe(false);
     }
-    expect(summary.sessions).toEqual(
-      ["goal", "reply"].map((name) => ({
-        agentId: "main",
-        sessionKey: key(name),
-        hasComposerDraft: true,
-        outboxAttentionCount: 0,
-      })),
-    );
+    expect(summary.sessions).toEqual(["goal", "reply"].map(badge));
   });
 
   it("does not open IndexedDB without subscribers or a ready recovery owner", async () => {
@@ -301,9 +292,7 @@ describe("stored draft projection", () => {
     async (failure) => {
       await writeDraft("b");
       const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
-      const reader = createStoredChatOutboxReader();
-      const changes = subscribe(reader);
-      const host = state();
+      const { reader, changes, host } = projection();
       reader.read(host);
       await changes.changed;
       const initial = reader.read(host);
