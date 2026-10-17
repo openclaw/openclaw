@@ -64,31 +64,28 @@ function mockEntrypoint(entryPath: string, execPath = "node") {
 }
 
 describe("resolveGatewayProgramArguments", () => {
-  it.each([true])(
-    "installs only the requested start-mode override: %s",
-    async (allowUnconfigured) => {
-      const entryPath = path.resolve("/opt/openclaw/dist/index.js");
-      process.argv = ["node", entryPath];
-      fsMocks.realpath.mockResolvedValue(entryPath);
-      fsMocks.access.mockResolvedValue(undefined);
-      const { programArguments } = await resolveGatewayProgramArguments({
-        port: 18789,
-        runtime: "node",
-        runtimePath: validatedNodePath,
-        allowUnconfigured,
-        existingCommand: {
-          programArguments: [validatedNodePath, entryPath, "gateway", "--allow-unconfigured"],
-        },
-      });
+  it("installs the requested start-mode override once", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    const { programArguments } = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      runtimePath: validatedNodePath,
+      allowUnconfigured: true,
+      existingCommand: {
+        programArguments: [validatedNodePath, entryPath, "gateway", "--allow-unconfigured"],
+      },
+    });
 
-      expect(programArguments.slice(programArguments.indexOf("gateway"))).toEqual([
-        "gateway",
-        "--port",
-        "18789",
-        ...(allowUnconfigured ? ["--allow-unconfigured"] : []),
-      ]);
-    },
-  );
+    expect(programArguments.slice(programArguments.indexOf("gateway"))).toEqual([
+      "gateway",
+      "--port",
+      "18789",
+      "--allow-unconfigured",
+    ]);
+  });
 
   it.skipIf(
     resolveNodeRuntimeExecutable({ requiredFlag: "--max-old-space-size" }) !== originalExecPath,
