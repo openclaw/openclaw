@@ -2440,6 +2440,9 @@ describe("systemd service control", () => {
     execFileMock.mockReset();
     assertNoSystemSystemdOwnershipMock.mockReset();
     assertNoSystemSystemdOwnershipMock.mockResolvedValue();
+    vi.spyOn(fs, "access").mockRejectedValue(
+      Object.assign(new Error("missing fixture unit"), { code: "ENOENT" }),
+    );
   });
 
   it("checks system ownership for the selected legacy user unit", async () => {
@@ -2485,7 +2488,7 @@ describe("systemd service control", () => {
     });
     const operation = startSystemdService({
       stdout: createWritableStreamMock(write).stdout,
-      env: {},
+      env: { HOME: TEST_MANAGED_HOME },
       onMutation,
     });
     await expect(operation).resolves.toBeUndefined();
@@ -2510,7 +2513,7 @@ describe("systemd service control", () => {
     );
     const operation = stopSystemdService({
       stdout: createWritableStreamMock().stdout,
-      env: { USER: "", LOGNAME: "" },
+      env: { HOME: TEST_MANAGED_HOME, USER: "", LOGNAME: "" },
     });
     await expect(operation).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
   });
@@ -2528,7 +2531,12 @@ describe("systemd service control", () => {
             XDG_RUNTIME_DIR: "/run/user/0",
             DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
           }
-        : { SUDO_USER: "debian", USER: "root-env-stale", LOGNAME: "root-env-stale" };
+        : {
+            HOME: TEST_MANAGED_HOME,
+            SUDO_USER: "debian",
+            USER: "root-env-stale",
+            LOGNAME: "root-env-stale",
+          };
       if (rootManager) {
         vi.spyOn(os, "userInfo").mockReturnValue({
           username: "root",
