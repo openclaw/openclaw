@@ -21,7 +21,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
-import type { SessionTranscriptRawDeltaResult } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readSessionTranscriptContextProjectionAsync } from "./session-transcript-context-read.js";
@@ -120,111 +119,97 @@ it("reads a prepared transcript snapshot while another writer owns the FIFO", as
   });
 });
 
-it("keeps admitted delta reads with their writer when independent history cannot settle", async () => {
-  await withOpenClawTestState({ label: "locked-admitted-delta" }, async (state) => {
-    const target = await targetFor(state, "locked-admitted-delta");
-    const manager = await SessionManager.openAsync(target);
-    await manager.appendMessageAsync(userMessage("earlier"));
-    const { databaseClaim } = await loadSessionEntryForAdmission(target);
-    if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
-      throw new Error("Expected admitted durable session reader");
-    }
-    try {
-      await withOwnedSessionTranscriptWrites(
-        {
-          sessionTarget: target,
-          sessionReader: databaseClaim.reader,
-          withTranscriptWrite: async (write) => write(),
-        },
-        () =>
-          withTranscriptWriteLock(target, async (locked) => {
-            const history = blockIndependentHistory();
-            let reading: Promise<SessionTranscriptRawDeltaResult> | undefined;
-            const read = async () => {
-              reading = withSessionTranscriptDeltaReader(target, (reader) => reader.raw({}));
-              return await Promise.race([
-                reading,
-                history.entered.then(() => {
-                  throw new Error("Admitted writer waited on independent history custody");
-                }),
-              ]);
-            };
-            try {
-              const earlier = {
-                event: expect.objectContaining({
-                  type: "message",
-                  message: expect.objectContaining({ role: "user", content: "earlier" }),
-                }),
-              };
-              await expect(read()).resolves.toMatchObject({
-                kind: "page",
-                events: expect.arrayContaining([expect.objectContaining(earlier)]),
-              });
-              await locked.appendMessage({
-                message: userMessage("later", 2),
-                prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-                  await expect(read()).resolves.toMatchObject({
-                    kind: "page",
-                    events: expect.arrayContaining([expect.objectContaining(earlier)]),
-                  });
-                  return message;
-                },
-              });
-            } finally {
-              await history.close(reading);
+it.each(["delta", "context"] as const)(
+  "keeps %s reads with their writer during lock and append preparation",
+  async (route, { signal }) => {
+    await withOpenClawTestState({ label: `locked-${route}` }, async (state) => {
+      const target = await targetFor(
+        state,
+        `locked-${route}`,
+        route === "context" ? "sessions.json" : "transcript.sqlite",
+      );
+      const manager = await SessionManager.openAsync(target);
+      await manager.appendMessageAsync(userMessage("earlier"));
+      const run = () =>
+        withTranscriptWriteLock(target, async (locked) => {
+          const history = blockIndependentHistory();
+          let reading: Promise<unknown> | undefined;
+          const read = () => {
+            reading =
+              route === "delta"
+                ? withSessionTranscriptDeltaReader(target, (reader) => reader.raw({}))
+                : readSessionTranscriptContextProjectionAsync(
+                    target,
+                    (source) => projectMessages(source, signal),
+                    signal,
+                  );
+            return Promise.race([
+              reading,
+              history.entered.then(() => {
+                throw new Error("Writer waited on independent history custody");
+              }),
+            ]);
+          };
+          const expectRead = async (includeLater = false) => {
+            const messages = [{ role: "user", content: "earlier" }];
+            if (includeLater) {
+              messages.push({ role: "user", content: "later" });
             }
-          }),
-      );
-    } finally {
-      await databaseClaim.release();
-    }
-  });
-});
-
-it("validates context projection inside a transcript lock and append preparation", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ label: "locked-context-projection" }, async (state) => {
-    const target = await targetFor(state, "locked-context", "sessions.json");
-    const manager = await SessionManager.openAsync(target);
-    await manager.appendMessageAsync(userMessage("earlier"));
-    const project = () =>
-      readSessionTranscriptContextProjectionAsync(
-        target,
-        (source) => projectMessages(source, signal),
-        signal,
-      );
-    await withTranscriptWriteLock(target, async (locked) => {
-      const history = blockIndependentHistory();
-      let reading: ReturnType<typeof project> | undefined;
-      const read = async () => {
-        reading = project();
-        return await Promise.race([
-          reading,
-          history.entered.then(() => {
-            throw new Error("Context acceptance waited on independent history custody");
-          }),
-        ]);
-      };
-      try {
-        await expect(read()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
-        await locked.appendMessage({
-          message: userMessage("later", 2),
-          prepareMessageAfterIdempotencyCheckAsync: async (message) => {
-            await expect(read()).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
-            return message;
-          },
+            await expect(read()).resolves.toMatchObject(
+              route === "context"
+                ? messages
+                : {
+                    kind: "page",
+                    events: expect.arrayContaining([
+                      expect.objectContaining({
+                        event: expect.objectContaining({
+                          type: "message",
+                          message: expect.objectContaining(messages[0]),
+                        }),
+                      }),
+                    ]),
+                  },
+            );
+          };
+          try {
+            await expectRead();
+            await locked.appendMessage({
+              message: userMessage("later", 2),
+              prepareMessageAfterIdempotencyCheckAsync: async (message) => {
+                await expectRead();
+                return message;
+              },
+            });
+            if (route === "context") {
+              await expectRead(true);
+            }
+          } finally {
+            await history.close(reading);
+          }
         });
-        await expect(read()).resolves.toMatchObject([
-          { role: "user", content: "earlier" },
-          { role: "user", content: "later" },
-        ]);
+      if (route === "context") {
+        return run();
+      }
+      const { databaseClaim } = await loadSessionEntryForAdmission(target);
+      assert(
+        "kind" in databaseClaim && databaseClaim.kind === "worker" && databaseClaim.reader,
+        "Expected admitted durable session reader",
+      );
+      try {
+        await withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: target,
+            sessionReader: databaseClaim.reader,
+            withTranscriptWrite: async (write) => write(),
+          },
+          run,
+        );
       } finally {
-        await history.close(reading);
+        await databaseClaim.release();
       }
     });
-  });
-});
+  },
+);
 
 it.each([
   ["projection", "append"],

@@ -45,21 +45,21 @@ it("appends entry-less raw events off-thread and resolves parents from current w
       parentId,
       customType: "raw",
     });
-    const first = custom("first", null);
-    const second = custom("second", "first");
-    const sibling = custom("sibling", "first");
+    const written = [
+      header,
+      custom("first", null),
+      custom("second", "first"),
+      custom("sibling", "first"),
+    ];
     await withoutHostSql(async () => {
-      for (const event of [header, first, second, sibling]) {
+      for (const event of written) {
         await expect(appendTranscriptEvent(scope, event)).resolves.toBe(true);
       }
       await expect(
         appendTranscriptEvent(scope, custom("current", "first"), { appendIntent: "active-branch" }),
       ).resolves.toBe(true);
       await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        header,
-        first,
-        second,
-        sibling,
+        ...written,
         custom("current", "sibling"),
       ]);
     });

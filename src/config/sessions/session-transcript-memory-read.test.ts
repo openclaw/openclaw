@@ -144,9 +144,7 @@ describe("memory transcript read adapters", () => {
         { id: "snapshot-0", role: "user", text: "Context 0" },
         { id: "snapshot-50", role: "user", text: "Context 50" },
       ]);
-      expect(await latestAssistant(scope)).toMatchObject({
-        text: "Concurrent reply",
-      });
+      expect(await latestAssistant(scope)).toMatchObject({ text: "Concurrent reply" });
     });
   });
 
@@ -168,9 +166,7 @@ describe("memory transcript read adapters", () => {
     expect(ids(context.events)).toContain("answer");
 
     await expect(readEvents({ ...scope, maxEventBytes: 1 })).rejects.toThrow("too large");
-    expect(await latestAssistant(scope)).toMatchObject({
-      text: "Answer one",
-    });
+    expect(await latestAssistant(scope)).toMatchObject({ text: "Answer one" });
 
     let readAfterClose: (() => Promise<unknown>) | undefined;
     await withSessionTranscriptDeltaReader(scope, async (reader) => {
@@ -191,9 +187,7 @@ describe("memory transcript read adapters", () => {
       readAfterClose = () => reader.raw({});
     });
     await expect(readAfterClose!()).rejects.toThrow("no longer active");
-    expect(await latestAssistant(scope)).toMatchObject({
-      text: "New answer",
-    });
+    expect(await latestAssistant(scope)).toMatchObject({ text: "New answer" });
 
     const hydration = prepareHydration(scope, { maxBytes: 16384, maxEvents: 1 });
     const bounded = await hydration.read();
@@ -267,10 +261,7 @@ describe("memory transcript read adapters", () => {
       kind: "missing",
     });
     expect(
-      await prepareHydration({
-        ...missing,
-        sessionKey: root.scope.sessionKey,
-      }).read(),
+      await prepareHydration({ ...missing, sessionKey: root.scope.sessionKey }).read(),
     ).toMatchObject({ kind: "full", snapshot: { events: [] } });
     expect(
       await prepareHydration(
@@ -364,9 +355,7 @@ describe("memory transcript read adapters", () => {
     await runWithSessionActorStorage(binding, () =>
       runWithSessionTranscriptReadFence(receipt, async () => {
         expect(ids(await readEvents(scope))).toEqual(["one", "user", "answer"]);
-        expect(await latestAssistant(scope)).toMatchObject({
-          text: "Answer one",
-        });
+        expect(await latestAssistant(scope)).toMatchObject({ text: "Answer one" });
         const hydrated = await prepareHydration(scope).read();
         expect(ids(hydrated.snapshot.events)).toEqual(["one", "user", "answer"]);
         await withSessionTranscriptDeltaReader(scope, async (reader) => {
