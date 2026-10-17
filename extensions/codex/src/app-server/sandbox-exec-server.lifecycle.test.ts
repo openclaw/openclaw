@@ -89,18 +89,26 @@ function streamingHttpParams(requestId: string) {
   };
 }
 
+function execSpec(finalizeToken = "token", argv = ["sandbox-child"]) {
+  return { argv, env: {}, finalizeToken, stdinMode: "pipe-closed" as const };
+}
+
+function finalization(status: "failed" | "completed", exitCode: number | null, token = "token") {
+  return { status, exitCode, timedOut: false, token };
+}
+
+const nextImmediate = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+
 function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {}) {
   const child = createFakeChild();
   spawnMock.mockReturnValue(child);
   const finalizeExec = vi.fn(overrides.finalizeExec ?? (async () => undefined));
   const server = createSessionExecServer(
     createSandboxContext({
-      buildExecSpec: async () => ({
-        argv: ["sandbox-child"],
-        env: {},
-        finalizeToken: "token",
-        stdinMode: "pipe-closed",
-      }),
+      buildExecSpec: async () => execSpec(),
       ...overrides,
       finalizeExec,
     }),
@@ -329,9 +337,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
           params: { processId: "late-remote-process", signal: "interrupt" },
         });
         await fixture.firstScanCompleted;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextImmediate();
         expect(fixture.send.mock.calls.some(([message]) => message.id === 2)).toBe(false);
         expect(fixture.receivedSignal).toBe(false);
 
@@ -376,9 +382,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
           closed = true;
         });
         await vi.waitFor(() => expect(fixture.transportClosed).toBe(true), { timeout: 5_000 });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextImmediate();
         expect(fixture.finalizeExec).not.toHaveBeenCalled();
         expect(closed).toBe(false);
 
@@ -462,12 +466,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       });
       await vi.runOnlyPendingTimersAsync();
       expect(signalProcessTreeMock).toHaveBeenCalledOnce();
-      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-        status: "completed",
-        exitCode: 1,
-        timedOut: false,
-        token: "token",
-      });
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith(finalization("completed", 1));
       expect(settled).toBe(false);
       releaseFinalize.resolve();
       await expect(cleanup).resolves.toEqual([{ running: true }, { running: true }]);
@@ -500,12 +499,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       buildExecSpec: async () => {
         preparing = true;
         await releasePreparation.promise;
-        return {
-          argv: ["sandbox-http-child"],
-          env: {},
-          finalizeToken: "cancelled-http-preparation",
-          stdinMode: "pipe-closed",
-        };
+        return execSpec("cancelled-http-preparation", ["sandbox-http-child"]);
       },
     });
     spawnMock.mockImplementation(() => {
@@ -523,19 +517,14 @@ describe("Codex sandbox exec-server lifecycle", () => {
       const cleanup = session.close().then(() => {
         closed = true;
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextImmediate();
       expect(closed).toBe(false);
       releasePreparation.resolve();
       await Promise.all([request, cleanup]);
       expect(spawnMock).not.toHaveBeenCalled();
-      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-        status: "failed",
-        exitCode: null,
-        timedOut: false,
-        token: "cancelled-http-preparation",
-      });
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith(
+        finalization("failed", null, "cancelled-http-preparation"),
+      );
     } finally {
       releasePreparation.resolve();
       await Promise.all([request, session.close()]);
@@ -576,12 +565,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       expect(finalizeExec).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       expect(signalProcessTreeMock).toHaveBeenCalledOnce();
-      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-        status: "failed",
-        exitCode: 1,
-        timedOut: false,
-        token: "token",
-      });
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith(finalization("failed", 1));
       expect(closed).toBe(false);
       releaseFinalization.resolve();
       await cleanup;
@@ -610,9 +594,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       ) {
         output.write(chunk.subarray(0, Math.min(remaining, chunk.length)));
       }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextImmediate();
       expect(signalProcessTreeMock).not.toHaveBeenCalled();
 
       output.write(Buffer.from("x"));
@@ -622,12 +604,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
         message: `sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`,
       });
       await Promise.all(operations);
-      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-        status: "failed",
-        exitCode: 143,
-        timedOut: false,
-        token: "token",
-      });
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith(finalization("failed", 143));
     } finally {
       child.emit("close", 143, "SIGTERM");
       await response;
@@ -657,12 +634,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       exited: true,
       exitCode: 23,
     });
-    expect(finalizeExec).toHaveBeenCalledWith({
-      status: "failed",
-      exitCode: 23,
-      timedOut: false,
-      token: "token",
-    });
+    expect(finalizeExec).toHaveBeenCalledWith(finalization("failed", 23));
     expect(notifications.send.mock.calls.map(([method]) => method)).toEqual([
       "process/exited",
       "process/closed",
@@ -671,20 +643,12 @@ describe("Codex sandbox exec-server lifecycle", () => {
 
   it("finalizes process tokens after an empty exec spec", async () => {
     const { start, finalizeExec } = createFixture({
-      buildExecSpec: async () => ({
-        argv: [],
-        env: {},
-        finalizeToken: "process-start-token",
-        stdinMode: "pipe-closed",
-      }),
+      buildExecSpec: async () => execSpec("process-start-token", []),
     });
     await expect(start("process-start-failure")).rejects.toThrow("did not provide a command");
-    expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-      status: "failed",
-      exitCode: null,
-      timedOut: false,
-      token: "process-start-token",
-    });
+    expect(finalizeExec).toHaveBeenCalledExactlyOnceWith(
+      finalization("failed", null, "process-start-token"),
+    );
   });
 
   it("retains the streaming HTTP backend lease through close and remote cleanup after child error", async () => {
@@ -725,12 +689,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
 
       releaseRemoteCleanup.resolve();
       await Promise.all(operations);
-      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-        status: "failed",
-        exitCode: 29,
-        timedOut: false,
-        token: "token",
-      });
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith(finalization("failed", 29));
     } finally {
       releaseRemoteCleanup.resolve();
       await Promise.all(operations);

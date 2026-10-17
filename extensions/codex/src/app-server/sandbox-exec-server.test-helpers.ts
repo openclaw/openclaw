@@ -1,7 +1,3 @@
-/**
- * Test helpers for standing up fake sandbox contexts and driving the Codex
- * sandbox exec-server JSON-RPC/WebSocket protocol.
- */
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
@@ -13,22 +9,28 @@ type RpcResponse = {
   result?: unknown;
   error?: { code: number; message: string };
 };
+type Backend = NonNullable<SandboxContext["backend"]>;
+type FsBridge = NonNullable<SandboxContext["fsBridge"]>;
+type ProcessRead = {
+  chunks?: Array<{ seq?: number; stream: string; chunk: string }>;
+  exited?: boolean;
+  exitCode?: number;
+  closed?: boolean;
+  nextSeq?: number;
+};
 
-/** Builds a minimal enabled sandbox context with overridable backend and fs bridge hooks. */
 export function createSandboxContext(overrides: {
-  buildExecSpec?: NonNullable<SandboxContext["backend"]>["buildExecSpec"];
-  copyFile?: NonNullable<SandboxContext["fsBridge"]>["copyFile"];
-  finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
-  mkdirp?: NonNullable<SandboxContext["fsBridge"]>["mkdirp"];
-  readFile?: NonNullable<SandboxContext["fsBridge"]>["readFile"];
-  remove?: NonNullable<SandboxContext["fsBridge"]>["remove"];
-  resolvePinnedMutationTarget?: NonNullable<
-    SandboxContext["fsBridge"]
-  >["resolvePinnedMutationTarget"];
-  resolveReadPolicyPath?: NonNullable<SandboxContext["fsBridge"]>["resolveReadPolicyPath"];
-  runShellCommand?: NonNullable<SandboxContext["backend"]>["runShellCommand"];
-  stat?: NonNullable<SandboxContext["fsBridge"]>["stat"];
-  writeFile?: NonNullable<SandboxContext["fsBridge"]>["writeFile"];
+  buildExecSpec?: Backend["buildExecSpec"];
+  finalizeExec?: Backend["finalizeExec"];
+  runShellCommand?: Backend["runShellCommand"];
+  copyFile?: FsBridge["copyFile"];
+  mkdirp?: FsBridge["mkdirp"];
+  readFile?: FsBridge["readFile"];
+  remove?: FsBridge["remove"];
+  resolvePinnedMutationTarget?: FsBridge["resolvePinnedMutationTarget"];
+  resolveReadPolicyPath?: FsBridge["resolveReadPolicyPath"];
+  stat?: FsBridge["stat"];
+  writeFile?: FsBridge["writeFile"];
 }): SandboxContext {
   return {
     enabled: true,
@@ -62,9 +64,7 @@ export function createSandboxContext(overrides: {
         (async () => ({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 })),
     },
     fsBridge: {
-      resolvePath: ({
-        filePath,
-      }: Parameters<NonNullable<SandboxContext["fsBridge"]>["resolvePath"]>[0]) => ({
+      resolvePath: ({ filePath }: Parameters<FsBridge["resolvePath"]>[0]) => ({
         relativePath: filePath,
         containerPath: filePath,
       }),
@@ -87,7 +87,6 @@ export function createSandboxContext(overrides: {
   } as unknown as SandboxContext;
 }
 
-/** Creates a fake Codex app-server client with a configurable server version. */
 export function createClient(options: { serverVersion?: string } = {}) {
   return {
     getServerVersion: vi.fn(() => options.serverVersion ?? CODEX_APP_SERVER_VERSION),
@@ -95,7 +94,6 @@ export function createClient(options: { serverVersion?: string } = {}) {
   };
 }
 
-/** Reads the registered exec-server URL from a fake client's environment/add call. */
 export function execServerUrlFromClient(
   client: ReturnType<typeof createClient>,
   callIndex = 0,
@@ -111,7 +109,6 @@ export function execServerUrlFromClient(
   return execServerUrl;
 }
 
-/** Builds a Codex-style managed filesystem sandbox context for RPC params. */
 export function codexFsSandboxContext(params: {
   entries: Array<{ path: unknown; access: "read" | "write" | "none" | "deny" }>;
   cwd?: string;
@@ -119,10 +116,7 @@ export function codexFsSandboxContext(params: {
   return {
     permissions: {
       type: "managed",
-      file_system: {
-        type: "restricted",
-        entries: params.entries,
-      },
+      file_system: { type: "restricted", entries: params.entries },
       network: "restricted",
     },
     cwd: params.cwd ?? "file:///workspace",
@@ -132,26 +126,14 @@ export function codexFsSandboxContext(params: {
   };
 }
 
-/** Builds a Codex filesystem special-path selector for tests. */
 export function specialPath(kind: string, subpath?: string): unknown {
-  return {
-    type: "special",
-    value: {
-      kind,
-      ...(subpath ? { subpath } : {}),
-    },
-  };
+  return { type: "special", value: { kind, ...(subpath ? { subpath } : {}) } };
 }
 
-/** Builds a Codex filesystem glob-path selector for tests. */
 export function globPath(pattern: string): unknown {
-  return {
-    type: "glob_pattern",
-    pattern,
-  };
+  return { type: "glob_pattern", pattern };
 }
 
-/** Opens a WebSocket connection and resolves only after the socket is ready. */
 export function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const socket = new websocket.WebSocket(url);
@@ -160,7 +142,6 @@ export function openSocket(url: string): Promise<WebSocket> {
   });
 }
 
-/** Collects server-originated JSON-RPC notifications seen by a WebSocket. */
 export function collectNotifications(
   socket: WebSocket,
 ): Array<{ method: string; params?: unknown }> {
@@ -179,16 +160,7 @@ export function collectNotifications(
 }
 
 /** Polls process/read until the managed sandbox process reports closed. */
-export async function readUntilClosed(
-  socket: WebSocket,
-  processId: string,
-): Promise<{
-  chunks?: Array<{ stream: string; chunk: string }>;
-  exited?: boolean;
-  exitCode?: number;
-  closed?: boolean;
-  nextSeq?: number;
-}> {
+export async function readUntilClosed(socket: WebSocket, processId: string): Promise<ProcessRead> {
   let afterSeq = 0;
   const chunks: Array<{ stream: string; chunk: string }> = [];
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -196,13 +168,7 @@ export async function readUntilClosed(
       processId,
       afterSeq,
       waitMs: 1000,
-    })) as {
-      chunks?: Array<{ seq?: number; stream: string; chunk: string }>;
-      exited?: boolean;
-      exitCode?: number;
-      closed?: boolean;
-      nextSeq?: number;
-    };
+    })) as ProcessRead;
     chunks.push(...(read.chunks ?? []));
     afterSeq = Math.max(afterSeq, (read.nextSeq ?? 1) - 1);
     if (read.closed) {
@@ -212,7 +178,6 @@ export async function readUntilClosed(
   throw new Error(`process ${processId} did not close`);
 }
 
-/** Resolves with the WebSocket close code once the socket closes. */
 export function waitForSocketClose(socket: WebSocket): Promise<{ code: number }> {
   return new Promise((resolve) => {
     socket.once("close", (code) => resolve({ code }));
@@ -239,7 +204,6 @@ export async function waitForHttpBodyDeltas(
   throw new Error(`expected ${count} http body deltas`);
 }
 
-/** Sends one JSON-RPC request and resolves/rejects from the matching response id. */
 export function rpc(socket: WebSocket, method: string, params: unknown): Promise<unknown> {
   const id = Math.floor(Math.random() * 1_000_000);
   return new Promise((resolve, reject) => {

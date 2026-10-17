@@ -23,6 +23,10 @@ import {
 
 const SANDBOX_MOUNT = "/workspace";
 
+function expectFile(filePath: string, content: string) {
+  return expect(fs.readFile(filePath, "utf8")).resolves.toBe(content);
+}
+
 function rewritePortableStatScript(script: string): string {
   if (process.platform !== "darwin") {
     return script;
@@ -147,62 +151,49 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
             { path: specialPath("project_roots", ".git"), access: "read" },
           ],
         });
-
-        await expect(
+        const write = (filePath: string, data: string) =>
           rpc(socket, "fs/writeFile", {
-            path: "file:///workspace/alias/config",
-            dataBase64: Buffer.from("blocked").toString("base64"),
+            path: `file:///workspace/${filePath}`,
+            dataBase64: Buffer.from(data).toString("base64"),
             sandbox: workspacePolicy,
-          }),
-        ).rejects.toThrow("Codex fs sandbox denied write access");
+          });
+        const copy = (destination: string, source = "nested/src-dir") =>
+          rpc(socket, "fs/copy", {
+            sourcePath: `file:///workspace/${source}`,
+            destinationPath: destination ? `file:///workspace/${destination}` : "file:///workspace",
+            recursive: true,
+            sandbox: workspacePolicy,
+          });
+
+        await expect(write("alias/config", "blocked")).rejects.toThrow(
+          "Codex fs sandbox denied write access",
+        );
         await expect(fs.stat(path.join(gitDir, "config"))).rejects.toMatchObject({
           code: "ENOENT",
         });
         expect(mutationCalls).toHaveLength(0);
 
-        await rpc(socket, "fs/writeFile", {
-          path: "file:///workspace/real-note.txt",
-          dataBase64: Buffer.from("allowed").toString("base64"),
-          sandbox: workspacePolicy,
-        });
-        await expect(fs.readFile(path.join(mountDir, "real-note.txt"), "utf8")).resolves.toBe(
-          "allowed",
-        );
+        await write("real-note.txt", "allowed");
+        await expectFile(path.join(mountDir, "real-note.txt"), "allowed");
         expect(mutationCalls.length).toBeGreaterThan(0);
 
-        await rpc(socket, "fs/writeFile", {
-          path: "file:///workspace/alias-real/config",
-          dataBase64: Buffer.from("aliased").toString("base64"),
-          sandbox: workspacePolicy,
-        });
-        await expect(fs.readFile(path.join(realDir, "config"), "utf8")).resolves.toBe("aliased");
+        await write("alias-real/config", "aliased");
+        await expectFile(path.join(realDir, "config"), "aliased");
 
         // Existing directory roots must resolve as directories, not file-backed parents.
         await fs.mkdir(path.join(mountDir, "nested", "src-dir"), { recursive: true });
         await fs.writeFile(path.join(mountDir, "nested", "src-dir", "child.txt"), "dir-copy");
-        await rpc(socket, "fs/copy", {
-          sourcePath: "file:///workspace/nested/src-dir",
-          destinationPath: "file:///workspace",
-          recursive: true,
-          sandbox: workspacePolicy,
-        });
-        await expect(fs.readFile(path.join(mountDir, "child.txt"), "utf8")).resolves.toBe(
-          "dir-copy",
-        );
+        await copy("");
+        await expectFile(path.join(mountDir, "child.txt"), "dir-copy");
 
         // An alias must not hide a copy into the source subtree.
         const sourceSubdir = path.join(mountDir, "nested", "src-dir", "subdir");
         await fs.mkdir(sourceSubdir);
         await fs.symlink(sourceSubdir, path.join(mountDir, "source-subdir-alias"));
         const mutationsBeforeRejectedCopy = mutationCalls.length;
-        await expect(
-          rpc(socket, "fs/copy", {
-            sourcePath: "file:///workspace/nested/src-dir",
-            destinationPath: "file:///workspace/source-subdir-alias",
-            recursive: true,
-            sandbox: workspacePolicy,
-          }),
-        ).rejects.toThrow("Cannot recursively copy a directory into itself");
+        await expect(copy("source-subdir-alias")).rejects.toThrow(
+          "Cannot recursively copy a directory into itself",
+        );
         expect(mutationCalls).toHaveLength(mutationsBeforeRejectedCopy);
         await expect(fs.stat(path.join(sourceSubdir, "child.txt"))).rejects.toMatchObject({
           code: "ENOENT",
@@ -212,15 +203,8 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
         const dirTarget = path.join(mountDir, "dir-target");
         await fs.mkdir(dirTarget, { recursive: true });
         await fs.symlink(dirTarget, path.join(mountDir, "alias-dir"));
-        await rpc(socket, "fs/copy", {
-          sourcePath: "file:///workspace/nested/src-dir",
-          destinationPath: "file:///workspace/alias-dir",
-          recursive: true,
-          sandbox: workspacePolicy,
-        });
-        await expect(fs.readFile(path.join(dirTarget, "child.txt"), "utf8")).resolves.toBe(
-          "dir-copy",
-        );
+        await copy("alias-dir");
+        await expectFile(path.join(dirTarget, "child.txt"), "dir-copy");
         const namesSource = path.join(mountDir, "names-source");
         const namesDestination = path.join(mountDir, "names-copy");
         const fileName = "tab\tand\nnewline.txt";
@@ -242,24 +226,13 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
           ]),
         );
 
-        await expect(
-          rpc(socket, "fs/copy", {
-            sourcePath: "file:///workspace/names-source",
-            destinationPath: "file:///workspace/names-copy",
-            recursive: true,
-            sandbox: workspacePolicy,
-          }),
-        ).resolves.toEqual({});
+        await expect(copy("names-copy", "names-source")).resolves.toEqual({});
         expect((await fs.readdir(namesDestination)).toSorted()).toEqual(
           [directoryName, fileName].toSorted(),
         );
-        await expect(fs.readFile(path.join(namesDestination, fileName), "utf8")).resolves.toBe(
-          "top-level bytes",
-        );
+        await expectFile(path.join(namesDestination, fileName), "top-level bytes");
         expect(await fs.readdir(path.join(namesDestination, directoryName))).toEqual([nestedName]);
-        await expect(
-          fs.readFile(path.join(namesDestination, directoryName, nestedName), "utf8"),
-        ).resolves.toBe("nested bytes");
+        await expectFile(path.join(namesDestination, directoryName, nestedName), "nested bytes");
         socket.close();
       } finally {
         await fs.rm(stateDir, { recursive: true, force: true });

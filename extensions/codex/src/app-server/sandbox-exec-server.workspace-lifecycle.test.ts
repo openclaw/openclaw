@@ -43,6 +43,10 @@ function createFakeChild(): ChildProcessWithoutNullStreams {
     kill: vi.fn(() => true),
   }) as unknown as ChildProcessWithoutNullStreams;
 }
+
+function preparedSpec(assertCurrent: () => void) {
+  return { argv: ["sandbox-child"], env: {}, stdinMode: "pipe-open" as const, assertCurrent };
+}
 function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {}) {
   const child = createFakeChild();
   spawnMock.mockReturnValue(child);
@@ -130,16 +134,12 @@ describe("Codex managed workspace process authority", () => {
         terminate: terminateProcessOwner,
       } = createFixture({
         runShellCommand,
-        buildExecSpec: async () => ({
-          argv: ["sandbox-child"],
-          env: {},
-          stdinMode: "pipe-open",
-          assertCurrent: () => {
+        buildExecSpec: async () =>
+          preparedSpec(() => {
             if (!current) {
               throw new Error("workspace revoked");
             }
-          },
-        }),
+          }),
       });
       child.stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString()));
       const terminate = vi.fn(async () => {
@@ -180,16 +180,12 @@ describe("Codex managed workspace process authority", () => {
     async (kind) => {
       let current = true;
       const { child, sandbox, server, processes, start } = createFixture({
-        buildExecSpec: async () => ({
-          argv: ["sandbox-child"],
-          env: {},
-          stdinMode: "pipe-open",
-          assertCurrent: () => {
+        buildExecSpec: async () =>
+          preparedSpec(() => {
             if (!current) {
               throw new Error("readiness owner revoked");
             }
-          },
-        }),
+          }),
       });
       child.once("spawn", () => {
         current = false;
