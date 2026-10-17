@@ -2,8 +2,13 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
-import { consumeSqliteMaintenanceIntegrity } from "./sqlite-maintenance-integrity.js";
+import {
+  consumeSqliteMaintenanceIntegrity,
+  type SqliteIntegrityCheckOptions,
+} from "./sqlite-maintenance-integrity.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
+
+export type { SqliteIntegrityCheckOptions } from "./sqlite-maintenance-integrity.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -13,12 +18,6 @@ export type SqliteIntegrityCheckTiming = {
   syncElapsedMs?: number;
   workerCheckElapsedMs?: number;
   workerLifetimeElapsedMs?: number;
-};
-
-export type SqliteIntegrityCheckOptions = {
-  check?: "quick" | "full";
-  /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
-  tables?: readonly string[];
 };
 
 export type SqliteIntegrityCheck = SqliteIntegrityCheckOptions & {
