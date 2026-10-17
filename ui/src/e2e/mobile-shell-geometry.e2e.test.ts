@@ -1,9 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -19,6 +16,7 @@ import { waitForWatchedSessionKey } from "./chat-github-publication.test-support
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
+const sessionKey = "agent:main:main";
 function viewportScenario(
   name: string,
   width: number,
@@ -27,19 +25,7 @@ function viewportScenario(
   largeUnit = false,
   mobile = true,
 ) {
-  const [top = 0, bottom = 0, left = 0, right = 0] = insets ?? [];
-  return {
-    name,
-    width,
-    height,
-    mobile,
-    standalone: insets !== undefined,
-    largeUnit,
-    top,
-    bottom,
-    left,
-    right,
-  };
+  return { name, width, height, mobile, largeUnit, insets };
 }
 const scenarios = [
   viewportScenario("standalone-large-unit-contract", 402, 874, [62, 34, 0, 0], true),
@@ -51,11 +37,6 @@ const scenarios = [
   viewportScenario("standalone-insets-contract", 390, 844, [48, 30, 0, 0]),
   viewportScenario("standalone-landscape-contract", 844, 390, [0, 20, 48, 48]),
 ];
-
-const saveJson = (artifacts: string, name: string, value: unknown) =>
-  writeFile(path.join(artifacts, name + ".json"), JSON.stringify(value, null, 2));
-const screenshot = (page: Page, artifacts: string, name: string) =>
-  page.screenshot({ path: path.join(artifacts, name + ".png"), animations: "disabled" });
 
 async function activateStandaloneStyles(page: Page, largeUnitDifference = 0, shortCanvas = false) {
   // Fault injection, not an iPhone measurement: viewport units may exceed the visible viewport.
@@ -105,9 +86,9 @@ async function expectReachableAction(
   const bounds = await action.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(visibleBottom);
+  const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
   if (mobile) {
-    // Compact Send uses the 36px primary target; Chat's existing Stop variant
-    // uses the 32px quiet target. Model/effort retain their independent 44px targets.
+    // Compact Send is 36px, Stop 32px; model/effort retain independent 44px targets.
     const compact = await page
       .locator(".agent-chat__input")
       .evaluate((element) => element.getBoundingClientRect().width <= 560);
@@ -123,26 +104,20 @@ async function expectReachableAction(
     }
   }
   expect(
-    await action.evaluate((element) => {
-      const box = element.getBoundingClientRect();
-      return element.contains(
-        document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
-      );
-    }),
+    await action.evaluate(
+      (element, center) => element.contains(document.elementFromPoint(center.x, center.y)),
+      point,
+    ),
   ).toBe(true);
-  return { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
+  return point;
 }
 
-async function expectEditableDraft(
-  page: Page,
-  visibleBottom: number,
-  artifacts: string,
-  mobile: boolean,
-) {
+async function expectEditableDraft(page: Page, visibleBottom: number, mobile: boolean) {
   // Dense queue/context reachability belongs to chat-footer.e2e.test.ts; this tests the editor.
-  await expect(page.locator(".chat-details:popover-open")).toHaveCount(0);
   await expect(
-    page.locator(".chat-footer__context .session-progress-card, .chat-footer__context .chat-prs"),
+    page.locator(
+      ".chat-details:popover-open, .chat-footer__context .session-progress-card, .chat-footer__context .chat-prs",
+    ),
   ).toHaveCount(0);
   const textarea = page.locator(".agent-chat__composer-combobox textarea");
   const measure = () =>
@@ -160,12 +135,9 @@ async function expectEditableDraft(
         top: box.top,
         bottom: box.bottom,
         conversationTop: conversation.top,
-        clientHeight: editor.clientHeight,
-        scrollHeight: editor.scrollHeight,
+        availableHeight: editor.clientHeight - paddingTop - paddingBottom,
         scrollTop: editor.scrollTop,
         line,
-        paddingTop,
-        paddingBottom,
         lineTop,
         lineBottom: lineTop + line,
         reachable:
@@ -176,9 +148,7 @@ async function expectEditableDraft(
 
   expect(before.top).toBeGreaterThanOrEqual(before.conversationTop);
   expect(before.bottom).toBeLessThanOrEqual(visibleBottom);
-  expect(before.clientHeight - before.paddingTop - before.paddingBottom).toBeGreaterThanOrEqual(
-    before.line,
-  );
+  expect(before.availableHeight).toBeGreaterThanOrEqual(before.line);
   expect(before.reachable).toBe(true);
   const box = (await textarea.boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -189,15 +159,12 @@ async function expectEditableDraft(
   await page.keyboard.type(" typed");
   await expect(textarea).toHaveValue("First line\nSecond line\nThird line\nLast line typed");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
-  // Native caret scrolling reveals the glyphs, not necessarily all line leading.
-  // Scroll the draft itself to prove the complete last reading line is reachable.
+  // Scroll the complete line into view; native caret scrolling may show only its glyphs.
   await page.mouse.wheel(0, 1000);
   await expect
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
     .toBe(await textarea.evaluate((editor) => editor.scrollHeight));
   const last = await measure();
-  await screenshot(page, artifacts, "short-editor-typing");
-
   expect(last.scrollTop).toBeGreaterThan(0);
   await expectReachableAction(page, "Send message", visibleBottom, mobile);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
@@ -211,7 +178,6 @@ async function expectEditableDraft(
     expect(reading.lineBottom).toBeLessThanOrEqual(Math.min(reading.bottom, visibleBottom));
   }
   await expect(textarea).toHaveValue("Edited First line\nSecond line\nThird line\nLast line typed");
-  await saveJson(artifacts, "short-editor", { before, last, first });
   await textarea.fill("");
 }
 
@@ -223,8 +189,8 @@ async function geometry(page: Page) {
       if (!el) {
         return null;
       }
-      const { left, right, top, bottom, width, height } = el.getBoundingClientRect();
-      return { left, right, top, bottom, width, height };
+      const { left, right, top, bottom } = el.getBoundingClientRect();
+      return { left, right, top, bottom };
     };
     return {
       shell: rect(".shell")!,
@@ -290,8 +256,9 @@ suite.define(() => {
   );
 
   it.each(scenarios)("keeps $name routes and controls in one usable canvas", async (scenario) => {
-    const { name, width, height, mobile, top, bottom, left, right } = scenario;
-    const artifacts = createControlUiE2eArtifactDir(name);
+    const { name, width, height, mobile, largeUnit, insets } = scenario;
+    const [top = 0, bottom = 0, left = 0, right = 0] = insets ?? [];
+    const standalone = insets !== undefined;
     await suite.withPage(
       { viewport: { width, height }, hasTouch: mobile, isMobile: mobile, colorScheme: "dark" },
       async ({ page, context }) => {
@@ -299,12 +266,14 @@ suite.define(() => {
           expectReachableAction(page, label, visibleBottom, mobile);
         await page.clock.setFixedTime(new Date("2026-09-20T16:50:10Z"));
         await page.emulateMedia({ reducedMotion: "reduce" });
-        if (scenario.standalone) {
+        if (standalone) {
           const cdp = await context.newCDPSession(page);
           await cdp.send("Emulation.setSafeAreaInsetsOverride", {
             insets: { top, bottom, left, right },
           });
         }
+        const assistantText =
+          "The transcript and composer should share a comfortable reading column.";
         const gateway = await installMockGateway(page, {
           featureMethods: [
             ...defaultControlUiFeatureMethods,
@@ -312,58 +281,42 @@ suite.define(() => {
             "controlUi.sessionPullRequests.subscribe",
           ],
           methodResponses: { "controlUi.sessionPullRequests.subscribe": { subscribed: true } },
-          assistantName: "OpenClaw",
           workspace: "/workspace/example",
-          historyMessages: [
-            {
-              role: "user",
-              content: "Please check the mobile layout.",
-              timestamp: 1_789_923_000_000,
-            },
-            {
-              role: "assistant",
-              content: "The transcript and composer should share a comfortable reading column.",
-              timestamp: 1_789_923_001_000,
-            },
-          ],
+          historyMessages: ["Please check the mobile layout.", assistantText].map(
+            (content, index) => ({
+              role: index ? "assistant" : "user",
+              content,
+              timestamp: 1_789_923_000_000 + index * 1_000,
+            }),
+          ),
         });
         await page.goto(suite.server.baseUrl + "new");
         await expect(page.locator(".new-session-page__message")).toBeVisible();
-        if (scenario.standalone) {
-          await activateStandaloneStyles(page, scenario.largeUnit ? top : 0);
+        if (standalone) {
+          await activateStandaloneStyles(page, largeUnit ? top : 0);
         }
         const fresh = await geometry(page);
-        await screenshot(page, artifacts, "new");
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         await expect(textarea).toBeVisible();
-        await page
-          .getByText("The transcript and composer should share a comfortable reading column.")
-          .waitFor();
-        if (scenario.standalone) {
-          await activateStandaloneStyles(page, scenario.largeUnit ? top : 0);
+        await page.getByText(assistantText).waitFor();
+        if (standalone) {
+          await activateStandaloneStyles(page, largeUnit ? top : 0);
         }
         const firstMessage = page.locator(".chat-group.user").first();
         const bubble = firstMessage.locator(".chat-bubble").first();
         const details = page.locator(".chat-pane__layout-trigger");
-        const initialFrame = await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
+        await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
           animations: "disabled",
         });
-        await writeFile(path.join(artifacts, "details-transcript.png"), initialFrame.png);
         await (mobile ? bubble.tap() : bubble.hover());
         const actions = firstMessage.locator(".chat-group-footer-actions");
         await expect(actions.locator(".chat-copy-btn")).toBeVisible();
-        const hoverFrame = await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
+        await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
           animations: "disabled",
         });
-        await writeFile(path.join(artifacts, "details-message-actions.png"), hoverFrame.png);
         const detailsBox = (await details.boundingBox())!;
         const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
-        await saveJson(artifacts, "details-geometry", {
-          details: detailsBox,
-          bubble: transcriptBoxes[0],
-          actions: transcriptBoxes[1],
-        });
         for (const box of transcriptBoxes) {
           expect(
             box &&
@@ -374,10 +327,10 @@ suite.define(() => {
             `${name}: Header controls must clear the first message and its actions`,
           ).toBe(true);
         }
-        await waitForWatchedSessionKey(gateway, "agent:main:main");
+        await waitForWatchedSessionKey(gateway, sessionKey);
         await gateway.emitGatewayEvent("controlUi.sessionPullRequests.changed", {
           sessions: {
-            "agent:main:main": {
+            [sessionKey]: {
               pullRequests: [
                 {
                   number: 123,
@@ -403,7 +356,7 @@ suite.define(() => {
         ) => {
           await gateway.setMethodResponse("progressCard.get", {
             card: {
-              sessionKey: "agent:main:main",
+              sessionKey,
               revision,
               updatedAt: 1_789_923_001_000,
               markdown,
@@ -411,7 +364,7 @@ suite.define(() => {
             },
           });
           await gateway.emitGatewayEvent("progressCard.changed", {
-            sessionKey: "agent:main:main",
+            sessionKey,
             revision,
           });
         };
@@ -422,7 +375,6 @@ suite.define(() => {
         ]);
         await expect(page.locator('[data-progress-card-placement="details"]')).toBeVisible();
         const chat = await geometry(page);
-        await screenshot(page, artifacts, "chat");
         await textarea.fill("Please continue the layout check.");
         const sendPoint = await reach("Send message", height - bottom);
         // Coordinate input cannot auto-scroll an offscreen control into view.
@@ -433,7 +385,6 @@ suite.define(() => {
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
         const generating = await geometry(page);
-        await screenshot(page, artifacts, "generating");
         await setProgress(2, "Checking the usable mobile canvas.", [
           { step: "Inspect the layout", status: "completed" },
           { step: "Verify the controls", status: "in_progress" },
@@ -444,33 +395,32 @@ suite.define(() => {
         await openChatDetails(page);
         await expect(progress).toBeVisible();
         const withProgress = await geometry(page);
-        await screenshot(page, artifacts, "progress");
         await closeChatDetails(page);
-        const keyboard = [];
         if (mobile) {
           await textarea.focus();
-          // Simulate only the browser's VisualViewport contract. No drawn
-          // keyboard, clipped screenshot, or claim of native IME reproduction.
-          for (const state of [
-            { name: "small-browser-bar", height: height - 62, offsetTop: 0, scale: 1 },
-            { name: "keyboard-open", height: height - 240, offsetTop: 0, scale: 1 },
-            { name: "keyboard-pan", height: height - 270, offsetTop: 45, scale: 1 },
-            {
-              name: "keyboard-dismissed-focus-retained",
-              height,
-              offsetTop: 0,
-              scale: 1,
-            },
-            { name: "pinch-zoom", height: height / 2, offsetTop: 35, scale: 2 },
-          ]) {
-            await visualViewport(page, state.height, state.offsetTop, state.scale);
-            keyboard.push({ ...state, geometry: await geometry(page) });
-            if (state.name === "keyboard-open" && width > height) {
-              await screenshot(page, artifacts, "short-editor");
-              await expectEditableDraft(page, state.height + state.offsetTop, artifacts, mobile);
+          // Simulate the VisualViewport contract, not a native IME.
+          for (const [kind, visibleHeight, offsetTop, scale] of [
+            ["small-browser-bar", height - 62, 0, 1],
+            ["keyboard-open", height - 240, 0, 1],
+            ["keyboard-pan", height - 270, 45, 1],
+            ["keyboard-dismissed-focus-retained", height, 0, 1],
+            ["pinch-zoom", height / 2, 35, 2],
+          ] as const) {
+            await visualViewport(page, visibleHeight, offsetTop, scale);
+            const frame = await geometry(page);
+            const occluded = kind === "keyboard-open" || kind === "keyboard-pan";
+            expect(frame.shell.bottom, kind).toBeCloseTo(
+              scale !== 1
+                ? (largeUnit ? height + top : height) - bottom
+                : visibleHeight + offsetTop - (occluded ? 0 : bottom),
+              0,
+            );
+            expect(frame.composer.bottom, kind).toBeLessThanOrEqual(frame.shell.bottom);
+            if (kind === "keyboard-open" && width > height) {
+              await expectEditableDraft(page, visibleHeight + offsetTop, mobile);
             }
-            if (state.scale === 1) {
-              await reach("Stop generating", state.height + state.offsetTop);
+            if (scale === 1) {
+              await reach("Stop generating", visibleHeight + offsetTop);
             }
           }
           await visualViewport(page, height);
@@ -484,7 +434,7 @@ suite.define(() => {
           });
           await waitForLayoutSettled(page, ".chat-main__conversation-frame");
           const bounds = (await frame.boundingBox())!;
-          await expectEditableDraft(page, bounds.y + bounds.height, artifacts, mobile);
+          await expectEditableDraft(page, bounds.y + bounds.height, mobile);
           await reach("Stop generating", bounds.y + bounds.height);
           await frame.evaluate((element: HTMLElement) => {
             element.style.removeProperty("flex");
@@ -500,22 +450,16 @@ suite.define(() => {
         await gateway.waitForRequest("chat.abort");
         if (mobile) {
           await visualViewport(page, height);
-        }
-        const surfaces: Array<{
-          name: string;
-          left: number;
-          right: number;
-          top: number;
-          bottom: number;
-        }> = [];
-        if (mobile) {
           const readSurface = async (selector: string, surfaceName: string) => {
             await waitForLayoutSettled(page, selector);
             const bounds = await page.locator(selector).evaluate((el) => {
               const box = el.getBoundingClientRect();
               return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
             });
-            surfaces.push({ name: surfaceName, ...bounds });
+            expect(bounds.left, surfaceName).toBeGreaterThanOrEqual(left);
+            expect(bounds.right, surfaceName).toBeLessThanOrEqual(width - right);
+            expect(bounds.top, surfaceName).toBeGreaterThanOrEqual(top);
+            expect(bounds.bottom, surfaceName).toBeLessThanOrEqual(height);
           };
           await page.locator("[data-chat-model-select]").click();
           await expect(page.locator(".chat-controls__model-menu")).toBeVisible();
@@ -530,23 +474,10 @@ suite.define(() => {
           await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
           await expect(page.locator(".sidebar-session-filter-panel")).toBeVisible();
           await readSurface(".sidebar-session-filter-panel", "filter-sheet");
-          await screenshot(page, artifacts, "drawer-filter");
           await page.keyboard.press("Escape");
           await page.keyboard.press("Escape");
         }
-        await saveJson(artifacts, "geometry", {
-          scenario,
-          fresh,
-          chat,
-          generating,
-          withProgress,
-          keyboard,
-          surfaces,
-        });
-        // Collect captures before the regression assertion so the unfixed entry
-        // point is inspectable in exactly the same route, data and viewport.
-        expect(chat.layoutHeight).toBe(height);
-        expect(chat.visualHeight).toBe(height);
+        expect([chat.layoutHeight, chat.visualHeight]).toEqual([height, height]);
         expect(chat.composer.bottom).toBeLessThanOrEqual(height - bottom);
         expect(chat.shell.top).toBeCloseTo(top, 0);
         expect(chat.shell.bottom).toBeCloseTo(height - bottom, 0);
@@ -564,24 +495,6 @@ suite.define(() => {
           );
           expect(withProgress.details!.right).toBeLessThanOrEqual(withProgress.conversation!.right);
           expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.footer!.top);
-          for (const surface of surfaces) {
-            expect(surface.left, surface.name).toBeGreaterThanOrEqual(left);
-            expect(surface.right, surface.name).toBeLessThanOrEqual(width - right);
-            expect(surface.top, surface.name).toBeGreaterThanOrEqual(top);
-            expect(surface.bottom, surface.name).toBeLessThanOrEqual(height);
-          }
-          for (const state of keyboard) {
-            const occluded = state.name === "keyboard-open" || state.name === "keyboard-pan";
-            expect(state.geometry.shell.bottom, state.name).toBeCloseTo(
-              state.scale !== 1
-                ? (scenario.largeUnit ? height + top : height) - bottom
-                : state.height + state.offsetTop - (occluded ? 0 : bottom),
-              0,
-            );
-            expect(state.geometry.composer.bottom, state.name).toBeLessThanOrEqual(
-              state.geometry.shell.bottom,
-            );
-          }
         }
       },
     );

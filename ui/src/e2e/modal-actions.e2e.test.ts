@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -20,83 +18,71 @@ const exactButton = (host: Page | Locator, name: string) =>
   host.getByRole("button", { name, exact: true });
 const modalFor = (page: Page, label: string) =>
   page.locator(`openclaw-modal-dialog[label="${label}"]`);
-function expectNear(actual: number, expected: number, tolerance: number) {
-  expect(Math.abs(actual - expected)).toBeLessThanOrEqual(tolerance);
-}
-
-// Browser layout is the contract: neither the footer tag nor a CSS declaration
-// proves that wrapped buttons stay right-aligned, visible and inside their form.
-async function inspectActions(page: Page, modal: Locator, selector: string, name: string) {
+async function inspectActions(page: Page, modal: Locator, selector: string) {
   const dialog = modal.getByRole("dialog");
   const footer = modal.locator(selector).last();
-  const frame = await takeControlUiScreenshotFrame(page, dialog, [footer], {
+  await takeControlUiScreenshotFrame(page, dialog, [footer], {
     animations: "disabled",
     elements: [dialog],
     scrollTo: footer,
   });
-  await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-  await writeFile(path.join(suite.artifactDir, name + "-dialog.png"), frame.elements[0]!.png);
   const geometry = await footer.evaluate((row) => {
-    const bounds = (element: Element) => {
-      const r = element.getBoundingClientRect();
-      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
-    };
     const card = row.parentElement!;
-    const cardStyle = getComputedStyle(card);
-    const rowStyle = getComputedStyle(row);
+    const box = row.getBoundingClientRect();
+    const cardBox = card.getBoundingClientRect();
+    const style = getComputedStyle(card);
+    const edge = box.right - Number.parseFloat(getComputedStyle(row).paddingRight);
+    const controls = [...row.querySelectorAll("button")]
+      .map((button) => button.getBoundingClientRect())
+      .filter((rect) => rect.height > 0);
+    const rowEnds = new Map<number, number>();
+    for (const rect of controls) {
+      const line = Math.round(rect.top);
+      rowEnds.set(line, Math.max(rowEnds.get(line) ?? -Infinity, rect.right));
+    }
     return {
-      row: bounds(row),
-      card: bounds(card),
-      rowPadding: Number.parseFloat(rowStyle.paddingRight),
-      paddingRight: Number.parseFloat(cardStyle.paddingRight),
-      paddingBottom: Number.parseFloat(cardStyle.paddingBottom),
-      controls: [...row.querySelectorAll("button")]
-        .filter((button) => button.getBoundingClientRect().height > 0)
-        .map((button) => Object.assign(bounds(button), { label: button.textContent?.trim() })),
-      following: [...card.children]
+      tops: controls.map((rect) => rect.top),
+      footerLast: ![...card.children]
         .slice([...card.children].indexOf(row) + 1)
-        .filter((child) => child.getBoundingClientRect().height > 0).length,
-      scrollWidth: card.scrollWidth,
-      clientWidth: card.clientWidth,
-      viewport: { width: innerWidth, height: innerHeight },
+        .some((child) => child.getBoundingClientRect().height > 0),
+      noOverflow: card.scrollWidth <= card.clientWidth + 1,
+      rightAligned:
+        Math.abs(box.right - cardBox.right + Number.parseFloat(style.paddingRight)) <= 3,
+      bottomAligned:
+        Math.abs(box.bottom - cardBox.bottom + Number.parseFloat(style.paddingBottom)) <= 4,
+      contained: controls.every(
+        (rect) =>
+          rect.left >= box.left - 1 &&
+          rect.right <= box.right + 1 &&
+          rect.top >= 0 &&
+          rect.bottom <= innerHeight,
+      ),
+      rowsAligned: [...rowEnds.values()].every((right) => Math.abs(right - edge) <= 3),
     };
   });
-  await writeFile(path.join(suite.artifactDir, name + ".json"), JSON.stringify(geometry, null, 2));
-  expectCompletionPlacement(geometry);
-  return geometry;
+  expect(geometry).toMatchObject({
+    footerLast: true,
+    noOverflow: true,
+    rightAligned: true,
+    bottomAligned: true,
+    contained: true,
+    rowsAligned: true,
+  });
+  expect(geometry.tops.length).toBeGreaterThan(0);
+  return geometry.tops;
 }
 
-function expectCompletionPlacement(geometry: Awaited<ReturnType<typeof inspectActions>>) {
-  const { row, card, controls } = geometry;
-  expect(geometry.following).toBe(0);
-  expect(controls.length).toBeGreaterThan(0);
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
-  expectNear(row.right, card.right - geometry.paddingRight, 3);
-  expectNear(row.bottom, card.bottom - geometry.paddingBottom, 4);
-  const rows = new Map<number, number[]>();
-  for (const control of controls) {
-    expect(control.left).toBeGreaterThanOrEqual(row.left - 1);
-    expect(control.right).toBeLessThanOrEqual(row.right + 1);
-    expect(control.top).toBeGreaterThanOrEqual(0);
-    expect(control.bottom).toBeLessThanOrEqual(geometry.viewport.height);
-    const line = Math.round(control.top);
-    rows.set(line, [...(rows.get(line) ?? []), control.right]);
-  }
-  for (const edges of rows.values()) {
-    expectNear(Math.max(...edges), row.right - geometry.rowPadding, 3);
-  }
-}
-
-async function submitSecretDialog(page: Page, label: string, proof: string, enter = false) {
+async function submitSecretDialog(page: Page, label: string, enter = false) {
   const modal = modalFor(page, label);
-  const geometry = await inspectActions(page, modal, ".secrets-store-dialog__actions", proof);
+  const geometry = await inspectActions(page, modal, ".secrets-store-dialog__actions");
+  // These short labels fit one row even at 320px; never stretch into a full-width column.
+  expect(Math.abs(geometry[0]! - geometry[1]!)).toBeLessThanOrEqual(2);
   if (enter) {
     await modal.getByLabel("Name", { exact: true }).press("Enter");
   } else {
     await exactButton(modal, "Save").click();
   }
   await modal.waitFor({ state: "detached" });
-  return geometry;
 }
 
 suite.define(() => {
@@ -177,12 +163,12 @@ suite.define(() => {
       await issue.locator("summary").click();
       await issue.locator(".sidebar-update-card__action").click();
       const modal = modalFor(page, "Update Gateway");
-      await inspectActions(page, modal, ".exec-approval-actions", "update-confirm");
+      await inspectActions(page, modal, ".exec-approval-actions");
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
       await exactButton(modal, "Update and restart").click();
       await gateway.waitForRequest("update.run");
       await exactButton(modal, "Updating…").waitFor();
-      await inspectActions(page, modal, ".exec-approval-actions", "update-working");
+      await inspectActions(page, modal, ".exec-approval-actions");
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
     }));
 
@@ -215,7 +201,7 @@ suite.define(() => {
         const add = modalFor(page, "Add");
         await add.getByLabel("Name", { exact: true }).fill("DEPLOY_REGION");
         await add.getByLabel("Value", { exact: true }).fill("eu-west-1");
-        const addition = await submitSecretDialog(page, "Add", "secrets-add", true);
+        await submitSecretDialog(page, "Add", true);
         await gateway.waitForRequest("secrets.store.set");
         expect((await gateway.getRequests("secrets.store.set"))[0]?.params).toMatchObject({
           name: "DEPLOY_REGION",
@@ -226,20 +212,15 @@ suite.define(() => {
         await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
         const edit = modalFor(page, "Edit");
         await edit.getByLabel("Value", { exact: true }).fill("https://updated.test");
-        const editing = await submitSecretDialog(page, "Edit", "secrets-edit");
+        await submitSecretDialog(page, "Edit");
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(2);
         await exactButton(page, "Bulk Add").click();
         const bulk = modalFor(page, "Bulk Add");
         await bulk
           .getByRole("textbox", { name: "Value", exact: true })
           .fill(["SERVICE_URL=https://service.test", "SERVICE_API_KEY=fixture-only"].join("\n"));
-        const bulkActions = await submitSecretDialog(page, "Bulk Add", "secrets-bulk");
+        await submitSecretDialog(page, "Bulk Add");
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(4);
-        for (const geometry of [addition, editing, bulkActions]) {
-          // These short English labels fit one row even at 320px; do not stretch
-          // both actions into the old mobile full-width column.
-          expectNear(geometry.controls[0]!.top, geometry.controls[1]!.top, 2);
-        }
       }),
     );
   }

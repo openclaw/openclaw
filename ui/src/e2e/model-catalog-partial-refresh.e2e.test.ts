@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import partialConfig from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
@@ -58,13 +56,6 @@ function sessionList(defaults: Record<string, unknown>, row: Record<string, unkn
   };
 }
 
-async function capture(page: Page, stage: string) {
-  await page.screenshot({
-    path: path.join(suite.artifactDir, stage + ".png"),
-    animations: "disabled",
-  });
-}
-
 async function expectUnreserved(picker: Locator) {
   expect(await picker.getAttribute("aria-hidden")).toBe("false");
   expect(await picker.getAttribute("class")).not.toContain(
@@ -85,12 +76,6 @@ function readEffort(page: Page) {
           }
         : null;
     });
-}
-
-async function captureControls(page: Page, stage: string) {
-  const controls = { effort: await readEffort(page) };
-  await writeFile(path.join(suite.artifactDir, `${stage}.json`), JSON.stringify(controls, null, 2));
-  await capture(page, stage);
 }
 
 suite.define(() => {
@@ -146,7 +131,6 @@ suite.define(() => {
       await composer.locator('[data-chat-model-select="true"]').click();
       await gateway.waitForRequest("models.list", { after: retryAfter });
       await composer.locator("[data-chat-model-refresh]").waitFor({ state: "visible" });
-      await captureControls(page, "pending-refresh");
       expect(await effort.isVisible()).toBe(true);
       await expectUnreserved(effortPicker);
       await effort.click();
@@ -189,9 +173,7 @@ suite.define(() => {
           await revealChatModelOption(available);
           await expect.poll(() => available.isVisible()).toBe(true);
           expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-          await capture(page, `${route}-catalog`);
           await model.click();
-          await capture(page, `${route}-composer`);
           const effort = composer.locator("[data-chat-thinking-select]");
           await expect.poll(() => effort.isVisible()).toBe(true);
           await effort.click();
@@ -216,7 +198,6 @@ suite.define(() => {
           }
           const speed = composer.getByRole("radio", { name: "Fast", exact: true });
           await expect.poll(() => speed.isEnabled()).toBe(true);
-          await capture(page, `${route}-effort`);
           await speed.click();
           if (route === "chat") {
             await expect
@@ -232,7 +213,7 @@ suite.define(() => {
           await page.keyboard.press("Escape");
           await model.click();
           expect(await composer.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
-          for (const [index, refreshFailed] of [false, true, false].entries()) {
+          for (const refreshFailed of [false, true, false]) {
             await gateway.setMethodResponse("models.list", {
               ...catalog,
               refreshFailed,
@@ -247,7 +228,6 @@ suite.define(() => {
             await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("ultra");
             expect(await effort.getAttribute("data-chat-fast-mode")).toBe("true");
             expect(await model.textContent()).toContain("GPT-5.4");
-            await captureControls(page, `${route}-recovery-${index}`);
           }
         },
       );
@@ -347,7 +327,6 @@ suite.define(() => {
             return !effort || effort.reserved === "true" || effort.disabled === "true";
           })
           .toBe(true);
-        await captureControls(page, `${condition}-open`);
         await model.click();
         await expect
           .poll(async () => {
@@ -355,7 +334,6 @@ suite.define(() => {
             return !effort || effort.disabled === "true";
           })
           .toBe(true);
-        await captureControls(page, `${condition}-closed`);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       });
     },

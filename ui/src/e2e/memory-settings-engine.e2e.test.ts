@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -69,16 +68,6 @@ async function openSettings(
   return gateway;
 }
 
-async function capture(
-  page: Page,
-  name: string,
-  target = page.locator(".settings-page > .settings-section").first(),
-) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await target.screenshot({ animations: "disabled", path: path.join(suite.artifactDir, name) });
-  }
-}
-
 suite.define(() => {
   it("config.set keeps the default engine first and drains Off before selecting it", async () => {
     await suite.withPage(desktop, async ({ page }) => {
@@ -100,7 +89,6 @@ suite.define(() => {
 
       const pendingOffSave = await gateway.waitForRequest("config.set");
       expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
-      await capture(page, "00-off-write-draining.png");
       await gateway.resolveDeferred("config.set");
       const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
       expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
@@ -111,8 +99,6 @@ suite.define(() => {
       const selected = engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true });
       await expect.poll(() => selected.isChecked()).toBe(true);
       await expect.poll(() => page.getByText("Could not change the memory engine").count()).toBe(0);
-
-      await capture(page, "01-openclaw-memory-selected.png");
     });
   });
 
@@ -162,12 +148,6 @@ suite.define(() => {
         .waitFor();
       expect(await page.getByText("Could not update Active memory").count()).toBe(0);
       expect(pageErrors).toEqual([]);
-
-      await capture(
-        page,
-        "03-addon-committed-refresh-warning.png",
-        page.locator("openclaw-memory-settings"),
-      );
     });
   });
 
@@ -193,8 +173,6 @@ suite.define(() => {
             .isChecked(),
         )
         .toBe(true);
-
-      await capture(page, "02-configured-engine-unavailable.png");
     });
   });
 });

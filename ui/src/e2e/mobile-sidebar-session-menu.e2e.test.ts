@@ -1,17 +1,13 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  captureControlUiE2eFailureDiagnostics,
   createControlUiMockSameOriginGatewayScript,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
-  captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -32,8 +28,6 @@ const pageOptions = (width: number, height: number, hasTouch: boolean): BrowserC
   colorScheme: "dark",
   hasTouch,
   viewport: { width, height },
-  locale: "en-US",
-  serviceWorkers: "block",
 });
 async function box(item: Locator) {
   const bounds = await item.boundingBox();
@@ -52,7 +46,6 @@ async function openDrawer(page: Page, wait = false) {
 
 async function captureFrame(
   page: Page,
-  name: string,
   highlights: Locator[],
   crop = false,
   alwaysCapture = false,
@@ -62,16 +55,10 @@ async function captureFrame(
     return;
   }
   const target = page.locator(crop ? ".shell-nav" : ".shell");
-  const frame = await takeControlUiScreenshotFrame(page, target, highlights, {
+  await takeControlUiScreenshotFrame(page, target, highlights, {
     animations: "disabled",
     ...(crop ? { elements: [target] } : {}),
   });
-  if (enabled) {
-    await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-    if (crop) {
-      await writeFile(path.join(suite.artifactDir, `${name}-crop.png`), frame.elements[0]!.png);
-    }
-  }
 }
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -119,18 +106,13 @@ suite.define(() => {
           sessionKey: groupedKey,
           sessionGroups: ["Research", "Operations"],
           sessions: [
-            sessionRow(pinnedKey, "Release planning", 3, {
-              icon: "📌",
-              color: "blue",
-            }),
-            sessionRow(groupedKey, "Review the mobile navigation changes", 2, {
+            sessionRow(pinnedKey, "Release planning", 3, { icon: "📌", color: "blue" }),
+            sessionRow(groupedKey, "Review notes", 2, {
               category: "Research",
               icon: "🔬",
               color: "purple",
             }),
-            sessionRow("agent:main:follow-up", "Follow-up questions", 1, {
-              category: "Operations",
-            }),
+            sessionRow("agent:main:follow-up", "Follow-up", 1, { category: "Operations" }),
           ],
           controlUiTabs: [
             { id: "reports", pluginId: "reports", label: "Reports", icon: "chartBar" },
@@ -175,7 +157,7 @@ suite.define(() => {
         expect(await plugin.count()).toBe(1);
         await rail.locator('[data-navigation-view="sessions"]').click();
         await group.locator(".sidebar-recent-session").waitFor();
-        await captureFrame(page, `sidebar-spacing-${pointer}`, [pinned, plugin, group], true);
+        await captureFrame(page, [pinned, plugin, group], true);
         if (pointer === "coarse") {
           await page.clock.install();
         }
@@ -222,11 +204,7 @@ suite.define(() => {
                 await page.keyboard.press("Shift+F10");
               }
               const move = menuItem(page, "Move up");
-              if (pointer === "coarse") {
-                await move.tap();
-              } else {
-                await move.press("Enter");
-              }
+              await (pointer === "coarse" ? move.tap() : move.press("Enter"));
               await move.waitFor({ state: "hidden" });
               expect(
                 await row.evaluate((element) =>
@@ -270,33 +248,31 @@ suite.define(() => {
       const plainKey = "agent:main:mobile-sidebar-long-title";
       const privateKey = "agent:main:mobile-sidebar-private";
       const overflowGroups = Array.from({ length: 24 }, (_, index) => `Team ${index + 1}`);
-      const context = await suite.browser.newContext(pageOptions(390, 650, pointer === "coarse"));
-      const page = await context.newPage();
-      await page.addInitScript(() => {
-        localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-      });
-      await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": sessionsListResponse([
-            sessionRow(sessionKey, "Mobile sidebar menu", Date.parse("2026-08-19T03:00:00.000Z"), {
-              category: "Research",
-              lastMessagePreview: "Keep this second line visible during navigation",
-            }),
-            sessionRow(plainKey, "Investigate mobile sidebar title readability", 1, {
-              category: "Research",
-              color: "blue",
-            }),
-            sessionRow(privateKey, "Private planning and follow-up tasks", 0, {
-              category: "Research",
-              incognito: true,
-            }),
-          ]),
-        },
-        sessionGroups: ["Research", "Operations", "Planning", ...overflowGroups],
-        sessionKey,
-      });
+      await suite.withPage(pageOptions(390, 650, pointer === "coarse"), async ({ page }) => {
+        await page.addInitScript(() => {
+          localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+        });
+        await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": sessionsListResponse([
+              sessionRow(sessionKey, "Mobile sidebar menu", Date.UTC(2026, 7, 19, 3), {
+                category: "Research",
+                lastMessagePreview: "Keep this second line visible during navigation",
+              }),
+              sessionRow(plainKey, "Investigate mobile sidebar title readability", 1, {
+                category: "Research",
+                color: "blue",
+              }),
+              sessionRow(privateKey, "Private planning and follow-up tasks", 0, {
+                category: "Research",
+                incognito: true,
+              }),
+            ]),
+          },
+          sessionGroups: ["Research", "Operations", "Planning", ...overflowGroups],
+          sessionKey,
+        });
 
-      try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await openDrawer(page, true);
 
@@ -310,7 +286,7 @@ suite.define(() => {
         const titleWidth = () => widthOf(title);
         const restingWidth = await titleWidth();
         await page.mouse.move(389, 649);
-        await captureFrame(page, `mobile-title-${pointer}`, [title], true);
+        await captureFrame(page, [title], true);
         // Keep the drawer increase modest; reclaim reading space inside its rows.
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
@@ -346,17 +322,12 @@ suite.define(() => {
             mask: getComputedStyle(element).maskImage,
           })),
         ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
-        if (pointer === "coarse") {
-          await menuButton.tap();
-        } else {
-          await menuButton.click();
-        }
+        await (pointer === "coarse" ? menuButton.tap() : menuButton.click());
 
         const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });
         await menu.waitFor({ state: "visible" });
         await menuItem(page, "Pin session").waitFor();
         await menuItem(page, "Archive session").waitFor();
-        await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-root.png");
 
         await noNestedMenus(page.locator("openclaw-session-menu"));
         await page.getByRole("menuitem", { name: "Move to group" }).click();
@@ -378,16 +349,7 @@ suite.define(() => {
         expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight);
         expect(scroll.scrollTop).toBeGreaterThan(0);
         expectVerticalBounds(await box(back), menuBox);
-        await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-group-drilldown.png");
-      } catch (error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error: error instanceof Error ? error : new Error(String(error)),
-          label: "mobile-sidebar-session-menu",
-        });
-        throw error;
-      } finally {
-        await context.close();
-      }
+      });
     },
   );
 
@@ -438,7 +400,6 @@ suite.define(() => {
         await part(row, "link").click({ button: "right" });
         const menu = page.locator("openclaw-session-menu");
         await menuItem(menu, "Pin session").waitFor();
-        const phase = "after-" + width;
         expect(await sessionMenuLabels(menu.locator(".session-menu__panel"))).toEqual([
           "Pin session",
           "Rename…",
@@ -451,7 +412,7 @@ suite.define(() => {
           "Archive session",
           "Advanced",
         ]);
-        await captureFrame(page, `${phase}-root`, [menuItem(menu, "Pin session")]);
+        await captureFrame(page, [menuItem(menu, "Pin session")]);
         await menuItem(menu, "Copy link").click();
         await expect
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -469,7 +430,7 @@ suite.define(() => {
         const advanced = menuItem(menu, "Advanced");
         await advanced.click();
         await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
-        await captureFrame(page, `${phase}-advanced`, [
+        await captureFrame(page, [
           width === 390 ? menuItem(menu, "Back") : advanced,
           menu.locator(".session-menu__communication"),
         ]);
@@ -480,7 +441,7 @@ suite.define(() => {
             await menuItem(menu, "Back").click();
             await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
           }
-          await captureFrame(page, "after-phone-back", [menuItem(menu, "Back")], false, true);
+          await captureFrame(page, [menuItem(menu, "Back")], false, true);
           await menuItem(menu, "Back").click();
           await menuItem(menu, "Copy link").waitFor();
         }

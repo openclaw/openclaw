@@ -20,56 +20,37 @@ const mobile = {
   serviceWorkers: "block" as const,
   viewport: { width: 390, height: 844 },
 };
-const visibilities: Array<"shared" | "read-only" | "suggest" | "draft"> = [
-  "shared",
-  "read-only",
-  "suggest",
-  "draft",
-];
+const visibilities = ["shared", "read-only", "suggest", "draft"];
+const human = (id: string, label: string) => ({ type: "human", id, label });
 const item = (host: Locator, name: string) => host.getByRole("menuitem", { name, exact: true });
-const height = (element: Locator) =>
-  element.evaluate((node) => node.getBoundingClientRect().height);
+const height = (locator: Locator) => locator.evaluate((e) => e.getBoundingClientRect().height);
 const updatedAt = Date.parse("2026-08-28T12:00:00.000Z");
-async function installDraft(
-  page: Page,
-  sessionKey: string,
-  title: string,
-  role: "owner" | "member",
-) {
+async function installDraft(page: Page, key: string, title: string, role: "owner" | "member") {
   const featureMethods = ["chat.metadata", "chat.startup", "session.visibility.set"];
   const methodResponses: Record<string, unknown> = {
     "sessions.list": sessionsListResponse([
-      sessionRow(sessionKey, title, updatedAt, { sharingRole: role, visibility: "draft" }),
+      sessionRow(key, title, updatedAt, { sharingRole: role, visibility: "draft" }),
     ]),
   };
   if (role === "owner") {
-    featureMethods.push(
-      "session.members.listEvidence",
-      "session.members.add",
-      "session.members.remove",
-    );
-    const owner = { type: "human", id: "owner", label: "Owner" };
+    featureMethods.push(...["listEvidence", "add", "remove"].map((s) => `session.members.${s}`));
+    const owner = human("owner", "Owner");
     methodResponses["session.members.listEvidence"] = {
-      sessionKey,
+      sessionKey: key,
       owner,
       members: [],
       role,
       allowedVisibilities: visibilities,
       identities: [
         owner,
-        ...Array.from({ length: 30 }, (_, index) => ({
-          type: "human",
-          id: `member-${index}`,
-          label: `Member ${index}`,
-        })),
+        ...Array.from({ length: 30 }, (_, i) => human(`member-${i}`, `Member ${i}`)),
       ],
     };
   }
   await installMockGateway(page, {
-    sessionKey,
+    sessionKey: key,
     featureMethods,
     methodResponses,
-    allowedSessionVisibilities: visibilities,
     operatorScopes: role === "owner" ? ["operator.read", "operator.write"] : ["operator.read"],
   });
 }
@@ -80,8 +61,8 @@ async function withMobilePage(run: (page: Page) => Promise<void>, colorScheme?: 
 suite.define(() => {
   it.each(["light", "dark"] as const)(
     "keeps the %s mobile Layout menu bounded and its actions reachable without desktop shortcuts",
-    async (colorScheme) => {
-      await withMobilePage(async (page) => {
+    (colorScheme) =>
+      withMobilePage(async (page) => {
         const sessionKey = "agent:main:mobile-layout";
         await installMockGateway(page, {
           sessionKey,
@@ -105,10 +86,8 @@ suite.define(() => {
             [menu, terminal],
             { animations: "disabled" },
           );
-          await writeFile(
-            path.join(suite.artifactDir, "mobile-layout-" + colorScheme + ".png"),
-            frame.png,
-          );
+          const file = path.join(suite.artifactDir, `mobile-layout-${colorScheme}.png`);
+          await writeFile(file, frame.png);
         }
         await page.setViewportSize({ width: 1280, height: 900 });
         expect(await terminal.locator("kbd").isVisible()).toBe(true);
@@ -154,15 +133,14 @@ suite.define(() => {
         await selectChatLayoutAction(page, "Subagents");
         await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
         await expect.poll(() => host.getAttribute("open")).toBeNull();
-      }, colorScheme);
-    },
+      }, colorScheme),
   );
 
   it.each(["light", "dark"] as const)(
     "keeps mobile sharing inside the %s session More menu",
-    async (colorScheme) => {
-      const sessionKey = "agent:main:mobile-more";
-      await withMobilePage(async (page) => {
+    (colorScheme) =>
+      withMobilePage(async (page) => {
+        const sessionKey = "agent:main:mobile-more";
         await installDraft(page, sessionKey, "Mobile menu", "owner");
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -195,13 +173,12 @@ suite.define(() => {
           .toBeGreaterThan(await menu.evaluate((element) => element.clientHeight));
         await expect.poll(async () => Math.round(await height(publish))).toBe(34);
         await captureUiProof(suite, page, `mobile-more-sharing-followup-after-${colorScheme}.png`);
-      }, colorScheme);
-    },
+      }, colorScheme),
   );
 
-  it("keeps the mobile draft indicator for non-manager sessions", async () => {
-    const sessionKey = "agent:main:mobile-member-draft";
-    await withMobilePage(async (page) => {
+  it("keeps the mobile draft indicator for non-manager sessions", () =>
+    withMobilePage(async (page) => {
+      const sessionKey = "agent:main:mobile-member-draft";
       await installDraft(page, sessionKey, "Member draft", "member");
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -209,6 +186,5 @@ suite.define(() => {
       await page.getByRole("button", { name: "Actions for Member draft" }).click();
       const menuHost = page.locator("openclaw-chat-header-session-menu");
       await expect.poll(() => item(menuHost, "Session sharing").count()).toBe(0);
-    });
-  });
+    }));
 });
