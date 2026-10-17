@@ -1,12 +1,31 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../channels/plugins/types.public.js";
 import { cameraTempPath } from "../cli/nodes-camera.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deliverOutboundPayloadsCore } from "../infra/outbound/deliver-core.js";
+import { prepareOutboundPayloadBatch } from "../infra/outbound/deliver-prepare.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   readFileUtf8AndCleanup,
   stubFetchTextResponse,
 } from "../test-utils/camera-url-test-helpers.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
+import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
+import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
+import {
+  createTestContext,
+  endTool,
+} from "./embedded-agent-subscribe.handlers.tools.test-support.js";
+import { createMessageTool } from "./tools/message-tool-execution.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 
 const { callGateway } = vi.hoisted(() => ({ callGateway: vi.fn() }));
@@ -99,9 +118,19 @@ describe("nodes camera_snap", () => {
       },
     });
     const result = await executeNodes({ action: "camera_snap" }, { modelHasVision: true });
+    const mediaUrl = firstMediaUrl(result);
     expect(result.content?.filter((block) => block.type === "image")).toEqual([
       { type: "image", data: JPG_PAYLOAD.base64, mimeType: "image/jpeg" },
     ]);
+    expect(result.content?.filter((block) => block.type === "text")).toEqual([
+      {
+        type: "text",
+        text: `Loaded 1 photo into private model context for inspection; not attached or sent to the user. Saved to ${JSON.stringify(mediaUrl)}. Share explicitly only when the user asks.`,
+      },
+    ]);
+    expect(result.details).toMatchObject({
+      media: { mediaUrls: [mediaUrl], outbound: false },
+    });
   });
 
   it("rejects facing both when deviceId is provided", async () => {
@@ -333,5 +362,165 @@ describe("nodes invoke", () => {
       { allowMediaInvokeCommands: true },
     );
     expect(result.details).toStrictEqual({ payload });
+  });
+});
+
+describe("nodes group recipient isolation and explicit sharing", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("delivers only text to group recipients after inspecting photos_latest or screen_snapshot and delivers media only on explicit share", async () => {
+    const deliveredTexts: Array<{ to: string; text: string }> = [];
+    const deliveredMedia: Array<{ to: string; text?: string; mediaUrl?: string }> = [];
+    const outbound: ChannelOutboundAdapter = {
+      deliveryMode: "direct",
+      resolveTarget: ({ to }) => ({ ok: true, to: to ?? "group:family-chat" }),
+      sendText: async ({ to, text }) => {
+        deliveredTexts.push({ to, text });
+        return { channel: "matrix", messageId: `text-${deliveredTexts.length}` };
+      },
+      sendMedia: async ({ to, text, mediaUrl, onPlatformSendDispatch }) => {
+        await onPlatformSendDispatch?.();
+        deliveredMedia.push({ to, text, mediaUrl });
+        return { channel: "matrix", messageId: `media-${deliveredMedia.length}` };
+      },
+    };
+    const plugin: ChannelPlugin = {
+      ...createOutboundTestPlugin({
+        id: "matrix",
+        outbound,
+        capabilities: { chatTypes: ["direct", "group"], media: true },
+      }),
+      ...createChannelTestPluginBase({
+        id: "matrix",
+        capabilities: { chatTypes: ["direct", "group"], media: true },
+        config: { isConfigured: () => true, resolveAccount: () => ({ enabled: true }) },
+      }),
+      messaging: {
+        normalizeTarget: (raw) => raw.trim() || undefined,
+        targetResolver: { looksLikeId: (raw) => raw.trim().length > 0 },
+      },
+      outbound,
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
+    const cfg = { channels: { matrix: { enabled: true } } } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg);
+
+    setupNodeInvokeMock({
+      commands: ["photos.latest", "screen.snapshot"],
+      onInvoke: (params) => {
+        const record = params as { command?: string };
+        if (record.command === "photos.latest") {
+          return { payload: { photos: [PHOTO] } };
+        }
+        if (record.command === "screen.snapshot") {
+          return {
+            payload: {
+              format: "jpeg",
+              base64: TINY_JPEG_BASE64,
+              width: 1,
+              height: 1,
+              screenIndex: 0,
+            },
+          };
+        }
+        throw new Error(`unexpected command: ${String(record.command)}`);
+      },
+    });
+
+    const photoResult = await executeNodes({ action: "photos_latest" }, { modelHasVision: true });
+    const photoPath = firstMediaUrl(photoResult);
+    const snapshotResult = await executeNodes(
+      { action: "screen_snapshot" },
+      { modelHasVision: true },
+    );
+    const snapshotPath =
+      (snapshotResult.details as { media?: { mediaUrl?: string } } | undefined)?.media?.mediaUrl ??
+      "";
+    expect(snapshotPath).toMatch(/openclaw-screen-snapshot-.*\.jpg$/);
+
+    const { ctx } = createTestContext();
+    ctx.builtinToolNames = new Set(["nodes"]);
+    ctx.trustedLocalMediaToolNames = new Set(["nodes"]);
+    await endTool(ctx, {
+      toolName: "nodes",
+      toolCallId: "call-photos",
+      result: photoResult,
+    });
+    await endTool(ctx, {
+      toolName: "nodes",
+      toolCallId: "call-snapshot",
+      result: snapshotResult,
+    });
+
+    // Neither inspected artifact enters the automatic reply attachment queue.
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+
+    const inspectionPayloads =
+      mergeAttemptToolMediaPayloads({
+        payloads: buildEmbeddedRunPayloads({
+          assistantTexts: ["The receipt total is $42."],
+          sessionKey: "agent:main:matrix:group:family-chat",
+          verboseLevel: "off",
+          reasoningLevel: "off",
+          toolResultFormat: "plain",
+        }),
+        toolMediaUrls: ctx.state.pendingToolMediaUrls,
+      }) ?? [];
+    expect(inspectionPayloads).toEqual([
+      expect.objectContaining({ text: "The receipt total is $42." }),
+    ]);
+    expect(inspectionPayloads.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([]);
+    expect(inspectionPayloads[0]?.mediaUrl).toBeUndefined();
+
+    const deliveryParams = {
+      cfg,
+      channel: "matrix" as const,
+      to: "group:family-chat",
+      payloads: inspectionPayloads as ReplyPayload[],
+    };
+    const preparedBatch = await prepareOutboundPayloadBatch(deliveryParams);
+    const deliveryResults = await deliverOutboundPayloadsCore({
+      ...deliveryParams,
+      preparedBatch,
+    });
+    expect(deliveryResults).toMatchObject([{ channel: "matrix", messageId: "text-1" }]);
+    expect(deliveredTexts).toEqual([
+      { to: "group:family-chat", text: "The receipt total is $42." },
+    ]);
+    expect(deliveredMedia).toEqual([]);
+
+    // Explicit sharing via the message tool with the model-visible saved path still reaches the group.
+    const messageTool = createMessageTool({
+      config: cfg,
+      agentChannel: "matrix",
+      agentSessionKey: "agent:main:matrix:group:family-chat",
+      runId: "run-explicit-share",
+      preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+      resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
+        resolvedConfig,
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+      }),
+    });
+    try {
+      await messageTool.execute("call-share", {
+        action: "send",
+        channel: "matrix",
+        target: "group:family-chat",
+        message: "Here is the receipt you asked me to share.",
+        media: photoPath,
+      });
+      expect(deliveredMedia).toHaveLength(1);
+      expect(deliveredMedia[0]?.to).toBe("group:family-chat");
+      expect(deliveredMedia[0]?.mediaUrl).toBe(photoPath);
+    } finally {
+      await fs.unlink(photoPath).catch(() => undefined);
+      await fs.unlink(snapshotPath).catch(() => undefined);
+    }
   });
 });

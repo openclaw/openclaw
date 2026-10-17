@@ -109,6 +109,7 @@ vi.mock("../../cli/nodes-screen.js", () => ({
 }));
 
 let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;
+let extractToolResultMediaArtifact: typeof import("../embedded-agent-tool-media.js").extractToolResultMediaArtifact;
 
 function mockNodePairApproveFlow(pendingRequest: {
   requiredApproveScopes?: string[];
@@ -157,6 +158,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     // cached prior import before wiring this file's gateway/media mocks.
     vi.resetModules();
     ({ createNodesTool } = await import("./nodes-tool.js"));
+    ({ extractToolResultMediaArtifact } = await import("../embedded-agent-tool-media.js"));
   });
 
   beforeEach(() => {
@@ -373,6 +375,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
         height: 1080,
         media: {
           mediaUrl: "/tmp/screen-snapshot.png",
+          outbound: false,
         },
       },
     });
@@ -547,9 +550,67 @@ describe("createNodesTool screen_record duration guardrails", () => {
       ],
       media: {
         mediaUrls: ["/tmp/photo-1.jpg", "/tmp/photo-2.jpg"],
+        outbound: false,
       },
     });
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
+  });
+
+  it("keeps inspected photos private (not auto-attached to replies)", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        photos: [{ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 }],
+      },
+    });
+    nodesCameraMocks.parseCameraSnapPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "jpg",
+      width: 800,
+      height: 600,
+    });
+    const tool = createNodesTool({ modelHasVision: true });
+
+    const result = await tool.execute("call-2", {
+      action: "photos_latest",
+      node: "macbook",
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("MEDIA:");
+    // When image sanitization omits the dummy base64 block, the result text
+    // still carries the saved path without claiming images were loaded.
+    const texts = (result?.content ?? [])
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect(texts).toContain('Photo saved to "/tmp/camera.jpg"; not attached or sent to the user.');
+    expect(texts).not.toContain("loaded into private model context");
+    expect(result?.details?.media).toMatchObject({ outbound: false });
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
+  });
+
+  it("does not claim photos were loaded into model context when modelHasVision is false", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        photos: [{ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 }],
+      },
+    });
+    nodesCameraMocks.parseCameraSnapPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "jpg",
+      width: 800,
+      height: 600,
+    });
+    const tool = createNodesTool({ modelHasVision: false });
+
+    const result = await tool.execute("call-no-vision", {
+      action: "photos_latest",
+      node: "macbook",
+    });
+
+    expect(result?.content).toEqual([{ type: "text", text: "Library photo saved to /tmp/camera.jpg." }]);
+    expect(result?.details?.media).toMatchObject({ outbound: false });
+    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
   it("caps photos_latest limit at 20 before gateway invoke", async () => {
