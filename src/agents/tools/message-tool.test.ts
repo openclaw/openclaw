@@ -250,7 +250,7 @@ vi.mock("./gateway-tool.js", () => ({
   createGatewayTool: () => openClawToolsFactoryMocks.tool("gateway"),
 }));
 vi.mock("./heartbeat-response-tool.js", () => ({
-  createHeartbeatResponseTool: () => openClawToolsFactoryMocks.tool("heartbeat_response"),
+  resolveHeartbeatResponseTool: () => null,
 }));
 vi.mock("./image-generate-tool.js", () => ({
   createImageGenerateTool: () => null,
