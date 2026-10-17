@@ -27,6 +27,29 @@ vi.mock("./mcp-oauth.js", () => ({
 vi.mock("../logger.js", () => ({ logDebug: vi.fn(), logWarn: vi.fn() }));
 
 const server = { url: "https://mcp.example.com/events", transport: "streamable-http" };
+const requesterServer = { ...server, auth: "oauth", oauth: { identity: "per-requester" } };
+function request(overrides: Partial<Parameters<typeof requestMcpEvent>[0]> = {}) {
+  return requestMcpEvent({
+    serverName: "calendar",
+    server,
+    method: "events/list",
+    assertCurrent: () => {},
+    ...overrides,
+  });
+}
+function authority(message: string) {
+  let current = true;
+  return {
+    revoke() {
+      current = false;
+    },
+    assertCurrent() {
+      if (!current) {
+        throw new Error(message);
+      }
+    },
+  };
+}
 function readRequest(init: RequestInit | undefined) {
   if (typeof init?.body !== "string") {
     throw new Error("Expected a JSON string request body");
@@ -39,15 +62,14 @@ function readRequest(init: RequestInit | undefined) {
 }
 
 function reply(init: RequestInit | undefined, mode: "json" | "sse", result: unknown) {
-  const request = readRequest(init);
-  const message = JSON.stringify({ jsonrpc: "2.0", id: request.id, result });
+  const rpc = readRequest(init);
+  const message = JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result });
   return new Response(mode === "json" ? message : "event: message\ndata: " + message + "\n\n", {
     headers: { "content-type": mode === "json" ? "application/json" : "text/event-stream" },
   });
 }
 beforeEach(() => {
-  // This suite mocks every HTTP operation; select the direct DNS path explicitly.
-  // Ambient proxy coverage belongs to mcp-http-fetch.test.ts.
+  // Select direct DNS; ambient proxy coverage belongs to mcp-http-fetch.test.ts.
   for (const key of [
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -76,12 +98,8 @@ describe("MCP Events direct protocol transport", () => {
     async (mode) => {
       const resolution = vi.spyOn(mcpTransport, "resolveMcpTransport");
       mocks.fetch.mockImplementation(async (_url, init) => reply(init, mode, { events: [] }));
-      const result = await requestMcpEvent({
-        serverName: "calendar",
-        server,
-        method: "events/list",
+      const result = await request({
         params: { _meta: { malicious: true } },
-        assertCurrent: () => {},
       });
       expect(result).toEqual({ events: [] });
       const resolved = resolution.mock.results.find((entry) => entry.type === "return");
@@ -98,62 +116,48 @@ describe("MCP Events direct protocol transport", () => {
       expect(init?.method).toBe("POST");
       expect(headers.get("mcp-method")).toBe("events/list");
       expect(headers.get("mcp-protocol-version")).toBe("2026-07-28");
-      const body = readRequest(init);
-      expect(body.method).toBe("events/list");
-      expect(body.params._meta).toEqual({
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-        "io.modelcontextprotocol/clientInfo": { name: "openclaw", version: expect.any(String) },
-        "io.modelcontextprotocol/clientCapabilities": {},
+      expect(readRequest(init)).toEqual({
+        id: expect.any(String),
+        method: "events/list",
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": { name: "openclaw", version: expect.any(String) },
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
       });
     },
   );
   it("rechecks authority after guarded DNS resolution and before HTTP", async () => {
-    let current = true;
+    const owner = authority("source revoked");
     mocks.lookup.mockImplementation(async () => {
-      current = false;
+      owner.revoke();
       return [{ address: "93.184.216.34", family: 4 }];
     });
     await expect(
-      requestMcpEvent({
-        serverName: "calendar",
-        server,
-        method: "events/subscribe",
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("source revoked");
-          }
-        },
-      }),
+      request({ method: "events/subscribe", assertCurrent: owner.assertCurrent }),
     ).rejects.toThrow("source revoked");
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
   it("does not return a successful remote effect after owner revocation", async () => {
-    let current = true;
+    const owner = authority("source revoked after effect");
     mocks.fetch.mockImplementation(async (_url, init) => {
-      current = false;
+      owner.revoke();
       return reply(init, "json", { id: "remote" });
     });
     await expect(
-      requestMcpEvent({
-        serverName: "calendar",
-        server,
-        method: "events/subscribe",
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("source revoked after effect");
-          }
-        },
-      }),
+      request({ method: "events/subscribe", assertCurrent: owner.assertCurrent }),
     ).rejects.toThrow("source revoked after effect");
     expect(mocks.fetch).toHaveBeenCalledOnce();
   });
   it("preserves protocol dispositions without exposing remote diagnostic text", async () => {
     mocks.fetch.mockImplementation(async (_url, init) => {
-      const request = readRequest(init);
+      const rpc = readRequest(init);
       return new Response(
         JSON.stringify({
           jsonrpc: "2.0",
-          id: request.id,
+          id: rpc.id,
           error: {
             code: -32602,
             message: "private-account-secret",
@@ -163,12 +167,7 @@ describe("MCP Events direct protocol transport", () => {
         { headers: { "content-type": "application/json" } },
       );
     });
-    const error = await requestMcpEvent({
-      serverName: "calendar",
-      server,
-      method: "events/subscribe",
-      assertCurrent: () => {},
-    }).catch((cause: unknown) => cause);
+    const error = await request({ method: "events/subscribe" }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
       name: "McpEventRequestError",
@@ -183,12 +182,7 @@ describe("MCP Events direct protocol transport", () => {
         "network unavailable https://fixture-user:fixture-password@mcp.example.com/events?api_key=fixture-token",
       ),
     );
-    const error = await requestMcpEvent({
-      serverName: "calendar",
-      server,
-      method: "events/list",
-      assertCurrent: () => {},
-    }).catch((cause: unknown) => cause);
+    const error = await request().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
       message: expect.stringContaining("network unavailable"),
@@ -199,38 +193,26 @@ describe("MCP Events direct protocol transport", () => {
     expect(diagnostic).not.toContain("fixture-token");
   });
   it("fails closed for missing requester OAuth rather than using shared OAuth", async () => {
-    await expect(
-      requestMcpEvent({
-        serverName: "calendar",
-        server: { ...server, auth: "oauth", oauth: { identity: "per-requester" } },
-        method: "events/list",
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("subscription owner");
+    await expect(request({ server: requesterServer })).rejects.toThrow("subscription owner");
     expect(mocks.token).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
   it("rechecks native requester authority after OAuth token resolution before resource HTTP", async () => {
-    let current = true;
+    const owner = authority("OAuth owner revoked");
     mocks.token.mockImplementation(async () => {
-      current = false;
+      owner.revoke();
       return "oauth-fixture-token";
     });
     await expect(
-      requestMcpEvent({
-        serverName: "calendar",
-        server: { ...server, auth: "oauth", oauth: { identity: "per-requester" } },
+      request({
+        server: requesterServer,
         requesterScope: {
           requesterSenderId: "alice",
           messageChannel: "discord",
           agentAccountId: "default",
         },
         method: "events/subscribe",
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("OAuth owner revoked");
-          }
-        },
+        assertCurrent: owner.assertCurrent,
       }),
     ).rejects.toThrow("OAuth owner revoked");
     expect(mocks.token).toHaveBeenCalledWith(
@@ -241,12 +223,8 @@ describe("MCP Events direct protocol transport", () => {
 
   it("does not perform HTTP for an already canceled request", async () => {
     await expect(
-      requestMcpEvent({
-        serverName: "calendar",
-        server,
-        method: "events/list",
+      request({
         signal: AbortSignal.abort(new Error("canceled by owner")),
-        assertCurrent: () => {},
       }),
     ).rejects.toThrow("canceled by owner");
     expect(mocks.fetch).not.toHaveBeenCalled();

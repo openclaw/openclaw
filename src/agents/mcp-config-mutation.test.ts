@@ -31,6 +31,18 @@ const PER_REQUESTER_SERVER = {
   auth: "oauth",
   oauth: { identity: "per-requester" },
 };
+const STDIO_SERVER = { command: "uvx", args: ["operator-mcp"] };
+
+async function install(server = PER_REQUESTER_SERVER) {
+  const result = await setConfiguredMcpServer({ name: "fixture", server });
+  expect(result.ok).toBe(true);
+  return result;
+}
+
+async function closeState() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
 
 function seedOAuthState(name: string) {
   const operator = operatorMcpOAuthIdentity(name, SERVER_URL);
@@ -51,8 +63,7 @@ function seedOAuthState(name: string) {
 }
 
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeState();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -60,13 +71,11 @@ afterEach(async () => {
 async function withMcpConfigHome(run: () => Promise<void>): Promise<void> {
   await withTempHome(
     async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await closeState();
       try {
         await run();
       } finally {
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
+        await closeState();
       }
     },
     {
@@ -83,11 +92,7 @@ async function withMcpConfigHome(run: () => Promise<void>): Promise<void> {
 describe("configured MCP OAuth cleanup", () => {
   it("preserves config and OAuth credentials when deletion authority expires during preflight", async () => {
     await withMcpConfigHome(async () => {
-      const initial = await setConfiguredMcpServer({
-        name: "fixture",
-        server: PER_REQUESTER_SERVER,
-      });
-      expect(initial.ok).toBe(true);
+      const initial = await install();
       const { operator, requester } = seedOAuthState("fixture");
       const raw = await fs.readFile(initial.path, "utf8");
       let active = true;
@@ -154,13 +159,8 @@ describe("configured MCP OAuth cleanup", () => {
     },
   ])("applies cleanup and preserves env references after $name", async ({ mutate, expected }) => {
     await withMcpConfigHome(async () => {
-      const serverName = "fixture";
-      const initial = await setConfiguredMcpServer({
-        name: serverName,
-        server: PER_REQUESTER_SERVER,
-      });
-      expect(initial.ok).toBe(true);
-      const { operator, requester } = seedOAuthState(serverName);
+      const initial = await install();
+      const identities = seedOAuthState("fixture");
       const configPath = initial.path;
       const config = JSON.parse(await fs.readFile(configPath, "utf8"));
       config.messages = { responsePrefix: "${OPENCLAW_TEST_MCP_PREFIX}" };
@@ -169,7 +169,7 @@ describe("configured MCP OAuth cleanup", () => {
       await fs.writeFile(configPath, raw);
       const result = await withContendedConfigMutation(
         configPath,
-        () => mutate(serverName),
+        () => mutate("fixture"),
         async () => {
           expect(await fs.readFile(configPath, "utf8")).toBe(raw);
           vi.stubEnv("OPENCLAW_TEST_MCP_PREFIX", "after-lock");
@@ -183,18 +183,13 @@ describe("configured MCP OAuth cleanup", () => {
       const fresh = await readConfigFileSnapshot();
       expect(fresh.valid).toBe(true);
       expect(fresh.sourceConfig.messages?.responsePrefix).toBe("after-lock");
-      expect((await readMcpOAuthStore(operator.storeKey)).tokens?.access_token).toBe(
-        expected.operator,
-      );
-      expect((await readMcpOAuthStore(requester.storeKey)).tokens?.access_token).toBe(
-        expected.requester,
-      );
-      expect(await readMcpOAuthPendingAuthorization("operator-state")).toBe(
-        expected.operator ? operator.storeKey : undefined,
-      );
-      expect(await readMcpOAuthPendingAuthorization("requester-state")).toBe(
-        expected.requester ? requester.storeKey : undefined,
-      );
+      for (const principal of ["operator", "requester"] as const) {
+        const { storeKey } = identities[principal];
+        expect((await readMcpOAuthStore(storeKey)).tokens?.access_token).toBe(expected[principal]);
+        expect(await readMcpOAuthPendingAuthorization(`${principal}-state`)).toBe(
+          expected[principal] ? storeKey : undefined,
+        );
+      }
     });
   });
 });
@@ -220,7 +215,7 @@ describe("configured MCP ownership coordination", () => {
 
       const mutation = setConfiguredMcpServer({
         name: " fixture ",
-        server: { command: "uvx", args: ["operator-mcp"] },
+        server: STDIO_SERVER,
       }).then((result) => {
         order.push("operator");
         return result;
@@ -243,7 +238,7 @@ describe("configured MCP ownership coordination", () => {
     await withMcpConfigHome(async () => {
       const result = await setConfiguredMcpServer({
         name: " ",
-        server: { command: "uvx", args: ["operator-mcp"] },
+        server: STDIO_SERVER,
       });
 
       expect(result).toEqual({
