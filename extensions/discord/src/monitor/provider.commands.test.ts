@@ -8,9 +8,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { discordSetupPlugin } from "../channel.setup.js";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import * as nativeCommandRuntime from "./native-command.js";
@@ -20,30 +21,24 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type InteractionParams = Parameters<typeof createDiscordProviderInteractionSurface>[0];
 
-const command = (name: string, description = name): NativeCommandSpec => ({
-  name,
-  description,
-  acceptsArgs: false,
-});
+const spec = (name: string): NativeCommandSpec => ({ name, description: name, acceptsArgs: false });
 const names = (specs: readonly { name: string }[]) => specs.map(({ name }) => name);
-const skill = (name: string, skillName = name, description = name) => ({
-  name,
-  skillName,
-  description,
-});
+const skill = (name: string) => ({ name, skillName: name, description: name });
 const paddingSkills = (prefix: string, count: number) =>
   Array.from({ length: count }, (_, index) => skill(`${prefix}-${index}`));
 
-function createInteractionHarness(params: {
-  commandSpecs: NativeCommandSpec[];
-  voiceEnabled: boolean;
-  channelRuntime?: InteractionParams["channelRuntime"];
-}) {
+function createInteractionHarness(
+  commandSpecs: NativeCommandSpec[],
+  channelRuntime?: InteractionParams["channelRuntime"],
+  voiceEnabled = true,
+) {
   const createNativeCommand = vi
     .spyOn(nativeCommandRuntime, "createDiscordNativeCommand")
     .mockImplementation(
-      ({ command: spec }) =>
-        ({ name: spec.name }) as ReturnType<typeof nativeCommandRuntime.createDiscordNativeCommand>,
+      ({ command }) =>
+        ({ name: command.name }) as ReturnType<
+          typeof nativeCommandRuntime.createDiscordNativeCommand
+        >,
     );
   const surface = createDiscordProviderInteractionSurface({
     cfg: {},
@@ -53,9 +48,9 @@ function createInteractionHarness(params: {
     },
     accountId: "default",
     token: "token",
-    commandSpecs: params.commandSpecs,
+    commandSpecs,
     nativeEnabled: true,
-    voiceEnabled: params.voiceEnabled,
+    voiceEnabled,
     groupPolicy: "open",
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
@@ -64,8 +59,8 @@ function createInteractionHarness(params: {
     guildEntries: undefined,
     allowFrom: [],
     dmPolicy: "open",
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv,
-    channelRuntime: params.channelRuntime,
+    runtime: createRuntimeSpies(),
+    channelRuntime,
   });
   return { createNativeCommand, surface };
 }
@@ -74,7 +69,7 @@ type SkillCommands = Awaited<ReturnType<typeof commandAuthNative.prepareSkillCom
 
 const skillCommands = [skill("skill-only"), skill("extra-skill")];
 
-function createResolverHarness(
+async function createResolverHarness(
   options: {
     pluginCommandSpecs?: NativeCommandSpec[];
     voiceEnabled?: boolean;
@@ -82,17 +77,15 @@ function createResolverHarness(
     nativeSkillsEnabled?: boolean;
   } = {},
 ) {
-  const error = vi.fn();
-  const log = vi.fn();
-  const runtime: RuntimeEnv = { error, log, exit: vi.fn() };
+  const runtime = createRuntimeSpies();
   const configuredSkillCommands = options.skillCommands ?? skillCommands;
   vi.spyOn(commandAuthNative, "prepareSkillCommandsForAgents").mockResolvedValue(
     configuredSkillCommands,
   );
-  const listNativeCommandSpecsForConfig = vi
+  const listSpecs = vi
     .spyOn(commandAuthNative, "listNativeCommandSpecsForConfig")
     .mockImplementation((_config, listOptions): NativeCommandSpec[] => [
-      command("built-in"),
+      spec("built-in"),
       ...(listOptions?.skillCommands ?? []).map(({ name, description }) => ({
         name,
         description,
@@ -100,10 +93,10 @@ function createResolverHarness(
       })),
     ]);
   setActivePluginRegistry(createTestRegistry());
-  for (const spec of options.pluginCommandSpecs ?? []) {
+  for (const command of options.pluginCommandSpecs ?? []) {
     expect(
-      registerPluginCommand(`test-${spec.name}`, {
-        ...spec,
+      registerPluginCommand(`test-${command.name}`, {
+        ...command,
         channels: ["discord"],
         handler: async () => ({ text: "ok" }),
       }),
@@ -111,23 +104,19 @@ function createResolverHarness(
   }
 
   return {
-    error,
-    listNativeCommandSpecsForConfig,
-    log,
-    resolve: () =>
-      resolveDiscordProviderCommandSpecs({
-        cfg: {},
-        runtime,
-        nativeEnabled: true,
-        nativeSkillsEnabled: options.nativeSkillsEnabled ?? true,
-        voiceEnabled: options.voiceEnabled ?? false,
-      }),
+    ...runtime,
+    listSpecs,
+    resolved: await resolveDiscordProviderCommandSpecs({
+      cfg: {},
+      runtime,
+      nativeEnabled: true,
+      nativeSkillsEnabled: options.nativeSkillsEnabled ?? true,
+      voiceEnabled: options.voiceEnabled ?? false,
+    }),
   };
 }
 
-beforeEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+beforeEach(resetPluginRuntimeStateForTest);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -135,20 +124,19 @@ afterEach(() => {
 });
 
 it("reports only retained collisions after command overflow removes skills", async () => {
-  const harness = createResolverHarness({
+  const { resolved, ...harness } = await createResolverHarness({
     voiceEnabled: true,
     skillCommands: [...skillCommands, ...paddingSkills("overflow-skill", 96)],
     pluginCommandSpecs: [
       {
-        ...command("skill-only", "Plugin skill alias"),
+        ...spec("skill-only"),
+        description: "Plugin skill alias",
         descriptionLocalizations: { de: "Plugin-Fertigkeitsalias" },
       },
-      command("plugin-unique"),
-      command("built-in"),
+      spec("plugin-unique"),
+      spec("built-in"),
     ],
   });
-
-  const resolved = await harness.resolve();
 
   expect(resolved.skillCommands).toEqual([]);
   expect(names(resolved.commandSpecs)).toEqual(["built-in", "vc", "skill-only", "plugin-unique"]);
@@ -161,7 +149,7 @@ it("reports only retained collisions after command overflow removes skills", asy
   expect(harness.error).toHaveBeenCalledExactlyOnceWith(
     danger('discord: plugin command "/built-in" duplicates an existing native command. Skipping.'),
   );
-  expect(harness.listNativeCommandSpecsForConfig).toHaveBeenCalledTimes(2);
+  expect(harness.listSpecs).toHaveBeenCalledTimes(2);
   expect(harness.log).toHaveBeenCalledExactlyOnceWith(
     warn(
       "101 commands exceed the 100-command Discord limit; removing per-skill commands and keeping /skill.",
@@ -172,14 +160,12 @@ it("reports only retained collisions after command overflow removes skills", asy
 it.each(["plugin", "skill"])("retains voice ownership against a %s named vc", async (source) => {
   const fromPlugin = source === "plugin";
   const vcSkillCommands = [skill("vc")];
-  const harness = createResolverHarness({
+  const { resolved, ...harness } = await createResolverHarness({
     voiceEnabled: true,
     nativeSkillsEnabled: !fromPlugin,
-    pluginCommandSpecs: fromPlugin ? [command("vc")] : [],
+    pluginCommandSpecs: fromPlugin ? [spec("vc")] : [],
     skillCommands: fromPlugin ? undefined : vcSkillCommands,
   });
-
-  const resolved = await harness.resolve();
 
   expect(names(resolved.commandSpecs)).toEqual(["built-in", "vc"]);
   expect(resolved.commandSpecs[1]).toBe(DISCORD_VOICE_COMMAND_SPEC);
@@ -191,10 +177,7 @@ it.each(["plugin", "skill"])("retains voice ownership against a %s named vc", as
   }
   expect(resolved.skillCommands).toEqual(vcSkillCommands);
   expect(harness.error).not.toHaveBeenCalled();
-  const { createNativeCommand, surface } = createInteractionHarness({
-    commandSpecs: resolved.commandSpecs,
-    voiceEnabled: true,
-  });
+  const { createNativeCommand, surface } = createInteractionHarness(resolved.commandSpecs);
   expect(createNativeCommand).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ command: resolved.commandSpecs[0] }),
   );
@@ -210,7 +193,7 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "discord", plugin: discordSetupPlugin, source: "test" }]),
   );
-  const voiceSkill = skill("voice", "Voice Skill", "Skill voice");
+  const voiceSkill = { ...skill("voice"), description: "Skill voice" };
   const config: OpenClawConfig = { commands: { native: true, nativeSkills: true } };
   const primary = (commands: SkillCommands) =>
     commandAuthNative.listNativeCommandSpecsForConfig(config, {
@@ -220,7 +203,7 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
   const uniqueCount = (specs: NativeCommandSpec[]) =>
     new Set(names(specs).map(normalizeLowercaseStringOrEmpty).filter(Boolean)).size;
   const voiceSpecs = (specs: NativeCommandSpec[]) =>
-    specs.filter((spec) => normalizeLowercaseStringOrEmpty(spec.name) === "voice");
+    specs.filter((command) => normalizeLowercaseStringOrEmpty(command.name) === "voice");
   const cappedSkillCommands: SkillCommands = [
     voiceSkill,
     ...paddingSkills("cap-padding", 100 - uniqueCount(primary([voiceSkill]))),
@@ -229,19 +212,18 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
   const rawVoice = voiceSpecs(rawPrimary);
   expect(uniqueCount(rawPrimary)).toBe(100);
   expect(rawPrimary).toHaveLength(101);
-  expect(rawVoice).toHaveLength(2);
-  expect(rawVoice.map((spec) => spec.description)).toEqual([
+  expect(rawVoice.map((command) => command.description)).toEqual([
     "Control text-to-speech (TTS).",
     "Skill voice",
   ]);
-  const log = vi.fn();
+  const runtime = createRuntimeSpies();
   vi.spyOn(commandAuthNative, "prepareSkillCommandsForAgents").mockResolvedValue(
     cappedSkillCommands,
   );
 
   const resolved = await resolveDiscordProviderCommandSpecs({
     cfg: config,
-    runtime: { log, error: vi.fn(), exit: vi.fn() },
+    runtime,
     nativeEnabled: true,
     nativeSkillsEnabled: true,
     voiceEnabled: false,
@@ -252,23 +234,20 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
   expect(voiceSpecs(resolved.commandSpecs)).toEqual([
     expect.objectContaining({ description: "Control text-to-speech (TTS)." }),
   ]);
-  expect(log).not.toHaveBeenCalled();
+  expect(runtime.log).not.toHaveBeenCalled();
 });
 it("binds native slash commands to the owning Gateway dispatcher", () => {
-  const dispatchReplyFromConfig = vi.fn();
-  const buildContext = vi.fn();
-  const channelRuntime = createPluginRuntimeMock({
-    channel: { reply: { dispatchReplyFromConfig }, inbound: { buildContext } },
-  }).channel;
-  const { createNativeCommand, surface } = createInteractionHarness({
-    commandSpecs: [command("normal")],
-    voiceEnabled: false,
+  const channelRuntime = createPluginRuntimeMock().channel;
+  const { createNativeCommand, surface } = createInteractionHarness(
+    [spec("normal")],
     channelRuntime,
-  });
+    false,
+  );
 
   expect(names(surface.commands)).toEqual(["normal"]);
-  expect(createNativeCommand.mock.calls[0]?.[0].dispatchReplyFromConfig).toBe(
-    dispatchReplyFromConfig,
+  const commandOptions = createNativeCommand.mock.calls[0]?.[0];
+  expect(commandOptions?.dispatchReplyFromConfig).toBe(
+    channelRuntime.reply.dispatchReplyFromConfig,
   );
-  expect(createNativeCommand.mock.calls[0]?.[0].buildContext).toBe(buildContext);
+  expect(commandOptions?.buildContext).toBe(channelRuntime.inbound.buildContext);
 });

@@ -36,9 +36,6 @@ const runtimeDeps = vi.hoisted(() => {
   const Agent = trackedDispatcher(mocks.agent);
   const EnvHttpProxyAgent = trackedDispatcher(mocks.envAgent);
   class ProxyAgent extends trackedDispatcher(mocks.proxy) {
-    get uri() {
-      return this.options.uri;
-    }
     constructor(options: string | (AgentOptions & { uri: string })) {
       const resolved = typeof options === "string" ? { uri: options } : options;
       if (resolved.uri === "bad-proxy") {
@@ -47,12 +44,7 @@ const runtimeDeps = vi.hoisted(() => {
       super(resolved);
     }
   }
-  class Pool {
-    constructor(
-      readonly origin: unknown,
-      readonly options: unknown,
-    ) {}
-  }
+  function Pool() {}
   return { Agent, EnvHttpProxyAgent, ProxyAgent, Pool, fetch: mocks.fetch };
 });
 vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
@@ -88,12 +80,9 @@ beforeEach(() => {
   ]) {
     vi.stubEnv(key, undefined);
   }
-  for (const mock of [mocks.capture, mocks.fetch, mocks.agent, mocks.envAgent, mocks.proxy]) {
-    mock.mockReset();
-  }
-  mocks.capture.mockResolvedValue(undefined);
-  mocks.fetch.mockResolvedValue(new Response("ok"));
-  mocks.dispatch.mockClear();
+  vi.clearAllMocks();
+  mocks.capture.mockReset().mockResolvedValue(undefined);
+  mocks.fetch.mockReset().mockResolvedValue(new Response("ok"));
   runtime = createRuntimeSpies();
   Reflect.set(globalThis, depsKey, runtimeDeps);
 });
@@ -157,9 +146,10 @@ it("uses managed env proxy CA trust without leaking it to NO_PROXY requests", as
   dispatchRequest(dispatcher);
   expect(mocks.dispatch).toHaveBeenCalledTimes(1);
   const proxy = mocks.dispatch.mock.contexts[0];
-  expect(proxy).toMatchObject({
+  expect(proxy?.options).toMatchObject({
     uri: "https://proxy.example:8443",
-    options: { allowH2: false, proxyTls: { ca: "discord-rest-managed-proxy-ca" } },
+    allowH2: false,
+    proxyTls: { ca: "discord-rest-managed-proxy-ca" },
   });
   expect(proxy?.options).not.toHaveProperty("requestTls.ca");
   vi.stubEnv("NO_PROXY", "discord.com");

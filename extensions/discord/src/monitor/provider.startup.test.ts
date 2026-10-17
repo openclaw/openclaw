@@ -4,11 +4,14 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, expect, it, vi } from "vitest";
 import { Client } from "../internal/client.js";
 
-const { registerVoiceClientSpy, waitForRegistration, stopPresenceListener } = vi.hoisted(() => ({
-  registerVoiceClientSpy: vi.fn(),
-  stopPresenceListener: vi.fn(async () => {}),
-  waitForRegistration: vi.fn(),
-}));
+const { registerVoiceClientSpy, waitForRegistration, stopPresenceListener, gateway, supervisor } =
+  vi.hoisted(() => ({
+    registerVoiceClientSpy: vi.fn(),
+    stopPresenceListener: vi.fn(async () => {}),
+    waitForRegistration: vi.fn(),
+    gateway: { id: "gateway", registerClient: vi.fn() },
+    supervisor: { shutdown: vi.fn(), handleError: vi.fn() },
+  }));
 vi.mock("../internal/voice.js", () => ({
   VoicePlugin: class VoicePlugin {
     id = "voice";
@@ -29,11 +32,11 @@ vi.mock("./auto-presence.js", () => ({
   })),
 }));
 vi.mock("./gateway-plugin.js", () => ({
-  createDiscordGatewayPlugin: vi.fn(() => ({ id: "gateway" })),
+  createDiscordGatewayPlugin: vi.fn(() => gateway),
   waitForDiscordGatewayPluginRegistration: waitForRegistration,
 }));
 vi.mock("./gateway-supervisor.js", () => ({
-  createDiscordGatewaySupervisor: vi.fn(() => ({ shutdown: vi.fn(), handleError: vi.fn() })),
+  createDiscordGatewaySupervisor: vi.fn(() => supervisor),
 }));
 vi.mock("./listeners.js", () => {
   const listener = (type: string) =>
@@ -60,7 +63,6 @@ vi.mock("./listeners.js", () => {
 
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../internal/rest.js";
-import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import { registerDiscordListener } from "./listeners.js";
 import {
@@ -69,9 +71,7 @@ import {
   registerDiscordMonitorListeners,
 } from "./provider.startup.js";
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(() => vi.clearAllMocks());
 
 function createMonitorClient(
   overrides: Partial<Parameters<typeof createDiscordMonitorClient>[0]> = {},
@@ -93,21 +93,17 @@ function createMonitorClient(
 }
 
 it("registers voice after gateway setup and awaits registration before supervision", async () => {
-  const gatewayPlugin = { id: "gateway", registerClient: vi.fn() };
   const registration = createDeferred<void>();
   waitForRegistration.mockReturnValueOnce(registration.promise);
-  const gatewaySupervisor = { shutdown: vi.fn(), handleError: vi.fn() };
-  vi.mocked(createDiscordGatewayPlugin).mockReturnValueOnce(gatewayPlugin as never);
-  vi.mocked(createDiscordGatewaySupervisor).mockReturnValueOnce(gatewaySupervisor as never);
   const pending = createMonitorClient({ voiceEnabled: true });
   await Promise.resolve();
-  expect(waitForRegistration).toHaveBeenCalledWith(gatewayPlugin);
+  expect(waitForRegistration).toHaveBeenCalledWith(gateway);
   expect(createDiscordGatewaySupervisor).not.toHaveBeenCalled();
   registration.resolve();
   const result = await pending;
   expect(registerVoiceClientSpy).toHaveBeenCalledExactlyOnceWith(result.client);
   expect(createDiscordGatewaySupervisor).toHaveBeenCalledOnce();
-  expect(result.gatewaySupervisor).toBe(gatewaySupervisor);
+  expect(result.gatewaySupervisor).toBe(supervisor);
 });
 
 it("passes REST timeout options and fetch to internal Discord REST", async () => {

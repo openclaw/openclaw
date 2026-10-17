@@ -84,8 +84,8 @@ function createTestManager(options: { accountId?: string; persist?: boolean } = 
   });
 }
 
-function installCanonicalRows(initial: Array<[string, ThreadBindingRecord]>) {
-  const rows = new Map(initial);
+function installCanonicalRows(initial: PluginStateEntry<ThreadBindingRecord>[]) {
+  const rows = new Map(initial.map(({ key, value }) => [key, value]));
   const entries = () => [...rows].map(([key, value]) => ({ key, value, createdAt: 100 }));
   stores.entries.mockImplementation(async () => entries());
   stores.syncEntries.mockImplementation(entries);
@@ -97,9 +97,7 @@ function installCanonicalRows(initial: Array<[string, ThreadBindingRecord]>) {
     options?.assertCurrent?.();
     return rows.delete(key);
   });
-  stores.syncRegister.mockImplementation((key, value) => {
-    rows.set(key, value);
-  });
+  stores.syncRegister.mockImplementation((key, value) => void rows.set(key, value));
   stores.syncDelete.mockImplementation((key) => rows.delete(key));
   stores.syncUpdate.mockImplementation((key, update) => {
     const next = update(rows.get(key));
@@ -112,9 +110,11 @@ function installCanonicalRows(initial: Array<[string, ThreadBindingRecord]>) {
   return rows;
 }
 
-async function persistentManager() {
-  await ensureBindingsLoadedAsync();
-  return await createTestManager({ persist: true });
+function persistentManager(entries?: PluginStateEntry<ThreadBindingRecord>[]) {
+  if (entries) {
+    stores.entries.mockResolvedValueOnce(entries);
+  }
+  return createTestManager({ persist: true });
 }
 
 function pauseNextWrite(rows?: Map<string, ThreadBindingRecord>) {
@@ -221,9 +221,7 @@ it.each(["startup", "write"])("keeps an in-memory fallback after failed %s", asy
     stores.entries.mockResolvedValue([persistedBinding()]);
     stores.register.mockRejectedValueOnce(new Error("persistence failed"));
   }
-  const manager = await (phase === "startup"
-    ? createTestManager({ persist: true })
-    : persistentManager());
+  const manager = await persistentManager();
   expect(manager).toBe(getThreadBindingManager("work"));
   if (phase === "startup") {
     expect(manager.listBindings()).toEqual([]);
@@ -238,12 +236,10 @@ it.each(["startup", "write"])("keeps an in-memory fallback after failed %s", asy
     expect(stores.register).toHaveBeenCalledOnce();
   }
   expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
-  await manager.stop();
 });
 
 it("does not turn revoked bind authority into an in-memory fallback", async () => {
-  stores.entries.mockResolvedValueOnce([persistedBinding()]);
-  const manager = await persistentManager();
+  const manager = await persistentManager([persistedBinding()]);
   const { entered, finish } = pauseNextWrite();
   let current = true;
   const binding = manager.bindTarget({
@@ -260,7 +256,6 @@ it("does not turn revoked bind authority into an in-memory fallback", async () =
   finish.resolve();
   await outcome;
   expect(manager.getByThreadId("thread-1")).toEqual(persistedBinding().value);
-  await manager.stop();
 });
 
 registerThreadBindingCompatibilityTests({ stores, persistedBinding, persistentManager });
@@ -272,9 +267,7 @@ it.each([false, true])("preflights selected stopping owners (matching=%s)", asyn
     { accountId: "other", threadId: "thread-2" },
   );
   const blocker = persistedBinding("agent:main:subagent:blocker", { threadId: "thread-3" });
-  const rows = installCanonicalRows(
-    [saved, other, blocker].map(({ key, value }): [string, ThreadBindingRecord] => [key, value]),
-  );
+  const rows = installCanonicalRows([saved, other, blocker]);
   const manager = await persistentManager();
   const otherManager = await createTestManager({ accountId: "other" });
   const { entered, finish } = pauseNextWrite(rows);
@@ -297,7 +290,6 @@ it.each([false, true])("preflights selected stopping owners (matching=%s)", asyn
   } finally {
     finish.resolve();
     await Promise.allSettled([touching, stopping, setting]);
-    await manager.stop();
   }
 });
 
@@ -329,10 +321,7 @@ it("keeps activity in memory after a real native read-only failure", async () =>
       };
     });
     const saved = persistedBinding();
-    const store = nativeStore({
-      namespace: "thread-bindings",
-      maxEntries: 10_000,
-    });
+    const store = nativeStore({ namespace: "thread-bindings", maxEntries: 10_000 });
     store.register(saved.key, saved.value);
     const manager = await persistentManager();
     const database = openOpenClawStateDatabase();
@@ -358,21 +347,16 @@ it("keeps activity in memory after a real native read-only failure", async () =>
 });
 
 it("keeps generic synchronous lifecycle setters synchronous", async () => {
-  stores.entries.mockResolvedValueOnce([persistedBinding()]);
-  const manager = await persistentManager();
-  let saved = persistedBinding().value;
-  stores.syncUpdate.mockImplementation((_key, update) => {
-    saved = update(saved) ?? saved;
-    return true;
-  });
+  const saved = persistedBinding();
+  const rows = installCanonicalRows([saved]);
+  await persistentManager();
   const support = discordPlugin.conversationBindings!;
-  const target = { targetSessionKey: saved.targetSessionKey, accountId: "work" };
+  const target = { targetSessionKey: saved.value.targetSessionKey, accountId: "work" };
   expect(
     Array.isArray(support.setIdleTimeoutBySessionKey!({ ...target, idleTimeoutMs: 500 })),
   ).toBe(true);
-  expect(saved.idleTimeoutMs).toBe(500);
+  expect(rows.get(saved.key)?.idleTimeoutMs).toBe(500);
   expect(Array.isArray(support.setMaxAgeBySessionKey!({ ...target, maxAgeMs: 1000 }))).toBe(true);
-  expect(saved.maxAgeMs).toBe(1000);
+  expect(rows.get(saved.key)).toMatchObject({ idleTimeoutMs: 500, maxAgeMs: 1000 });
   expect(stores.register).not.toHaveBeenCalled();
-  await manager.stop();
 });

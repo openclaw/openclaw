@@ -11,6 +11,9 @@ import * as channels from "../resolve-channels.js";
 import * as users from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 
+const denyExec = { deny: ["exec"] };
+const allowExec = { allow: ["exec"] };
+const allowRead = { allow: ["read"] };
 function resolvedChannel(input: string, channelName = "general", channelId = "246") {
   return { input, resolved: true, guildId: "145", guildName: "Ops", channelId, channelName };
 }
@@ -134,10 +137,8 @@ it.each(["general", "2026", "246", undefined])(
     const guilds = {
       ops: {
         users: ["Bob"],
-        tools: channelKey ? { allow: ["exec"] } : { deny: ["exec"] },
-        channels: channelKey
-          ? { [channelKey]: { users: ["Carol"], tools: { deny: ["exec"] } } }
-          : undefined,
+        tools: channelKey ? allowExec : denyExec,
+        channels: channelKey ? { [channelKey]: { users: ["Carol"], tools: denyExec } } : undefined,
       },
     };
     vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
@@ -162,9 +163,9 @@ it.each(["general", "2026", "246", undefined])(
       expect(getDiscordChannelPolicyBinding("work", "ops", channelKey)).toBeUndefined();
     }
     const admittedGuild = resolved.guildEntries?.["145"];
-    expect(channelKey ? admittedGuild?.channels?.["246"]?.tools : admittedGuild?.tools).toEqual({
-      deny: ["exec"],
-    });
+    expect(channelKey ? admittedGuild?.channels?.["246"]?.tools : admittedGuild?.tools).toEqual(
+      denyExec,
+    );
     expect(findDiscordGuildPolicyKey("work", "145")).toBeUndefined();
     const context = {
       accountId: "default",
@@ -177,11 +178,7 @@ it.each(["general", "2026", "246", undefined])(
         ...context,
         cfg: { channels: { discord: { guilds: entries } } },
       });
-    expect(toolPolicy({ "*": { tools: { allow: ["exec"] } }, ...guilds })).toEqual({
-      deny: ["exec"],
-    });
-    expect(toolPolicy({ ...guilds, "145": { tools: { allow: ["read"] } } })).toEqual({
-      allow: ["read"],
-    });
+    expect(toolPolicy({ "*": { tools: allowExec }, ...guilds })).toEqual(denyExec);
+    expect(toolPolicy({ ...guilds, "145": { tools: allowRead } })).toEqual(allowRead);
   },
 );

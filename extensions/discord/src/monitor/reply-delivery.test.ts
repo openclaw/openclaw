@@ -218,21 +218,6 @@ it("returns provider-owned hook suppression without inventing a Discord send", a
   });
 });
 
-it("strips assistant scaffolding from explicit tool progress payloads", async () => {
-  const text = [
-    "<think>private reasoning</think>",
-    '<tool_call>{"name":"x"}</tool_call>',
-    "🛠️ run git status",
-  ].join("\n");
-  await deliver([{ text }], { accountId: "default", kind: "tool" });
-
-  expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      payloads: [{ text: "🛠️ run git status" }],
-    }),
-  );
-});
-
 it("drops pure internal tool failure warnings at the final Discord send boundary", async () => {
   await deliver(
     [
@@ -247,45 +232,50 @@ it("drops pure internal tool failure warnings at the final Discord send boundary
   expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
 });
 
-it("preserves component-only channelData payloads when text scrubs empty", async () => {
-  const button = { type: 2, style: 1, label: "Open", custom_id: "open" };
-  const channelData = {
-    discord: { components: [{ type: 1, components: [button] }] },
-  };
-
-  const text = [
-    "analysis: internal only",
+const codeExample = ["Example:", "```", "🛠️ Exec: run ls", "```"].join("\n");
+it.each<[string, ReplyOptions["replies"][number], string | undefined, ReplyOptions["kind"]?]>([
+  [
+    "strips assistant scaffolding from explicit tool progress",
+    {
+      text: '<think>private reasoning</think>\n<tool_call>{"name":"x"}</tool_call>\n🛠️ run git status',
+    },
     "🛠️ run git status",
-    "📖 Read: lines 1-40 from secret.md",
-    "[tool:exec]",
-    "<parameter=command>",
-    "cat /proc/mounts",
-    "</parameter>",
-    "<function=exec>",
-    "<parameter=command>",
-    "find /tmp -type f",
-    "</parameter>",
-    "</function>",
-  ].join("\n");
-  await deliver([{ text, channelData }], { accountId: "default" });
-
-  expect(firstDeliverParams().payloads).toEqual([{ channelData, text: undefined }]);
-});
-
-it("preserves presentation-only payloads when text scrubs empty", async () => {
-  const presentation = { title: "Action required" };
-
-  await deliver([{ text: "commentary: hidden", presentation }], { accountId: "default" });
-
-  expect(firstDeliverParams().payloads).toEqual([{ presentation, text: undefined }]);
-});
-
-it("does not strip ordinary code-fenced examples of tool-call labels", async () => {
-  const text = ["Example:", "```", "🛠️ Exec: run ls", "```"].join("\n");
-
-  await deliver([{ text }], { accountId: "default" });
-
-  expect(firstDeliverParams().payloads).toEqual([{ text }]);
+    "tool",
+  ],
+  [
+    "preserves components when text scrubs empty",
+    {
+      text: `analysis: internal only
+🛠️ run git status
+📖 Read: lines 1-40 from secret.md
+[tool:exec]
+<parameter=command>
+cat /proc/mounts
+</parameter>
+<function=exec>
+<parameter=command>
+find /tmp -type f
+</parameter>
+</function>`,
+      channelData: {
+        discord: {
+          components: [
+            { type: 1, components: [{ type: 2, style: 1, label: "Open", custom_id: "open" }] },
+          ],
+        },
+      },
+    },
+    undefined,
+  ],
+  [
+    "preserves presentation when text scrubs empty",
+    { text: "commentary: hidden", presentation: { title: "Action required" } },
+    undefined,
+  ],
+  ["preserves code-fenced examples of tool-call labels", { text: codeExample }, codeExample],
+])("%s", async (_name, payload, text, kind = "final") => {
+  await deliver([payload], { accountId: "default", kind });
+  expect(firstDeliverParams().payloads).toEqual([{ ...payload, text }]);
 });
 
 it("passes media roots and explicit off-mode payload reply tags to shared outbound", async () => {
