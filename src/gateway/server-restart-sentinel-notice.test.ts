@@ -80,15 +80,13 @@ const noticeRequest = (channel = "whatsapp", to = "+15550002") => ({
   revision: 123,
 });
 function useMatrixPlugin(sendText: ChannelOutboundAdapter["sendText"]) {
+  const id = "matrix";
   setActivePluginRegistry(
     createTestRegistry([
       {
-        pluginId: "matrix",
+        pluginId: id,
         source: "test",
-        plugin: createOutboundTestPlugin({
-          id: "matrix",
-          outbound: { deliveryMode: "direct", sendText },
-        }),
+        plugin: createOutboundTestPlugin({ id, outbound: { deliveryMode: "direct", sendText } }),
       },
     ]),
   );
@@ -113,6 +111,11 @@ function pauseGate() {
   };
   return { entered: entered.promise, release: release.resolve, pause };
 }
+const notDispatched = (retryable: boolean) =>
+  new PlatformMessageNotDispatchedError("synthetic transport failure", {
+    cause: new Error("not dispatched"),
+    retryable,
+  });
 
 describe("restart sentinel notice recovery", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -193,11 +196,8 @@ describe("restart sentinel notice recovery", () => {
         await markAttempt(request);
         return { status: "sent", results: [{ channel: "matrix", messageId: "notice" }] };
       });
-      const cfg = {
-        commands: {
-          ownerAllowFrom: destination === "no-owners" ? [] : ["matrix:@owner:example.org"],
-        },
-      };
+      const ownerAllowFrom = destination === "no-owners" ? [] : ["matrix:@owner:example.org"];
+      const cfg = { commands: { ownerAllowFrom } };
       setRuntimeConfigSnapshot(cfg);
       const sessionKey = "agent:main:matrix:direct:contact";
       await upsertSessionEntryCore(
@@ -466,12 +466,7 @@ describe("restart sentinel notice recovery", () => {
       const context = capturedCustody(stateDir, "restart-recovery-fixture");
       const sendText = vi
         .fn()
-        .mockRejectedValueOnce(
-          new PlatformMessageNotDispatchedError("retry synthetic transport", {
-            cause: new Error("not dispatched"),
-            retryable: outcome === "retry recovery",
-          }),
-        )
+        .mockRejectedValueOnce(notDispatched(outcome === "retry recovery"))
         .mockResolvedValue({ channel: "matrix", messageId: "recovered-context" });
       useMatrixPlugin(sendText);
       const request = noticeRequest("matrix", "!operator:example");
@@ -513,14 +508,9 @@ describe("restart sentinel notice recovery", () => {
       expect(secondSettled).toBe(false);
       expect(hooks.runMessageSending).toHaveBeenCalledOnce();
       gate.release();
-      await expect(first).resolves.toEqual({
-        id: "restart-sentinel-notice:agent:main:main:123",
-        created: true,
-      });
-      await expect(second).resolves.toEqual({
-        id: "restart-sentinel-notice:agent:main:main:123",
-        created: false,
-      });
+      const id = "restart-sentinel-notice:agent:main:main:123";
+      await expect(first).resolves.toEqual({ id, created: true });
+      await expect(second).resolves.toEqual({ id, created: false });
       await expect(enqueueRestartSentinelNotice(request)).resolves.toEqual(await second);
       expect(hooks.runMessageSending).toHaveBeenCalledOnce();
     } finally {
@@ -540,21 +530,14 @@ describe("restart sentinel notice recovery", () => {
       const failure = () =>
         outcome === "ambiguous"
           ? new Error("platform outcome unknown")
-          : new PlatformMessageNotDispatchedError("transport not dispatched", {
-              cause: new Error("synthetic transport failure"),
-              retryable: outcome !== "permanent",
-            });
+          : notDispatched(outcome !== "permanent");
       sendBatch.mockImplementationOnce(async (request: DeliveryRequest) => {
         await markAttempt(request);
         if (outcome !== "sent") {
           return { status: "failed", error: failure() };
         }
         request.onMessageSentEvent?.(
-          {
-            success: true,
-            content: "restart complete",
-            messageId: "notice-1",
-          },
+          { success: true, content: "restart complete", messageId: "notice-1" },
           0,
         );
         return { status: "sent", results: [{ channel: "whatsapp", messageId: "notice-1" }] };

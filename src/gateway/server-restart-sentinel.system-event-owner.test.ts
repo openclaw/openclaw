@@ -96,11 +96,7 @@ function withFixture<Args extends unknown[]>(run: (...args: Args) => Promise<voi
 
 function mockEventSession(agentId = "main", sessionKey = "agent:main:main") {
   mocks.loadSessionEntryAsync.mockResolvedValue({
-    ...sessionFixture(
-      sessionKey,
-      { sessionId: "current-session", updatedAt: 1 },
-      { storePath: "/tmp/restart-owner/openclaw-agent.sqlite" },
-    ),
+    ...sessionFixture(sessionKey, { sessionId: "current-session", updatedAt: 1 }),
     agentId,
   });
 }
@@ -149,7 +145,7 @@ function expectResearchEvent(expectedTarget: object) {
 }
 
 it.each(cases)(
-  "binds %s to its destination without rewriting its queued key",
+  "binds %s without rewriting its queued key",
   withFixture(async (_name: string, payload: QueuedSessionDeliveryPayload) => {
     mockEventSession("research", "global");
     const entry = await enqueueEntry({ ...payload, deliveryContext });
@@ -168,7 +164,7 @@ it.each(cases)(
 );
 
 it(
-  "carries a persisted owner through global session lookup in an explicit roster",
+  "resolves the persisted owner of a global session",
   withFixture(async () => {
     const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
       "./session-utils-store-worker.js",
@@ -206,82 +202,78 @@ it(
   }),
 );
 
-it.each(["completed", "failed", "cancelled"] as const)(
-  "retains durable custody until an adopted session event is %s",
-  withFixture(async (status: "completed" | "failed" | "cancelled") => {
-    const id = await enqueue();
-    const adopted = createDeferred();
-    const outcome = createDeferred<SessionEventOutcome>();
-    mocks.enqueueSessionEvent.mockImplementationOnce((_text, options) => ({
-      id: "sentinel-event",
-      accepted: Promise.resolve({ ok: true }),
-      cancel: () => true,
-      settled: Promise.resolve().then(async () => {
-        await options.onAdopted?.();
-        adopted.resolve();
-        return outcome.promise;
-      }),
-    }));
-    const onSettled = vi.fn();
-    const drain = drainEvent(id, onSettled);
-    try {
-      await awaitGateBeforeSettlement(
-        adopted.promise,
-        drain,
-        "Restart custody settled before adoption",
-      );
-      expect(await pending(id)).toMatchObject({
-        id,
-        deliveryStartedAt: expect.any(Number),
-      });
-    } finally {
-      outcome.resolve({
+it.each([
+  ["completed", true, undefined],
+  ["failed", true, undefined],
+  ["cancelled", true, undefined],
+  ["failed", false, undefined],
+  ["failed", false, true],
+  ["failed", false, false],
+] as const)(
+  "settles %s with adopted=%s and retryable=%s",
+  withFixture(
+    async (status: SessionEventOutcome["status"], started: boolean, retryable?: boolean) => {
+      const id = await enqueue();
+      const adopted = createDeferred();
+      const outcome = createDeferred<SessionEventOutcome>();
+      const result: SessionEventOutcome = {
         status,
-        executionStarted: true,
-        delivered: status === "completed",
-        error: status === "failed" ? "model failed" : undefined,
-      });
-      await drain;
-    }
-    expect(onSettled).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ id }),
-      status === "completed" ? "recovered" : "moved-to-failed",
-      queueContext,
-    );
-    expect(await pending(id)).toBeNull();
-    expect(mocks.enqueueSessionEvent).toHaveBeenCalledOnce();
-  }),
-);
-
-it.each([undefined, true, false])(
-  "settles an admission refusal with retryable=%s",
-  withFixture(async (retryable: boolean | undefined) => {
-    const id = await enqueue();
-    mocks.enqueueSessionEvent.mockReturnValueOnce({
-      id: "refused-event",
-      accepted: Promise.resolve({ ok: false, error: "session is busy" }),
-      cancel: () => true,
-      settled: Promise.resolve({
-        status: "failed",
-        executionStarted: false,
-        delivered: false,
-        error: "session is busy",
+        executionStarted: started,
+        delivered: started && status === "completed",
         retryable,
-      }),
-    });
-    await drainEvent(id);
-    const entry = await pending(id);
-    if (retryable === false) {
-      expect(entry).toBeNull();
-    } else {
-      expect(entry).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
-      expect(entry?.deliveryStartedAt).toBeUndefined();
-    }
-  }),
+        error: started ? (status === "failed" ? "model failed" : undefined) : "session is busy",
+      };
+      mocks.enqueueSessionEvent.mockImplementationOnce((_text, options) => ({
+        id: "sentinel-event",
+        accepted: Promise.resolve(started ? { ok: true } : { ok: false, error: "session is busy" }),
+        cancel: () => true,
+        settled: Promise.resolve().then(async () => {
+          if (started) {
+            await options.onAdopted?.();
+            adopted.resolve();
+          }
+          return outcome.promise;
+        }),
+      }));
+      if (!started) {
+        outcome.resolve(result);
+      }
+      const onSettled = vi.fn();
+      const drain = drainEvent(id, onSettled);
+      try {
+        if (started) {
+          await awaitGateBeforeSettlement(
+            adopted.promise,
+            drain,
+            "Custody settled before adoption",
+          );
+          expect(await pending(id)).toMatchObject({ id, deliveryStartedAt: expect.any(Number) });
+        }
+      } finally {
+        outcome.resolve(result);
+        await drain;
+      }
+      const entry = await pending(id);
+      if (started || retryable === false) {
+        expect(entry).toBeNull();
+      } else {
+        expect(entry).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
+        expect(entry?.deliveryStartedAt).toBeUndefined();
+      }
+      if (started) {
+        expect(onSettled).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id }),
+          status === "completed" ? "recovered" : "moved-to-failed",
+          queueContext,
+        );
+        expect(mocks.enqueueSessionEvent).toHaveBeenCalledOnce();
+      }
+    },
+  ),
 );
 
 it(
-  "does not hand off an event after its queue admission retires during the session read",
+  "rejects handoff if queue admission retires during session lookup",
   withFixture(async () => {
     const resolveTarget = mocks.resolveSessionTarget.getMockImplementation()!;
     mocks.resolveSessionTarget.mockImplementationOnce(async (params) => {
@@ -302,7 +294,7 @@ it(
 );
 
 it(
-  "joins managed media promotion before publishing an internal restart delivery",
+  "promotes media before publishing the restart delivery",
   withFixture(async (test: TestContext) => {
     const sessionKey = "agent:main:media-completion";
     const sessionId = "media-completion-session";
@@ -333,7 +325,7 @@ it(
     const admission = vi
       .spyOn(queueStorage, "markSessionDeliveryAttemptStarted")
       .mockResolvedValue(undefined);
-    const dispatch = vi.spyOn(recoveryRuntime, "dispatchGatewayLifecycleMethod").mockResolvedValue({
+    using dispatch = vi.spyOn(recoveryRuntime, "dispatchGatewayLifecycleMethod").mockResolvedValue({
       status: "ok",
       result: { payloads: [{ mediaUrls: [mediaUrl] }], deliveryStatus: { status: "sent" } },
     });
@@ -391,7 +383,6 @@ it(
       unsubscribe();
       promotion.mockRestore();
       admission.mockRestore();
-      dispatch.mockRestore();
     }
   }),
 );

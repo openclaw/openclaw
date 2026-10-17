@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -10,11 +11,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as queuedChatTurns from "./chat-queued-turns.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import * as providerFixture from "./gateway-provider-fixture.test-support.js";
 import * as sourceFinalization from "./server-methods/chat-send-source-finalization.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -49,19 +46,17 @@ it(
     const tasks = new Set<Promise<void>>();
     const providerServer = createServer((request, response) => {
       const task = (async () => {
-        const body = await readProviderBody(request);
+        const body = await providerFixture.readProviderBody(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
         }
         const followup = body.includes("SYNTHETIC_QUEUED_REPLY");
-        const first = !followup && body.includes("SYNTHETIC_FIRST_REPLY");
-        if (first) {
-          firstReceived = true;
-          await firstGate.promise;
-        }
         if (followup) {
           followupReceived = true;
+        } else if (body.includes("SYNTHETIC_FIRST_REPLY")) {
+          firstReceived = true;
+          await firstGate.promise;
         }
         if (!response.destroyed) {
           writeOpenAiResponsesText(response, {
@@ -129,12 +124,12 @@ it(
         }
       }
       await resources.replyReleased;
-      await closeProvider(providerServer);
+      await providerFixture.closeProvider(providerServer);
       await Promise.allSettled(tasks);
       await state.cleanup();
     });
     const provider = buildMockOpenAiResponsesProvider(
-      await listenProvider(providerServer),
+      await providerFixture.listenProvider(providerServer),
       "gpt-rpc-owner-proof",
     );
     const cfg = {
@@ -174,17 +169,17 @@ it(
     // The queued input stays pending until delivery, so wait for its actual
     // registration before releasing the first reply that currently blocks it.
     await withinTest(queuedRunRegistered.promise, signal);
-    await expect(
-      withinTest(
-        gateway.client.request("agent.wait", { runId: "rpc-queued", timeoutMs: 30_000 }),
-        signal,
-      ),
-    ).resolves.toMatchObject({ runId: "rpc-queued", status: "pending", timeoutPhase: "queue" });
+    const queued = client.request("agent.wait", { runId: "rpc-queued", timeoutMs: 30_000 });
+    await expect(withinTest(queued, signal)).resolves.toMatchObject({
+      runId: "rpc-queued",
+      status: "pending",
+      timeoutPhase: "queue",
+    });
     expect(context?.chatQueuedTurns.has("rpc-queued")).toBe(true);
     firstGate.resolve();
     await withinTest(finalReached.promise, signal);
     expect(followupReceived).toBe(true);
-    const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
+    const history = await client.request<{ messages: unknown[] }>("chat.history", {
       sessionKey,
       limit: 20,
     });
@@ -196,14 +191,10 @@ it(
         ]),
       }),
     );
-    if (!context?.resolveGatewayContext) {
-      throw new Error("Missing actual Gateway resolver");
-    }
+    assert(context?.resolveGatewayContext, "Missing actual Gateway resolver");
     const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
     const entry = sessionAccessor.loadSessionEntry({ storePath, sessionKey });
-    if (!entry) {
-      throw new Error("Real RPC did not create a session");
-    }
+    assert(entry, "Real RPC did not create a session");
     const target = { scope: storePath, sessionKey, sessionId: entry.sessionId };
     resources.replyReleased = getSessionWorkAdmissionRelease({
       scope: storePath,

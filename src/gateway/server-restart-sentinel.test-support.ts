@@ -1,10 +1,11 @@
+import assert from "node:assert/strict";
 import { expect, type Mock } from "vitest";
 import type * as SessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import type { QueuedSessionDelivery } from "../infra/session-delivery-queue.records.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
-import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
 import type { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
@@ -14,22 +15,20 @@ type Fields = Record<string, unknown>;
 export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
   Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 
-export function createRestartSentinelSessionFixture(
+export const createRestartSentinelSessionFixture = (
   canonicalKey: string,
   entry: RestartSentinelSessionFixture["entry"],
   overrides: Partial<RestartSentinelSessionFixture> = {},
-): RestartSentinelSessionFixture {
-  return {
-    cfg: {},
-    entry,
-    store: {},
-    storePath: "/tmp/sessions.json",
-    canonicalKey,
-    storeKeys: [canonicalKey],
-    legacyKey: undefined,
-    ...overrides,
-  };
-}
+): RestartSentinelSessionFixture => ({
+  cfg: {},
+  entry,
+  store: {},
+  storePath: "/tmp/sessions.json",
+  canonicalKey,
+  storeKeys: [canonicalKey],
+  legacyKey: undefined,
+  ...overrides,
+});
 
 export async function appendRestartSentinelTranscriptReceipt(
   params: Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
@@ -62,31 +61,25 @@ export async function appendRestartSentinelTranscriptReceipt(
   };
 }
 
-type GeneratedMediaDeliveryEntry = Extract<
-  Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
-  { kind: "agentTurn" }
->;
+type MediaEntry = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
 
-export function createGeneratedMediaDeliveryEntry(
-  overrides: Partial<GeneratedMediaDeliveryEntry> &
-    Pick<GeneratedMediaDeliveryEntry, "id" | "messageId">,
-): GeneratedMediaDeliveryEntry {
-  return {
-    kind: "agentTurn",
-    sessionKey: "agent:main:main",
-    message: "generated image ready",
-    enqueuedAt: 1,
-    retryCount: 0,
-    route: { channel: "discord", to: "channel:123", chatType: "channel" },
-    inputProvenance: {
-      kind: "inter_session",
-      sourceChannel: "internal",
-      sourceTool: "image_generate",
-    },
-    sourceReplyDeliveryMode: "automatic",
-    ...overrides,
-  };
-}
+export const createGeneratedMediaDeliveryEntry = (
+  overrides: Partial<MediaEntry> & Pick<MediaEntry, "id" | "messageId">,
+): MediaEntry => ({
+  kind: "agentTurn",
+  sessionKey: "agent:main:main",
+  message: "generated image ready",
+  enqueuedAt: 1,
+  retryCount: 0,
+  route: { channel: "discord", to: "channel:123", chatType: "channel" },
+  inputProvenance: {
+    kind: "inter_session",
+    sourceChannel: "internal",
+    sourceTool: "image_generate",
+  },
+  sourceReplyDeliveryMode: "automatic",
+  ...overrides,
+});
 
 export function expectCapturedQueueContext(stateDir: string) {
   return expect.objectContaining({
@@ -101,9 +94,7 @@ export function expectCapturedQueueContext(stateDir: string) {
 }
 
 export function expectRecordFields(record: unknown, expected: Fields): Fields {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
+  assert(record && typeof record === "object", "Expected record");
   const actual = record as Fields;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -113,15 +104,12 @@ export function expectRecordFields(record: unknown, expected: Fields): Fields {
 
 export function mockCallArg(mock: MockCalls, callIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
+  assert(call, `Expected mock call ${callIndex}`);
   return call[0];
 }
 
-export function lastMockCallArg(mock: MockCalls): unknown {
-  return mockCallArg(mock, mock.mock.calls.length - 1);
-}
+export const lastMockCallArg = (mock: MockCalls): unknown =>
+  mockCallArg(mock, mock.mock.calls.length - 1);
 
 export function expectMockCallFields(mock: MockCalls, expected: Fields, callIndex = 0): Fields {
   return expectRecordFields(mockCallArg(mock, callIndex), expected);
