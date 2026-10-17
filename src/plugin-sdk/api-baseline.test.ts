@@ -6,24 +6,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
-import { formatPluginSdkApiTypeAlias } from "./api-baseline-declaration-print.js";
+import { formatPluginSdkApiTypeAlias as formatTypeAlias } from "./api-baseline-declaration-print.js";
 import {
-  normalizePluginSdkApiDeclarationText,
-  normalizePluginSdkApiSourcePath,
-  renderPluginSdkApiBaseline,
+  normalizePluginSdkApiDeclarationText as normalizeDeclaration,
+  normalizePluginSdkApiSourcePath as normalizeSourcePath,
+  renderPluginSdkApiBaseline as renderBaseline,
   type PluginSdkApiBaseline,
 } from "./api-baseline.js";
 import {
-  diffPluginSdkApi,
+  diffPluginSdkApi as diffApi,
   formatPluginSdkApiDiffReport,
-  hasPluginSdkApiChanges,
-  parsePluginSdkApiDiffSurface,
-  pluginSdkApiAcknowledgement,
-  readPluginSdkApiEntrypoints,
+  hasPluginSdkApiChanges as hasChanges,
+  parsePluginSdkApiDiffSurface as parseSurface,
+  pluginSdkApiAcknowledgement as acknowledgement,
+  readPluginSdkApiEntrypoints as readEntrypoints,
   type PluginSdkApiDiff,
 } from "./api-diff.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { objectContaining, stringContaining, arrayContaining } = expect;
+const fixtureSource = { path: "src/plugin-sdk/fixture.ts" };
+
+function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
+  expect(actual).toEqual(expected.map((item) => objectContaining(item)));
+}
 
 async function renderSourceFixture(
   source: string | Readonly<Record<string, string>>,
@@ -46,11 +52,11 @@ async function renderSourceFixture(
     fs.writeFileSync(filePath, content);
   }
   if (!symlinked) {
-    return renderPluginSdkApiBaseline({ repoRoot, entrypoints });
+    return renderBaseline({ repoRoot, entrypoints });
   }
   const alias = path.join(tempDirs.make("openclaw-plugin-sdk-api-alias-"), "checkout");
   fs.symlinkSync(repoRoot, alias, "junction");
-  return renderPluginSdkApiBaseline({ repoRoot: alias, entrypoints });
+  return renderBaseline({ repoRoot: alias, entrypoints });
 }
 
 function optionFunctions(type: string, fields: string, ...names: string[]) {
@@ -64,8 +70,26 @@ function importedFunction(type: string, file: string, name: string) {
   return `import type { ${type} } from "./${file}.js";\nexport declare function ${name}(value: ${type}): ${type};`;
 }
 
+function importedType(type: string, file: string, definition: string) {
+  return `import type { ${type} } from "./${file}.js";\n${definition}`;
+}
+
 function report(diff: PluginSdkApiDiff) {
   return formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
+}
+
+function nativeProject(
+  cwd: string,
+  roots: string[],
+  compilerOptions: Record<string, unknown>,
+  files: Record<string, string> = {},
+) {
+  const configFileName = path.join(cwd, "tsconfig.json");
+  return nativeTypeScript.createNativeTypeScriptProject({
+    cwd,
+    configFileName,
+    files: { ...files, [configFileName]: JSON.stringify({ compilerOptions, files: roots }) },
+  });
 }
 
 function writePluginSdkInventory(repoRoot: string, entrypoints: readonly string[]): void {
@@ -105,10 +129,11 @@ async function renderPrivateDeclarationFixture(params?: {
       `export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
     ].join("\n"),
     "fixture-result.ts": 'export type { FixtureResultLeaf } from "./fixture-result-shape.js";\n',
-    "fixture-result-shape.ts": [
-      'import type { FixtureOptionLeaf } from "./fixture-option.js";',
+    "fixture-result-shape.ts": importedType(
+      "FixtureOptionLeaf",
+      "fixture-option",
       `export type FixtureResultLeaf = { value${params?.optionalResult ? "?" : ""}: string; option?: FixtureOptionLeaf };`,
-    ].join("\n"),
+    ),
     "../../node_modules/fixture-external/package.json":
       '{"name":"fixture-external","types":"index.d.ts"}\n',
     "../../node_modules/fixture-external/index.d.ts":
@@ -129,7 +154,6 @@ async function renderDependencyDeclarationFixture(dependencyDeclaration: string)
 function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
   const cwd = tempDirs.make("openclaw-plugin-sdk-tuple-");
   const fileName = path.join(cwd, "fixture.ts");
-  const configFileName = path.join(cwd, "tsconfig.json");
   const source = [
     "interface Array<T> { [index: number]: T; readonly length: number }",
     "interface ReadonlyArray<T> { readonly [index: number]: T; readonly length: number }",
@@ -137,17 +161,14 @@ function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean
     `const VALUES = ${tuple};`,
     "type Value = (typeof VALUES)[number];",
   ].join("\n");
-  const native = nativeTypeScript.createNativeTypeScriptProject({
+  const native = nativeProject(
     cwd,
-    configFileName,
-    files: {
+    [fileName],
+    { noLib: true, target: "esnext", types: [] },
+    {
       [fileName]: source,
-      [configFileName]: JSON.stringify({
-        compilerOptions: { noLib: true, target: "esnext", types: [] },
-        files: [fileName],
-      }),
     },
-  });
+  );
   const { checker } = native.project;
   const sourceFile = native.project.program.getSourceFile(fileName);
   if (!sourceFile) {
@@ -171,12 +192,12 @@ describe("Plugin SDK API baseline", () => {
     const modelCatalogPath = path.join(repoRoot, "src", "agents", "agent-model-discovery");
     const declaration = `export function setModelCatalogImportForTest(loader?: (() => Promise<typeof import("${modelCatalogPath}", { with: { "resolution-mode": "import" } })>) | undefined): void;`;
 
-    const normalized = normalizePluginSdkApiDeclarationText(repoRoot, declaration);
+    const normalized = normalizeDeclaration(repoRoot, declaration);
 
     expect(normalized).not.toContain(repoRoot);
     expect(normalized).toContain('import("<repo>", { with: { "resolution-mode": "import" } })');
     expect(
-      normalizePluginSdkApiDeclarationText(
+      normalizeDeclaration(
         repoRoot,
         'type Owned = import("src/x").Foo; type External = import("node_modules/pkg/x").Foo; type Namespace = typeof import("src/x"); type ExternalNamespace = typeof import("node_modules/pkg/x");',
       ),
@@ -188,7 +209,7 @@ describe("Plugin SDK API baseline", () => {
   it("normalizes source paths under pnpm node_modules", () => {
     const repo = path.join(path.sep, "workspace", "openclaw-worktree");
     expect(
-      normalizePluginSdkApiSourcePath(
+      normalizeSourcePath(
         repo,
         path.join(
           repo,
@@ -201,8 +222,8 @@ describe("Plugin SDK API baseline", () => {
   it("keeps tuple-derived unions stable across unrelated type discovery", () => {
     using baseline = createTupleAliasFixture("[3, 1, 2] as const", "1", false);
     using prewarmed = createTupleAliasFixture("[3, 1, 2] as const", "1", true);
-    expect(formatPluginSdkApiTypeAlias(baseline.checker, baseline.declaration)).toBe("3 | 1 | 2");
-    expect(formatPluginSdkApiTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe("3 | 1 | 2");
+    expect(formatTypeAlias(baseline.checker, baseline.declaration)).toBe("3 | 1 | 2");
+    expect(formatTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe("3 | 1 | 2");
   });
 
   it("preserves empty tuple defaults in public function signatures", async () => {
@@ -212,14 +233,12 @@ describe("Plugin SDK API baseline", () => {
         "export declare function emptyDefault<const T extends readonly string[] = []>(value?: T): T;\n",
     });
 
-    expect(baseline.modules[0]?.exports).toEqual([
-      expect.objectContaining({
-        exportName: "publicEmptyDefault",
-        declaration: expect.stringMatching(
-          /export function publicEmptyDefault<const T extends readonly string\[\] = \[\s*\]>\(value\?: T\): T;/u,
-        ),
-      }),
-    ]);
+    expectItems(baseline.modules[0]?.exports, {
+      exportName: "publicEmptyDefault",
+      declaration: expect.stringMatching(
+        /export function publicEmptyDefault<const T extends readonly string\[\] = \[\s*\]>\(value\?: T\): T;/u,
+      ),
+    });
   });
 
   it("reads added and removed entrypoints from each revision's own inventory", async () => {
@@ -228,8 +247,8 @@ describe("Plugin SDK API baseline", () => {
     writePluginSdkInventory(baseRoot, ["fixture", "private-fixture"]);
     writePluginSdkInventory(headRoot, ["fixture", "added", "private-fixture"]);
 
-    expect(await readPluginSdkApiEntrypoints(baseRoot)).toEqual(["fixture"]);
-    expect(await readPluginSdkApiEntrypoints(headRoot)).toEqual(["fixture", "added"]);
+    expect(await readEntrypoints(baseRoot)).toEqual(["fixture"]);
+    expect(await readEntrypoints(headRoot)).toEqual(["fixture", "added"]);
 
     const before = await renderSourceFixture("export type Fixture = string;\n");
     const renderAdded = (valueType: "number" | "string") =>
@@ -245,8 +264,8 @@ describe("Plugin SDK API baseline", () => {
       );
     const after = await renderAdded("number");
     const sameNamesDifferentContents = await renderAdded("string");
-    const addedDiff = diffPluginSdkApi(before, after);
-    const removedDiff = diffPluginSdkApi(after, before);
+    const addedDiff = diffApi(before, after);
+    const removedDiff = diffApi(after, before);
     expect(addedDiff.entrypointsAdded).toEqual([
       {
         entrypoint: "added",
@@ -254,23 +273,21 @@ describe("Plugin SDK API baseline", () => {
         importSpecifier: "openclaw/plugin-sdk/added",
       },
     ]);
-    expect(addedDiff.exports).toEqual([
-      expect.objectContaining({
-        change: "added",
-        declarationChanges: expect.arrayContaining([
-          expect.objectContaining({ after: expect.stringContaining("value: number") }),
-        ]),
-        entrypoint: "added",
-        exportName: "createAdded",
-      }),
-    ]);
+    expectItems(addedDiff.exports, {
+      change: "added",
+      declarationChanges: arrayContaining([
+        objectContaining({ after: stringContaining("value: number") }),
+      ]),
+      entrypoint: "added",
+      exportName: "createAdded",
+    });
     expect(removedDiff.exports[0]).toMatchObject({
       change: "removed",
-      declarationChanges: expect.arrayContaining([
-        expect.objectContaining({ before: expect.stringContaining("value: number") }),
+      declarationChanges: arrayContaining([
+        objectContaining({ before: stringContaining("value: number") }),
       ]),
     });
-    expect(addedDiff.digest).not.toBe(diffPluginSdkApi(before, sameNamesDifferentContents).digest);
+    expect(addedDiff.digest).not.toBe(diffApi(before, sameNamesDifferentContents).digest);
     expect(report(addedDiff)).toContain("value: number");
   });
 
@@ -282,11 +299,12 @@ describe("Plugin SDK API baseline", () => {
     const baseline = await render("text: string");
     const changed = await render("text: string; accountId: string");
 
-    const diff = diffPluginSdkApi(baseline, changed);
-    expect(diff.exports).toEqual([
-      expect.objectContaining({ change: "signature", exportName: "SendOptions" }),
-      expect.objectContaining({ change: "reachable", exportName: "send" }),
-    ]);
+    const diff = diffApi(baseline, changed);
+    expectItems(
+      diff.exports,
+      { change: "signature", exportName: "SendOptions" },
+      { change: "reachable", exportName: "send" },
+    );
     expect(diff.exports[0]?.declarationChanges.length).toBeGreaterThan(0);
     expect(diff.exports[1]?.declarationChanges).toEqual([]);
   });
@@ -309,12 +327,12 @@ describe("Plugin SDK API baseline", () => {
       [changed, "accountId"],
     ] as const) {
       expect(surface.declarationSections.map(({ name, text }) => [name, text])).toEqual([
-        ["PoolOptions", expect.stringContaining("value: number;")],
-        ["PoolOptions", expect.stringContaining("value: string;")],
-        ["SharedOptions", expect.stringContaining(`${field}: string;`)],
-        ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
-        ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
-        ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
+        ["PoolOptions", stringContaining("value: number;")],
+        ["PoolOptions", stringContaining("value: string;")],
+        ["SharedOptions", stringContaining(`${field}: string;`)],
+        ["fixed", stringContaining("function fixed(options: PoolOptions): void;")],
+        ["preview", stringContaining("function preview(options: SharedOptions): void;")],
+        ["send", stringContaining("function send(options: SharedOptions): void;")],
       ]);
       expect(
         surface.modules.flatMap(({ entrypoint, exports }) =>
@@ -332,18 +350,16 @@ describe("Plugin SDK API baseline", () => {
       ]);
     }
 
-    const diff = diffPluginSdkApi(baseline, changed);
+    const diff = diffApi(baseline, changed);
     expect(diff.exports.map(({ change, exportName }) => ({ change, exportName }))).toEqual([
       { change: "reachable", exportName: "preview" },
       { change: "reachable", exportName: "send" },
     ]);
-    expect(diff.exports[0]?.declarationChanges).toEqual([
-      expect.objectContaining({
-        after: expect.stringContaining("accountId: string"),
-        before: expect.stringContaining("text: string"),
-        name: expect.stringContaining("SharedOptions"),
-      }),
-    ]);
+    expectItems(diff.exports[0]?.declarationChanges, {
+      after: stringContaining("accountId: string"),
+      before: stringContaining("text: string"),
+      name: stringContaining("SharedOptions"),
+    });
     expect(diff.exports[1]?.declarationChanges).toEqual([]);
     expect(JSON.stringify(diff).match(/type SharedOptions/gu)).toHaveLength(2);
     const text = report(diff);
@@ -355,12 +371,12 @@ describe("Plugin SDK API baseline", () => {
 
   it("validates renderer artifacts at the subprocess boundary", async () => {
     const baseline = await renderSourceFixture("export type Fixture = { value: string };\n");
-    const parsed = parsePluginSdkApiDiffSurface(JSON.stringify(baseline));
+    const parsed = parseSurface(JSON.stringify(baseline));
 
-    expect(hasPluginSdkApiChanges(diffPluginSdkApi(baseline, parsed))).toBe(false);
-    expect(() =>
-      parsePluginSdkApiDiffSurface('{"declarationSections":[],"modules":[{"entrypoint":1}]}'),
-    ).toThrow("invalid module");
+    expect(hasChanges(diffApi(baseline, parsed))).toBe(false);
+    expect(() => parseSurface('{"declarationSections":[],"modules":[{"entrypoint":1}]}')).toThrow(
+      "invalid module",
+    );
   });
 
   it("reports public types resolved from each revision's dependency declarations", async () => {
@@ -370,15 +386,13 @@ describe("Plugin SDK API baseline", () => {
     const after = await renderDependencyDeclarationFixture(
       "export declare const fixtureValue: { newValue: number };\n",
     );
-    const diff = diffPluginSdkApi(before, after);
+    const diff = diffApi(before, after);
     const text = report(diff);
 
-    expect(diff.exports).toEqual([
-      expect.objectContaining({ change: "signature", exportName: "publicValue" }),
-    ]);
+    expectItems(diff.exports, { change: "signature", exportName: "publicValue" });
     expect(text).toContain("oldValue: string");
     expect(text).toContain("newValue: number");
-    expect(text).toContain(`Acknowledgement digest: \`${pluginSdkApiAcknowledgement(diff)}\``);
+    expect(text).toContain(`Acknowledgement digest: \`${acknowledgement(diff)}\``);
   });
 
   it("bounds reports by UTF-8 bytes without splitting multibyte text", () => {
@@ -472,12 +486,12 @@ describe("Plugin SDK API baseline", () => {
     );
 
     expect(baseline.modules).toEqual([
-      expect.objectContaining({
-        source: { path: "src/plugin-sdk/fixture.ts" },
+      objectContaining({
+        source: fixtureSource,
         exports: [
-          expect.objectContaining({
+          objectContaining({
             exportName: "measure",
-            declaration: expect.stringContaining("export function measure(value: string): number;"),
+            declaration: stringContaining("export function measure(value: string): number;"),
           }),
         ],
       }),
@@ -511,7 +525,7 @@ describe("Plugin SDK API baseline", () => {
     const before = await render("original");
     const after = await render("changed");
 
-    expect(diffPluginSdkApi(before, after).exports.map(({ exportName }) => exportName)).toEqual([
+    expect(diffApi(before, after).exports.map(({ exportName }) => exportName)).toEqual([
       "importShape",
     ]);
     expect(before.declarationSections.map(({ text }) => text).join("\n")).toContain(
@@ -557,8 +571,7 @@ describe("Plugin SDK API baseline", () => {
     const render = (extra = "") =>
       renderSourceFixture({
         "fixture.ts": importedFunction("Bridge", "bridge", "createFixture"),
-        "bridge.ts":
-          'import type { Shared } from "./shared.js";\nexport type Bridge = { shared: Shared };',
+        "bridge.ts": importedType("Shared", "shared", "export type Bridge = { shared: Shared };"),
         "shared.ts": `export type Shared = { value: string };\n${extra}`,
       });
     const baseline = await render();
@@ -580,16 +593,10 @@ describe("Plugin SDK API baseline", () => {
         ].join("\n"),
       );
     }
-    const configFileName = path.join(repoRoot, "tsconfig.json");
-    using native = nativeTypeScript.createNativeTypeScriptProject({
-      cwd: repoRoot,
-      configFileName,
-      files: {
-        [configFileName]: JSON.stringify({
-          compilerOptions: { target: "esnext", module: "nodenext", moduleResolution: "nodenext" },
-          files,
-        }),
-      },
+    using native = nativeProject(repoRoot, files, {
+      target: "esnext",
+      module: "nodenext",
+      moduleResolution: "nodenext",
     });
     const { program } = native.project;
     const printer = native.api.printer;
@@ -619,14 +626,12 @@ describe("Plugin SDK API baseline", () => {
         {
           "cycle-a.ts": importedFunction("A", "a", "first"),
           "cycle-b.ts": importedFunction("B", "b", "second"),
-          "a.ts": [
-            'import type { B } from "./b.js";',
+          "a.ts": importedType(
+            "B",
+            "b",
             `export type A = { marker${optionalMarker ? "?" : ""}: string; b?: B };`,
-          ].join("\n"),
-          "b.ts": [
-            'import type { A } from "./a.js";',
-            "export type B = { value: string; a?: A };",
-          ].join("\n"),
+          ),
+          "b.ts": importedType("A", "a", "export type B = { value: string; a?: A };"),
         },
         ["cycle-a", "cycle-b"],
       );
@@ -654,23 +659,17 @@ describe("Plugin SDK API baseline", () => {
     const declaration = baseline.modules[0]?.exports[0];
 
     expect(declaration).toEqual(
-      expect.objectContaining({
+      objectContaining({
         exportName: "createFixture",
         kind: "function",
-        source: { path: "src/plugin-sdk/fixture.ts" },
+        source: fixtureSource,
       }),
     );
     expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(declaration?.closureSectionIds?.map((id) => baseline.declarationSections[id])).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "FixtureOptionLeaf",
-          text: expect.stringContaining("required: string"),
-        }),
-        expect.objectContaining({
-          name: "FixtureResult",
-          text: expect.stringContaining("FixtureResultLeaf"),
-        }),
+      arrayContaining([
+        objectContaining({ name: "FixtureOptionLeaf", text: stringContaining("required: string") }),
+        objectContaining({ name: "FixtureResult", text: stringContaining("FixtureResultLeaf") }),
       ]),
     );
     expect(declaration?.declaration).toContain("FixtureOptions");
@@ -688,21 +687,19 @@ describe("Plugin SDK API baseline", () => {
       optionalOption: true,
       optionalResult: true,
     });
-    const combinedDiff = diffPluginSdkApi(baseline, combined);
-    expect(combinedDiff.exports).toEqual([
-      expect.objectContaining({
-        change: "reachable",
-        entrypoint: "fixture",
-        exportName: "createFixture",
-      }),
-    ]);
+    const combinedDiff = diffApi(baseline, combined);
+    expectItems(combinedDiff.exports, {
+      change: "reachable",
+      entrypoint: "fixture",
+      exportName: "createFixture",
+    });
     expect(
       combinedDiff.exports.flatMap((change) =>
         change.declarationChanges.map((section) => section.name),
       ),
-    ).toEqual(expect.arrayContaining(["FixtureOptionLeaf", "FixtureResultLeaf"]));
-    expect(hasPluginSdkApiChanges(combinedDiff)).toBe(true);
-    expect(pluginSdkApiAcknowledgement(combinedDiff)).toMatch(/^[a-f0-9]{8}$/u);
+    ).toEqual(arrayContaining(["FixtureOptionLeaf", "FixtureResultLeaf"]));
+    expect(hasChanges(combinedDiff)).toBe(true);
+    expect(acknowledgement(combinedDiff)).toMatch(/^[a-f0-9]{8}$/u);
     expect(report(combinedDiff)).toContain("Reachable declarations changed");
   });
 });

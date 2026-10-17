@@ -15,6 +15,13 @@ const execRequest = {
   expiresAtMs: 10_000,
 };
 const actionInput = { cfg: {}, accountId: "work", action: "approve" } as const;
+const deliveryDefaults = {
+  listAccountIds: () => ["work"],
+  hasApprovers: () => true,
+  isExecAuthorizedSender: () => true,
+  isNativeDeliveryEnabled: () => true,
+  resolveNativeDeliveryMode: () => "dm" as const,
+};
 function makeNativeRuntime() {
   return {
     availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
@@ -30,64 +37,48 @@ function makeNativeRuntime() {
 describe("createApproverRestrictedNativeApprovalAdapter", () => {
   it("uses approver-restricted authorization for exec and plugin commands", () => {
     const adapter = createApproverRestrictedNativeApprovalAdapter({
+      ...deliveryDefaults,
       channel: "discord",
       channelLabel: "Discord",
-      listAccountIds: () => ["work"],
       hasApprovers: ({ accountId }) => accountId === "work",
       isExecAuthorizedSender: ({ senderId }) => senderId === "exec-owner",
       isPluginAuthorizedSender: ({ senderId }) => senderId === "plugin-owner",
-      isNativeDeliveryEnabled: () => true,
-      resolveNativeDeliveryMode: () => "dm",
     });
     const authorizeActorAction = adapter.auth.authorizeActorAction;
     if (!authorizeActorAction) {
       throw new Error("approval auth unavailable");
     }
 
-    expect(
+    const authorize = (
+      senderId: string,
+      approvalKind: "exec" | "plugin",
+      request?: typeof execRequest,
+    ) =>
       authorizeActorAction({
         ...actionInput,
-        senderId: "exec-owner",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ authorized: true });
-
-    expect(
-      authorizeActorAction({
-        ...actionInput,
-        senderId: "plugin-owner",
-        approvalKind: "plugin",
-      }),
-    ).toEqual({ authorized: true });
-
-    expect(
-      authorizeActorAction({
-        ...actionInput,
-        senderId: "someone-else",
-        approvalKind: "plugin",
-      }),
-    ).toEqual({
+        senderId,
+        approvalKind,
+        request,
+      });
+    expect(authorize("exec-owner", "exec")).toEqual({ authorized: true });
+    expect(authorize("plugin-owner", "plugin")).toEqual({ authorized: true });
+    expect(authorize("someone-else", "plugin")).toEqual({
       authorized: false,
       reason: "❌ You are not authorized to approve plugin requests on Discord.",
     });
 
     expect(
-      authorizeActorAction({
-        ...actionInput,
-        senderId: "plugin-owner",
-        approvalKind: "plugin",
-        request: { ...execRequest, id: "exec-request" },
-      }),
+      authorize("plugin-owner", "plugin", { ...execRequest, id: "exec-request" }),
     ).toMatchObject({ authorized: false });
   });
 
   it("reports approval availability and DM routing from the relevant delivery surface", () => {
     const adapter = createApproverRestrictedNativeApprovalAdapter({
+      ...deliveryDefaults,
       channel: "telegram",
       channelLabel: "Telegram",
       listAccountIds: () => ["dm-only", "channel-only", "disabled", "no-approvers"],
       hasApprovers: ({ accountId }) => accountId !== "no-approvers",
-      isExecAuthorizedSender: () => true,
       isNativeDeliveryEnabled: ({ accountId }) => accountId !== "disabled",
       resolveNativeDeliveryMode: ({ accountId }) =>
         accountId === "channel-only" ? "channel" : "dm",
@@ -111,18 +102,12 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       request: execRequest,
     });
 
-    const availability = (accountId: string) =>
-      getActionAvailabilityState({ ...actionInput, accountId });
+    const availability = (accountId: string, approvalKind?: "plugin") =>
+      getActionAvailabilityState({ ...actionInput, accountId, approvalKind });
     expect(availability("dm-only")).toEqual({ kind: "enabled" });
     expect(availability("no-approvers")).toEqual({ kind: "disabled" });
     expect(availability("disabled")).toEqual({ kind: "enabled" });
-    expect(
-      getActionAvailabilityState({
-        ...actionInput,
-        accountId: "disabled",
-        approvalKind: "plugin",
-      }),
-    ).toEqual({ kind: "enabled" });
+    expect(availability("disabled", "plugin")).toEqual({ kind: "enabled" });
     expect(
       getExecInitiatingSurfaceState({
         ...actionInput,
@@ -144,11 +129,10 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       ({ accountId }: { accountId?: string | null }) => accountId === "topic-1",
     );
     const adapter = createApproverRestrictedNativeApprovalAdapter({
+      ...deliveryDefaults,
       channel: "telegram",
       channelLabel: "Telegram",
       listAccountIds: () => [],
-      hasApprovers: () => true,
-      isExecAuthorizedSender: () => true,
       isNativeDeliveryEnabled,
       resolveNativeDeliveryMode: () => "both",
       requireMatchingTurnSourceChannel: true,
@@ -203,14 +187,11 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }) => `${channelLabel}:${channel}:${accountId ?? "default"}:setup`,
     );
     const adapterParams = {
+      ...deliveryDefaults,
       channel: "matrix",
       channelLabel: "Matrix",
       describeExecApprovalSetup,
-      listAccountIds: () => ["work"],
-      hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
-      isNativeDeliveryEnabled: () => true,
-      resolveNativeDeliveryMode: () => "dm",
       resolveApproverDmTargets: () => [{ to: "user:@owner:example.com" }],
     } satisfies Parameters<typeof createApproverRestrictedNativeApprovalCapability>[0];
     const capability = createApproverRestrictedNativeApprovalCapability({
@@ -354,13 +335,12 @@ describe("createChannelApprovalCapability", () => {
 describe("createApproverRestrictedNativeApprovalCapabilityAsync", () => {
   it("awaits channel actor authorization before allowing an approval action", async () => {
     const capability = createApproverRestrictedNativeApprovalCapabilityAsync({
+      ...deliveryDefaults,
       channel: "example",
       channelLabel: "Example",
       listAccountIds: () => ["default"],
-      hasApprovers: () => true,
       isExecAuthorizedSender: async ({ senderId }) => senderId === "owner",
       isNativeDeliveryEnabled: async () => true,
-      resolveNativeDeliveryMode: () => "dm",
     });
     const input = { cfg: {}, action: "approve", approvalKind: "exec" } as const;
     expect(await capability.authorizeActorActionAsync?.({ ...input, senderId: "other" })).toEqual({

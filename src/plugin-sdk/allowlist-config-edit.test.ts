@@ -24,25 +24,21 @@ describe("allowlist config helpers", () => {
     ).toEqual([{ label: "room1", entries: ["a", "b"] }]);
   });
   it("builds an account-scoped flat override resolver", () => {
+    const account = { channels: { room1: { users: ["a"] } } };
     const resolveOverrides = createFlatAllowlistOverrideResolver({
-      resolveRecord: (accountValue: { channels?: Record<string, { users: string[] }> }) =>
-        accountValue.channels,
+      resolveRecord: (value: typeof account) => value.channels,
       label: (key) => key,
       resolveEntries: (value) => value.users,
     });
 
-    expect(resolveOverrides({ channels: { room1: { users: ["a"] } } })).toEqual([
-      { label: "room1", entries: ["a"] },
-    ]);
+    expect(resolveOverrides(account)).toEqual([{ label: "room1", entries: ["a"] }]);
   });
   it("builds an account-scoped nested override resolver", () => {
+    const account = {
+      groups: { g1: { allowFrom: ["owner"], topics: { t1: { allowFrom: ["member"] } } } },
+    };
     const resolveOverrides = createNestedAllowlistOverrideResolver({
-      resolveRecord: (accountLocal: {
-        groups?: Record<
-          string,
-          { allowFrom?: string[]; topics?: Record<string, { allowFrom?: string[] }> }
-        >;
-      }) => accountLocal.groups,
+      resolveRecord: (value: typeof account) => value.groups,
       outerLabel: (groupId) => groupId,
       resolveOuterEntries: (group) => group.allowFrom,
       resolveChildren: (group) => group.topics,
@@ -50,11 +46,7 @@ describe("allowlist config helpers", () => {
       resolveInnerEntries: (topic) => topic.allowFrom,
     });
 
-    expect(
-      resolveOverrides({
-        groups: { g1: { allowFrom: ["owner"], topics: { t1: { allowFrom: ["member"] } } } },
-      }),
-    ).toEqual([
+    expect(resolveOverrides(account)).toEqual([
       { label: "g1", entries: ["owner"] },
       { label: "g1 topic t1", entries: ["member"] },
     ]);

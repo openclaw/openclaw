@@ -51,16 +51,16 @@ function createMatrixRouteGates(options?: {
   });
 }
 
+const matrixRoute = {
+  agentId: "agent-a",
+  sessionKey: "agent:agent-a:matrix:room-1",
+  turnSourceAccountId: "default",
+  turnSourceChannel: "matrix",
+  turnSourceTo: "room-1",
+};
 const matrixExecRequest = {
   id: "req-1",
-  request: {
-    agentId: "agent-a",
-    command: "echo hi",
-    sessionKey: "agent:agent-a:matrix:room-1",
-    turnSourceAccountId: "default",
-    turnSourceChannel: "matrix",
-    turnSourceTo: "room-1",
-  },
+  request: { ...matrixRoute, command: "echo hi" },
   createdAtMs: 0,
   expiresAtMs: 1000,
 } as const;
@@ -69,19 +69,22 @@ const matrixPluginRequest = {
   ...matrixExecRequest,
   id: "plugin:req-1",
   request: {
-    agentId: "agent-a",
+    ...matrixRoute,
     description: "Allow access",
-    sessionKey: "agent:agent-a:matrix:room-1",
     title: "Plugin approval",
-    turnSourceAccountId: "default",
-    turnSourceChannel: "matrix",
-    turnSourceTo: "room-1",
   },
 } as const;
 
 function execRequest(request: Partial<ExecApprovalRequest["request"]>) {
   return { ...matrixExecRequest, request: { command: "echo hi", ...request } };
 }
+
+const matrixTarget = { channel: "matrix", to: "room-1", source: "target" } as const;
+const targetsConfig = {
+  approvals: {
+    exec: { enabled: true, mode: "targets", targets: [{ channel: "matrix", to: "room-1" }] },
+  },
+} satisfies OpenClawConfig;
 
 describe("createNativeApprovalMessagingTargetResolvers", () => {
   const resolvers = createNativeApprovalMessagingTargetResolvers({
@@ -100,15 +103,14 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
       }),
     ).toEqual({ to: "owner", accountId: "work", threadId: 42 });
     expect(
-      resolvers.resolveTurnSourceTarget({
-        ...matrixExecRequest,
-        request: {
+      resolvers.resolveTurnSourceTarget(
+        execRequest({
           ...matrixExecRequest.request,
           turnSourceChannel: " SIGNAL ",
           turnSourceTo: " OWNER ",
           turnSourceAccountId: " work ",
-        },
-      }),
+        }),
+      ),
     ).toEqual({ to: "owner", accountId: "work" });
     expect(
       resolvers.resolveSessionTarget({
@@ -132,14 +134,13 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
       }),
     ).toBeNull();
     expect(
-      resolvers.resolveTurnSourceTarget({
-        ...matrixExecRequest,
-        request: {
+      resolvers.resolveTurnSourceTarget(
+        execRequest({
           ...matrixExecRequest.request,
           turnSourceChannel: "signal",
           turnSourceTo: " ",
-        },
-      }),
+        }),
+      ),
     ).toBeNull();
     expect(resolvers.resolveSessionTarget({ channel: "signal", to: " " })).toBeNull();
     expect(resolvers.normalizeTarget({ to: " " })).toBeNull();
@@ -151,11 +152,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
     const gates = createMatrixRouteGates();
     const cfg = {
       approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "matrix", to: "room-1" }],
-        },
+        ...targetsConfig.approvals,
         plugin: {
           enabled: true,
           mode: "session",
@@ -187,7 +184,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
         cfg,
         approvalKind: "exec",
         request: matrixExecRequest,
-        target: { channel: "matrix", to: "room-1", source: "target" },
+        target: matrixTarget,
       }),
     ).toBe(true);
   });
@@ -204,41 +201,27 @@ describe("createNativeApprovalChannelRouteGates", () => {
       },
     } satisfies OpenClawConfig;
 
+    const eligible = (request: ExecApprovalRequest) =>
+      gates.isSessionApprovalEligible({ cfg, approvalKind: "exec", request });
+    expect(eligible(matrixExecRequest)).toBe(true);
     expect(
-      gates.isSessionApprovalEligible({
-        cfg,
-        approvalKind: "exec",
-        request: matrixExecRequest,
-      }),
-    ).toBe(true);
-    expect(
-      gates.isSessionApprovalEligible({
-        cfg,
-        approvalKind: "exec",
-        request: {
-          ...matrixExecRequest,
-          request: {
-            ...matrixExecRequest.request,
-            agentId: "agent-b",
-            sessionKey: "agent:agent-b:matrix:room-1",
-          },
-        },
-      }),
+      eligible(
+        execRequest({
+          ...matrixRoute,
+          agentId: "agent-b",
+          sessionKey: "agent:agent-b:matrix:room-1",
+        }),
+      ),
     ).toBe(false);
   });
 
   it("maps unscoped targets only to the default account", () => {
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "matrix", to: "room-1" }],
-        },
-      },
-    } satisfies OpenClawConfig;
-    const target = { channel: "matrix", to: "room-1", source: "target" } as const;
-    const input = { cfg, approvalKind: "exec", request: matrixExecRequest, target } as const;
+    const input = {
+      cfg: targetsConfig,
+      approvalKind: "exec",
+      request: matrixExecRequest,
+      target: matrixTarget,
+    } as const;
     const eligible = (accountId: string, enabledAccounts = ["default", "work"]) =>
       createMatrixRouteGates({
         accountIds: ["default", "work"],
@@ -288,11 +271,13 @@ describe("createChannelNativeOriginTargetResolver", () => {
   });
 
   it("uses shared route semantics for the default target matcher", () => {
+    const origin = { to: "-100123", threadId: 42.9 };
+    const session = { to: "-100123", threadId: "42" };
     expect(
       nativeApprovalTargetsMatch({
         channel: "telegram",
-        left: { to: "-100123", threadId: 42.9 },
-        right: { to: "-100123", threadId: "42" },
+        left: origin,
+        right: session,
       }),
     ).toBe(true);
     expect(
@@ -305,8 +290,8 @@ describe("createChannelNativeOriginTargetResolver", () => {
 
     const resolveOriginTarget = createChannelNativeOriginTargetResolver<NativeApprovalTarget>({
       channel: "telegram",
-      resolveTurnSourceTarget: () => ({ to: "-100123", threadId: 42.9 }),
-      resolveSessionTarget: () => ({ to: "-100123", threadId: "42" }),
+      resolveTurnSourceTarget: () => origin,
+      resolveSessionTarget: () => session,
     });
 
     expect(
@@ -374,12 +359,7 @@ describe("createChannelApproverDmTargetResolver", () => {
     const resolveApproverDmTargets = createChannelApproverDmTargetResolver({
       shouldHandleRequest: ({ approvalKind }) => approvalKind === "exec",
       resolveApprovers: () => ["owner-1", "owner-2", "skip-me"],
-      mapApprover: (approver) =>
-        approver === "skip-me"
-          ? null
-          : {
-              to: `user:${approver}`,
-            },
+      mapApprover: (approver) => (approver === "skip-me" ? null : { to: `user:${approver}` }),
     });
 
     expect(
@@ -387,7 +367,7 @@ describe("createChannelApproverDmTargetResolver", () => {
         cfg: {},
         accountId: "default",
         approvalKind: "exec",
-        request: { ...matrixExecRequest, request: { command: "echo hi" } },
+        request: execRequest({}),
       }),
     ).toEqual([{ to: "user:owner-1" }, { to: "user:owner-2" }]);
 

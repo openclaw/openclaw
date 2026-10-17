@@ -114,7 +114,7 @@ describe("plugin-sdk/approval-renderers", () => {
         approvalSlug: "plugin:a",
         text: "Approval required @everyone",
       }),
-      textExpected: (text: string) => expect(text).toContain("@everyone"),
+      text: expect.stringContaining("@everyone"),
       presentationExpected: pluginPresentation("plugin:approval-123"),
     },
     {
@@ -124,7 +124,7 @@ describe("plugin-sdk/approval-renderers", () => {
         approvalSlug: "custom-slug",
         channelData: { telegram: { quoteText: "quoted" } },
       }),
-      textExpected: (text: string) => expect(text).toContain("Plugin approval required"),
+      text: expect.stringContaining("Plugin approval required"),
       presentationExpected: pluginPresentation("plugin-approval-123"),
       channelDataExpected: {
         execApproval: pendingMetadata("custom-slug"),
@@ -137,10 +137,8 @@ describe("plugin-sdk/approval-renderers", () => {
         ...pendingRequest("plugin-approval-123", ["allow-once"]),
         allowedDecisions: ["allow-once"],
       }),
-      textExpected: (text: string) => {
-        expect(text).toContain("Reply with: /approve plugin-approval-123 allow-once");
-        expect(text).not.toContain("allow-once|deny");
-      },
+      text: expect.stringContaining("Reply with: /approve plugin-approval-123 allow-once"),
+      textExcluded: "allow-once|deny",
       presentationExpected: pluginPresentation("plugin-approval-123", ["allow-once", "deny"]),
       channelDataExpected: { execApproval: pendingMetadata("plugin-a", ["allow-once", "deny"]) },
     },
@@ -151,7 +149,7 @@ describe("plugin-sdk/approval-renderers", () => {
         approvalSlug: "req-123",
         text: "resolved @everyone",
       }),
-      textExpected: (text: string) => expect(text).toBe("resolved @everyone"),
+      text: "resolved @everyone",
       channelDataExpected: {
         execApproval: resolvedMetadata("req-123"),
       },
@@ -167,17 +165,17 @@ describe("plugin-sdk/approval-renderers", () => {
         },
         channelData: { discord: { components: [{ type: "container" }] } },
       }),
-      textExpected: (text: string) => expect(text).toContain("Plugin approval allowed once"),
+      text: expect.stringContaining("Plugin approval allowed once"),
       channelDataExpected: {
         execApproval: resolvedMetadata("plugin-approval-123", "plugin-a"),
         discord: { components: [{ type: "container" }] },
       },
     },
-  ])("$name", ({ payload, textExpected, presentationExpected, channelDataExpected }) => {
-    if (payload.text === undefined) {
-      throw new Error("expected rendered approval text");
+  ])("$name", ({ payload, text, textExcluded, presentationExpected, channelDataExpected }) => {
+    expect(payload.text).toEqual(text);
+    if (textExcluded) {
+      expect(payload.text).not.toContain(textExcluded);
     }
-    textExpected(payload.text);
     if (presentationExpected) {
       expect(payload.presentation).toEqual(presentationExpected);
       expect(payload.interactive).toBeUndefined();
