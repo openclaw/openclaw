@@ -21,10 +21,17 @@ import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const lockName = ".openclaw-lifecycle-lock";
+const pendingName = PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH;
 const pendingBytes = "pending candidate lifecycle\n";
 const malformedLockBytes = '{"kind":"openclaw-package-lifecycle",';
 type UpdateParams = Parameters<typeof runGlobalPackageUpdateSteps>[0];
 type StepParams = Parameters<UpdateParams["runStep"]>[0];
+const readText = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
+const writeText = (root: string, file: string, text: string) =>
+  fs.writeFile(path.join(root, file), text);
+const expectMissing = async (file: string) => {
+  await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+};
 
 function successfulStep({ name, argv, cwd }: StepParams, packageRoot: string) {
   return { name, command: argv.join(" "), cwd: cwd ?? packageRoot, durationMs: 0, exitCode: 0 };
@@ -33,7 +40,7 @@ function successfulStep({ name, argv, cwd }: StepParams, packageRoot: string) {
 async function readPackageBytes(packageRoot: string): Promise<string[]> {
   return await Promise.all(
     ["package.json", "dist/index.js", PACKAGE_DIST_INVENTORY_RELATIVE_PATH].map((file) =>
-      fs.readFile(path.join(packageRoot, file), "utf8"),
+      readText(packageRoot, file),
     ),
   );
 }
@@ -46,7 +53,7 @@ async function createFixture() {
   const originalBytes = await readPackageBytes(packageRoot);
   const siblingRoot = path.join(globalRoot, ".openclaw.update-stage-sibling");
   await fs.mkdir(siblingRoot);
-  await fs.writeFile(path.join(siblingRoot, "evidence"), "unrelated candidate\n");
+  await writeText(siblingRoot, "evidence", "unrelated candidate\n");
   const validateCandidate = vi.fn(async () => []);
   const beforeActivate = vi.fn(async () => {});
   const onTransaction = vi.fn();
@@ -94,10 +101,7 @@ async function runUpdate(
         const { globalRoot } = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "2.0.0");
-        await fs.writeFile(
-          path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-          pendingBytes,
-        );
+        await writeText(packageRoot, pendingName, pendingBytes);
         await prepareCandidate(packageRoot, prefix);
         stages.push({ prefix, packageRoot, bytes: await readPackageBytes(packageRoot) });
         return successfulStep(step, fixture.packageRoot);
@@ -107,7 +111,7 @@ async function runUpdate(
         return await runLifecycleStep(step);
       }
       if (step.name === "npm-package-postinstall" && step.cwd) {
-        await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+        await fs.rm(path.join(step.cwd, pendingName));
       }
       return successfulStep(step, fixture.packageRoot);
     },
@@ -128,9 +132,36 @@ function expectNoActivation(fixture: Fixture) {
 
 async function expectSiblingUntouched(fixture: Fixture) {
   await expect(fs.readdir(fixture.siblingRoot)).resolves.toEqual(["evidence"]);
-  await expect(fs.readFile(path.join(fixture.siblingRoot, "evidence"), "utf8")).resolves.toBe(
-    "unrelated candidate\n",
-  );
+  await expect(readText(fixture.siblingRoot, "evidence")).resolves.toBe("unrelated candidate\n");
+}
+
+async function expectOriginalUntouched(fixture: Fixture) {
+  expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
+  await expectSiblingUntouched(fixture);
+}
+
+function createLifecycleOwner() {
+  const entered = createDeferred();
+  const finish = createDeferred();
+  return {
+    entered: entered.promise,
+    finish: finish.resolve,
+    start: (packageRoot: string, postinstall?: () => Promise<void>) =>
+      completePendingPackageLifecycle({
+        packageRoot,
+        runScript: async (script) => {
+          if (script.name === "preinstall") {
+            entered.resolve();
+            await finish.promise;
+          } else {
+            if (postinstall) {
+              await postinstall();
+            }
+            await fs.rm(path.join(packageRoot, pendingName));
+          }
+        },
+      }),
+  };
 }
 
 async function writeUncertainLock(
@@ -173,16 +204,14 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
             expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
           }
           if (step.name === "npm-package-postinstall" && step.cwd) {
-            await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+            await fs.rm(path.join(step.cwd, pendingName));
           }
           return successfulStep(step, fixture.packageRoot);
         },
         selectNode
           ? {
               beforeVerifyCandidate: async (root) => {
-                await expect(
-                  fs.readFile(path.join(root, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
-                ).resolves.toBe(pendingBytes);
+                await expect(readText(root, pendingName)).resolves.toBe(pendingBytes);
                 nodeRunner = selectedNode;
                 admitted = true;
               },
@@ -201,19 +230,12 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     const { result } = await runUpdate(
       fixture,
       async () => {},
-      async ({ name, argv, cwd }) => {
-        const outputLimitExceeded = name === "npm-package-postinstall";
-        if (outputLimitExceeded && cwd) {
-          await fs.rm(path.join(cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+      async (step) => {
+        const outputLimitExceeded = step.name === "npm-package-postinstall";
+        if (outputLimitExceeded && step.cwd) {
+          await fs.rm(path.join(step.cwd, pendingName));
         }
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? fixture.packageRoot,
-          durationMs: 0,
-          exitCode: 0,
-          outputLimitExceeded,
-        };
+        return { ...successfulStep(step, fixture.packageRoot), outputLimitExceeded };
       },
     );
     expect(result.failedStep).toMatchObject({
@@ -222,8 +244,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       outputLimitExceeded: true,
     });
     expectNoActivation(fixture);
-    expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-    await expectSiblingUntouched(fixture);
+    await expectOriginalUntouched(fixture);
   });
 
   it.each([
@@ -239,7 +260,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
         await writeUncertainLock(packageRoot, shape);
         if (!marker) {
-          await fs.rm(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+          await fs.rm(path.join(packageRoot, pendingName));
         }
         if (!runtime) {
           await fs.rm(path.join(fixture.packageRoot, "dist/index.js"));
@@ -266,18 +287,11 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       if (runtime) {
         expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
       } else {
-        await expect(
-          fs.access(path.join(fixture.packageRoot, "dist/index.js")),
-        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(path.join(fixture.packageRoot, "dist/index.js"));
       }
       expect(await readPackageBytes(stage.packageRoot)).toEqual(stage.bytes);
       if (marker) {
-        await expect(
-          fs.readFile(
-            path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-            "utf8",
-          ),
-        ).resolves.toBe(pendingBytes);
+        await expect(readText(stage.packageRoot, pendingName)).resolves.toBe(pendingBytes);
       }
       const lockPath = path.join(stage.packageRoot, lockName);
       expect((await fs.stat(lockPath)).isDirectory()).toBe(shape === "legacy directory");
@@ -301,8 +315,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     if (scenario === "already-current") {
       fixture.params.installSpec = "openclaw@1.0.0";
     }
-    const entered = createDeferred();
-    const finish = createDeferred();
+    const lifecycle = createLifecycleOwner();
     let owner: Promise<unknown> | undefined;
     let lockBytes: string | undefined;
     try {
@@ -311,21 +324,11 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         if (state === "absent") {
           return;
         }
-        owner = completePendingPackageLifecycle({
-          packageRoot,
-          runScript: async (script) => {
-            if (script.name === "preinstall") {
-              entered.resolve();
-              await finish.promise;
-            } else {
-              await fs.rm(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
-            }
-          },
-        }).catch((error: unknown) => error);
-        await entered.promise;
-        lockBytes = await fs.readFile(path.join(packageRoot, lockName), "utf8");
+        owner = lifecycle.start(packageRoot).catch((error: unknown) => error);
+        await lifecycle.entered;
+        lockBytes = await readText(packageRoot, lockName);
         if (state === "completed") {
-          finish.resolve();
+          lifecycle.finish();
           expect(await owner).toBe(true);
         }
       });
@@ -333,21 +336,15 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       expectNoActivation(fixture);
       expect(result.activePackageRoot).toBe(fixture.packageRoot);
       expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
-      expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-      await expectSiblingUntouched(fixture);
+      await expectOriginalUntouched(fixture);
       if (state === "active") {
         expect(result.reason).toBeUndefined();
         expect(result.failedStep?.stderrTail).toContain("ownership is uncertain");
         expect(await readPackageBytes(stage.packageRoot)).toEqual(stage.bytes);
-        expect(await fs.readFile(path.join(stage.packageRoot, lockName), "utf8")).toBe(lockBytes);
-        await expect(
-          fs.readFile(
-            path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-            "utf8",
-          ),
-        ).resolves.toBe(pendingBytes);
+        expect(await readText(stage.packageRoot, lockName)).toBe(lockBytes);
+        await expect(readText(stage.packageRoot, pendingName)).resolves.toBe(pendingBytes);
       } else {
-        await expect(fs.access(stage.prefix)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(stage.prefix);
         if (scenario === "already-current") {
           expect(result.reason).toBe("already-current");
           expect(result.failedStep).toBeNull();
@@ -356,7 +353,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         }
       }
     } finally {
-      finish.resolve();
+      lifecycle.finish();
       await owner;
     }
   });
@@ -373,11 +370,12 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       await writePackageRoot(packageRoot, "1.0.0");
       const originalBytes = await readPackageBytes(packageRoot);
       await fs.mkdir(binDir);
-      await fs.writeFile(
-        path.join(oldOwner, "package.json"),
+      await writeText(
+        oldOwner,
+        "package.json",
         JSON.stringify({ dependencies: { openclaw: "1.0.0" } }),
       );
-      await fs.writeFile(path.join(oldOwner, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+      await writeText(oldOwner, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
       await fs.symlink("old", path.join(globalRoot, "hash-openclaw"));
       const stageArgs = (argv: string[]) => ({
         project: argv
@@ -395,27 +393,17 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           throw new Error("missing native stage");
         }
         observed.stage = stage;
-        observed.oldPending = path.join(
-          stage,
-          "v11/old/node_modules/openclaw",
-          PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
-        );
+        observed.oldPending = path.join(stage, "v11/old/node_modules/openclaw", pendingName);
         await fs.writeFile(observed.oldPending, pendingBytes);
         if (state === "orphan-lock") {
           // No hash link or group manifest: activation discovery must not hide this writer.
           observed.orphan = path.join(stage, "v11/orphan/node_modules/openclaw");
           await writePackageRoot(observed.orphan, "2.0.0");
-          await fs.writeFile(
-            path.join(observed.orphan, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-            pendingBytes,
-          );
+          await writeText(observed.orphan, pendingName, pendingBytes);
           await fs.mkdir(path.join(observed.orphan, lockName));
         }
         return {
-          name: step.name,
-          command: step.argv.join(" "),
-          cwd: step.cwd ?? packageRoot,
-          durationMs: 0,
+          ...successfulStep(step, packageRoot),
           exitCode: 1,
           stderrTail: "ordinary settled install failure",
         };
@@ -467,17 +455,12 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       }
       if (state === "absent") {
         expect(result.failedStep?.name).toBe("package-install");
-        await expect(fs.access(observed.stage)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(observed.stage);
       } else {
         expect(result.failedStep?.stderrTail).toContain("ownership is uncertain");
         expect(result.failedStep?.stderrTail).toContain(observed.orphan);
         expect(await fs.readFile(observed.oldPending, "utf8")).toBe(pendingBytes);
-        expect(
-          await fs.readFile(
-            path.join(observed.orphan!, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-            "utf8",
-          ),
-        ).toBe(pendingBytes);
+        expect(await readText(observed.orphan!, pendingName)).toBe(pendingBytes);
         await expect(fs.readdir(path.join(observed.orphan!, lockName))).resolves.toEqual([]);
       }
     },
@@ -532,14 +515,12 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           );
           expect(result.failedStep?.advisory).toBeUndefined();
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
-          await fs.access(path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
+          await fs.access(path.join(stage.packageRoot, pendingName));
         } else {
           expect(fixture.params.beforeActivate).toHaveBeenCalledOnce();
           expect(fixture.params.onTransaction).toHaveBeenCalledOnce();
-          expect(
-            await fs.readFile(path.join(fixture.packageRoot, "package.json"), "utf8"),
-          ).toContain("2.0.0");
-          await expect(fs.access(stage.packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await readText(fixture.packageRoot, "package.json")).toContain("2.0.0");
+          await expectMissing(stage.packageRoot);
           expect(result.afterVersion).toBe("2.0.0");
           expect(result.failedStep).toBeNull();
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "2.0.0" });
@@ -582,42 +563,31 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     expect(result.failedStep?.stderrTail).toContain("ownership is uncertain");
     expect(result.failedStep?.advisory).toBeUndefined();
     expect(result.recovery.serviceRestartSafe).toBe(false);
-    await expect(fs.readFile(path.join(stage.packageRoot, lockName), "utf8")).resolves.toBe(
-      malformedLockBytes,
-    );
+    await expect(readText(stage.packageRoot, lockName)).resolves.toBe(malformedLockBytes);
     await expectSiblingUntouched(fixture);
   });
 
   it("reverifies the candidate after another lifecycle owner completes", async () => {
     const fixture = await createFixture();
-    const entered = createDeferred();
-    const finish = createDeferred();
+    const lifecycle = createLifecycleOwner();
     let owner: Promise<boolean> | undefined;
     let waitedForOwner = false;
     const isPidAlive = pidAlive.isPidAlive;
-    const safetyRelease = setTimeout(() => finish.resolve(), 5000);
+    const safetyRelease = setTimeout(() => lifecycle.finish(), 5000);
     try {
       const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
-        owner = completePendingPackageLifecycle({
-          packageRoot,
-          runScript: async (script) => {
-            if (script.name === "preinstall") {
-              entered.resolve();
-              await finish.promise;
-            } else {
-              await fs.writeFile(
-                path.join(packageRoot, "package.json"),
-                JSON.stringify({ name: "openclaw", version: "3.0.0" }),
-              );
-              await fs.rm(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
-            }
-          },
+        owner = lifecycle.start(packageRoot, async () => {
+          await writeText(
+            packageRoot,
+            "package.json",
+            JSON.stringify({ name: "openclaw", version: "3.0.0" }),
+          );
         });
-        await entered.promise;
+        await lifecycle.entered;
         vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => {
           // Initial candidate verification has finished before admission checks its owner.
           waitedForOwner = true;
-          finish.resolve();
+          lifecycle.finish();
           return isPidAlive(pid);
         });
       });
@@ -632,12 +602,12 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       expect(result.failedStep?.stderrTail).toContain("3.0.0");
       expectNoActivation(fixture);
       expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-      await expect(fs.access(stage.prefix)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(stage.prefix);
       await expectSiblingUntouched(fixture);
     } finally {
       clearTimeout(safetyRelease);
       vi.restoreAllMocks();
-      finish.resolve();
+      lifecycle.finish();
       await owner;
     }
   });
@@ -652,7 +622,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           throw new Error("expected the staged package root");
         }
         await fs.rename(path.join(cwd, lockName), path.join(cwd, "original-generation"));
-        await fs.writeFile(path.join(cwd, lockName), "replacement generation\n");
+        await writeText(cwd, lockName, "replacement generation\n");
         return {
           name,
           command: argv.join(" "),
@@ -671,17 +641,9 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     expect(result.failedStep?.stderrTail).toContain("package lifecycle ownership is uncertain");
     expect(lifecycleCalls).toEqual(["npm-package-preinstall"]);
     expectNoActivation(fixture);
-    expect(await fs.readFile(path.join(stage.packageRoot, lockName), "utf8")).toBe(
-      "replacement generation\n",
-    );
-    expect(
-      await fs.readFile(
-        path.join(stage.packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH),
-        "utf8",
-      ),
-    ).toBe(pendingBytes);
-    expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-    await expectSiblingUntouched(fixture);
+    expect(await readText(stage.packageRoot, lockName)).toBe("replacement generation\n");
+    expect(await readText(stage.packageRoot, pendingName)).toBe(pendingBytes);
+    await expectOriginalUntouched(fixture);
   });
 
   it.each(["settled script failure", "ownership error for another root"] as const)(
@@ -721,7 +683,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       expect(lifecycleCalls).toEqual(["npm-package-preinstall"]);
       expectNoActivation(fixture);
       expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-      await expect(fs.access(stage.prefix)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(stage.prefix);
       expect((await fs.readdir(fixture.globalRoot)).toSorted()).toEqual(
         ["openclaw", path.basename(fixture.siblingRoot)].toSorted(),
       );

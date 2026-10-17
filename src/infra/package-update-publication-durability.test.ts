@@ -47,6 +47,8 @@ async function prepareFixtureActivation(
 }
 
 const fixture = createPackageActivationLifetimeFixture();
+const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+const manifest = (directory: string) => JSON.parse(read(directory, "package.json"));
 let root: string;
 beforeEach(() => {
   ({ root } = fixture.setup());
@@ -91,9 +93,9 @@ it
         expect(prepared).toBeDefined();
         if (changed === "interrupted") {
           const failure = new Error("package helper read interrupted");
-          const read = vi.spyOn(fsp, "readFile").mockRejectedValueOnce(failure);
+          const interruptedRead = vi.spyOn(fsp, "readFile").mockRejectedValueOnce(failure);
           await expect(prepared!.publish(false)).rejects.toBe(failure);
-          read.mockRestore();
+          interruptedRead.mockRestore();
         }
         const tampered = path.join(
           changed === "previous" ? f.packageRoot : candidateRoot,
@@ -134,17 +136,17 @@ it
         if (changed === "candidate-version" || changed === "candidate-directory") {
           await expect(publishing).rejects.toThrow("Package publication object changed");
           expect(hash).not.toHaveBeenCalled();
-          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          expect(read(f.launcher)).toBe("old launcher\n");
           return;
         }
         if (changed === "previous" || changed === "interrupted") {
           await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
           expect(hash.mock.calls.map(([file]) => file)).toEqual([tampered]);
-          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          expect(read(f.launcher)).toBe("old launcher\n");
           return;
         }
         await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+        expect(read(f.launcher)).toBe("candidate launcher\n");
         if (changed === "initially-fresh") {
           // Re-read recent previous-package bytes once after they settle;
           // the private candidate does not enter the content verifier.
@@ -228,12 +230,11 @@ it.skipIf(process.platform === "win32").each([
       });
       expect(refused).toBe(1);
       expect(callbackDurable).toBe(cut === "displace" ? undefined : true);
-      const version = (directory: string) =>
-        JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8")).version;
+      const version = (directory: string) => manifest(directory).version;
       expect(version(previousRoot)).toBe("1.0.0");
       expect(version(cut === "displace" ? candidateRoot : f.packageRoot)).toBe("2.0.0");
       expect(fs.existsSync(cut === "displace" ? f.packageRoot : candidateRoot)).toBe(false);
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      expect(read(f.launcher)).toBe("old launcher\n");
       const journal = openPackageActivationJournal(anchor);
       const pending = journal.read();
       expect(pending).toMatchObject({
@@ -249,14 +250,14 @@ it.skipIf(process.platform === "win32").each([
       expect(refused).toBe(2);
       expect(journal.read()).toEqual(pending);
       expect(version(previousRoot)).toBe("1.0.0");
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      expect(read(f.launcher)).toBe("old launcher\n");
       faultEnabled = false;
       await expect(
         runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
       ).resolves.toMatchObject({ phase: "publication-complete" });
       expect(parents.every((directory) => synced[cut].has(directory))).toBe(true);
       expect(version(f.packageRoot)).toBe("2.0.0");
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      expect(read(f.launcher)).toBe("candidate launcher\n");
       await expect(
         runPackageActivationRecovery(anchor, "retire", pending.descriptor.operationId),
       ).resolves.toMatchObject({ phase: "complete" });
@@ -306,17 +307,12 @@ it.skipIf(process.platform === "win32").each(["anchor", "installation", "launche
         await expect(transaction!.rollback(fence.assertCurrent)).rejects.toBe(failure);
         expect(refused).toBe(1);
         expect(openPackageActivationJournal(anchor).read().phase).toBe("rollback-in-progress");
-        expect(
-          JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
-        ).toBe("1.0.0");
-        expect(
-          JSON.parse(fs.readFileSync(path.join(anchor, "previous.candidate/package.json"), "utf8"))
-            .version,
-        ).toBe("2.0.0");
+        expect(manifest(f.packageRoot).version).toBe("1.0.0");
+        expect(JSON.parse(read(anchor, "previous.candidate/package.json")).version).toBe("2.0.0");
         if (parent === "launchers") {
           expect(fs.existsSync(f.launcher)).toBe(false);
         } else {
-          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          expect(read(f.launcher)).toBe("old launcher\n");
         }
         await expect(
           transaction!.complete({ activationVerified: true }, fence.assertCurrent),
@@ -389,7 +385,7 @@ it.skipIf(process.platform === "win32").each([
           if (
             cut === "directory" &&
             directory === path.dirname(f.launcher) &&
-            fs.readFileSync(f.launcher, "utf8") === "candidate launcher\n"
+            read(f.launcher) === "candidate launcher\n"
           ) {
             refused++;
             throw failure;
@@ -421,7 +417,7 @@ it.skipIf(process.platform === "win32").each([
       expect(fs.existsSync(path.join(anchor, "previous"))).toBe(true);
       if (cut === "directory") {
         expect(pending.intent).toMatchObject({ kind: "launcher", name: "openclaw" });
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+        expect(read(f.launcher)).toBe("candidate launcher\n");
         const before = refused;
         await expect(
           runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
@@ -429,7 +425,7 @@ it.skipIf(process.platform === "win32").each([
         expect(refused).toBeGreaterThan(before);
         expect(journal.read()).toEqual(pending);
       } else {
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+        expect(read(f.launcher)).toBe("old launcher\n");
         expect(handles.length).toBeGreaterThan(0);
       }
       // The same recorded operation can finish only once the persistence boundary works.
@@ -442,7 +438,7 @@ it.skipIf(process.platform === "win32").each([
       await expect(
         runPackageActivationRecovery(anchor, "retire", pending.descriptor.operationId),
       ).resolves.toMatchObject({ phase: "complete" });
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      expect(read(f.launcher)).toBe("candidate launcher\n");
       expect(fs.existsSync(anchor)).toBe(false);
     }),
 );
@@ -536,6 +532,6 @@ it.skipIf(process.platform === "win32")(
       expect(fs.existsSync(anchor)).toBe(false);
       expect(fs.existsSync(resolvePackageActivationControl(anchor))).toBe(false);
       expect(fs.existsSync(f.params.stage.packageRoot)).toBe(true);
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      expect(read(f.launcher)).toBe("old launcher\n");
     }),
 );

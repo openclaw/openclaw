@@ -4,7 +4,7 @@ import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -21,8 +21,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+let root: string, source: string, destination: string, backup: string, marker: string;
+beforeEach(async () => {
+  root = await fs.realpath(dirs.make("package-filesystem-"));
+  source = path.join(root, "source");
+  destination = path.join(root, "destination");
+  backup = path.join(root, ".openclaw.backup");
+  marker = path.join(backup, "marker.txt");
+});
+
+async function writeLaunchers(replacement = "replacement", live = "live") {
+  await fs.writeFile(source, replacement);
+  await fs.writeFile(destination, live);
+}
+
+async function writeBackup(contents?: string) {
+  await fs.mkdir(backup);
+  if (contents !== undefined) {
+    await fs.writeFile(marker, contents);
+  }
+}
+
+async function expectFile(file: string, contents: string) {
+  expect(await fs.readFile(file, "utf8")).toBe(contents);
+}
+
+async function expectMissing(file: string) {
+  await expect(fs.lstat(file)).rejects.toHaveProperty("code", "ENOENT");
+}
+
+async function expectEntries(directory: string, entries: string[]) {
+  expect((await fs.readdir(directory)).toSorted()).toEqual(entries);
+}
+
 it("keeps forced package cleanup idempotent when the parent is already absent", async () => {
-  const root = dirs.make("package-cleanup-missing-");
   const parent = path.join(root, "missing");
   const assertCurrent = vi.fn();
 
@@ -31,16 +63,13 @@ it("keeps forced package cleanup idempotent when the parent is already absent", 
   ).resolves.toBeUndefined();
 
   expect(assertCurrent).toHaveBeenCalled();
-  await expect(fs.lstat(parent)).rejects.toHaveProperty("code", "ENOENT");
+  await expectMissing(parent);
 });
 
 it.each(["copy", "remove", "activate", "restore", "discard"] as const)(
   "rejects a returned Promise at the raw %s authority boundary before filesystem effects",
   async (operation) => {
-    const root = dirs.make("package-async-authority-");
-    const source = path.join(root, "source");
     const live = path.join(root, "live");
-    const destination = path.join(root, "destination");
     await fs.mkdir(source);
     await fs.mkdir(live);
     await fs.writeFile(path.join(source, "marker.txt"), "source");
@@ -76,18 +105,15 @@ it.each(["copy", "remove", "activate", "restore", "discard"] as const)(
     expect(unlink).not.toHaveBeenCalled();
     expect(rmdir).not.toHaveBeenCalled();
     expect(rename).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(source, "marker.txt"), "utf8")).toBe("source");
-    expect(await fs.readFile(path.join(live, "marker.txt"), "utf8")).toBe("live");
-    await expect(fs.lstat(destination)).rejects.toHaveProperty("code", "ENOENT");
+    await expectFile(path.join(source, "marker.txt"), "source");
+    await expectFile(path.join(live, "marker.txt"), "live");
+    await expectMissing(destination);
   },
 );
 
 it.runIf(process.platform === "darwin").each([0o700, 0o755])(
   "preserves symlink mode %s without following its target",
   async (mode) => {
-    const root = dirs.make("package-launcher-mode-");
-    const source = path.join(root, "source");
-    const destination = path.join(root, "destination");
     const target = path.join(root, "target");
     await fs.writeFile(target, "target contents", { mode: 0o640 });
     await fs.symlink("target", source);
@@ -103,7 +129,7 @@ it.runIf(process.platform === "darwin").each([0o700, 0o755])(
     expect(await fs.readlink(destination)).toBe("target");
     expect((await fs.lstat(destination)).mode).toBe((await fs.lstat(source)).mode);
     expect((await fs.stat(target)).mode).toBe(targetStat.mode);
-    expect(await fs.readFile(target, "utf8")).toBe("target contents");
+    await expectFile(target, "target contents");
     await fs.unlink(target);
     await copyPackagePathEntry(source, destination);
     expect((await fs.lstat(destination)).mode).toBe((await fs.lstat(source)).mode);
@@ -119,9 +145,6 @@ it.runIf(process.platform === "darwin").each([
 ] as const)(
   "handles symlink $operation failure $code without following the target",
   async ({ operation, code, continues }) => {
-    const root = dirs.make("package-launcher-metadata-");
-    const source = path.join(root, "source");
-    const destination = path.join(root, "destination");
     await fs.symlink("missing", source);
     await fs.writeFile(destination, "live launcher");
     vi.spyOn(fs, operation).mockRejectedValueOnce(
@@ -135,18 +158,17 @@ it.runIf(process.platform === "darwin").each([
       await expect(copyPackagePathEntry(source, destination)).rejects.toThrow(
         "link metadata denied",
       );
-      expect(await fs.readFile(destination, "utf8")).toBe("live launcher");
+      await expectFile(destination, "live launcher");
     }
-    expect((await fs.readdir(root)).toSorted()).toEqual(["destination", "source"]);
+    await expectEntries(root, ["destination", "source"]);
   },
 );
 
 it("keeps the live launcher intact when its replacement copy is interrupted", async () => {
-  const root = dirs.make("package-launcher-copy-");
-  const source = path.join(root, "retained-launcher");
-  const destination = path.join(root, "live-launcher");
-  await fs.writeFile(source, "previous launcher\n");
-  await fs.writeFile(destination, "candidate launcher\n");
+  const retainedLauncher = path.join(root, "retained-launcher");
+  const liveLauncher = path.join(root, "live-launcher");
+  await fs.writeFile(retainedLauncher, "previous launcher\n");
+  await fs.writeFile(liveLauncher, "candidate launcher\n");
   const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
   const copy = vi.spyOn(prototype, "copyIn").mockImplementationOnce(async function (
     this: Root,
@@ -156,24 +178,20 @@ it("keeps the live launcher intact when its replacement copy is interrupted", as
     throw new Error("interrupted launcher copy");
   });
 
-  await expect(copyPackagePathEntry(source, destination)).rejects.toThrow(
+  await expect(copyPackagePathEntry(retainedLauncher, liveLauncher)).rejects.toThrow(
     "interrupted launcher copy",
   );
   expect(copy).toHaveBeenCalledOnce();
-  expect(await fs.readFile(destination, "utf8")).toBe("candidate launcher\n");
-  expect((await fs.readdir(root)).toSorted()).toEqual(["live-launcher", "retained-launcher"]);
+  await expectFile(liveLauncher, "candidate launcher\n");
+  await expectEntries(root, ["live-launcher", "retained-launcher"]);
 
   copy.mockRestore();
-  await copyPackagePathEntry(source, destination);
-  expect(await fs.readFile(destination, "utf8")).toBe("previous launcher\n");
+  await copyPackagePathEntry(retainedLauncher, liveLauncher);
+  await expectFile(liveLauncher, "previous launcher\n");
 });
 
 it("keeps the live launcher intact when an ordinary copy cannot sync its staged file", async () => {
-  const root = await fs.realpath(dirs.make("package-launcher-copy-sync-"));
-  const source = path.join(root, "source");
-  const destination = path.join(root, "destination");
-  await fs.writeFile(source, "replacement launcher\n");
-  await fs.writeFile(destination, "live launcher\n");
+  await writeLaunchers("replacement launcher\n", "live launcher\n");
   const failure = Object.assign(new Error("staged launcher sync failed"), { code: "EIO" });
   let refused = 0;
   const refuseStagedFileSync = (fd: number) => {
@@ -217,15 +235,12 @@ it("keeps the live launcher intact when an ordinary copy cannot sync its staged 
   await expect(copyPackagePathEntry(source, destination)).rejects.toHaveProperty("cause", failure);
 
   expect(refused).toBe(1);
-  expect(await fs.readFile(source, "utf8")).toBe("replacement launcher\n");
-  expect(await fs.readFile(destination, "utf8")).toBe("live launcher\n");
-  expect((await fs.readdir(root)).toSorted()).toEqual(["destination", "source"]);
+  await expectFile(source, "replacement launcher\n");
+  await expectFile(destination, "live launcher\n");
+  await expectEntries(root, ["destination", "source"]);
 });
 
 it("stages a complete directory with independent hardlinked files and preserved modes", async () => {
-  const root = dirs.make("package-launcher-tree-");
-  const source = path.join(root, "source");
-  const destination = path.join(root, "destination");
   await fs.mkdir(path.join(source, "nested"), { recursive: true });
   await fs.mkdir(destination);
   await fs.writeFile(path.join(destination, "obsolete.txt"), "obsolete");
@@ -238,7 +253,7 @@ it("stages a complete directory with independent hardlinked files and preserved 
 
   expect(await fs.readdir(destination)).toEqual(["nested"]);
   const published = path.join(destination, "nested", "launcher");
-  expect(await fs.readFile(published, "utf8")).toBe("launcher bytes");
+  await expectFile(published, "launcher bytes");
   expect((await fs.lstat(published, { bigint: true })).ino).not.toBe(
     (await fs.lstat(original, { bigint: true })).ino,
   );
@@ -246,19 +261,12 @@ it("stages a complete directory with independent hardlinked files and preserved 
   expect((await fs.stat(path.join(destination, "nested"))).mode).toBe(
     (await fs.stat(path.join(source, "nested"))).mode,
   );
-  expect((await fs.readdir(root)).toSorted()).toEqual([
-    "destination",
-    "retained-hardlink",
-    "source",
-  ]);
+  await expectEntries(root, ["destination", "retained-hardlink", "source"]);
 });
 
 it.skipIf(process.platform === "win32")(
   "retains the directory-copy link contract without copying the linked target",
   async () => {
-    const root = dirs.make("package-launcher-links-");
-    const source = path.join(root, "source");
-    const destination = path.join(root, "destination");
     await fs.mkdir(source);
     await fs.writeFile(path.join(root, "outside.txt"), "outside");
     await fs.symlink("../outside.txt", path.join(source, "link"));
@@ -266,14 +274,11 @@ it.skipIf(process.platform === "win32")(
     await copyPackagePathEntry(source, destination);
 
     expect(await fs.readlink(path.join(destination, "link"))).toBe(path.join(root, "outside.txt"));
-    expect(await fs.readFile(path.join(root, "outside.txt"), "utf8")).toBe("outside");
+    await expectFile(path.join(root, "outside.txt"), "outside");
   },
 );
 
 it("keeps the live tree intact and cleans private staging after copy authority closes", async () => {
-  const root = dirs.make("package-launcher-copy-authority-");
-  const source = path.join(root, "source");
-  const destination = path.join(root, "destination");
   await fs.mkdir(source);
   await fs.mkdir(destination);
   await fs.writeFile(path.join(source, "a.txt"), "first replacement");
@@ -318,17 +323,13 @@ it("keeps the live tree intact and cleans private staging after copy authority c
   expect(copied).toEqual(["a.txt"]);
   expect(cleaned).toContain("a.txt");
   expect(cleaned).not.toContain("live.txt");
-  expect(await fs.readFile(path.join(destination, "live.txt"), "utf8")).toBe("live launcher");
-  expect((await fs.readdir(root)).toSorted()).toEqual(["destination", "source"]);
+  await expectFile(path.join(destination, "live.txt"), "live launcher");
+  await expectEntries(root, ["destination", "source"]);
 });
 
 it("retains the first copy failure when private staging has been replaced", async () => {
-  const root = dirs.make("package-launcher-private-owner-");
-  const source = path.join(root, "source");
-  const destination = path.join(root, "destination");
+  await writeLaunchers();
   const retained = path.join(root, "retained-stage");
-  await fs.writeFile(source, "replacement");
-  await fs.writeFile(destination, "live");
   const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
   const copy = prototype.copyIn;
@@ -351,18 +352,16 @@ it("retains the first copy failure when private staging has been replaced", asyn
   await expect(copyPackagePathEntry(source, destination)).rejects.toBe(refused);
 
   expect(replaced).not.toBe("");
-  expect(await fs.readFile(destination, "utf8")).toBe("live");
-  expect(await fs.readFile(path.join(replaced, "foreign.txt"), "utf8")).toBe("successor staging");
-  expect(await fs.readFile(path.join(retained, "entry"), "utf8")).toBe("replacement");
+  await expectFile(destination, "live");
+  await expectFile(path.join(replaced, "foreign.txt"), "successor staging");
+  await expectFile(path.join(retained, "entry"), "replacement");
 });
 
 it.each([
   { name: "ENOENT", refusal: Object.assign(new Error("owner missing"), { code: "ENOENT" }) },
   { name: "false", refusal: false },
 ])("does not retire a backup after a one-shot $name ownership refusal", async ({ refusal }) => {
-  const root = dirs.make("package-backup-refusal-");
-  const backup = path.join(root, ".openclaw.backup");
-  await fs.mkdir(backup);
+  await writeBackup();
   await fs.writeFile(path.join(backup, "a.txt"), "first");
   await fs.writeFile(path.join(backup, "b.txt"), "retained");
   let armed = false;
@@ -386,24 +385,15 @@ it.each([
   );
 
   expect(outcome.ok).toBe(false);
-  if (outcome.ok) {
-    throw new Error("backup retirement accepted a refused owner");
-  }
-  expect(outcome.error).toBe(refusal);
+  expect(outcome.ok ? undefined : outcome.error).toBe(refusal);
   expect(refusals).toBe(1);
-  expect(await fs.readFile(path.join(backup, "b.txt"), "utf8")).toBe("retained");
-  await expect(fs.lstat(path.join(backup, "a.txt"))).rejects.toHaveProperty("code", "ENOENT");
-  await expect(fs.lstat(path.join(root, ".openclaw-backup"))).rejects.toHaveProperty(
-    "code",
-    "ENOENT",
-  );
+  await expectFile(path.join(backup, "b.txt"), "retained");
+  await expectMissing(path.join(backup, "a.txt"));
+  await expectMissing(path.join(root, ".openclaw-backup"));
 });
 
 it("retains delayed retirement for an ordinary backup removal I/O failure", async () => {
-  const root = dirs.make("package-backup-io-");
-  const backup = path.join(root, ".openclaw.backup");
-  await fs.mkdir(backup);
-  await fs.writeFile(path.join(backup, "marker.txt"), "old");
+  await writeBackup("old");
   const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
   const remove = vi
     .spyOn(prototype, "remove")
@@ -413,14 +403,12 @@ it("retains delayed retirement for an ordinary backup removal I/O failure", asyn
 
   expect(remove).toHaveBeenCalledOnce();
   expect(warning).toContain("for delayed cleanup");
-  expect(await fs.readFile(path.join(root, ".openclaw-backup", "marker.txt"), "utf8")).toBe("old");
-  await expect(fs.lstat(backup)).rejects.toHaveProperty("code", "ENOENT");
+  await expectFile(path.join(root, ".openclaw-backup", "marker.txt"), "old");
+  await expectMissing(backup);
 });
 
 it("does not report retained backup when its final removal completes at the cleanup deadline", async () => {
-  const root = dirs.make("package-backup-completed-deadline-");
-  const backup = path.join(root, ".openclaw.backup");
-  await fs.mkdir(backup);
+  await writeBackup();
   const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const rmdir = fs.rmdir.bind(fs);
   vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
@@ -431,14 +419,11 @@ it("does not report retained backup when its final removal completes at the clea
   });
 
   await expect(discardPackageUpdateBackup(backup, "old package", root)).resolves.toBeNull();
-  await expect(fs.lstat(backup)).rejects.toHaveProperty("code", "ENOENT");
+  await expectMissing(backup);
 });
 
 it("preserves an observed filesystem identity refusal when the cleanup budget expires", async () => {
-  const root = dirs.make("package-backup-deadline-identity-");
-  const backup = path.join(root, ".openclaw.backup");
-  await fs.mkdir(backup);
-  await fs.writeFile(path.join(backup, "marker.txt"), "original");
+  await writeBackup("original");
   const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
   const refusal = new FsSafeError("path-mismatch", "fixture removal identity changed");
@@ -448,15 +433,12 @@ it("preserves an observed filesystem identity refusal when the cleanup budget ex
   });
 
   await expect(discardPackageUpdateBackup(backup, "old package", root)).rejects.toBe(refusal);
-  expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
+  await expectFile(path.join(backup, "marker.txt"), "original");
 });
 
 it("retains the original backup when removal fails after the cleanup budget", async () => {
   const code = "EACCES";
-  const root = dirs.make("package-backup-late-io-");
-  const backup = path.join(root, ".openclaw.backup");
-  await fs.mkdir(backup);
-  await fs.writeFile(path.join(backup, "marker.txt"), "original");
+  await writeBackup("original");
   const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
   vi.spyOn(prototype, "remove").mockImplementationOnce(async () => {
@@ -471,17 +453,13 @@ it("retains the original backup when removal fails after the cleanup budget", as
   expect(warning).toContain(backup);
   expect(warning).toContain(`${code}: fixture removal failed`);
   expect(rename).not.toHaveBeenCalled();
-  expect(await fs.readFile(path.join(backup, "marker.txt"), "utf8")).toBe("original");
+  await expectFile(path.join(backup, "marker.txt"), "original");
 });
 
 it.each(["owner", "backup"] as const)(
   "does not downgrade a revoked %s to a cleanup deadline warning",
   async (revoked) => {
-    const root = dirs.make("package-backup-deadline-refusal-");
-    const backup = path.join(root, ".openclaw.backup");
-    const marker = path.join(backup, "marker.txt");
-    await fs.mkdir(backup);
-    await fs.writeFile(marker, "original");
+    await writeBackup("original");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const clock = vi.spyOn(performance, "now").mockReturnValue(0);
@@ -531,53 +509,49 @@ it.each(["backup", "parent"] as const)(
   async (replacement) => {
     const sandbox = dirs.make("package-backup-replacement-");
     await fs.mkdir(path.join(sandbox, "global"));
-    const root = await fs.realpath(path.join(sandbox, "global"));
-    const backup = path.join(root, ".openclaw.backup");
-    const retired = path.join(root, ".openclaw-backup");
-    const retained = path.join(path.dirname(root), "retained");
-    await fs.mkdir(backup);
-    await fs.writeFile(path.join(backup, "old.txt"), "obsolete");
-    const original = await fs.lstat(backup, { bigint: true });
+    const replacementRoot = await fs.realpath(path.join(sandbox, "global"));
+    const replacementBackup = path.join(replacementRoot, ".openclaw.backup");
+    const retired = path.join(replacementRoot, ".openclaw-backup");
+    const retained = path.join(path.dirname(replacementRoot), "retained");
+    await fs.mkdir(replacementBackup);
+    await fs.writeFile(path.join(replacementBackup, "old.txt"), "obsolete");
+    const original = await fs.lstat(replacementBackup, { bigint: true });
     const rmdir = fs.rmdir.bind(fs);
     let injections = 0;
     vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
-      if (String(args[0]) === backup) {
+      if (String(args[0]) === replacementBackup) {
         injections += 1;
         // The owned leaf was removed first. Race the final directory operation,
         // then return an ordinary errno that used to admit the rename fallback.
-        expect(await fs.readdir(backup)).toEqual([]);
-        await fs.rename(replacement === "backup" ? backup : root, retained);
-        await fs.mkdir(backup, { recursive: true });
-        await fs.writeFile(path.join(backup, "sentinel.txt"), "successor");
+        expect(await fs.readdir(replacementBackup)).toEqual([]);
+        await fs.rename(replacement === "backup" ? replacementBackup : replacementRoot, retained);
+        await fs.mkdir(replacementBackup, { recursive: true });
+        await fs.writeFile(path.join(replacementBackup, "sentinel.txt"), "successor");
         throw Object.assign(new Error("final backup removal failed"), { code: "EIO" });
       }
       await rmdir(...args);
     });
     const rename = vi.spyOn(fs, "rename");
 
-    await expect(discardPackageUpdateBackup(backup, "old package", root)).rejects.toHaveProperty(
-      "code",
-      "path-mismatch",
-    );
+    await expect(
+      discardPackageUpdateBackup(replacementBackup, "old package", replacementRoot),
+    ).rejects.toHaveProperty("code", "path-mismatch");
 
     expect(injections).toBe(1);
-    expect(rename.mock.calls.some(([, destination]) => String(destination) === retired)).toBe(
-      false,
-    );
-    expect(await fs.readFile(path.join(backup, "sentinel.txt"), "utf8")).toBe("successor");
+    expect(rename.mock.calls.some(([, target]) => String(target) === retired)).toBe(false);
+    await expectFile(path.join(replacementBackup, "sentinel.txt"), "successor");
     const retainedBackup =
-      replacement === "backup" ? retained : path.join(retained, path.basename(backup));
+      replacement === "backup" ? retained : path.join(retained, path.basename(replacementBackup));
     expect(await fs.lstat(retainedBackup, { bigint: true })).toMatchObject({
       dev: original.dev,
       ino: original.ino,
     });
     expect(await fs.readdir(retainedBackup)).toEqual([]);
-    await expect(fs.lstat(retired)).rejects.toHaveProperty("code", "ENOENT");
+    await expectMissing(retired);
   },
 );
 
 it("does not compensate a root rename after its original owner refused once", async () => {
-  const root = dirs.make("package-root-restore-owner-");
   const liveRoot = path.join(root, "live");
   const backupRoot = path.join(root, "backup");
   const displacedRoot = path.join(root, "displaced");
@@ -611,9 +585,9 @@ it("does not compensate a root rename after its original owner refused once", as
 
   expect(refusals).toBe(1);
   expect(renameSpy).toHaveBeenCalledTimes(1);
-  await expect(fs.lstat(liveRoot)).rejects.toHaveProperty("code", "ENOENT");
-  expect(await fs.readFile(path.join(displacedRoot, "marker.txt"), "utf8")).toBe("candidate");
-  expect(await fs.readFile(path.join(backupRoot, "marker.txt"), "utf8")).toBe("original");
+  await expectMissing(liveRoot);
+  await expectFile(path.join(displacedRoot, "marker.txt"), "candidate");
+  await expectFile(path.join(backupRoot, "marker.txt"), "original");
 });
 
 it.each([
@@ -628,11 +602,7 @@ it.each([
     cleanupFailure: { error: undefined },
   },
 ])("retains $name through private copy cleanup", async ({ copyFailure, cleanupFailure }) => {
-  const root = await fs.realpath(dirs.make("package-copy-cleanup-result-"));
-  const source = path.join(root, "source");
-  const destination = path.join(root, "destination");
-  await fs.writeFile(source, "replacement");
-  await fs.writeFile(destination, "live");
+  await writeLaunchers();
   const prototype = Object.getPrototypeOf(await fsSafeRoot(root)) as Root;
   // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
   const copy = prototype.copyIn;
@@ -667,30 +637,23 @@ it.each([
   );
 
   expect(outcome.ok).toBe(false);
-  if (outcome.ok) {
-    throw new Error("copy cleanup silently accepted a failure");
-  }
-  expect(outcome.error).toBe((copyFailure ?? cleanupFailure)?.error);
+  expect(outcome.ok ? undefined : outcome.error).toBe((copyFailure ?? cleanupFailure)?.error);
   expect(copySpy).toHaveBeenCalledOnce();
   expect(cleanupAttempts).toBe(1);
   expect(staging).not.toBe("");
   expect(rename.mock.calls.filter(([, to]) => String(to) === destination)).toHaveLength(
     copyFailure ? 0 : 1,
   );
-  expect(await fs.readFile(source, "utf8")).toBe("replacement");
-  expect(await fs.readFile(destination, "utf8")).toBe(copyFailure ? "live" : "replacement");
+  await expectFile(source, "replacement");
+  await expectFile(destination, copyFailure ? "live" : "replacement");
   expect(await fs.readdir(staging)).toEqual([]);
 });
 
 it.each(["publish", "revoke", "replace"] as const)(
   "preserves live ownership through the journal publication hook: %s",
   async (action) => {
-    const root = dirs.make("package-journal-publication-");
-    const source = path.join(root, "source");
-    const destination = path.join(root, "destination");
+    await writeLaunchers("sealed launcher", "live launcher");
     const retained = path.join(root, "retained");
-    await fs.writeFile(source, "sealed launcher");
-    await fs.writeFile(destination, "live launcher");
     const refusal = new Error("journal owner revoked");
     let revoked = false;
     const beforePublish = vi.fn((staged: string) => {
@@ -719,10 +682,10 @@ it.each(["publish", "revoke", "replace"] as const)(
       await expect(result).rejects.toBe(refusal);
     } else {
       await expect(result).rejects.toHaveProperty("code", "path-mismatch");
-      expect(await fs.readFile(retained, "utf8")).toBe("live launcher");
+      await expectFile(retained, "live launcher");
     }
     expect(beforePublish).toHaveBeenCalledOnce();
-    expect(await fs.readFile(source, "utf8")).toBe("sealed launcher");
+    await expectFile(source, "sealed launcher");
     expect(await fs.readFile(destination, "utf8")).toBe(
       action === "publish"
         ? "sealed launcher"

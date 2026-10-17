@@ -23,6 +23,7 @@ import { createPackageSwapFixture } from "./package-update-swap.test-support.js"
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
+const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
 let root: string;
 beforeEach(() => {
   ({ root } = fixtures.setup());
@@ -150,15 +151,13 @@ it
       ) {
         expect(result.failedStep, JSON.stringify({ phases, failed: result.failedStep })).toBeNull();
         expect(phases).toEqual(["install", "validate", "activate"]);
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+        expect(read(f.launcher)).toBe("candidate launcher\n");
         expect(result.afterVersion).toBe("2.0.0");
         if (foreign === "unpublished launcher") {
-          expect(fs.readFileSync(launcher, "utf8")).toBe("old launcher\n");
+          expect(read(launcher)).toBe("old launcher\n");
         }
         if (foreign === "external source") {
-          expect(fs.readFileSync(path.join(source, "package.json"), "utf8")).toContain(
-            '"version":"1.0.0"',
-          );
+          expect(read(source, "package.json")).toContain('"version":"1.0.0"');
         }
         await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
         expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
@@ -175,7 +174,7 @@ it
         expect(result.failedStep?.stderrTail).toContain(`expected UID ${uid}`);
         expect(phases).toEqual(foreign === "launcher suffix" ? ["install"] : []);
         expect(transaction).toBeUndefined();
-        expect(fs.readFileSync(launcher, "utf8")).toBe("old launcher\n");
+        expect(read(launcher)).toBe("old launcher\n");
         expect(result.recovery).toEqual(
           foreign === "orphan launcher"
             ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
@@ -254,9 +253,7 @@ it
           expect(result.status).toBe("failed");
           expect(result.step.stderrTail).toContain("outside its publication intent");
           expect(fs.readlinkSync(f.launcher)).toBe("foreign-target");
-          expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
-            '"version":"1.0.0"',
-          );
+          expect(read(f.packageRoot, "package.json")).toContain('"version":"1.0.0"');
           return;
         }
         if (outcome === "rollback") {
@@ -266,12 +263,10 @@ it
           expect(await transaction!.rollback(fence.assertCurrent)).toMatchObject({ exitCode: 0 });
           expect(fs.readlinkSync(f.launcher)).toBe(target);
           expect(fs.lstatSync(f.launcher).gid).toBe(process.getegid!());
-          expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
-            '"version":"1.0.0"',
-          );
+          expect(read(f.packageRoot, "package.json")).toContain('"version":"1.0.0"');
         } else {
           expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-          expect(fs.readFileSync(f.launcher, "utf8")).toContain('"version":"2.0.0"');
+          expect(read(f.launcher)).toContain('"version":"2.0.0"');
           expect(fs.lstatSync(f.launcher).gid).toBe(process.getegid!());
         }
         await transaction!.complete(
