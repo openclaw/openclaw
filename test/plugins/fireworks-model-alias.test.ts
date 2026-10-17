@@ -56,15 +56,11 @@ beforeEach(() => {
   manifestMocks.loadPluginManifestRegistryCore.mockReset();
 });
 
-describe("Fireworks manifest provider alias", () => {
-  const modelId = "accounts/fireworks/routers/glm-5p3-fast";
-  const providerBaseUrl = "https://fireworks-proxy.example/v1";
-  const modelBaseUrl = "https://fireworks-proxy.example/model";
-
+function useManifest(pluginId: string) {
   beforeEach(() => {
     const rootDir = path.dirname(
       resolveBundledPluginPublicModulePath({
-        pluginId: "fireworks",
+        pluginId,
         artifactBasename: "openclaw.plugin.json",
       }),
     );
@@ -78,31 +74,116 @@ describe("Fireworks manifest provider alias", () => {
     manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
     manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
   });
+}
 
-  function resolveFireworksGlm(provider: string, cfg?: OpenClawConfig) {
-    const catalogModel = resolveBundledStaticCatalogModel({
-      provider: "fireworks",
-      modelId,
-      includeRuntimeDiscovery: true,
-    });
-    if (!catalogModel) {
-      throw new Error("Missing Fireworks GLM catalog model");
-    }
-    return resolveCatalogModel(provider, catalogModel, cfg);
+function resolveAlias(
+  provider: string,
+  modelId: string,
+  catalogProvider: string,
+  cfg?: OpenClawConfig,
+) {
+  const catalog = resolveBundledStaticCatalogModel({
+    provider: catalogProvider,
+    modelId,
+    includeRuntimeDiscovery: true,
+  });
+  if (!catalog) {
+    throw new Error(`Missing ${catalogProvider} catalog model`);
   }
+  return resolveCatalogModel(provider, catalog, cfg);
+}
+
+async function expectAlias(
+  pluginId: string,
+  provider: string,
+  alias: string,
+  modelId: string,
+  baseUrl: string,
+) {
+  expect(resolveOwningPluginIdsForProviderRef({ provider: alias })).toEqual([pluginId]);
+  const catalog = resolveBundledStaticCatalogModel({
+    provider,
+    modelId,
+    includeRuntimeDiscovery: true,
+  });
+  const expected = { provider, id: modelId, api: "openai-completions", baseUrl };
+  expect(catalog).toMatchObject(expected);
+  if (!catalog) {
+    throw new Error(`Missing ${provider} catalog model`);
+  }
+  const canonical = await resolveCatalogModel(provider, catalog);
+  expect(canonical).toMatchObject(expected);
+  expect(await resolveCatalogModel(alias, catalog)).toEqual(canonical);
+}
+
+type ProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
+type ModelApi = ProviderConfig["api"];
+async function expectConfiguredAlias(
+  provider: string,
+  catalogProvider: string,
+  modelId: string,
+  header: string,
+  providerApi: ModelApi,
+  modelApi: ModelApi,
+  modelBaseUrl: string | undefined,
+  expectedApi: ModelApi,
+) {
+  const baseUrl = `https://${catalogProvider}-proxy.example/v1`;
+  const settings = {
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 4096,
+    maxTokens: 512,
+  } satisfies Partial<ProviderConfig["models"][number]>;
+  const headers = { [header]: "custom" };
+  const cfg: OpenClawConfig = {
+    models: {
+      providers: {
+        [provider]: {
+          baseUrl,
+          api: providerApi,
+          headers,
+          models: [
+            {
+              id: modelId,
+              name: "Configured model",
+              api: modelApi,
+              baseUrl: modelBaseUrl,
+              ...settings,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+    },
+  };
+  expect(await resolveAlias(provider, modelId, catalogProvider, cfg)).toMatchObject({
+    provider,
+    id: modelId,
+    api: expectedApi,
+    baseUrl: modelBaseUrl ?? baseUrl,
+    headers,
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 4096,
+    maxTokens: 512,
+  });
+}
+
+describe("Fireworks manifest provider alias", () => {
+  const modelId = "accounts/fireworks/routers/glm-5p3-fast";
+  const modelBaseUrl = "https://fireworks-proxy.example/model";
+
+  useManifest("fireworks");
 
   it("finds the alias owner before runtime loading and resolves the canonical catalog model", async () => {
-    expect(resolveOwningPluginIdsForProviderRef({ provider: "fireworks-ai" })).toEqual([
+    await expectAlias(
       "fireworks",
-    ]);
-    const canonical = await resolveFireworksGlm("fireworks");
-    expect(canonical).toMatchObject({
-      provider: "fireworks",
-      id: modelId,
-      api: "openai-completions",
-      baseUrl: "https://api.fireworks.ai/inference/v1",
-    });
-    expect(await resolveFireworksGlm("fireworks-ai")).toEqual(canonical);
+      "fireworks",
+      "fireworks-ai",
+      modelId,
+      "https://api.fireworks.ai/inference/v1",
+    );
   });
 
   it.each([
@@ -118,124 +199,35 @@ describe("Fireworks manifest provider alias", () => {
   ] as const)(
     "preserves explicit alias configuration with %s",
     async (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            "fireworks-ai": {
-              baseUrl: providerBaseUrl,
-              api: providerApi,
-              headers: { "X-Fireworks-Route": "custom" },
-              models: [
-                {
-                  id: modelId,
-                  name: "Configured GLM",
-                  api: modelApi,
-                  baseUrl: configuredModelBaseUrl,
-                  reasoning: false,
-                  input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 4096,
-                  maxTokens: 512,
-                },
-              ],
-            },
-          },
-        },
-      };
-
-      expect(await resolveFireworksGlm("fireworks-ai", cfg)).toMatchObject({
-        provider: "fireworks-ai",
-        id: modelId,
-        api: expectedApi,
-        baseUrl: configuredModelBaseUrl ?? providerBaseUrl,
-        headers: { "X-Fireworks-Route": "custom" },
-        reasoning: false,
-        input: ["text", "image"],
-        contextWindow: 4096,
-        maxTokens: 512,
-      });
+      await expectConfiguredAlias(
+        "fireworks-ai",
+        "fireworks",
+        modelId,
+        "X-Fireworks-Route",
+        providerApi,
+        modelApi,
+        configuredModelBaseUrl,
+        expectedApi,
+      );
     },
   );
 });
 
 describe("StepFun manifest provider aliases", () => {
   const modelId = "step-3.7-flash";
-  const providerBaseUrl = "https://stepfun-proxy.example/v1";
   const modelBaseUrl = "https://stepfun-proxy.example/model";
 
-  beforeEach(() => {
-    const rootDir = path.dirname(
-      resolveBundledPluginPublicModulePath({
-        pluginId: "stepfun",
-        artifactBasename: "openclaw.plugin.json",
-      }),
-    );
-    const loaded = loadPluginManifest(rootDir);
-    if (!loaded.ok) {
-      throw new Error(loaded.error);
-    }
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
-    });
-    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
-    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
-  });
-
-  function resolveStepfunModel(params: {
-    catalogProvider: "stepfun" | "stepfun-plan";
-    provider: string;
-    cfg?: OpenClawConfig;
-  }) {
-    const catalogModel = resolveBundledStaticCatalogModel({
-      provider: params.catalogProvider,
-      modelId,
-      includeRuntimeDiscovery: true,
-    });
-    if (!catalogModel) {
-      throw new Error(`Missing StepFun catalog model for ${params.catalogProvider}`);
-    }
-    return resolveCatalogModel(params.provider, catalogModel, params.cfg);
-  }
+  useManifest("stepfun");
 
   it("finds models.dev alias owners before runtime loading and resolves canonical catalog models", async () => {
-    expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai" })).toEqual(["stepfun"]);
-    expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai-step-plan" })).toEqual([
+    await expectAlias("stepfun", "stepfun", "stepfun-ai", modelId, "https://api.stepfun.ai/v1");
+    await expectAlias(
       "stepfun",
-    ]);
-
-    const standard = await resolveStepfunModel({
-      catalogProvider: "stepfun",
-      provider: "stepfun",
-    });
-    expect(standard).toMatchObject({
-      provider: "stepfun",
-      id: modelId,
-      api: "openai-completions",
-      baseUrl: "https://api.stepfun.ai/v1",
-    });
-    expect(
-      await resolveStepfunModel({
-        catalogProvider: "stepfun",
-        provider: "stepfun-ai",
-      }),
-    ).toEqual(standard);
-
-    const plan = await resolveStepfunModel({
-      catalogProvider: "stepfun-plan",
-      provider: "stepfun-plan",
-    });
-    expect(plan).toMatchObject({
-      provider: "stepfun-plan",
-      id: modelId,
-      api: "openai-completions",
-      baseUrl: "https://api.stepfun.ai/step_plan/v1",
-    });
-    expect(
-      await resolveStepfunModel({
-        catalogProvider: "stepfun-plan",
-        provider: "stepfun-ai-step-plan",
-      }),
-    ).toEqual(plan);
+      "stepfun-plan",
+      "stepfun-ai-step-plan",
+      modelId,
+      "https://api.stepfun.ai/step_plan/v1",
+    );
   });
 
   it.each([
@@ -251,48 +243,16 @@ describe("StepFun manifest provider aliases", () => {
   ] as const)(
     "preserves explicit stepfun-ai alias configuration with %s",
     async (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            "stepfun-ai": {
-              baseUrl: providerBaseUrl,
-              api: providerApi,
-              headers: { "X-StepFun-Route": "custom" },
-              models: [
-                {
-                  id: modelId,
-                  name: "Configured Step",
-                  api: modelApi,
-                  baseUrl: configuredModelBaseUrl,
-                  reasoning: false,
-                  input: ["text", "image"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 4096,
-                  maxTokens: 512,
-                },
-              ],
-            },
-          },
-        },
-      };
-
-      expect(
-        await resolveStepfunModel({
-          catalogProvider: "stepfun",
-          provider: "stepfun-ai",
-          cfg,
-        }),
-      ).toMatchObject({
-        provider: "stepfun-ai",
-        id: modelId,
-        api: expectedApi,
-        baseUrl: configuredModelBaseUrl ?? providerBaseUrl,
-        headers: { "X-StepFun-Route": "custom" },
-        reasoning: false,
-        input: ["text", "image"],
-        contextWindow: 4096,
-        maxTokens: 512,
-      });
+      await expectConfiguredAlias(
+        "stepfun-ai",
+        "stepfun",
+        modelId,
+        "X-StepFun-Route",
+        providerApi,
+        modelApi,
+        configuredModelBaseUrl,
+        expectedApi,
+      );
     },
   );
 });
@@ -300,77 +260,19 @@ describe("StepFun manifest provider aliases", () => {
 describe("Together manifest provider alias", () => {
   const modelId = "zai-org/GLM-5.2";
 
-  beforeEach(() => {
-    const rootDir = path.dirname(
-      resolveBundledPluginPublicModulePath({
-        pluginId: "together",
-        artifactBasename: "openclaw.plugin.json",
-      }),
-    );
-    const loaded = loadPluginManifest(rootDir);
-    if (!loaded.ok) {
-      throw new Error(loaded.error);
-    }
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
-    });
-    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
-    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
-  });
+  useManifest("together");
 
   it("owns togetherai before runtime load and resolves the canonical catalog model", async () => {
-    expect(resolveOwningPluginIdsForProviderRef({ provider: "togetherai" })).toEqual(["together"]);
-    const catalogModel = resolveBundledStaticCatalogModel({
-      provider: "together",
-      modelId,
-      includeRuntimeDiscovery: true,
-    });
-    expect(catalogModel).toMatchObject({
-      provider: "together",
-      id: modelId,
-      api: "openai-completions",
-      baseUrl: "https://api.together.xyz/v1",
-    });
-    const resolve = (provider: string) => resolveCatalogModel(provider, catalogModel!);
-    expect(await resolve("togetherai")).toEqual(await resolve("together"));
+    await expectAlias("together", "together", "togetherai", modelId, "https://api.together.xyz/v1");
   });
 });
 
 describe("Kilocode manifest provider alias", () => {
   const modelId = "kilo-auto/balanced";
 
-  beforeEach(() => {
-    const rootDir = path.dirname(
-      resolveBundledPluginPublicModulePath({
-        pluginId: "kilocode",
-        artifactBasename: "openclaw.plugin.json",
-      }),
-    );
-    const loaded = loadPluginManifest(rootDir);
-    if (!loaded.ok) {
-      throw new Error(loaded.error);
-    }
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
-    });
-    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
-    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
-  });
+  useManifest("kilocode");
 
   it("owns kilo before runtime load and resolves the canonical catalog model", async () => {
-    expect(resolveOwningPluginIdsForProviderRef({ provider: "kilo" })).toEqual(["kilocode"]);
-    const catalogModel = resolveBundledStaticCatalogModel({
-      provider: "kilocode",
-      modelId,
-      includeRuntimeDiscovery: true,
-    });
-    expect(catalogModel).toMatchObject({
-      provider: "kilocode",
-      id: modelId,
-      api: "openai-completions",
-      baseUrl: "https://api.kilo.ai/api/gateway/",
-    });
-    const resolve = (provider: string) => resolveCatalogModel(provider, catalogModel!);
-    expect(await resolve("kilo")).toEqual(await resolve("kilocode"));
+    await expectAlias("kilocode", "kilocode", "kilo", modelId, "https://api.kilo.ai/api/gateway/");
   });
 });

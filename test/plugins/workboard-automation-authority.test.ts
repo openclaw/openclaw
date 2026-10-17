@@ -45,6 +45,12 @@ describe("Workboard terminal hook automation ownership", () => {
     const { storePath } = await makeStorePath();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(storePath));
     const gatewayContext = createContext();
+    const gatewayScope = {
+      pluginId: "workboard",
+      pluginOrigin: "bundled" as const,
+      context: gatewayContext,
+      isWebchatConnect: () => false,
+    };
     const finished = createFinishedBarrier();
     const executeJob = vi.fn(() => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
@@ -127,14 +133,8 @@ describe("Workboard terminal hook automation ownership", () => {
           ...service,
           apiVersion: 2,
           start: (ctx) =>
-            withPluginRuntimeGatewayRequestScope(
-              {
-                pluginId: "workboard",
-                pluginOrigin: "bundled",
-                context: gatewayContext,
-                isWebchatConnect: () => false,
-              },
-              () => service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
+            withPluginRuntimeGatewayRequestScope(gatewayScope, () =>
+              service.start({ ...ctx, logger: { ...ctx.logger, warn } }),
             ),
         },
       });
@@ -176,14 +176,8 @@ describe("Workboard terminal hook automation ownership", () => {
         },
       ]);
     const request = <T>(method: string, params: Record<string, unknown>) =>
-      withPluginRuntimeGatewayRequestScope(
-        {
-          pluginId: "workboard",
-          pluginOrigin: "bundled",
-          context: gatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () => dispatchTrustedPluginGatewayMethod<T>(method, params, { scopes: ["operator.admin"] }),
+      withPluginRuntimeGatewayRequestScope(gatewayScope, () =>
+        dispatchTrustedPluginGatewayMethod<T>(method, params, { scopes: ["operator.admin"] }),
       );
     const admission = prepareAgentRunAdmission({
       cfg: {},
@@ -212,39 +206,32 @@ describe("Workboard terminal hook automation ownership", () => {
       if (!caller) {
         throw new Error("Expected an admitted worker caller");
       }
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          pluginId: "workboard",
-          pluginOrigin: "bundled",
-          context: gatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () =>
-          withGatewayToolCallerIdentity(caller, async () => {
-            const pending =
-              hook === "agent_end"
-                ? agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId })
-                : subagentEnded!(
-                    {
-                      targetSessionKey: sessionKey,
-                      targetKind: "subagent",
-                      runId,
-                      endedAt: card.updatedAt + 1,
-                      outcome: "ok",
-                      reason: "subagent-complete",
-                    },
-                    { childSessionKey: sessionKey, runId },
-                  );
-            admission.close();
-            await pending;
-            await expect(
-              dispatchTrustedPluginGatewayMethod(
-                "cron.run",
-                { id: job.id, mode: "if-enabled" },
-                { scopes: ["operator.admin"] },
-              ),
-            ).rejects.toThrow("agent tool caller authority is no longer active");
-          }),
+      await withPluginRuntimeGatewayRequestScope(gatewayScope, () =>
+        withGatewayToolCallerIdentity(caller, async () => {
+          const pending =
+            hook === "agent_end"
+              ? agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId })
+              : subagentEnded!(
+                  {
+                    targetSessionKey: sessionKey,
+                    targetKind: "subagent",
+                    runId,
+                    endedAt: card.updatedAt + 1,
+                    outcome: "ok",
+                    reason: "subagent-complete",
+                  },
+                  { childSessionKey: sessionKey, runId },
+                );
+          admission.close();
+          await pending;
+          await expect(
+            dispatchTrustedPluginGatewayMethod(
+              "cron.run",
+              { id: job.id, mode: "if-enabled" },
+              { scopes: ["operator.admin"] },
+            ),
+          ).rejects.toThrow("agent tool caller authority is no longer active");
+        }),
       );
 
       await withGatewayToolCallerIdentity({ ...caller }, async () => {

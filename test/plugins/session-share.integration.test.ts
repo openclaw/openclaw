@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
@@ -113,6 +112,36 @@ const remoteIdentity = {
   idKind: "github-account",
   id: "4242",
 };
+
+function nodeConfig(
+  nodes: Record<string, { owner?: string; linkGitHubIdentities?: boolean }>,
+): OpenClawConfig {
+  return { plugins: { entries: { "session-share": { config: { nodes } } } } };
+}
+
+function publishedActor(id: string, label: string, idKind = "github-account") {
+  return {
+    type: "human",
+    id,
+    label,
+    identity: { type: "remote", pluginId: "session-share", domain: "openclaw", idKind, id },
+  };
+}
+
+function holdStateRead() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const execute = stateReads.executeExistingOpenClawStateRead;
+  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
+    async (...args) => {
+      const result = await execute(...args);
+      entered.resolve();
+      await release.promise;
+      return result;
+    },
+  );
+  return { entered: entered.promise, release: () => release.resolve() };
+}
 
 function catalogFixture(stateDir: string) {
   let config: OpenClawConfig = {};
@@ -296,18 +325,8 @@ describe("session-share node commands", () => {
       } finally {
         counter.restore();
       }
-      const responses = [
-        JSON.stringify(await source.list({ limit: 100 })),
-        JSON.stringify(await source.list({ limit: 100 })),
-      ];
-      const hashes = responses.map((response) =>
-        createHash("sha256").update(response).digest("hex"),
-      );
-      expect(hashes[1]).toBe(hashes[0]);
-      console.info("Session Share paired source response", {
-        bytes: responses.map((response) => Buffer.byteLength(response)),
-        hashes,
-      });
+      const response = JSON.stringify(await source.list({ limit: 100 }));
+      expect(JSON.stringify(await source.list({ limit: 100 }))).toBe(response);
       await receiver.hydrate();
       const first = await receiver.catalog.list({ limitPerHost: 1 });
       expect(first[0]?.sessions).toMatchObject([
@@ -413,18 +432,7 @@ describe("session-share node commands", () => {
         authenticationAlias: { kind: "github-login", login: "source-person" },
       });
       const createdActor = { type: "human", source: "profile", id: profile.id } as const;
-      const publishedActor = {
-        type: "human",
-        id: "4242",
-        label: "Source Person",
-        identity: {
-          type: "remote",
-          pluginId: "session-share",
-          domain: "openclaw",
-          idKind: "github-account",
-          id: "4242",
-        },
-      };
+      const actor = publishedActor("4242", "Source Person");
       // Keep the tied fixture fresh: subsequent writes prune ancient unarchived sessions.
       const recency = Date.now();
       for (const [key, patch] of [
@@ -432,7 +440,6 @@ describe("session-share node commands", () => {
           "agent:main:alpha",
           {
             label: "Alpha",
-            category: "Team",
             updatedAt: recency,
             color: "blue",
             createdVia: "operator",
@@ -448,7 +455,6 @@ describe("session-share node commands", () => {
           "agent:main:beta",
           {
             label: "Beta",
-            category: "Team",
             updatedAt: recency,
             archivedAt: recency - 1,
             createdActor,
@@ -456,45 +462,25 @@ describe("session-share node commands", () => {
             worktree: { id: "beta-worktree", repoRoot: "/work/beta", branch: "b".repeat(6010) },
           },
         ],
-        ["agent:main:private", { label: "Private", category: "Other", updatedAt: recency + 1 }],
-        [
-          "agent:main:draft",
-          { label: "Draft", category: "Team", visibility: "draft", updatedAt: recency + 1 },
-        ],
-        [
-          "agent:main:incognito",
-          { label: "Incognito", category: "Team", incognito: true, updatedAt: recency + 1 },
-        ],
-        [
-          "agent:main:catalog:external",
-          { label: "Adopted", category: "Team", updatedAt: recency + 1 },
-        ],
-        [
-          "agent:main:subagent:key-only",
-          { label: "Subagent", category: "Team", updatedAt: recency + 1 },
-        ],
-        [
-          "agent:main:dashboard:spawn-owned",
-          { category: "Team", updatedAt: recency + 1, createdVia: "spawn" },
-        ],
+        ["agent:main:private", { label: "Private", category: "Other" }],
+        ["agent:main:draft", { label: "Draft", visibility: "draft" }],
+        ["agent:main:incognito", { label: "Incognito", incognito: true }],
+        ["agent:main:catalog:external", { label: "Adopted" }],
+        ["agent:main:subagent:key-only", { label: "Subagent" }],
+        ["agent:main:dashboard:spawn-owned", { createdVia: "spawn" }],
         [
           "agent:main:acp:resumed-child",
           {
-            category: "Team",
-            updatedAt: recency + 1,
             spawnedBy: "agent:main:main",
             spawnDepth: 1,
           },
         ],
-        ["agent:main:main", { category: "Team", updatedAt: recency - 1 }],
-        [
-          "agent:main:cron:job:run:root",
-          { category: "Team", updatedAt: recency - 1, createdVia: "cron" },
-        ],
+        ["agent:main:main", { updatedAt: recency - 1 }],
+        ["agent:main:cron:job:run:root", { updatedAt: recency - 1, createdVia: "cron" }],
       ] as const) {
         await replaceSessionEntry(
           { agentId: "main", sessionKey: key },
-          { sessionId: key, ...patch },
+          { sessionId: key, category: "Team", updatedAt: recency + 1, ...patch },
         );
       }
       for (const key of ["subagent:key-only", "dashboard:spawn-owned", "acp:resumed-child"]) {
@@ -504,19 +490,15 @@ describe("session-share node commands", () => {
       const first = await fixture.list({ limit: 1 });
       expect(first.sessions).toEqual([
         {
+          ...nativeSession,
           threadId: "agent:main:alpha",
           name: "Alpha",
           color: "blue",
           cwd: "/work/alpha",
-          status: "idle",
           createdAt: recency - 100,
           updatedAt: recency,
           recencyAt: recency,
-          archived: false,
-          canContinue: false,
-          canArchive: false,
-          canOpenTerminal: false,
-          createdActor: publishedActor,
+          createdActor: actor,
         },
       ]);
       expect.soft(identityReads).not.toHaveBeenCalled();
@@ -525,6 +507,7 @@ describe("session-share node commands", () => {
       const older = await fixture.list({ limit: 1, cursor: first.nextCursor });
       expect(older.sessions).toEqual([
         {
+          ...nativeSession,
           threadId: "agent:main:beta",
           name: "Beta",
           cwd: "/work/beta",
@@ -534,10 +517,7 @@ describe("session-share node commands", () => {
           gitBranch: "b".repeat(6000),
           archived: true,
           status: "archived",
-          canContinue: false,
-          canArchive: false,
-          canOpenTerminal: false,
-          createdActor: publishedActor,
+          createdActor: actor,
         },
       ]);
       expect.soft(identityReads).not.toHaveBeenCalled();
@@ -626,44 +606,21 @@ describe("session-share node commands", () => {
       } finally {
         counter.restore();
       }
-      const portable = (id: string, idKind = "github-account") => ({
-        type: "remote",
-        pluginId: "session-share",
-        domain: "openclaw",
-        idKind,
-        id,
-      });
       expect(first.sessions.map((session) => session.createdActor)).toEqual([
-        ...Array.from({ length: 8 }, () => ({
-          type: "human",
-          id: "4242",
-          label: "Original Person",
-          identity: portable("4242"),
-        })),
-        ...distinct.map(({ accountId }, index) => ({
-          type: "human",
-          id: String(accountId),
-          label: `Person ${index}`,
-          identity: portable(String(accountId)),
-        })),
-        ...["First fallback", "Second fallback"].map((label) => ({
-          type: "human",
-          id: "missing",
-          label,
-          identity: portable("missing", "profile"),
-        })),
+        ...Array.from({ length: 8 }, () => publishedActor("4242", "Original Person")),
+        ...distinct.map(({ accountId }, index) =>
+          publishedActor(String(accountId), `Person ${index}`),
+        ),
+        ...["First fallback", "Second fallback"].map((label) =>
+          publishedActor("missing", label, "profile"),
+        ),
         { type: "human", id: creator.id, label: "Channel person" },
         { type: "agent", id: creator.id, label: "Agent" },
       ]);
       linkEmail("creator@example.test", target.id);
       const refreshed = await fixture.list();
       expect(refreshed.sessions.slice(0, 8).map((session) => session.createdActor)).toEqual(
-        Array.from({ length: 8 }, () => ({
-          type: "human",
-          id: "4343",
-          label: "Merged Person",
-          identity: portable("4343"),
-        })),
+        Array.from({ length: 8 }, () => publishedActor("4343", "Merged Person")),
       );
       expect(refreshed.sessions.slice(8)).toEqual(first.sessions.slice(8));
       openOpenClawStateDatabase()
@@ -734,21 +691,11 @@ describe("session-share node commands", () => {
           },
         });
         const pathname = openOpenClawAgentDatabase({ agentId: "main" }).path;
-        const accepted = createDeferredCore();
-        const release = createDeferredCore();
-        const execute = stateReads.executeExistingOpenClawStateRead;
-        vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
-          async (...args) => {
-            const result = await execute(...args);
-            accepted.resolve();
-            await release.promise;
-            return result;
-          },
-        );
+        const gate = holdStateRead();
         const pending = operation === "list" ? fixture.list() : fixture.read(scope.sessionKey);
         try {
           await Promise.race([
-            accepted.promise,
+            gate.entered,
             pending.then(() => {
               throw new Error("Read was not held");
             }),
@@ -757,7 +704,7 @@ describe("session-share node commands", () => {
           fs.renameSync(pathname, `${pathname}.previous`);
           fs.copyFileSync(`${pathname}.previous`, pathname);
         } finally {
-          release.resolve();
+          gate.release();
         }
         await expect(pending).rejects.toThrow();
       });
@@ -858,20 +805,12 @@ describe("session-share receiver identity integration", () => {
       fixture.list.mockResolvedValue({
         nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
       });
-      fixture.setConfig({
-        plugins: {
-          entries: {
-            "session-share": {
-              config: {
-                nodes: {
-                  alpha: { linkGitHubIdentities: false },
-                  beta: { linkGitHubIdentities: true },
-                },
-              },
-            },
-          },
-        },
-      });
+      fixture.setConfig(
+        nodeConfig({
+          alpha: { linkGitHubIdentities: false },
+          beta: { linkGitHubIdentities: true },
+        }),
+      );
       fixture.invoke.mockImplementation(async ({ nodeId }) => ({
         sessions: [
           {
@@ -885,17 +824,7 @@ describe("session-share receiver identity integration", () => {
       }));
       await fixture.hydrate();
       const firstPublished = createDeferredCore();
-      const secondPreparing = createDeferredCore();
-      const release = createDeferredCore();
-      const execute = stateReads.executeExistingOpenClawStateRead;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
-        async (...args) => {
-          const result = await execute(...args);
-          secondPreparing.resolve();
-          await release.promise;
-          return result;
-        },
-      );
+      const gate = holdStateRead();
       const pending = fixture.catalog.list({
         onHost: (host) => {
           if (host.hostId === "node:alpha") {
@@ -906,7 +835,7 @@ describe("session-share receiver identity integration", () => {
       });
       try {
         await Promise.race([
-          Promise.all([firstPublished.promise, secondPreparing.promise]),
+          Promise.all([firstPublished.promise, gate.entered]),
           pending.then(() => {
             throw new Error("Second host was not held");
           }),
@@ -916,7 +845,7 @@ describe("session-share receiver identity integration", () => {
         });
         await fixture.catalog.list({ hostIds: [] });
       } finally {
-        release.resolve();
+        gate.release();
       }
       await expect(pending).rejects.toThrow("Session Share is unavailable");
     });
@@ -994,11 +923,7 @@ describe("session-share receiver identity integration", () => {
       ).toEqual(namespacedIdentity);
       expect(fullIdentityScans()).toBe(0);
       for (const owner of [`profile:${profile.id}`, "github:CATALOG-PERSON"]) {
-        fixture.setConfig({
-          plugins: {
-            entries: { "session-share": { config: { nodes: { [nodeId]: { owner } } } } },
-          },
-        });
+        fixture.setConfig(nodeConfig({ [nodeId]: { owner } }));
         await fixture.hydrate();
         const rows = (await fixture.catalog.list({}))[0]!.sessions;
         expect(rows[0]).toEqual(namespacedHuman);
@@ -1010,13 +935,7 @@ describe("session-share receiver identity integration", () => {
         });
         expect(rows[2]).toEqual(namespacedUnmatched);
       }
-      fixture.setConfig({
-        plugins: {
-          entries: {
-            "session-share": { config: { nodes: { [nodeId]: { linkGitHubIdentities: true } } } },
-          },
-        },
-      });
+      fixture.setConfig(nodeConfig({ [nodeId]: { linkGitHubIdentities: true } }));
       await fixture.hydrate();
       identityReads.mockClear();
       const linked = (await fixture.catalog.list({}))[0]!.sessions;
