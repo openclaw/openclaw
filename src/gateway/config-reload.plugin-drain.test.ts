@@ -78,6 +78,34 @@ afterEach(async () => {
 });
 
 describe("plugin drain recovery", () => {
+  it("hot-applies model settings without replacing the Codex generation", async () => {
+    const initialConfig: OpenClawConfig = {
+      plugins: { entries: { codex: { enabled: true } } },
+    };
+    let config = initialConfig;
+    const harness = createReloaderHarness(async () => makeSnapshot({ config }), {
+      initialConfig,
+    });
+    await harness.reloader.ready;
+
+    for (const update of [
+      { agents: { defaults: { models: { "openai/gpt-5.6-sol": { alias: "primary" } } } } },
+      { agents: { entries: { worker: { model: { primary: "openai/gpt-5.6-sol" } } } } },
+      {
+        models: {
+          providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } },
+        },
+      },
+    ] satisfies OpenClawConfig[]) {
+      config = { ...initialConfig, ...update };
+      await flushWatcherChange(harness);
+      expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(false);
+      expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+    }
+    expect(harness.onHotReload).toHaveBeenCalledTimes(3);
+    expect(harness.onRestart).not.toHaveBeenCalled();
+  });
+
   it("retries deferred replacement after work and cleanup settle", async () => {
     const initialConfig: OpenClawConfig = {
       ...codexConfig("read-only"),
