@@ -13,7 +13,7 @@ import {
   removeExpiredRuns,
   resumingRunIds,
 } from "./code-mode-state.js";
-import { createCodeModeTools } from "./code-mode.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -222,18 +222,38 @@ export function createCodeModeHarness(
   return { catalogRef, config, ctx, tools };
 }
 
+export function createCatalogCodeModeHarness(
+  targets: AnyAgentTool[] = [],
+  options?: Parameters<typeof createCodeModeHarness>[0],
+) {
+  const h = createCodeModeHarness(options);
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
+  return {
+    ...h,
+    ...codeModeRunner(h.tools),
+    complete: (code: string) =>
+      runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code }),
+  };
+}
+
+export function codeModeRunner(tools: AnyAgentTool[]) {
+  return {
+    run: async (code: string, id = "cell", args: Record<string, unknown> = {}) =>
+      resultDetails(await tools[0]!.execute(id, { code, ...args })),
+    resume: async (details: Record<string, unknown>, id = "resume") =>
+      resultDetails(await tools[1]!.execute(id, { runId: details.runId })),
+  };
+}
+
 export async function runUntilCompleted(params: {
   execTool: AnyAgentTool;
   waitTool: AnyAgentTool;
   code: string;
   restartSafe?: boolean;
 }) {
-  const details = resultDetails(
-    await params.execTool.execute("code-call-1", {
-      code: params.code,
-      restartSafe: params.restartSafe,
-    }),
-  );
+  const details = await codeModeRunner([params.execTool]).run(params.code, "code-call-1", {
+    restartSafe: params.restartSafe,
+  });
   return await waitUntilCompleted({ details, waitTool: params.waitTool });
 }
 

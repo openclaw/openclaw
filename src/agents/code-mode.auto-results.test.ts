@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import {
@@ -30,84 +30,79 @@ afterEach(async () => {
   await resetCodeModeTestState();
 });
 
-function createResultsHarness(...args: Parameters<typeof createCodeModeHarness>) {
-  const harness = createCodeModeHarness(...args);
-  catalogs.push(harness.ctx);
-  return harness;
+function createResultsHarness(
+  options?: Parameters<typeof createCodeModeHarness>[0],
+  modelContextWindowTokens?: number,
+) {
+  const h = createCodeModeHarness(options);
+  const ctx = { ...h.ctx, modelContextWindowTokens };
+  const tools = createCodeModeTools(ctx);
+  catalogs.push(ctx);
+  applyCodeModeCatalog({ ...ctx, tools });
+  return {
+    ctx,
+    tools,
+    run: async (code: string, args: { restartSafe?: boolean } = {}) =>
+      resultDetails(await tools[0]!.execute("result", { code, ...args })),
+  };
 }
 
-it.each([{ modelContextWindowTokens: 4096, maxOutputBytes: 1024, network: true }])(
-  "keeps a usable automatic reference after output exhaustion and wait (context=$modelContextWindowTokens, bytes=$maxOutputBytes, network=$network)",
-  async ({ modelContextWindowTokens, maxOutputBytes, network }) => {
-    const h = createResultsHarness({ codeMode: { maxOutputBytes } });
-    const ctx = { ...h.ctx, modelContextWindowTokens };
-    const tools = createCodeModeTools(ctx);
-    const rows = Array.from({ length: 180 }, (_, id) => ({ id, title: "row 🦞", amount: 4 }));
-    const read = pluginToolWithExecute("read_rows", "Rows", async () => jsonResult(rows));
-    if (network) {
-      read.resultContentSource = "network";
-    }
-    applyCodeModeCatalog({ ...ctx, tools: [...tools, read] });
-    const first = resultDetails(
-      await tools[0]!.execute("emit", {
-        code: 'const rows = await read_rows({}); text("progress".repeat(500)); await yield_control(); return rows;',
-      }),
-    );
-    expect(first.status).toBe("waiting");
-    const response = await tools[1]!.execute("finish", { runId: first.runId });
-    const saved = resultDetails(response);
-    expectCodeModeSharedBudget(saved, maxOutputBytes);
-    expect(saved, JSON.stringify(saved)).toMatchObject({
-      status: "completed",
-      value: {
-        truncated: true,
-        reference: {
-          id: expect.any(String),
-          bytes: Buffer.byteLength(JSON.stringify(rows)),
-          count: 180,
-        },
-        guidance: expect.stringContaining("results.load"),
+it("keeps a usable network reference after output exhaustion and wait", async () => {
+  const maxOutputBytes = 1024;
+  const modelContextWindowTokens = 4096;
+  const { ctx, tools, run } = createResultsHarness(
+    { codeMode: { maxOutputBytes } },
+    modelContextWindowTokens,
+  );
+  const rows = Array.from({ length: 180 }, (_, id) => ({ id, title: "row 🦞", amount: 4 }));
+  const read = pluginToolWithExecute("read_rows", "Rows", async () => jsonResult(rows));
+  read.resultContentSource = "network";
+  applyCodeModeCatalog({ ...ctx, tools: [...tools, read] });
+  const first = await run(
+    'const rows = await read_rows({}); text("progress".repeat(500)); await yield_control(); return rows;',
+  );
+  expect(first.status).toBe("waiting");
+  const response = await tools[1]!.execute("finish", { runId: first.runId });
+  const saved = resultDetails(response);
+  expectCodeModeSharedBudget(saved, maxOutputBytes);
+  expect(saved, JSON.stringify(saved)).toMatchObject({
+    status: "completed",
+    value: {
+      truncated: true,
+      reference: {
+        id: expect.any(String),
+        bytes: Buffer.byteLength(JSON.stringify(rows)),
+        count: 180,
       },
+      guidance: expect.stringContaining("results.load"),
+    },
+  });
+  const id = (saved.value as { reference: { id: string } }).reference.id;
+  const loaded = await tools[0]!.execute("load", {
+    code: `return (await results.load(${JSON.stringify(id)})).reduce((sum,row) => sum + row.amount,0);`,
+  });
+  expect(resultDetails(loaded)).toMatchObject({ status: "completed", value: 720 });
+  const text = response.content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .join("\n");
+  expect(toolResultFitsBudget(text, resolveToolResultBudget(modelContextWindowTokens))).toBe(true);
+  for (const result of [response, loaded]) {
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
-    const id = (saved.value as { reference: { id: string } }).reference.id;
-    const loaded = await tools[0]!.execute("load", {
-      code: `return (await results.load(${JSON.stringify(id)})).reduce((sum,row) => sum + row.amount,0);`,
-    });
-    expect(resultDetails(loaded)).toMatchObject({ status: "completed", value: 720 });
-    if (modelContextWindowTokens) {
-      const text = response.content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
-      expect(toolResultFitsBudget(text, resolveToolResultBudget(modelContextWindowTokens))).toBe(
-        true,
-      );
-    }
-    if (network) {
-      expect(response.content[0]).toMatchObject({
-        text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-      });
-      expect(loaded.content[0]).toMatchObject({
-        text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-      });
-    }
-    expect(read.execute).toHaveBeenCalledOnce();
-  },
-);
+  }
+  expect(read.execute).toHaveBeenCalledOnce();
+});
 
 it("keeps success and old references when automatic retention is full", async () => {
-  const { ctx, tools } = createResultsHarness({ codeMode: { maxOutputBytes: 1024 } });
-  applyCodeModeCatalog({ ...ctx, tools });
-  const first = resultDetails(
-    await tools[0]!.execute("fill", {
-      code: "let first; for(let i=0;i<64;i++) { const ref = await results.save(i); first ??= ref.id; } return first;",
-    }),
+  const { run } = createResultsHarness({ codeMode: { maxOutputBytes: 1024 } });
+  const first = await run(
+    "let first; for(let i=0;i<64;i++) { const ref = await results.save(i); first ??= ref.id; } return first;",
   );
   expect(first.status).toBe("completed");
-  const full = resultDetails(
-    await tools[0]!.execute("oversized", {
-      code: 'return Array.from({length:180},(_,id) => ({id, description:"data".repeat(10)}));',
-    }),
+  const full = await run(
+    'return Array.from({length:180},(_,id) => ({id, description:"data".repeat(10)}));',
   );
   expect(full).toMatchObject({
     status: "completed",
@@ -118,13 +113,10 @@ it("keeps success and old references when automatic retention is full", async ()
   });
   expect(full.value).not.toHaveProperty("reference");
   expect(full).not.toHaveProperty("error");
-  expect(
-    resultDetails(
-      await tools[0]!.execute("old", {
-        code: `return await results.load(${JSON.stringify(first.value)});`,
-      }),
-    ),
-  ).toMatchObject({ status: "completed", value: 0 });
+  expect(await run(`return await results.load(${JSON.stringify(first.value)});`)).toMatchObject({
+    status: "completed",
+    value: 0,
+  });
 });
 
 it.each([
@@ -155,15 +147,13 @@ it.each([
 ])(
   "returns an ordinary successful truncation for $name",
   async ({ maxOutputBytes, modelContextWindowTokens, maxSnapshotBytes, restartSafe, guidance }) => {
-    const h = createResultsHarness({ codeMode: { maxOutputBytes, maxSnapshotBytes } });
-    const ctx = { ...h.ctx, modelContextWindowTokens };
-    const tools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({ ...ctx, tools });
-    const output = resultDetails(
-      await tools[0]!.execute("large", {
-        restartSafe,
-        code: 'return {rows:Array.from({length:180}, (_,id) => ({id,payload:"🦞".repeat(10)}))};',
-      }),
+    const { run } = createResultsHarness(
+      { codeMode: { maxOutputBytes, maxSnapshotBytes } },
+      modelContextWindowTokens,
+    );
+    const output = await run(
+      'return {rows:Array.from({length:180}, (_,id) => ({id,payload:"🦞".repeat(10)}))};',
+      { restartSafe },
     );
     expect(output).toMatchObject({
       status: "completed",
@@ -175,14 +165,10 @@ it.each([
 );
 
 it("shows nested array counts and explicitly sampled heterogeneous shapes", async () => {
-  const h = createResultsHarness();
-  applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
-  const output = resultDetails(
-    await h.tools[0]!.execute("preview", {
-      code: `const rows = Array.from({length:180},(_,id) => ({id, amount:4})); rows[90] = "pending"; rows[179] = null;
-      return await results.save({content:[{type:"text",text:"metadata".repeat(1000)}],structuredContent:{rows},isError:false,status:"partial"});`,
-    }),
-  );
+  const { run } = createResultsHarness();
+  const output =
+    await run(`const rows = Array.from({length:180},(_,id) => ({id, amount:4})); rows[90] = "pending"; rows[179] = null;
+      return await results.save({content:[{type:"text",text:"metadata".repeat(1000)}],structuredContent:{rows},isError:false,status:"partial"});`);
   expect(output).toMatchObject({
     status: "completed",
     value: {
@@ -202,13 +188,9 @@ it("shows nested array counts and explicitly sampled heterogeneous shapes", asyn
 });
 
 it("releases an automatic save when a tiny model budget cannot expose its identity", async () => {
-  const { ctx } = createResultsHarness({ codeMode: { maxOutputBytes: 1024 } });
-  const tools = createCodeModeTools({ ...ctx, modelContextWindowTokens: 1024 });
-  applyCodeModeCatalog({ ...ctx, tools });
-  const output = resultDetails(
-    await tools[0]!.execute("tiny", {
-      code: 'text("progress".repeat(1000)); return Array.from({length:180},(_,id) => ({id,amount:4}));',
-    }),
+  const { ctx, run } = createResultsHarness({ codeMode: { maxOutputBytes: 1024 } }, 1024);
+  const output = await run(
+    'text("progress".repeat(1000)); return Array.from({length:180},(_,id) => ({id,amount:4}));',
   );
   expect(output, JSON.stringify(output)).toMatchObject({
     status: "completed",
@@ -218,7 +200,7 @@ it("releases an automatic save when a tiny model budget cannot expose its identi
     },
   });
   expect(output.value).not.toHaveProperty("reference");
-  const ordinary = createCodeModeTools(ctx);
+  const ordinary = createCodeModeTools({ ...ctx, modelContextWindowTokens: undefined });
   expect(
     resultDetails(
       await ordinary[0]!.execute("capacity", {
@@ -228,36 +210,28 @@ it("releases an automatic save when a tiny model budget cannot expose its identi
   ).toMatchObject({ status: "completed", value: 64 });
 });
 
-it.each([false])(
-  "bounds deep and long-key preview traversal (visible array=%s)",
-  async (visibleArray) => {
-    const h = createResultsHarness();
-    applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
-    const output = resultDetails(
-      await h.tools[0]!.execute("bounded-preview", {
-        code: `const root = { ${visibleArray ? "rows: Array.from({length:20},(_,id) => ({id}))," : ""} ["x".repeat(10000)]: [77] }; let next = root; for(let i=0;i<20;i++) {next.deep={};next=next.deep;} next.hidden=[99]; return await results.save(root);`,
-      }),
-    );
-    expect(output).toMatchObject({
-      status: "completed",
-      value: {
-        id: expect.any(String),
-        shape: expect.stringContaining("limited traversal"),
-        preview: expect.stringContaining('"traversalLimited":true'),
-        previewTruncated: true,
-      },
-    });
-    expect(Buffer.byteLength(JSON.stringify(output.value))).toBeLessThanOrEqual(768);
-    const id = (output.value as { id: string }).id;
-    expect(
-      resultDetails(
-        await h.tools[0]!.execute("full", {
-          code: `const value = await results.load(${JSON.stringify(id)}); return value["x".repeat(10000)][0];`,
-        }),
-      ),
-    ).toMatchObject({ status: "completed", value: 77 });
-  },
-);
+it("bounds deep and long-key preview traversal", async () => {
+  const { run } = createResultsHarness();
+  const output = await run(
+    `const root = { ["x".repeat(10000)]: [77] }; let next = root; for(let i=0;i<20;i++) {next.deep={};next=next.deep;} next.hidden=[99]; return await results.save(root);`,
+  );
+  expect(output).toMatchObject({
+    status: "completed",
+    value: {
+      id: expect.any(String),
+      shape: expect.stringContaining("limited traversal"),
+      preview: expect.stringContaining('"traversalLimited":true'),
+      previewTruncated: true,
+    },
+  });
+  expect(Buffer.byteLength(JSON.stringify(output.value))).toBeLessThanOrEqual(768);
+  const id = (output.value as { id: string }).id;
+  expect(
+    await run(
+      `const value = await results.load(${JSON.stringify(id)}); return value["x".repeat(10000)][0];`,
+    ),
+  ).toMatchObject({ status: "completed", value: 77 });
+});
 
 it("infers literal and union selectors while keeping dynamic and missing inputs sound", async () => {
   const h = createCodeModeHarness();
@@ -348,35 +322,27 @@ it("keeps a large set of action declarations within the complete output allowanc
   expect(file.content).toContain("Promise<unknown>");
 });
 
-describe("Code Mode bounded console", () => {
-  it.each([65_536])(
-    "bounds inspection and repeated console output under the %i-byte shared result cap",
-    async (maxOutputBytes) => {
-      const result = await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness(),
-        code:
-          'const huge = { unicode: "🦞".repeat(100000), values: Array(100000).fill("x") }; ' +
-          'console.log(huge); console.error(new Proxy({}, { ownKeys() { throw Error("bad proxy"); } })); ' +
-          "for (let i = 0; i < 20000; i++) console.log(); await yield_control(); " +
-          'console.log("after exhaustion"); return true;',
-        overrides: { maxOutputBytes },
-      });
-      expect(result.status).toBe("completed");
-      expectCodeModeSharedBudget(result, maxOutputBytes);
-      expect(JSON.stringify(result.output)).toContain("🦞");
-      if (maxOutputBytes === 65_536) {
-        expect(result.output.length).toBeLessThan(700);
-        expect(
-          result.output.filter(
-            (entry) =>
-              isRecord(entry) &&
-              entry.type === "text" &&
-              entry.text === "[console output truncated]",
-          ),
-        ).toHaveLength(1);
-        expect(JSON.stringify(result.output)).not.toContain("after exhaustion");
-        expect(JSON.stringify(result.output)).toContain("[Unserializable]");
-      }
-    },
-  );
+it("bounds inspection and repeated console output under the shared result cap", async () => {
+  const maxOutputBytes = 65_536;
+  const result = await runCodeModeScriptHeadless({
+    ctx: createHeadlessCodeModeHarness(),
+    code:
+      'const huge = { unicode: "🦞".repeat(100000), values: Array(100000).fill("x") }; ' +
+      'console.log(huge); console.error(new Proxy({}, { ownKeys() { throw Error("bad proxy"); } })); ' +
+      "for (let i = 0; i < 20000; i++) console.log(); await yield_control(); " +
+      'console.log("after exhaustion"); return true;',
+    overrides: { maxOutputBytes },
+  });
+  expect(result.status).toBe("completed");
+  expectCodeModeSharedBudget(result, maxOutputBytes);
+  expect(JSON.stringify(result.output)).toContain("🦞");
+  expect(result.output.length).toBeLessThan(700);
+  expect(
+    result.output.filter(
+      (entry) =>
+        isRecord(entry) && entry.type === "text" && entry.text === "[console output truncated]",
+    ),
+  ).toHaveLength(1);
+  expect(JSON.stringify(result.output)).not.toContain("after exhaustion");
+  expect(JSON.stringify(result.output)).toContain("[Unserializable]");
 });

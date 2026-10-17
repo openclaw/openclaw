@@ -12,33 +12,18 @@ import {
   createCodeModeHarness,
   runUntilCompleted,
   testing,
+  createCatalogCodeModeHarness as createGuestHarness,
 } from "./code-mode.test-support.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { jsonResult } from "./tools/common.js";
-import type { AnyAgentTool } from "./tools/common.js";
-
-function createGuestHarness(targets: AnyAgentTool[] = []) {
-  const harness = createCodeModeHarness();
-  const compacted = applyCodeModeCatalog({
-    ...harness.ctx,
-    tools: [...harness.tools, ...targets],
-  });
-  return { ...harness, compacted };
-}
-
-function run(tools: AnyAgentTool[], code: string) {
-  return runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
-}
 
 describe("Code Mode guest execution", () => {
   afterEach(resetCodeModeTestState);
 
   it("does not invoke toJSON while serializing final values", async () => {
     const noop = pluginTool("fake_noop", "Noop");
-    const { tools: codeModeTools } = createGuestHarness([noop]);
-
-    const details = await run(
-      codeModeTools,
+    const { complete } = createGuestHarness([noop]);
+    const details = await complete(
       `
         const result = {
           invoked: false,
@@ -80,10 +65,8 @@ describe("Code Mode guest execution", () => {
       pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
       pluginTool("tool___openclawResult", "Keep the exact safe lifecycle-shaped name"),
     ];
-    const { tools: codeModeTools, ctx, catalogRef } = createGuestHarness([...targets]);
-
-    const details = await run(
-      codeModeTools,
+    const { complete, ctx, catalogRef } = createGuestHarness(targets);
+    const details = await complete(
       `
         const handles = catalog.all();
         const results = {};
@@ -99,11 +82,11 @@ describe("Code Mode guest execution", () => {
 
     expect(details.status).toBe("completed");
     const value = details.value as { names: string[]; results: Record<string, unknown> };
-    expect(value.names).toContain("llm_task");
-    expect(value.names).toContain("tool_9patch");
-    expect(value.names).toContain("tool___openclawResult");
     expect(value.names).toEqual(
       expect.arrayContaining([
+        "llm_task",
+        "tool_9patch",
+        "tool___openclawResult",
         expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
         expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
         expect.stringMatching(/^store_[a-f0-9]{8}$/u),
@@ -127,7 +110,7 @@ describe("Code Mode guest execution", () => {
 
   it("uses the client tool as the single winner for a shadowed exact name", async () => {
     const plugin = pluginTool("shared_action", "Plugin action");
-    const { ctx, tools: codeModeTools } = createGuestHarness([plugin]);
+    const { ctx, complete } = createGuestHarness([plugin]);
     const client = pluginTool("shared_action", "Client action");
     addClientToolsToToolCatalog({
       enabled: true,
@@ -135,8 +118,7 @@ describe("Code Mode guest execution", () => {
       ...ctx,
     });
 
-    const details = await run(
-      codeModeTools,
+    const details = await complete(
       `
         const matches = await catalog.search("shared_action");
         return { count: matches.length, value: await shared_action({ source: "guest" }) };
@@ -206,18 +188,17 @@ describe("Code Mode guest execution", () => {
   it.each(["node", "quickjs"] as const)(
     "%s rejects malformed commands before dispatch and accepts a corrected follow-up",
     async (executor) => {
-      const { ctx, tools: codeModeTools } = createCodeModeHarness({ codeMode: { executor } });
       const command = pluginTool("fake_command", "Run a synthetic command");
-      applyCodeModeCatalog({ ...ctx, tools: [...codeModeTools, command] });
+      const { tools: codeModeTools, run: execute } = createGuestHarness([command], {
+        codeMode: { executor },
+      });
       const execTool = expectDefined(codeModeTools[0], "Code Mode exec");
       const malformed = [
         'await fake_command({ value: "first" });',
         String.raw`const patch = { 'newText:' const value = 1;\n };`,
         "return await fake_command({ value: \"import test from 'node:test';\" });",
       ].join("\n");
-      const details = resultDetails(
-        await execTool.execute("code-call-syntax", { code: malformed }),
-      );
+      const details = await execute(malformed, "code-call-syntax");
 
       expect(details).toMatchObject({
         status: "failed",
@@ -260,18 +241,10 @@ describe("Code Mode guest execution", () => {
     "$executor preserves guest error classification and source lines: $error",
     async ({ executor, source, error }) => {
       const code = "const valid = 1;\n" + source;
-      const { ctx, tools: codeModeTools } = createCodeModeHarness({ codeMode: { executor } });
-      applyCodeModeCatalog({
-        tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-        ...ctx,
+      const { run: execute } = createGuestHarness([pluginTool("fake_noop", "Noop")], {
+        codeMode: { executor },
       });
-
-      const details = resultDetails(
-        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-          "code-call-runtime",
-          { code },
-        ),
-      );
+      const details = await execute(code, "code-call-runtime");
 
       expect(details.status).toBe("failed");
       const diagnostic = String(details.error);
@@ -289,8 +262,7 @@ describe("Code Mode guest execution", () => {
       const target = pluginToolWithExecute("late_effect", "Must not dispatch late", async () =>
         jsonResult({ done: true }),
       );
-      const { ctx, config, tools } = createCodeModeHarness();
-      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+      const { run: execute, resume: wait } = createGuestHarness([target]);
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
       const original = worker.runCodeModeExecutor;
       const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation(async (...args) => {
@@ -312,14 +284,13 @@ describe("Code Mode guest execution", () => {
         });
       });
       try {
-        let result = resultDetails(
-          await tools[0]!.execute("late", {
-            code: (resume ? "await yield_control(); " : "") + "return await late_effect({});",
-          }),
+        let result = await execute(
+          (resume ? "await yield_control(); " : "") + "return await late_effect({});",
+          "late",
         );
         if (resume) {
           expect(result.status).toBe("waiting");
-          result = resultDetails(await tools[1]!.execute("late-resume", { runId: result.runId }));
+          result = await wait(result, "late-resume");
         }
         expect(target.execute).not.toHaveBeenCalled();
         expect(result, JSON.stringify(result)).toMatchObject({ status: "failed", code: "timeout" });
@@ -340,18 +311,16 @@ describe("Code Mode guest execution", () => {
   ])(
     "bounds cumulative original output across yielded waits: $name",
     async ({ cap, firstText, lastText }) => {
-      const { ctx, tools } = createCodeModeHarness({ codeMode: { maxOutputBytes: cap } });
-      applyCodeModeCatalog({ ...ctx, tools });
-      const exec = expectDefined(tools[0], "exec");
-      const wait = expectDefined(tools[1], "wait");
+      const { run: execute, resume } = createGuestHarness([], {
+        codeMode: { maxOutputBytes: cap },
+      });
       const original = [
         { type: "text", text: firstText },
         { type: "text", text: lastText },
       ];
-      const first = resultDetails(
-        await exec.execute("cumulative", {
-          code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); text(${JSON.stringify(lastText)}); await yield_control(); return true;`,
-        }),
+      const first = await execute(
+        `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); text(${JSON.stringify(lastText)}); await yield_control(); return true;`,
+        "cumulative",
       );
       expect(first.status).toBe("waiting");
       if (Buffer.byteLength(JSON.stringify([original[0]])) > (cap ?? 65536)) {
@@ -359,15 +328,13 @@ describe("Code Mode guest execution", () => {
       } else {
         expect(first.output).toEqual([original[0]]);
       }
-      const empty = resultDetails(await wait.execute("empty-leg", { runId: first.runId }));
-      expect(empty.status).toBe("waiting");
-      expect(empty.output).toEqual([]);
-      const changed = resultDetails(await wait.execute("new-leg", { runId: first.runId }));
+      const empty = await resume(first, "empty-leg");
+      expect(empty).toMatchObject({ status: "waiting", output: [] });
+      const changed = await resume(first, "new-leg");
       expect(changed.status).toBe("waiting");
       expectOriginalCodeModeMarker((changed.output as unknown[])[0], original);
-      const final = resultDetails(await wait.execute("final", { runId: first.runId }));
-      expect(final.status).toBe("completed");
-      expect(final.value).toBe(true);
+      const final = await resume(first, "final");
+      expect(final).toMatchObject({ status: "completed", value: true });
       expectOriginalCodeModeMarker((final.output as unknown[])[0], original);
       for (const frame of [first, empty, changed, final]) {
         expectCodeModeSharedBudget(frame, cap ?? 65536);
