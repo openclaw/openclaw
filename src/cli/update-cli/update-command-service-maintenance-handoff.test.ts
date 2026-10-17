@@ -1,4 +1,3 @@
-// Install the native service fixtures before loading the maintenance owner.
 import "./update-command-service-maintenance.test-support.js";
 import { randomUUID } from "node:crypto";
 import * as fsSync from "node:fs";
@@ -22,6 +21,7 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import {
   maintenanceDefaults,
+  gatewayCommand,
   commandResult,
   writeHandoffMeta,
 } from "./update-command-service-fixtures.test-support.js";
@@ -33,6 +33,37 @@ vi.mock("node:fs", async (importOriginal) => ({
 
 const { mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
+const nativeHost = process.platform === "linux" || process.platform === "darwin";
+const platforms = ["linux", "darwin", "win32"] as const;
+const blockedTree = (pid: number) =>
+  `This command is running inside the gateway process tree (gateway PID ${pid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`;
+function expectNoCalls(...methods: GatewayService[keyof GatewayService][]) {
+  for (const method of methods) {
+    expect(method).not.toHaveBeenCalled();
+  }
+}
+
+async function withHandoff(run: (home: string) => Promise<void>) {
+  return withServiceHome(async (home) => {
+    vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(
+      commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
+    );
+    try {
+      await run(home);
+    } finally {
+      await closeStateDatabaseForTest();
+    }
+  });
+}
+
+function claimLease(root: string, handoffId = "owned-handoff") {
+  const store = createManagedHandoffLeaseStore();
+  const claim = store.acquire(root, handoffId, { kind: "update" });
+  if (claim.kind !== "acquired") {
+    throw new Error("fixture could not acquire its installation lease");
+  }
+  return { store, lease: claim.lease };
+}
 
 function mockHandoffServicePlatform(platform: NodeJS.Platform) {
   const hostPlatform = process.platform;
@@ -49,11 +80,10 @@ function mockHandoffServicePlatform(platform: NodeJS.Platform) {
 }
 
 function handoffService(home: string, overrides: Partial<GatewayService> = {}, pid = process.ppid) {
-  return createMockGatewayService({
+  const service = createMockGatewayService({
     readCommand: async () => ({
-      programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+      ...gatewayCommand(home),
       ...(process.platform === "win32" ? { sourcePath: mocks.taskScriptPath } : {}),
-      environment: { HOME: home },
     }),
     readRuntime: async () => ({
       status: "running",
@@ -63,6 +93,8 @@ function handoffService(home: string, overrides: Partial<GatewayService> = {}, p
     isLoaded: async () => true,
     ...overrides,
   });
+  mocks.service.mockReturnValue(service);
+  return service;
 }
 
 function replaceExecutorIdentity(home: string, root: string, identity: string) {
@@ -77,7 +109,7 @@ function replaceExecutorIdentity(home: string, root: string, identity: string) {
 }
 
 const servingAncestorMaintenanceCases = [
-  ...(["linux", "darwin", "win32"] as const).flatMap(
+  ...platforms.flatMap(
     (platform) =>
       [
         { platform, identity: "current updater", phase: "inspect" },
@@ -122,7 +154,7 @@ const servingAncestorMaintenanceCases = [
   { platform: "linux", identity: "current updater", phase: "prepare", splitRoot: false },
 ] as const;
 
-it.runIf(process.platform === "linux" || process.platform === "darwin").each(
+it.runIf(nativeHost).each(
   servingAncestorMaintenanceCases
     .map((scenario) => Object.assign({ splitRoot: true }, scenario))
     .filter(
@@ -133,7 +165,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
 )(
   "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase $ancestry split=$splitRoot",
   (scenario) =>
-    withServiceHome(async (home) => {
+    withHandoff(async (home) => {
       const { platform, identity, phase, splitRoot } = scenario;
       const authorized = identity === "current updater";
       const unresolved = "ancestry" in scenario && scenario.ancestry === "unavailable ancestry";
@@ -143,9 +175,6 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
       const inherited = external || unresolved;
       const reparented = "membership" in scenario;
       const gatewayPid = external || reparented ? 2 : process.ppid;
-      vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(
-        commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
-      );
       const root = await fs.realpath(process.cwd());
       const packageRoot = splitRoot ? path.join(home, "package-B") : root;
       if (splitRoot) {
@@ -160,18 +189,13 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
         identity === "different run" ? randomUUID() : runId,
         "owned-handoff",
       );
-      const store = createManagedHandoffLeaseStore();
       if (identity !== "missing lease") {
-        const claim = store.acquire(
+        const { store, lease } = claimLease(
           packageRoot,
           identity === "replaced owner" ? "replacement-handoff" : "owned-handoff",
-          { kind: "update" },
         );
-        if (claim.kind !== "acquired") {
-          throw new Error("fixture could not acquire its installation lease");
-        }
         if (identity === "parent lease") {
-          expect(store.bind(claim.lease, process.ppid)).not.toBeNull();
+          expect(store.bind(lease, process.ppid)).not.toBeNull();
         } else if (identity === "stale start identity") {
           replaceExecutorIdentity(home, packageRoot, "stale");
         }
@@ -202,190 +226,147 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
       if (unresolved) {
         ancestryInspection.mockReturnValue({ pids: new Set([process.pid]), complete: false });
       }
-      try {
-        await withEnvAsync(
-          {
-            OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
-            OPENCLAW_UPDATE_RUN_ID:
-              identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
-            [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
-              identity === "missing metadata" ? undefined : metaPath,
-            OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
-            OPENCLAW_SERVICE_KIND: inherited ? "gateway" : undefined,
-            OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
-          },
-          async () => {
-            const service = handoffService(home, {}, gatewayPid);
-            mocks.service.mockReturnValue(service);
-            // Candidate admission inspects before supplying the ledger run context.
-            const updateRun = phase === "inspect" ? undefined : { runId, env: process.env };
-            const { recordPhase } = createUpdateCommandExecutionGuards(
-              { run: updateRun },
-              packageRoot,
+      await withEnvAsync(
+        {
+          OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
+          OPENCLAW_UPDATE_RUN_ID:
+            identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
+          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
+            identity === "missing metadata" ? undefined : metaPath,
+          OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
+          OPENCLAW_SERVICE_KIND: inherited ? "gateway" : undefined,
+          OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
+        },
+        async () => {
+          const service = handoffService(home, {}, gatewayPid);
+          // Candidate admission inspects before supplying the ledger run context.
+          const updateRun = phase === "inspect" ? undefined : { runId, env: process.env };
+          const { recordPhase } = createUpdateCommandExecutionGuards(
+            { run: updateRun },
+            packageRoot,
+          );
+          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+            ...maintenanceDefaults,
+            root,
+            handoffRoot: splitRoot ? packageRoot : undefined,
+            phase,
+            updateRun,
+            recordPhase,
+            handoffFromGateway: async () => false,
+          });
+          expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
+          if (authorized || external) {
+            expect(inspected.blockMessage).toBeUndefined();
+          } else {
+            expect(inspected.blockFailureFacts).toEqual([
+              expect.objectContaining({
+                check: "managed-service-preflight",
+                code: reparented
+                  ? scenario.membership === "inside"
+                    ? "inside-gateway-service"
+                    : "service-membership-unverified"
+                  : unresolved
+                    ? "service-ancestry-unverified"
+                    : "inside-gateway-process-tree",
+              }),
+            ]);
+            expect(inspected.blockMessage).toEqual(
+              reparented
+                ? expect.stringContaining("service")
+                : unresolved
+                  ? expect.stringContaining("Process ancestry could not be fully inspected")
+                  : blockedTree(gatewayPid),
             );
-            const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-              root,
-              handoffRoot: splitRoot ? packageRoot : undefined,
-              updateInstallKind: "package",
-              shouldRestart: true,
-              jsonMode: true,
-              phase,
-              updateRun,
-              recordPhase,
-              handoffFromGateway: async () => false,
-            });
-            expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-            if (authorized || external) {
-              expect(inspected.blockMessage).toBeUndefined();
-            } else {
-              expect(inspected.blockFailureFacts).toEqual([
-                expect.objectContaining({
-                  check: "managed-service-preflight",
-                  code: reparented
-                    ? scenario.membership === "inside"
-                      ? "inside-gateway-service"
-                      : "service-membership-unverified"
-                    : unresolved
-                      ? "service-ancestry-unverified"
-                      : "inside-gateway-process-tree",
-                }),
-              ]);
-              if (reparented) {
-                expect(inspected.blockMessage).toContain("service");
-              } else if (unresolved) {
-                expect(inspected.blockMessage).toContain(
-                  "Process ancestry could not be fully inspected",
-                );
-              } else {
-                expect(inspected.blockMessage).toBe(
-                  `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
-                );
-              }
-            }
-            expect(service.stop).toHaveBeenCalledTimes(
-              (authorized || external) && phase === "prepare" ? 1 : 0,
+          }
+          expect(service.stop).toHaveBeenCalledTimes(
+            (authorized || external) && phase === "prepare" ? 1 : 0,
+          );
+          if ((authorized || external) && phase === "prepare") {
+            expect(service.stop).toHaveBeenCalledWith(
+              expect.objectContaining({
+                updateHandoff: { root: packageRoot, runId },
+              }),
             );
-            if ((authorized || external) && phase === "prepare") {
-              expect(service.stop).toHaveBeenCalledWith(
-                expect.objectContaining({
-                  updateHandoff: { root: packageRoot, runId },
-                }),
-              );
-            }
-            expect(service.start).not.toHaveBeenCalled();
-            expect(service.restart).not.toHaveBeenCalled();
-            expect(service.stage).not.toHaveBeenCalled();
-            expect(service.install).not.toHaveBeenCalled();
-          },
-        );
-      } finally {
-        await closeStateDatabaseForTest();
-      }
+          }
+          expectNoCalls(service.start, service.restart, service.stage, service.install);
+        },
+      );
     }),
 );
 
-it
-  .runIf(process.platform === "linux" || process.platform === "darwin")
-  .each(["linux", "darwin", "win32"] as const)(
+it.runIf(nativeHost).each(["linux", "darwin", "win32"] as const)(
   "rechecks the managed handoff identity immediately before stopping the %s Gateway",
   (platform) =>
-    withServiceHome(async (home) => {
-      vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(
-        commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
-      );
+    withHandoff(async (home) => {
       const root = await fs.realpath(process.cwd());
       const runId = randomUUID();
       createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
       const metaPath = await writeHandoffMeta(home, root, runId, "owned-handoff");
-      const store = createManagedHandoffLeaseStore();
-      const claim = store.acquire(root, "owned-handoff", { kind: "update" });
-      if (claim.kind !== "acquired") {
-        throw new Error("fixture could not acquire its installation lease");
-      }
+      claimLease(root);
       mockHandoffServicePlatform(platform);
       let runtimeReads = 0;
       const stop = vi.fn(async () => undefined);
-      mocks.service.mockReturnValue(
-        handoffService(home, {
-          readRuntime: async () => {
-            runtimeReads += 1;
-            if (runtimeReads === 2) {
-              replaceExecutorIdentity(home, root, "replaced");
-            }
-            return {
-              status: "running",
-              pid: process.ppid,
-              systemd: { managerUid: 2001 },
-            };
-          },
-          stop,
-        }),
+      handoffService(home, {
+        readRuntime: async () => {
+          runtimeReads += 1;
+          if (runtimeReads === 2) {
+            replaceExecutorIdentity(home, root, "replaced");
+          }
+          return {
+            status: "running",
+            pid: process.ppid,
+            systemd: { managerUid: 2001 },
+          };
+        },
+        stop,
+      });
+      await withEnvAsync(
+        {
+          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+        },
+        async () => {
+          const updateRun = { runId, env: process.env };
+          const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
+          await expect(
+            maybeStopManagedServiceBeforeMutableUpdate({
+              ...maintenanceDefaults,
+              root,
+              phase: "prepare",
+              updateRun,
+              recordPhase,
+            }).then(() => undefined),
+          ).rejects.toThrow(blockedTree(process.ppid));
+        },
       );
-      try {
-        await withEnvAsync(
-          {
-            OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-            [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-          },
-          async () => {
-            const updateRun = { runId, env: process.env };
-            const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
-            await expect(
-              maybeStopManagedServiceBeforeMutableUpdate({
-                ...maintenanceDefaults,
-                root,
-                phase: "prepare",
-                updateRun,
-                recordPhase,
-              }).then(() => undefined),
-            ).rejects.toThrow(
-              `This command is running inside the gateway process tree (gateway PID ${process.ppid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
-            );
-          },
-        );
-      } finally {
-        await closeStateDatabaseForTest();
-      }
       expect(runtimeReads).toBe(2);
       expect(stop).not.toHaveBeenCalled();
     }),
 );
 
-it.runIf(process.platform === "linux" || process.platform === "darwin")(
-  "records a native membership refusal discovered at the stop boundary",
-  () =>
-    withServiceHome(async (home) => {
-      const root = process.cwd();
-      mockHandoffServicePlatform("darwin");
-      const service = handoffService(home, {
-        readRuntime: async () => ({ status: "running", pid: 2 }),
-        stop: async () => {
-          throw new ServiceInspectionError("service-membership-unverified");
-        },
-      });
-      mocks.service.mockReturnValue(service);
-      await expect(
-        maybeStopManagedServiceBeforeMutableUpdate({
-          ...maintenanceDefaults,
-          root,
-          phase: "prepare",
-        }),
-      ).rejects.toMatchObject({
-        reason: "managed-service-preflight",
-        failureFacts: [expect.objectContaining({ code: "service-membership-unverified" })],
-      });
-      expect(service.start).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
-    }),
+it.runIf(nativeHost)("records a native membership refusal discovered at the stop boundary", () =>
+  withServiceHome(async (home) => {
+    mockHandoffServicePlatform("darwin");
+    const service = handoffService(home, {
+      readRuntime: async () => ({ status: "running", pid: 2 }),
+      stop: async () => {
+        throw new ServiceInspectionError("service-membership-unverified");
+      },
+    });
+    await expect(
+      maybeStopManagedServiceBeforeMutableUpdate({ ...maintenanceDefaults, phase: "prepare" }),
+    ).rejects.toMatchObject({
+      reason: "managed-service-preflight",
+      failureFacts: [expect.objectContaining({ code: "service-membership-unverified" })],
+    });
+    expectNoCalls(service.start, service.restart);
+  }),
 );
 
-it
-  .runIf(process.platform === "linux" || process.platform === "darwin")
-  .each(["inspect", "prepare"] as const)(
+it.runIf(nativeHost).each(["inspect", "prepare"] as const)(
   "refuses an active systemd unit with no MainPID during %s",
   (phase) =>
     withServiceHome(async (home) => {
-      const root = process.cwd();
       mockHandoffServicePlatform("linux");
       const service = handoffService(home, {
         readRuntime: async () => ({
@@ -399,18 +380,14 @@ it
           },
         }),
       });
-      mocks.service.mockReturnValue(service);
       const outcome = await maybeStopManagedServiceBeforeMutableUpdate({
         ...maintenanceDefaults,
-        root,
         phase,
         handoffFromGateway: async () => false,
       });
       expect(outcome.blockFailureFacts).toEqual([
         expect.objectContaining({ code: "service-membership-unverified" }),
       ]);
-      expect(service.stop).not.toHaveBeenCalled();
-      expect(service.start).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
+      expectNoCalls(service.stop, service.start, service.restart);
     }),
 );

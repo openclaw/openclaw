@@ -15,6 +15,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import { maintenanceDefaults } from "./update-command-service-fixtures.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
@@ -45,17 +46,10 @@ const root = "/synthetic/install";
 let service: GatewayService;
 beforeEach(() => {
   mockSystemAccountHome();
-  for (const key of [
-    "OPENCLAW_HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_SUPERVISOR_MODE",
-    "OPENCLAW_PROFILE",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-  ]) {
-    vi.stubEnv(key, undefined);
+  const suffixes =
+    "HOME STATE_DIR CONFIG_PATH SUPERVISOR_MODE PROFILE SYSTEMD_UNIT LAUNCHD_LABEL WINDOWS_TASK_NAME";
+  for (const suffix of suffixes.split(" ")) {
+    vi.stubEnv(`OPENCLAW_${suffix}`, undefined);
   }
   service = createMockGatewayService();
   boundary.service.mockReturnValue(service);
@@ -68,15 +62,14 @@ afterEach(() => {
 
 function inspectService(assertCurrent = () => {}) {
   return maybeStopManagedServiceBeforeMutableUpdate({
+    ...maintenanceDefaults,
     root,
-    updateInstallKind: "package",
-    shouldRestart: true,
-    jsonMode: true,
     phase: "inspect",
     assertCurrent,
   });
 }
 
+type Outcome = "forced" | "uncertain" | "nested failure";
 function pendingCleanup() {
   const cleanup = createDeferredCore<"forced" | "uncertain">();
   const joining = createDeferredCore();
@@ -87,7 +80,17 @@ function pendingCleanup() {
         once: true,
       });
     },
-    async settle(work: Promise<unknown>, result: "forced" | "uncertain", beforeRelease = () => {}) {
+    async settle(
+      inspection: Promise<unknown>,
+      result: Outcome,
+      failure: Error,
+      beforeRelease = () => {},
+    ) {
+      if (result === "nested failure") {
+        await expect(inspection).rejects.toBe(failure);
+        return failure;
+      }
+      const work = inspection.catch((error: unknown) => error);
       try {
         await Promise.race([
           joining.promise,
@@ -132,17 +135,15 @@ it.each(["forced", "uncertain", "revoked", "nested failure"] as const)(
         throw failure;
       }
     });
-    if (outcome === "nested failure") {
-      await expect(inspection).rejects.toBe(failure);
-    }
-    const work = inspection.catch((error: unknown) => error);
-    const result =
-      outcome === "nested failure"
-        ? await work
-        : await cleanup.settle(work, outcome === "uncertain" ? "uncertain" : "forced", () => {
-            expect(service.stop).not.toHaveBeenCalled();
-            current = outcome !== "revoked";
-          });
+    const result = await cleanup.settle(
+      inspection,
+      outcome === "revoked" ? "forced" : outcome,
+      failure,
+      () => {
+        expect(service.stop).not.toHaveBeenCalled();
+        current = outcome !== "revoked";
+      },
+    );
     expect(hasCommandProcessCleanupError(result)).toBe(
       outcome === "uncertain" || outcome === "nested failure",
     );
@@ -199,18 +200,11 @@ it.each([
     boundary.managedContext.mockResolvedValue(owned ? managed : undefined);
     const inspection = inspectUpdateDatabaseContexts({
       roots: [root],
-      updateInstallKind: "package",
-      shouldRestart: true,
-      jsonMode: true,
+      ...maintenanceDefaults,
       timeoutMs: 1_000,
       managedServiceRootRedirect: null,
     });
-    if (cleanupResult === "nested failure") {
-      await expect(inspection).rejects.toBe(failure);
-    }
-    const work = inspection.catch((error: unknown) => error);
-    const result =
-      cleanupResult === "nested failure" ? await work : await cleanup.settle(work, cleanupResult);
+    const result = await cleanup.settle(inspection, cleanupResult, failure);
     expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult !== "forced");
     if (cleanupResult === "nested failure") {
       expect(result).toBe(failure);

@@ -1,7 +1,7 @@
-// Reuse the maintained native service fixture and the actual Windows recovery owner.
 import "./update-command-service-maintenance.test-support.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -72,7 +72,7 @@ it.each(["ERROR: Access is denied.", "HRESULT 0x80070005"])(
         .mockImplementation(async (args) =>
           args[0] === "/Query"
             ? commandResult("<Task><Settings><Enabled>true</Enabled></Settings></Task>")
-            : { code: 1, stdout: "", stderr: detail },
+            : commandResult("", 1, detail),
         );
       const service = windowsService(home);
       const failure = await maybeStopManagedServiceBeforeMutableUpdate(maintenanceDefaults).catch(
@@ -92,33 +92,34 @@ it.each(["ERROR: Access is denied.", "HRESULT 0x80070005"])(
     }),
 );
 
-it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-reject"] as const)(
+it.each([
+  ["disable", [], true],
+  ["restore", ["/DISABLE"], false],
+  ["compensation", ["/DISABLE", "/ENABLE"], true],
+  ["never", ["/DISABLE", "/ENABLE", "/DISABLE"], false],
+  ["stop-return", ["/DISABLE"], false],
+  ["stop-reject", ["/DISABLE"], false],
+] as const)(
   "retains caller authority when Windows task recovery loses its owner before %s",
-  (lostBefore) =>
+  (lostBefore, mutations, enabled) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("win32");
       const lostDuringStop = lostBefore === "stop-return" || lostBefore === "stop-reject";
       const authorityLost = new Error("Repair continuation no longer owns this task");
       const stopFailure = new Error("Native stop failed after mutation");
       let partialStop: PreManagedServiceStop | undefined;
-      let privateRecovery:
-        | ReturnType<typeof windowsRecovery.createWindowsTaskAutoStartRecovery>
-        | undefined;
-      const ownedListeners = new Map<string, ReturnType<typeof process.listeners>>();
+      let privateRecovery: windowsRecovery.WindowsTaskAutoStartRecovery | undefined;
+      const readListeners = () =>
+        ["SIGINT", "SIGTERM", "SIGBREAK"].map((signal) => process.listeners(signal));
+      let ownedListeners: ReturnType<typeof readListeners> = [];
       const createRecovery = windowsRecovery.createWindowsTaskAutoStartRecovery;
       vi.spyOn(windowsRecovery, "createWindowsTaskAutoStartRecovery").mockImplementation(
         (params) => {
-          const signals = ["SIGINT", "SIGTERM", "SIGBREAK"];
-          const previous = new Map(signals.map((signal) => [signal, process.listeners(signal)]));
+          const before = readListeners();
           privateRecovery = createRecovery(params);
-          for (const signal of signals) {
-            ownedListeners.set(
-              signal,
-              process
-                .listeners(signal)
-                .filter((listener) => !previous.get(signal)?.includes(listener)),
-            );
-          }
+          ownedListeners = readListeners().map((listeners, index) =>
+            listeners.filter((listener) => !before[index]?.includes(listener)),
+          );
           return privateRecovery;
         },
       );
@@ -151,10 +152,8 @@ it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-rej
       try {
         try {
           stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-            root: process.cwd(),
-            updateInstallKind: "package",
+            ...maintenanceDefaults,
             shouldRestart: lostBefore !== "disable",
-            jsonMode: true,
             onStopped: (state) => {
               partialStop = state;
             },
@@ -164,10 +163,10 @@ it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-rej
               }
             },
           });
-          const recovery = stopped.windowsTaskAutoStartRecovery;
-          if (!recovery) {
-            throw new Error("Missing Windows task recovery");
-          }
+          const recovery = expectDefined(
+            stopped.windowsTaskAutoStartRecovery,
+            "Missing Windows task recovery",
+          );
           revokeDuringInspection = lostBefore === "restore";
           await recovery.restore();
           revokeDuringInspection = lostBefore === "compensation";
@@ -175,18 +174,7 @@ it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-rej
         } catch (error) {
           failure = error;
         }
-        expect(task.mutations).toEqual(
-          lostDuringStop
-            ? ["/DISABLE"]
-            : lostBefore === "disable"
-              ? []
-              : lostBefore === "restore"
-                ? ["/DISABLE"]
-                : lostBefore === "compensation"
-                  ? ["/DISABLE", "/ENABLE"]
-                  : ["/DISABLE", "/ENABLE", "/DISABLE"],
-        );
-        expect(task.enabled).toBe(lostBefore === "disable" || lostBefore === "compensation");
+        expect(task).toEqual({ mutations, enabled });
         if (lostDuringStop) {
           expect(stopped).toBeUndefined();
           expect(partialStop?.stopped).toBe(true);
@@ -196,12 +184,13 @@ it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-rej
           if (lostBefore === "stop-reject") {
             expect(errors).toContain(stopFailure);
           }
-          expect([...ownedListeners.values()].flat().length).toBeGreaterThan(0);
-          for (const [signal, listeners] of ownedListeners) {
+          expect(ownedListeners.flat().length).toBeGreaterThan(0);
+          const remaining = readListeners();
+          ownedListeners.forEach((listeners, index) => {
             for (const listener of listeners) {
-              expect(process.listeners(signal)).not.toContain(listener);
+              expect(remaining[index]).not.toContain(listener);
             }
-          }
+          });
           await waitForSignalExitBarriers();
         }
         if (lostBefore === "never") {
@@ -214,7 +203,6 @@ it.each(["disable", "restore", "compensation", "never", "stop-return", "stop-rej
         }
       } finally {
         await stopped?.windowsTaskAutoStartRecovery?.complete();
-        // A failing baseline must still retire the real private token after assertions.
         if (!stopped) {
           await privateRecovery?.complete(false);
         }
@@ -231,7 +219,6 @@ it.each(["before-disable", "after-disable"] as const)(
         runId: randomUUID(),
         env: { HOME: home },
       };
-      const opts: UpdateCommandOptions = { run };
       const task = mutableTask(
         () => {
           if (interruption === "before-disable") {
@@ -247,33 +234,27 @@ it.each(["before-disable", "after-disable"] as const)(
         },
       );
       const service = windowsService(home);
-      let failure: unknown;
-      try {
-        await withUpdateCommandExecutor(run.runId, async (executor) => {
-          const guards = createUpdateCommandExecutionGuards(opts, root);
-          guards.admitExecutor(await executor.enter(root));
-          const platform = mockProcessPlatform("win32");
-          try {
-            await maybeStopManagedServiceBeforeMutableUpdate({
-              root,
-              updateInstallKind: "package",
-              shouldRestart: false,
-              jsonMode: true,
-              updateRun: run,
-              recordPhase: guards.recordPhase,
-              assertCurrent: guards.assertCurrent,
-            });
-          } finally {
-            platform.mockRestore();
-          }
-        });
-      } catch (error) {
-        failure = error;
-      }
-      expect(task.mutations).toEqual(
-        interruption === "before-disable" ? [] : ["/DISABLE", "/ENABLE"],
-      );
-      expect(task.enabled).toBe(true);
+      const failure = await withUpdateCommandExecutor(run.runId, async (executor) => {
+        const guards = createUpdateCommandExecutionGuards({ run }, root);
+        guards.admitExecutor(await executor.enter(root));
+        const platform = mockProcessPlatform("win32");
+        try {
+          await maybeStopManagedServiceBeforeMutableUpdate({
+            ...maintenanceDefaults,
+            root,
+            shouldRestart: false,
+            updateRun: run,
+            recordPhase: guards.recordPhase,
+            assertCurrent: guards.assertCurrent,
+          });
+        } finally {
+          platform.mockRestore();
+        }
+      }).catch((error: unknown) => error);
+      expect(task).toEqual({
+        mutations: interruption === "before-disable" ? [] : ["/DISABLE", "/ENABLE"],
+        enabled: true,
+      });
       expect(service.stop).not.toHaveBeenCalled();
       expect(String(failure)).toMatch(
         interruption === "before-disable"

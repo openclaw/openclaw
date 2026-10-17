@@ -1,4 +1,3 @@
-// Install service observations before loading the real native stop owner.
 import "./update-command-service-maintenance.test-support.js";
 import "./update-command-service-maintenance-native.test-support.js";
 import { spawn } from "node:child_process";
@@ -47,6 +46,15 @@ const { mocks, withServiceHome } =
 const { runNativeMaintenanceUpdate } =
   await import("./update-command-service-maintenance-native.test-support.js");
 
+function mutateHandoff(sql: string, value: string, root: string) {
+  const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+  try {
+    db.prepare(sql).run(value, root);
+  } finally {
+    db.close();
+  }
+}
+
 it
   .runIf(process.platform === "darwin" || process.platform === "linux")
   .each([
@@ -78,21 +86,15 @@ it
       scenario === "held service phase acknowledgement" ||
       scenario === "revoked after service phase acknowledgement";
     const productionCaller =
-      scenario === "activation helper" ||
       retainedService ||
       heldServicePhase ||
-      scenario === "revoked at native stop";
+      ["activation helper", "revoked at native stop"].includes(scenario);
     const label = "ai.openclaw.native-stop-test";
-    // Each case needs its own process: successful bootout must prove actual exit,
-    // while refusal cases must leave that same serving identity alive.
-    // The child imports no OpenClaw code and never opens a handoff database.
+    // Bootout must kill a real process; refused authority must leave it serving.
     const child = spawn(
       process.execPath,
       ["-e", "process.stdout.write('ready\\n'); process.stdin.resume()"],
-      {
-        env: { HOME: home },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
+      { env: { HOME: home }, stdio: ["pipe", "pipe", "pipe"] },
     );
     const closed = once(child, "close");
     const output = new PassThrough();
@@ -107,35 +109,30 @@ it
       if (claim.kind !== "acquired") {
         throw new Error("fixture could not acquire its handoff lease");
       }
+      const revokeAt = (point: typeof scenario) => {
+        if (scenario === point) {
+          expect(store.release(claim.lease)).toBe(true);
+        }
+      };
       createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
       const metaPath = await writeHandoffMeta(home, callerRoot, runId, claim.lease.owner);
-      if (scenario === "unrecorded helper") {
-        expect(store.release(claim.lease)).toBe(true);
-      }
+      revokeAt("unrecorded helper");
       mockProcessPlatform("darwin");
       if (productionCaller) {
-        // Model the completed helper→executor handoff. Admission still checks
-        // both live identities and the real lease before creating its fence.
+        // Admission still checks both live identities and the lease after handoff.
         const helperStart = pidAlive.getFileLockProcessStartTime(process.ppid);
         expect(helperStart).not.toBeNull();
-        const leaseDb = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-        try {
-          leaseDb
-            .prepare("UPDATE managed_update_handoffs SET payload_json=? WHERE install_root=?")
-            .run(
-              JSON.stringify({
-                version: 2,
-                helper: { pid: process.ppid, startIdentity: String(helperStart) },
-                executor: claim.lease.executor,
-                action: { kind: "update" },
-              }),
-              callerRoot,
-            );
-        } finally {
-          leaseDb.close();
-        }
+        mutateHandoff(
+          "UPDATE managed_update_handoffs SET payload_json=? WHERE install_root=?",
+          JSON.stringify({
+            version: 2,
+            helper: { pid: process.ppid, startIdentity: String(helperStart) },
+            executor: claim.lease.executor,
+            action: { kind: "update" },
+          }),
+          callerRoot,
+        );
       }
-      // Keep effective command parsing real; adapt only the native plist transport.
       vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
         if (command !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
           throw new Error(`Unexpected fixture subprocess: ${command}`);
@@ -192,7 +189,6 @@ it
         pids: callerPids,
         complete: true,
       });
-      // The native manager and port are the external boundaries; stopLaunchAgent stays real.
       const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcessesSync").mockReturnValue([]);
       vi.spyOn(ports, "inspectPortUsage").mockResolvedValue({
         port: 43210,
@@ -201,9 +197,7 @@ it
         hints: [],
       });
       vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockImplementation(async () => {
-        if (scenario === "revoked before port cleanup") {
-          expect(store.release(claim.lease)).toBe(true);
-        }
+        revokeAt("revoked before port cleanup");
         return {
           env: {},
           port: scenario === "revoked before port cleanup" ? 43210 : null,
@@ -223,17 +217,15 @@ it
         }
         if (args[0] === "print") {
           inspections += 1;
-          if (inspections === 2 && scenario === "revoked after inspection with disable") {
-            expect(store.release(claim.lease)).toBe(true);
+          if (inspections === 2) {
+            revokeAt("revoked after inspection with disable");
           }
           return loaded
             ? nativeResult(`${args[1]} = {\n\tstate = running\n\tpid = ${gatewayPid}\n}`)
             : nativeResult("", 113, "Could not find service");
         }
         if (args[0] === "disable") {
-          if (scenario === "revoked after disable") {
-            expect(store.release(claim.lease)).toBe(true);
-          }
+          revokeAt("revoked after disable");
           return nativeResult();
         }
         expect(args[0]).toBe("bootout");
@@ -265,22 +257,17 @@ it
           XPC_SERVICE_NAME: undefined,
         },
         async () => {
-          // Use the real adapter: its nested scope must inherit (not manufacture) update ownership.
           const { resolveGatewayService } =
             await vi.importActual<typeof import("../../daemon/service.js")>(
               "../../daemon/service.js",
             );
           const service = resolveGatewayService();
-          const revokeExecutor = () => {
-            const leaseDb = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-            try {
-              leaseDb
-                .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
-                .run("revoked-native-stop-owner", root);
-            } finally {
-              leaseDb.close();
-            }
-          };
+          const revokeExecutor = () =>
+            mutateHandoff(
+              "UPDATE managed_update_handoffs SET owner=? WHERE install_root=?",
+              "revoked-native-stop-owner",
+              root,
+            );
           const receiptCommitted = createDeferredCore();
           const releaseReceipt = createDeferredCore();
           const stopEntered = createDeferredCore();
@@ -318,7 +305,7 @@ it
                   if (args[1] === "activating") {
                     activatingReceipts += 1;
                     if (activatingReceipts === 1) {
-                      // Execution's earlier phase is migrated; observe only service preparation.
+                      // Observe service preparation, not execution's earlier phase.
                       observingServiceWrite = true;
                     } else if (activatingReceipts === 2) {
                       receiptCommitted.resolve();
@@ -333,7 +320,6 @@ it
             observingServiceWrite = false;
             stopEntered.resolve();
             if (scenario === "revoked at native stop") {
-              // Revoke after caller inspection, immediately before the real guarded adapter.
               revokeExecutor();
             }
             await nativeStop(args);
@@ -361,9 +347,7 @@ it
                     withGatewayServiceUpdateAuthority(
                       assertCurrent,
                       () => stopLaunchAgent(nativeArgs),
-                      {
-                        originalRoot: root,
-                      },
+                      { originalRoot: root },
                     ),
                   );
           const authorized =
@@ -378,13 +362,9 @@ it
                 stopEntered.promise.then(() => "native-stop"),
                 pending.then(() => "command-completed"),
               ]);
-              // The baseline reaches native stop before the service-owned receipt.
-              expect(hostWrites).toEqual([]);
-              expect(reached).toBe("service-receipt");
-              expect(activatingReceipts).toBe(2);
+              expect([hostWrites, reached, activatingReceipts]).toEqual([[], "service-receipt", 2]);
               expect(stopCall).not.toHaveBeenCalled();
-              expect(loaded).toBe(true);
-              expect(pidAlive.isPidAlive(gatewayPid)).toBe(true);
+              expect([loaded, pidAlive.isPidAlive(gatewayPid)]).toEqual([true, true]);
               expect(await getUpdateRunAsync(runId, { env: effectiveEnv })).toMatchObject({
                 runId,
                 phase: "activating",
@@ -424,14 +404,11 @@ it
                   ? [["disable", target]]
                   : [],
             );
-            expect(loaded).toBe(!bootedOut);
-            expect(pidAlive.isPidAlive(gatewayPid)).toBe(!bootedOut);
-            expect(atBootout).toEqual(
-              bootedOut ? { pid: gatewayPid, reason: "update.run" } : undefined,
-            );
-            expect(intent()).toEqual(
-              bootedOut ? { pid: gatewayPid, reason: "update.run" } : undefined,
-            );
+            const expectedIntent = bootedOut
+              ? { pid: gatewayPid, reason: "update.run" }
+              : undefined;
+            expect([loaded, pidAlive.isPidAlive(gatewayPid)]).toEqual([!bootedOut, !bootedOut]);
+            expect([atBootout, intent()]).toEqual([expectedIntent, expectedIntent]);
             expect(cleanup).not.toHaveBeenCalled();
           } finally {
             releaseReceipt.resolve();
