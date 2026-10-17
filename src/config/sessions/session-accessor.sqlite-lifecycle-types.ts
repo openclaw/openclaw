@@ -319,7 +319,10 @@ export type SqliteSessionReclamationResult =
         committedEntryIndices: number[];
       };
     }
-  | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }
+  | {
+      kind: "entry";
+      value: DeleteSessionEntryLifecycleResult & { transcriptInventoryUnchanged?: true };
+    }
   | {
       kind: "lifecycle-artifacts";
       value: {

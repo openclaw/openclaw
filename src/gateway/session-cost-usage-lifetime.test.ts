@@ -4,7 +4,9 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-writable.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
@@ -166,7 +168,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
   });
 });
 
-it("coalesces usage, flushes exact reads, and recovers deferred appends after restart", async ({
+it("coalesces usage through alias cleanup, flushes exact reads, and recovers deferred appends after restart", async ({
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -204,6 +206,9 @@ it("coalesces usage, flushes exact reads, and recovers deferred appends after re
         touchSessionEntry: false,
       });
     await append("assistant", 10);
+    const alias = { ...target, sessionKey: "agent:main:cron:usage:run:completed" };
+    replaceSessionEntrySync(alias, { sessionId: target.sessionId, updatedAt: timestamp });
+    const expectedAlias = await readSessionEntryInWorker(alias);
     await aggregation.refreshCostUsageCacheForAgent({ config, agentId: target.agentId });
     const roster = await agentList.listGatewayAgentsBasic(config);
     const listAgents = vi
@@ -266,6 +271,15 @@ it("coalesces usage, flushes exact reads, and recovers deferred appends after re
       expect(refresh).not.toHaveBeenCalled();
 
       await append("assistant", 20);
+      await expect(
+        deleteSessionEntryLifecycle({
+          ...alias,
+          storePath: resolveSessionStorePathForScope(alias, config),
+          target: { canonicalKey: alias.sessionKey, storeKeys: [alias.sessionKey] },
+          expectedEntry: expectedAlias,
+          archiveTranscript: false,
+        }),
+      ).resolves.toMatchObject({ deleted: true });
       await vi.advanceTimersByTimeAsync(50);
       await append("assistant", 30);
       expect(refresh).not.toHaveBeenCalled();
@@ -308,6 +322,26 @@ it("coalesces usage, flushes exact reads, and recovers deferred appends after re
           totals: { totalTokens: 150 },
           cacheStatus: { status: "fresh" },
         });
+        await expect(
+          deleteSessionEntryLifecycle({
+            ...target,
+            storePath: resolveSessionStorePathForScope(target, config),
+            target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+            expectedEntry: await readSessionEntryInWorker(target),
+            archiveTranscript: false,
+            deleteTranscriptWithoutArchive: true,
+          }),
+        ).resolves.toMatchObject({ deleted: true });
+        expect(
+          (
+            await loadCostUsageSummaryCached({
+              config,
+              agentId: target.agentId,
+              startMs: timestamp - 1,
+              endMs: timestamp + 1,
+            })
+          ).totals.totalTokens,
+        ).toBe(0);
       } finally {
         offUsage();
         await restarted.stop();

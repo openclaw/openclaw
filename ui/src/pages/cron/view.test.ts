@@ -1,5 +1,6 @@
 // Control UI tests cover the Automations (cron) list pane and select controls.
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { loadMarkdownHighlighter } from "../../components/markdown-code-blocks.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -12,6 +13,8 @@ import {
   selectSegmented,
   renderCronView as renderView,
 } from "./view.test-support.ts";
+
+beforeAll(loadMarkdownHighlighter);
 
 describe("cron view list pane", () => {
   it("combines status filters and run history in one tab row", () => {

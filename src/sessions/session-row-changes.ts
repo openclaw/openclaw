@@ -58,7 +58,7 @@ export type SessionRowFacts =
       actorVersion?: { epoch: string; sequence: number };
     }
   | { kind: "category"; sessionId: string; category: string | null }
-  | { kind: "removed" };
+  | { kind: "removed"; transcriptInventoryUnchanged?: true };
 
 export type SessionRowChange =
   | {

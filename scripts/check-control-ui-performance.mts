@@ -56,8 +56,8 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 29,
   newBootJsRequests: 24,
-  // Measured 1,566,022 / 1,119,513 B; retain under 1% headroom.
-  chatBootJsGzipBytes: 1_580_000,
+  // Lazy highlighting measured 1,541,363 / 1,118,543 B; retain under 1% headroom.
+  chatBootJsGzipBytes: 1_550_000,
   newBootJsGzipBytes: 1_130_000,
   startupCssRequests: 1,
   startupJsGzipBytes: 339_000,

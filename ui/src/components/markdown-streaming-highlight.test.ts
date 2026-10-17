@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { loadMarkdownHighlighter } from "./markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+
+beforeAll(loadMarkdownHighlighter);
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
