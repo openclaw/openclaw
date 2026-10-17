@@ -46,13 +46,12 @@ const dirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const cfg = { agents: { entries: { main: {} } } };
-const contains = expect.objectContaining;
 const result = (response: Awaited<ReturnType<typeof invoke>>, ...args: unknown[]) =>
   expect(response).toHaveBeenCalledWith(...args);
 const calls = (response: Awaited<ReturnType<typeof invoke>>, ...args: unknown[]) =>
   expect(response.mock.calls).toEqual([args]);
-const ok = (payload: object) => [true, contains(payload), undefined];
-const refused = (error: object) => [false, undefined, contains(error)];
+const ok = (payload: object) => [true, expect.objectContaining(payload), undefined];
+const refused = (error: object) => [false, undefined, expect.objectContaining(error)];
 let client: GatewayClient;
 let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
@@ -187,7 +186,7 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
       sessionGoalHandlers,
       "sessions.goal.update",
       request,
-      ok({ goal: contains({ objective: "After" }) }),
+      ok({ goal: expect.objectContaining({ objective: "After" }) }),
     );
     const replay = await invoke(sessionGoalHandlers, "sessions.goal.update", request);
     result(replay, true, { ...(first.mock.calls[0]![1] as object), replayed: true }, undefined);
@@ -218,12 +217,19 @@ it("returns the unbound memory Goal receipt on retry and serves suggestion mutat
         }),
       }),
     ).toBeUndefined();
-    result(added, true, contains({ suggestion: contains({ text: "Check this" }) }));
+    result(
+      added,
+      true,
+      expect.objectContaining({ suggestion: expect.objectContaining({ text: "Check this" }) }),
+    );
     const suggestion = (added.mock.calls[0]![1] as { suggestion: { id: string } }).suggestion;
-    await suggest("list", {}, [true, contains({ suggestions: [contains({ id: suggestion.id })] })]);
+    await suggest("list", {}, [
+      true,
+      expect.objectContaining({ suggestions: [expect.objectContaining({ id: suggestion.id })] }),
+    ]);
     await suggest("resolve", { id: suggestion.id, resolution: "dismiss" }, [
       true,
-      contains({ suggestion: contains({ state: "dismissed" }) }),
+      expect.objectContaining({ suggestion: expect.objectContaining({ state: "dismissed" }) }),
     ]);
     expect(host.queries).toEqual([]);
   } finally {
@@ -298,7 +304,7 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
       resume.resolve();
     }
     const rejected = await pending;
-    result(rejected, false, undefined, contains({ code: "UNAVAILABLE" }));
+    result(rejected, false, undefined, expect.objectContaining({ code: "UNAVAILABLE" }));
     expect(loadSessionEntry(destination)?.label).toBe("After");
   } finally {
     resume.resolve();
@@ -316,24 +322,31 @@ it("attaches unbound memory skill pins for the next turn and refuses a detached 
     content: "---\nname: actor-skill\ndescription: Synthetic skill\n---\n# Actor skill\n",
     expectedRevision: null,
   });
-  calls(saved, true, contains({ entry: contains({ skillId: expect.any(String) }) }), undefined);
+  calls(
+    saved,
+    true,
+    expect.objectContaining({ entry: expect.objectContaining({ skillId: expect.any(String) }) }),
+    undefined,
+  );
   const entry = (saved.mock.calls[0]![1] as { entry: { skillId: string; revision: string } }).entry;
   const skills = requests(skillsLibraryHandlers, "skills.library", { sessionKey });
   const selection = { skillId: entry.skillId, revision: entry.revision };
   await skills(
     "activate",
     { skillId: entry.skillId, action: "attach" },
-    ok({ sessionActivation: "next-turn", selections: [contains(selection)] }),
+    ok({ sessionActivation: "next-turn", selections: [expect.objectContaining(selection)] }),
   );
   await skills(
     "list",
     {},
     ok({
-      session: contains({ selections: [contains({ skillId: entry.skillId })] }),
+      session: expect.objectContaining({
+        selections: [expect.objectContaining({ skillId: entry.skillId })],
+      }),
     }),
   );
   const detached = await skills("activate", { skillId: entry.skillId, action: "detach" });
-  calls(detached, true, contains({ selections: [] }), undefined);
+  calls(detached, true, expect.objectContaining({ selections: [] }), undefined);
   await skills("read", selection, refused({ details: { code: "SKILL_LIBRARY_FORBIDDEN" } }));
 });
 
@@ -387,13 +400,18 @@ it("restores a refused unbound memory task suggestion and retains accepted chat 
       sessionKey,
       agentId: "main",
     });
-    calls(created, true, contains({ taskId: expect.any(String) }), undefined);
+    calls(created, true, expect.objectContaining({ taskId: expect.any(String) }), undefined);
     const taskId = (created.mock.calls[0]![1] as { taskId: string }).taskId;
     const acceptance = { taskId, mode: "session" };
     const rejected = await tasks("accept", acceptance);
-    calls(rejected, false, undefined, contains({ message: "delivery refused before admission" }));
+    calls(
+      rejected,
+      false,
+      undefined,
+      expect.objectContaining({ message: "delivery refused before admission" }),
+    );
     const restored = await tasks("list", { sessionKey });
-    calls(restored, true, { suggestions: [contains({ id: taskId })] }, undefined);
+    calls(restored, true, { suggestions: [expect.objectContaining({ id: taskId })] }, undefined);
     expect(read(sessionKey)?.sessionId).toBe(sessionId);
     expect(deletion).not.toHaveBeenCalled();
     refuse = false;

@@ -50,7 +50,7 @@ function storeFixture(state: OpenClawTestState) {
       openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope(key)))),
     archives: () =>
       fs.readdirSync(state.sessionsDir()).filter((name) => name.includes(".deleted.")),
-    seed(key: string, entry: SessionEntry, content?: string) {
+    seed: (key: string, entry: SessionEntry, content?: string) => {
       replaceSessionEntrySync(scope(key), entry);
       if (content !== undefined) {
         replaceTranscriptEventsSync({ ...scope(key), sessionId: entry.sessionId }, [
