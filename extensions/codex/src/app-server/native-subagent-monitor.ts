@@ -250,7 +250,7 @@ class Monitor {
         ) {
           throw new Error("Native submission parent generation is no longer current.");
         }
-        state.submissionStore?.assertCurrent();
+        // The mutation owner compares its binding row; retain only parent custody here.
       },
       parentOwner: (state, turnId) => this.resolveParentOwner(state, turnId),
       client: this.client,
@@ -303,7 +303,7 @@ class Monitor {
         ) {
           throw new Error("Native assignment parent is no longer current.");
         }
-        state.assignmentStore?.assertCurrent();
+        // The mutation owner compares its binding row; retain only parent custody here.
       },
       isCurrent: (state) => this.isCurrentParent(state),
       readHistory: (assignment) =>
@@ -528,6 +528,7 @@ class Monitor {
     run: (cancel: () => Promise<NativeDescendantCancellationResult>) => Promise<T>,
   ): Promise<T> {
     params.assertCurrent();
+    params.assertBindingCurrent?.();
     const parent = this.parentStates.get(params.parentThreadId);
     if (!parent) {
       return run(async () => ({ killed: 0, cancelledRequesters: [] }));
@@ -568,7 +569,7 @@ class Monitor {
       throw new Error("Codex descendant cancellation requester generation changed");
     }
     const states = [...this.parentStates.values()].filter(matches);
-    const assertCurrent = () => {
+    const assertCustodyCurrent = () => {
       params.assertCurrent();
       if (
         this.disposed ||
@@ -581,6 +582,10 @@ class Monitor {
       ) {
         throw new Error("Codex descendant cancellation reservation changed");
       }
+    };
+    const assertCurrent = () => {
+      assertCustodyCurrent();
+      params.assertBindingCurrent?.();
       for (const state of states) {
         state.assignmentStore?.assertCurrent();
       }
@@ -682,8 +687,8 @@ class Monitor {
             let turnId = child.nativeTurnId;
             const requesterTurnRunId = child.requesterTurnRunId;
             const requestCustody = child.requestCustody;
-            const assertChild = () => {
-              assertCurrent();
+            const assertChildCustody = () => {
+              assertCustodyCurrent();
               if (
                 this.childStates.get(child.runId) !== child ||
                 this.currentChild(child.childThreadId) !== child ||
@@ -697,6 +702,10 @@ class Monitor {
               ) {
                 throw new Error("Codex descendant assignment changed before cancellation");
               }
+            };
+            const assertChild = () => {
+              assertCurrent();
+              assertChildCustody();
             };
             assertChild();
             if (!child.terminal) {
@@ -756,9 +765,9 @@ class Monitor {
               child.cancellationRequested && child.pendingCompletion?.status === "cancelled";
             if (cancelled && this.childStates.get(child.runId) === child) {
               assertChild();
-              await this.submissions.settleCancelled(state, child, assertChild);
+              await this.submissions.settleCancelled(state, child, assertChildCustody);
               assertChild();
-              await this.assignments.settleCancelled(state, child, assertChild);
+              await this.assignments.settleCancelled(state, child, assertChildCustody);
               assertChild();
               this.unregisterChild(child);
             }

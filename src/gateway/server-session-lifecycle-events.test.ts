@@ -259,7 +259,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
         text: "Research",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+      {
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:main:main"],
+        prepareSessionProjection: expect.any(Function),
+      },
     );
   });
 
@@ -324,7 +328,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
         activeRunIds: ["run-before-finalize"],
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+      {
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:ops:global", "global"],
+        prepareSessionProjection: expect.any(Function),
+      },
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     if (agentId) {
@@ -381,6 +389,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
       {
         agentId: "ops",
         dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:ops:global"],
         sessionKeys: ["agent:ops:global"],
       },
     );

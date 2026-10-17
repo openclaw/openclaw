@@ -1,8 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
+import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import {
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
 } from "./session-cost-usage-partitions.js";
@@ -10,6 +16,59 @@ import {
 function utf8Json(value: string) {
   return new TextEncoder().encode(value);
 }
+
+it("rebuilds retired usage partitions even when the transcript is unchanged", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-retired-partitions";
+    const sessionFile = path.join(state.sessionsDir(agentId), "session.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    const transcript = `${JSON.stringify({
+      type: "message",
+      id: "retained",
+      parentId: null,
+      timestamp: "2026-09-18T00:00:00Z",
+      message: {
+        role: "assistant",
+        provider: "test",
+        model: "test",
+        usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+      },
+    })}\n`;
+    await fs.writeFile(sessionFile, transcript);
+    const config = {};
+    const refresh = () =>
+      refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+    await refresh();
+    const row = readSessionCostUsageRollupRows(agentId)[0]!;
+    const envelope: unknown = JSON.parse(row.valueJson);
+    if (!isRecord(envelope) || !isRecord(envelope.projection)) {
+      throw new Error("Expected a persisted partition checkpoint");
+    }
+    envelope.projection.version = 2;
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    db.prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?").run(
+      JSON.stringify(envelope),
+      "session-cost-usage-rollup-v3",
+      row.key,
+    );
+    db.prepare("UPDATE cache_entries SET scope = ?, key = ? WHERE scope = ?").run(
+      LEGACY_USAGE_COST_PARTITION_SCOPE,
+      [row.key, "2026-09-01"].join("\0"),
+      USAGE_COST_PARTITION_SCOPE,
+    );
+
+    await refresh();
+    expect(
+      db
+        .prepare("SELECT count(*) AS count FROM cache_entries WHERE scope = ?")
+        .get(USAGE_COST_PARTITION_SCOPE),
+    ).toEqual({ count: 1 });
+    expect(JSON.parse(readSessionCostUsageRollupRows(agentId)[0]!.valueJson)).toMatchObject({
+      projection: { version: 3 },
+    });
+    expect(await fs.readFile(sessionFile, "utf8")).toBe(transcript);
+  });
+});
 
 it("retires selected months across batches atomically while retaining other partitions", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -65,7 +124,7 @@ it("retires selected months across batches atomically while retaining other part
       // The last month fails after the first deletion batch has already run.
       db.exec(`CREATE TRIGGER refuse_late_month_delete BEFORE DELETE ON cache_entries
       WHEN OLD.scope = '${USAGE_COST_PARTITION_SCOPE}'
-        AND OLD.key = 'session.jsonl' || char(0) || '${removedDates[100]}'
+        AND OLD.key = '"session.jsonl":${removedDates[100]}'
       BEGIN SELECT RAISE(ABORT, 'late month delete refused'); END;`);
       await expect(owner.writeRollup(update)).rejects.toThrow("late month delete refused");
       expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(before);

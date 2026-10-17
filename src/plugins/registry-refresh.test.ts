@@ -241,23 +241,30 @@ describe("plugin registry refresh config ownership", () => {
     );
   });
 
-  it("rechecks authority after the runtime cache owner loads", async () => {
-    const refusal = new Error("owner revoked while loading runtime cache");
-    let current = true;
-    const warn = vi.fn();
-    const invalidation = invalidatePluginRuntimeDiscoveryAfterConfigMutation({
-      logger: { warn },
-      assertCurrent: () => {
-        if (!current) {
-          throw refusal;
-        }
-      },
-    });
-    current = false;
-    await expect(invalidation).rejects.toBe(refusal);
-    expect(runtimeCache.clear).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["native", "awaited"] as const)(
+    "rechecks %s authority after the runtime cache owner loads",
+    async (kind) => {
+      const refusal = new Error("owner revoked while loading runtime cache");
+      let current = true;
+      const warn = vi.fn();
+      const invalidation = invalidatePluginRuntimeDiscoveryAfterConfigMutation({
+        logger: { warn },
+        assertCurrent: () => {
+          if (!current) {
+            if (kind === "awaited") {
+              return Promise.reject(refusal);
+            }
+            throw refusal;
+          }
+          return undefined;
+        },
+      });
+      current = false;
+      await expect(invalidation).rejects.toBe(refusal);
+      expect(runtimeCache.clear).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { reason: "source-changed", envSource: "process" },

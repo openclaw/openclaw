@@ -86,6 +86,21 @@ function recordDiagnosticEvent(
         labels,
         evt.bytes,
       );
+      if (evt.sessionEvent) {
+        const sessionLabels = { event: evt.event, ...evt.sessionEvent };
+        store.counter(
+          "openclaw_gateway_ws_session_event_frames_total",
+          "Outbound session event frames by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.count,
+        );
+        store.counter(
+          "openclaw_gateway_ws_session_event_bytes_total",
+          "Encoded outbound session event bytes by reason and exact message subscription per socket.",
+          sessionLabels,
+          evt.bytes,
+        );
+      }
       return;
     }
     case "gateway.ws.connections":
@@ -107,6 +122,7 @@ function recordDiagnosticEvent(
     case "secret.egress":
     case "tool.catalog":
     case "gateway.rpc":
+    case "sessions.list.baseline.retired":
     case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "gateway.event_loop.sample":

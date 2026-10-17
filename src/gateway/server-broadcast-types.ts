@@ -56,6 +56,8 @@ export type GatewayBroadcastOpts = {
   excludeClientCapability?: GatewayClientCap;
   /** Canonical subscription keys for session-scoped delivery. */
   sessionKeys?: readonly string[];
+  /** Producer-resolved exact subscription keys for traffic attribution; never changes recipients. */
+  sessionEventSubscriptionKeys?: readonly string[];
   /** Prepared facts remain valid only during this synchronous publication. */
   prepareSessionProjection?: PrepareSessionEventProjection;
   /** Target recipients were selected from subscriptions at ingress. */

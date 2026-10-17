@@ -192,6 +192,23 @@ function ModelList(props: { label: string; more?: boolean; children: JSX.Element
 export function ChatModelPicker(params: ChatModelPickerParams) {
   let summary: HTMLElement;
   let searchInput: HTMLInputElement | undefined;
+  let details: HTMLDetailsElement | undefined;
+  let pendingSearchFocus: Element | null | undefined;
+  const focusSearch = () => {
+    if (pendingSearchFocus === undefined || !details) {
+      return;
+    }
+    if (
+      !details.isConnected ||
+      !details.open ||
+      details.ownerDocument.activeElement !== pendingSearchFocus
+    ) {
+      pendingSearchFocus = undefined;
+    } else if (searchInput?.isConnected) {
+      pendingSearchFocus = undefined;
+      searchInput.focus({ preventScroll: true });
+    }
+  };
   // Retain choices after first use so provider expansion survives dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
   const pickerOverlay = createChatPickerOverlay((target) => {
@@ -200,20 +217,16 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     }
     params.onOpenChange?.(target.open);
     if (!target.open) {
+      pendingSearchFocus = undefined;
       params.accountSection?.onClose();
       resetModelSearch(target);
       return;
     }
     void params.onOpen?.();
-    const active = target.ownerDocument.activeElement;
-    requestAnimationFrame(() => {
-      if (target.isConnected && target.open && target.ownerDocument.activeElement === active) {
-        searchInput?.focus({ preventScroll: true });
-      }
-    });
+    pendingSearchFocus = target.ownerDocument.activeElement;
+    requestAnimationFrame(focusSearch);
   });
   const state = createMemo(() => prepareChatModelPicker(params));
-  let details: HTMLDetailsElement | undefined;
   const closeModelPickerAfterSelection = (event: MouseEvent) => {
     // Option buttons live inside the picker overlay; its summary lives outside it.
     if (event.currentTarget instanceof Element) {
@@ -237,6 +250,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     () => {
       if (details) {
         syncChatModelSearch(details);
+        focusSearch();
       }
     },
   );

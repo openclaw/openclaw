@@ -156,11 +156,11 @@ if (!isMainThread) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
         statement[method] = function(...args) {
-          if (args.includes("session-cost-usage-projection-v1")) {
+          if (args.includes("session-cost-usage-projection-v2")) {
             record({ kind: "partitions" });
           }
           const rollup = args.includes("session-cost-usage-rollup-v3");
-          if (!rollup && !args.includes("session-cost-usage-projection-v1")) {
+          if (!rollup && !args.includes("session-cost-usage-projection-v2")) {
             return Reflect.apply(original, this, args);
           }
           if (rollup) record({ kind: "cache" });

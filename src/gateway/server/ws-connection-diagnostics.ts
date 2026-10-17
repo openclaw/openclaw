@@ -8,6 +8,7 @@ import {
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
 } from "../../infra/diagnostic-events.js";
+import type { GatewayWsSessionEventAttribution } from "../../infra/diagnostic-rpc-types.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { GATEWAY_EVENTS } from "../events.js";
@@ -84,7 +85,11 @@ const gatewayEventNames = new Set(GATEWAY_EVENTS);
 type EventTraffic = Extract<DiagnosticEventInput, { type: "gateway.ws.event" }>;
 let pendingEventTraffic: Map<string, EventTraffic> | undefined;
 
-export function recordGatewayWsEvent(event: string, bytes: number): void {
+export function recordGatewayWsEvent(
+  event: string,
+  bytes: number,
+  sessionEvent?: GatewayWsSessionEventAttribution,
+): void {
   if (
     !areDiagnosticsEnabledForProcess() ||
     !hasInternalDiagnosticEventInterest("gateway.ws.event", true)
@@ -106,11 +111,18 @@ export function recordGatewayWsEvent(event: string, bytes: number): void {
       }).unref(),
     );
   }
-  const observation = pendingEventTraffic.get(name);
+  const key = sessionEvent ? `${name}:${sessionEvent.reason}:${sessionEvent.delivery}` : name;
+  const observation = pendingEventTraffic.get(key);
   if (observation) {
     observation.count++;
     observation.bytes += bytes;
   } else {
-    pendingEventTraffic.set(name, { type: "gateway.ws.event", event: name, count: 1, bytes });
+    pendingEventTraffic.set(key, {
+      type: "gateway.ws.event",
+      event: name,
+      count: 1,
+      bytes,
+      ...(sessionEvent ? { sessionEvent } : {}),
+    });
   }
 }

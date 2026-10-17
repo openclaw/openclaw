@@ -169,7 +169,10 @@ export function expectRestartSentinelTranscriptBroadcast(
       }),
     }),
     params.subscribers,
-    { prepareSessionProjection: expect.any(Function) },
+    {
+      sessionEventSubscriptionKeys: [params.sessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
 }
 

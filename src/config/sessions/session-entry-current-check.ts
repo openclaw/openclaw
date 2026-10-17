@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
   resolveCurrentConversationSession,
@@ -49,6 +50,7 @@ type SessionEntryCurrentCheckParams = {
   agentId: string;
   sessionKey: string;
   storePath?: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   /** Live channel/run facts only; persisted routing belongs in the alternatives below. */
   isActive?: () => boolean;
@@ -71,7 +73,8 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
       throw new Error(params.errorMessage ?? "Session operation is no longer active");
     }
   });
-  const storePath = incognito?.path ?? params.storePath ?? resolveSessionStorePathForScope(params);
+  const storePath =
+    incognito?.path ?? params.storePath ?? resolveSessionStorePathForScope(params, params.config);
   const input = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,

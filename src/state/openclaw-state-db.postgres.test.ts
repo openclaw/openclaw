@@ -29,8 +29,10 @@ import {
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
@@ -49,6 +51,50 @@ const legacyWriteIndexesSql = `
 `;
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
+  it("reads an existing PostgreSQL store while another connection reserves its SQLite anchor", async () => {
+    const directory = tempDirs.make("state-anchor-reader-postgres-");
+    const pathname = path.join(directory, "state.sqlite");
+    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "state_anchor_reader" },
+    });
+    const client = new pg.Client({ connectionString: connection });
+    await client.connect();
+    let namespace: string | undefined;
+    try {
+      namespace = withEngineStoreAdmission(
+        () => getPostgresPhysicalFacts(openOpenClawStateDatabase(options).db)?.namespace,
+      );
+      expect(namespace).toBeDefined();
+      closeOpenClawStateDatabaseForTest();
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      using writer = openNodeSqliteDatabase(pathname);
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        const read = await executeExistingOpenClawStateRead(
+          options,
+          { type: "agentDatabaseRegistry.read" },
+          { current: true },
+        );
+        expect(read?.result).toEqual({ status: "available", entries: [] });
+      } finally {
+        writer.exec("ROLLBACK");
+      }
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(pathname);
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      resetDatabaseEngineSelectionForTest();
+      try {
+        if (namespace) {
+          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
+        }
+      } finally {
+        await client.end();
+      }
+    }
+  });
+
   it.each([25, 26])(
     "migrates version %i indexes while preserving heads, leases, lazy fragments and schema admission",
     async (previousVersion) => {

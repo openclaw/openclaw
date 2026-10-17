@@ -20,6 +20,36 @@ const { getSessionEntryPatchDelivery } =
   await import("./session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
 
+async function conversationGuard(f: ReturnType<typeof fixture>, peerId: string) {
+  const identity = buildConversationIdentity({
+    channel: "reef",
+    accountId: "default",
+    kind: "direct",
+    peerId,
+    deliveryTarget: `user:${peerId}`,
+  })!;
+  await registerConversationAddresses(f.scope, [identity]);
+  const conversation = (await readConversation(f.scope, identity.conversationRef))!;
+  return {
+    conversationRef: identity.conversationRef,
+    expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation),
+  };
+}
+
+function replaceRouteBeforeCommit(f: ReturnType<typeof fixture>, conversationRef: string) {
+  delivery.beforeCommit = () => {
+    delivery.beforeCommit = undefined;
+    const foreign = new (requireNodeSqlite().DatabaseSync)(f.database.path);
+    try {
+      foreign
+        .prepare("UPDATE conversations SET delivery_target = ? WHERE conversation_id = ?")
+        .run("user:replacement", conversationRef);
+    } finally {
+      foreign.close();
+    }
+  };
+}
+
 it.each(["inbound", "route"] as const)(
   "merges %s metadata with an in-process write without a detached comparison read",
   async (kind) => {
@@ -56,8 +86,8 @@ it.each(["inbound", "route"] as const)(
       expect(result).toMatchObject({
         label: "concurrent label",
         updatedAt: original.updatedAt + 100,
+        delivery: { origin: { label: "Alice" } },
       });
-      expect(result).toMatchObject({ delivery: { origin: { label: "Alice" } } });
       expect(f.read()).toEqual(result);
       expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
     });
@@ -206,21 +236,8 @@ it("creates the full initial cron session in one owner command", async () => {
 it("rechecks conversation authority before a fixed patch commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
-    const identity = buildConversationIdentity({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "patch-peer",
-      deliveryTarget: "user:patch-peer",
-    })!;
-    await registerConversationAddresses(f.scope, [identity]);
-    const conversation = (await readConversation(f.scope, identity.conversationRef))!;
-    const workerGuard = {
-      conversation: {
-        conversationRef: identity.conversationRef,
-        expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation),
-      },
-    };
+    const conversation = await conversationGuard(f, "patch-peer");
+    const workerGuard = { conversation };
     const onCommitted = vi.fn();
     const accepted = await applySessionEntryOperation(
       f.scope,
@@ -232,17 +249,7 @@ it("rechecks conversation authority before a fixed patch commits", async () => {
     expect(onCommitted).toHaveBeenCalledExactlyOnceWith(accepted);
     onCommitted.mockClear();
 
-    delivery.beforeCommit = () => {
-      delivery.beforeCommit = undefined;
-      const foreign = new (requireNodeSqlite().DatabaseSync)(f.database.path);
-      try {
-        foreign
-          .prepare("UPDATE conversations SET delivery_target = ? WHERE conversation_id = ?")
-          .run("user:replacement", identity.conversationRef);
-      } finally {
-        foreign.close();
-      }
-    };
+    replaceRouteBeforeCommit(f, conversation.conversationRef);
     await expect(
       applySessionEntryOperation(
         f.scope,
@@ -252,7 +259,7 @@ it("rechecks conversation authority before a fixed patch commits", async () => {
     ).rejects.toThrow("Conversation is no longer available");
     expect(f.read()).toEqual(accepted);
     expect(onCommitted).not.toHaveBeenCalled();
-    expect(await readConversation(f.scope, identity.conversationRef)).toMatchObject({
+    expect(await readConversation(f.scope, conversation.conversationRef)).toMatchObject({
       target: "user:replacement",
     });
   });
@@ -261,15 +268,7 @@ it("rechecks conversation authority before a fixed patch commits", async () => {
 it("retains typed source and conversation authority when updating the last route", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
-    const identity = buildConversationIdentity({
-      channel: "reef",
-      accountId: "default",
-      kind: "direct",
-      peerId: "route-peer",
-      deliveryTarget: "user:route-peer",
-    })!;
-    await registerConversationAddresses(f.scope, [identity]);
-    const conversation = (await readConversation(f.scope, identity.conversationRef))!;
+    const conversation = await conversationGuard(f, "route-peer");
     let sourceCurrent = true;
     const refusal = new Error("route source was revoked");
     const source = captureSessionEntrySourceAssertion({
@@ -293,12 +292,7 @@ it("retains typed source and conversation authority when updating the last route
         channel: "reef",
         to: "user:route-peer",
         assertCommitAllowed: source,
-        workerGuard: {
-          conversation: {
-            conversationRef: identity.conversationRef,
-            expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation),
-          },
-        },
+        workerGuard: { conversation },
       });
     const accepted = await updateRoute();
     expect(accepted).toMatchObject({
@@ -309,17 +303,7 @@ it("retains typed source and conversation authority when updating the last route
     await expect(updateRoute()).rejects.toBe(refusal);
     expect(f.read()).toEqual(accepted);
     sourceCurrent = true;
-    delivery.beforeCommit = () => {
-      delivery.beforeCommit = undefined;
-      const foreign = new (requireNodeSqlite().DatabaseSync)(f.database.path);
-      try {
-        foreign
-          .prepare("UPDATE conversations SET delivery_target = ? WHERE conversation_id = ?")
-          .run("user:replacement", identity.conversationRef);
-      } finally {
-        foreign.close();
-      }
-    };
+    replaceRouteBeforeCommit(f, conversation.conversationRef);
     await expect(updateRoute()).rejects.toThrow("Conversation is no longer available");
     expect(f.read()).toEqual(accepted);
   });

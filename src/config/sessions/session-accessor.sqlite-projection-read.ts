@@ -1,5 +1,6 @@
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -146,7 +147,7 @@ export function readSnapshotEventRows(
       "event.seq",
       "in",
       /* kysely-allow-raw: bind physical sequences already selected in this snapshot. */
-      sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
+      sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(eventSeqs)))})`,
     ),
   ).rows;
 }
@@ -199,13 +200,7 @@ export function selectMessageRows(
         "in",
         selection.positions.length <= 500
           ? selection.positions
-          : getActiveTranscriptKysely(database)
-              .selectFrom((eb) =>
-                eb
-                  .fn<{ value: number }>("json_each", [eb.val(JSON.stringify(selection.positions))])
-                  .as("requested"),
-              )
-              .select("requested.value"),
+          : sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(database.db, sql.val(JSON.stringify(selection.positions)))})` /* kysely-allow-raw: Retained positions are numeric on both engines and use one binding. */,
       )
     : query
         .where("active.message_position", ">=", selection.start)

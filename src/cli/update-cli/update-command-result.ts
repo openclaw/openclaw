@@ -438,12 +438,16 @@ export async function withUpdateAdmissionReporting<T>(
     }
     if (
       !(error instanceof GatewayServiceUpdateOwnershipError) &&
-      !(error instanceof SystemPackageOwnershipError)
+      !(error instanceof SystemPackageOwnershipError) &&
+      !(
+        error instanceof UpdatePreMutationError &&
+        (error.reason === "config-read-failed" || error.reason === "invalid-config")
+      )
     ) {
       throw error;
     }
     const message =
-      error instanceof SystemPackageOwnershipError
+      error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError
         ? error.message
         : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
     if (opts.json) {
@@ -457,7 +461,11 @@ export async function withUpdateAdmissionReporting<T>(
         durationMs: 0,
       }),
       opts,
-      { readHistory: false, nextAction: message },
+      {
+        readHistory: false,
+        nextAction:
+          error instanceof UpdatePreMutationError ? (error.nextAction ?? message) : message,
+      },
     );
     return exitCliAfterOutput(defaultRuntime, 1);
   }

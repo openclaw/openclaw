@@ -18,6 +18,10 @@ import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { isCoreGatewayMethodClassified } from "../../methods/core-method-policy.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
+import {
+  getSessionListBaseMiss,
+  retainSessionListBaseMiss,
+} from "../../session-list-diagnostics.js";
 
 type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
 type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
@@ -45,6 +49,7 @@ export function retainGatewayRpcResponseDiagnostics(
   }
   const result = asOptionalRecord(payload);
   if (result) {
+    retainSessionListBaseMiss(serialized, getSessionListBaseMiss(result));
     sharedResponseFields.set(serialized, {
       rowsUnchanged: result.rowsUnchanged === true,
       rowsDelta: result.rowsDelta === undefined ? undefined : true,
@@ -127,6 +132,7 @@ export class GatewayRpcDiagnostics {
       outcome === "ok" && (this.sessionsList || this.chatHistoryClient)
         ? asOptionalRecord(response?.payload)
         : undefined;
+    const baseMissReason = result ? getSessionListBaseMiss(result) : undefined;
     if (result) {
       result = sharedResponseFields.get(result) ?? result;
     }
@@ -174,6 +180,7 @@ export class GatewayRpcDiagnostics {
             sessionsList: {
               ...this.sessionsList,
               rowsOutcome,
+              ...(rowsOutcome === "full-with-base" && baseMissReason ? { baseMissReason } : {}),
             },
           }
         : {}),

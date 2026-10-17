@@ -1,5 +1,11 @@
 import { sql } from "kysely";
 import {
+  jsonArrayElements,
+  jsonObjectValue,
+  jsonPathValue,
+  jsonSetPath,
+} from "../../infra/database-engine/json-values.js";
+import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
@@ -19,14 +25,27 @@ import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcr
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 // These derived facts omit transcript bodies and remain inside the admitted snapshot.
-const inputMessageJson = (database: EngineConnection) =>
-  /* kysely-allow-raw: Project only input provenance and exact run correlation without hydrating message bodies. */
-  sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.role'),
-    'idempotencyKey', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.idempotencyKey'),
-    'provenance', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.provenance'),
-    '__openclaw', json_object(
-      'runId', ${transcriptEventRunIdSql(database, "event")},
-      'steerTargetRunId', json_extract(${transcriptEventNavigationSql(database, "event")}, '$.message.__openclaw.steerTargetRunId')))`;
+const inputMessageJson = (database: EngineConnection) => {
+  const navigation = transcriptEventNavigationSql(database, "event");
+  return jsonSetPath(
+    database,
+    jsonObjectValue(database, {
+      role: jsonPathValue(database, navigation, sql.lit("$.message.role")),
+      idempotencyKey: jsonPathValue(database, navigation, sql.lit("$.message.idempotencyKey")),
+      __openclaw: jsonObjectValue(database, {
+        runId: transcriptEventRunIdSql(database, "event"),
+        steerTargetRunId: jsonPathValue(
+          database,
+          navigation,
+          sql.lit("$.message.__openclaw.steerTargetRunId"),
+        ),
+      }),
+    }),
+    sql.lit("$.provenance"),
+    jsonPathValue(database, navigation, sql.lit("$.message.provenance"), "json"),
+    true,
+  );
+};
 
 type RunInputVisibility =
   | { hidden: false }
@@ -57,7 +76,7 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
   const visible = resolveVisibleMessagePositions(projection);
   const keptPositions =
     /* kysely-allow-raw: Bind the exact retained display positions without SQLite's variable limit. */
-    sql<number>`(SELECT value FROM json_each(${JSON.stringify(visible.kept)}))`;
+    sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(visible.kept)))})`;
   const userInputs = db
     .selectFrom("session_transcript_active_events as active")
     .innerJoin("transcript_events as event", (join) =>
@@ -96,10 +115,11 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
         )
         .where("identity.message_idempotency_key", "=", params.idempotencyKey)
         .where(
-          /* kysely-allow-raw: A steering admission cannot identify the input that originated its receiving run. */
-          sql<
-            string | null
-          >`json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.__openclaw.steerTargetRunId')`,
+          jsonPathValue(
+            projection.database.db,
+            transcriptEventNavigationSql(projection.database.db, "event"),
+            sql.lit("$.message.__openclaw.steerTargetRunId"),
+          ),
           "is",
           null,
         )
@@ -134,8 +154,11 @@ export function readSessionTranscriptRunInputVisibilityFromProjection(
     .where((eb) =>
       eb.or([
         eb(
-          /* kysely-allow-raw: Match only steering committed to this exact run. */
-          sql<string>`json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.__openclaw.steerTargetRunId')`,
+          jsonPathValue(
+            projection.database.db,
+            transcriptEventNavigationSql(projection.database.db, "event"),
+            sql.lit("$.message.__openclaw.steerTargetRunId"),
+          ),
           "=",
           params.runId,
         ),
