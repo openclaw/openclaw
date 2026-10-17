@@ -100,7 +100,7 @@ export function repairStateSchema(
   const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   try {
     return runUpdateSqliteMigration(db, pathname, () =>
-      repairOpenedStateSchema(db, pathname, env, scope),
+      repairOpenedStateSchema(db, pathname, env, scope, integrityCheck),
     );
   } finally {
     if (db.isOpen) {
@@ -115,6 +115,7 @@ function repairOpenedStateSchema(
   pathname: string,
   env: NodeJS.ProcessEnv,
   scope: "automatic" | "doctor" | "readability" | "indexes" | "version",
+  integrityCheck: "quick" | "full",
 ): { changes: string[]; warnings: string[] } {
   const rebuiltIndexNames = new Set<string>();
   let indexChanges: string[] = [];
