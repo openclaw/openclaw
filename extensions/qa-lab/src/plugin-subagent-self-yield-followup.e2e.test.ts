@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
-import type { QaGatewayChildParams } from "./gateway-child-setup.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { QA_SUBAGENT_SELF_YIELD_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
@@ -51,10 +50,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
     }
   });
 
-  async function startFixtureGateway(
-    options: Pick<QaGatewayChildParams, "forcedRuntime" | "mutateConfig" | "command"> = {},
-    interceptProvider?: (baseUrl: string) => Promise<string>,
-  ) {
+  async function startFixtureGateway() {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
     const bus = await startQaBusServer({ state });
@@ -65,27 +61,16 @@ describe("plugin subagent sessions_yield follow-up", () => {
     cleanups.push(async () => {
       expect((await owner.stop()).errors).toEqual([]);
     });
-    const providerBaseUrl = interceptProvider
-      ? await interceptProvider(mock.baseUrl)
-      : mock.baseUrl;
     const gateway = await owner.start({
       repoRoot: REPO_ROOT,
-      providerBaseUrl: `${providerBaseUrl}/v1`,
+      providerBaseUrl: `${mock.baseUrl}/v1`,
       mockSessionObserverUrl: mock.sessionObserverUrl,
       providerMode: "mock-openai",
       transport,
       transportBaseUrl: bus.baseUrl,
       controlUiEnabled: false,
       mutateConfig: withFixturePlugin,
-      ...options,
-    });
-    return { state, transport, mock, gateway };
-  }
-
-  it("announces to the original requester only after the follow-up run ends", async () => {
-    // E2E prerequisites own the build; a dev runner would rebuild dirty fixtures
-    // inside the timed lifecycle proof. Keep the packaged plugin/auth path.
-    const { state, transport, mock, gateway } = await startFixtureGateway({
+      // E2E prerequisites own the build; keep the packaged plugin/auth path.
       command: {
         executablePath: process.execPath,
         argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
@@ -93,11 +78,38 @@ describe("plugin subagent sessions_yield follow-up", () => {
         usePackagedPlugins: true,
       },
     });
+    return { state, transport, mock, gateway };
+  }
+
+  it("announces to the original requester only after the follow-up run ends", async () => {
+    const { state, transport, mock, gateway } = await startFixtureGateway();
     await transport.waitReady({ gateway });
 
-    const outboundStartIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
+    const outboundMessages = () =>
+      state.getSnapshot().messages.filter((message) => message.direction === "outbound");
+    const completionCount = () =>
+      outboundMessages().filter((message) => message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER))
+        .length;
+    const outboundStartIndex = outboundMessages().length;
+    const waitForReply = (textIncludes: string, timeoutMs: number) =>
+      transport.waitForOutbound({
+        conversation: REQUESTER_CONVERSATION,
+        sinceIndex: outboundStartIndex,
+        textIncludes,
+        timeoutMs,
+      });
+    const post = async (route: string, expectedStatus: number) => {
+      const response = await fetch(`${gateway.baseUrl}/qa/self-yield/${route}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${gateway.token}`,
+          ...(route === "follow-up" ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(route === "follow-up" ? { body: JSON.stringify({}) } : {}),
+      });
+      expect(response.status).toBe(expectedStatus);
+      return response.json();
+    };
     await transport.sendInbound({
       accountId: "default",
       conversation: REQUESTER_CONVERSATION,
@@ -118,32 +130,13 @@ describe("plugin subagent sessions_yield follow-up", () => {
 
     try {
       // The kickoff reply only acknowledges the spawn; it carries no child result.
-      await transport.waitForOutbound({
-        conversation: REQUESTER_CONVERSATION,
-        sinceIndex: outboundStartIndex,
-        textIncludes: "QA-SELF-YIELD-SPAWNED",
-        timeoutMs: 30_000,
-      });
-      const followUpResponse = await fetch(`${gateway.baseUrl}/qa/self-yield/follow-up`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${gateway.token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      });
-      expect(followUpResponse.status).toBe(202);
-      const followUp = (await followUpResponse.json()) as {
+      await waitForReply("QA-SELF-YIELD-SPAWNED", 30_000);
+      const followUp = (await post("follow-up", 202)) as {
         kickoffRunId?: string;
         runId: string;
       };
       expect(followUp.runId).toBeTruthy();
-      const releaseResponse = await fetch(`${gateway.baseUrl}/qa/self-yield/release`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${gateway.token}` },
-      });
-      expect(releaseResponse.status).toBe(200);
-      const release = (await releaseResponse.json()) as {
+      const release = (await post("release", 200)) as {
         finalReply?: string;
         kickoffRunId?: string;
         runId?: string;
@@ -158,51 +151,26 @@ describe("plugin subagent sessions_yield follow-up", () => {
       expect(release.runId).not.toBe(release.kickoffRunId);
       distinctFollowupRun = release.runId !== release.kickoffRunId;
 
-      const completion = await transport.waitForOutbound({
-        conversation: REQUESTER_CONVERSATION,
-        sinceIndex: outboundStartIndex,
-        textIncludes: QA_SUBAGENT_SELF_YIELD_MARKER,
-        timeoutMs: 90_000,
-      });
+      const completion = await waitForReply(QA_SUBAGENT_SELF_YIELD_MARKER, 90_000);
       expect(completion.accountId).toBe("default");
     } catch (error) {
       throw failureContext(error);
     }
 
-    const outbound = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound");
+    const outbound = outboundMessages();
     // The follow-up supersedes the paused turn before its notice publishes, so the
     // requester sees only the spawn acknowledgement and the one completion announcement.
     expect(outbound).toHaveLength(outboundStartIndex + 2);
-    expect(
-      outbound.filter((message) => message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER)),
-    ).toHaveLength(1);
-    const visibleRepliesBeforeQuiet = outbound.filter((message) =>
-      message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
-    ).length;
-    await transport.waitForNoOutbound({
-      sinceIndex: outbound.length,
-      quietMs: 1_000,
-    });
-    const visibleRepliesAfterQuiet = state
-      .getSnapshot()
-      .messages.filter(
-        (message) =>
-          message.direction === "outbound" && message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
-      ).length;
+    const visibleRepliesBeforeQuiet = completionCount();
+    expect(visibleRepliesBeforeQuiet).toBe(1);
+    const waitForQuiet = () =>
+      transport.waitForNoOutbound({ sinceIndex: outbound.length, quietMs: 1_000 });
+    await waitForQuiet();
+    const visibleRepliesAfterQuiet = completionCount();
     await gateway.restartAfterStateMutation(async () => {});
     await transport.waitReady({ gateway });
-    await transport.waitForNoOutbound({
-      sinceIndex: outbound.length,
-      quietMs: 1_000,
-    });
-    const visibleRepliesAfterRestart = state
-      .getSnapshot()
-      .messages.filter(
-        (message) =>
-          message.direction === "outbound" && message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
-      ).length;
+    await waitForQuiet();
+    const visibleRepliesAfterRestart = completionCount();
     const requests = (await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
       response.json(),
     )) as Array<{ allInputText?: string; plannedToolName?: string; prompt?: string }>;
@@ -211,9 +179,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
         request.prompt?.includes("Subagent self yield qa worker") ||
         request.prompt?.includes("Subagent self yield qa remote job finished"),
     );
-    // The follow-up was admitted while the child was still yielding. Its result
-    // reaches the original requester through one registry completion turn, and
-    // the pause it superseded never wakes that requester with a notice.
+    // Only the registry completion turn may wake the original requester.
     const requesterCompletionTurns = requests.filter((request) =>
       request.allInputText?.includes("A background task completed."),
     ).length;
@@ -235,9 +201,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
         childModelRequests: handoffRequests.length,
         requesterCompletionTurns,
         pauseNoticeRequests,
-        visibleReplies: outbound.filter((message) =>
-          message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
-        ).length,
+        visibleReplies: visibleRepliesBeforeQuiet,
         duplicateRepliesAfterQuietWindow: visibleRepliesAfterQuiet - visibleRepliesBeforeQuiet,
         duplicateRepliesAfterGatewayRestart: visibleRepliesAfterRestart - visibleRepliesAfterQuiet,
         distinctFollowupRun,

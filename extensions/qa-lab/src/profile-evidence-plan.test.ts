@@ -5,6 +5,7 @@ import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import type {
   QaEvidenceIdentity,
   QaEvidenceStatus,
+  QaEvidenceSummaryJson,
   QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
@@ -143,7 +144,19 @@ describe("QA profile evidence plan", () => {
   ) {
     const { owner, complete } = proofInvocation();
     complete(owner.begin(0), rows);
-    return owner.snapshot({ generatedAt: "2026-09-13T00:00:00Z", evidenceMode: mode });
+    return snapshot(owner, mode);
+  }
+  function snapshot(
+    owner: ReturnType<typeof createQaEvidenceInvocation>,
+    evidenceMode: "full" | "slim" = "full",
+  ) {
+    return owner.snapshot({ generatedAt: "2026-09-13T00:00:00Z", evidenceMode });
+  }
+  function evaluate(evidence: QaEvidenceSummaryJson, plan = proofPlan()) {
+    return qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]!;
+  }
+  function proofCheck(occurrenceId: string, status: string) {
+    return { occurrenceId, assertionId: "assertion-one", status };
   }
 
   it.each(["slim"] as const)(
@@ -199,21 +212,19 @@ describe("QA profile evidence plan", () => {
             ...item,
             retryAcceptance,
           }));
-          const [proof] = qaProfileEvidencePlan.evaluateProof(plan, evidence);
-          expect(proof!.qualified).toBe(
+          const proof = evaluate(evidence, plan);
+          expect(proof.qualified).toBe(
             caseName === "primary" && retryAcceptance === "selected-attempt",
           );
           if (retryAcceptance === "all-recorded-attempts") {
-            expect(proof!.checks.some((check) => check.status === "failed")).toBe(true);
+            expect(proof.checks.some((check) => check.status === "failed")).toBe(true);
           }
           if (caseName === "rowless") {
-            expect(proof!.checks.some((check) => check.status === "incomplete")).toBe(true);
+            expect(proof.checks.some((check) => check.status === "incomplete")).toBe(true);
           }
         }
         expect(JSON.stringify(evidence)).toBe(original);
-        expect(qaProfileEvidencePlan.evaluateProof(proofPlan(), second)[0]!.qualified).toBe(
-          caseName !== "rowless",
-        );
+        expect(evaluate(second).qualified).toBe(caseName !== "rowless");
       }
     },
   );
@@ -227,10 +238,7 @@ describe("QA profile evidence plan", () => {
       complete(child, [{ status: "pass" }]);
       owner.complete(dispatch, { status: "pass", entries: [] });
       owner.select(0, child);
-      const evidence = owner.snapshot({
-        generatedAt: "2026-09-13T00:00:00Z",
-        evidenceMode,
-      });
+      const evidence = snapshot(owner, evidenceMode);
       const original = structuredClone(evidence);
       const plan = proofPlan();
       plan.proofRequirements[0]!.retryAcceptance = "all-recorded-attempts";
@@ -241,12 +249,9 @@ describe("QA profile evidence plan", () => {
       const incomplete = owner.begin(0, null);
       owner.complete(incomplete, { status: "fail", entries: [] });
       owner.select(0, incomplete);
-      const failed = owner.snapshot({
-        generatedAt: "2026-09-13T00:00:00Z",
-        evidenceMode,
-      });
+      const failed = snapshot(owner, evidenceMode);
       expect(failed.occurrences.find((item) => item.id === incomplete)?.assertions).toHaveLength(1);
-      expect(qaProfileEvidencePlan.evaluateProof(plan, failed)[0]?.checks).toEqual([
+      expect(evaluate(failed, plan).checks).toEqual([
         expect.objectContaining({ occurrenceId: child, status: "qualified" }),
         expect.objectContaining({ occurrenceId: incomplete, status: "incomplete" }),
       ]);
@@ -259,9 +264,9 @@ describe("QA profile evidence plan", () => {
   it("classifies prepared identity without inventing a product failure", () => {
     const evidence = proofEvidence([{ status: "pass" }]);
     evidence.occurrences[1]!.receipts[0]!.phase = "prepared";
-    const [result] = qaProfileEvidencePlan.evaluateProof(proofPlan(), evidence);
-    expect(result?.qualified).toBe(false);
-    expect(result?.checks.map((check) => check.status)).toEqual(["insufficient"]);
+    const result = evaluate(evidence);
+    expect(result.qualified).toBe(false);
+    expect(result.checks.map((check) => check.status)).toEqual(["insufficient"]);
     expect(evidence.entries[0]?.result.status).toBe("pass");
   });
 
@@ -272,9 +277,7 @@ describe("QA profile evidence plan", () => {
     "retains $statuses while classifying a required assertion",
     ({ statuses, expected }) => {
       const evidence = proofEvidence(statuses.map((status) => ({ status })));
-      expect(qaProfileEvidencePlan.evaluateProof(proofPlan(), evidence)[0]?.checks[0]?.status).toBe(
-        expected,
-      );
+      expect(evaluate(evidence).checks[0]?.status).toBe(expected);
       expect(evidence.entries.map((entry) => entry.result.status)).toEqual(statuses);
       expect(() => qaProfileEvidencePlan.attest(proofPlan(), true, evidence)).toThrow(
         `channel-proof (${expected})`,
@@ -285,11 +288,9 @@ describe("QA profile evidence plan", () => {
   it("distinguishes a prerequisite incident from an omitted started assertion", () => {
     const { owner, complete } = proofInvocation();
     complete(owner.begin(0), [], "blocked");
-    const evidence = owner.snapshot({ generatedAt: "2026-09-13T00:00:00Z" });
+    const evidence = snapshot(owner);
     const plan = proofPlan();
-    expect(qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]?.checks[0]?.status).toBe(
-      "incomplete",
-    );
+    expect(evaluate(evidence, plan).checks[0]?.status).toBe("incomplete");
     const missingPlan = {
       ...buildPlan([
         { scenarioId: native.id, executionKind: "playwright", channel: null },
@@ -297,9 +298,7 @@ describe("QA profile evidence plan", () => {
       ]),
       proofRequirements: requirements,
     };
-    expect(qaProfileEvidencePlan.evaluateProof(missingPlan, evidence)[0]?.checks[0]?.status).toBe(
-      "prerequisite",
-    );
+    expect(evaluate(evidence, missingPlan).checks[0]?.status).toBe("prerequisite");
   });
 
   it.each(["skipped"] as const)(
@@ -311,21 +310,16 @@ describe("QA profile evidence plan", () => {
         complete(first, [{ status: "pass" }], "fail");
         const retry = owner.begin(0, first);
         complete(retry, [], status);
-        const evidence = owner.snapshot({
-          generatedAt: "2026-09-13T00:00:00Z",
-          evidenceMode,
-        });
+        const evidence = snapshot(owner, evidenceMode);
         const original = structuredClone(evidence);
         const plan = proofPlan();
         expect(owner.selectedObservation(0)?.occurrence.id).toBe(first);
-        expect(qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]?.checks).toEqual([
-          { occurrenceId: first, assertionId: "assertion-one", status: "qualified" },
-        ]);
+        expect(evaluate(evidence, plan).checks).toEqual([proofCheck(first, "qualified")]);
         expect(qaProfileEvidencePlan.attest(plan, true, evidence).proof?.[0]?.qualified).toBe(true);
         plan.proofRequirements[0]!.retryAcceptance = "all-recorded-attempts";
-        expect(qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]?.checks).toEqual([
-          { occurrenceId: first, assertionId: "assertion-one", status: "qualified" },
-          { occurrenceId: retry, assertionId: "assertion-one", status: "incomplete" },
+        expect(evaluate(evidence, plan).checks).toEqual([
+          proofCheck(first, "qualified"),
+          proofCheck(retry, "incomplete"),
         ]);
         expect(() => qaProfileEvidencePlan.attest(plan, true, evidence)).toThrow(
           "unqualified declared proof",
@@ -342,16 +336,11 @@ describe("QA profile evidence plan", () => {
       complete(first, [], "fail");
       const retry = owner.begin(0, first);
       complete(retry, [], "pass");
-      const evidence = owner.snapshot({
-        generatedAt: "2026-09-13T00:00:00Z",
-        evidenceMode,
-      });
+      const evidence = snapshot(owner, evidenceMode);
       const original = structuredClone(evidence);
       const plan = proofPlan();
       expect(owner.selectedObservation(0)?.occurrence.id).toBe(retry);
-      expect(qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]?.checks).toEqual([
-        { occurrenceId: retry, assertionId: "assertion-one", status: "incomplete" },
-      ]);
+      expect(evaluate(evidence, plan).checks).toEqual([proofCheck(retry, "incomplete")]);
       expect(() => qaProfileEvidencePlan.attest(plan, true, evidence)).toThrow(
         "unqualified declared proof",
       );
@@ -365,11 +354,11 @@ describe("QA profile evidence plan", () => {
     complete(first, [{ status: "pass" }]);
     const independent = owner.begin(0, null);
     complete(independent, [], "blocked");
-    const evidence = owner.snapshot({ generatedAt: "2026-09-13T00:00:00Z" });
+    const evidence = snapshot(owner);
     const original = structuredClone(evidence);
-    expect(qaProfileEvidencePlan.evaluateProof(proofPlan(), evidence)[0]?.checks).toEqual([
-      { occurrenceId: first, assertionId: "assertion-one", status: "qualified" },
-      { occurrenceId: independent, assertionId: "assertion-one", status: "incomplete" },
+    expect(evaluate(evidence).checks).toEqual([
+      proofCheck(first, "qualified"),
+      proofCheck(independent, "incomplete"),
     ]);
     expect(evidence).toEqual(original);
   });
@@ -388,15 +377,16 @@ describe("QA profile evidence plan", () => {
         identity: { ...proofIdentity, source: { ...proofIdentity.source, ref: "other" } },
       },
     ]);
-    const evidence = owner.snapshot({ generatedAt: "2026-09-13T00:00:00Z" });
-    expect(qaProfileEvidencePlan.evaluateProof(proofPlan(), evidence)[0]?.qualified).toBe(false);
+    const evidence = snapshot(owner);
+    expect(evaluate(evidence).qualified).toBe(false);
     const plan = proofPlan();
     plan.proofRequirements[0]!.alternatives = [{ protocol: "gateway:3" }];
     // The first observation satisfies this explicitly sparse alternative; the
     // second still contradicts its own captured launch source.
-    expect(
-      qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]?.checks.map((check) => check.status),
-    ).toEqual(["qualified", "stale"]);
+    expect(evaluate(evidence, plan).checks.map((check) => check.status)).toEqual([
+      "qualified",
+      "stale",
+    ]);
   });
 
   it("keeps historical or stale semantic identity unqualified and leaves absent obligations alone", () => {
@@ -408,16 +398,12 @@ describe("QA profile evidence plan", () => {
       schemaVersion: 2 as const,
       entries: evidence.entries.map(({ binding: _binding, effective: _effective, ...row }) => row),
     };
-    expect(qaProfileEvidencePlan.evaluateProof(plan, legacy)[0]?.checks[0]?.status).toBe(
-      "insufficient",
-    );
+    expect(evaluate(legacy, plan).checks[0]?.status).toBe("insufficient");
     const old = structuredClone(evidence) as QaEvidenceSummaryV3Json;
     old.profilePlan = { ...plan, taxonomyIdentity: { version: 1, sha256: "0".repeat(64) } };
-    expect(qaProfileEvidencePlan.evaluateProof(plan, old)[0]?.checks[0]?.status).toBe("stale");
+    expect(evaluate(old, plan).checks[0]?.status).toBe("stale");
     delete old.profilePlan.taxonomyIdentity;
-    expect(qaProfileEvidencePlan.evaluateProof(plan, old)[0]?.checks[0]?.status).toBe(
-      "insufficient",
-    );
+    expect(evaluate(old, plan).checks[0]?.status).toBe("insufficient");
     const { proofRequirements: _requirements, ...withoutRequirements } = plan;
     expect(qaProfileEvidencePlan.attest(withoutRequirements, true, old)).not.toHaveProperty(
       "proof",

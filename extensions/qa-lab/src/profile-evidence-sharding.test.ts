@@ -33,24 +33,17 @@ const { exclusiveLiveChannels, liveAdapterFactories } = vi.hoisted(() => {
     exclusiveLiveChannels: definitions
       .filter(([, isolatesInstances]) => !isolatesInstances)
       .map(([channelId]) => channelId),
-    liveAdapterFactories: definitions.map(([channelId, isolatesInstances, supportsModuleFlows]) => {
-      const factory: {
-        id: string;
-        isolatesInstances?: true;
-        matches: (context: { channelId: string; driver: string }) => boolean;
-        supportsModuleFlows?: true;
-      } = {
-        id: channelId,
-        matches: (context) => context.channelId === channelId && context.driver === "live",
-      };
-      if (isolatesInstances) {
-        factory.isolatesInstances = true;
-      }
-      if (supportsModuleFlows) {
-        factory.supportsModuleFlows = true;
-      }
-      return factory;
-    }),
+    liveAdapterFactories: definitions.map(([channelId, isolatesInstances, supportsModuleFlows]) =>
+      Object.assign(
+        {
+          id: channelId,
+          matches: (context: { channelId: string; driver: string }) =>
+            context.channelId === channelId && context.driver === "live",
+        },
+        isolatesInstances ? { isolatesInstances: true } : {},
+        supportsModuleFlows ? { supportsModuleFlows: true } : {},
+      ),
+    ),
   };
 });
 
@@ -59,6 +52,17 @@ vi.mock("./live-transports/cli.js", () => ({
 }));
 
 type ShardPlan = ReturnType<typeof createQaProfileEvidenceShardPlan>;
+
+const aggregatePath = (outputDir: string) => path.join(outputDir, "aggregate", "qa-evidence.json");
+const readEvidence = async (file: string) =>
+  validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(file, "utf8")));
+const aggregateEvidence = (outputDir: string, evidencePaths: string[]) =>
+  aggregateQaProfileEvidenceShards({
+    evidencePaths,
+    generatedAt: "2026-08-16T00:00:01.000Z",
+    outputPath: aggregatePath(outputDir),
+    profile: "all",
+  });
 
 function scenarioLiveChannels(
   scenario: ReturnType<typeof readQaScenarioPack>["scenarios"][number],
@@ -147,18 +151,14 @@ async function writeShardEvidenceSet(params: {
           ]
         : [];
     if (index === 0) {
-      await fs.mkdir(path.join(path.dirname(evidencePath), "playwright"), { recursive: true });
-      await fs.mkdir(path.join(path.dirname(evidencePath), "diagnostics"), { recursive: true });
-      await fs.writeFile(
-        path.join(path.dirname(evidencePath), artifactRelativePath),
-        artifactContent,
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(path.dirname(evidencePath), unreferencedPayloadRelativePath),
-        unreferencedPayloadContent,
-        "utf8",
-      );
+      for (const [relative, content] of [
+        [artifactRelativePath, artifactContent],
+        [unreferencedPayloadRelativePath, unreferencedPayloadContent],
+      ] as const) {
+        const file = path.join(path.dirname(evidencePath), relative);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, content, "utf8");
+      }
     }
     await fs.writeFile(
       evidencePath,
@@ -194,7 +194,7 @@ describe("QA profile evidence sharding", () => {
       });
       const digest = createHash("sha256").update(artifactContent).digest("hex");
       for (const [index, file] of evidencePaths.entries()) {
-        const summary = validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(file, "utf8")));
+        const summary = await readEvidence(file);
         const occurrence: QaEvidenceOccurrence = {
           id: `shard-${index}-observation`,
           parentCell: null,
@@ -238,13 +238,8 @@ describe("QA profile evidence sharding", () => {
         });
         await fs.writeFile(file, JSON.stringify(v3));
       }
-      const outputPath = path.join(outputDir, "aggregate", "qa-evidence.json");
-      const aggregate = await aggregateQaProfileEvidenceShards({
-        evidencePaths,
-        generatedAt: "2026-08-16T00:00:01.000Z",
-        outputPath,
-        profile: "all",
-      });
+      const outputPath = aggregatePath(outputDir);
+      const aggregate = await aggregateEvidence(outputDir, evidencePaths);
       expect(aggregate.schemaVersion).toBe(3);
       if (aggregate.schemaVersion !== 3) {
         throw new Error("expected occurrence evidence");
@@ -301,22 +296,16 @@ describe("QA profile evidence sharding", () => {
   it("rejects mixed taxonomy identity before any aggregate writes", async () => {
     const outputDir = tempDirs.make("qa-profile-shards-identity-");
     const { evidencePaths } = await writeShardEvidenceSet({ outputDir });
-    const alteredPaths = [evidencePaths.at(-1)!];
-    for (const file of alteredPaths) {
-      const summary = validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(file, "utf8")));
-      summary.profilePlan!.taxonomyIdentity = { version: 1, sha256: "0".repeat(64) };
-      await fs.writeFile(file, JSON.stringify(summary));
-    }
-    const outputPath = path.join(outputDir, "aggregate", "qa-evidence.json");
-    await expect(
-      aggregateQaProfileEvidenceShards({
-        evidencePaths,
-        generatedAt: "2026-08-16T00:00:01.000Z",
-        outputPath,
-        profile: "all",
-      }),
-    ).rejects.toThrow("semantic taxonomy identity");
-    await expect(fs.stat(path.dirname(outputPath))).rejects.toMatchObject({ code: "ENOENT" });
+    const file = evidencePaths.at(-1)!;
+    const summary = await readEvidence(file);
+    summary.profilePlan!.taxonomyIdentity = { version: 1, sha256: "0".repeat(64) };
+    await fs.writeFile(file, JSON.stringify(summary));
+    await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
+      "semantic taxonomy identity",
+    );
+    await expect(fs.stat(path.dirname(aggregatePath(outputDir)))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("preserves an incomplete child as incomplete aggregate evidence", async () => {
@@ -325,12 +314,7 @@ describe("QA profile evidence sharding", () => {
       incompleteFirstShard: true,
       outputDir,
     });
-    const aggregate = await aggregateQaProfileEvidenceShards({
-      evidencePaths,
-      generatedAt: "2026-08-16T00:00:01.000Z",
-      outputPath: path.join(outputDir, "aggregate", "qa-evidence.json"),
-      profile: "all",
-    });
+    const aggregate = await aggregateEvidence(outputDir, evidencePaths);
 
     expect(aggregate.profilePlan?.missingCells).toHaveLength(1);
     expect(() => qaProfileEvidencePlan.attest(aggregate.profilePlan, true)).toThrow(
@@ -345,9 +329,7 @@ describe("QA profile evidence sharding", () => {
     if (!evidencePath) {
       throw new Error("expected shard evidence");
     }
-    const summary = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(evidencePath, "utf8")),
-    );
+    const summary = await readEvidence(evidencePath);
     const artifact = summary.entries[0]?.execution?.artifacts[0];
     if (!artifact) {
       throw new Error("expected declared shard artifact");
@@ -355,14 +337,9 @@ describe("QA profile evidence sharding", () => {
     artifact.path = ".artifacts/nonexistent/qa-evidence.json";
     await fs.writeFile(evidencePath, `${JSON.stringify(summary)}\n`, "utf8");
 
-    await expect(
-      aggregateQaProfileEvidenceShards({
-        evidencePaths,
-        generatedAt: "2026-08-16T00:00:01.000Z",
-        outputPath: path.join(outputDir, "aggregate", "qa-evidence.json"),
-        profile: "all",
-      }),
-    ).rejects.toThrow("was not found within downloaded payload");
+    await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
+      "was not found within downloaded payload",
+    );
   });
 
   it.skipIf(process.platform === "win32")(
@@ -381,27 +358,16 @@ describe("QA profile evidence sharding", () => {
         artifactPath,
       );
 
-      await expect(
-        aggregateQaProfileEvidenceShards({
-          evidencePaths,
-          generatedAt: "2026-08-16T00:00:01.000Z",
-          outputPath: path.join(outputDir, "aggregate", "qa-evidence.json"),
-          profile: "all",
-        }),
-      ).rejects.toThrow("traverses a symbolic link");
+      await expect(aggregateEvidence(outputDir, evidencePaths)).rejects.toThrow(
+        "traverses a symbolic link",
+      );
     },
   );
 
   it("rejects duplicate or missing shards instead of treating them as partial evidence", async () => {
     const outputDir = tempDirs.make("qa-profile-shards-invalid-");
     const { evidencePaths, shardPlan } = await writeShardEvidenceSet({ outputDir });
-    const aggregate = (paths: string[]) =>
-      aggregateQaProfileEvidenceShards({
-        evidencePaths: paths,
-        generatedAt: "2026-08-16T00:00:01.000Z",
-        outputPath: path.join(outputDir, "aggregate", "qa-evidence.json"),
-        profile: "all",
-      });
+    const aggregate = (paths: string[]) => aggregateEvidence(outputDir, paths);
 
     await expect(aggregate(evidencePaths.slice(1))).rejects.toThrow(
       `requires ${shardPlan.shards.length} shard evidence files`,

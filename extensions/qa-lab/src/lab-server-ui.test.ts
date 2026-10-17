@@ -22,6 +22,12 @@ afterEach(async () => {
   }
 });
 
+async function makeUiDir() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-"));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
 describe("qa-lab server ui helpers", () => {
   it("detects basic UI asset content types", () => {
     expect(detectContentType("index.html")).toBe("text/html; charset=utf-8");
@@ -36,19 +42,12 @@ describe("qa-lab server ui helpers", () => {
   });
 
   it("never resolves sibling files outside the UI dist root", async () => {
-    const rootDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-boundary-"));
-    cleanups.push(async () => {
-      await rm(rootDir, { recursive: true, force: true });
-    });
+    const rootDir = await makeUiDir();
     const uiDistDir = path.join(rootDir, "dist");
     const siblingDir = path.join(rootDir, "dist-other");
     await mkdir(uiDistDir, { recursive: true });
     await mkdir(siblingDir, { recursive: true });
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><body>bundle-root</body></html>",
-      "utf8",
-    );
+    await writeFile(path.join(uiDistDir, "index.html"), "bundle-root", "utf8");
     await writeFile(path.join(siblingDir, "secret.txt"), "sibling-secret", "utf8");
 
     expect(tryResolveUiAsset("/", uiDistDir, rootDir)).toBe(path.join(uiDistDir, "index.html"));
@@ -56,15 +55,8 @@ describe("qa-lab server ui helpers", () => {
   });
 
   it("rejects malformed percent-encoded UI asset paths", async () => {
-    const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-malformed-"));
-    cleanups.push(async () => {
-      await rm(uiDistDir, { recursive: true, force: true });
-    });
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><body>bundle-root</body></html>",
-      "utf8",
-    );
+    const uiDistDir = await makeUiDir();
+    await writeFile(path.join(uiDistDir, "index.html"), "bundle-root", "utf8");
 
     expect(tryResolveUiAsset("/%E0%A4", uiDistDir, uiDistDir)).toBeNull();
   });
@@ -111,17 +103,12 @@ async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<numbe
 }
 
 async function openBrowserPair(): Promise<{ browser: Socket; proxySocket: Socket }> {
-  let resolveProxySocket!: (socket: Socket) => void;
-  const proxySocketPromise = new Promise<Socket>((resolve) => {
-    resolveProxySocket = resolve;
-  });
-  const server = trackServer(
-    net.createServer({ allowHalfOpen: true }, (socket) => resolveProxySocket(socket)),
-  );
+  const server = trackServer(net.createServer({ allowHalfOpen: true }));
   const port = await listenLoopback(server);
+  const connected = once(server, "connection");
   const browser = net.connect({ host: "127.0.0.1", port });
   await once(browser, "connect");
-  const proxySocket = await proxySocketPromise;
+  const proxySocket: Socket = (await connected)[0];
   cleanups.push(async () => {
     browser.destroy();
     proxySocket.destroy();
@@ -129,58 +116,26 @@ async function openBrowserPair(): Promise<{ browser: Socket; proxySocket: Socket
   return { browser, proxySocket };
 }
 
-function buildUpgradeRequest() {
-  return {
-    httpVersion: "1.1",
-    method: "GET",
-    rawHeaders: ["Host", "ignored.local", "Connection", "Upgrade", "Upgrade", "websocket"],
-    url: "/control-ui/socket?client=qa",
-  };
-}
-
-function runUpgradeProxy(params: { proxySocket: Socket; target: URL }) {
+function runUpgradeProxy(socket: Socket, target: string) {
   proxyUpgradeRequest({
-    req: buildUpgradeRequest() as never,
-    socket: params.proxySocket,
+    req: {
+      httpVersion: "1.1",
+      method: "GET",
+      rawHeaders: ["Host", "ignored.local", "Connection", "Upgrade", "Upgrade", "websocket"],
+      url: "/control-ui/socket?client=qa",
+    } as never,
+    socket,
     head: Buffer.alloc(0),
-    target: params.target,
+    target: new URL(target),
   });
 }
 
-async function readUntil(socket: Socket, marker: string, timeoutMs = 2_000): Promise<string> {
+async function readSocket(socket: Socket, marker?: string, timeoutMs = 2_000): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     let body = "";
-    const timer = setTimeout(() => finish(new Error(`timed out waiting for ${marker}`)), timeoutMs);
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      socket.off("data", onData);
-      socket.off("error", onError);
-      socket.off("close", onClose);
-      if (error) {
-        reject(error);
-      } else {
-        resolve(body);
-      }
-    };
-    const onData = (chunk: Buffer) => {
-      body += chunk.toString("utf8");
-      if (body.includes(marker)) {
-        finish();
-      }
-    };
-    const onError = (error: Error) => finish(error);
-    const onClose = () => finish(new Error(`socket closed before ${marker}`));
-    socket.on("data", onData);
-    socket.once("error", onError);
-    socket.once("close", onClose);
-  });
-}
-
-async function readToEnd(socket: Socket, timeoutMs = 2_000): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    let body = "";
+    const waitingFor = marker ?? "socket end";
     const timer = setTimeout(
-      () => finish(new Error("timed out waiting for socket end")),
+      () => finish(new Error(`timed out waiting for ${waitingFor}`)),
       timeoutMs,
     );
     const finish = (error?: Error) => {
@@ -197,10 +152,17 @@ async function readToEnd(socket: Socket, timeoutMs = 2_000): Promise<string> {
     };
     const onData = (chunk: Buffer) => {
       body += chunk.toString("utf8");
+      if (marker && body.includes(marker)) {
+        finish();
+      }
     };
-    const onEnd = () => finish();
     const onError = (error: Error) => finish(error);
-    const onClose = () => finish(new Error("socket closed before a clean end"));
+    const onEnd = () => {
+      if (!marker) {
+        finish();
+      }
+    };
+    const onClose = () => finish(new Error(`socket closed before ${marker ?? "a clean end"}`));
     socket.on("data", onData);
     socket.once("end", onEnd);
     socket.once("error", onError);
@@ -241,12 +203,9 @@ describe("proxyUpgradeRequest loopback transport", () => {
     const { browser, proxySocket } = await openBrowserPair();
     const setTimeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
     const removeListenerSpy = vi.spyOn(net.Socket.prototype, "removeListener");
-    const responsePromise = readUntil(browser, "\r\n\r\n");
+    const responsePromise = readSocket(browser, "\r\n\r\n");
 
-    runUpgradeProxy({
-      proxySocket,
-      target: new URL(`https://localhost:${upstreamPort}`),
-    });
+    runUpgradeProxy(proxySocket, `https://localhost:${upstreamPort}`);
 
     await expect(requestPromise).resolves.toContain("GET /socket?client=qa HTTP/1.1");
     await expect(responsePromise).resolves.toBe(UPGRADE_RESPONSE);
@@ -270,12 +229,9 @@ describe("proxyUpgradeRequest loopback transport", () => {
     const { browser, proxySocket } = await openBrowserPair();
     const setTimeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
     const endSpy = vi.spyOn(proxySocket, "end");
-    const responsePromise = readToEnd(browser, 14_000);
+    const responsePromise = readSocket(browser, undefined, 14_000);
 
-    runUpgradeProxy({
-      proxySocket,
-      target: new URL(`https://localhost:${upstreamPort}`),
-    });
+    runUpgradeProxy(proxySocket, `https://localhost:${upstreamPort}`);
 
     const upstreamSocket = await upstreamPromise;
     const upstreamClosed = once(upstreamSocket, "close");
@@ -310,10 +266,7 @@ describe("proxyUpgradeRequest loopback transport", () => {
     });
     const proxyEnded = once(proxySocket, "end");
 
-    runUpgradeProxy({
-      proxySocket,
-      target: new URL(`http://127.0.0.1:${upstreamPort}`),
-    });
+    runUpgradeProxy(proxySocket, `http://127.0.0.1:${upstreamPort}`);
     browser.end();
 
     await proxyEnded;
@@ -332,12 +285,9 @@ describe("proxyUpgradeRequest loopback transport", () => {
     const upstreamPort = await listenLoopback(upstreamServer);
     const { browser, proxySocket } = await openBrowserPair();
     const endSpy = vi.spyOn(proxySocket, "end");
-    const responsePromise = readToEnd(browser);
+    const responsePromise = readSocket(browser);
 
-    runUpgradeProxy({
-      proxySocket,
-      target: new URL(`http://127.0.0.1:${upstreamPort}`),
-    });
+    runUpgradeProxy(proxySocket, `http://127.0.0.1:${upstreamPort}`);
 
     await expect(responsePromise).resolves.toBe(BAD_GATEWAY_RESPONSE);
     expect(endSpy).toHaveBeenCalledWith(BAD_GATEWAY_RESPONSE, expect.any(Function));
