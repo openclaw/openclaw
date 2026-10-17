@@ -12,14 +12,10 @@ const transports = vi.hoisted(
     }>,
 );
 
-function transportFixture(context: RealtimeTalkTransportContext) {
+function transportConstructor(_session: unknown, context: RealtimeTalkTransportContext) {
   const stop = vi.fn(() => context.input.stop());
   transports.push({ context, stop });
   return { start: async () => "ready" as const, stop };
-}
-
-function transportConstructor(_session: unknown, context: RealtimeTalkTransportContext) {
-  return transportFixture(context);
 }
 
 vi.mock("./webrtc.ts", () => ({
@@ -45,6 +41,18 @@ function microphone() {
 
 function useMicrophone(getUserMedia: MediaDevices["getUserMedia"]) {
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+}
+
+function pendingMicrophone() {
+  const media = microphone();
+  const permission = createDeferred<MediaStream>();
+  const requested = createDeferred();
+  const getUserMedia = vi.fn(() => {
+    requested.resolve();
+    return permission.promise;
+  });
+  useMicrophone(getUserMedia);
+  return { ...media, ...permission, requested, getUserMedia };
 }
 
 const sessions: RealtimeTalkSession[] = [];
@@ -91,14 +99,7 @@ describe("Realtime Talk microphone preparation", () => {
     "allocates %s only after permission is granted, even after the activation lifetime",
     async (transport) => {
       vi.useFakeTimers();
-      const permission = createDeferred<MediaStream>();
-      const permissionRequested = createDeferred();
-      const media = microphone();
-      const getUserMedia = vi.fn(() => {
-        permissionRequested.resolve();
-        return permission.promise;
-      });
-      useMicrophone(getUserMedia);
+      const media = pendingMicrophone();
       const request = vi.fn(async (method: string) => {
         if (method === "talk.client.create" && transport === "gateway-relay") {
           throw new Error("Use relay session creation");
@@ -108,19 +109,19 @@ describe("Realtime Talk microphone preparation", () => {
       const session = sessionFor(request, transport);
       const starting = session.start();
       void starting.catch(() => undefined);
-      await permissionRequested.promise;
+      await media.requested.promise;
       await vi.advanceTimersByTimeAsync(65_000);
       expect(request).not.toHaveBeenCalled();
-      expect(getUserMedia).toHaveBeenCalledOnce();
-      permission.resolve(media.stream);
+      expect(media.getUserMedia).toHaveBeenCalledOnce();
+      media.resolve(media.stream);
       await starting;
       expect(request.mock.calls.map(([method]) => method)).toEqual(
         transport === "gateway-relay"
           ? ["talk.client.create", "talk.session.create"]
           : ["talk.client.create"],
       );
-      expect(getUserMedia).toHaveBeenCalledOnce();
-      expect(getUserMedia).toHaveBeenCalledWith({
+      expect(media.getUserMedia).toHaveBeenCalledOnce();
+      expect(media.getUserMedia).toHaveBeenCalledWith({
         audio: {
           autoGainControl: true,
           echoCancellation: true,
@@ -143,18 +144,15 @@ describe("Realtime Talk microphone preparation", () => {
   });
 
   it("cancels pending permission without allocating and releases a late stream", async () => {
-    const permission = createDeferred<MediaStream>();
-    const media = microphone();
-    const getUserMedia = vi.fn(() => permission.promise);
-    useMicrophone(getUserMedia);
+    const media = pendingMicrophone();
     const request = vi.fn(async () => clientSession());
     const session = sessionFor(request);
     const starting = session.start();
     void starting.catch(() => undefined);
-    await waitForFast(() => expect(getUserMedia).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(media.getUserMedia).toHaveBeenCalledOnce());
     void session.stop();
     await expect(starting).resolves.toBeUndefined();
-    permission.resolve(media.stream);
+    media.resolve(media.stream);
     await waitForFast(() => expect(media.track.stop).toHaveBeenCalledOnce());
     expect(request).not.toHaveBeenCalled();
     expect(transports).toHaveLength(0);
@@ -163,9 +161,7 @@ describe("Realtime Talk microphone preparation", () => {
   it("releases prepared microphone ownership when provider creation fails", async () => {
     const media = microphone();
     useMicrophone(vi.fn(async () => media.stream));
-    const request = vi.fn(async () => {
-      throw new Error("Provider allocation failed");
-    });
+    const request = vi.fn().mockRejectedValue(new Error("Provider allocation failed"));
     await expect(sessionFor(request).start()).rejects.toThrow("Provider allocation failed");
     expect(media.track.stop).toHaveBeenCalledOnce();
     expect(transports).toHaveLength(0);
