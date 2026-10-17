@@ -1385,7 +1385,7 @@ describe("ci workflow guards", () => {
         lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
         lintCentralScripts: true,
-        graphs: ["core-test-agents-root", "test-root"],
+        graphs: ["core-test-agents-root", "test-root-tooling"],
       },
       {
         path: "ui/src/styles/chat.css",
@@ -1426,7 +1426,7 @@ describe("ci workflow guards", () => {
         lintCoreStripes: [],
         lintExtensionStripes: [3],
         lintCentralScripts: false,
-        graphs: ["extensions", "extensions-test", "test-root"],
+        graphs: ["extensions", "extensions-test", "test-root-tooling"],
       },
       {
         path: "src/wizard/i18n/locales/en.ts",
@@ -1731,7 +1731,7 @@ describe("ci workflow guards", () => {
           runnerProfile: "hybrid",
           changedPaths: paths,
           ciTypeGraphNames: paths[0]?.startsWith("extensions/")
-            ? ["extensions", "extensions-test", "test-root"]
+            ? ["extensions", "extensions-test", "test-root-tooling"]
             : undefined,
           changedPlannerSource: changedPlannerSource(),
         });
@@ -2052,7 +2052,7 @@ describe("ci workflow guards", () => {
           "core-test-gateway-root",
           "extensions-test",
           "scripts",
-          "test-root",
+          "test-root-tooling",
         ];
         const paths = ["src/shared/runtime.ts"];
         const manifest = runCiManifestFixture({
@@ -2098,8 +2098,8 @@ describe("ci workflow guards", () => {
         expect(JSON.parse(production.type_graph_names_json)).toEqual(["core", "ui", "extensions"]);
         expect(JSON.parse(central.type_graph_names_json)).toEqual(
           profile === "blacksmith" && !centralCorePaths
-            ? ["extensions-test", "test-root", "scripts"]
-            : ["extensions-test", "scripts", "test-root"],
+            ? ["extensions-test", "test-root-tooling", "scripts"]
+            : ["extensions-test", "scripts", "test-root-tooling"],
         );
         const hosted = profile === "hybrid";
         const coreNames = ["core-test-agents-root", "core-test-gateway-root"];
