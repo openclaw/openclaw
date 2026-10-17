@@ -7,7 +7,7 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import { beginForegroundSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
+import { reserveForegroundUnlessStopped } from "../../agents/session-maintenance/coordinator.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import {
   isRestartRecoveryTombstone,
@@ -126,9 +126,11 @@ export async function admitReplyTurn(
   const workspaceReadiness = captureAgentWorkspaceReadiness(params.sessionKey);
   const workSignal = getAsyncWorkSignal();
   const activeAtAdmission = replyRunRegistry.get(params.sessionKey);
+  // A Stop during the maintenance wait reserves nothing; the admission loop's
+  // first check then reports it as aborted. Maintenance failures still throw.
   const releaseForeground =
     params.kind === "visible"
-      ? await beginForegroundSessionMaintenance(params.sessionKey)
+      ? await reserveForegroundUnlessStopped(params.sessionKey, params.upstreamAbortSignal)
       : undefined;
   let foregroundTransferred = false;
   // Maintenance may finish after the observed reply rotates and clears its slot.
