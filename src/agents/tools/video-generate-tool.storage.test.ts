@@ -14,10 +14,7 @@ import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js"
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
 function createMp4Fixture(): Buffer {
-  return Buffer.from([
-    0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00,
-    0x69, 0x73, 0x6f, 0x6d, 0x6d, 0x70, 0x34, 0x31,
-  ]);
+  return Buffer.from("000000186674797069736f6d0000020069736f6d6d703431", "hex");
 }
 
 function createConfig(primary: string, fallbacks: string[]): OpenClawConfig {
@@ -154,15 +151,7 @@ describe("video generation invocation QA", () => {
         },
       ]);
 
-      const savedPaths = details.paths as string[];
-      expect(savedPaths).toHaveLength(1);
-      const savedPath = savedPaths[0];
-      if (!savedPath) {
-        throw new Error("expected saved video path");
-      }
-      const savedStat = await fs.stat(savedPath);
-      expect(savedStat.isFile()).toBe(true);
-      expect(savedStat.size).toBe(generatedVideo.byteLength);
+      const savedPath = savedVideoPath(details, 0, 1);
       await expect(fs.readFile(savedPath)).resolves.toEqual(generatedVideo);
       expect(details.attachments).toEqual([
         expect.objectContaining({
@@ -203,13 +192,9 @@ describe("video generation invocation QA", () => {
       const details = requireDetails(result);
       const paths = details.paths as string[];
 
-      expect(paths).toHaveLength(3);
       expect(paths[0]).toBe("https://media.example/first.mp4");
       expect(paths[2]).toBe("https://media.example/last.mp4");
-      const savedPath = paths[1];
-      if (!savedPath) {
-        throw new Error("expected managed middle video path");
-      }
+      const savedPath = savedVideoPath(details, 1, 3);
       await expect(fs.readFile(savedPath)).resolves.toEqual(savedVideo);
       expect(details.attachments).toMatchObject([
         { url: paths[0], name: "first.mp4" },
@@ -219,3 +204,13 @@ describe("video generation invocation QA", () => {
     });
   });
 });
+
+function savedVideoPath(details: Record<string, unknown>, index: number, count: number) {
+  const paths = details.paths as string[];
+  expect(paths).toHaveLength(count);
+  const savedPath = paths[index];
+  if (!savedPath) {
+    throw new Error("expected saved video path");
+  }
+  return savedPath;
+}

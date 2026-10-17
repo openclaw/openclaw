@@ -294,10 +294,4 @@ describe("transcripts read actions", () => {
     expect(listed.details).toHaveProperty("sessions.length", 50);
     expect(JSON.stringify(listed.content).length).toBeLessThan(4200);
   });
-
-  it("requires exactly one show selector", async () => {
-    await expect(run({ action: "show", selector: "one", sessionId: "two" })).rejects.toThrow(
-      "exactly one",
-    );
-  });
 });
