@@ -41,6 +41,7 @@ const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize(
 const actors: SessionActor[] = [];
 const sessionKey = "agent:main:dashboard:incognito-expiry";
 const day = 24 * 60 * 60_000;
+const memoryPath = (agentId = "main") => resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
 let time: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let sidecar: { stop(): Promise<void> | void } | undefined;
@@ -75,18 +76,16 @@ async function createSession(createdAt: number, key = sessionKey, sessionId = "o
   const agentId = key.split(":")[1]!;
   const owner = memorySessionActorOwners.get({
     agentId,
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env }),
+    path: memoryPath(agentId),
   });
   const actor = await owner.acquire(
     { sessionKey: key, database: owner.identity },
     { assertCurrent() {}, assertReadable() {} },
   );
   actors.push(actor);
+  const entry = { sessionId, updatedAt: createdAt, createdAt, incognito: true };
   const created = await actor.storage!.mutate(
-    {
-      type: "session.entry.create",
-      input: { entry: { sessionId, updatedAt: createdAt, createdAt, incognito: true } },
-    },
+    { type: "session.entry.create", input: { entry } },
     authority,
   );
   expect(created.kind).toBe("committed");
@@ -117,11 +116,7 @@ async function deleteSession(params: Parameters<typeof deletion.deleteGatewaySes
 it("observes startup and publications without creating a memory owner", async () => {
   const deleteGatewaySession = vi.spyOn(deletion, "deleteGatewaySession");
   startLifetime();
-  sessionChanges.emit({
-    agentId: "main",
-    sessionKey,
-    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-  });
+  sessionChanges.emit({ agentId: "main", sessionKey, storePath: memoryPath() });
   await time.advanceBy(day);
   expect(memorySessionActorOwners.list()).toEqual([]);
   expect(deleteGatewaySession).not.toHaveBeenCalled();
@@ -144,16 +139,9 @@ it("keeps the creation deadline after activity and joins accepted expiry before 
   let stopping: Promise<void> | undefined;
   try {
     await time.advanceBy(day - 1);
+    const patch = { createdAt: time.clock.now(), updatedAt: time.clock.now() };
     const patched = await actor.storage!.mutate(
-      {
-        type: "session.entry.patch",
-        input: {
-          operation: {
-            kind: "fields",
-            patch: { createdAt: time.clock.now(), updatedAt: time.clock.now() },
-          },
-        },
-      },
+      { type: "session.entry.patch", input: { operation: { kind: "fields", patch } } },
       authority,
     );
     expect(patched.kind).toBe("committed");
@@ -181,14 +169,10 @@ it("keeps the creation deadline after activity and joins accepted expiry before 
 
 it("retries failed cleanup without extending the original lifetime", async () => {
   const { owner } = await createSession(time.clock.now());
-  let attempts = 0;
-  vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
-    attempts += 1;
-    if (attempts === 1) {
-      throw new Error("Transient cleanup failure");
-    }
-    return deleteSession(params);
-  });
+  const cleanup = vi
+    .spyOn(deletion, "deleteGatewaySession")
+    .mockRejectedValueOnce(new Error("Transient cleanup failure"))
+    .mockImplementation(deleteSession);
   startLifetime();
   await time.advanceBy(day);
   expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("original");
@@ -197,17 +181,12 @@ it("retries failed cleanup without extending the original lifetime", async () =>
   );
   await time.advanceBy(60_000);
   expect(owner.readSession(sessionKey, authority)).toBeUndefined();
-  expect(attempts).toBe(2);
+  expect(cleanup).toHaveBeenCalledTimes(2);
 });
 
 it("starts memory expiry with Gateway sidecars and preserves replacement deadlines", async () => {
   const first = await createSession(time.clock.now());
-  const deleted: string[] = [];
-  vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
-    const result = await deleteSession(params);
-    deleted.push(params.params.expectedSessionId!);
-    return result;
-  });
+  const cleanup = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(deleteSession);
   const stopOwner = createGatewaySidecarStopOwner();
   sidecar = stopOwner;
   await attachInitialGatewayLifetimeSidecars({
@@ -224,8 +203,11 @@ it("starts memory expiry with Gateway sidecars and preserves replacement deadlin
   await createSession(time.clock.now(), sessionKey, "replacement");
   await createSession(time.clock.now(), "agent:work:dashboard:incognito-expiry", "other-agent");
   await time.advanceBy(day - 60_000);
-  expect(deleted).toEqual([]);
+  expect(cleanup).not.toHaveBeenCalled();
   await time.advanceBy(60_000);
-  expect(deleted.toSorted()).toEqual(["other-agent", "replacement"]);
+  expect(cleanup.mock.calls.map(([call]) => call.params.expectedSessionId).toSorted()).toEqual([
+    "other-agent",
+    "replacement",
+  ]);
   expect(logWarning).not.toHaveBeenCalled();
 });

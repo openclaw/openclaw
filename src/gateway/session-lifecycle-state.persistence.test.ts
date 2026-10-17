@@ -29,28 +29,23 @@ import {
   getAgentRunContextOwnerStatus,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import { registerChatAbortController } from "./chat-abort.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
+import { createChatRunState, createSessionEventSubscriberRegistry } from "./server-chat-state.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import {
   bindSessionRowProjection,
@@ -82,17 +77,12 @@ vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
   },
 }));
 
-const persistenceTestWarnings = vi.fn();
-const silentLog: SubsystemLogger = {
+const subscriptionFixture = createSubscriptionTestFixture();
+const persistenceTestWarnings = subscriptionFixture.warn;
+const silentLog: typeof subscriptionFixture.log = {
+  ...subscriptionFixture.log,
   subsystem: "gateway-lifecycle-persistence-test",
   isEnabled: () => false,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: persistenceTestWarnings,
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
   child: () => silentLog,
 };
 
@@ -117,21 +107,10 @@ function subscribe(
   overrides: Partial<Parameters<typeof startGatewayEventSubscriptions>[0]> = {},
 ) {
   return startGatewayEventSubscriptions({
-    scheduler: createTestGatewayScheduler(),
-    signal: new AbortController().signal,
+    ...subscriptionFixture.createParams(),
     log: silentLog,
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeHasSessionSubscribers: () => false,
-    nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map(),
     chatRunState,
     toolEventRecipients: chatRunState.toolEventRecipients,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
-    restartRecoveryCandidates: new Map(),
-    refreshConnectedUserProfiles: vi.fn(),
     ...overrides,
   });
 }
@@ -296,6 +275,14 @@ it.each(["success", "failed-write"])(
     };
     const sessionId = "native-cancel-session";
     const runId = "native-cancel-run";
+    const emitLifecycle = (data: Record<string, unknown>) =>
+      emitAgentEvent({
+        runId,
+        sessionId,
+        sessionKey: target.sessionKey,
+        stream: "lifecycle",
+        data,
+      });
     const chatRunState = createChatRunState();
     const broadcast = vi.fn();
     const terminalChanged = createDeferred();
@@ -384,7 +371,7 @@ it.each(["success", "failed-write"])(
         readOnly: false,
       }),
     );
-    const readHistory = async () => {
+    const readSessionInfo = async () => {
       const respond = vi.fn();
       await chatHistoryHandlers["chat.history"]!({
         req: { type: "req", id: "native-cancel-history", method: "chat.history" },
@@ -395,7 +382,7 @@ it.each(["success", "failed-write"])(
         context,
       });
       expect(respond.mock.calls[0]?.[0]).toBe(true);
-      return respond.mock.calls[0]?.[1];
+      return respond.mock.calls[0]?.[1]?.sessionInfo;
     };
     try {
       admissionEntry =
@@ -430,19 +417,14 @@ it.each(["success", "failed-write"])(
             return persistence;
           };
         });
-      emitAgentEvent({
-        runId,
-        sessionId,
-        sessionKey: target.sessionKey,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 1_000 },
-      });
-      // The first start crosses lazy handler loading; await its real commit,
-      // not a polling deadline that also measures cold module initialization.
+      emitLifecycle({ phase: "start", startedAt: 1_000 });
+      // Join the real commit across lazy handler loading, not a polling deadline.
       await startPersisted.promise;
       expect(loadSessionEntry(target)?.status).toBeUndefined();
-      expect(await readHistory()).toMatchObject({
-        sessionInfo: { status: "running", hasActiveRun: true, activeRunIds: [runId] },
+      expect(await readSessionInfo()).toMatchObject({
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: [runId],
       });
       heldWriter = patchSessionEntryCore(target, async () => {
         writerStarted.resolve();
@@ -460,16 +442,10 @@ it.each(["success", "failed-write"])(
         reason: createAgentRunDirectAbortError(),
       });
       expect(registration.controller.signal.aborted).toBe(true);
-      emitAgentEvent({
-        runId,
-        sessionId,
-        sessionKey: target.sessionKey,
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          ...resolveAgentRunAbortLifecycleFields(registration.controller.signal),
-          endedAt: 2_000,
-        },
+      emitLifecycle({
+        phase: "error",
+        ...resolveAgentRunAbortLifecycleFields(registration.controller.signal),
+        endedAt: 2_000,
       });
       registration.cleanup();
       admission.release();
@@ -486,9 +462,7 @@ it.each(["success", "failed-write"])(
           agentId: "main",
         }),
       ).toEqual({ active: false, runIds: [] });
-      expect(await readHistory()).toMatchObject({
-        sessionInfo: { status: "running", hasActiveRun: true },
-      });
+      expect(await readSessionInfo()).toMatchObject({ status: "running", hasActiveRun: true });
 
       if (outcome === "failed-write") {
         const removed = waitForChatAbortControllerRemoval({
@@ -516,16 +490,14 @@ it.each(["success", "failed-write"])(
           expect.anything(),
         ),
       );
-      expect(await readHistory()).toMatchObject({
-        sessionInfo: {
-          status: "killed",
-          hasActiveRun: false,
-          activeRunIds: [],
-          startedAt: 1_000,
-          endedAt: 2_000,
-          runtimeMs: 1_000,
-          abortedLastRun: true,
-        },
+      expect(await readSessionInfo()).toMatchObject({
+        status: "killed",
+        hasActiveRun: false,
+        activeRunIds: [],
+        startedAt: 1_000,
+        endedAt: 2_000,
+        runtimeMs: 1_000,
+        abortedLastRun: true,
       });
       await terminalChanged.promise;
       expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -616,6 +588,8 @@ it.for([
           throw new Error("expected worker terminal claim");
         }
         const terminalClaimId = claimId;
+        const ownerStatus = () =>
+          getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration);
         const chatRunState = createChatRunState();
         const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
         subscriptions = subscribe(chatRunState);
@@ -640,9 +614,7 @@ it.for([
         expect(persistenceTestWarnings).not.toHaveBeenCalled();
         expect(markFinal).toHaveBeenCalledWith(runId);
 
-        expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
-          "active",
-        );
+        expect(ownerStatus()).toBe("active");
         releaseWriter.resolve();
         await heldWriter;
         // Failed runs also persist a transcript receipt after the row update.
@@ -662,9 +634,7 @@ it.for([
             }),
           );
         }
-        expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
-          "clear-requested",
-        );
+        expect(ownerStatus()).toBe("clear-requested");
       } finally {
         releaseWriter.resolve();
         await heldWriter;
