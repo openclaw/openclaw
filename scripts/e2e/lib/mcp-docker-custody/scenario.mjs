@@ -52,10 +52,10 @@ async function waitForReady(directory, cli) {
   }
 }
 
-function startProbe(stateDir) {
+function startMcpCommand(stateDir, args) {
   const child = spawn(
     process.execPath,
-    ["/app/openclaw.mjs", "--profile", "docker-custody", "mcp", "probe", "fixture", "--json"],
+    ["/app/openclaw.mjs", "--profile", "docker-custody", "mcp", ...args],
     {
       cwd: "/app",
       env: {
@@ -116,13 +116,30 @@ async function exercise(mode) {
     JSON.stringify({
       agents: { defaults: { workspace: path.join(directory, "workspace") } },
       plugins: { enabled: false },
-      mcp: { servers: { fixture: { ...server, transport: "stdio" } } },
+      mcp: {
+        servers:
+          mode === "add"
+            ? {}
+            : {
+                fixture: {
+                  ...server,
+                  transport: "stdio",
+                  ...(mode === "configure" ? { enabled: false } : {}),
+                },
+              },
+      },
     }),
   );
+  const commandArgs =
+    mode === "add"
+      ? ["add", "fixture", "--command", server.command, ...server.args.map((arg) => `--arg=${arg}`)]
+      : mode === "configure"
+        ? ["configure", "fixture", "--enable", "--parallel", "--probe"]
+        : ["probe", "fixture", "--json"];
   const before = await docker(["ps", "-aq", "--no-trunc", "--filter", `name=^/${name}$`]);
   assert.equal(before, "", "fixture name must not predate this launch");
   const startedAt = performance.now();
-  let cli = startProbe(stateDir);
+  let cli = startMcpCommand(stateDir, commandArgs);
   try {
     const ready = await waitForReady(directory, cli);
     assert.equal(ready, mode === "timeout" ? "initialize-withheld" : "tools/list");
@@ -162,7 +179,7 @@ async function exercise(mode) {
       );
       await fs.rm(path.join(directory, "ready"));
       recoveredFrom = id;
-      cli = startProbe(stateDir);
+      cli = startMcpCommand(stateDir, commandArgs);
       assert.equal(await waitForReady(directory, cli), "tools/list");
       const [replacement] = JSON.parse(await docker(["inspect", "--type", "container", name]));
       id = replacement.Id;
@@ -213,6 +230,28 @@ async function exercise(mode) {
     assert(labels["openclaw.mcp.state"], "transport must label its state namespace");
     assert(labels["openclaw.mcp.gateway"], "transport must record its owner");
     assert(labels["openclaw.mcp.launch"], "transport must label the launch");
+    if (mode === "add" || mode === "configure") {
+      const savedConfig = JSON.parse(
+        await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8"),
+      );
+      const saved = savedConfig.mcp.servers.fixture;
+      assert(saved, "successful pre-save probe must persist the server");
+      assert.equal(saved.command, server.command);
+      assert.deepEqual(
+        saved.args,
+        server.args,
+        "custody flags must never be saved in operator config",
+      );
+      assert.notEqual(saved.enabled, false, "the saved server must be enabled");
+      assert.equal(
+        saved.connectionTimeoutMs,
+        undefined,
+        "the pre-save probe deadline must remain transient",
+      );
+      if (mode === "configure") {
+        assert.equal(saved.supportsParallelToolCalls, true);
+      }
+    }
     if (unrelatedId) {
       const [retained] = JSON.parse(await docker(["inspect", "--type", "container", unrelatedId]));
       assert.equal(
@@ -228,6 +267,7 @@ async function exercise(mode) {
         elapsedMs: Math.round(performance.now() - startedAt),
         exitCode: result.code,
         removed: true,
+        ...(mode === "add" || mode === "configure" ? { saved: true } : {}),
         ...(recoveredFrom ? { recoveredFrom, unrelatedId, unrelatedRetained: true } : {}),
       }),
     );
@@ -240,7 +280,7 @@ async function exercise(mode) {
 }
 
 try {
-  for (const mode of ["close", "timeout", "shell-close", "recovery"]) {
+  for (const mode of ["close", "add", "configure", "timeout", "shell-close", "recovery"]) {
     await exercise(mode);
   }
   console.log("Docker MCP custody CLI proof passed");
