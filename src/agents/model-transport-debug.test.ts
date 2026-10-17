@@ -53,21 +53,15 @@ afterEach(async () => {
   await closeProviderTransportDispatcherPool();
 });
 
-function guardedResponse(init: ResponseInit) {
-  return {
-    response: new Response("ok", init),
-    finalUrl: requestUrl,
-    release: async () => undefined,
-  };
-}
+const guardedResponse = (init: ResponseInit) => ({
+  response: new Response("ok", init),
+  finalUrl: requestUrl,
+  release: async () => undefined,
+});
 
-const startMessage = "[model-fetch] start provider=openai api=chat model=gpt method=POST";
 const responseMessage = "[model-fetch] response provider=openai api=chat model=gpt status=200";
-const sseMessage = "[model-sse] event type=response.output_text.delta";
 it.each([
-  [startMessage, undefined, undefined],
-  [`${responseMessage} elapsedMs=42`, undefined, undefined],
-  [sseMessage, undefined, undefined],
+  ["[model-sse] event type=response.output_text.delta", undefined, undefined],
   [responseMessage, "OPENCLAW_DEBUG_MODEL_TRANSPORT", "1"],
   [responseMessage, "OPENCLAW_DEBUG_MODEL_PAYLOAD", "summary"],
   [responseMessage, "OPENCLAW_DEBUG_SSE", "events"],

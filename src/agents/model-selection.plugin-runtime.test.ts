@@ -3,6 +3,7 @@ import { createModelSelectionState as selectState } from "../auto-reply/reply/mo
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import type { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 
 const customProvider = "custom-provider";
@@ -12,7 +13,7 @@ const legacyRef = `${customProvider}/${legacy}`;
 const modernRef = `${customProvider}/${modern}`;
 const emptyPluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
 const { normalizeModelId, metadataSnapshot, catalogSnapshot } = vi.hoisted(() => ({
-  normalizeModelId: vi.fn(),
+  normalizeModelId: vi.fn<typeof normalizeProviderModelIdWithRuntime>(),
   metadataSnapshot: vi.fn(),
   catalogSnapshot: vi.fn(),
 }));
@@ -35,9 +36,9 @@ vi.mock("./model-catalog.runtime.js", () => ({
 
 type SelectionParams = Parameters<typeof selectState>[0];
 
-function defaultsConfig(defaults: AgentDefaultsConfig): OpenClawConfig {
-  return { agents: { defaults } };
-}
+const defaultsConfig = (defaults: AgentDefaultsConfig): OpenClawConfig => ({
+  agents: { defaults },
+});
 
 function captureAliases(cfg: OpenClawConfig, provider: string, aliases: Record<string, string>) {
   const snapshot = createPluginMetadataSnapshotFixture({
@@ -79,9 +80,8 @@ beforeEach(() => {
 });
 
 it("keeps model visibility policy construction off plugin runtime hooks by default", async () => {
-  normalizeModelId.mockImplementation(
-    ({ provider: owner, context }: { provider: string; context: { modelId?: string } }) =>
-      owner === customProvider && context.modelId === legacy ? modern : undefined,
+  normalizeModelId.mockImplementation(({ provider: owner, context }) =>
+    owner === customProvider && context.modelId === legacy ? modern : undefined,
   );
   const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
   const policy = createModelVisibilityPolicy({
@@ -91,8 +91,7 @@ it("keeps model visibility policy construction off plugin runtime hooks by defau
     defaultModel: legacy,
   });
 
-  expect(policy.allowedKeys.has(legacyRef)).toBe(true);
-  expect(policy.allowedKeys.has(modernRef)).toBe(false);
+  expect([legacyRef, modernRef].map((key) => policy.allowedKeys.has(key))).toEqual([true, false]);
   expect(normalizeModelId).not.toHaveBeenCalled();
 });
 
@@ -108,44 +107,38 @@ it("resolves bare reply defaults from the captured manifest once", async () => {
 });
 
 it.each(["session", "parent"])("normalizes captured raw %s pins", async (source) => {
+  const provider = "snapshot-fixture";
   const cfg = defaultsConfig({
-    model: "snapshot-fixture/default",
-    modelPolicy: { allow: ["snapshot-fixture/stored-modern"] },
+    model: `${provider}/default`,
+    modelPolicy: { allow: [`${provider}/stored-modern`] },
   });
-  captureAliases(cfg, "snapshot-fixture", { "stored-legacy": "stored-modern" });
+  captureAliases(cfg, provider, { "stored-legacy": "stored-modern" });
   const sessionKey = "agent:main:snapshot-child";
   const parentSessionKey = "agent:main:snapshot-parent";
-  const storedEntry = pin("snapshot-fixture", "stored-legacy", "snapshot-pin");
+  const storedEntry = pin(provider, "stored-legacy", "snapshot-pin");
   const sessionEntry = source === "session" ? storedEntry : { sessionId: sessionKey, updatedAt: 1 };
-  const state = await selectModel(cfg, "snapshot-fixture", "default", {
+  const state = await selectModel(cfg, provider, "default", {
     sessionEntry,
     sessionStore: { [sessionKey]: sessionEntry, [parentSessionKey]: storedEntry },
     sessionKey,
     parentSessionKey: source === "parent" ? parentSessionKey : undefined,
   });
 
-  expect(state).toMatchObject({
-    provider: "snapshot-fixture",
-    model: "stored-modern",
-    resetModelOverride: false,
-  });
+  expect(state).toMatchObject({ provider, model: "stored-modern", resetModelOverride: false });
   expect(storedEntry.modelOverride).toBe("stored-legacy");
 });
 
 it("keeps resolved persisted overrides off plugin runtime hooks", () => {
   normalizeModelId.mockReturnValue("incorrectly-renormalized-model");
-
-  expect(
-    resolveSessionModelRef(
-      {},
-      {
-        providerOverride: customProvider,
-        modelOverride: modern,
-        modelOverrideRouteResolution: "resolved",
-      },
-      "main",
-    ),
-  ).toEqual({ provider: customProvider, model: modern });
+  const entry = {
+    providerOverride: customProvider,
+    modelOverride: modern,
+    modelOverrideRouteResolution: "resolved" as const,
+  };
+  expect(resolveSessionModelRef({}, entry, "main")).toEqual({
+    provider: customProvider,
+    model: modern,
+  });
   expect(normalizeModelId).not.toHaveBeenCalled();
 });
 
@@ -157,17 +150,14 @@ it("keeps concurrent model-policy runs isolated while sharing metadata", async (
     await release.promise;
     return { entries: [], authoritative: true };
   });
-  const createConfig = (model: string) =>
-    defaultsConfig({
-      modelPolicy: { allow: [`custom-provider/${model}`] },
-      models: { [`custom-provider/${model}`]: {} },
-    });
+  const createConfig = (model: string) => {
+    const key = `${customProvider}/${model}`;
+    return defaultsConfig({ modelPolicy: { allow: [key] }, models: { [key]: {} } });
+  };
   const firstConfig = createConfig("first");
   const secondConfig = createConfig("second");
-
   const select = (cfg: ReturnType<typeof createConfig>, model: string) =>
     selectModel(cfg, customProvider, model, { hasModelDirective: true });
-
   const firstPromise = select(firstConfig, "first");
   await started.promise;
   const second = await select(secondConfig, "second");
@@ -192,9 +182,7 @@ it("preserves runtime discovery fallback across configured, stored, and fallback
     ["stored-legacy", "stored-modern"],
     ["fallback-legacy", "fallback-modern"],
   ]);
-  normalizeModelId.mockImplementation(({ context }: { context: { modelId?: string } }) =>
-    aliases.get(context.modelId ?? ""),
-  );
+  normalizeModelId.mockImplementation(({ context }) => aliases.get(context.modelId ?? ""));
   const cfg = defaultsConfig({
     model: {
       primary: "custom-provider/configured-legacy",
@@ -207,7 +195,6 @@ it("preserves runtime discovery fallback across configured, stored, and fallback
   });
   const sessionKey = "agent:main:discord:channel:c1";
   const sessionEntry = pin(customProvider, "stored-legacy", sessionKey);
-
   const state = await selectModel(cfg, customProvider, "configured-legacy", {
     sessionEntry,
     sessionStore: { [sessionKey]: sessionEntry },
@@ -222,9 +209,7 @@ it("preserves runtime discovery fallback across configured, stored, and fallback
     config: cfg,
     allowWorkspaceScopedSnapshot: true,
   });
-  expect(
-    normalizeModelId.mock.calls.map(
-      ([call]) => (call as { context?: { modelId?: string } }).context?.modelId,
-    ),
-  ).toEqual(expect.arrayContaining(["configured-legacy", "stored-legacy", "fallback-legacy"]));
+  expect(normalizeModelId.mock.calls.map(([call]) => call.context.modelId)).toEqual(
+    expect.arrayContaining(["configured-legacy", "stored-legacy", "fallback-legacy"]),
+  );
 });

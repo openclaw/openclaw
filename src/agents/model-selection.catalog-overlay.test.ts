@@ -31,12 +31,6 @@ type OverlayCase = [string, Partial<ModelDefinitionConfig>, boolean, ("api" | "b
 const capturedRoute = { api: "openai-responses", baseUrl: "https://captured.example/v1" } as const;
 const configuredEndpoint = "https://configured.example/v1";
 const thinkingOwner = "fixture-thinking-owner";
-const selectedIdentity = {
-  provider: "route-fixture",
-  id: "selected",
-  name: "Configured selected",
-  alias: "Selected alias",
-};
 const routePolicy: ModelCatalogRoutePolicy = {
   resolveIdentity: ({ provider, id }) => ({ id, key: `${provider}/${id}` }),
   matchesRoute: modelTransportRoutesMatch,
@@ -54,23 +48,23 @@ function project(
   cfg: OpenClawConfig,
   entry: ModelCatalogEntry,
   catalog: ModelCatalogEntry[],
-  route: ProviderModelRouteCandidate,
+  route: Partial<Pick<ProviderModelRouteCandidate, "api" | "baseUrl">>,
 ) {
   return projectModelCatalogEntryForRoute({
     entry,
     catalog,
-    projection: { kind: "selected", route, policy: routePolicy },
+    projection: {
+      kind: "selected",
+      route: {
+        ...capturedRoute,
+        ...route,
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+      policy: routePolicy,
+    },
     overrides: createConfiguredModelCatalogOverridesResolver({ cfg, policy: routePolicy })(entry),
   });
-}
-
-function thinkingDefault(entry: ModelCatalogEntry) {
-  return resolveThinkingProfile({
-    provider: entry.provider,
-    model: entry.id,
-    catalog: [entry],
-    providerPolicySource: { providers: [] },
-  }).defaultLevel;
 }
 
 // Materialize optional fields so absence and explicit undefined keep their original equality semantics.
@@ -82,26 +76,10 @@ function expectFields<T>(entry: T, expected: Partial<T>) {
   expect(actual).toEqual(expected);
 }
 
-function capabilities(
-  override: Partial<ModelDefinitionConfig>,
-  hasDonor: boolean,
-): Partial<ModelCatalogEntry> {
-  return {
-    reasoning: override.reasoning ?? (hasDonor ? true : undefined),
-    input: override.input ?? (hasDonor ? ["text", "image"] : undefined),
-    contextWindow: override.contextWindow ?? (hasDonor ? 128_000 : undefined),
-    contextTokens: override.contextTokens ?? (hasDonor ? 96_000 : undefined),
-    thinkingLevelMap:
-      override.thinkingLevelMap ?? (hasDonor ? { off: null, high: "high" } : undefined),
-  };
-}
-
 it.each([undefined, 4_000_000_000])(
   "keeps discovered parameter counts with their configured physical route (override %s)",
   (parameterCount) => {
-    const cfg = modelConfig([
-      { ...makeModel("compact-chat"), name: "Compact Chat", parameterCount },
-    ]);
+    const cfg = modelConfig([{ ...makeModel("compact-chat"), parameterCount }]);
     const catalog = buildConfiguredModelCatalog({
       cfg,
       catalog: [
@@ -118,12 +96,7 @@ it.each([undefined, 4_000_000_000])(
     const entry = expectDefined(catalog[0], "configured parameter metadata");
     expect(entry.parameterCount).toBe(4_000_000_000);
     for (const baseUrl of [capturedRoute.baseUrl, "https://different.example/v1"]) {
-      const { entry: projected, runtimeEntry } = project(cfg, entry, catalog, {
-        ...capturedRoute,
-        baseUrl,
-        authRequirement: "api-key",
-        requestTransportOverrides: "none",
-      });
+      const { entry: projected, runtimeEntry } = project(cfg, entry, catalog, { baseUrl });
       const matchesConfiguredRoute = baseUrl === capturedRoute.baseUrl;
       expect(projected.parameterCount).toBe(matchesConfiguredRoute ? 4_000_000_000 : undefined);
       expect(runtimeEntry.parameterCount).toBe(projected.parameterCount);
@@ -205,23 +178,18 @@ it.each<OverlayCase>([
     const preparedPolicy = vi.fn(
       () => ({ levels: [{ id: "off" }, { id: "max" }], defaultLevel: "max" }) as const,
     );
+    const provider = {
+      id: thinkingOwner,
+      label: "Thinking owner",
+      auth: [],
+      resolveThinkingProfile: preparedPolicy,
+    };
     prepareModelCatalogThinkingPolicies({
       catalog,
       metadataSnapshot,
       pluginRegistry: {
         ...createEmptyPluginRegistry(),
-        providers: [
-          {
-            pluginId: thinkingOwner,
-            source: "test",
-            provider: {
-              id: thinkingOwner,
-              label: "Thinking owner",
-              auth: [],
-              resolveThinkingProfile: preparedPolicy,
-            },
-          },
-        ],
+        providers: [{ pluginId: thinkingOwner, source: "test", provider }],
       },
     });
     const allowed = buildAllowedModelSet({
@@ -231,54 +199,64 @@ it.each<OverlayCase>([
       manifestPlugins: metadataSnapshot,
     });
     const selected = expectDefined(allowed.allowedCatalog[0], "configured selected row");
-    const route: ProviderModelRouteCandidate = {
+    const route = {
       ...capturedRoute,
       api: override.api ?? capturedRoute.api,
       baseUrl: override.baseUrl ?? capturedRoute.baseUrl,
-      authRequirement: "api-key",
-      requestTransportOverrides: "none",
     };
     expect(allowed.allowedCatalog).toHaveLength(1);
     for (const field of ["api", "baseUrl"] as const) {
       expect(selected[field]).toBe(captured[field]);
       expect(Object.hasOwn(selected, field)).toBe(Object.hasOwn(captured, field));
     }
-    expect(thinkingDefault(selected)).toBe(
-      override.reasoning === false ? "off" : clearsCapturedMetadata ? undefined : "max",
-    );
-    expect(preparedPolicy).toHaveBeenCalledTimes(clearsCapturedMetadata ? 0 : 1);
-    preparedPolicy.mockClear();
     expectFields(selected, {
-      ...selectedIdentity,
-      ...capabilities(override, !clearsCapturedMetadata),
       configuredReasoning: override.reasoning,
       ...(!missingRouteField
         ? { compat: clearsCapturedMetadata ? override.compat : { supportsTools: true } }
         : {}),
       params: clearsCapturedMetadata ? override.params : { captured: true, ...override.params },
-      contextWindows: clearsCapturedMetadata ? undefined : captured.contextWindows,
+      contextWindows: clearsCapturedMetadata
+        ? undefined
+        : [{ id: "native", label: "Native", contextWindow: 128_000 }],
       contextWindowDefault: clearsCapturedMetadata ? undefined : "native",
-      mediaInput: clearsCapturedMetadata ? undefined : captured.mediaInput,
-      thinkingPolicyProvider: clearsCapturedMetadata ? undefined : thinkingOwner,
+      mediaInput: clearsCapturedMetadata ? undefined : { image: { maxBytes: 4_096 } },
     });
 
     const projection = project(source.config, selected, catalog.routeVariants, route);
     const hasMatchingDonor = !clearsCapturedMetadata && !missingRouteField;
-    expectFields(projection.entry, {
-      ...selectedIdentity,
-      api: route.api,
-      baseUrl: route.baseUrl,
-      ...capabilities(override, hasMatchingDonor),
-      thinkingPolicyProvider: hasMatchingDonor ? thinkingOwner : undefined,
-    });
+    expectFields(projection.entry, route);
     expectFields(projection.runtimeEntry, {
       compat: hasMatchingDonor ? { supportsTools: true } : undefined,
       params: hasMatchingDonor ? { captured: true } : undefined,
     });
-    expect(thinkingDefault(projection.entry)).toBe(
-      override.reasoning === false ? "off" : hasMatchingDonor ? "max" : undefined,
-    );
-    expect(preparedPolicy).toHaveBeenCalledTimes(hasMatchingDonor ? 1 : 0);
+    for (const [entry, hasDonor] of [
+      [selected, !clearsCapturedMetadata],
+      [projection.entry, hasMatchingDonor],
+    ] as const) {
+      expectFields(entry, {
+        provider: "route-fixture",
+        id: "selected",
+        name: "Configured selected",
+        alias: "Selected alias",
+        reasoning: override.reasoning ?? (hasDonor ? true : undefined),
+        input: override.input ?? (hasDonor ? ["text", "image"] : undefined),
+        contextWindow: override.contextWindow ?? (hasDonor ? 128_000 : undefined),
+        contextTokens: override.contextTokens ?? (hasDonor ? 96_000 : undefined),
+        thinkingLevelMap:
+          override.thinkingLevelMap ?? (hasDonor ? { off: null, high: "high" } : undefined),
+        thinkingPolicyProvider: hasDonor ? thinkingOwner : undefined,
+      });
+      expect(
+        resolveThinkingProfile({
+          provider: entry.provider,
+          model: entry.id,
+          catalog: [entry],
+          providerPolicySource: { providers: [] },
+        }).defaultLevel,
+      ).toBe(override.reasoning === false ? "off" : hasDonor ? "max" : undefined);
+      expect(preparedPolicy).toHaveBeenCalledTimes(hasDonor ? 1 : 0);
+      preparedPolicy.mockClear();
+    }
   },
 );
 it.each(["configured", "visibility"] as const)(
@@ -299,21 +277,11 @@ it.each(["configured", "visibility"] as const)(
           baseUrl: `https://${owner}.example/v1`,
         })),
       );
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { modelPolicy: { allow: ids.map((id) => `fixture/${id}`) } },
-        },
-      };
+      const modelPolicy = { allow: ids.map((id) => `fixture/${id}`) };
+      const cfg: OpenClawConfig = { agents: { defaults: { modelPolicy } } };
       if (kind === "configured") {
         cfg.models = modelConfig(
-          ids.map<ModelDefinitionConfig>((id) => ({
-            id,
-            name: id,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 1024,
-          })),
+          ids.map(makeModel),
           { baseUrl: configuredEndpoint },
           "fixture",
         ).models;
@@ -329,7 +297,7 @@ it.each(["configured", "visibility"] as const)(
               allowPluginNormalization: false,
             }).allowedCatalog;
       expect(selected.map((entry) => entry.baseUrl)).toEqual(
-        Array.from({ length: rowCount }, () => `https://${scope}.example/v1`),
+        ids.map(() => `https://${scope}.example/v1`),
       );
       return loadPolicy.mock.calls.length;
     };
