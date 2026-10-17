@@ -15,10 +15,14 @@ import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const parser = createNativeTypeScriptParser();
+const baselineFile = "config/assertion-safety-baseline.txt";
+const firstAssertion = "export const first = value as string;\n";
+const safety = "// SAFETY: fixture parser validated the value.\n";
+const sha256 = (source: string | Buffer) => createHash("sha256").update(source).digest("hex");
 afterAll(() => parser.close());
 
-function parseFixture(source: string, fileName: string) {
-  return [source, fileName, parser.parseSourceFile(fileName, source), parser] as const;
+function count(source: string, fileName = "src/example.ts") {
+  return countAssertions(source, fileName, parser.parseSourceFile(fileName, source), parser);
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -50,35 +54,43 @@ function git(cwd: string, args: string[], input?: string) {
   );
 }
 
-function commitFixture(root: string) {
-  for (const args of [["init"], ["add", "."], ["commit", "-m", "fixture"]]) {
-    git(root, args);
-  }
+function write(root: string, file: string, source: string) {
+  const target = path.join(root, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, source);
 }
 
 function fileFixture(files: Record<string, string>, committed = false) {
   const root = tempDirs.make("openclaw-assertion-safety-");
   for (const [file, source] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), source);
+    write(root, file, source);
   }
+  git(root, ["init"]);
   if (committed) {
-    commitFixture(root);
-  } else {
-    git(root, ["init"]);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "fixture"]);
   }
   return root;
 }
 
-function ratchetFixture(source = "export const first = value as string;\n") {
+function sourceFiles(size: number, source: (index: number) => string, extensions = ["ts"]) {
+  return Object.fromEntries(
+    Array.from({ length: size }, (_, index) => [
+      `src/source-${String(index).padStart(2, "0")}.${extensions[index % extensions.length]!}`,
+      source(index),
+    ]),
+  );
+}
+
+function ratchetFixture(source = firstAssertion) {
   const root = fileFixture(
     {
       "src/example.ts": source,
-      "config/assertion-safety-baseline.txt": "src/example.ts\t1\n",
+      [baselineFile]: "src/example.ts\t1\n",
     },
     true,
   );
-  const baselinePath = path.join(root, "config/assertion-safety-baseline.txt");
+  const baselinePath = path.join(root, baselineFile);
   const sourcePath = path.join(root, "src/example.ts");
   vi.spyOn(console, "log").mockImplementation(() => {});
   return { root, baselinePath, sourcePath };
@@ -97,36 +109,31 @@ afterEach(() => {
 
 describe("check-assertion-safety-ratchet", () => {
   it("counts mixed source files and reports the first malformed source in path order", () => {
-    const extensions = ["ts", "tsx", "mts", "cts"];
-    const sources = Array.from({ length: 36 }, (_, index) => ({
-      file: `src/source-${String(index).padStart(2, "0")}.${extensions[index % extensions.length]!}`,
-      source:
+    const sources = sourceFiles(
+      36,
+      (index) =>
         index === 17 ? "export const value = 17;\n" : "export const value = input as Shape;\n",
-    }));
-    const root = fileFixture(Object.fromEntries(sources.map(({ file, source }) => [file, source])));
-
-    expect(currentCounts(root)).toEqual(
-      new Map(sources.filter((_, index) => index !== 17).map(({ file }) => [file, 1])),
+      ["ts", "tsx", "mts", "cts"],
     );
-
-    const malformed = [sources[5]!, sources[17]!, sources[35]!];
-    for (const { file } of malformed) {
-      fs.writeFileSync(path.join(root, file), "const broken = ;\n");
+    const entries = Object.entries(sources);
+    const root = fileFixture(sources);
+    expect(currentCounts(root)).toEqual(
+      new Map(entries.filter((_, index) => index !== 17).map(([file]) => [file, 1])),
+    );
+    const malformed = [entries[5]!, entries[17]!, entries[35]!];
+    for (const [file] of malformed) {
+      write(root, file, "const broken = ;\n");
     }
-    for (const { file, source } of malformed) {
+    for (const [file, source] of malformed) {
       expect(() => currentCounts(root)).toThrow(`${file}:1: Expression expected.`);
-      fs.writeFileSync(path.join(root, file), source);
+      write(root, file, source);
     }
   });
 
   it("keeps worktree counts and staged read failures with unmerged index entries", () => {
-    const files = Array.from(
-      { length: 36 },
-      (_, index) => `src/source-${String(index).padStart(2, "0")}.ts`,
-    );
-    const root = fileFixture(
-      Object.fromEntries(files.map((file) => [file, "export const value = input as Shape;\n"])),
-    );
+    const sources = sourceFiles(36, () => "export const value = input as Shape;\n");
+    const files = Object.keys(sources);
+    const root = fileFixture(sources);
     git(root, ["add", "."]);
     const oid = git(
       root,
@@ -169,15 +176,11 @@ describe("check-assertion-safety-ratchet", () => {
       "const angleUnknown = <unknown>value;",
     ].join("\n");
 
-    expect(countAssertions(...parseFixture(source, "src/example.ts"))).toBe(3);
+    expect(count(source)).toBe(3);
     for (const file of ["src/agents/agent-model-discovery.ts", "src/example.ts"]) {
-      expect(countAssertions(...parseFixture("value as unknown as Shape;", file))).toBe(1);
+      expect(count("value as unknown as Shape;", file)).toBe(1);
     }
-    expect(
-      countAssertions(
-        ...parseFixture("declare const value: unknown as Shape;", "src/example.d.ts"),
-      ),
-    ).toBe(0);
+    expect(count("declare const value: unknown as Shape;", "src/example.d.ts")).toBe(0);
     expect(
       [
         "src/example.ts",
@@ -201,15 +204,11 @@ describe("check-assertion-safety-ratchet", () => {
     expect(errors.join("\n")).toContain("src/example.ts: 2 > 1");
     expect(errors.join("\n")).toContain("// SAFETY:");
 
-    const safeSecond =
-      "// SAFETY: the parser guarantees this value is numeric.\nexport const second = value as number;\n";
-    fs.writeFileSync(sourcePath, `export const first = value as string;\n${safeSecond}`);
+    const safeSecond = `${safety}export const second = value as number;\n`;
+    fs.writeFileSync(sourcePath, `${firstAssertion}${safeSecond}`);
     expect(main(root, ["--base", "HEAD"])).toBe(0);
 
-    fs.writeFileSync(
-      sourcePath,
-      `// SAFETY: the parser guarantees this value is text.\nexport const first = value as string;\n${safeSecond}`,
-    );
+    fs.writeFileSync(sourcePath, `${safety}${firstAssertion}${safeSecond}`);
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
     expect(readBaseline(root, baselinePath)).toEqual(new Map());
@@ -217,7 +216,7 @@ describe("check-assertion-safety-ratchet", () => {
 
   it("allows rebaselining assertion debt already present in the base tree", () => {
     const { root, baselinePath } = ratchetFixture(
-      "export const first = value as string;\nexport const mergedConcurrently = value as number;\n",
+      `${firstAssertion}export const mergedConcurrently = value as number;\n`,
     );
 
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -242,7 +241,7 @@ describe("check-assertion-safety-ratchet", () => {
       "src/example.test.ts": "const test = value as Shape;",
       "src/example.d.ts": "declare const value: Shape;",
       "scripts/example.ts": "const support = value as Shape;",
-      "config/assertion-safety-baseline.txt": [
+      [baselineFile]: [
         "src/a.ts\t4",
         "src/b.ts\t1",
         "src/zero.ts\t2",
@@ -256,7 +255,7 @@ describe("check-assertion-safety-ratchet", () => {
     const root = fileFixture(files, true);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     // A report ref selects source bytes, unlike the ratchet's comparison-only --base.
-    fs.writeFileSync(path.join(root, "src/a.ts"), "const broken = ;");
+    write(root, "src/a.ts", "const broken = ;");
     fs.rmSync(path.join(root, "src/b.ts"));
     const report = assertionReport(root, "HEAD");
     expect(report).toMatchObject({ complete: true, matching: "not-performed" });
@@ -268,45 +267,39 @@ describe("check-assertion-safety-ratchet", () => {
       lockfileBlob: null,
     });
     expect(report.tooling.sha256["scripts/check-assertion-safety-ratchet.mts"]).toBe(
-      createHash("sha256")
-        .update(
-          fs.readFileSync(
-            new URL("../../scripts/check-assertion-safety-ratchet.mts", import.meta.url),
-          ),
-        )
-        .digest("hex"),
+      sha256(
+        fs.readFileSync(
+          new URL("../../scripts/check-assertion-safety-ratchet.mts", import.meta.url),
+        ),
+      ),
     );
     expect([report.coverage, report.totals]).toEqual([
       { discovered: 7, parsed: 3, failed: 0, unvisited: 0, excluded: 3, missing: 1 },
       { allowances: 25, counted: 3, exempt: 3, unusedAllowance: 22 },
     ]);
-    expect(report.files.map((file) => file.path)).toEqual([
-      "scripts/example.ts",
-      "src/a.ts",
-      "src/b.ts",
-      "src/deleted.ts",
-      "src/example.d.ts",
-      "src/example.test.ts",
-      "src/zero.ts",
-    ]);
+    expect(report.files.map((file) => file.path)).toEqual(
+      [...Object.keys(files).filter((file) => file !== baselineFile), "src/deleted.ts"].toSorted(),
+    );
     const first = report.files.find((file) => file.path === "src/a.ts");
-    expect(first?.blob).toBe(git(root, ["rev-parse", "HEAD:src/a.ts"]).trim());
-    expect(first?.sites.map((site) => site.exemption)).toEqual([
-      null,
-      "unknown",
-      "const",
-      "safety-comment",
-      null,
-    ]);
-    expect(first?.sites[0]).toMatchObject({
-      kind: "as",
-      line: 1,
-      column: files["src/a.ts"].indexOf("as Shape") + 1,
-      start: files["src/a.ts"].indexOf("value as Shape"),
+    expect(first).toMatchObject({
+      blob: git(root, ["rev-parse", "HEAD:src/a.ts"]).trim(),
+      sites: [
+        {
+          kind: "as",
+          line: 1,
+          exemption: null,
+          column: files["src/a.ts"].indexOf("as Shape") + 1,
+          start: files["src/a.ts"].indexOf("value as Shape"),
+        },
+        { exemption: "unknown" },
+        { exemption: "const" },
+        { exemption: "safety-comment" },
+        { exemption: null },
+      ],
     });
     expect(report.ambiguousFingerprints).toEqual([
       {
-        fingerprint: createHash("sha256").update("value as Shape").digest("hex"),
+        fingerprint: sha256("value as Shape"),
         occurrences: 2,
       },
     ]);
@@ -316,21 +309,16 @@ describe("check-assertion-safety-ratchet", () => {
     const output = vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--report", commit])).toBe(0);
     expect(output).toHaveBeenCalledExactlyOnceWith(JSON.stringify(report, null, 2));
-    expect(fs.readFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "utf8")).toBe(
-      files["config/assertion-safety-baseline.txt"],
-    );
+    expect(fs.readFileSync(path.join(root, baselineFile), "utf8")).toBe(files[baselineFile]);
   });
 
   it("reports parse failures across batches without treating unknown counts as zero", () => {
     const root = fileFixture(
       {
-        ...Object.fromEntries(
-          Array.from({ length: 34 }, (_, index) => [
-            `src/${String(index).padStart(2, "0")}.ts`,
-            index === 0 || index === 33 ? "const broken = ;" : "const value = 1;",
-          ]),
+        ...sourceFiles(34, (index) =>
+          index === 0 || index === 33 ? "const broken = ;" : "const value = 1;",
         ),
-        "config/assertion-safety-baseline.txt": "src/00.ts\t1\nsrc/33.ts\t1\n",
+        [baselineFile]: "src/source-00.ts\t1\nsrc/source-33.ts\t1\n",
       },
       true,
     );
