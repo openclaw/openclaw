@@ -104,7 +104,6 @@ it("keeps computed source siblings beside the admitted native realpath", async (
       expect(fs.existsSync(sibling)).toBe(true);
       fs.writeFileSync(path.join(root, "helper.cjs"), 'exports.value = "edited after admission";');
       expect(api.read("./helper.cjs")).toBe("late");
-      expect(fs.existsSync(sibling)).toBe(true);
       expect(fs.readFileSync(sibling, "utf8")).toBe(helper);
     } finally {
       await instance.dispose();

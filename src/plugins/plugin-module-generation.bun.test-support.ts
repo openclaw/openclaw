@@ -12,10 +12,8 @@ assert.ok(process.versions.bun, "this regression must execute in Bun");
 const inputHome = process.argv[2];
 assert.ok(inputHome, "the fixture requires its private home directory");
 const home = inputHome;
-const root = path.join(home, "plugin");
-const roots = [root];
-fs.mkdirSync(root);
-fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+const roots: string[] = [];
+const root = fixture("plugin", {});
 const instances: PluginInstance[] = [];
 const cleanups = new Map<PluginInstance, number>();
 let retained: ReturnType<PluginInstance["retainConsumer"]> | undefined;
@@ -411,16 +409,16 @@ try {
   }
   retained = oldNative.instance.retainConsumer();
   const retiring = oldNative.instance.dispose();
-  assert.equal(await retained.run(() => oldNative.entry.read()), 42);
-  assert.equal(await retained.run(() => oldNative.entry.read("#exact")), 45, "native condition");
-  assert.equal(await retained.run(() => oldNative.entry.read("#wild/leaf")), 46);
-  assert.equal(
-    await retained.run(() => oldNative.entry.read("#wild/shadow")),
-    45,
-    "exact map entry",
-  );
-  assert.equal(await retained.run(() => oldNative.entry.read("#trailer/leaf.js")), 47);
-  assert.equal(await retained.run(() => oldNative.entry.read("#alias/leaf")), 48);
+  for (const [target, expected] of [
+    [undefined, 42],
+    ["#exact", 45],
+    ["#wild/leaf", 46],
+    ["#wild/shadow", 45],
+    ["#trailer/leaf.js", 47],
+    ["#alias/leaf", 48],
+  ] as const) {
+    assert.equal(await retained.run(() => oldNative.entry.read(target)), expected, target);
+  }
   await assert.rejects(retained.run(() => oldNative.entry.read("#wild/blocked")));
   fs.writeFileSync(path.join(nativeRoot, "deep.mjs"), "export const value = 43;");
   const currentNative = loadNative();

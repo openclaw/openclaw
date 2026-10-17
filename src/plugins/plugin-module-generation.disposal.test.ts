@@ -29,6 +29,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const nativeRequire = createRequire(import.meta.url);
+const recordEvent = (events: string[], event: string) => () => void events.push(event);
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -121,9 +122,7 @@ it.each(["runtime", "setup"] as const)(
     const events: string[] = [];
     const consumer = instance.retainConsumer();
     const retained = consumer.wrap(value);
-    instance.lifecycle.onDispose(() => {
-      events.push("plugin");
-    });
+    instance.lifecycle.onDispose(recordEvent(events, "plugin"));
     const gate = gateRemoval(value.filename, events, undefined, nativeFile);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let settled = false;
@@ -135,9 +134,7 @@ it.each(["runtime", "setup"] as const)(
       expect(events).toEqual([]);
       expect(retained.read()).toBe("retained");
       expect(fs.existsSync(value.filename)).toBe(true);
-      await consumer.close(() => {
-        events.push("consumer");
-      });
+      await consumer.close(recordEvent(events, "consumer"));
       await Promise.race([gate.entered, retirement]);
       expect(events).toEqual(["consumer", "plugin", "remove"]);
       expect(nativeRequire.cache[value.filename]).toBeUndefined();
@@ -238,9 +235,7 @@ it.each([
   };
   const cleanup = rejects ? instance.wrap(operation) : operation;
   if (!rejects) {
-    instance.lifecycle.onDispose(() => {
-      events.push("sibling");
-    });
+    instance.lifecycle.onDispose(recordEvent(events, "sibling"));
   }
   if (kind === "plugin callback") {
     instance.lifecycle.onDispose(cleanup);

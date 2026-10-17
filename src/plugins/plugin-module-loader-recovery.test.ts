@@ -125,8 +125,7 @@ it.each(
     }
     const { root, entry, captures, instance, create } = fixture(standalone, nativePackageMap);
     const oldModule = instance.loadModule(entry) as FixtureModule;
-    expect(oldModule.next()).toBe(1);
-    expect(oldModule.next()).toBe(2);
+    expect([oldModule.next(), oldModule.next()]).toEqual([1, 2]);
     expect(oldModule.native()).toBe("original native bytes");
     const nativeIdentity = fs.statSync(oldModule.nativePath);
     const dependencyIdentity = fs.statSync(oldModule.nativeDependencyPath());
@@ -171,9 +170,9 @@ it.each(
     await restored.dispose();
     const final = newInstance();
     withPluginSourceCaptureDirectory(captures, () => again.bind(final));
-    expect((final.loadModule(entry) as FixtureModule).next()).toBe(1);
-    expect((final.loadModule(entry) as FixtureModule).late()).toBe("original late import");
     const finalModule = final.loadModule(entry) as FixtureModule;
+    expect(finalModule.next()).toBe(1);
+    expect(finalModule.late()).toBe("original late import");
     expect(finalModule.native()).toBe("original native bytes");
     expectIdentity(finalModule.nativePath, nativeIdentity);
     await final.dispose();

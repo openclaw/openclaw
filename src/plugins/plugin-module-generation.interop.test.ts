@@ -12,9 +12,27 @@ import { createPluginModuleGenerationTestHarness } from "./plugin-module-generat
 const { temp, fixture, host } = createPluginModuleGenerationTestHarness();
 type Reader<T = number> = { read(): Promise<T> };
 type Loader<T> = { load(): Promise<T> };
+type Importer<T> = { read(name: string): Promise<T> };
+type ModuleValue<T = number> = { value: T };
 
 function write(root: string, file: string, source: string) {
   fs.writeFileSync(path.join(root, file), source);
+}
+const fileUrl = (root: string, file: string) => pathToFileURL(path.join(root, file)).href;
+const valueModule = (value: number, name = "value") => `export const ${name} = ${value};`;
+function load<T>(root: string, entry = "entry.mjs", standalone = false): T {
+  return host(root, standalone).load(entry) as T;
+}
+async function expectImportedValue<T>(promise: Promise<ModuleValue<T>>, value: T) {
+  await expect(promise).resolves.toMatchObject({ value });
+}
+function expectRequiredIdentity(actual: { token: object }, expected: { token: object }) {
+  if (process.versions.bun) {
+    expect(actual).toEqual(expected);
+    expect(actual.token).toBe(expected.token);
+  } else {
+    expect(actual).toBe(expected);
+  }
 }
 
 describe("native plugin generation interop", () => {
@@ -158,12 +176,7 @@ describe("native plugin generation interop", () => {
       "native.cjs": "exports.value = 7;",
       "async.ts": "export const value = 42;",
     });
-    type Plugin = {
-      directory: string;
-      captured: string;
-      value: number;
-      read(): Promise<{ value: number }>;
-    };
+    type Plugin = Record<"directory" | "captured", string> & ModuleValue & Reader<ModuleValue>;
     const cache = createRequire(import.meta.url).cache;
     const records = (plugin: Plugin) => {
       const directory = plugin.directory + path.sep;
@@ -219,7 +232,7 @@ describe("native plugin generation interop", () => {
         "package.json": '{"dependencies":{"conditional-dependency":"1.0.0"}}',
         "node_modules/conditional-dependency/package.json":
           '{"exports":{"import":"./import.mjs","require":"./require.cjs"}}',
-        "node_modules/conditional-dependency/import.mjs": "export const value = 42;",
+        "node_modules/conditional-dependency/import.mjs": valueModule(42),
         "node_modules/conditional-dependency/require.cjs": "exports.value = 7;",
       });
       type Plugin = { default: { register(api: { read?: () => Promise<unknown[]> }): void } };
@@ -259,13 +272,13 @@ describe("native plugin generation interop", () => {
 
   it("preserves optional source resolver arguments during synchronous registration", () => {
     const root = fixture({
-      "value.ts": "export const value = 1;",
-      "nested/value.ts": "export const value = 2;",
+      "value.ts": valueModule(1),
+      "nested/value.ts": valueModule(2),
       "package.json": '{"dependencies":{"conditional-dependency":"1.0.0"}}',
       "node_modules/conditional-dependency/package.json":
         '{"exports":{"custom":"./custom.mjs","import":"./import.mjs"}}',
-      "node_modules/conditional-dependency/custom.mjs": "export const value = 3;",
-      "node_modules/conditional-dependency/import.mjs": "export const value = 4;",
+      "node_modules/conditional-dependency/custom.mjs": valueModule(3),
+      "node_modules/conditional-dependency/import.mjs": valueModule(4),
       "index.ts": `export default { register(api) {
       const resolve = import.meta.resolve;
       const parentURL = new URL('./nested/entry.ts', import.meta.url);
@@ -290,7 +303,7 @@ describe("native plugin generation interop", () => {
       "resolver.ts":
         "export const value = import.meta.resolve('missing-optional-dependency', { try: true }) ?? 42;",
     });
-    await expect((host(root).load("index.ts") as Reader).read()).resolves.toBe(42);
+    await expect(load<Reader>(root, "index.ts").read()).resolves.toBe(42);
   });
 
   it("links static ESM imports to an async CommonJS TypeScript child", async () => {
@@ -459,18 +472,10 @@ describe("native plugin generation interop", () => {
       });
       const pluginRoot = path.join(root, "plugin");
       const typed = path.join(root, `node_modules/peer-dependency/peer.${extension}`);
-      const plugin = host(pluginRoot, true).load("entry.mjs") as {
-        read(name: string): Promise<{ value: string }>;
-      };
-      await expect(plugin.read(pathToFileURL(typed).href)).resolves.toMatchObject({
-        value: "typescript",
-      });
-      await expect(plugin.read("peer-dependency/native")).resolves.toMatchObject({
-        value: "javascript",
-      });
-      await expect(plugin.read(pathToFileURL(typed).href)).resolves.toMatchObject({
-        value: "typescript",
-      });
+      const plugin = load<Importer<ModuleValue<string>>>(pluginRoot, "entry.mjs", true);
+      await expectImportedValue(plugin.read(pathToFileURL(typed).href), "typescript");
+      await expectImportedValue(plugin.read("peer-dependency/native"), "javascript");
+      await expectImportedValue(plugin.read(pathToFileURL(typed).href), "typescript");
     },
   );
 
@@ -491,24 +496,20 @@ describe("native plugin generation interop", () => {
           type: "module",
           exports: { ".": "./first.mjs", "./second": "./second.mjs" },
         }),
-        "node_modules/source-dependency/first.mjs": "export const value = 42;",
-        "node_modules/source-dependency/second.mjs": "export const value = 84;",
+        "node_modules/source-dependency/first.mjs": valueModule(42),
+        "node_modules/source-dependency/second.mjs": valueModule(84),
       });
       const pluginRoot = path.join(root, "plugin");
-      const plugin = host(pluginRoot, true).load("entry.mjs") as {
-        read(name: string): Promise<{ value: number }>;
-      };
+      const plugin = load<Importer<ModuleValue>>(pluginRoot, "entry.mjs", true);
       const first = path.join(root, "node_modules/source-dependency/first.mjs");
       const specifier =
         reference === "absolute" ? toSafeImportPath(first) : pathToFileURL(first).href;
-      await expect(plugin.read(specifier)).resolves.toMatchObject({ value: 42 });
-      fs.writeFileSync(first, "export const value = 43;");
-      fs.writeFileSync(path.join(pluginRoot, "later.mjs"), "export const value = 2;");
-      await expect(plugin.read("source-dependency/second")).resolves.toMatchObject({ value: 84 });
-      await expect(plugin.read(`${pathToFileURL(first).href}?captured`)).resolves.toMatchObject({
-        value: 42,
-      });
-      await expect(plugin.read("./later.mjs")).resolves.toMatchObject({ value: 2 });
+      await expectImportedValue(plugin.read(specifier), 42);
+      fs.writeFileSync(first, valueModule(43));
+      write(pluginRoot, "later.mjs", valueModule(2));
+      await expectImportedValue(plugin.read("source-dependency/second"), 84);
+      await expectImportedValue(plugin.read(`${pathToFileURL(first).href}?captured`), 42);
+      await expectImportedValue(plugin.read("./later.mjs"), 2);
     },
   );
 
@@ -541,10 +542,10 @@ describe("native plugin generation interop", () => {
             : "export const read = async name => (await import(name)).value;",
         "node_modules/versioned-dependency/package.json":
           '{"name":"versioned-dependency","version":"1.0.0","type":"module","exports":{".":"./index.mjs","./sub:entry":"./index.mjs"}}',
-        "node_modules/versioned-dependency/index.mjs": "export const value = 1;",
+        "node_modules/versioned-dependency/index.mjs": valueModule(1),
         "nested/node_modules/versioned-dependency/package.json":
           '{"name":"versioned-dependency","version":"2.0.0","type":"module","exports":{".":"./index.mjs","./sub:entry":"./index.mjs"}}',
-        "nested/node_modules/versioned-dependency/index.mjs": "export const value = 2;",
+        "nested/node_modules/versioned-dependency/index.mjs": valueModule(2),
       });
       type Plugin = { rootVersion: number; readNested(name: string): Promise<number> };
       const plugin = host(root, standalone).load("entry.mjs") as Plugin;
@@ -591,19 +592,20 @@ describe("native plugin generation interop", () => {
         "entry.mjs": "",
         "node_modules/source-dependency/package.json":
           '{"name":"source-dependency","type":"module","exports":"./value.mjs"}',
-        "node_modules/source-dependency/value.mjs": "export const value = 42;",
+        "node_modules/source-dependency/value.mjs": valueModule(42),
       });
       const dependency = path.join(root, "node_modules/source-dependency/value.mjs");
       const specifier =
         reference === "absolute" ? toSafeImportPath(dependency) : pathToFileURL(dependency).href;
-      fs.writeFileSync(
-        path.join(root, "entry.mjs"),
+      write(
+        root,
+        "entry.mjs",
         `export const read = async () => (await import(${JSON.stringify(specifier)})).value;`,
       );
-      const first = host(root).load("entry.mjs") as Reader;
-      fs.writeFileSync(dependency, "export const value = 43;");
+      const first = load<Reader>(root);
+      fs.writeFileSync(dependency, valueModule(43));
       await expect(first.read()).resolves.toBe(42);
-      const second = host(root).load("entry.mjs") as Reader;
+      const second = load<Reader>(root);
       await expect(second.read()).resolves.toBe(43);
     },
   );
@@ -616,7 +618,7 @@ describe("native plugin generation interop", () => {
     const linkedPath = link === "directory" ? "shared/value.mjs" : "value.mjs";
     const root = fixture({
       "plugin/entry.mjs": `export { value } from "./${linkedPath}";`,
-      "shared/value.mjs": "export const value = 42;",
+      "shared/value.mjs": valueModule(42),
     });
     const plugin = path.join(root, "plugin");
     fs.symlinkSync(
@@ -640,9 +642,9 @@ describe("native plugin generation interop", () => {
       const root = fixture({
         "package.json": JSON.stringify({ imports: { "#answer": `./shared/answer.${extension}` } }),
         [`plugin/entry.${extension}`]: "",
-        [`plugin/local.${extension}`]: "export const value = 17;",
+        [`plugin/local.${extension}`]: valueModule(17),
         [`shared/value.${extension}`]: 'export { answer } from "#answer";',
-        [`shared/answer.${extension}`]: "export const answer = 42;",
+        [`shared/answer.${extension}`]: valueModule(42, "answer"),
       });
       const shared = path.join(root, "shared", `value.${extension}`);
       const specifier =
@@ -651,8 +653,9 @@ describe("native plugin generation interop", () => {
           : reference === "absolute"
             ? toSafeImportPath(shared)
             : pathToFileURL(shared).href;
-      fs.writeFileSync(
-        path.join(root, "plugin", `entry.${extension}`),
+      write(
+        root,
+        `plugin/entry.${extension}`,
         `import { answer } from ${JSON.stringify(specifier)}; export const value = answer;
          export const readLocal = (specifier) => import(specifier).then(module => module.value);`,
       );
@@ -661,10 +664,8 @@ describe("native plugin generation interop", () => {
         readLocal(specifier: string): Promise<number>;
       };
       expect(first).toMatchObject({ value: 42 });
-      await expect(
-        first.readLocal(pathToFileURL(path.join(root, "plugin", `local.${extension}`)).href),
-      ).resolves.toBe(17);
-      fs.writeFileSync(shared, "export const answer = 43;");
+      await expect(first.readLocal(fileUrl(root, `plugin/local.${extension}`))).resolves.toBe(17);
+      fs.writeFileSync(shared, valueModule(43, "answer"));
       expect(host(path.join(root, "plugin"), true).load(`entry.${extension}`)).toMatchObject({
         value: 43,
       });
@@ -685,11 +686,10 @@ describe("native plugin generation interop", () => {
         "node_modules/source-dependency/value.ts": "export const value: number = 42;",
       });
       if (reference === "file URL") {
-        const target = pathToFileURL(
-          path.join(root, "node_modules/source-dependency/value.ts"),
-        ).href;
-        fs.writeFileSync(
-          path.join(root, "node_modules/source-dependency/index.ts"),
+        const target = fileUrl(root, "node_modules/source-dependency/value.ts");
+        write(
+          root,
+          "node_modules/source-dependency/index.ts",
           `import { value } from ${JSON.stringify(target)}; export const answer: number = value;`,
         );
       }
@@ -742,18 +742,16 @@ describe("native plugin generation interop", () => {
           firstImport === "dynamic"
             ? await (managed.load("lazy.cjs") as { load(): Promise<Namespace> }).load()
             : undefined;
-        const entry = managed.load("entry.mjs") as {
-          value: Value;
-          namespace: Namespace;
-          required: Value;
-          cached: Value;
-          reexported: Value;
-          answer: number;
-          hidden: number;
-          readNamed(): number;
-          readNamespace(): Namespace;
-          lazy(): Promise<Namespace>;
-        };
+        const entry = managed.load("entry.mjs") as Record<
+          "value" | "required" | "cached" | "reexported",
+          Value
+        > &
+          Record<"answer" | "hidden", number> & {
+            namespace: Namespace;
+            readNamed(): number;
+            readNamespace(): Namespace;
+            lazy(): Promise<Namespace>;
+          };
         const importedValue =
           process.versions.bun && name === "own-default"
             ? (entry.required.default as Value)
@@ -774,8 +772,7 @@ describe("native plugin generation interop", () => {
         expect(entry.required.getterReads).toBe(process.versions.bun ? 1 : 0);
         entry.required.answer = 43;
         expect(entry.value.answer).toBe(importedValue === entry.required ? 43 : 0);
-        expect(entry.readNamed()).toBe(42);
-        expect(entry.answer).toBe(42);
+        expect([entry.readNamed(), entry.answer]).toEqual([42, 42]);
       }
     },
   );
@@ -920,18 +917,16 @@ describe("native plugin generation interop", () => {
         'module.exports = { value: "require", token: {} };',
     });
     type Dependency = { value: string; token: object };
-    const entry = host(root).load("entry.ts") as {
-      imported: Dependency;
-      required: Dependency;
-      createdRequire: Dependency;
-      reexported: string;
-      namespace: Dependency;
-      shadowed: number;
-      readImported(): Dependency;
-      readRequired(): Dependency;
-      lazy: () => Promise<Dependency>;
-      lazyModule: () => Promise<Dependency & { required: Dependency }>;
-    };
+    const entry = load<
+      Record<"imported" | "required" | "createdRequire" | "namespace", Dependency> & {
+        reexported: string;
+        shadowed: number;
+        readImported(): Dependency;
+        readRequired(): Dependency;
+        lazy: () => Promise<Dependency>;
+        lazyModule: () => Promise<Dependency & { required: Dependency }>;
+      }
+    >(root, "entry.ts");
     const imported = entry.readImported();
     const required = entry.readRequired();
     expect(entry.imported.value).toBe("require");
@@ -939,22 +934,12 @@ describe("native plugin generation interop", () => {
     expect(entry.reexported).toBe("require");
     expect(entry.namespace.token).toBe(entry.imported.token);
     expect(entry.required.value).toBe("require");
-    if (process.versions.bun) {
-      expect(entry.createdRequire).toEqual(entry.required);
-      expect(entry.createdRequire.token).toBe(entry.required.token);
-    } else {
-      expect(entry.createdRequire).toBe(entry.required);
-    }
+    expectRequiredIdentity(entry.createdRequire, entry.required);
     const lazy = await entry.lazy();
     expect(lazy.value).toBe("import");
     expect(lazy.token).not.toBe(imported.token);
     const lazyModule = await entry.lazyModule();
     expect(lazyModule.token).toBe(lazy.token);
-    if (process.versions.bun) {
-      expect(lazyModule.required).toEqual(required);
-      expect(lazyModule.required.token).toBe(required.token);
-    } else {
-      expect(lazyModule.required).toBe(required);
-    }
+    expectRequiredIdentity(lazyModule.required, required);
   });
 });
