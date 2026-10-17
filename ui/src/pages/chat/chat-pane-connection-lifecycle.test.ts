@@ -343,8 +343,8 @@ describe("chat pane connection lifecycle", () => {
     expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
     expect(state.chatStreamRenderFrame).toBeNull();
     expect(requestUpdate).toHaveBeenCalledOnce();
-    lifecycle.requestUpdate();
-    lifecycle.requestUpdate();
+    lifecycle.invalidate();
+    lifecycle.invalidate();
     await Promise.resolve();
     expect(performUpdate).not.toHaveBeenCalled();
 
@@ -356,7 +356,7 @@ describe("chat pane connection lifecycle", () => {
     const addVisibilityListener = vi.spyOn(document, "addEventListener");
     const removeVisibilityListener = vi.spyOn(document, "removeEventListener");
     visibilityState = "hidden";
-    lifecycle.requestUpdate();
+    lifecycle.invalidate();
     await Promise.resolve();
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
@@ -375,7 +375,7 @@ describe("chat pane connection lifecycle", () => {
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
     addVisibilityListener.mockClear();
-    lifecycle.requestUpdate();
+    lifecycle.invalidate();
     await lifecycle.updateComplete;
     expect(addVisibilityListener).not.toHaveBeenCalledWith(
       "visibilitychange",

@@ -14,7 +14,7 @@ export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
 ) => R;
 
 export type PaneTestLifecycle = {
-  requestUpdate(): void;
+  invalidate(): void;
   prepareRender(): void;
   commitRender(): void;
   connectedCallback(): void;
@@ -105,7 +105,6 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
     "onClosePane",
     "boardProvider",
   ] satisfies (keyof ChatPaneProps)[]);
-  const runtimeKey = (key: string | symbol) => (key === "requestUpdate" ? "invalidate" : key);
   const owner = (key: PropertyKey) =>
     !lifecycle.has(String(key)) && (key in runtime || !(key in element)) ? runtime : element;
   const pane = new Proxy(element, {
@@ -134,9 +133,8 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
           runtime.chatState.commitRender();
         };
       }
-      const mappedKey = runtimeKey(key);
-      const source = owner(mappedKey);
-      const value: unknown = Reflect.get(source, mappedKey);
+      const source = owner(key);
+      const value: unknown = Reflect.get(source, key);
       if (typeof value !== "function" || vi.isMockFunction(value)) {
         return value;
       }
@@ -146,28 +144,24 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       return bound.get(value);
     },
     set(_target, key, value) {
-      const mappedKey = runtimeKey(key);
-      const source = owner(mappedKey);
-      const previous = Reflect.get(source, mappedKey);
-      const applied = Reflect.set(source, mappedKey, value);
-      if (applied && inputs.has(String(mappedKey)) && !Object.is(previous, value)) {
+      const source = owner(key);
+      const previous = Reflect.get(source, key);
+      const applied = Reflect.set(source, key, value);
+      if (applied && inputs.has(String(key)) && !Object.is(previous, value)) {
         runtime.invalidate();
       }
       return applied;
     },
     defineProperty(_target, key, descriptor) {
-      const mappedKey = runtimeKey(key);
-      return Reflect.defineProperty(owner(mappedKey), mappedKey, descriptor);
+      return Reflect.defineProperty(owner(key), key, descriptor);
     },
     deleteProperty(_target, key) {
-      const mappedKey = runtimeKey(key);
-      return Reflect.deleteProperty(owner(mappedKey), mappedKey);
+      return Reflect.deleteProperty(owner(key), key);
     },
     getOwnPropertyDescriptor(_target, key) {
-      const mappedKey = runtimeKey(key);
-      const source = owner(mappedKey);
+      const source = owner(key);
       for (let current: object | null = source; current; current = Object.getPrototypeOf(current)) {
-        const descriptor = Object.getOwnPropertyDescriptor(current, mappedKey);
+        const descriptor = Object.getOwnPropertyDescriptor(current, key);
         if (descriptor) {
           return { ...descriptor, configurable: true };
         }
@@ -175,8 +169,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       return undefined;
     },
     has(_target, key) {
-      const mappedKey = runtimeKey(key);
-      return mappedKey in runtime || mappedKey in element;
+      return key in runtime || key in element;
     },
   });
   // SAFETY: This test adapter forwards controller members and native DOM access to their owners.

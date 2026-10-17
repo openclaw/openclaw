@@ -155,7 +155,7 @@ it("refreshes the fallback self identity and defers to the authoritative profile
     identity: { type: "profile", id: "self" },
     name: "Authoritative self",
   };
-  pane.requestUpdate();
+  pane.invalidate();
   await settleLitElement(pane);
   update.mockClear();
   pane.presencePayload = {

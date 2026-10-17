@@ -475,7 +475,7 @@ function createGlobalFeaturePane(
         { key: "global", agentId, sessionId: `${agentId}-parent`, kind: "global", updatedAt: 1 },
       ],
     };
-    pane.requestUpdate();
+    pane.invalidate();
   };
   select("research");
   connectPaneTestView(pane);
@@ -570,7 +570,7 @@ describe("global chat pane feature ownership", () => {
       };
       const expectStableQuestions = async () => {
         const previous = pane.chatProps?.gatewayQuestionPrompts;
-        pane.requestUpdate();
+        pane.invalidate();
         await draw();
         expect(pane.chatProps?.gatewayQuestionPrompts).toBe(previous);
       };

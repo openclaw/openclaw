@@ -66,7 +66,7 @@ function mountPane(
     ChatPaneRuntime,
   ) as unknown as TestChatPane;
   panes.push(pane);
-  vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+  vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({
       offlineRecoveryScope: "test-recovery-scope",

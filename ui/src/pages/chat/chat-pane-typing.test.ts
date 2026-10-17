@@ -442,11 +442,11 @@ describe("chat pane typing presence", () => {
     );
     expect(pane.typingOverflow).toEqual({ several: true });
     const stable = pane.typingActorViews();
-    const requestUpdate = vi.spyOn(pane, "requestUpdate");
+    const invalidate = vi.spyOn(pane, "invalidate");
     for (let index = 0; index < 100; index += 1) {
       pane.handleSessionTypingEvent({ ...event(9), preview: "Unprojected " + index });
     }
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
     expect(pane.typingActorViews()).toBe(stable);
     pane.handleSessionTypingEvent(event(9, false));
     pane.handleSessionTypingEvent(event(8, false));
@@ -500,18 +500,18 @@ describe("chat pane typing presence", () => {
     for (let index = 0; index < 1000; index += 1) {
       pane.handleSessionTypingEvent(event(index));
     }
-    const requestUpdate = vi.spyOn(pane, "requestUpdate");
+    const invalidate = vi.spyOn(pane, "invalidate");
     vi.advanceTimersByTime(10_000);
     // The active-only overflow vanishes in bounded updates even though the
     // first two preview drafts remain retained for their own idle deadline.
-    expect(requestUpdate.mock.calls.length).toBeLessThan(12);
+    expect(invalidate.mock.calls.length).toBeLessThan(12);
     expect(pane.typingActorViews()).toHaveLength(2);
     expect(pane.typingOverflow).toBeUndefined();
     vi.advanceTimersByTime(19_800);
     pane.handleSessionTypingEvent({ ...event(999), preview: "Renewed during exit" });
-    requestUpdate.mockClear();
+    invalidate.mockClear();
     vi.advanceTimersByTime(200);
-    expect(requestUpdate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
     expect(pane.typingActors.size).toBe(1);
     expect(pane.typingActorViews()).toEqual([
       { id: "peer-999", label: "Peer 999", preview: "Renewed during exit" },
