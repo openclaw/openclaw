@@ -64,6 +64,27 @@ it("keeps read-existing credential operations local and does not bootstrap missi
   expect(fs.readdirSync(root)).toEqual([]);
 });
 
+it.each(["-wal", "-shm", "-journal"])(
+  "refuses fresh credentials when only shared %s survives",
+  (suffix) => {
+    const { root, env, run } = fixture();
+    const shared = path.join(root, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(shared));
+    const sidecar = `${shared}${suffix}`;
+    const original = Buffer.from("synthetic retained SQLite family bytes");
+    fs.writeFileSync(sidecar, original);
+    expect(() => run({ kind: "identity.read", identity_key: "node" })).toThrow(
+      "restore the matching main database",
+    );
+    expect(() => run({ kind: "identity.create", identity })).toThrow(
+      "restore the matching main database",
+    );
+    expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
+    expect(fs.readdirSync(path.dirname(shared))).toEqual([path.basename(sidecar)]);
+    expect(fs.readFileSync(sidecar)).toEqual(original);
+  },
+);
+
 it("returns the durable first identity without replacing its exact key material or timestamps", () => {
   const { root, env, run } = fixture();
   expect(run({ kind: "identity.create", identity })).toEqual({ kind: "identity", identity });

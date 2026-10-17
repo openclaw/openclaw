@@ -86,7 +86,9 @@ public enum DeviceCredentialAccess {
         guard self.isInspection(operation),
               !FileManager.default.fileExists(atPath: OpenClawClientCredentialStore.databaseURL(rootURL: root).path)
         else { return nil }
-        var inputs = [root.appendingPathComponent("state/openclaw.sqlite")]
+        let sharedFile = try ClientCredentialReceipt.SharedFile.inspectIfPresent(
+            root.appendingPathComponent("state/openclaw.sqlite"))
+        var inputs: [URL] = []
         for profile in [GatewayDeviceIdentityProfile.primary, .node, .shareExtension] {
             let directory = root.appendingPathComponent("identity")
             inputs += [
@@ -101,10 +103,10 @@ public enum DeviceCredentialAccess {
                 }
             }
         }
-        inputs += inputs.dropFirst().flatMap {
+        inputs += inputs.flatMap {
             [$0.appendingPathExtension("native-importing"), $0.appendingPathExtension("doctor-importing")]
         }
-        guard !inputs.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
+        guard sharedFile == nil, !inputs.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
             throw OpenClawNativeStateError(
                 "Local credentials require migration; run openclaw doctor --fix before inspecting them")
         }

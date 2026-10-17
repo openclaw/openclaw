@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 
 export const CLIENT_CREDENTIAL_LEGACY_KEYS = [
   "identity:primary",
@@ -32,6 +33,11 @@ export function readClientCredentialFileIdentity(
 ): ClientCredentialFileIdentity | null {
   const stat = fs.statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!stat) {
+    if (SQLITE_SIDECAR_SUFFIXES.some((suffix) => fs.existsSync(`${pathname}${suffix}`))) {
+      throw new Error(
+        "Client credential source is unavailable; restore the matching main database before using this client.",
+      );
+    }
     return null;
   }
   if (!stat.isFile()) {

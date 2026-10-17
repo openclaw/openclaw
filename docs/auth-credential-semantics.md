@@ -408,7 +408,12 @@ Legacy JSON imports record consumption atomically with the local write. Revocati
 retains that record, so a restored or rewritten legacy file cannot resurrect its
 token. Refresh and removal compare the observed token with the current local row.
 
-Automatic rollback restores the pre-upgrade shared credentials. Tokens issued
+If the shared SQLite main file is missing while its WAL, shared-memory file, or
+rollback journal remains, credential startup and session import require recovery.
+Restore the matching main database and sidecars before retrying. OpenClaw does not
+create a replacement identity from an incomplete source.
+
+Automatic rollback restores the pre-upgrade shared credentials. Credentials issued
 between upgrade and rollback are lost; affected clients pair again. A subsequent
 upgrade rebuilds any stale local store from the restored shared source. See
 [credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).

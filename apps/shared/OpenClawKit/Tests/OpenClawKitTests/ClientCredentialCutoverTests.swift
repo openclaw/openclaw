@@ -21,6 +21,49 @@ struct ClientCredentialCutoverTests {
         #expect(try self.snapshot(root) == before)
     }
 
+    @Test(arguments: ["-wal", "-shm", "-journal"])
+    func `missing shared main with a retained sidecar refuses inspection and identity creation`(suffix: String) throws {
+        let root = self.root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shared = root.appendingPathComponent("state/openclaw.sqlite")
+        try FileManager.default.createDirectory(
+            at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let sidecar = URL(fileURLWithPath: shared.path + suffix)
+        try Data([0x00, 0x53, 0xFF]).write(to: sidecar)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sidecar.path)
+        let before = try self.snapshot(root)
+        let material = DeviceIdentityStore.generateMaterial()
+        let inspections: [ClientCredentialOperation.Kind] = [.identityRead, .tokenRead, .tokenList, .socketRead]
+        for kind in inspections {
+            var operation = ClientCredentialOperation(kind: kind)
+            operation.identity_key = "primary"
+            operation.key = .init(deviceID: material.identity.deviceId, role: "operator")
+            operation.device_id = material.identity.deviceId
+            #expect(throws: OpenClawNativeStateError.self) {
+                _ = try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+            }
+        }
+        #expect(!FileManager.default.fileExists(
+            atPath: OpenClawClientCredentialStore.databaseURL(rootURL: root).path))
+        var create = ClientCredentialOperation(kind: .identityCreate)
+        create.identity = .init(
+            key: "primary",
+            deviceID: material.identity.deviceId,
+            publicKeyPEM: material.publicKeyPEM,
+            privateKeyPEM: material.privateKeyPEM,
+            createdAtMs: material.identity.createdAtMs,
+            updatedAtMs: material.identity.createdAtMs)
+        #expect(throws: OpenClawNativeStateError.self) {
+            _ = try DeviceCredentialAccess.executeOffline(root: root, operation: create)
+        }
+        let owner = try OpenClawClientCredentialStore(rootURL: root, migration: true)
+        defer { owner.close() }
+        #expect(try owner.readIdentity(key: "primary") == nil)
+        _ = try owner.importLegacy(key: "identity:primary", sha256: nil)
+        #expect(throws: OpenClawNativeStateError.self) { try owner.assertReady(rootURL: root) }
+        #expect(try self.snapshot(root) == before)
+    }
+
     @Test func `app dispatch after close never creates an offline store`() throws {
         let root = self.root()
         DeviceCredentialAccess.close()

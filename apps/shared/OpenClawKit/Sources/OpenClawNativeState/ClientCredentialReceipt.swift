@@ -31,11 +31,31 @@ public struct ClientCredentialReceipt: Codable, Sendable {
         public var dev: String
         public var ino: String
 
+        private static let recoveryMessage =
+            "Credential migration source is missing; restore the matching backup or run openclaw doctor --fix"
+
         public static func inspect(_ url: URL) throws -> Self {
+            guard let binding = try inspectIfPresent(url) else {
+                throw OpenClawNativeStateError(self.recoveryMessage)
+            }
+            return binding
+        }
+
+        /// Absence is fresh only when no SQLite family member remains. Never opens the selected database.
+        public static func inspectIfPresent(_ url: URL) throws -> Self? {
             var info = stat()
-            guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
-                throw OpenClawNativeStateError(
-                    "Credential migration source is missing; restore the matching backup or run openclaw doctor --fix")
+            if lstat(url.path, &info) != 0 {
+                guard errno == ENOENT else { throw OpenClawNativeStateError(Self.recoveryMessage) }
+                for suffix in ["-wal", "-shm", "-journal"] {
+                    var sidecar = stat()
+                    guard lstat(url.path + suffix, &sidecar) != 0, errno == ENOENT else {
+                        throw OpenClawNativeStateError(Self.recoveryMessage)
+                    }
+                }
+                return nil
+            }
+            guard info.st_mode & S_IFMT == S_IFREG else {
+                throw OpenClawNativeStateError(Self.recoveryMessage)
             }
             return try Self(
                 path: OpenClawClientCredentialStore.canonicalPath(url),
@@ -88,8 +108,9 @@ extension OpenClawClientCredentialStore {
 
     public func assertReady(rootURL: URL) throws {
         let sharedURL = rootURL.appendingPathComponent("state/openclaw.sqlite")
+        let current = try ClientCredentialReceipt.SharedFile.inspectIfPresent(sharedURL)
         guard let state = try readReceipt() else {
-            guard !FileManager.default.fileExists(atPath: sharedURL.path) else {
+            guard current == nil else {
                 throw OpenClawNativeStateError(
                     "Client credential migration is required; run openclaw doctor --fix " +
                         "with the matching CLI before starting the app")
@@ -100,8 +121,6 @@ extension OpenClawClientCredentialStore {
             throw OpenClawNativeStateError(
                 "Client credential migration is incomplete; run openclaw doctor --fix before starting the app")
         }
-        let current = FileManager.default.fileExists(atPath: sharedURL.path)
-            ? try ClientCredentialReceipt.SharedFile.inspect(sharedURL) : nil
         guard current == state.receipt.sharedFile else {
             throw OpenClawNativeStateError(
                 "Client credentials do not match restored shared state; run openclaw doctor --fix")
