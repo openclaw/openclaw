@@ -34,6 +34,8 @@ afterEach(async () => {
 function storedRow(threadId: string, recencyAt: number, archived = false): CodexCatalogIndexRow {
   return catalogRow(threadId, recencyAt, {}, { archived });
 }
+const readSnapshot = (rows: CodexCatalogIndexRow[]) =>
+  new CodexCatalogPersistence(completeState(rows), () => {}).readSnapshot();
 
 describe("resident Codex catalog restore bounds", () => {
   it("persists newly reached overflow when an incremental walk stops at its known prefix", async () => {
@@ -47,11 +49,7 @@ describe("resident Codex catalog restore bounds", () => {
         nextCursor: offset + 64 < native.length ? String(offset + 64) : undefined,
       };
     });
-    const index = catalog({
-      homeId: "incremental-overflow",
-      state,
-      readNative,
-    });
+    const index = catalog({ homeId: "incremental-overflow", state, readNative });
     await index.initialize();
     expect(values.get("complete")).toEqual({ version: 1, kind: "complete" });
     for (const id of ["new-one", "new-two"]) {
@@ -134,10 +132,7 @@ describe("resident Codex catalog restore bounds", () => {
   it("cleans a full invalid snapshot without mistaking repeated keys for overflow", async () => {
     const rows = Array.from({ length: 20_000 }, (_, index) => storedRow(`invalid-${index}`, index));
     rows[0]!.preview = "x".repeat(501);
-    const snapshot = await new CodexCatalogPersistence(
-      completeState(rows),
-      () => {},
-    ).readSnapshot();
+    const snapshot = await readSnapshot(rows);
     expect(snapshot.rows).toEqual([]);
     expect(snapshot.complete).toBe(false);
     expect(snapshot.cleanupIncomplete).toBe(false);
@@ -147,18 +142,12 @@ describe("resident Codex catalog restore bounds", () => {
   it("keeps the persisted rollout path within its native catalog bound", async () => {
     const valid = storedRow("bounded", 100);
     valid.rolloutPath = `/${"x".repeat(4_095)}`;
-    const accepted = await new CodexCatalogPersistence(
-      completeState([valid]),
-      () => {},
-    ).readSnapshot();
+    const accepted = await readSnapshot([valid]);
     expect(accepted.complete).toBe(true);
     expect(accepted.rows[0]?.rolloutPath).toHaveLength(4_096);
 
     const oversized = { ...valid, rolloutPath: `${valid.rolloutPath}x` };
-    const rejected = await new CodexCatalogPersistence(
-      completeState([oversized]),
-      () => {},
-    ).readSnapshot();
+    const rejected = await readSnapshot([oversized]);
     expect(rejected.complete).toBe(false);
     expect(rejected.rows).toEqual([]);
     expect(rejected.obsolete).toEqual(new Set(["bounded", "complete"]));
@@ -167,15 +156,11 @@ describe("resident Codex catalog restore bounds", () => {
 
 const createdAt = Date.parse("2026-09-16T12:00:00.000Z") / 1_000;
 const line = (type: string, payload: unknown) => `${JSON.stringify({ type, payload })}\n`;
-function nativeCatalog(
-  root: string,
-  data: CodexThread[],
-  options: { homeId?: string; local?: boolean } = {},
-) {
+function nativeCatalog(root: string, data: CodexThread[]) {
   const readNative = vi.fn(async () => projectCodexCatalogPage({ data }));
   const index = catalog({
-    homeId: options.homeId ?? root,
-    ...(options.local === false ? {} : { localSessionsRoot: root }),
+    homeId: root,
+    localSessionsRoot: root,
     readNative,
   });
   return { index, readNative };
@@ -304,16 +289,19 @@ describe("native catalog metadata authority", () => {
 
   it("keeps native selections and fallback ordering when an old rollout is touched", async () => {
     const { root, file, thread } = await fixture();
-    const native: CodexThread = {
-      ...thread,
+    const nativeMetadata = {
       cwd: "/workspace/native-selected",
       modelProvider: "native-provider",
       source: "vscode",
       sessionId: "native-session",
       cliVersion: "0.155.0",
-      gitInfo: { branch: "native-branch" },
       createdAt: createdAt + 10,
       updatedAt: createdAt + 300,
+    } satisfies Partial<CodexThread>;
+    const native: CodexThread = {
+      ...thread,
+      ...nativeMetadata,
+      gitInfo: { branch: "native-branch" },
       recencyAt: null,
     };
     const peer: CodexThread = {
@@ -325,14 +313,8 @@ describe("native catalog metadata authority", () => {
     const { index, readNative } = nativeCatalog(root, [peer, native]);
     const selected = {
       threadId: "authority",
-      cwd: "/workspace/native-selected",
-      modelProvider: "native-provider",
-      source: "vscode",
-      sessionId: "native-session",
-      cliVersion: "0.155.0",
+      ...nativeMetadata,
       gitBranch: "native-branch",
-      createdAt: createdAt + 10,
-      updatedAt: createdAt + 300,
     };
     await index.initialize();
     await index.reconcile();

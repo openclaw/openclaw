@@ -1,4 +1,3 @@
-// Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -29,6 +28,52 @@ import {
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
+type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
+const node = (nodeId: string, overrides: Partial<CatalogNode> = {}): CatalogNode => ({
+  nodeId,
+  connected: true,
+  commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+  ...overrides,
+});
+const session = (threadId: string, fields: Record<string, unknown> = {}) => ({
+  threadId,
+  status: "idle",
+  archived: false,
+  ...fields,
+});
+function listCatalog(
+  runtime: PluginRuntime,
+  control: ReturnType<typeof createControl>,
+  options: Partial<Parameters<typeof listCodexSessionCatalog>[0]> = {},
+) {
+  return listCodexSessionCatalog({
+    bindingStore: createCodexTestBindingStore(),
+    config,
+    runtime,
+    control,
+    ...options,
+  });
+}
+function providerFor(runtime: PluginRuntime, control = createControl()) {
+  const { api, getProvider } = createGatewayApi(runtime);
+  registerCodexSessionCatalog({
+    api,
+    bindingStore: createCodexTestBindingStore(),
+    control,
+    getRuntimeConfig: () => config,
+  });
+  return getProvider()!;
+}
+function transcriptCommand(control: ReturnType<typeof createControl>, command: string) {
+  const found = createCodexSessionCatalogNodeHostCommands(control).find(
+    (entry) => entry.command === command,
+  );
+  if (!found) {
+    throw new Error(`Codex node command was not registered: ${command}`);
+  }
+  return found;
+}
+
 describe("Codex supervision catalog", () => {
   it("does not start paired hosts when retired during node inventory", async () => {
     const inventory = createDeferred<Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>>();
@@ -42,11 +87,7 @@ describe("Codex supervision catalog", () => {
     }));
     const controller = new AbortController();
     const reason = new Error("catalog retired during inventory");
-    const listed = listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime: createRuntime({ invoke }).runtime,
-      control: createControl(),
+    const listed = listCatalog(createRuntime({ invoke }).runtime, createControl(), {
       query: { hostIds: ["node:late"] },
       listNodes,
       signal: controller.signal,
@@ -54,9 +95,7 @@ describe("Codex supervision catalog", () => {
     await inventoryStarted.promise;
     controller.abort(reason);
     inventory.resolve({
-      nodes: [
-        { nodeId: "late", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
-      ],
+      nodes: [node("late")],
     });
     const result = await listed;
     expect(invoke).not.toHaveBeenCalled();
@@ -69,12 +108,12 @@ describe("Codex supervision catalog", () => {
       const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
         cursor
           ? {
-              sessions: [{ threadId: "native-2", status: "idle", source: "cli", archived: false }],
+              sessions: [session("native-2", { source: "cli" })],
             }
           : {
               sessions: [
-                { threadId: "managed", status: "idle", source: "vscode", archived: false },
-                { threadId: "native-1", status: "idle", source: "cli", archived: false },
+                session("managed", { source: "vscode" }),
+                session("native-1", { source: "cli" }),
               ],
               nextCursor: "page-2",
               backwardsCursor: "page-0",
@@ -117,10 +156,7 @@ describe("Codex supervision catalog", () => {
       expect(JSON.parse(result)).toEqual({
         sourceHomeId: "home-main",
         canContinueCodex: false,
-        sessions: [
-          { threadId: "native-1", status: "idle", source: "cli", archived: false },
-          { threadId: "native-2", status: "idle", source: "cli", archived: false },
-        ],
+        sessions: [session("native-1", { source: "cli" }), session("native-2", { source: "cli" })],
         backwardsCursor: "page-0",
       });
       expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledTimes(1);
@@ -136,42 +172,26 @@ describe("Codex supervision catalog", () => {
   it("keeps paired-node catalogs non-archived and metadata-only", async () => {
     const control = createControl({
       listPage: vi.fn(async () => ({
-        sessions: [{ threadId: "local", status: "idle", archived: false }],
+        sessions: [session("local")],
       })),
     });
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
       payloadJSON: JSON.stringify({
         sessions: [
-          {
-            threadId: "remote",
+          session("remote", {
             fallbackName: "Remote task",
-            status: "idle",
-            archived: false,
             preview: "must be stripped",
             turns: [{ private: true }],
-          },
+          }),
         ],
       }),
     }));
     const { runtime } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          displayName: "Dev Box",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-      ],
+      nodes: [node("devbox", { displayName: "Dev Box" })],
       invoke,
     });
 
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
-      includeLocal: false,
-    });
+    const result = await listCatalog(runtime, control, { includeLocal: false });
 
     expect(result.hosts).toEqual([
       {
@@ -183,9 +203,7 @@ describe("Codex supervision catalog", () => {
         canOpenTerminalCodex: false,
         canStartTerminal: false,
         connected: true,
-        sessions: [
-          { threadId: "remote", fallbackName: "Remote task", status: "idle", archived: false },
-        ],
+        sessions: [session("remote", { fallbackName: "Remote task" })],
       },
     ]);
     expect(control.listPage).not.toHaveBeenCalled();
@@ -215,15 +233,11 @@ describe("Codex supervision catalog", () => {
 
     invoke.mockResolvedValueOnce({
       payloadJSON: JSON.stringify({
-        sessions: [{ threadId: "archived", status: "idle", archived: true }],
+        sessions: [session("archived", { archived: true })],
       }),
     });
     await expect(
-      listCodexSessionCatalog({
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        runtime,
-        control,
+      listCatalog(runtime, control, {
         query: { hostIds: ["node:devbox"] },
       }),
     ).resolves.toEqual({
@@ -240,15 +254,7 @@ describe("Codex supervision catalog", () => {
   it("isolates federated host failures while preserving selected healthy hosts", async () => {
     const control = createControl({
       listPage: vi.fn(async () => ({
-        sessions: [
-          {
-            threadId: "local-match",
-            name: "Match locally",
-            status: "idle",
-            source: "cli",
-            archived: false,
-          },
-        ],
+        sessions: [session("local-match", { name: "Match locally", source: "cli" })],
         nextCursor: "local-page-3",
       })),
     });
@@ -259,21 +265,12 @@ describe("Codex supervision catalog", () => {
       return {
         payloadJSON: JSON.stringify({
           sessions: [
-            {
-              threadId: "remote-match",
-              name: "Remote match",
-              status: "idle",
-              source: "vscode",
-              archived: false,
-            },
-            {
-              threadId: "preview-only",
+            session("remote-match", { name: "Remote match", source: "vscode" }),
+            session("preview-only", {
               name: "Other title",
               preview: "match appears only in private transcript text",
-              status: "idle",
               source: "cli",
-              archived: false,
-            },
+            }),
           ],
           nextCursor: "healthy-page-3",
         }),
@@ -281,43 +278,16 @@ describe("Codex supervision catalog", () => {
     });
     const { runtime } = createRuntime({
       nodes: [
-        {
-          nodeId: "healthy",
-          displayName: "A healthy node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "broken",
-          displayName: "B broken node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "offline",
-          displayName: "C offline node",
-          connected: false,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "unsupported",
-          connected: true,
-          commands: ["other.command"],
-        },
-        {
-          nodeId: "unselected",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
+        node("healthy", { displayName: "A healthy node" }),
+        node("broken", { displayName: "B broken node" }),
+        node("offline", { displayName: "C offline node", connected: false }),
+        node("unsupported", { commands: ["other.command"] }),
+        node("unselected"),
       ],
       invoke,
     });
 
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
+    const result = await listCatalog(runtime, control, {
       query: {
         search: "match",
         limitPerHost: 7,
@@ -403,26 +373,12 @@ describe("Codex supervision catalog", () => {
         });
         const { runtime } = createRuntime({
           invoke,
-          nodes: [
-            {
-              nodeId: "slow-node",
-              displayName: "Slow node",
-              connected: true,
-              commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-            },
-          ],
-        });
-        const { api, getProvider } = createGatewayApi(runtime);
-        registerCodexSessionCatalog({
-          api,
-          bindingStore: createCodexTestBindingStore(),
-          control: createControl(),
-          getRuntimeConfig: () => config,
+          nodes: [node("slow-node", { displayName: "Slow node" })],
         });
         const completions: Promise<void>[] = [];
         const completed = vi.fn();
         const onHost = vi.fn();
-        const pending = getProvider()!.list({
+        const pending = providerFor(runtime).list({
           hostIds: ["node:slow-node"],
           limitPerHost: 40,
           signal: controller.signal,
@@ -458,7 +414,7 @@ describe("Codex supervision catalog", () => {
         } else {
           invokeResult.resolve({
             payloadJSON: JSON.stringify({
-              sessions: [{ threadId: "late-thread", status: "idle", archived: false }],
+              sessions: [session("late-thread")],
             }),
           });
         }
@@ -508,22 +464,13 @@ describe("Codex supervision catalog", () => {
 
   it("serves one bounded transcript page from the node host command", async () => {
     const item = catalogThreadItem("item-1", { text: "bounded answer" });
-    const listTurnPage = vi.fn(async () => ({
-      data: [
-        {
-          id: "turn-1",
-          items: [item],
-        },
-      ],
+    const page = {
+      data: [{ id: "turn-1", items: [item] }],
       nextCursor: "turns-page-2",
-    }));
+    };
+    const listTurnPage = vi.fn(async () => page);
     const control = createEligibleControl({ listTurnPage });
-    const command = createCodexSessionCatalogNodeHostCommands(control).find(
-      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-    );
-    if (!command) {
-      throw new Error("Codex transcript node command was not registered");
-    }
+    const command = transcriptCommand(control, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
 
     await expect(
       command.handle(
@@ -534,17 +481,7 @@ describe("Codex supervision catalog", () => {
           sourceHomeId: "node-native",
         }),
       ),
-    ).resolves.toBe(
-      JSON.stringify({
-        data: [
-          {
-            id: "turn-1",
-            items: [item],
-          },
-        ],
-        nextCursor: "turns-page-2",
-      }),
-    );
+    ).resolves.toBe(JSON.stringify(page));
     expect(listTurnPage).toHaveBeenCalledWith({
       threadId: "thread-1",
       cursor: "turns-page-1",
@@ -568,12 +505,7 @@ describe("Codex supervision catalog", () => {
       requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
       listItemPage,
     });
-    const command = createCodexSessionCatalogNodeHostCommands(control).find(
-      (candidate) => candidate.command === CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
-    );
-    if (!command) {
-      throw new Error("Codex bounded transcript node command was not registered");
-    }
+    const command = transcriptCommand(control, CODEX_CATALOG_TRANSCRIPT_READ_COMMAND);
 
     const payload = await command.handle(
       JSON.stringify({
@@ -739,12 +671,7 @@ describe("Codex supervision catalog", () => {
         ] as never,
       })),
     });
-    const command = createCodexSessionCatalogNodeHostCommands(control).find(
-      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-    );
-    if (!command) {
-      throw new Error("Codex transcript node command was not registered");
-    }
+    const command = transcriptCommand(control, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
 
     await expect(
       command.handle(JSON.stringify({ threadId: "thread-1", limit: 50 })),
@@ -757,20 +684,13 @@ describe("Codex supervision catalog", () => {
       payloadJSON: JSON.stringify({ sessions: [] }),
     }));
     const { runtime } = createRuntime({
-      nodes: Array.from({ length: 120 }, (_, index) => ({
-        nodeId: `node-${index.toString().padStart(3, "0")}`,
-        connected: true,
-        commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-      })),
+      nodes: Array.from({ length: 120 }, (_, index) =>
+        node(`node-${index.toString().padStart(3, "0")}`),
+      ),
       invoke,
     });
 
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
-    });
+    const result = await listCatalog(runtime, control);
 
     expect(result.hosts).toHaveLength(100);
     expect(result.hosts[0]?.hostId).toBe(CODEX_LOCAL_SESSION_HOST_ID);
@@ -822,14 +742,7 @@ describe("Codex supervision catalog", () => {
   ])("rejects $name at the provider boundary", async ({ params: requestParams, error }) => {
     const control = createControl();
     const { runtime } = createRuntime();
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control,
-      getRuntimeConfig: () => config,
-    });
-    await expect(getProvider()?.list(requestParams as never)).rejects.toThrow(error);
+    await expect(providerFor(runtime, control).list(requestParams as never)).rejects.toThrow(error);
     expect(control.listPage).not.toHaveBeenCalled();
     expect(runtime.nodes.list).not.toHaveBeenCalled();
   });

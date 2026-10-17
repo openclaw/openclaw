@@ -210,23 +210,20 @@ describe("paired-node Codex home ownership", () => {
     expect(fixture.createSessionEntry).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { phase: "update", home: "changed", sourceHomeId: homeB, allowed: false },
-    { phase: "reconcile", home: "changed", sourceHomeId: homeB, allowed: false },
-  ] as const)(
-    "finalizes during $phase only for the $home home",
-    async ({ phase, sourceHomeId, allowed }) => {
+  it.each(["update", "reconcile"] as const)(
+    "rejects finalization during %s for a changed home",
+    async (phase) => {
       const fixture = createHomeFixture();
       const adopted = await fixture.continueAt(homeA);
       const entry = fixture.entry(adopted.sessionKey);
-      entry.archivedAt = allowed ? undefined : 123;
+      entry.archivedAt = 123;
       entry.pluginExtensions = {
         codex: {
           sessionCatalog: {
             sourceHostId: hostId,
             sourceThreadId: threadId,
             nodeId,
-            sourceHomeId,
+            sourceHomeId: homeB,
             ...(phase === "update" ? { initializing: true } : {}),
           },
         },
@@ -235,16 +232,12 @@ describe("paired-node Codex home ownership", () => {
         fixture.patchSessionEntry.mockRejectedValueOnce(new Error("finalization receipt lost"));
       }
 
-      if (allowed) {
-        await expect(adopted.afterConversationBound?.()).resolves.toBeUndefined();
-      } else {
-        await expect(adopted.afterConversationBound?.()).rejects.toThrow(
-          phase === "update" ? "changed before it could be bound" : "finalization receipt lost",
-        );
-      }
-      expect(entry.archivedAt).toBe(allowed ? undefined : 123);
+      await expect(adopted.afterConversationBound?.()).rejects.toThrow(
+        phase === "update" ? "changed before it could be bound" : "finalization receipt lost",
+      );
+      expect(entry.archivedAt).toBe(123);
       expect(entry.pluginExtensions?.codex).toMatchObject({
-        sessionCatalog: { sourceHomeId },
+        sessionCatalog: { sourceHomeId: homeB },
       });
     },
   );
