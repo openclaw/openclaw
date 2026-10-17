@@ -108,24 +108,18 @@ describe("xai video generation provider transport", () => {
       });
 
       expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4"));
-      expect(server.requests).toHaveLength(3);
-      expect(server.requests[0]).toMatchObject({
-        method: "POST",
-        url: "/v1/videos/generations",
-        headers: { authorization: "Bearer local-xai-key", "x-xai-trace": "transport-proof" },
-      });
+      const apiHeaders = {
+        authorization: "Bearer local-xai-key",
+        "x-xai-trace": "transport-proof",
+      };
+      expect(server.requests).toMatchObject([
+        { method: "POST", url: "/v1/videos/generations", headers: apiHeaders },
+        { method: "GET", url: "/v1/videos/local_request", headers: apiHeaders },
+        { method: "GET", url: "/media/generated.mp4" },
+      ]);
       expect(JSON.parse(server.requests[0]?.body ?? "{}")).toMatchObject({
         model: "grok-imagine-video",
         prompt: "transport proof",
-      });
-      expect(server.requests[1]).toMatchObject({
-        method: "GET",
-        url: "/v1/videos/local_request",
-        headers: { authorization: "Bearer local-xai-key", "x-xai-trace": "transport-proof" },
-      });
-      expect(server.requests[2]).toMatchObject({
-        method: "GET",
-        url: "/media/generated.mp4",
       });
       expect(server.requests[2]?.headers.authorization).toBeUndefined();
       expect(server.requests[2]?.headers["x-xai-trace"]).toBeUndefined();
