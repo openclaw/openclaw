@@ -48,6 +48,7 @@ export function disconnectDisallowedGatewayPolicyClients(
       | "invalidatedReason"
       | "authPolicy"
       | "authenticatedUserProfile"
+      | "internal"
     > & {
       connect?: Pick<ConnectParams, "role" | "scopes">;
       socket: Pick<GatewayWsClient["socket"], "close">;
@@ -64,31 +65,33 @@ export function disconnectDisallowedGatewayPolicyClients(
       });
       continue;
     }
-    let roleScopesRevoked = false;
+    let roleAuthorityRevoked = false;
     if (client.connect?.role === "operator") {
       try {
         const role = resolveOperatorRolePolicyForProfile(
           client.authenticatedUserProfile?.profileId,
           cfg,
         );
-        roleScopesRevoked =
+        roleAuthorityRevoked =
           role !== undefined &&
-          !roleScopesAllow({
+          (!roleScopesAllow({
             role: "operator",
             requestedScopes: client.connect.scopes ?? [],
             allowedScopes: role.scopes,
-          });
+          }) ||
+            role.accessPolicyPlugin !==
+              client.internal?.operatorAccessAuthority?.requiredPolicyPlugin);
       } catch {
         // A retired profile cannot retain its connection's grants.
-        roleScopesRevoked = true;
+        roleAuthorityRevoked = true;
       }
     }
-    if (roleScopesRevoked || !isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
+    if (roleAuthorityRevoked || !isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
       invalidateGatewayPolicyClient(client, {
         reason: "gateway-policy-changed",
         code: 4001,
         message: "gateway policy changed",
-        revokeSource: roleScopesRevoked || !isGatewayAuthGrantCurrent(client.authPolicy, cfg),
+        revokeSource: roleAuthorityRevoked || !isGatewayAuthGrantCurrent(client.authPolicy, cfg),
       });
     }
   }
