@@ -115,7 +115,11 @@ function describeHolders(pids: readonly number[]) {
  * to close its database, which Doctor's maintenance ownership would refuse.
  */
 export async function admitDoctorAgentLeases(params: {
-  state: { readonly env: NodeJS.ProcessEnv; release(): Promise<Error | undefined> };
+  state: {
+    readonly env: NodeJS.ProcessEnv;
+    run<T>(operation: () => T): T;
+    release(): Promise<Error | undefined>;
+  };
   wait: boolean;
   acquire: () => Promise<void>;
   assertCurrent?: () => void;
@@ -135,7 +139,7 @@ export async function admitDoctorAgentLeases(params: {
   for (;;) {
     await params.acquire();
     try {
-      await assertDoctorAgentLeaseAdmission(params.state.env);
+      await params.state.run(() => assertDoctorAgentLeaseAdmission(params.state.env));
       if (waited) {
         params.log(
           `Agent databases closed after ${formatDoctorWaitSeconds(performance.now() - startedAt)}; continuing Doctor maintenance.`,
