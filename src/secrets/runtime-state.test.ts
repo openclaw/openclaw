@@ -14,11 +14,11 @@ import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/p
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore as getAuthStore,
   getRuntimeAuthProfileStoreSnapshotsRevision,
-  noteRuntimeAuthProfileStorePersistedMutation,
+  noteRuntimeAuthProfileStorePersistedMutation as noteAuthMutation,
   prepareRuntimeAuthProfileStoreSnapshots,
-  setRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot as setAuthStore,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runtime-snapshots.test-support.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
@@ -51,13 +51,58 @@ import {
   activateSecretsRuntimeSnapshotStateIfCurrent,
   clearSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeConfigSnapshot,
-  getActiveSecretsRuntimeSnapshotState,
-  getActiveSecretsRuntimeSnapshotRevisionState,
+  getActiveSecretsRuntimeSnapshotState as getSnapshot,
+  getActiveSecretsRuntimeSnapshotRevisionState as getRevision,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   prepareSecretsRuntimeSnapshotRestoreState,
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
+
+function noteCredentialMutation(agentDir: string | undefined, ...profileIds: string[]) {
+  noteAuthMutation(agentDir, { credentialsChanged: true, stateChanged: false, profileIds });
+}
+
+function apiKeyProfile(provider: string, key: string, keyRef?: SecretRef) {
+  return { type: "api_key" as const, provider, key, ...(keyRef ? { keyRef } : {}) };
+}
+
+function providerConfig(
+  port: number,
+  apiKey: string | SecretRef,
+  source: OpenClawConfig = {},
+): OpenClawConfig {
+  return {
+    ...source,
+    gateway: { port },
+    models: {
+      providers: { openai: { baseUrl: "https://api.openai.com/v1", apiKey, models: [] } },
+    },
+  };
+}
+
+function fileProviderConfig(port: number, providerPath: string): OpenClawConfig {
+  return {
+    gateway: { port },
+    secrets: { providers: { vault: { source: "file", path: providerPath } } },
+  };
+}
+
+function ownedProfileSnapshot(agentDir: string, includeStable = false) {
+  return (key: string | null, owner: "external" | "inherited" | "local", port: number) =>
+    preparedGatewayAuthSnapshot(agentDir, port, {
+      version: 1,
+      profiles: {
+        ...(key === null ? {} : { "openai:x": apiKeyProfile("openai", key) }),
+        ...(includeStable ? { "anthropic:stable": apiKeyProfile("anthropic", "sk-stable") } : {}),
+      },
+      runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
+      runtimeLocalProfileIds: [
+        ...(includeStable ? ["anthropic:stable"] : []),
+        ...(owner === "local" ? ["openai:x"] : []),
+      ],
+    });
+}
 
 type PreparedSnapshotOverrides = Omit<
   Partial<PreparedSecretsRuntimeSnapshot>,
@@ -122,7 +167,7 @@ function activateSnapshotIfCurrent(
 ): boolean {
   return activateSecretsRuntimeSnapshotStateIfCurrent({
     snapshot,
-    expectedRevision: options.expectedRevision ?? getActiveSecretsRuntimeSnapshotRevisionState(),
+    expectedRevision: options.expectedRevision ?? getRevision(),
     refreshContext: null,
     refreshHandler: null,
     ...options,
@@ -137,7 +182,7 @@ function restoreSnapshotIfCurrent(
   const restoration = prepareSecretsRuntimeSnapshotRestoreState({
     snapshot,
     ownedSnapshot,
-    expectedRevision: options.expectedRevision ?? getActiveSecretsRuntimeSnapshotRevisionState(),
+    expectedRevision: options.expectedRevision ?? getRevision(),
     refreshContext: null,
     refreshHandler: null,
     ...options,
@@ -166,7 +211,7 @@ describe("secrets runtime state", () => {
     const canonical: AuthProfileStore = {
       version: 1,
       profiles: {
-        inline: { type: "api_key", provider: "fixture", key: "canonical" },
+        inline: apiKeyProfile("fixture", "canonical"),
         ref: {
           type: "api_key",
           provider: "fixture",
@@ -182,16 +227,12 @@ describe("secrets runtime state", () => {
       keyRef: { source: "env", provider: "default", id: "OBSERVATION_TEST_KEY" },
       key: "resolved-only",
     };
-    materialized.profiles.external = {
-      type: "token",
-      provider: "fixture",
-      token: "external-only",
-    };
+    materialized.profiles.external = { type: "token", provider: "fixture", token: "external-only" };
     materialized.runtimeExternalProfileIds = ["external"];
     activateSnapshot(preparedGatewayAuthSnapshot(agentDir, 19_001, materialized));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const rotated = cloneAuthProfileStore(materialized);
-    rotated.profiles.inline = { type: "api_key", provider: "fixture", key: "rotated" };
+    rotated.profiles.inline = apiKeyProfile("fixture", "rotated");
     observeCanonicalAuthProfileCredentials(databasePath, { inline: rotated.profiles.inline });
     const candidate = preparedGatewayAuthSnapshot(agentDir, 19_002, rotated);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
@@ -200,7 +241,7 @@ describe("secrets runtime state", () => {
     await withCanonicalAuthProfileCredentialObserver(
       (value) => observations.push(value),
       async () => {
-        const cached = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+        const cached = getAuthStore(agentDir);
         expect(cached?.profiles.inline).toEqual(canonical.profiles.inline);
         expect(cached?.profiles.ref).toMatchObject({ key: "resolved-only" });
         expect(cached?.profiles.external).toMatchObject({ token: "external-only" });
@@ -256,11 +297,7 @@ describe("secrets runtime state", () => {
     const initialConfig = { gateway: { port: 19_030 } } satisfies OpenClawConfig;
     const concurrentConfig = { gateway: { port: 19_031 } } satisfies OpenClawConfig;
     activateSnapshot(
-      preparedSnapshot({
-        sourceConfig: initialConfig,
-        config: initialConfig,
-        authStores: [],
-      }),
+      preparedSnapshot({ sourceConfig: initialConfig, config: initialConfig, authStores: [] }),
     );
     const staleMetadata = getRuntimeConfigSnapshotMetadata();
     if (!staleMetadata) {
@@ -270,14 +307,14 @@ describe("secrets runtime state", () => {
 
     expect(
       setSecretsRuntimeSourceSnapshotIfCurrent({
-        expectedSecretsRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
+        expectedSecretsRevision: getRevision(),
         expectedRuntimeConfigRevision: staleMetadata.revision,
         runtimeSourceConfig: initialConfig,
         secretsSourceConfig: initialConfig,
       }),
     ).toBe(false);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(concurrentConfig);
-    expect(getActiveSecretsRuntimeSnapshotState()?.sourceConfig).toEqual(initialConfig);
+    expect(getSnapshot()?.sourceConfig).toEqual(initialConfig);
   });
 
   it("restores source-only ownership through a scoped descendant", () => {
@@ -299,11 +336,7 @@ describe("secrets runtime state", () => {
       },
     } satisfies OpenClawConfig;
     activateSnapshot(
-      preparedSnapshot({
-        sourceConfig: initialSource,
-        config: runtimeConfig,
-        authStores: [],
-      }),
+      preparedSnapshot({ sourceConfig: initialSource, config: runtimeConfig, authStores: [] }),
       { runtimeSourceConfig: initialSource },
     );
     const runtimeMetadata = getRuntimeConfigSnapshotMetadata();
@@ -312,15 +345,15 @@ describe("secrets runtime state", () => {
     }
     expect(
       setSecretsRuntimeSourceSnapshotIfCurrent({
-        expectedSecretsRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
+        expectedSecretsRevision: getRevision(),
         expectedRuntimeConfigRevision: runtimeMetadata.revision,
         runtimeSourceConfig: nextSource,
         secretsSourceConfig: nextSource,
       }),
     ).toBe(true);
     expect(getConfigResolutionFacts(getActiveSecretsRuntimeConfigSnapshot()?.config)?.size).toBe(0);
-    const committedRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    const active = getActiveSecretsRuntimeSnapshotState()!;
+    const committedRevision = getRevision();
+    const active = getSnapshot()!;
     const descendant = structuredClone(active);
     descendant.config.models!.providers!.openai!.baseUrl = "https://refreshed.example.invalid/v1";
     expect(
@@ -350,8 +383,8 @@ describe("secrets runtime state", () => {
         "gateway.auth.token",
       )?.id,
     ).toBe("GATEWAY_TOKEN");
-    expect(getActiveSecretsRuntimeSnapshotState()?.sourceConfig).toEqual(initialSource);
-    expect(getActiveSecretsRuntimeSnapshotState()?.config.models?.providers?.openai?.baseUrl).toBe(
+    expect(getSnapshot()?.sourceConfig).toEqual(initialSource);
+    expect(getSnapshot()?.config.models?.providers?.openai?.baseUrl).toBe(
       "https://refreshed.example.invalid/v1",
     );
   });
@@ -360,12 +393,8 @@ describe("secrets runtime state", () => {
     const agentDir = "/tmp/openclaw-auth-bookkeeping-merge";
     const order = { openai: ["openai:default"] };
     const saved = action === "save";
-    const credential = {
-      type: "api_key" as const,
-      provider: "openai",
-      key: "sk-current",
-    };
-    setRuntimeAuthProfileStoreSnapshot(
+    const credential = apiKeyProfile("openai", "sk-current");
+    setAuthStore(
       {
         version: 1,
         profiles: { "openai:default": credential },
@@ -390,7 +419,7 @@ describe("secrets runtime state", () => {
         },
       ],
     });
-    setRuntimeAuthProfileStoreSnapshot(
+    setAuthStore(
       {
         version: 1,
         profiles: { "openai:default": credential },
@@ -406,27 +435,17 @@ describe("secrets runtime state", () => {
 
     activateSnapshot(snapshot);
 
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats?.["openai:default"],
-    ).toMatchObject({ lastUsed: 2, cooldownUntil: expect.any(Number) });
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order).toEqual(
-      saved ? order : undefined,
-    );
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.runtimeLocalOrderProviderIds).toEqual(
-      saved ? ["openai"] : [],
-    );
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.lastGood?.openai).toBe(
-      "openai:default",
-    );
+    expect(getAuthStore(agentDir)?.usageStats?.["openai:default"]).toMatchObject({
+      lastUsed: 2,
+      cooldownUntil: expect.any(Number),
+    });
+    expect(getAuthStore(agentDir)?.order).toEqual(saved ? order : undefined);
+    expect(getAuthStore(agentDir)?.runtimeLocalOrderProviderIds).toEqual(saved ? ["openai"] : []);
+    expect(getAuthStore(agentDir)?.lastGood?.openai).toBe("openai:default");
   });
 
   it("rolls back candidate credentials against the activation-time auth baseline", () => {
     const agentDir = "/tmp/openclaw-auth-activation-baseline";
-    const profile = (provider: string, key: string) => ({
-      type: "api_key" as const,
-      provider,
-      key,
-    });
     const snapshot = (
       profiles: AuthProfileStore["profiles"],
       port: number,
@@ -437,8 +456,8 @@ describe("secrets runtime state", () => {
         authStores: [{ agentDir, store: { version: 1, profiles, ...state } }],
       });
     const predecessorProfiles = {
-      "provider-a:default": profile("provider-a", "a-old"),
-      "provider-b:default": profile("provider-b", "b-old"),
+      "provider-a:default": apiKeyProfile("provider-a", "a-old"),
+      "provider-b:default": apiKeyProfile("provider-b", "b-old"),
     };
     const predecessorState = {
       order: { provider: ["provider-a:default", "provider-b:default"] },
@@ -446,12 +465,12 @@ describe("secrets runtime state", () => {
       usageStats: { "provider-b:default": { lastUsed: 1 } },
     };
     activateSnapshot(snapshot(predecessorProfiles, 19_001, predecessorState));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
-    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+    const previous = getSnapshot()!;
+    const previousRevision = getRevision();
     const activationProfiles = {
       ...predecessorProfiles,
-      "provider-b:default": profile("provider-b", "b-external"),
-      "provider-q:login": profile("provider-q", "q-external"),
+      "provider-b:default": apiKeyProfile("provider-b", "b-external"),
+      "provider-q:login": apiKeyProfile("provider-q", "q-external"),
     };
     const activationState = {
       order: { provider: ["provider-b:default", "provider-a:default"] },
@@ -460,10 +479,7 @@ describe("secrets runtime state", () => {
         "provider-b:default": { lastUsed: 2, cooldownUntil: 30_000 },
       },
     };
-    setRuntimeAuthProfileStoreSnapshot(
-      { version: 1, profiles: activationProfiles, ...activationState },
-      agentDir,
-    );
+    setAuthStore({ version: 1, profiles: activationProfiles, ...activationState }, agentDir);
     const preparedState = {
       order: { provider: ["provider-a:default"] },
       lastGood: { provider: "provider-a:default" },
@@ -472,28 +488,28 @@ describe("secrets runtime state", () => {
     const candidate = snapshot(
       {
         ...activationProfiles,
-        "provider-a:default": profile("provider-a", "a-candidate"),
-        "provider-x:candidate": profile("provider-x", "x-candidate"),
+        "provider-a:default": apiKeyProfile("provider-a", "a-candidate"),
+        "provider-x:candidate": apiKeyProfile("provider-x", "x-candidate"),
       },
       19_002,
       preparedState,
     );
     expect(activateSnapshotIfCurrent(candidate, { expectedRevision: previousRevision })).toBe(true);
-    const liveAfterActivation = getRuntimeAuthProfileStoreSnapshotCore(agentDir)!;
+    const liveAfterActivation = getAuthStore(agentDir)!;
     liveAfterActivation.order = { provider: ["provider-q:login", "provider-b:default"] };
     liveAfterActivation.lastGood = { provider: "provider-q:login" };
     liveAfterActivation.usageStats = {
       "provider-b:default": { lastUsed: 4, cooldownUntil: 40_000 },
     };
-    setRuntimeAuthProfileStoreSnapshot(liveAfterActivation, agentDir);
+    setAuthStore(liveAfterActivation, agentDir);
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    const restored = getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles;
+    const restored = getAuthStore(agentDir)?.profiles;
     expect(restored?.["provider-a:default"]).toMatchObject({ key: "a-old" });
     expect(restored?.["provider-b:default"]).toMatchObject({ key: "b-external" });
     expect(restored?.["provider-q:login"]).toMatchObject({ key: "q-external" });
     expect(restored?.["provider-x:candidate"]).toBeUndefined();
-    const restoredStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+    const restoredStore = getAuthStore(agentDir);
     expect(restoredStore?.order?.provider).toEqual(["provider-q:login", "provider-b:default"]);
     expect(restoredStore?.lastGood?.provider).toBe("provider-q:login");
     expect(restoredStore?.usageStats?.["provider-b:default"]).toMatchObject({
@@ -509,36 +525,27 @@ describe("secrets runtime state", () => {
     "resolves per-profile ownership for %s while preserving post-activation profile B",
     (label, baselineAKey, candidateAKey, currentAKey, currentAExternal, expectedAKey) => {
       const agentDir = `/tmp/openclaw-auth-post-activation-${label}`;
-      const profile = (provider: string, key: string) => ({
-        type: "api_key" as const,
-        provider,
-        key,
-      });
       const snapshot = (aKey: string | null, bKey: string, port: number, aExternal = false) =>
         preparedGatewayAuthSnapshot(agentDir, port, {
           version: 1,
           profiles: {
-            ...(aKey === null ? {} : { "provider-a:default": profile("provider-a", aKey) }),
-            "provider-b:default": profile("provider-b", bKey),
+            ...(aKey === null ? {} : { "provider-a:default": apiKeyProfile("provider-a", aKey) }),
+            "provider-b:default": apiKeyProfile("provider-b", bKey),
           },
           runtimeExternalProfileIds: aExternal ? ["provider-a:default"] : undefined,
         });
       activateSnapshot(snapshot(baselineAKey, "b-old", 19_001));
-      const previous = getActiveSecretsRuntimeSnapshotState()!;
+      const previous = getSnapshot()!;
       const candidate = snapshot(candidateAKey, "b-old", 19_002);
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-      setRuntimeAuthProfileStoreSnapshot(
+      setAuthStore(
         snapshot(currentAKey, "b-external", 19_002, currentAExternal).authStores[0]!.store,
         agentDir,
       );
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: ["provider-b:default"],
-      });
+      noteCredentialMutation(agentDir, "provider-b:default");
 
       expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-      const restored = getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles;
+      const restored = getAuthStore(agentDir)?.profiles;
       if (expectedAKey === null) {
         expect(restored?.["provider-a:default"]).toBeUndefined();
       } else {
@@ -546,9 +553,7 @@ describe("secrets runtime state", () => {
       }
       expect(restored?.["provider-b:default"]).toMatchObject({ key: "b-external" });
       if (currentAExternal) {
-        expect(
-          getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.runtimeExternalProfileIds,
-        ).toContain("provider-a:default");
+        expect(getAuthStore(agentDir)?.runtimeExternalProfileIds).toContain("provider-a:default");
       }
     },
   );
@@ -567,22 +572,14 @@ describe("secrets runtime state", () => {
         runtimeLocalProfileIds,
       });
     activateSnapshot(snapshot("sk-old", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-candidate", 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    noteRuntimeAuthProfileStorePersistedMutation(undefined, {
-      credentialsChanged: true,
-      stateChanged: false,
-      profileIds: ["openai:default"],
-    });
-    setRuntimeAuthProfileStoreSnapshot(candidate.authStores[0]!.store, agentDir);
+    noteCredentialMutation(undefined, "openai:default");
+    setAuthStore(candidate.authStores[0]!.store, agentDir);
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-    ).toMatchObject({
-      key: expected,
-    });
+    expect(getAuthStore(agentDir)?.profiles["openai:default"]).toMatchObject({ key: expected });
   });
 
   it("invalidates a partial store when an omitted candidate owner mutates", () => {
@@ -597,58 +594,34 @@ describe("secrets runtime state", () => {
         profiles,
         runtimeExternalProfileIds: externalProfileIds,
       });
-    const profileX = {
-      type: "api_key" as const,
-      provider: "openai",
-      key: "sk-external-x",
-    };
-    const profileY = {
-      type: "api_key" as const,
-      provider: "openai",
-      key: "sk-external-y",
-    };
+    const profileX = apiKeyProfile("openai", "sk-external-x");
+    const profileY = apiKeyProfile("openai", "sk-external-y");
     activateSnapshot(
       snapshot({ "openai:x": profileX, "openai:y": profileY }, ["openai:x", "openai:y"], 19_001),
     );
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot({ "openai:y": profileY }, ["openai:y"], 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    noteRuntimeAuthProfileStorePersistedMutation(undefined, {
-      credentialsChanged: true,
-      stateChanged: false,
-      profileIds: ["openai:x"],
-    });
-    setRuntimeAuthProfileStoreSnapshot(candidate.authStores[0]!.store, agentDir);
+    noteCredentialMutation(undefined, "openai:x");
+    setAuthStore(candidate.authStores[0]!.store, agentDir);
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+    expect(getAuthStore(agentDir)).toBeUndefined();
   });
 
   it.each([true, false])(
     "handles baseline external to inherited with mutation=%s",
     (mutateCandidateOwner) => {
       const agentDir = `/tmp/openclaw-auth-external-to-inherited-${mutateCandidateOwner}`;
-      const snapshot = (key: string, owner: "external" | "inherited" | "local", port: number) =>
-        preparedGatewayAuthSnapshot(agentDir, port, {
-          version: 1,
-          profiles: {
-            "openai:x": { type: "api_key", provider: "openai", key },
-          },
-          runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-          runtimeLocalProfileIds: owner === "local" ? ["openai:x"] : [],
-        });
+      const snapshot = ownedProfileSnapshot(agentDir);
       activateSnapshot(snapshot("sk-external-old", "external", 19_001));
-      const previous = getActiveSecretsRuntimeSnapshotState()!;
+      const previous = getSnapshot()!;
       const candidate = snapshot("sk-candidate", "inherited", 19_002);
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
       if (mutateCandidateOwner) {
-        noteRuntimeAuthProfileStorePersistedMutation(undefined, {
-          credentialsChanged: true,
-          stateChanged: false,
-          profileIds: ["openai:x"],
-        });
+        noteCredentialMutation(undefined, "openai:x");
       }
-      setRuntimeAuthProfileStoreSnapshot(
+      setAuthStore(
         snapshot(mutateCandidateOwner ? "sk-candidate" : "sk-descendant", "inherited", 19_002)
           .authStores[0]!.store,
         agentDir,
@@ -656,9 +629,9 @@ describe("secrets runtime state", () => {
 
       expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
       if (mutateCandidateOwner) {
-        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+        expect(getAuthStore(agentDir)).toBeUndefined();
       } else {
-        const restored = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+        const restored = getAuthStore(agentDir);
         expect(restored?.profiles["openai:x"]).toMatchObject({ key: "sk-external-old" });
         expect(restored?.runtimeExternalProfileIds).toContain("openai:x");
       }
@@ -667,101 +640,48 @@ describe("secrets runtime state", () => {
 
   it("invalidates candidate external ownership after a baseline inherited mutation", () => {
     const agentDir = `/tmp/openclaw-auth-inherited-to-external`;
-    const snapshot = (
-      key: string | null,
-      owner: "external" | "inherited" | "local",
-      port: number,
-    ) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
-          ...(key === null
-            ? {}
-            : { "openai:x": { type: "api_key" as const, provider: "openai", key } }),
-          "anthropic:stable": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-stable",
-          },
-        },
-        runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-        runtimeLocalProfileIds: ["anthropic:stable", ...(owner === "local" ? ["openai:x"] : [])],
-      });
+    const snapshot = ownedProfileSnapshot(agentDir, true);
     activateSnapshot(snapshot("sk-baseline", "inherited", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-external", "external", 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    noteRuntimeAuthProfileStorePersistedMutation(undefined, {
-      credentialsChanged: true,
-      stateChanged: false,
-      profileIds: ["openai:x"],
-    });
-    setRuntimeAuthProfileStoreSnapshot(candidate.authStores[0]!.store, agentDir);
+    noteCredentialMutation(undefined, "openai:x");
+    setAuthStore(candidate.authStores[0]!.store, agentDir);
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+    expect(getAuthStore(agentDir)).toBeUndefined();
   });
 
   it("restores unchanged inherited ownership after a candidate external refresh", () => {
     const agentDir = `/tmp/openclaw-auth-inherited-external-refresh`;
-    const snapshot = (
-      key: string | null,
-      owner: "external" | "inherited" | "local",
-      port: number,
-    ) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
-          ...(key === null
-            ? {}
-            : { "openai:x": { type: "api_key" as const, provider: "openai", key } }),
-          "anthropic:stable": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-stable",
-          },
-        },
-        runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-        runtimeLocalProfileIds: ["anthropic:stable", ...(owner === "local" ? ["openai:x"] : [])],
-      });
+    const snapshot = ownedProfileSnapshot(agentDir, true);
     const baseline = snapshot("sk-baseline", "inherited", 19_001);
     activateSnapshot(baseline);
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-external", "external", 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    setRuntimeAuthProfileStoreSnapshot(
+    setAuthStore(
       snapshot("sk-external-refresh", "external", 19_002).authStores[0]!.store,
       agentDir,
     );
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    const restored = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+    const restored = getAuthStore(agentDir);
     expect(restored?.profiles["openai:x"]).toMatchObject({ key: "sk-baseline" });
     expect(restored?.runtimeExternalProfileIds ?? []).not.toContain("openai:x");
   });
 
   it("preserves external owner metadata when bytes equal the local candidate", () => {
     const agentDir = `/tmp/openclaw-auth-local-external-equal-bytes`;
-    const snapshot = (key: string, owner: "external" | "local", port: number) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
-          "openai:x": { type: "api_key", provider: "openai", key },
-        },
-        runtimeExternalProfileIds: owner === "external" ? ["openai:x"] : [],
-        runtimeLocalProfileIds: owner === "local" ? ["openai:x"] : [],
-      });
+    const snapshot = ownedProfileSnapshot(agentDir);
     activateSnapshot(snapshot("sk-old", "local", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-candidate", "local", 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    setRuntimeAuthProfileStoreSnapshot(
-      snapshot("sk-candidate", "external", 19_002).authStores[0]!.store,
-      agentDir,
-    );
+    setAuthStore(snapshot("sk-candidate", "external", 19_002).authStores[0]!.store, agentDir);
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    const restored = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+    const restored = getAuthStore(agentDir);
     expect(restored?.profiles["openai:x"]).toMatchObject({ key: "sk-candidate" });
     expect(restored?.runtimeExternalProfileIds).toContain("openai:x");
     expect(restored?.runtimeLocalProfileIds ?? []).not.toContain("openai:x");
@@ -777,12 +697,12 @@ describe("secrets runtime state", () => {
         runtimeExternalProfileIdsAuthoritative: authoritative ? true : undefined,
       });
     activateSnapshot(snapshot(true, 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot(false, 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toMatchObject({
+    expect(getAuthStore(agentDir)).toMatchObject({
       runtimeExternalProfileIds: [],
       runtimeExternalProfileIdsAuthoritative: true,
     });
@@ -801,16 +721,13 @@ describe("secrets runtime state", () => {
         runtimeExternalProfileIdsAuthoritative: authoritative ? true : undefined,
       });
     activateSnapshot(snapshot("sk-old", false, 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-old", true, 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    setRuntimeAuthProfileStoreSnapshot(
-      snapshot("sk-current", true, 19_002).authStores[0]!.store,
-      agentDir,
-    );
+    setAuthStore(snapshot("sk-current", true, 19_002).authStores[0]!.store, agentDir);
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    const restored = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+    const restored = getAuthStore(agentDir);
     expect(restored?.profiles["openai:x"]).toMatchObject({ key: "sk-current" });
     expect(restored?.runtimeExternalProfileIdsAuthoritative).toBeUndefined();
   });
@@ -828,22 +745,14 @@ describe("secrets runtime state", () => {
           runtimeExternalProfileIds: ["openai:external"],
         });
       activateSnapshot(snapshot("sk-old", 19_001));
-      const previous = getActiveSecretsRuntimeSnapshotState()!;
+      const previous = getSnapshot()!;
       const candidate = snapshot("sk-candidate", 19_002);
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-      noteRuntimeAuthProfileStorePersistedMutation(undefined, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: ["openai:external"],
-      });
-      setRuntimeAuthProfileStoreSnapshot(snapshot(current, 19_002).authStores[0]!.store, agentDir);
+      noteCredentialMutation(undefined, "openai:external");
+      setAuthStore(snapshot(current, 19_002).authStores[0]!.store, agentDir);
 
       expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-      expect(
-        getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:external"],
-      ).toMatchObject({
-        key: expected,
-      });
+      expect(getAuthStore(agentDir)?.profiles["openai:external"]).toMatchObject({ key: expected });
     },
   );
 
@@ -884,11 +793,7 @@ describe("secrets runtime state", () => {
       const root = autoCleanupTempDirs.make("openclaw-auth-evicted-ref-");
       const agentDir = path.join(root, eviction);
       fs.mkdirSync(agentDir, { recursive: true });
-      const previousRef = {
-        source: "env" as const,
-        provider: "default",
-        id: "OPENAI_API_KEY",
-      };
+      const previousRef = { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" };
       const candidateRef = { ...previousRef, id: "OPENAI_API_KEY_NEXT" };
       const snapshot = (key: string, keyRef: typeof previousRef, port: number) =>
         preparedGatewayAuthSnapshot(agentDir, port, {
@@ -904,15 +809,15 @@ describe("secrets runtime state", () => {
           agentDir,
         );
         activateSnapshot(snapshot("sk-old", previousRef, 19_001));
-        const previous = getActiveSecretsRuntimeSnapshotState()!;
+        const previous = getSnapshot()!;
         const candidate = snapshot("sk-candidate", candidateRef, 19_002);
         expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-        setRuntimeAuthProfileStoreSnapshot(
+        setAuthStore(
           snapshot("sk-descendant", candidateRef, 19_002).authStores[0]!.store,
           agentDir,
         );
         for (let index = 0; index < 300; index += 1) {
-          noteRuntimeAuthProfileStorePersistedMutation(
+          noteAuthMutation(
             eviction === "owner" ? `/tmp/openclaw-auth-unrelated-owner-${index}` : agentDir,
             {
               credentialsChanged: true,
@@ -923,7 +828,7 @@ describe("secrets runtime state", () => {
         }
 
         expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+        expect(getAuthStore(agentDir)).toBeUndefined();
         expect(
           ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles["openai:default"],
         ).toMatchObject({ keyRef: previousRef });
@@ -961,13 +866,7 @@ describe("secrets runtime state", () => {
                   agentDir,
                   store: {
                     version: 1,
-                    profiles: {
-                      "openai:default": {
-                        type: "api_key",
-                        provider: "openai",
-                        key: "sk-old",
-                      },
-                    },
+                    profiles: { "openai:default": apiKeyProfile("openai", "sk-old") },
                     runtimeLocalProfileIds: inheritsMainProfile ? [] : ["openai:default"],
                     runtimeInheritsMainState: inheritsMainState,
                   },
@@ -976,25 +875,20 @@ describe("secrets runtime state", () => {
             : [],
         });
       activateSnapshot(snapshot(true, 19_001));
-      const previous = getActiveSecretsRuntimeSnapshotState()!;
+      const previous = getSnapshot()!;
       const candidate = snapshot(false, 19_002);
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-      noteRuntimeAuthProfileStorePersistedMutation(
-        mutationOwner === "custom" ? agentDir : undefined,
-        {
-          credentialsChanged: !stateOnly,
-          stateChanged: stateOnly,
-          profileIds: [profileId],
-        },
-      );
+      noteAuthMutation(mutationOwner === "custom" ? agentDir : undefined, {
+        credentialsChanged: !stateOnly,
+        stateChanged: stateOnly,
+        profileIds: [profileId],
+      });
 
       expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
       if (expectMissing) {
-        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+        expect(getAuthStore(agentDir)).toBeUndefined();
       } else {
-        expect(
-          getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-        ).toMatchObject({ key: "sk-old" });
+        expect(getAuthStore(agentDir)?.profiles["openai:default"]).toMatchObject({ key: "sk-old" });
       }
     },
   );
@@ -1010,13 +904,7 @@ describe("secrets runtime state", () => {
                 agentDir,
                 store: {
                   version: 1,
-                  profiles: {
-                    "openai:x": {
-                      type: "api_key",
-                      provider: "openai",
-                      key: "sk-external",
-                    },
-                  },
+                  profiles: { "openai:x": apiKeyProfile("openai", "sk-external") },
                   runtimeExternalProfileIds: ["openai:x"],
                 },
               },
@@ -1024,10 +912,10 @@ describe("secrets runtime state", () => {
           : [],
       });
     activateSnapshot(snapshot(true, 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot(false, 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    noteRuntimeAuthProfileStorePersistedMutation(undefined, {
+    noteAuthMutation(undefined, {
       credentialsChanged: true,
       profileSetChanged: true,
       stateChanged: false,
@@ -1035,7 +923,7 @@ describe("secrets runtime state", () => {
     });
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+    expect(getAuthStore(agentDir)).toBeUndefined();
   });
 
   it("does not resurrect an auth store cleared after candidate activation", () => {
@@ -1049,13 +937,13 @@ describe("secrets runtime state", () => {
         }),
       );
     activateSnapshot(snapshot("sk-old", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-candidate", 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
     clearRuntimeAuthProfileStoreSnapshots();
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+    expect(getAuthStore(agentDir)).toBeUndefined();
   });
 
   it.each([
@@ -1063,11 +951,7 @@ describe("secrets runtime state", () => {
     ["restores the predecessor when the auth-store SecretRef changed", true],
   ])("%s", (_label, changedRef) => {
     const agentDir = `/tmp/openclaw-auth-ref-rollback-${changedRef}`;
-    const previousRef = {
-      source: "env" as const,
-      provider: "default",
-      id: "OPENAI_API_KEY",
-    };
+    const previousRef = { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" };
     const candidateRef = changedRef ? { ...previousRef, id: "OPENAI_API_KEY_NEXT" } : previousRef;
     const snapshot = (key: string, keyRef: typeof previousRef, port: number) =>
       preparedGatewayAuthSnapshot(
@@ -1078,10 +962,10 @@ describe("secrets runtime state", () => {
         }),
       );
     activateSnapshot(snapshot("sk-old", previousRef, 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-candidate", candidateRef, 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    const candidateRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+    const candidateRevision = getRevision();
     expect(
       activateSnapshotIfCurrent(snapshot("sk-refreshed", candidateRef, 19_002), {
         expectedRevision: candidateRevision,
@@ -1092,9 +976,7 @@ describe("secrets runtime state", () => {
     expect(
       restoreSnapshotIfCurrent(previous, candidate, { expectedRevision: candidateRevision }),
     ).toBe(true);
-    expect(
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-    ).toMatchObject({
+    expect(getAuthStore(agentDir)?.profiles["openai:default"]).toMatchObject({
       key: changedRef ? "sk-old" : "sk-refreshed",
       keyRef: changedRef ? previousRef : candidateRef,
     });
@@ -1112,68 +994,20 @@ describe("secrets runtime state", () => {
       expectedKey: "sk-old",
     },
   ])("$label", ({ candidateRefId, expectedKey }) => {
-    const previousKeyRef = {
-      source: "env" as const,
-      provider: "default",
-      id: "OPENAI_API_KEY",
-    };
+    const previousKeyRef = { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" };
     const candidateKeyRef = { ...previousKeyRef, id: candidateRefId };
-    const snapshot = (params: {
-      sourcePort: number;
-      runtimePort: number;
-      apiKey: string;
-      keyRef: string | typeof previousKeyRef;
-    }) =>
+    const snapshot = (port: number, apiKey: string, keyRef: SecretRef) =>
       preparedSnapshot({
-        sourceConfig: {
-          gateway: { port: params.sourcePort },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: params.keyRef,
-                models: [],
-              },
-            },
-          },
-        },
-        config: {
-          gateway: { port: params.runtimePort },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: params.apiKey,
-                models: [],
-              },
-            },
-          },
-        },
+        sourceConfig: providerConfig(port, keyRef),
+        config: providerConfig(port, apiKey),
         authStores: [],
       });
-    activateSnapshot(
-      snapshot({
-        sourcePort: 19_021,
-        runtimePort: 19_021,
-        apiKey: "sk-old",
-        keyRef: previousKeyRef,
-      }),
-    );
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
-    const candidate = snapshot({
-      sourcePort: 19_022,
-      runtimePort: 19_022,
-      apiKey: "sk-candidate",
-      keyRef: candidateKeyRef,
-    });
+    activateSnapshot(snapshot(19_021, "sk-old", previousKeyRef));
+    const previous = getSnapshot()!;
+    const candidate = snapshot(19_022, "sk-candidate", candidateKeyRef);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    const candidateRevision = getActiveSecretsRuntimeSnapshotRevisionState();
-    const providerRefresh = snapshot({
-      sourcePort: 19_022,
-      runtimePort: 19_022,
-      apiKey: "sk-refreshed",
-      keyRef: candidateKeyRef,
-    });
+    const candidateRevision = getRevision();
+    const providerRefresh = snapshot(19_022, "sk-refreshed", candidateKeyRef);
     expect(
       activateSnapshotIfCurrent(providerRefresh, {
         expectedRevision: candidateRevision,
@@ -1184,10 +1018,8 @@ describe("secrets runtime state", () => {
     expect(
       restoreSnapshotIfCurrent(previous, candidate, { expectedRevision: candidateRevision }),
     ).toBe(true);
-    expect(getActiveSecretsRuntimeSnapshotState()?.config.gateway?.port).toBe(19_021);
-    expect(getActiveSecretsRuntimeSnapshotState()?.config.models?.providers?.openai?.apiKey).toBe(
-      expectedKey,
-    );
+    expect(getSnapshot()?.config.gateway?.port).toBe(19_021);
+    expect(getSnapshot()?.config.models?.providers?.openai?.apiKey).toBe(expectedKey);
   });
 
   it.each([
@@ -1243,34 +1075,10 @@ describe("secrets runtime state", () => {
     "restores resolved values when a same-ref $label was rejected",
     ({ keyRef, previousSourceConfig, candidateSourceConfig, evictLineage }) => {
       const agentDir = `/tmp/openclaw-auth-provider-dependency-${keyRef.provider}`;
-      const snapshot = (params: { sourceConfig: OpenClawConfig; apiKey: string; port: number }) =>
+      const snapshot = (sourceConfig: OpenClawConfig, apiKey: string, port: number) =>
         preparedSnapshot({
-          sourceConfig: {
-            ...params.sourceConfig,
-            gateway: { port: params.port },
-            models: {
-              providers: {
-                openai: {
-                  baseUrl: "https://api.openai.com/v1",
-                  apiKey: keyRef,
-                  models: [],
-                },
-              },
-            },
-          },
-          config: {
-            ...params.sourceConfig,
-            gateway: { port: params.port },
-            models: {
-              providers: {
-                openai: {
-                  baseUrl: "https://api.openai.com/v1",
-                  apiKey: params.apiKey,
-                  models: [],
-                },
-              },
-            },
-          },
+          sourceConfig: providerConfig(port, keyRef, sourceConfig),
+          config: providerConfig(port, apiKey, sourceConfig),
           authStores: [
             {
               agentDir,
@@ -1279,58 +1087,39 @@ describe("secrets runtime state", () => {
                   type: "api_key",
                   provider: "openai",
                   keyRef,
-                  key: params.apiKey,
+                  key: apiKey,
                 },
               }),
             },
           ],
         });
-      activateSnapshot(
-        snapshot({ sourceConfig: previousSourceConfig, apiKey: "sk-old", port: 19_031 }),
-      );
-      const previous = getActiveSecretsRuntimeSnapshotState()!;
-      const candidate = snapshot({
-        sourceConfig: candidateSourceConfig,
-        apiKey: "sk-candidate",
-        port: 19_032,
-      });
+      activateSnapshot(snapshot(previousSourceConfig, "sk-old", 19_031));
+      const previous = getSnapshot()!;
+      const candidate = snapshot(candidateSourceConfig, "sk-candidate", 19_032);
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
       if (evictLineage) {
         for (let index = 0; index < 300; index += 1) {
-          noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-            credentialsChanged: true,
-            stateChanged: false,
-            profileIds: [`openai:unrelated-${index}`],
-          });
+          noteCredentialMutation(agentDir, `openai:unrelated-${index}`);
         }
       }
-      const candidateRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+      const candidateRevision = getRevision();
       expect(
-        activateSnapshotIfCurrent(
-          snapshot({
-            sourceConfig: candidateSourceConfig,
-            apiKey: "sk-refreshed",
-            port: 19_032,
-          }),
-          {
-            expectedRevision: candidateRevision,
-            preserveActivationLineage: true,
-          },
-        ),
+        activateSnapshotIfCurrent(snapshot(candidateSourceConfig, "sk-refreshed", 19_032), {
+          expectedRevision: candidateRevision,
+          preserveActivationLineage: true,
+        }),
       ).toBe(true);
 
       expect(
         restoreSnapshotIfCurrent(previous, candidate, { expectedRevision: candidateRevision }),
       ).toBe(true);
-      const restored = getActiveSecretsRuntimeSnapshotState();
+      const restored = getSnapshot();
       expect(restored?.sourceConfig).toMatchObject(previousSourceConfig);
       expect(restored?.config.models?.providers?.openai?.apiKey).toBe("sk-old");
       if (evictLineage) {
-        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+        expect(getAuthStore(agentDir)).toBeUndefined();
       } else {
-        expect(
-          getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-        ).toMatchObject({
+        expect(getAuthStore(agentDir)?.profiles["openai:default"]).toMatchObject({
           key: "sk-old",
           keyRef,
         });
@@ -1345,76 +1134,45 @@ describe("secrets runtime state", () => {
     "invalidates a same-ref provider change after a durable %s",
     (_label, capturedOwner, currentOwner) => {
       const agentDir = `/tmp/openclaw-auth-provider-owner-${capturedOwner}-${currentOwner}`;
-      const keyRef = {
-        source: "file" as const,
-        provider: "vault",
-        id: "openai",
-      };
-      const snapshot = (params: {
-        key: string;
-        owner: "inherited" | "local";
-        providerPath: string;
-        port: number;
-      }) =>
+      const keyRef = { source: "file" as const, provider: "vault", id: "openai" };
+      const snapshot = (
+        key: string,
+        owner: "inherited" | "local",
+        providerPath: string,
+        port: number,
+      ) =>
         preparedSnapshot({
-          sourceConfig: {
-            gateway: { port: params.port },
-            secrets: {
-              providers: { vault: { source: "file", path: params.providerPath } },
-            },
-          },
-          config: { gateway: { port: params.port } },
+          sourceConfig: fileProviderConfig(port, providerPath),
+          config: { gateway: { port } },
           authStores: [
             {
               agentDir,
               store: {
                 version: 1,
-                profiles: {
-                  "openai:default": {
-                    type: "api_key",
-                    provider: "openai",
-                    key: params.key,
-                    keyRef,
-                  },
-                },
-                runtimeLocalProfileIds: params.owner === "local" ? ["openai:default"] : [],
+                profiles: { "openai:default": apiKeyProfile("openai", key, keyRef) },
+                runtimeLocalProfileIds: owner === "local" ? ["openai:default"] : [],
               },
             },
           ],
         });
-      activateSnapshot(
-        snapshot({
-          key: "sk-old",
-          owner: capturedOwner,
-          providerPath: "/tmp/old-secrets.json",
-          port: 19_041,
-        }),
+      activateSnapshot(snapshot("sk-old", capturedOwner, "/tmp/old-secrets.json", 19_041));
+      const previous = getSnapshot()!;
+      const candidate = snapshot(
+        "sk-candidate",
+        capturedOwner,
+        "/tmp/rejected-secrets.json",
+        19_042,
       );
-      const previous = getActiveSecretsRuntimeSnapshotState()!;
-      const candidate = snapshot({
-        key: "sk-candidate",
-        owner: capturedOwner,
-        providerPath: "/tmp/rejected-secrets.json",
-        port: 19_042,
-      });
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: ["openai:default"],
-      });
-      setRuntimeAuthProfileStoreSnapshot(
-        snapshot({
-          key: "sk-durable",
-          owner: currentOwner,
-          providerPath: "/tmp/rejected-secrets.json",
-          port: 19_042,
-        }).authStores[0]!.store,
+      noteCredentialMutation(agentDir, "openai:default");
+      setAuthStore(
+        snapshot("sk-durable", currentOwner, "/tmp/rejected-secrets.json", 19_042).authStores[0]!
+          .store,
         agentDir,
       );
 
       expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+      expect(getAuthStore(agentDir)).toBeUndefined();
     },
   );
 
@@ -1441,153 +1199,92 @@ describe("secrets runtime state", () => {
           },
         },
       };
-      const previousRef = {
-        source: "file" as const,
-        provider: "vault",
-        id: "openai-a",
-      };
-      const currentRef = {
-        source: "file" as const,
-        provider: currentProvider,
-        id: "openai-b",
-      };
-      const snapshot = (params: {
-        key: string;
-        keyRef: SecretRef;
-        port: number;
-        sourceConfig: OpenClawConfig;
-      }) =>
+      const previousRef = { source: "file" as const, provider: "vault", id: "openai-a" };
+      const currentRef = { source: "file" as const, provider: currentProvider, id: "openai-b" };
+      const snapshot = (
+        key: string,
+        keyRef: SecretRef,
+        port: number,
+        sourceConfig: OpenClawConfig,
+      ) =>
         preparedSnapshot({
-          sourceConfig: { ...params.sourceConfig, gateway: { port: params.port } },
-          config: { gateway: { port: params.port } },
+          sourceConfig: { ...sourceConfig, gateway: { port } },
+          config: { gateway: { port } },
           authStores: [
             {
               agentDir,
               store: {
                 version: 1,
                 profiles: {
-                  "openai:default": {
-                    type: "api_key",
-                    provider: "openai",
-                    key: params.key,
-                    keyRef: params.keyRef,
-                  },
+                  "openai:default": apiKeyProfile("openai", key, keyRef),
                 },
                 runtimeLocalProfileIds: ["openai:default"],
               },
             },
           ],
         });
-      activateSnapshot(
-        snapshot({
-          key: "sk-old",
-          keyRef: previousRef,
-          port: 19_051,
-          sourceConfig: previousSourceConfig,
-        }),
-      );
-      const previous = getActiveSecretsRuntimeSnapshotState()!;
-      const candidate = snapshot({
-        key: "sk-candidate",
-        keyRef: previousRef,
-        port: 19_052,
-        sourceConfig: candidateSourceConfig,
-      });
+      activateSnapshot(snapshot("sk-old", previousRef, 19_051, previousSourceConfig));
+      const previous = getSnapshot()!;
+      const candidate = snapshot("sk-candidate", previousRef, 19_052, candidateSourceConfig);
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: ["openai:default"],
-      });
-      setRuntimeAuthProfileStoreSnapshot(
-        snapshot({
-          key: "sk-durable",
-          keyRef: currentRef,
-          port: 19_052,
-          sourceConfig: candidateSourceConfig,
-        }).authStores[0]!.store,
+      noteCredentialMutation(agentDir, "openai:default");
+      setAuthStore(
+        snapshot("sk-durable", currentRef, 19_052, candidateSourceConfig).authStores[0]!.store,
         agentDir,
       );
 
       expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
       if (affectedProvider) {
-        expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+        expect(getAuthStore(agentDir)).toBeUndefined();
       } else {
-        expect(
-          getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:default"],
-        ).toMatchObject({ key: "sk-durable", keyRef: currentRef });
+        expect(getAuthStore(agentDir)?.profiles["openai:default"]).toMatchObject({
+          key: "sk-durable",
+          keyRef: currentRef,
+        });
       }
     },
   );
 
   it("invalidates an absent-profile external upsert under a rejected provider", () => {
     const agentDir = `/tmp/openclaw-auth-provider-absent-upsert-external`;
-    const snapshot = (params: { includeProfile: boolean; providerPath: string; port: number }) =>
+    const snapshot = (includeProfile: boolean, providerPath: string, port: number) =>
       preparedSnapshot({
-        sourceConfig: {
-          gateway: { port: params.port },
-          secrets: {
-            providers: { vault: { source: "file", path: params.providerPath } },
-          },
-        },
-        config: { gateway: { port: params.port } },
+        sourceConfig: fileProviderConfig(port, providerPath),
+        config: { gateway: { port } },
         authStores: [
           {
             agentDir,
             store: {
               version: 1,
               profiles: {
-                "anthropic:stable": {
-                  type: "api_key",
-                  provider: "anthropic",
-                  key: "sk-stable",
-                },
-                ...(params.includeProfile
+                "anthropic:stable": apiKeyProfile("anthropic", "sk-stable"),
+                ...(includeProfile
                   ? {
-                      "openai:default": {
-                        type: "api_key" as const,
-                        provider: "openai",
-                        key: "sk-current",
-                        keyRef: {
-                          source: "file" as const,
-                          provider: "vault",
-                          id: "openai-b",
-                        },
-                      },
+                      "openai:default": apiKeyProfile("openai", "sk-current", {
+                        source: "file",
+                        provider: "vault",
+                        id: "openai-b",
+                      }),
                     }
                   : {}),
               },
-              runtimeExternalProfileIds: params.includeProfile ? ["openai:default"] : [],
+              runtimeExternalProfileIds: includeProfile ? ["openai:default"] : [],
               runtimeLocalProfileIds: ["anthropic:stable"],
             },
           },
         ],
       });
-    activateSnapshot(
-      snapshot({
-        includeProfile: false,
-        providerPath: "/tmp/old-secrets.json",
-        port: 19_061,
-      }),
-    );
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
-    const candidate = snapshot({
-      includeProfile: false,
-      providerPath: "/tmp/rejected-secrets.json",
-      port: 19_062,
-    });
+    activateSnapshot(snapshot(false, "/tmp/old-secrets.json", 19_061));
+    const previous = getSnapshot()!;
+    const candidate = snapshot(false, "/tmp/rejected-secrets.json", 19_062);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    setRuntimeAuthProfileStoreSnapshot(
-      snapshot({
-        includeProfile: true,
-        providerPath: "/tmp/rejected-secrets.json",
-        port: 19_062,
-      }).authStores[0]!.store,
+    setAuthStore(
+      snapshot(true, "/tmp/rejected-secrets.json", 19_062).authStores[0]!.store,
       agentDir,
     );
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+    expect(getAuthStore(agentDir)).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
