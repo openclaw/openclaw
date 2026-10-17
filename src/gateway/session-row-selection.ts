@@ -33,14 +33,8 @@ export function createSessionRowSelection(
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
-  const orders = new Map<
-    string,
-    {
-      sortBy: NonNullable<SessionsListParams["sortBy"]>;
-      archived: SessionsListParams["archived"];
-      entries: SessionEntryPair[];
-    }
-  >();
+  const pending = new Map<string, Exclude<SelectionChange, { kind: "reset" }>>();
+  const orders = new Map<string, SessionEntryPair[]>();
   // Fixed partitions bound refiltering after exact publications without retaining old rosters.
   let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
   const partitionFor = (key: string) => {
@@ -245,36 +239,32 @@ export function createSessionRowSelection(
         changedInvolvements.delete(key);
       }
     }
-    for (const { sortBy, archived, entries } of orders.values()) {
-      const locate = (pair: SessionEntryPair) => {
-        let lo = 0,
-          hi = entries.length;
-        while (lo < hi) {
-          const mid = (lo + hi) >>> 1;
-          if (compareSessionEntryPairs(entries[mid]!, pair, sortBy) < 0) {
-            lo = mid + 1;
-          } else {
-            hi = mid;
-          }
-        }
-        return lo;
-      };
-      if (oldWinner && matchesSessionArchiveFilter(oldWinner.row.entry, archived)) {
-        entries.splice(locate(oldWinner.pair), 1);
-      }
-      if (winner && matchesSessionArchiveFilter(winner.row.entry, archived)) {
-        entries.splice(locate(winner.pair), 0, winner.pair);
-      }
+    orders.clear();
+  };
+  const flush = () => {
+    if (pending.size === 0) {
+      return;
     }
+    for (const change of pending.values()) {
+      update(change.id, keyFor(change), change.row);
+    }
+    pending.clear();
   };
   return {
     add(row: SelectionTarget) {
       update(rowIdentity(row), keyFor(row), row);
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
-      update(change.id, keyFor(change), change.row);
+      // Lists consume current metadata on demand; intermediate streaming updates
+      // need neither selection work nor an order that no reader will use.
+      pending.set(change.id, change);
+      if (!change.row) {
+        // Preserve resident insertion order across removal and recreation.
+        flush();
+      }
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
+      flush();
       assertCanonical();
       const profileOrders = Array.from(profileIds, (profileId) => {
         let entries = creatorOrders.get(profileId);
@@ -307,6 +297,7 @@ export function createSessionRowSelection(
       sortBy?: SessionsListParams["sortBy"],
       candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
     ) {
+      flush();
       assertCanonical();
       if (!candidates && !partitions) {
         partitions = Array.from({ length: 64 }, () => ({
@@ -319,10 +310,14 @@ export function createSessionRowSelection(
       }
       return {
         configuredAgentIds,
-        partitions: candidates ? undefined : partitions,
+        get partitions() {
+          flush();
+          return candidates ? undefined : partitions;
+        },
         entries(this: void, archived: SessionsListParams["archived"]) {
+          flush();
           const orderKey = `${sortBy}:${archived ?? false}`;
-          let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
+          let entries = !candidates && sortBy && orders.get(orderKey);
           if (!entries) {
             const targets = (
               candidates
@@ -338,14 +333,18 @@ export function createSessionRowSelection(
             if (sortBy) {
               entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
               if (!candidates) {
-                orders.set(orderKey, { sortBy, archived, entries });
+                orders.set(orderKey, entries);
               }
             }
           }
           return entries;
         },
-        get: (key: string) => winners.get(key)?.row,
+        get: (key: string) => {
+          flush();
+          return winners.get(key)?.row;
+        },
         involvementKeys(this: void, profileId: string, personal: boolean): ReadonlySet<string> {
+          flush();
           prepareInvolvements();
           return (
             (personal ? personalInvolvements : relatedInvolvements).get(profileId) ?? EMPTY_KEYS
