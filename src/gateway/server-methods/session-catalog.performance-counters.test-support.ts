@@ -59,21 +59,7 @@ vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOrigina
   };
 });
 
-type Counts = {
-  sqliteReadCalls: number;
-  sqliteFreshnessReads: number;
-  sessionEntryReads: number;
-  sessionPayloadReads: number;
-  bindingAuthorityReads: number;
-  otherSqliteReads: number;
-  fileReadCalls: number;
-  ownershipFileReadCalls: number;
-  fileOpenCalls: number;
-  ownershipFileOpenCalls: number;
-  nativeRpcCalls: number;
-  nativeThreadListCalls: number;
-};
-const empty = (): Counts => ({
+const empty = () => ({
   sqliteReadCalls: 0,
   sqliteFreshnessReads: 0,
   sessionEntryReads: 0,

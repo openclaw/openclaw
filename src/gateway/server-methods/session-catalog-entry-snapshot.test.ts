@@ -20,6 +20,7 @@ import * as userProfileList from "../../state/user-profile-list.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
+import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -38,6 +39,9 @@ vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 let projection: ReturnType<typeof createSessionRowProjectionFixture>;
+
+const snapshot = () =>
+  createSessionCatalogRequestEntrySnapshot({ cfg: {}, fallbackAgentId: "main", projection });
 
 function setEntries(entries: Array<{ sessionKey: string; entry: Partial<SessionEntry> }>) {
   for (const { sessionKey, entry } of entries) {
@@ -58,24 +62,17 @@ function provider(id: string, sessionKey: string): SessionCatalogProvider {
       });
       const adopted = entries.find((candidate) => candidate.sessionKey === sessionKey);
       return [
-        {
+        catalogHost({
           hostId: `gateway:${id}`,
           label: `${id} host`,
-          kind: "gateway" as const,
-          connected: true,
           sessions: adopted
             ? [
-                {
-                  threadId: `${id}-thread`,
-                  status: "stored" as const,
-                  archived: false,
+                catalogSession(`${id}-thread`, {
                   sessionKey: adopted.sessionKey,
-                  canContinue: true,
-                  canArchive: false,
-                },
+                }),
               ]
             : [],
-        },
+        }),
       ];
     }),
   };
@@ -154,28 +151,16 @@ describe("session catalog entry snapshots", () => {
     ["invalid", undefined],
     [undefined, undefined],
   ])("projects provider color %s to its canonical wire value", (color, expected) => {
-    const snapshot = createSessionCatalogRequestEntrySnapshot({
-      cfg: {},
-      fallbackAgentId: "main",
-      projection,
-    });
-    const host = snapshot.projectHostSessions(
-      {
+    const host = snapshot().projectHostSessions(
+      catalogHost({
         hostId: "gateway:fixture",
         label: "Fixture",
-        kind: "gateway",
-        connected: true,
         sessions: [
-          {
-            threadId: "color-fixture",
+          catalogSession("color-fixture", {
             color,
-            status: "stored",
-            archived: false,
-            canContinue: true,
-            canArchive: false,
-          },
+          }),
         ],
-      },
+      }),
       new Map(),
     );
     expect(host.sessions[0]?.color).toBe(expected);
@@ -253,29 +238,20 @@ describe("session catalog entry snapshots", () => {
     ];
     setEntries(entries);
     display.mockClear();
-    const snapshot = createSessionCatalogRequestEntrySnapshot({
-      cfg: {},
-      fallbackAgentId: "main",
-      projection,
-    });
-    const host: Parameters<typeof snapshot.projectHostSessions>[0] = {
+    const current = snapshot();
+    const host = catalogHost({
       hostId: "gateway:fixture",
       label: "Fixture",
-      kind: "gateway",
-      connected: true,
-      sessions: entries.map(({ sessionKey }) => ({
-        sessionKey,
-        threadId: sessionKey,
-        status: "stored",
-        archived: false,
-        canContinue: true,
-        canArchive: false,
-        createdActor: { type: "human", id: "provider-spoof" },
-      })),
-    };
+      sessions: entries.map(({ sessionKey }) =>
+        catalogSession(sessionKey, {
+          sessionKey,
+          createdActor: { type: "human", id: "provider-spoof" },
+        }),
+      ),
+    });
     const instances = new Map();
-    snapshot.captureHostInstances(host, instances);
-    const projected = snapshot.projectHostSessions(host, instances);
+    current.captureHostInstances(host, instances);
+    const projected = current.projectHostSessions(host, instances);
     expect(projected.sessions.map((session) => session.createdActor)).toEqual([
       {
         type: "human",

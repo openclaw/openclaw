@@ -6,6 +6,12 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  catalogHost,
+  catalogSession,
+  expectCatalog,
+  expectCatalogs,
+} from "./session-catalog.fixtures.test-support.js";
+import {
   call,
   hoisted,
   provider,
@@ -22,13 +28,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 it("returns three fast catalogs within one second while an eight-second provider finishes later", async () => {
-  const host = {
-    hostId: "gateway:local",
-    label: "Local",
-    kind: "gateway" as const,
-    connected: true,
-    sessions: [],
-  };
+  const host = catalogHost();
   hoisted.activeRegistry.sessionCatalogs = [
     ...["fast-a", "fast-b", "fast-c"].map((id) => ({
       provider: provider(id, { list: async () => [host] }),
@@ -55,17 +55,13 @@ it("returns three fast catalogs within one second while an eight-second provider
   });
   try {
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(pending.respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        ...["fast-a", "fast-b", "fast-c"].map((id) =>
-          expect.objectContaining({ id, hosts: [host] }),
-        ),
-        expect.objectContaining({
-          id: "slow",
-          error: expect.objectContaining({ code: "catalog_pending" }),
-        }),
-      ],
-    });
+    expectCatalogs(pending.respond, [
+      ...["fast-a", "fast-b", "fast-c"].map((id) => expect.objectContaining({ id, hosts: [host] })),
+      expect.objectContaining({
+        id: "slow",
+        error: expect.objectContaining({ code: "catalog_pending" }),
+      }),
+    ]);
     expect(elapsed).toBeLessThanOrEqual(1_000);
     root!.release();
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore + 1);
@@ -83,13 +79,12 @@ it("returns three fast catalogs within one second while an eight-second provider
 });
 
 it("reuses pending discovery and preserves authoritative host withdrawals in fallback pages", async () => {
-  const oldHost = {
+  const oldHost = catalogHost({
     hostId: "node:slow",
     label: "Old page",
-    kind: "node" as const,
-    connected: true,
+    kind: "node",
     sessions: [],
-  };
+  });
   const freshHost = { ...oldHost, label: "Late page" };
   const late = createDeferredCore<(typeof freshHost)[]>();
   const retry = createDeferredCore<(typeof freshHost)[]>();
@@ -109,16 +104,12 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
     for (let index = 0; index < 3; index++) {
       const waiting = startCall("sessions.catalog.list", query, config, client, context);
       await vi.advanceTimersByTimeAsync(0);
-      expect(waiting.respond).toHaveBeenCalledWith(true, {
-        catalogs: [
-          expect.objectContaining({
-            hosts: [{ ...oldHost, pending: true }],
-            error: expect.objectContaining({
-              code: "catalog_pending",
-              message: expect.stringContaining("stale"),
-            }),
-          }),
-        ],
+      expectCatalog(waiting.respond, {
+        hosts: [{ ...oldHost, pending: true }],
+        error: expect.objectContaining({
+          code: "catalog_pending",
+          message: expect.stringContaining("stale"),
+        }),
       });
       await waiting.completion;
     }
@@ -126,16 +117,12 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
     late.resolve([freshHost]);
     await vi.advanceTimersByTimeAsync(0);
     const failed = await call("sessions.catalog.list", query, config, client, context);
-    expect(failed).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [freshHost],
-          error: expect.objectContaining({
-            code: "catalog_stale",
-            message: expect.stringContaining("TIMEOUT"),
-          }),
-        }),
-      ],
+    expectCatalog(failed, {
+      hosts: [freshHost],
+      error: expect.objectContaining({
+        code: "catalog_stale",
+        message: expect.stringContaining("TIMEOUT"),
+      }),
     });
     const offlineHost = {
       ...freshHost,
@@ -149,40 +136,28 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
       return [offlineHost, loadingHost];
     });
     const offline = await call("sessions.catalog.list", query, config, client, context);
-    expect(offline).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [offlineHost, loadingHost],
-        }),
-      ],
+    expectCatalog(offline, {
+      hosts: [offlineHost, loadingHost],
     });
     list.mockImplementationOnce(() => retry.promise);
     const pending = startCall("sessions.catalog.list", query, config, client, context);
     await vi.advanceTimersByTimeAsync(1_000);
     await pending.completion;
-    expect(pending.respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [offlineHost, loadingHost],
-          error: expect.objectContaining({ code: "catalog_pending" }),
-        }),
-      ],
+    expectCatalog(pending.respond, {
+      hosts: [offlineHost, loadingHost],
+      error: expect.objectContaining({ code: "catalog_pending" }),
     });
     publication.resolve(completedHost);
     await vi.advanceTimersByTimeAsync(0);
     retry.reject(new Error("Provider enumeration failed"));
     await vi.advanceTimersByTimeAsync(0);
     const rejected = await call("sessions.catalog.list", query, config, client, context);
-    expect(rejected).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [offlineHost, completedHost],
-          error: expect.objectContaining({
-            code: "catalog_stale",
-            message: expect.stringContaining("TIMEOUT"),
-          }),
-        }),
-      ],
+    expectCatalog(rejected, {
+      hosts: [offlineHost, completedHost],
+      error: expect.objectContaining({
+        code: "catalog_stale",
+        message: expect.stringContaining("TIMEOUT"),
+      }),
     });
   } finally {
     late.resolve([freshHost]);
@@ -195,13 +170,10 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
 it.each(["caller", "query", "config", "registration", "gateway", "archive"] as const)(
   "does not reuse a cached page after a change to %s",
   async (change) => {
-    const host = {
-      hostId: "gateway:local",
+    const host = catalogHost({
       label: "Private page",
-      kind: "gateway" as const,
-      connected: true,
       sessions: [],
-    };
+    });
     const list = vi
       .fn<SessionCatalogProvider["list"]>()
       .mockResolvedValueOnce([host])
@@ -248,13 +220,9 @@ it.each(["caller", "query", "config", "registration", "gateway", "archive"] as c
       client,
       { requestEntryLifetime: { signal: gateway.signal } },
     );
-    expect(refreshed).toHaveBeenCalledWith(true, {
-      catalogs: [
-        expect.objectContaining({
-          hosts: [],
-          error: expect.objectContaining({ code: "UNAVAILABLE" }),
-        }),
-      ],
+    expectCatalog(refreshed, {
+      hosts: [],
+      error: expect.objectContaining({ code: "UNAVAILABLE" }),
     });
   },
 );
@@ -267,22 +235,9 @@ it("never projects a cached adoption onto a replacement session identity", async
   const list = vi
     .fn<SessionCatalogProvider["list"]>()
     .mockResolvedValueOnce([
-      {
-        hostId: "gateway:local",
-        label: "Local",
-        kind: "gateway",
-        connected: true,
-        sessions: [
-          {
-            threadId: "old-thread",
-            sessionKey,
-            status: "stored",
-            archived: false,
-            canContinue: true,
-            canArchive: true,
-          },
-        ],
-      },
+      catalogHost({
+        sessions: [catalogSession("old-thread", { sessionKey, canArchive: true })],
+      }),
     ])
     .mockRejectedValue(new Error("offline"));
   hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
@@ -314,22 +269,12 @@ it.each([false, true])(
           entry: { sessionId: index === 0 ? "first" : secondId, pluginOwnerId: `fixture-${index}` },
         })),
       );
-    const hosts = keys.map((sessionKey, index) => ({
-      hostId: "gateway:local",
-      label: `Provider ${index}`,
-      kind: "gateway" as const,
-      connected: true,
-      sessions: [
-        {
-          threadId: `thread-${index}`,
-          sessionKey,
-          status: "stored",
-          archived: false,
-          canContinue: true,
-          canArchive: true,
-        },
-      ],
-    }));
+    const hosts = keys.map((sessionKey, index) =>
+      catalogHost({
+        label: `Provider ${index}`,
+        sessions: [catalogSession(`thread-${index}`, { sessionKey, canArchive: true })],
+      }),
+    );
     const late = createDeferredCore<typeof hosts>();
     const slow = vi
       .fn<SessionCatalogProvider["list"]>()
