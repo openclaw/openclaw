@@ -56,7 +56,10 @@ export function synchronizeCustodianHealthNudge(
       notify();
     })
     .catch(() => {
-      // A failed optional snapshot leaves live health events authoritative.
+      // Retry on the next tick unless a live event or new connection superseded this read.
+      if (owner.healthNudgeSource === source && source.pending) {
+        owner.healthNudgeSource = null;
+      }
     });
 }
 

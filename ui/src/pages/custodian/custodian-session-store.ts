@@ -134,6 +134,8 @@ export class CustodianSessionStore {
             this.healthNudgeSource.pending = false;
           }
           this.eventNudge = eventNudgeState.classifyCustodianHealthNudge(event.payload);
+        } else if (event.event === "tick") {
+          this.synchronizeHealthNudge();
         }
         this.emit();
       });

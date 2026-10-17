@@ -1,5 +1,5 @@
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
-import { vi } from "vitest";
+import { type Mock, vi } from "vitest";
 import type {
   GatewayBrowserClient,
   GatewayEventFrame,
@@ -36,13 +36,13 @@ type ContextHarness = {
 };
 
 export function createContext(
-  request: ReturnType<typeof vi.fn>,
+  request: Mock,
   methods: string[] = ["openclaw.chat"],
   options: {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     channelsSnapshot?: ChannelsStatusSnapshot | null;
     gatewayCapabilities?: string[];
-    healthRequest?: ReturnType<typeof vi.fn>;
+    healthRequest?: typeof request;
   } = {},
 ): ContextHarness {
   let healthSnapshot: unknown = { channels: {} };

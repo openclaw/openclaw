@@ -707,6 +707,31 @@ describe("CustodianSessionStore", () => {
     expect(healthRequest).toHaveBeenCalledTimes(2);
   });
 
+  it("recovers a failed initial health read on tick without polling after success", async () => {
+    const initialHealth = deferred<unknown>();
+    const request = vi.fn().mockResolvedValue({ sessionId: "health-session", action: "none" });
+    const healthRequest = vi
+      .fn()
+      .mockReturnValueOnce(initialHealth.promise)
+      .mockResolvedValue({ configReload: { hotReloadStatus: "disabled" }, channels: {} });
+    const { context, emitGatewayEvent } = createContext(request, ["openclaw.chat"], {
+      healthRequest,
+    });
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    emitGatewayEvent({ event: "tick", payload: {} });
+    expect(healthRequest).toHaveBeenCalledOnce();
+
+    initialHealth.reject(new Error("Temporary health failure"));
+    await initialHealth.promise.catch(() => undefined);
+    await Promise.resolve();
+    expect(healthRequest).toHaveBeenCalledOnce();
+    emitGatewayEvent({ event: "tick", payload: {} });
+    await waitForFast(() => expect(store.eventNudge?.kind).toBe("config-reload"));
+    emitGatewayEvent({ event: "tick", payload: {} });
+    expect(healthRequest).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["event", "reconnect", "variant", "operator"] as const)(
     "does not replace current health with a pending snapshot after %s changes",
     async (change) => {
