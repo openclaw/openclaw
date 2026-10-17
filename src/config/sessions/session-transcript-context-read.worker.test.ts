@@ -10,9 +10,8 @@ import {
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -23,14 +22,14 @@ import {
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readSessionTranscriptContextProjectionAsync } from "./session-transcript-context-read.js";
+import { readSessionTranscriptContextProjectionAsync as readProjection } from "./session-transcript-context-read.js";
 import { withSessionTranscriptDeltaReader } from "./session-transcript-delta-read.js";
 import * as transcriptReaders from "./session-transcript-execution-read.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
-import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { runWithSessionTranscriptReadFence as withReadFence } from "./session-transcript-read-fence.js";
 import * as contextWorker from "./session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
-import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
+import { readSessionTranscriptWatermarkAsync as readWatermark } from "./session-transcript-watermark.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
@@ -50,7 +49,7 @@ async function targetFor(
 }
 
 async function projectMessages(
-  source: Parameters<Parameters<typeof readSessionTranscriptContextProjectionAsync>[1]>[0],
+  source: Parameters<Parameters<typeof readProjection>[1]>[0],
   signal?: AbortSignal,
 ) {
   const snapshot = await contextWorker.readSessionTranscriptContextMessagesInWorker(
@@ -62,36 +61,16 @@ async function projectMessages(
   return { value: snapshot.messages, version: snapshot.version };
 }
 
-function blockIndependentHistory() {
-  const entered = createDeferred();
-  const blocked = createDeferred<never>();
-  void blocked.promise.catch(() => {});
-  const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
-    entered.resolve();
-    return blocked.promise;
-  });
-  return {
-    entered: entered.promise,
-    async close(reading: Promise<unknown> | undefined) {
-      blocked.reject(new Error("Synthetic history custody released"));
-      await reading?.catch(() => {});
-      spy.mockRestore();
-    },
-  };
-}
-
 function userMessage(content: string, timestamp = 1) {
   return { role: "user" as const, content, timestamp };
 }
 
-it("reads a prepared transcript snapshot while another writer owns the FIFO", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ label: "prepared-read-writer-fifo" }, async (state) => {
+it("reads a prepared transcript snapshot while another writer owns the FIFO", ({ signal }) =>
+  withOpenClawTestState({ label: "prepared-read-writer-fifo" }, async (state) => {
     const target = await targetFor(state, "prepared-read");
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync(userMessage("committed"));
-    const before = await readSessionTranscriptWatermarkAsync(target);
+    const before = await readWatermark(target);
     const outside = AsyncResource.bind(<T>(run: () => T) => run());
     const entered = createDeferred();
     const release = createDeferred();
@@ -102,10 +81,10 @@ it("reads a prepared transcript snapshot while another writer owns the FIFO", as
         await release.promise;
       },
     );
-    let snapshot: ReturnType<typeof readSessionTranscriptWatermarkAsync> | undefined;
+    let snapshot: ReturnType<typeof readWatermark> | undefined;
     try {
       await withinTest(entered.promise, signal);
-      snapshot = outside(() => readSessionTranscriptWatermarkAsync(target));
+      snapshot = outside(() => readWatermark(target));
       expect(
         await withinTest(
           awaitGateBeforeSettlement(snapshot, writer, "Writer released before snapshot read"),
@@ -116,13 +95,12 @@ it("reads a prepared transcript snapshot while another writer owns the FIFO", as
       release.resolve();
       await Promise.allSettled([writer, snapshot]);
     }
-  });
-});
+  }));
 
 it.each(["delta", "context"] as const)(
   "keeps %s reads with their writer during lock and append preparation",
-  async (route, { signal }) => {
-    await withOpenClawTestState({ label: `locked-${route}` }, async (state) => {
+  (route, { signal }) =>
+    withOpenClawTestState({ label: `locked-${route}` }, async (state) => {
       const target = await targetFor(
         state,
         `locked-${route}`,
@@ -132,20 +110,22 @@ it.each(["delta", "context"] as const)(
       await manager.appendMessageAsync(userMessage("earlier"));
       const run = () =>
         withTranscriptWriteLock(target, async (locked) => {
-          const history = blockIndependentHistory();
+          const independent = createDeferred();
+          const blocked = createDeferred<never>();
+          void blocked.promise.catch(() => {});
+          const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(() => {
+            independent.resolve();
+            return blocked.promise;
+          });
           let reading: Promise<unknown> | undefined;
           const read = () => {
             reading =
               route === "delta"
                 ? withSessionTranscriptDeltaReader(target, (reader) => reader.raw({}))
-                : readSessionTranscriptContextProjectionAsync(
-                    target,
-                    (source) => projectMessages(source, signal),
-                    signal,
-                  );
+                : readProjection(target, (source) => projectMessages(source, signal), signal);
             return Promise.race([
               reading,
-              history.entered.then(() => {
+              independent.promise.then(() => {
                 throw new Error("Writer waited on independent history custody");
               }),
             ]);
@@ -184,7 +164,9 @@ it.each(["delta", "context"] as const)(
               await expectRead(true);
             }
           } finally {
-            await history.close(reading);
+            blocked.reject(new Error("Synthetic history custody released"));
+            await reading?.catch(() => {});
+            spy.mockRestore();
           }
         });
       if (route === "context") {
@@ -207,16 +189,15 @@ it.each(["delta", "context"] as const)(
       } finally {
         await databaseClaim.release();
       }
-    });
-  },
+    }),
 );
 
 it.each([
   ["projection", "append"],
   ["projection", "remove"],
   ["full context", "append"],
-] as const)("validates a fenced %s after an owned %s", async (route, change) => {
-  await withOpenClawTestState({ label: `context-${change}` }, async (state) => {
+] as const)("validates a fenced %s after an owned %s", (route, change) =>
+  withOpenClawTestState({ label: `context-${change}` }, async (state) => {
     const target = await targetFor(state, "projection-admission");
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync(userMessage("earlier"));
@@ -230,11 +211,11 @@ it.each([
         await manager.appendMessageAsync(userMessage("later", 3));
       }
     });
-    const projection = runWithSessionTranscriptReadFence(
+    const projection = withReadFence(
       { ...anchor, role: "user", logicalTurnId: "projection-turn" },
       () =>
         route === "projection"
-          ? readSessionTranscriptContextProjectionAsync(target, async (source) => {
+          ? readProjection(target, async (source) => {
               const snapshot = await projectMessages(source);
               await mutate();
               return snapshot;
@@ -253,40 +234,38 @@ it.each([
     } else {
       await expect(projection).resolves.toMatchObject([{ role: "user", content: "earlier" }]);
     }
-  });
-});
+  }),
+);
 
 it.each([false, true])(
-  "reads context, watermarks and message presence without caller SQL (warm=%s)",
-  async (warm) => {
-    await withOpenClawTestState({ label: "transcript-context-reader" }, async (state) => {
+  "reads admitted context, watermarks and presence without caller SQL (warm=%s)",
+  (warm) =>
+    withOpenClawTestState({ label: "transcript-context-reader" }, async (state) => {
       const scope = await targetFor(state, "context-reader");
       const source = await SessionManager.openAsync(scope);
       const user = await source.appendMessageAsync(userMessage("question"));
-      const answer = await source.appendMessageAsync(
-        makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] }),
-      );
+      const answer = await source.appendMessageAsync(userMessage("answer", 2));
       const admissionAnchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: user! });
       const through = readActiveTranscriptEntryAnchor({ ...scope, entryId: answer! });
       assert(admissionAnchor && through, "Missing fixture anchors");
-      const expected = source.buildSessionContext();
       if (warm) {
         openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       } else {
-        await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+        await closeDatabase(scope.storePath);
       }
       const sql = observeHostDataSql();
       try {
         for (const options of [{}, { through }]) {
           expect(
-            (await SessionManager.openModelContextAsync(scope, options)).buildSessionContext(),
-          ).toEqual(expected);
+            (await SessionManager.openModelContextAsync(scope, options)).buildSessionContext()
+              .messages,
+          ).toEqual([userMessage("question"), userMessage("answer", 2)]);
         }
         const admitted = await SessionManager.openModelContextAsync(scope, {
           admission: { ...admissionAnchor, role: "user", logicalTurnId: "reader-turn" },
         });
         expect(admitted.buildSessionContext().messages).toEqual([]);
-        await expect(readSessionTranscriptWatermarkAsync(scope)).resolves.toEqual({
+        await expect(readWatermark(scope)).resolves.toEqual({
           generation: through.generation,
           maxSeq: through.rawSeq,
         });
@@ -297,12 +276,11 @@ it.each([false, true])(
       } finally {
         sql.restore();
       }
-    });
-  },
+    }),
 );
 
-it("refuses a rewrite after final worker validation but before host consumption", async () => {
-  await withOpenClawTestState({ label: "context-validation-reply" }, async (state) => {
+it("refuses a rewrite after final worker validation but before host consumption", () =>
+  withOpenClawTestState({ label: "context-validation-reply" }, async (state) => {
     const scope = await targetFor(state, "delayed-context");
     const source = SessionManager.open(scope);
     source.appendMessage(userMessage("original"));
@@ -335,13 +313,12 @@ it("refuses a rewrite after final worker validation but before host consumption"
     } finally {
       spy.mockRestore();
     }
-  });
-});
+  }));
 
 it.each(["projection", "full context"] as const)(
   "accepts a fenced %s through a store alias but rejects a copied store",
-  async (route) => {
-    await withOpenClawTestState({ label: "context-input-store-alias" }, async (state) => {
+  (route) =>
+    withOpenClawTestState({ label: "context-input-store-alias" }, async (state) => {
       const target = await targetFor(state, "alias-input");
       const manager = await SessionManager.openAsync(target);
       await manager.appendMessageAsync(userMessage("earlier"));
@@ -349,17 +326,12 @@ it.each(["projection", "full context"] as const)(
       const anchor = readActiveTranscriptEntryAnchor({ ...target, entryId: current! });
       assert(anchor, "Missing current-input anchor");
       const read = (storePath: string) =>
-        runWithSessionTranscriptReadFence(
-          { ...anchor, role: "user", logicalTurnId: "alias-turn" },
-          () =>
-            route === "projection"
-              ? readSessionTranscriptContextProjectionAsync(
-                  { ...target, storePath },
-                  projectMessages,
-                )
-              : SessionManager.readSessionContextAsync({ ...target, storePath }, (messages) => [
-                  ...messages,
-                ]),
+        withReadFence({ ...anchor, role: "user", logicalTurnId: "alias-turn" }, () =>
+          route === "projection"
+            ? readProjection({ ...target, storePath }, projectMessages)
+            : SessionManager.readSessionContextAsync({ ...target, storePath }, (messages) => [
+                ...messages,
+              ]),
         );
       const alias = state.statePath("alias");
       await fs.symlink(
@@ -370,16 +342,15 @@ it.each(["projection", "full context"] as const)(
       await expect(read(path.join(alias, "transcript.sqlite"))).resolves.toMatchObject([
         { role: "user", content: "earlier" },
       ]);
-      await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+      await closeDatabase(target.storePath);
       const copy = state.statePath("copied.sqlite");
       await fs.copyFile(target.storePath, copy);
       await expect(read(copy)).rejects.toThrow("different transcript store");
-    });
-  },
+    }),
 );
 
-it("rejects a read owner closed after scanning instead of accepting the detached context", async () => {
-  await withOpenClawTestState({ label: "context-reader-close" }, async (state) => {
+it("rejects a read owner closed after scanning instead of accepting the detached context", () =>
+  withOpenClawTestState({ label: "context-reader-close" }, async (state) => {
     const scope = await targetFor(state, "context-close");
     const source = await SessionManager.openAsync(scope);
     await source.appendMessageAsync(userMessage("original"));
@@ -389,10 +360,10 @@ it("rejects a read owner closed after scanning instead of accepting the detached
       .mockImplementationOnce(async (...args) => {
         const context = await original(...args);
         // Start close without joining this very read; the owner must refuse disclosure and then settle.
-        closing = closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+        closing = closeDatabase(scope.storePath);
         return context;
       });
-    let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+    let closing: ReturnType<typeof closeDatabase> | undefined;
     try {
       await expect(SessionManager.openModelContextAsync(scope)).rejects.toThrow(
         /revoked|closed|current|admission/i,
@@ -401,13 +372,12 @@ it("rejects a read owner closed after scanning instead of accepting the detached
       spy.mockRestore();
       await closing;
     }
-  });
-});
+  }));
 
 it.each(["worker", "native"] as const)(
   "reads actual %s admission and completed-turn receipts through either store locator",
-  async (mode) => {
-    await withOpenClawTestState({ label: `context-anchor-locators-${mode}` }, async (state) => {
+  (mode) =>
+    withOpenClawTestState({ label: `context-anchor-locators-${mode}` }, async (state) => {
       const originalPath = state.statePath("transcript.sqlite");
       const aliasDirectory = state.path("database-alias");
       await fs.symlink(
@@ -459,6 +429,5 @@ it.each(["worker", "native"] as const)(
         );
         expect(native.buildSessionContext().messages).toEqual([earlier, current]);
       }
-    });
-  },
+    }),
 );

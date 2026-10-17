@@ -610,8 +610,8 @@ describe("session transcript reconcile worker lifecycle", () => {
 
   it.each([false, true])(
     "keeps canonical publication distinct from parent cache eviction (explicit close: %s)",
-    async (explicitClose) => {
-      await withFakeClockState("openclaw-reconcile-retained-", async () => {
+    (explicitClose) =>
+      withFakeClockState("openclaw-reconcile-retained-", async () => {
         const databaseOptions = { agentId: "main" };
         const scope = scopeFor("retained-primary", databaseOptions);
         const canonical = observeCanonicalWriterLeases();
@@ -676,15 +676,14 @@ describe("session transcript reconcile worker lifecycle", () => {
         } finally {
           canonical.restore();
         }
-      });
-    },
+      }),
     30_000,
   );
 
   it.each(["clean", "worker-create", "preflight-transaction", "preflight-commit"] as const)(
     "releases its handle for idle retirement after %s preflight/worker startup",
-    async (mode) => {
-      await withFakeClockState("openclaw-reconcile-startup-release-", async () => {
+    (mode) =>
+      withFakeClockState("openclaw-reconcile-startup-release-", async () => {
         const options = { agentId: "main" };
         const scope = scopeFor("startup-release", options);
         await seed(scope, "startup-message", "Startup release");
@@ -737,8 +736,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         await vi.advanceTimersByTimeAsync(30 * 60_000);
         expect(database.db.isOpen).toBe(false);
         await vi.waitFor(() => expect(countAgentDatabaseLeases(database.path)).toBe(0));
-      });
-    },
+      }),
     30_000,
   );
 
@@ -747,8 +745,8 @@ describe("session transcript reconcile worker lifecycle", () => {
     { expectedTerminal: "failed" as const, failAfterFirstPlan: true },
   ])(
     "keeps the operation pending until lease release after $expectedTerminal",
-    async ({ expectedTerminal, failAfterFirstPlan }) => {
-      await withFakeClockState("openclaw-transcript-worker-cleanup-", async () => {
+    ({ expectedTerminal, failAfterFirstPlan }) =>
+      withFakeClockState("openclaw-transcript-worker-cleanup-", async () => {
         const primarySessionId = "cleanup-primary";
         const primaryScope = scopeFor(primarySessionId);
         const canonical = observeCanonicalWriterLeases();
@@ -823,8 +821,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         } finally {
           canonical.restore();
         }
-      });
-    },
+      }),
     20_000,
   );
 });

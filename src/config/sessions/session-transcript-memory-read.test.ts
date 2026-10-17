@@ -64,6 +64,10 @@ function message(id: string, parentId: string | null, role: string, content: str
     message: { role, content },
   };
 }
+function control(type: string, id: string, parentId: string, fields: Record<string, unknown>) {
+  return { type, id, parentId, timestamp: "2026-10-11T00:00:00.000Z", ...fields };
+}
+
 const accounting = {
   inputTokens: 10,
   outputTokens: 20,
@@ -122,22 +126,27 @@ async function fixture(sessionId = "one", agentId = "main", messages?: Transcrip
 }
 
 describe("memory transcript read adapters", () => {
-  it("reads sparse recent user context through the captured owner during a reply append", async () => {
-    const { binding, scope, append } = await fixture(
-      "snapshot",
-      "main",
-      Array.from({ length: 300 }, (_, index) =>
+  it("reads sparse post-reset user context without custom messages during a reply append", async () => {
+    const { binding, scope, append } = await fixture("snapshot", "main", [
+      message("before", null, "user", "Before reset"),
+      control("reset", "boundary", "before", { reason: "reset" }),
+      control("custom_message", "notice", "boundary", {
+        customType: "notice",
+        content: "Visible control",
+        display: true,
+      }),
+      ...Array.from({ length: 300 }, (_, index) =>
         message(
           `snapshot-${index}`,
-          index === 0 ? null : `snapshot-${index - 1}`,
+          index === 0 ? "notice" : `snapshot-${index - 1}`,
           index === 0 || index === 50 ? "user" : "assistant",
           `Context ${index}`,
         ),
       ),
-    );
+    ]);
     await runWithSessionActorStorage(binding, async () => {
       const [recent] = await Promise.all([
-        recentText({ ...scope, role: "user", limit: 2 }),
+        recentText({ ...scope, role: "user", limit: 3 }),
         append(message("appended", "snapshot-299", "assistant", "Concurrent reply")),
       ]);
       expect(recent).toEqual([
@@ -198,32 +207,6 @@ describe("memory transcript read adapters", () => {
     const stopped = prepareHydration(scope, undefined, cancelled.signal);
     cancelled.abort(new Error("caller cancelled"));
     await expect(stopped.read()).rejects.toThrow("caller cancelled");
-  });
-
-  it("reads recent text after a reset without leaking older or custom-message context", async () => {
-    const { scope } = await fixture("reset", "main", [
-      message("before", null, "user", "Before reset"),
-      {
-        type: "reset",
-        id: "boundary",
-        parentId: "before",
-        reason: "reset",
-        timestamp: "2026-10-11T00:00:00.000Z",
-      },
-      {
-        type: "custom_message",
-        id: "notice",
-        parentId: "boundary",
-        customType: "notice",
-        content: "Visible control",
-        display: true,
-        timestamp: "2026-10-11T00:00:00.000Z",
-      },
-      message("after", "notice", "user", "After marker"),
-    ]);
-    expect(await recentText({ ...scope, role: "user", limit: 2 })).toEqual([
-      { id: "after", role: "user", text: "After marker" },
-    ]);
   });
 
   it("selects sibling and retained historical windows without creating missing sessions", async () => {

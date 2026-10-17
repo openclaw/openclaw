@@ -35,8 +35,8 @@ const events = [
   { type: "leaf", id: "selected-leaf", parentId: "first-branch" },
 ];
 
-it("appends entry-less raw events off-thread and resolves parents from current writes", async () => {
-  await withOpenClawTestState({ label: "transcript-events-append-worker" }, async (state) => {
+it("appends entry-less raw events off-thread and resolves parents from current writes", () =>
+  withOpenClawTestState({ label: "transcript-events-append-worker" }, async (state) => {
     const scope = transcriptScope(state.env, "raw-append", state.statePath("transcript.sqlite"));
     const header = { type: "session", id: scope.sessionId, version: 3 };
     const custom = (id: string, parentId: string | null) => ({
@@ -63,11 +63,10 @@ it("appends entry-less raw events off-thread and resolves parents from current w
         custom("current", "sibling"),
       ]);
     });
-  });
-});
+  }));
 
-it("reads all ordered raw events and byte bounds without caller SQL, including cold target discovery", async () => {
-  await withOpenClawTestState({ label: "transcript-events-worker" }, async (state) => {
+it("reads all ordered raw events and byte bounds without caller SQL, including cold target discovery", () =>
+  withOpenClawTestState({ label: "transcript-events-worker" }, async (state) => {
     const scope = transcriptScope(state.env, "raw-events", state.statePath("transcript.sqlite"));
     await replaceTranscriptEvents(scope, events);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
@@ -86,11 +85,10 @@ it("reads all ordered raw events and byte bounds without caller SQL, including c
       await expect(loadTranscriptEvents({ ...scope, storePath: absentPath })).resolves.toEqual([]);
     });
     await expect(fs.stat(absentPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-});
+  }));
 
-it("preserves SyntaxError across the worker boundary and releases the failed read", async () => {
-  await withOpenClawTestState({ label: "transcript-events-malformed" }, async (state) => {
+it("preserves SyntaxError across the worker boundary and releases the failed read", () =>
+  withOpenClawTestState({ label: "transcript-events-malformed" }, async (state) => {
     const scope = transcriptScope(state.env, "raw-events", state.statePath("transcript.sqlite"));
     await replaceTranscriptEvents(scope, events);
     const database = openOpenClawAgentDatabase({
@@ -107,13 +105,12 @@ it("preserves SyntaxError across the worker boundary and releases the failed rea
     });
     update.run(JSON.stringify(events[1]), scope.sessionId);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual(events);
-  });
-});
+  }));
 
 it.each(["scope", "physical store"] as const)(
   "captures the %s before target discovery yields",
-  async (change) => {
-    await withOpenClawTestState({ label: "transcript-events-source" }, async (state) => {
+  (change) =>
+    withOpenClawTestState({ label: "transcript-events-source" }, async (state) => {
       const scope = transcriptScope(
         { ...state.env },
         "raw-events",
@@ -160,6 +157,5 @@ it.each(["scope", "physical store"] as const)(
         await pending.catch(() => undefined);
         observation.mockRestore();
       }
-    });
-  },
+    }),
 );
