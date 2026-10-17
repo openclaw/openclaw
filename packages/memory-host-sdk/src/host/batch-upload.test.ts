@@ -1,4 +1,3 @@
-// Memory Host SDK tests cover batch upload behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
@@ -11,8 +10,17 @@ vi.mock("./remote-http.js", () => ({
 
 const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
 
-function textResponse(body: string, status: number): Response {
-  return new Response(body, { status });
+function upload(options: Partial<Parameters<typeof uploadBatchJsonlFile>[0]> = {}) {
+  return uploadBatchJsonlFile({
+    client: { baseUrl: "https://memory.example/v1", headers: { Authorization: "Bearer test" } },
+    requests: [{ input: "one" }],
+    errorPrefix: "file upload failed",
+    ...options,
+  });
+}
+
+function respond(response: Response) {
+  remoteHttpMock.mockImplementationOnce(async (params) => await params.onResponse(response));
 }
 
 function streamingTextResponse(params: {
@@ -39,118 +47,65 @@ describe("uploadBatchJsonlFile", () => {
   });
 
   it("wraps malformed file-upload JSON with the request error prefix", async () => {
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(textResponse("{ nope", 200));
-    });
+    respond(new Response("{ nope", { status: 200 }));
 
-    await expect(
-      uploadBatchJsonlFile({
-        client: {
-          baseUrl: "https://memory.example/v1",
-          headers: { Authorization: "Bearer test" },
-        },
-        requests: [{ input: "one" }],
-        errorPrefix: "file upload failed",
-      }),
-    ).rejects.toThrow("file upload failed: malformed JSON response");
+    await expect(upload()).rejects.toThrow("file upload failed: malformed JSON response");
   });
 
   it("bounds non-ok file-upload response bodies before formatting the error", async () => {
     let canceled = false;
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(
-        streamingTextResponse({
-          body: "x".repeat(12_000),
-          status: 413,
-          onCancel: () => {
-            canceled = true;
-          },
-        }),
-      );
-    });
-
-    await expect(
-      uploadBatchJsonlFile({
-        client: {
-          baseUrl: "https://memory.example/v1",
-          headers: { Authorization: "Bearer test" },
+    respond(
+      streamingTextResponse({
+        body: "x".repeat(12_000),
+        status: 413,
+        onCancel: () => {
+          canceled = true;
         },
-        requests: [{ input: "one" }],
-        errorPrefix: "file upload failed",
       }),
-    ).rejects.toThrow(`file upload failed: 413 ${"x".repeat(1_000)}... [truncated]`);
+    );
+
+    await expect(upload()).rejects.toThrow(
+      `file upload failed: 413 ${"x".repeat(1_000)}... [truncated]`,
+    );
     expect(canceled).toBe(true);
   });
 
   it("rejects oversized successful file-upload JSON before parsing", async () => {
     let canceled = false;
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(
-        streamingTextResponse({
-          body: '{"id":"file_123"}',
-          status: 200,
-          headers: { "content-length": "00064" },
-          onCancel: () => {
-            canceled = true;
-          },
-        }),
-      );
-    });
-
-    await expect(
-      uploadBatchJsonlFile({
-        client: {
-          baseUrl: "https://memory.example/v1",
-          headers: { Authorization: "Bearer test" },
+    respond(
+      streamingTextResponse({
+        body: '{"id":"file_123"}',
+        status: 200,
+        headers: { "content-length": "00064" },
+        onCancel: () => {
+          canceled = true;
         },
-        requests: [{ input: "one" }],
-        errorPrefix: "file upload failed",
-        maxResponseBytes: 8,
       }),
-    ).rejects.toThrow("file upload failed: response body too large: 64 bytes (limit: 8 bytes)");
+    );
+
+    await expect(upload({ maxResponseBytes: 8 })).rejects.toThrow(
+      "file upload failed: response body too large: 64 bytes (limit: 8 bytes)",
+    );
     expect(canceled).toBe(true);
   });
 
   it("accepts leading-zero content-length values on successful file-upload JSON", async () => {
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(
-        new Response('{"id":"file_123"}', {
-          status: 200,
-          headers: { "content-length": "00017" },
-        }),
-      );
-    });
-
-    await expect(
-      uploadBatchJsonlFile({
-        client: {
-          baseUrl: "https://memory.example/v1",
-          headers: { Authorization: "Bearer test" },
-        },
-        requests: [{ input: "one" }],
-        errorPrefix: "file upload failed",
-        maxResponseBytes: 32,
+    respond(
+      new Response('{"id":"file_123"}', {
+        status: 200,
+        headers: { "content-length": "00017" },
       }),
-    ).resolves.toBe("file_123");
+    );
+
+    await expect(upload({ maxResponseBytes: 32 })).resolves.toBe("file_123");
   });
 
   it("passes caller abort signals through non-ok file-upload response snippets", async () => {
     const fixture = createPendingResponse({ status: 500 });
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(fixture.response);
-    });
+    respond(fixture.response);
     const controller = new AbortController();
     const expected = new Error("upload aborted");
-    const upload = uploadBatchJsonlFile({
-      client: {
-        baseUrl: "https://memory.example/v1",
-        headers: { Authorization: "Bearer test" },
-      },
-      requests: [{ input: "one" }],
-      errorPrefix: "file upload failed",
-      signal: controller.signal,
-    });
-    const settled = upload.then(
+    const settled = upload({ signal: controller.signal }).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -174,21 +129,10 @@ describe("uploadBatchJsonlFile", () => {
 
   it("passes caller abort signals through successful file-upload JSON reads", async () => {
     const fixture = createPendingResponse({ status: 200 });
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(fixture.response);
-    });
+    respond(fixture.response);
     const controller = new AbortController();
     const expected = new Error("upload json aborted");
-    const upload = uploadBatchJsonlFile({
-      client: {
-        baseUrl: "https://memory.example/v1",
-        headers: { Authorization: "Bearer test" },
-      },
-      requests: [{ input: "one" }],
-      errorPrefix: "file upload failed",
-      signal: controller.signal,
-    });
-    const settled = upload.then(
+    const settled = upload({ signal: controller.signal }).then(
       () => undefined,
       (error: unknown) => error,
     );
