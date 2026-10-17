@@ -12,6 +12,20 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createComposedCatalogFixture } from "./session-catalog.performance.test-support.js";
 
+const workKeys = [
+  "sqliteReadCalls",
+  "sqliteFreshnessReads",
+  "bindingAuthorityReads",
+  "fileReadCalls",
+  "ownershipFileReadCalls",
+  "fileOpenCalls",
+  "ownershipFileOpenCalls",
+  "pluginStateWorkerOperations",
+] as const;
+const expectedWork = Object.fromEntries(
+  workKeys.map((key) => [key, key === "pluginStateWorkerOperations" ? 1 : 0]),
+);
+
 function measureHostCpuReference(): number {
   const bytes = Uint8Array.from({ length: 65_536 }, (_, index) => index & 255);
   const hash = () => {
@@ -46,18 +60,13 @@ function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
 
 function observedCpuSamples(profile: Profiler.Profile) {
   const namesById = new Map(profile.nodes.map((node) => [node.id, node.callFrame.functionName]));
-  let catalogPreviewSamples = 0;
-  let sanitizeTerminalTextSamples = 0;
   const samples = profile.samples ?? [];
-  for (const id of samples) {
-    if (namesById.get(id) === "catalogPreview") {
-      catalogPreviewSamples++;
-    }
-    if (namesById.get(id) === "sanitizeTerminalText") {
-      sanitizeTerminalTextSamples++;
-    }
-  }
-  return { totalCpuSamples: samples.length, catalogPreviewSamples, sanitizeTerminalTextSamples };
+  const count = (name: string) => samples.filter((id) => namesById.get(id) === name).length;
+  return {
+    totalCpuSamples: samples.length,
+    catalogPreviewSamples: count("catalogPreview"),
+    sanitizeTerminalTextSamples: count("sanitizeTerminalText"),
+  };
 }
 
 it("measures 100 composed catalog lists against real session and plugin stores", async () => {
@@ -115,12 +124,16 @@ it("measures 100 composed catalog lists against real session and plugin stores",
         });
         expect(await snapshot.lookup("complete")).toEqual({ version: 1, kind: "complete" });
         const setupIo = counters.end();
-        expect(setupIo.nativeRpcCalls).toBeGreaterThan(0);
-        expect(setupIo.nativeThreadListCalls).toBeGreaterThan(0);
-        expect(setupIo.sqliteReadCalls).toBeGreaterThan(0);
-        expect(setupIo.sessionEntryReads).toBeGreaterThan(0);
-        expect(setupIo.fileReadCalls).toBeGreaterThan(0);
-        expect(setupIo.pluginStateWorkerReadOperations).toBeGreaterThan(0);
+        for (const key of [
+          "nativeRpcCalls",
+          "nativeThreadListCalls",
+          "sqliteReadCalls",
+          "sessionEntryReads",
+          "fileReadCalls",
+          "pluginStateWorkerReadOperations",
+        ] as const) {
+          expect(setupIo[key], key).toBeGreaterThan(0);
+        }
 
         for (const thread of first.sessions.slice(0, 3)) {
           const adopted = await fixture.continueSession(
@@ -176,20 +189,9 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           durations.push(performance.now() - started);
           measuredResponses.push(result);
           const currentIo = counters.snapshot();
-          workPerList.push({
-            sqliteReadCalls: currentIo.sqliteReadCalls - previousIo.sqliteReadCalls,
-            sqliteFreshnessReads: currentIo.sqliteFreshnessReads - previousIo.sqliteFreshnessReads,
-            bindingAuthorityReads:
-              currentIo.bindingAuthorityReads - previousIo.bindingAuthorityReads,
-            fileReadCalls: currentIo.fileReadCalls - previousIo.fileReadCalls,
-            ownershipFileReadCalls:
-              currentIo.ownershipFileReadCalls - previousIo.ownershipFileReadCalls,
-            fileOpenCalls: currentIo.fileOpenCalls - previousIo.fileOpenCalls,
-            ownershipFileOpenCalls:
-              currentIo.ownershipFileOpenCalls - previousIo.ownershipFileOpenCalls,
-            pluginStateWorkerOperations:
-              currentIo.pluginStateWorkerOperations - previousIo.pluginStateWorkerOperations,
-          });
+          workPerList.push(
+            Object.fromEntries(workKeys.map((key) => [key, currentIo[key] - previousIo[key]])),
+          );
           previousIo = currentIo;
           minimumRows = Math.min(minimumRows, result.sessions.length);
         }
@@ -243,39 +245,28 @@ it("measures 100 composed catalog lists against real session and plugin stores",
             setupIo,
             ioTotals: io,
             workPerList,
-            ioPerList: Object.fromEntries(
-              Object.entries(io).map(([key, value]) => [key, value / 100]),
-            ),
             scope:
               "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Each sample joins its final host publication and tracked provider refresh. Binding authority is acquired through the plugin-state worker; calling-thread SQL and worker operations are counted separately. File counts cover sync, callback and promise fs read/open APIs, including separately attributed live ownership checks. Descriptor classification adds fstat instrumentation cost.",
           }),
         );
         expect(cpuSamples.totalCpuSamples).toBeGreaterThan(0);
-        expect(cpuSamples.catalogPreviewSamples).toBe(0);
-        expect(cpuSamples.sanitizeTerminalTextSamples).toBe(0);
-        expect(io.nativeRpcCalls).toBe(0);
+        expect(cpuSamples).toMatchObject({
+          catalogPreviewSamples: 0,
+          sanitizeTerminalTextSamples: 0,
+        });
         expect(io.fileReadCalls).toBe(io.ownershipFileReadCalls);
         expect(io.fileOpenCalls).toBe(io.ownershipFileOpenCalls);
-        expect(io.pluginStateWorkerReadOperations).toBe(100);
-        expect(io.sessionEntryReads).toBe(0);
-        expect(io.sessionPayloadReads).toBe(0);
+        expect(io).toMatchObject({
+          nativeRpcCalls: 0,
+          pluginStateWorkerReadOperations: 100,
+          sessionEntryReads: 0,
+          sessionPayloadReads: 0,
+        });
         // Binding authority stays in the worker; warm reads reuse process-owned admission.
         for (const work of workPerList) {
-          expect(work).toEqual({
-            sqliteReadCalls: 0,
-            sqliteFreshnessReads: 0,
-            bindingAuthorityReads: 0,
-            fileReadCalls: 0,
-            ownershipFileReadCalls: 0,
-            fileOpenCalls: 0,
-            ownershipFileOpenCalls: 0,
-            pluginStateWorkerOperations: 1,
-          });
+          expect(work).toEqual(expectedWork);
         }
-        // Two-CPU reference 1.568–1.615 ms gives 31.36–32.30 ms: >3x the prior 9.43 ms
-        // main median, below 10x the fastest 3.479 ms list. CPU-scaling the 23.95 ms
-        // hosted sighting predicts ~79.7 ms. Without an independent bound, uniform
-        // composition CPU growth leaves exact SQL budgets green.
+        // Scale the latency budget to host CPU; SQL budgets alone miss composition CPU growth.
         expect(durations[49]).toBeLessThan(cpuReferenceP50Ms * 20);
       } finally {
         vi.useRealTimers();

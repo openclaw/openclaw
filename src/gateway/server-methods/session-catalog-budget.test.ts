@@ -83,7 +83,6 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
     hostId: "node:slow",
     label: "Old page",
     kind: "node",
-    sessions: [],
   });
   const freshHost = { ...oldHost, label: "Late page" };
   const late = createDeferredCore<(typeof freshHost)[]>();
@@ -126,7 +125,6 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
     });
     const offlineHost = {
       ...freshHost,
-      sessions: [],
       error: { code: "UNAVAILABLE", message: "node offline" },
     };
     const loadingHost = { ...oldHost, hostId: "node:loading", pending: true };

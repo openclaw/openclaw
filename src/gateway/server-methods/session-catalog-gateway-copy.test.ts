@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   buildModelsListResult: vi.fn(async () => ({ models: [] as Array<Record<string, unknown>> })),
@@ -48,24 +49,18 @@ async function completeGatewaySession(params: Record<string, unknown>) {
     key: "agent:main:gateway-copy",
     agentId: "main",
     entry,
-    storePath: "/tmp/test-sessions.json",
   });
   return {
     ok: true as const,
     key: "agent:main:gateway-copy",
     agentId: "main",
     entry,
-    resolved: { modelProvider: entry.providerOverride, model: entry.modelOverride },
-    resetExisting: false,
-    postCommit: { status: "completed" as const },
   };
 }
 
 function provider(preferredModel = "openai/gpt-5.6-sol"): SessionCatalogProvider {
-  return {
-    id: "beam",
+  return catalogProvider("beam", {
     label: "Beam",
-    list: vi.fn(async () => []),
     read: vi.fn(async ({ hostId, threadId }) => ({
       hostId,
       threadId,
@@ -75,7 +70,7 @@ function provider(preferredModel = "openai/gpt-5.6-sol"): SessionCatalogProvider
       displayName: "Shared investigation",
       preferredModel,
     })),
-  };
+  });
 }
 
 function copyParams(
@@ -119,6 +114,22 @@ afterEach(() => vi.useRealTimers());
 const unavailable = { ok: false, error: { code: "UNAVAILABLE", retryable: true } };
 const fallbackNotice =
   "The source model, openai/gpt-5.6-sol, is not available to this Team agent, so this session is using its configured model, openai/team-default.";
+const emptyModels = { models: [] };
+const availableModels = {
+  models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true }],
+};
+const peek = (copying: ReturnType<typeof copySessionCatalogToGateway>) =>
+  Promise.race([copying, Promise.resolve("pending" as const)]);
+function startAssessment(overrides: Parameters<typeof copyParams>[0] = {}) {
+  const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
+  mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise);
+  return { assessment, copying: copySessionCatalogToGateway(copyParams(overrides)) };
+}
+function expectNoImport() {
+  for (const effect of [mocks.importSessionCatalogHistory, mocks.recordSessionStateEventAsync]) {
+    expect(effect).not.toHaveBeenCalled();
+  }
+}
 
 describe("copySessionCatalogToGateway", () => {
   beforeEach(() => {
@@ -148,11 +159,7 @@ describe("copySessionCatalogToGateway", () => {
   ] as const)(
     "copies history with source model listed = %s and restricted = %s",
     async (listed, restricted, sourceModel, expectedModel, notice) => {
-      mocks.buildModelsListResult.mockResolvedValue({
-        models: listed
-          ? [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true }]
-          : [],
-      });
+      mocks.buildModelsListResult.mockResolvedValue(listed ? availableModels : emptyModels);
       const catalog = provider(sourceModel);
       const result = await copySessionCatalogToGateway(
         copyParams({ provider: catalog }, restricted),
@@ -194,18 +201,13 @@ describe("copySessionCatalogToGateway", () => {
 
   it("bounds preferred-model assessment before creating a Gateway session", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
-    mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise as never);
-    const copying = copySessionCatalogToGateway(copyParams());
+    const { assessment, copying } = startAssessment();
     try {
       await vi.advanceTimersByTimeAsync(19_999);
       expect(mocks.createGatewaySession).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      expect(await Promise.race([copying, Promise.resolve("pending" as const)])).toMatchObject(
-        unavailable,
-      );
-      expect(mocks.importSessionCatalogHistory).not.toHaveBeenCalled();
-      expect(mocks.recordSessionStateEventAsync).not.toHaveBeenCalled();
+      expect(await peek(copying)).toMatchObject(unavailable);
+      expectNoImport();
     } finally {
       assessment.resolve({ models: [] });
       await copying;
@@ -214,10 +216,8 @@ describe("copySessionCatalogToGateway", () => {
 
   it("shares one monotonic deadline across preferred-model and create-time catalog reads", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
     const createRead = createDeferredCore<{ entries: never[]; routeVariants: never[] }>();
     const createReadStarted = createDeferredCore();
-    mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise as never);
     mocks.createGatewaySession.mockImplementationOnce(async (params: Record<string, unknown>) => {
       createReadStarted.resolve();
       await (params.loadGatewayModelCatalogSnapshot as () => Promise<unknown>)();
@@ -227,22 +227,17 @@ describe("copySessionCatalogToGateway", () => {
       ...copyParams().context,
       loadGatewayModelCatalogSnapshot: vi.fn(() => createRead.promise),
     } as never;
-    const copying = copySessionCatalogToGateway(copyParams({ context }));
+    const { assessment, copying } = startAssessment({ context });
     try {
       await vi.advanceTimersByTimeAsync(12_000);
       vi.setSystemTime(Date.now() + 3_600_000);
-      assessment.resolve({
-        models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true }],
-      });
+      assessment.resolve(availableModels);
       await createReadStarted.promise;
       await vi.advanceTimersByTimeAsync(7_999);
-      expect(await Promise.race([copying, Promise.resolve("pending" as const)])).toBe("pending");
+      expect(await peek(copying)).toBe("pending");
       await vi.advanceTimersByTimeAsync(1);
-      expect(await Promise.race([copying, Promise.resolve("pending" as const)])).toMatchObject(
-        unavailable,
-      );
-      expect(mocks.importSessionCatalogHistory).not.toHaveBeenCalled();
-      expect(mocks.recordSessionStateEventAsync).not.toHaveBeenCalled();
+      expect(await peek(copying)).toMatchObject(unavailable);
+      expectNoImport();
     } finally {
       assessment.resolve({ models: [] });
       createRead.resolve({ entries: [], routeVariants: [] });
@@ -253,20 +248,16 @@ describe("copySessionCatalogToGateway", () => {
   it.each(["request signal", "connection"] as const)(
     "ends a preferred-model catalog wait when the %s closes",
     async (owner) => {
-      const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
       const controller = new AbortController();
-      mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise as never);
-      const copying = copySessionCatalogToGateway(
-        copyParams(
-          owner === "request signal"
-            ? { signal: controller.signal }
-            : {
-                client: {
-                  connect: { scopes: ["operator.read", "operator.write"] },
-                  connectionSignal: controller.signal,
-                } as never,
-              },
-        ),
+      const { assessment, copying } = startAssessment(
+        owner === "request signal"
+          ? { signal: controller.signal }
+          : {
+              client: {
+                connect: { scopes: ["operator.read", "operator.write"] },
+                connectionSignal: controller.signal,
+              } as never,
+            },
       );
       try {
         const settled = expect(copying).resolves.toMatchObject(unavailable);

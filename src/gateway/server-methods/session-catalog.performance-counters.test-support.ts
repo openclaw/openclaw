@@ -14,31 +14,27 @@ const workerCounter = vi.hoisted(() => ({
 vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../plugin-state/plugin-state-worker-client.js")>();
-  const counted = Object.fromEntries(
-    Object.entries(actual).map(([name, value]) => [
-      name,
-      typeof value !== "function"
-        ? value
-        : (...args: unknown[]) => {
-            if (workerCounter.enabled) {
-              workerCounter.operations++;
-              if (
-                [
-                  "lookupPluginStateInWorker",
-                  "lookupManyPluginStateInWorker",
-                  "listPluginStateInWorker",
-                  "listPluginStateInKeyRangeInWorker",
-                  "countPluginStateInWorker",
-                  "observePluginStateInWorker",
-                ].includes(name)
-              ) {
-                workerCounter.reads++;
-              }
-            }
-            return Reflect.apply(value, undefined, args);
-          },
-    ]),
-  );
+  const reads = new Set([
+    "lookupPluginStateInWorker",
+    "lookupManyPluginStateInWorker",
+    "listPluginStateInWorker",
+    "listPluginStateInKeyRangeInWorker",
+    "countPluginStateInWorker",
+    "observePluginStateInWorker",
+  ]);
+  const counted: Record<string, unknown> = { ...actual };
+  for (const [name, value] of Object.entries(actual)) {
+    if (typeof value !== "function") {
+      continue;
+    }
+    counted[name] = (...args: unknown[]) => {
+      if (workerCounter.enabled) {
+        workerCounter.operations++;
+        workerCounter.reads += Number(reads.has(name));
+      }
+      return Reflect.apply(value, undefined, args);
+    };
+  }
   return {
     ...counted,
     registerPluginStateInWorker: async (
@@ -76,7 +72,6 @@ const empty = () => ({
 
 /** Call-through instrumentation records counts only, never SQLite or RPC result objects. */
 export function createCatalogIoCounters() {
-  let enabled = false;
   let counts = empty();
   let ownershipFile: Pick<fsSync.BigIntStats, "dev" | "ino"> | undefined;
   const catalogPersistence = createDeferredCore<string>();
@@ -105,7 +100,7 @@ export function createCatalogIoCounters() {
   for (const method of ["get", "all", "iterate"] as const) {
     const original = StatementSync.prototype[method];
     replace(StatementSync.prototype, method, function (this: StatementSync, ...args: unknown[]) {
-      if (enabled) {
+      if (workerCounter.enabled) {
         counts.sqliteReadCalls++;
         const sql = this.sourceSQL.toLowerCase();
         if (sql.includes("session_nodes") || sql.includes("session_participants")) {
@@ -136,7 +131,7 @@ export function createCatalogIoCounters() {
   ] as const) {
     const original = Reflect.get(target, method);
     replace(target, method, function (this: unknown, ...args: unknown[]) {
-      if (enabled) {
+      if (workerCounter.enabled) {
         if (method === "open" || method === "openSync") {
           counts.fileOpenCalls++;
         } else {
@@ -147,7 +142,7 @@ export function createCatalogIoCounters() {
         }
       }
       const result = Reflect.apply(original, this, args);
-      if (enabled && method === "openSync" && isOwnershipFile(result)) {
+      if (workerCounter.enabled && method === "openSync" && isOwnershipFile(result)) {
         counts.ownershipFileOpenCalls++;
       }
       return result;
@@ -167,29 +162,24 @@ export function createCatalogIoCounters() {
     },
     catalogPersisted: catalogPersistence.promise,
     nativeRequest(method: string) {
-      if (!enabled) {
+      if (!workerCounter.enabled) {
         return;
       }
       counts.nativeRpcCalls++;
-      if (method === "thread/list") {
-        counts.nativeThreadListCalls++;
-      }
+      counts.nativeThreadListCalls += Number(method === "thread/list");
     },
     begin() {
       counts = empty();
       workerCounter.reads = 0;
       workerCounter.operations = 0;
       workerCounter.enabled = true;
-      enabled = true;
     },
     end() {
-      enabled = false;
       workerCounter.enabled = false;
       return snapshot();
     },
     close() {
       workerCounter.catalogPersisted = undefined;
-      enabled = false;
       workerCounter.enabled = false;
       for (const undo of restore.toReversed()) {
         undo();

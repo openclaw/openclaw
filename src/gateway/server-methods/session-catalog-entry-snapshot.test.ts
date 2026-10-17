@@ -20,7 +20,11 @@ import * as userProfileList from "../../state/user-profile-list.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
-import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
+import {
+  catalogHost,
+  catalogProvider,
+  catalogSession,
+} from "./session-catalog.fixtures.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -47,35 +51,6 @@ function setEntries(entries: Array<{ sessionKey: string; entry: Partial<SessionE
   for (const { sessionKey, entry } of entries) {
     projection.setEntry(sessionKey, { sessionId: sessionKey, updatedAt: 1, ...entry });
   }
-}
-
-function provider(id: string, sessionKey: string): SessionCatalogProvider {
-  return {
-    id,
-    label: id.toUpperCase(),
-    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    list: vi.fn(async ({ sessionEntries }) => {
-      const entries = listSessionCatalogEntries({
-        config: {},
-        runtime: createPluginRuntime(),
-        sessionEntries,
-      });
-      const adopted = entries.find((candidate) => candidate.sessionKey === sessionKey);
-      return [
-        catalogHost({
-          hostId: `gateway:${id}`,
-          label: `${id} host`,
-          sessions: adopted
-            ? [
-                catalogSession(`${id}-thread`, {
-                  sessionKey: adopted.sessionKey,
-                }),
-              ]
-            : [],
-        }),
-      ];
-    }),
-  };
 }
 
 describe("session catalog entry snapshots", () => {
@@ -113,12 +88,8 @@ describe("session catalog entry snapshots", () => {
         sender: { identity: { type: "profile" as const, id: "deleted-profile" } },
       },
     ];
-    const catalog = provider("external", "unused");
-    catalog.read = async ({ hostId, threadId }) => ({
-      hostId,
-      threadId,
-      items,
-      nextCursor: "older",
+    const catalog = catalogProvider("external", {
+      read: async ({ hostId, threadId }) => ({ hostId, threadId, items, nextCursor: "older" }),
     });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: catalog }];
     const respond = vi.fn();
@@ -153,13 +124,7 @@ describe("session catalog entry snapshots", () => {
   ])("projects provider color %s to its canonical wire value", (color, expected) => {
     const host = snapshot().projectHostSessions(
       catalogHost({
-        hostId: "gateway:fixture",
-        label: "Fixture",
-        sessions: [
-          catalogSession("color-fixture", {
-            color,
-          }),
-        ],
+        sessions: [catalogSession("color-fixture", { color })],
       }),
       new Map(),
     );
@@ -173,13 +138,25 @@ describe("session catalog entry snapshots", () => {
     const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
     const revisions: Array<object | undefined> = [];
     const labels: Array<string | undefined> = [];
-    const catalog = provider("alpha", key);
-    const list = catalog.list;
-    catalog.list = async (params) => {
-      revisions.push(params.sessionEntries?.revision);
-      labels.push(params.sessionEntries?.entriesForCatalog?.()[0]?.entry.label);
-      return list(params);
-    };
+    const catalog = catalogProvider("alpha", {
+      list: vi.fn(async ({ sessionEntries }) => {
+        revisions.push(sessionEntries?.revision);
+        labels.push(sessionEntries?.entriesForCatalog?.()[0]?.entry.label);
+        const entries = listSessionCatalogEntries({
+          config: {},
+          runtime: createPluginRuntime(),
+          sessionEntries,
+        });
+        const adopted = entries.find((candidate) => candidate.sessionKey === key);
+        return [
+          catalogHost({
+            sessions: adopted
+              ? [catalogSession("alpha-thread", { sessionKey: adopted.sessionKey })]
+              : [],
+          }),
+        ];
+      }),
+    });
     hoisted.activeRegistry.sessionCatalogs.push({ provider: catalog });
     const poll = async () => {
       const respond = vi.fn();
@@ -240,8 +217,6 @@ describe("session catalog entry snapshots", () => {
     display.mockClear();
     const current = snapshot();
     const host = catalogHost({
-      hostId: "gateway:fixture",
-      label: "Fixture",
       sessions: entries.map(({ sessionKey }) =>
         catalogSession(sessionKey, {
           sessionKey,

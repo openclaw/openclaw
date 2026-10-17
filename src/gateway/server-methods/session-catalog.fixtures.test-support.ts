@@ -1,8 +1,22 @@
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+
+export function catalogProvider(
+  id: string,
+  overrides: Partial<SessionCatalogProvider> = {},
+): SessionCatalogProvider {
+  return {
+    id,
+    label: id.toUpperCase(),
+    list: vi.fn(async () => []),
+    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    ...overrides,
+  };
+}
 
 export function catalogSession(
   threadId: string,
@@ -35,4 +49,8 @@ export function expectCatalogs(respond: unknown, catalogs: unknown[]) {
 
 export function expectCatalog(respond: unknown, catalog: Record<string, unknown>) {
   expectCatalogs(respond, [expect.objectContaining(catalog)]);
+}
+
+export function expectCatalogHost(respond: unknown, host: Record<string, unknown>) {
+  expectCatalog(respond, { hosts: [expect.objectContaining(host)] });
 }

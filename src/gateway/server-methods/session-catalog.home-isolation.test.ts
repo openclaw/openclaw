@@ -9,7 +9,11 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { catalogHost, expectCatalog } from "./session-catalog.fixtures.test-support.js";
+import {
+  catalogHost,
+  catalogProvider as provider,
+  expectCatalog,
+} from "./session-catalog.fixtures.test-support.js";
 
 // mock-isolation: HOME policy uses the real home path but must not open its profile database.
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
@@ -21,19 +25,6 @@ vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 const { listActiveSessionCatalogs } = await import("../../plugins/session-catalog-active.js");
 let projection: ReturnType<typeof createSessionRowProjectionFixture>;
-
-function provider(
-  id: string,
-  overrides: Partial<SessionCatalogProvider> = {},
-): SessionCatalogProvider {
-  return {
-    id,
-    label: id.toUpperCase(),
-    list: vi.fn(async () => []),
-    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    ...overrides,
-  };
-}
 
 function registerCatalog(registry: PluginRegistry, catalog: SessionCatalogProvider) {
   registry.sessionCatalogs.push({ pluginId: catalog.id, source: "test", provider: catalog });
