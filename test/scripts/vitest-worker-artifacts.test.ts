@@ -79,9 +79,28 @@ function inFixture(
 ) {
   return context.workerArtifacts.fixtureLifetime.run(() => body(createFixture(context)));
 }
+async function withWorkerRun(
+  artifacts: ArtifactContext["workerArtifacts"],
+  body: (owner: ReturnType<typeof artifacts.createWorkerRun>, directory: string) => Promise<void>,
+) {
+  const owner = artifacts.createWorkerRun();
+  try {
+    await body(owner, owner.descriptor.directory);
+  } finally {
+    await owner.dispose();
+  }
+  expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+}
 function writeFiles(directory: string, files: Record<string, string | Record<string, unknown>>) {
   for (const [name, source] of Object.entries(files)) {
     writeFixture(directory, name, typeof source === "string" ? source : JSON.stringify(source));
+  }
+}
+async function joinAll(work: Promise<unknown>[]) {
+  for (const result of await Promise.allSettled(work)) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
   }
 }
 function readGenerations(directory: string): string[] {
@@ -142,13 +161,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
   it("uses installed fs-safe packages from compiled subprocesses", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
-      const owner = workerArtifacts.createWorkerRun();
-      const directory = owner.descriptor.directory;
-      const relocated = fs.realpathSync(
-        workerArtifacts.fixtureLifetime.createTempDir("worker-package-proof-"),
-      );
-      const native = path.join(relocated, "node_modules/@openclaw/fs-safe/node_modules");
-      try {
+      await withWorkerRun(workerArtifacts, async (owner, directory) => {
+        const relocated = fs.realpathSync(
+          workerArtifacts.fixtureLifetime.createTempDir("worker-package-proof-"),
+        );
+        const native = path.join(relocated, "node_modules/@openclaw/fs-safe/node_modules");
         await prepareWorkers(owner);
         const { nativePackages } = await copyCompiledFsSafeRuntimeFixture(directory, relocated);
         expect(nativePackages.length).toBeGreaterThan(0);
@@ -204,16 +221,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           );
           expect(result.code, result.stderr + result.stdout).toBe(0);
         };
-        const joinProbes = async (probes: Promise<void>[]) => {
-          // Join every native caller before moving assets, including on failure.
-          const results = await Promise.allSettled(probes);
-          for (const result of results) {
-            if (result.status === "rejected") {
-              throw result.reason;
-            }
-          }
-        };
-        await joinProbes([
+        // Join every native caller before moving assets, including on failure.
+        await joinAll([
           probe("default", undefined, "native"),
           ...["off", "auto", "require"].map((mode) =>
             probe(mode, mode, mode === "off" ? "fallback" : "native"),
@@ -222,14 +231,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         for (const nativePackage of nativePackages) {
           fs.rmSync(nativePackage.root, { recursive: true });
         }
-        await joinProbes([
+        await joinAll([
           probe("missing-require", "require", "missing"),
           ...["off", "auto"].map((mode) => probe(`missing-${mode}`, mode, "fallback")),
         ]);
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(directory)).toBe(false);
+      });
     }));
 
   it("rejects compiler output altered before publishing a manifest", (context) =>
@@ -251,23 +257,19 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         `,
         ),
       );
-      const owner = workerArtifacts.createWorkerRun();
-      try {
+      await withWorkerRun(workerArtifacts, async (_owner, generation) => {
         // Inject only into the actual native compiler entry, never the parent's
         // module cache or a production build flag. node() joins this direct child.
         const result = await node([
           ...fixturePreloadArgs(preload),
           path.join(root, compilerEntry),
-          owner.descriptor.directory,
+          generation,
         ]);
         expect(result.code).not.toBe(0);
         expect(result.stderr).toContain("Compiled subprocess artifact changed");
         expect(fs.readFileSync(altered, "utf8")).toBe("compiler returned");
-        expect(fs.existsSync(path.join(owner.descriptor.directory, "manifest.json"))).toBe(false);
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+        expect(fs.existsSync(path.join(generation, "manifest.json"))).toBe(false);
+      });
     }));
 
   it
@@ -640,8 +642,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
   }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
-      const owner = workerArtifacts.createWorkerRun();
-      try {
+      await withWorkerRun(workerArtifacts, async (owner, generation) => {
         await prepareWorkers(owner);
         const directory = workerArtifacts.fixtureDirectory();
         const bundled = path.join(directory, "bundled");
@@ -654,10 +655,10 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         writeFixture(
           pluginRoot,
           "index.mjs",
-          `export {default} from ${JSON.stringify(pathToFileURL(path.join(owner.descriptor.directory, "dist/extensions/anthropic/index.js")).href)};`,
+          `export {default} from ${JSON.stringify(pathToFileURL(path.join(generation, "dist/extensions/anthropic/index.js")).href)};`,
         );
         const result = await node(
-          [path.join(owner.descriptor.directory, "dist/test-support/anthropic-preparation.js")],
+          [path.join(generation, "dist/test-support/anthropic-preparation.js")],
           root,
           {
             ...testRunnerFixtureEnv(),
@@ -666,10 +667,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           },
         );
         expect(result.code, result.stderr + result.stdout).toBe(0);
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+      });
     }));
 
   it.for(["source", "compiled"] as const)(
@@ -1317,9 +1315,7 @@ export default class {
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
       const fixture = workerArtifacts.fixtureDirectory();
-      const initial = workerArtifacts.createWorkerRun();
-      const initialDirectory = initial.descriptor.directory;
-      try {
+      await withWorkerRun(workerArtifacts, async (initial, initialDirectory) => {
         const manifest = await prepareWorkers(initial);
         expect(Object.keys(manifest.inputs)).toEqual(
           expect.arrayContaining([
@@ -1407,13 +1403,7 @@ export default class {
         const inputs = Object.keys(manifest.inputs);
         for (let offset = 0; offset < inputs.length; offset += 32) {
           // Join every started copy before fixture cleanup can remove its inputs.
-          const completed = await Promise.allSettled(
-            inputs.slice(offset, offset + 32).map(copyInput),
-          );
-          const failed = completed.find((result) => result.status === "rejected");
-          if (failed) {
-            throw failed.reason;
-          }
+          await joinAll(inputs.slice(offset, offset + 32).map(copyInput));
         }
         // This is a synthetic source checkout. Its dist is valid old code, not an
         // invalid sentinel that could fail even if stale-artifact fallback regressed.
@@ -1560,8 +1550,6 @@ export default class {
           buildResult = await build;
         }
         expect(buildResult.code, buildResult.stderr).toBe(0);
-      } finally {
-        await initial.dispose();
-      }
+      });
     }));
 });
