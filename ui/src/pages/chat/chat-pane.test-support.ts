@@ -477,7 +477,12 @@ export function createSessionContext(
     },
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },
-    placementStartup: { get: vi.fn(() => null), hasPendingTurn: () => false, pause: vi.fn() },
+    placementStartup: {
+      get: vi.fn(() => null),
+      hasPendingTurn: () => false,
+      pause: vi.fn(),
+      subscribe: () => () => {},
+    },
     sessions,
   } as unknown as Omit<ApplicationContext, FixtureContextServices> & {
     sessions?: SessionCapability;
