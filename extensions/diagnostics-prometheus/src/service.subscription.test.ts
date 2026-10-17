@@ -94,7 +94,9 @@ it("exports trusted session-list retention gauges and clears them on retirement"
       );
     }
     for (const suffix of ["views", "refs", "bytes"]) {
-      expect(metrics.render()).toContain(`# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`);
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`,
+      );
     }
     expect(retentionLines()).toEqual([
       "openclaw_sessions_list_retained_bytes 3504",
