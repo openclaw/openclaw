@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-ids.ts";
@@ -18,13 +17,8 @@ import {
 } from "./theme-background.test-support.ts";
 
 const builtinThemes = BUILTIN_THEME_IDS.flatMap((family) =>
-  (["dark", "light"] as const).map((mode) => ({
-    family,
-    mode,
-    resolved: resolveTheme(family, mode),
-  })),
+  (["dark", "light"] as const).map((mode) => ({ family, mode })),
 );
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const suite = createControlUiE2eSuite({ name: "Control UI app theme artwork" });
 const pageOptions = {
@@ -59,7 +53,8 @@ function themeConfig(family: ThemeName, mode: ColorMode | "system") {
 async function changeTheme(
   page: Page,
   gateway: MockGatewayControls,
-  selection: { family: ThemeName; mode: ColorMode; resolved: string },
+  selection: { family: ThemeName; mode: ColorMode },
+  resolved = resolveTheme(selection.family, selection.mode),
 ) {
   // Refresh through the Gateway so a synced change must preserve the mounted draft.
   const configGets = (await gateway.getRequests("config.get")).length;
@@ -68,43 +63,9 @@ async function changeTheme(
   await expect
     .poll(async () => (await gateway.getRequests("config.get")).length)
     .toBeGreaterThan(configGets);
-  await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(selection.resolved);
-  await expect
-    .poll(() => page.locator("html").getAttribute("data-theme-mode"))
-    .toBe(selection.mode);
-}
-
-async function captureProof(page: Page, name: string, compareBefore = false) {
-  if (!captureUiProof) {
-    return;
-  }
-  const capture = (suffix: string) =>
-    page.screenshot({
-      animations: "disabled",
-      fullPage: true,
-      path: path.join(suite.artifactDir, `${name}-${suffix}.png`),
-    });
-  await capture("after");
-  if (compareBefore) {
-    // Same DOM/content/viewport; restore only the exact pre-feature CSS rules.
-    const override = await page.addStyleTag({
-      content: `
-      .shell { background: none !important; }
-      :root[data-theme-mode="light"] .content { background: var(--bg-content) !important; }
-      .agent-chat__input { background: var(--chat-composer-surface) !important;
-        backdrop-filter: blur(12px) saturate(1.6) !important;
-        -webkit-backdrop-filter: blur(12px) saturate(1.6) !important; }
-      .agent-chat__composer-combobox > :is(textarea, input)::placeholder,
-      .agent-chat__composer-placeholder {
-        color: var(--chat-composer-tertiary) !important; }
-    `,
-    });
-    try {
-      await capture("before");
-    } finally {
-      await override.evaluate((element) => element.parentNode?.removeChild(element));
-    }
-  }
+  const root = page.locator("html");
+  await expect.poll(() => root.getAttribute("data-theme")).toBe(resolved);
+  await expect.poll(() => root.getAttribute("data-theme-mode")).toBe(selection.mode);
 }
 
 suite.define(() => {
@@ -118,12 +79,7 @@ suite.define(() => {
           message("user", "Help me organize a focused afternoon."),
           message(
             "assistant",
-            "Start with one meaningful task. Close unrelated tabs and leave space for a short break.\n\n### A simple plan\n- Review the open questions.\n- Work through the most important decision.\n- Write down the next step before you finish.",
-          ),
-          message("user", "Keep the plan practical and easy to revisit."),
-          message(
-            "assistant",
-            "A useful plan leaves room to think. Keep your notes brief, make the next action specific, and adjust the schedule when new information arrives.\n\nYou can return to this conversation whenever you need the context.",
+            "### A simple plan\n- Review the open questions.\n\nYou can return to this conversation whenever you need the context.",
           ),
         ],
       });
@@ -144,6 +100,12 @@ suite.define(() => {
           route === "settings/appearance" ? null : page.locator(".agent-chat__input");
         const textarea = composer?.locator("textarea");
         const draft = `An unsent ${route} draft stays here while the theme changes.`;
+        const expectDraft = async (accessible = false) => {
+          if (composer && textarea) {
+            await expectComposerSurface(composer, accessible);
+            expect(await textarea.inputValue()).toBe(draft);
+          }
+        };
         if (textarea) {
           await textarea.fill(draft);
         } else {
@@ -153,19 +115,19 @@ suite.define(() => {
           ? builtinThemes
           : builtinThemes.filter(({ family }) => family === "claw" || family === "dash")) {
           await changeTheme(page, gateway, selection);
+          const resolved = resolveTheme(selection.family, selection.mode);
           for (const viewport of ["desktop", "mobile"] as const) {
             await page.setViewportSize(
               viewport === "desktop" ? { width: 1440, height: 900 } : { width: 390, height: 844 },
             );
             if (textarea && composer) {
               await textarea.click();
-              expect(await textarea.inputValue()).toBe(draft);
-              await expectComposerSurface(composer);
+              await expectDraft();
               if (viewport === "mobile") {
                 await expectMobileComposer(composer);
               }
             }
-            const label = `${selection.resolved}-${route.replace("/", "-")}-${viewport}`;
+            const label = `${resolved}-${route.replace("/", "-")}-${viewport}`;
             const artwork = await readArtwork(shell);
             expectAppArtwork(artwork, label);
             const minimumContrast = selection.family === "beacon" ? 7 : 4.5;
@@ -174,10 +136,7 @@ suite.define(() => {
               .toBeGreaterThanOrEqual(minimumContrast);
             if (composer) {
               expect
-                .soft(
-                  artwork.composerContrast,
-                  `${label}: placeholder contrast (opaque reference ${artwork.opaqueComposerContrast})`,
-                )
+                .soft(artwork.composerContrast, `${label}: placeholder contrast`)
                 .toBeGreaterThanOrEqual(minimumContrast);
             }
             if (route === "chat") {
@@ -187,27 +146,21 @@ suite.define(() => {
               ).toBeGreaterThanOrEqual(4.5);
             }
             if (route === "new" && viewport === "desktop") {
-              images.set(selection.resolved, artwork.backgroundImage);
+              images.set(resolved, artwork.backgroundImage);
               decoded.add(artwork.pixels);
             } else {
-              expect(artwork.backgroundImage, label).toBe(images.get(selection.resolved));
+              expect(artwork.backgroundImage, label).toBe(images.get(resolved));
             }
-            await captureProof(page, label, selection.family === "claw");
           }
         }
         if (composer && textarea) {
-          // Glass must not obstruct real controls on either composer surface.
           await composer.getByRole("button", { name: "Add attachment", exact: true }).click();
           await composer
             .getByRole("menuitem", { name: "File", exact: true })
             .waitFor({ state: "visible" });
           await page.keyboard.press("Escape");
         }
-        await changeTheme(page, gateway, {
-          family: "dash",
-          mode: "light",
-          resolved: "dash-light",
-        });
+        await changeTheme(page, gateway, { family: "dash", mode: "light" }, "dash-light");
         const background = () =>
           shell.evaluate((element) => getComputedStyle(element).backgroundImage);
         for (const media of [
@@ -216,16 +169,12 @@ suite.define(() => {
         ] as const) {
           await page.emulateMedia(media);
           await expect.poll(background).toBe("none");
-          if (composer && textarea) {
-            await expectComposerSurface(composer, true);
-            expect(await textarea.inputValue()).toBe(draft);
-          }
+          await expectDraft(true);
         }
         await page.emulateMedia({ contrast: "no-preference", forcedColors: "none" });
         await expect.poll(background).toBe(images.get("dash-light"));
         if (composer && textarea) {
-          // Playwright's media options do not expose reduced transparency;
-          // exercise the real browser media query through Chromium's protocol.
+          // Playwright exposes reduced transparency only through Chromium's protocol.
           const session = await context.newCDPSession(page);
           try {
             await session.send("Emulation.setEmulatedMedia", {
@@ -239,9 +188,8 @@ suite.define(() => {
                 () => matchMedia("(prefers-reduced-transparency: reduce)").matches,
               ),
             ).toBe(true);
-            await expectComposerSurface(composer, true);
+            await expectDraft(true);
             expect(await background()).toBe(images.get("dash-light"));
-            expect(await textarea.inputValue()).toBe(draft);
           } finally {
             await session.send("Emulation.setEmulatedMedia", { features: [] });
             await session.detach();
@@ -254,10 +202,7 @@ suite.define(() => {
           const resolved = mode === "dark" ? "dash" : "dash-light";
           await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
           expect(await background()).toBe(images.get(resolved));
-          if (composer && textarea) {
-            await expectComposerSurface(composer);
-            expect(await textarea.inputValue()).toBe(draft);
-          }
+          await expectDraft();
         }
         await page.setViewportSize({ width: 1440, height: 900 });
       }
@@ -272,28 +217,16 @@ suite.define(() => {
     await suite.withPage(pageOptions, async ({ context, page }) => {
       const imported = createImportedCustomThemeFixture();
       const externalImage = 'url("https://theme-artwork.invalid/tracker.svg")';
-      await context.addInitScript(
-        ({ gatewayUrl, customTheme, image }) => {
-          localStorage.setItem(
-            `openclaw.control.settings.v1:${gatewayUrl}`,
-            JSON.stringify({
-              gatewayUrl,
-              theme: "custom",
-              themeMode: "dark",
-              customTheme: {
-                ...customTheme,
-                light: { ...customTheme.light, "app-background-image": image },
-                dark: { ...customTheme.dark, "app-background-image": image },
-              },
-            }),
-          );
-        },
-        {
-          gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-          customTheme: imported,
-          image: externalImage,
-        },
-      );
+      const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
+      const customTheme = {
+        ...imported,
+        light: { ...imported.light, "app-background-image": externalImage },
+        dark: { ...imported.dark, "app-background-image": externalImage },
+      };
+      await context.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+        key: `openclaw.control.settings.v1:${gatewayUrl}`,
+        value: JSON.stringify({ gatewayUrl, theme: "custom", themeMode: "dark", customTheme }),
+      });
       const externalRequests: string[] = [];
       await page.route("https://theme-artwork.invalid/**", async (route) => {
         externalRequests.push(route.request().url());
@@ -307,11 +240,8 @@ suite.define(() => {
       await composer.locator("textarea").fill("Keep imported palettes local and quiet");
       const images = new Set<string>();
       for (const mode of ["dark", "light"] as const) {
-        await changeTheme(page, gateway, {
-          family: "custom",
-          mode,
-          resolved: mode === "dark" ? "custom" : "custom-light",
-        });
+        const resolved = mode === "dark" ? "custom" : "custom-light";
+        await changeTheme(page, gateway, { family: "custom", mode }, resolved);
         const artwork = await readArtwork(page.locator(".shell"));
         expectAppArtwork(artwork, `custom ${mode}`);
         await expectComposerSurface(composer);

@@ -1,5 +1,4 @@
-import path from "node:path";
-import type { BrowserContextOptions, Page } from "playwright";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -15,20 +14,28 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 const updateCard = (page: Page) =>
   page.locator('openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]');
 const updateDialog = (page: Page) => page.locator("openclaw-modal-dialog");
-const artifactPath = (name: string) =>
-  captureUiProofEnabled ? path.join(suite.artifactDir, name) : "";
-function pageOptions(artifactDir: string, mobile = false): BrowserContextOptions {
+const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+const text = (root: Page | Locator, value: string) => root.getByText(value, { exact: true });
+const failureText = "⚠️ OpenClaw update failed: global-install-failed.";
+const restartingText = "⬆️ OpenClaw update in progress: restarting.";
+const runResponses = (
+  run: ReturnType<typeof createUpdateRunFixture> | null,
+  response?: object,
+) => ({
+  "update.runs.get": { run },
+  "update.status": { activeRun: null, lastRun: null },
+  ...(response ? { "update.run": response } : {}),
+});
+function pageOptions(mobile = false): BrowserContextOptions {
   const viewport = mobile ? { height: 1200, width: 555 } : { height: 720, width: 1280 };
   return {
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
-    recordVideo: captureUiProofEnabled ? { dir: artifactDir, size: viewport } : undefined,
     ...(mobile ? { colorScheme: "dark", hasTouch: true, isMobile: true } : {}),
   };
 }
@@ -52,42 +59,31 @@ async function startUpdate(page: Page) {
   await updateDialog(page).getByRole("button", { name: "Update and restart", exact: true }).click();
 }
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page.locator(".sidebar-issues-button").click();
-  const updateIssue = updateCard(page);
-  await updateIssue.locator("summary").click();
+  const updateIssue = await openUpdateIssue(page);
   await updateIssue.locator(".sidebar-update-card__action").click();
 }
-
-async function captureUpdateProof(
-  page: Page,
-  artifactDir: string,
-  fileName: string,
-): Promise<void> {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await page.screenshot({ path: path.join(artifactDir, fileName) });
+async function openUpdateIssue(page: Page) {
+  await page.locator(".sidebar-issues-button").click();
+  const issue = updateCard(page);
+  await issue.locator("summary").click();
+  return issue;
 }
 
 suite.define(() => {
   it("explains a disabled update to a read-only mobile operator", async () => {
-    const artifactDir = artifactPath("update-read-only-mobile");
-    await suite.withPage(pageOptions(artifactDir, true), async ({ page }) => {
+    await suite.withPage(pageOptions(true), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.read"],
       });
 
       await announceUpdate(page, gateway, true);
 
-      await page.locator(".sidebar-issues-button").click();
-      const updateIssue = updateCard(page);
-      await updateIssue.locator("summary").click();
+      const updateIssue = await openUpdateIssue(page);
       const action = updateIssue.locator(".sidebar-update-card__action");
       await expect.poll(() => action.getAttribute("aria-disabled")).toBe("true");
       expect(await action.evaluate((element) => (element as HTMLButtonElement).disabled)).toBe(
         false,
       );
-      await captureUpdateProof(page, artifactDir, "disabled-update.png");
 
       const tooltipHost = updateIssue.locator("openclaw-tooltip");
       const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
@@ -102,13 +98,11 @@ suite.define(() => {
       await expect.poll(() => tooltipHost.getAttribute("data-e2e-after-show")).not.toBeNull();
       expect(await tooltip.textContent()).toContain("Administrator access is required");
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      await captureUpdateProof(page, artifactDir, "disabled-update-tooltip.png");
     });
   });
 
   it("shows package update failure status after the Update click", async () => {
-    const artifactDir = artifactPath("update-package-status");
-    await suite.withPage(pageOptions(artifactDir), async ({ page }) => {
+    await suite.withPage(pageOptions(), async ({ page }) => {
       const pageErrors = watchPageErrors(page);
       const run = createUpdateRunFixture({
         phase: "finished",
@@ -116,32 +110,21 @@ suite.define(() => {
         reason: "global-install-failed",
         finishedAtMs: Date.now(),
         steps: [
-          {
-            step: "install",
-            status: "failed",
-            detail: "Package install did not verify on disk.",
-          },
+          { step: "install", status: "failed", detail: "Package install did not verify on disk." },
         ],
       });
       const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "update.run": {
-            ok: false,
-            runId: run.runId,
-            result: { reason: run.reason, status: "error" },
-          },
-          "update.runs.get": { run },
-          "update.status": { activeRun: null, lastRun: null },
-        },
+        methodResponses: runResponses(run, {
+          ok: false,
+          runId: run.runId,
+          result: { reason: run.reason, status: "error" },
+        }),
       });
 
       await announceUpdate(page, gateway);
       await startUpdate(page);
       const dialog = updateDialog(page);
-      await dialog
-        .getByText("⚠️ OpenClaw update failed: global-install-failed.", { exact: true })
-        .first()
-        .waitFor();
+      await text(dialog, failureText).first().waitFor();
       expect(await dialog.textContent()).toContain("openclaw triage");
       expect(await dialog.textContent()).toContain("Package install did not verify on disk.");
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
@@ -152,74 +135,45 @@ suite.define(() => {
       await page.locator("openclaw-config-page").waitFor();
       expect(await dialog.count()).toBe(0);
       expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
-      await page
-        .locator("openclaw-update-run-view")
-        .getByText("⚠️ OpenClaw update failed: global-install-failed.", { exact: true })
-        .first()
-        .waitFor();
+      await text(page.locator("openclaw-update-run-view"), failureText).first().waitFor();
       expect(pageErrors).toEqual([]);
-      await captureUpdateProof(page, artifactDir, "package-update-failure.png");
     });
   });
 
   it("shows coalesced restart feedback after the Update click", async () => {
-    const artifactDir = artifactPath("update-coalesced");
-    await suite.withPage(pageOptions(artifactDir), async ({ page }) => {
+    await suite.withPage(pageOptions(), async ({ page }) => {
       const pageErrors = watchPageErrors(page);
       const run = createUpdateRunFixture({ phase: "restarting" });
       const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "update.run": {
-            ok: true,
-            runId: run.runId,
-            restart: { coalesced: true },
-            result: { after: { version: "2.0.0" }, status: "ok" },
-          },
-          "update.runs.get": { run },
-          "update.status": { activeRun: null, lastRun: null },
-        },
+        methodResponses: runResponses(run, {
+          ok: true,
+          runId: run.runId,
+          restart: { coalesced: true },
+          result: { after: { version: "2.0.0" }, status: "ok" },
+        }),
       });
 
       await announceUpdate(page, gateway);
       await startUpdate(page);
-      await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
+      await button(page, "Updating…").waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await page.getByRole("button", { name: "Close", exact: true }).click();
-      await page.locator(".sidebar-issues-button").click();
-      const updateIssue = updateCard(page);
-      await updateIssue.locator("summary").click();
-      await updateIssue
-        .getByText("⬆️ OpenClaw update in progress: restarting.", { exact: true })
-        .first()
-        .waitFor();
+      await button(page, "Close").click();
+      const updateIssue = await openUpdateIssue(page);
+      await text(updateIssue, restartingText).first().waitFor();
       await updateIssue.locator(".sidebar-update-card__action").click();
-      await page
-        .locator("openclaw-modal-dialog")
-        .getByText("⬆️ OpenClaw update in progress: restarting.", { exact: true })
-        .waitFor();
+      await text(updateDialog(page), restartingText).waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(await page.locator(".sidebar-issues-button__count").count()).toBe(1);
       expect(pageErrors).toEqual([]);
-      await captureUpdateProof(page, artifactDir, "coalesced-restart-banner.png");
     });
   });
 
   it.each([
-    {
-      artifactName: "response-first",
-      expectedText: "Expected v2.0.0, running v1.0.0",
-      name: "after the response arrives before disconnect",
-      responseFirst: true,
-    },
-    {
-      artifactName: "disconnect-first",
-      expectedText: "Expected v2.0.0, running v1.0.0",
-      name: "when disconnect arrives before the response",
-      responseFirst: false,
-    },
-  ])("settles the managed update $name", async ({ artifactName, expectedText, responseFirst }) => {
-    const artifactDir = artifactPath(`update-managed-handoff-${artifactName}`);
-    await suite.withPage(pageOptions(artifactDir), async ({ page }) => {
+    ["response-first", true],
+    ["disconnect-first", false],
+  ] as const)("settles the managed update (%s)", async (artifactName, responseFirst) => {
+    const expectedText = "Expected v2.0.0, running v1.0.0";
+    await suite.withPage(pageOptions(), async ({ page }) => {
       const pageErrors = watchPageErrors(page);
       let run = createUpdateRunFixture({
         phase: "restarting",
@@ -229,10 +183,7 @@ suite.define(() => {
       const response = { ok: true, runId: run.runId, handoff: { status: "started" } };
       const gateway = await installMockGateway(page, {
         deferredMethods: ["update.run"],
-        methodResponses: {
-          "update.runs.get": { run },
-          "update.status": { activeRun: null, lastRun: null },
-        },
+        methodResponses: runResponses(run),
       });
 
       await announceUpdate(page, gateway);
@@ -240,7 +191,7 @@ suite.define(() => {
       await gateway.waitForRequest("update.run");
       if (responseFirst) {
         await gateway.resolveDeferred("update.run", response);
-        await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
+        await button(page, "Updating…").waitFor();
       }
       await gateway.setOnline(false);
       run = {
@@ -266,10 +217,7 @@ suite.define(() => {
 
       try {
         const dialog = updateDialog(page);
-        await dialog
-          .locator(".update-run-view__details")
-          .getByText(expectedText, { exact: true })
-          .waitFor();
+        await text(dialog.locator(".update-run-view__details"), expectedText).waitFor();
         expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
           "fail",
         );
@@ -284,34 +232,23 @@ suite.define(() => {
       }
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(pageErrors).toEqual([]);
-      await captureUpdateProof(page, artifactDir, `managed-handoff-${artifactName}.png`);
     });
   });
 
   it.each(["available", "failed", "skipped"] as const)(
     "routes the %s sidebar update through live Mac app ownership",
     async (outcome) => {
-      const artifactDir = artifactPath(`update-ownership-${outcome}`);
-      const context = await suite.browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 720, width: 1280 },
-      });
+      const context = await suite.browser.newContext(pageOptions());
       await context.addInitScript(() => {
-        const nativeWindow = window as unknown as {
-          openClawUpdateMessages: unknown[];
+        const messages: unknown[] = [];
+        Object.assign(window, {
+          openClawUpdateMessages: messages,
           webkit: {
-            messageHandlers: { openclawUpdate: { postMessage: (message: unknown) => void } };
-          };
-        };
-        nativeWindow.openClawUpdateMessages = [];
-        nativeWindow.webkit = {
-          messageHandlers: {
-            openclawUpdate: {
-              postMessage: (message) => nativeWindow.openClawUpdateMessages.push(message),
+            messageHandlers: {
+              openclawUpdate: { postMessage: (message: unknown) => messages.push(message) },
             },
           },
-        };
+        });
       });
       const page = await context.newPage();
       const pageErrors = watchPageErrors(page);
@@ -327,13 +264,12 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["openclaw.chat", "update.run"],
         methodResponses: {
-          "update.status": { activeRun: null, lastRun: run },
-          "update.runs.get": { run },
-          "update.run": {
+          ...runResponses(run, {
             ok: true,
             restart: null,
             result: { after: { version: "2.0.0" }, status: "ok" },
-          },
+          }),
+          "update.status": { activeRun: null, lastRun: run },
         },
       });
 
@@ -342,14 +278,13 @@ suite.define(() => {
 
         await openUpdateConfirmation(page);
         if (run) {
-          await page.getByRole("button", { name: "Retry update", exact: true }).click();
+          await button(page, "Retry update").click();
         }
         expect(await page.locator("openclaw-modal-dialog").getAttribute("label")).toBe(
           "Update Mac app + Gateway",
         );
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        await captureUpdateProof(page, artifactDir, "native-update-confirmation.png");
-        await page.getByRole("button", { name: "Update Mac app and restart", exact: true }).click();
+        await button(page, "Update Mac app and restart").click();
         expect(
           await page.evaluate(
             () =>
@@ -367,7 +302,6 @@ suite.define(() => {
         );
         await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
         expect(pageErrors).toEqual([]);
-        await captureUpdateProof(page, artifactDir, "gateway-update-target.png");
       } finally {
         await context.close();
       }

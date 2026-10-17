@@ -1,5 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
@@ -9,32 +7,23 @@ import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rende
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-
 const themeCases = [
-  { family: "claw", mode: "dark", resolved: "dark" },
-  { family: "claw", mode: "light", resolved: "light" },
-  { family: "knot", mode: "dark", resolved: "openknot" },
-  { family: "knot", mode: "light", resolved: "openknot-light" },
-  { family: "dash", mode: "dark", resolved: "dash" },
-  { family: "dash", mode: "light", resolved: "dash-light" },
-  { family: "absolutely", mode: "dark", resolved: "absolutely" },
-  { family: "absolutely", mode: "light", resolved: "absolutely-light" },
-  { family: "tide", mode: "dark", resolved: "tide" },
-  { family: "tide", mode: "light", resolved: "tide-light" },
-  { family: "beacon", mode: "dark", resolved: "beacon" },
-  { family: "beacon", mode: "light", resolved: "beacon-light" },
-  { family: "phosphor", mode: "dark", resolved: "phosphor" },
-  { family: "phosphor", mode: "light", resolved: "phosphor-light" },
-  { family: "crt", mode: "dark", resolved: "crt" },
-  { family: "crt", mode: "light", resolved: "crt-light" },
-  { family: "manuscript", mode: "dark", resolved: "manuscript" },
-  { family: "manuscript", mode: "light", resolved: "manuscript-light" },
-  { family: "rose", mode: "dark", resolved: "rose" },
-  { family: "rose", mode: "light", resolved: "rose-light" },
-  { family: "miami", mode: "dark", resolved: "miami" },
-  { family: "miami", mode: "light", resolved: "miami-light" },
+  ["claw", "dark", "light"],
+  ["knot", "openknot", "openknot-light"],
+  ["dash", "dash", "dash-light"],
+  ["absolutely", "absolutely", "absolutely-light"],
+  ["tide", "tide", "tide-light"],
+  ["beacon", "beacon", "beacon-light"],
+  ["phosphor", "phosphor", "phosphor-light"],
+  ["crt", "crt", "crt-light"],
+  ["manuscript", "manuscript", "manuscript-light"],
+  ["rose", "rose", "rose-light"],
+  ["miami", "miami", "miami-light"],
 ] as const;
+const appearances = themeCases.flatMap(([family, dark, light]) => [
+  { family, mode: "dark" as const, resolved: dark },
+  { family, mode: "light" as const, resolved: light },
+]);
 
 const textTokens = [
   "--text",
@@ -48,7 +37,7 @@ const textTokens = [
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function themeConfigResponse(
-  family: (typeof themeCases)[number]["family"],
+  family: (typeof themeCases)[number][0],
   mode: "dark" | "light",
   accent?: string,
 ) {
@@ -96,21 +85,20 @@ function relativeLuminance(resolved: RenderedColor): number {
   if (resolved.alpha !== 1) {
     throw new Error("Composite a translucent rendered color before calculating contrast");
   }
-  const channels = [resolved.red, resolved.green, resolved.blue].map((channel) => {
+  const linear = (channel: number) => {
     const value = channel / 255;
     return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  });
-  const [red, green, blue] = channels;
-  if (red === undefined || green === undefined || blue === undefined) {
-    throw new Error(`Expected three theme color channels, received ${JSON.stringify(resolved)}`);
-  }
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+  return (
+    0.2126 * linear(resolved.red) + 0.7152 * linear(resolved.green) + 0.0722 * linear(resolved.blue)
+  );
 }
 
-function contrastRatio(foreground: RenderedColor, background: RenderedColor) {
-  const first = relativeLuminance(foreground);
-  const second = relativeLuminance(background);
-  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+function expectContrast(front: RenderedColor, back: RenderedColor, label: string, min = 4.5) {
+  const first = relativeLuminance(front);
+  const second = relativeLuminance(back);
+  const ratio = (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+  expect(ratio, label).toBeGreaterThanOrEqual(min);
 }
 
 const suite = createControlUiE2eSuite({
@@ -140,7 +128,7 @@ suite.define(() => {
   });
 
   it.each(
-    themeCases.flatMap(({ family, mode, resolved }) =>
+    appearances.flatMap(({ family, mode, resolved }) =>
       (family === "claw" ? [undefined, "#000000", "#ffffff"] : [undefined]).map((accent) => ({
         family,
         mode,
@@ -197,21 +185,21 @@ suite.define(() => {
           ui: { prefs: { theme: family === "claw" ? null : family, accent: "theme" } },
         });
 
-        // Theme clicks apply immediately; the eventual Gateway acknowledgement must not revert them.
-        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
-        await expect
-          .poll(() => selectedCard.getAttribute("class"))
-          .toContain("settings-theme-card--active");
+        const selection = async () => ({
+          theme: await page.locator("html").getAttribute("data-theme"),
+          mode: await page.locator("html").getAttribute("data-theme-mode"),
+          active: (await selectedCard.getAttribute("class"))?.includes(
+            "settings-theme-card--active",
+          ),
+        });
+        // Both optimistic paint and the acknowledgement must retain the selection.
+        await expect.poll(selection).toMatchObject({ theme: resolved, active: true });
 
         await gateway.setMethodResponse("config.get", committed);
         await gateway.resolveDeferred("config.patch", committed);
         await expectCommittedConfig(page, committed);
 
-        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
-        await expect
-          .poll(() => selectedCard.getAttribute("class"))
-          .toContain("settings-theme-card--active");
+        await expect.poll(selection).toEqual({ theme: resolved, mode, active: true });
 
         // Reapply each extreme through the real picker after theme defaults,
         // rather than accidentally dropping custom-accent contrast coverage.
@@ -260,11 +248,11 @@ suite.define(() => {
               backgroundLayers,
               descriptionColor: getComputedStyle(description).color,
               descriptionOpacity: opacity,
-              foregrounds: Object.fromEntries(
-                foregroundNames.map((name) => [name, styles.getPropertyValue(name).trim()]),
-              ) as Record<string, string>,
-              surfaces: Object.fromEntries(
-                surfaceNames.map((name) => [name, styles.getPropertyValue(name).trim()]),
+              tokens: Object.fromEntries(
+                [...foregroundNames, ...surfaceNames].map((name) => [
+                  name,
+                  styles.getPropertyValue(name).trim(),
+                ]),
               ) as Record<string, string>,
             };
           },
@@ -272,35 +260,22 @@ suite.define(() => {
         );
 
         const colors = await page.evaluate(resolveRenderedColors, {
-          ...rendered.foregrounds,
-          ...rendered.surfaces,
+          ...rendered.tokens,
           description: rendered.descriptionColor,
           ...Object.fromEntries(
             rendered.backgroundLayers.map((color, index) => [`layer-${index}`, color]),
           ),
         });
 
-        const pairings = textTokens.flatMap((textToken) =>
-          surfaceTokens.map((surfaceToken) => {
-            const foreground = rendered.foregrounds[textToken];
-            const background = rendered.surfaces[surfaceToken];
-            if (!foreground || !background) {
-              throw new Error(`Missing browser-resolved ${textToken} or ${surfaceToken}`);
-            }
-            const contrast = contrastRatio(colors[textToken]!, colors[surfaceToken]!);
-            expect(
-              contrast,
-              `${resolved}: ${textToken} ${foreground} on ${surfaceToken} ${background}`,
-            ).toBeGreaterThanOrEqual(4.5);
-            return {
-              background,
-              contrast: Number(contrast.toFixed(3)),
-              foreground,
-              surfaceToken,
-              textToken,
-            };
-          }),
-        );
+        for (const textToken of textTokens) {
+          for (const surfaceToken of surfaceTokens) {
+            expectContrast(
+              colors[textToken]!,
+              colors[surfaceToken]!,
+              `${resolved}: ${textToken} on ${surfaceToken}`,
+            );
+          }
+        }
 
         let descriptionBackground = colors["--bg"]!;
         for (let index = rendered.backgroundLayers.length - 1; index >= 0; index--) {
@@ -314,11 +289,11 @@ suite.define(() => {
           },
           descriptionBackground,
         );
-        const descriptionContrast = contrastRatio(descriptionForeground, descriptionBackground);
-        expect(
-          descriptionContrast,
-          `${resolved}: actual rendered muted Appearance description, including ancestor backgrounds and opacity`,
-        ).toBeGreaterThanOrEqual(4.5);
+        expectContrast(
+          descriptionForeground,
+          descriptionBackground,
+          `${resolved}: rendered Appearance description`,
+        );
 
         const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
         await openPicker(picker);
@@ -354,10 +329,7 @@ suite.define(() => {
           });
           const background = compositeColor(optionColors.background!, optionColors.listbox!);
           for (const text of [optionColors.label!, optionColors.description!]) {
-            expect(
-              contrastRatio(text, background),
-              `${resolved} picker text`,
-            ).toBeGreaterThanOrEqual(4.5);
+            expectContrast(text, background, `${resolved} picker text`);
           }
           return { paint, background, outline: optionColors.outline! };
         };
@@ -374,44 +346,13 @@ suite.define(() => {
         const focused = await assertOptionContrast(current);
         expect(focused.paint.outline).not.toBe("none");
         expect(focused.paint.outlineWidth).toBeGreaterThanOrEqual(2);
-        expect(contrastRatio(focused.outline, focused.background)).toBeGreaterThanOrEqual(3);
+        expectContrast(focused.outline, focused.background, `${resolved} picker outline`, 3);
         await picker.locator('[role="option"][data-value="system"]').hover();
         await assertOptionContrast(picker.locator('[role="option"][data-value="system"]'));
         await page.keyboard.press("Escape");
         expect(new URL(page.url()).pathname).toBe("/settings/appearance");
         expect(await pickerValue(picker)).toBe(selectedValue);
         expect(await gateway.getRequests("config.get")).toHaveLength(initialConfigGets);
-
-        if (captureUiProof) {
-          const proofDir = path.join(suite.artifactDir, "theme-muted-contrast");
-          await mkdir(proofDir, { recursive: true });
-          const proofName = accent ? `${resolved}-${accent.slice(1)}` : resolved;
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDir, `${proofName}.png`),
-          });
-          await writeFile(
-            path.join(proofDir, `${proofName}.json`),
-            `${JSON.stringify(
-              {
-                accent,
-                description: {
-                  background: descriptionBackground,
-                  contrast: Number(descriptionContrast.toFixed(3)),
-                  foreground: descriptionForeground,
-                  opacity: rendered.descriptionOpacity,
-                },
-                mode,
-                pairings,
-                resolved,
-                selectedFamily: family,
-              },
-              null,
-              2,
-            )}\n`,
-          );
-        }
       } finally {
         await suite.closeBrowserContext(context);
       }

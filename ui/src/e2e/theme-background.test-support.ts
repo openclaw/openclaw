@@ -2,8 +2,8 @@ import type { Locator } from "playwright";
 import { expect } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 
-async function readComposerSurface(composer: Locator) {
-  return composer.evaluate((element) => {
+export async function expectComposerSurface(composer: Locator, accessible = false) {
+  const surface = await composer.evaluate((element) => {
     const style = getComputedStyle(element);
     const probe = document.createElement("div");
     element.appendChild(probe);
@@ -26,13 +26,11 @@ async function readComposerSurface(composer: Locator) {
       translucent,
     };
   });
-}
-
-export async function expectComposerSurface(composer: Locator, accessible = false) {
-  const surface = await readComposerSurface(composer);
-  expect(surface.images).toEqual(["none", "none", "none"]);
-  expect(surface.background).toBe(accessible ? surface.solid : surface.translucent);
-  expect(surface.filter).toBe("none");
+  expect(surface).toMatchObject({
+    images: ["none", "none", "none"],
+    background: accessible ? surface.solid : surface.translucent,
+    filter: "none",
+  });
 }
 
 export async function readArtwork(shell: Locator) {
@@ -85,8 +83,7 @@ export async function readArtwork(shell: Locator) {
         maxColorSpread = Math.max(maxColorSpread, Math.max(...channels) - Math.min(...channels));
       }
     }
-    // Let the browser parse modern color-mix/oklch syntax, rather than treating
-    // color(srgb ...) channels as 0–255 RGB or discarding their alpha.
+    // Canvas normalizes modern CSS colors to sRGB without discarding alpha.
     const color = (value: string) => {
       pixels.clearRect(0, 0, 1, 1);
       pixels.fillStyle = value;
@@ -128,8 +125,7 @@ export async function readArtwork(shell: Locator) {
     );
     const canvasLabel = color(description ? getComputedStyle(description).color : mutedColor);
     const transcriptColor = transcript ? color(getComputedStyle(transcript).color) : null;
-    // Ellipsized composers paint a sibling while the native placeholder is
-    // transparent. Measure the element that supplies the visible hint.
+    // Measure the visible ellipsized hint, not its transparent native placeholder.
     const placeholder = composer?.querySelector(".agent-chat__composer-placeholder");
     const textarea = composer?.querySelector("textarea");
     const placeholderStyle = placeholder
@@ -206,7 +202,6 @@ export async function readArtwork(shell: Locator) {
       ? minContrast(pixels, content.getBoundingClientRect(), transcriptColor)
       : null;
     let composerContrast: number | null = null;
-    let opaqueComposerContrast: number | null = null;
     if (composer) {
       const translucent = document.createElement("canvas");
       translucent.width = canvas.width;
@@ -222,13 +217,6 @@ export async function readArtwork(shell: Locator) {
       context.fillStyle = composerStyle.backgroundColor;
       context.fillRect(0, 0, translucent.width, translucent.height);
       composerContrast = minContrast(context, composer.getBoundingClientRect(), composerLabel);
-      context.fillStyle = composerStyle.getPropertyValue("--chat-composer-surface");
-      context.fillRect(0, 0, translucent.width, translucent.height);
-      opaqueComposerContrast = minContrast(
-        context,
-        composer.getBoundingClientRect(),
-        composerLabel,
-      );
     }
     return {
       backgroundColor: style.backgroundColor,
@@ -238,7 +226,6 @@ export async function readArtwork(shell: Locator) {
       canvasColor,
       canvasContrast,
       composerContrast,
-      opaqueComposerContrast,
       maxColorSpread,
       paintedPixels,
       pixels: fingerprint,
@@ -252,19 +239,27 @@ export async function readArtwork(shell: Locator) {
 }
 
 export function expectAppArtwork(artwork: Awaited<ReturnType<typeof readArtwork>>, label: string) {
-  expect(artwork.backgroundImage, label).toBe(artwork.tokenImage);
-  expect(artwork.backgroundColor, label).toBe(artwork.canvasColor);
-  expect(artwork.backgroundPosition, label).toBe("50% 50%");
-  expect(artwork.backgroundSize, label).toBe("cover");
-  expect(artwork.paintedPixels, label).toBeGreaterThan(0);
-  expect(artwork.visiblePaintedPixels, label).toBeGreaterThan(0);
-  expect(artwork.transparentAncestors.length, label).toBeGreaterThan(0);
-  for (const ancestor of artwork.transparentAncestors) {
-    expect(ancestor.alpha, `${label}: ${ancestor.className} hides the canvas`).toBe(0);
-    expect(ancestor.image, label).toBe("none");
-    expect(ancestor.opacity, label).toBe(1);
+  expect(artwork, label).toMatchObject({
+    backgroundImage: artwork.tokenImage,
+    backgroundColor: artwork.canvasColor,
+    backgroundPosition: "50% 50%",
+    backgroundSize: "cover",
+  });
+  for (const count of [
+    artwork.paintedPixels,
+    artwork.visiblePaintedPixels,
+    artwork.transparentAncestors.length,
+    artwork.readingSurfaces.length,
+  ]) {
+    expect(count, label).toBeGreaterThan(0);
   }
-  expect(artwork.readingSurfaces.length, label).toBeGreaterThan(0);
+  for (const ancestor of artwork.transparentAncestors) {
+    expect(ancestor, `${label}: ${ancestor.className} hides the canvas`).toMatchObject({
+      alpha: 0,
+      image: "none",
+      opacity: 1,
+    });
+  }
   expect(
     artwork.readingSurfaces.every((alpha) => alpha === 255),
     label,

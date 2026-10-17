@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
+import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
@@ -21,14 +22,13 @@ const methods = [
   "transcripts.export",
   "transcripts.status",
 ];
-function pageOptions(mobile = false, record = true) {
+function pageOptions(mobile = false) {
   const viewport = mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 };
   return {
     viewport,
     locale: "en-US",
     serviceWorkers: "block" as const,
     ...(mobile ? { colorScheme: "dark" as const } : {}),
-    ...(record ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
   };
 }
 function configResponse(config: unknown, hash: string) {
@@ -51,8 +51,26 @@ function exportResponse(contents: string, extension: string, mimeType: string) {
     sizeBytes: Buffer.byteLength(contents),
   };
 }
-const screenshot = (page: Page, name: string) =>
-  page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`), animations: "disabled" });
+const control = (root: Page | Locator, role: Parameters<Page["getByRole"]>[0], name: string) =>
+  root.getByRole(role, { name, exact: true });
+const text = (root: Page | Locator, value: string) => root.getByText(value, { exact: true });
+const click = (root: Page | Locator, name: string) => control(root, "button", name).click();
+const transcriptCase = (match: object, response: TranscriptsGetResult = meetingPage) => ({
+  match,
+  response,
+});
+const transcriptPage = (utterances: TranscriptsGetResult["utterances"]) => ({
+  ...meetingPage,
+  utterances,
+  nextCursor: null,
+});
+const expectParams = (gateway: MockGatewayControls, method: string, params: object) =>
+  expect.poll(async () => (await gateway.getRequests(method)).at(-1)?.params).toMatchObject(params);
+async function expectSource(gateway: MockGatewayControls, source: object & { title: string }) {
+  await expectParams(gateway, "config.set", { raw: expect.stringContaining(source.title) });
+  const write = (await gateway.getRequests("config.set")).at(-1)?.params as { raw: string };
+  expect(JSON.parse(write.raw).transcripts.autoStart).toEqual([source]);
+}
 async function expectDownload(
   page: Page,
   reader: Locator,
@@ -61,7 +79,7 @@ async function expectDownload(
   contents: string,
 ) {
   const event = page.waitForEvent("download");
-  await reader.getByRole("button", { name: `Download ${format}` }).click();
+  await click(reader, `Download ${format}`);
   const download = await event;
   expect(download.suggestedFilename()).toBe(`design-review.${extension}`);
   const file = await download.path();
@@ -71,7 +89,7 @@ async function expectDownload(
 
 suite.define(() => {
   it("renders provider locators after native selection and saves a new capture source", async () => {
-    await suite.withPage(pageOptions(false, false), async ({ page }) => {
+    await suite.withPage(pageOptions(), async ({ page }) => {
       const config = { transcripts: { enabled: false, autoStart: [] } };
       const gateway = await installMockGateway(page, {
         featureMethods: methods,
@@ -84,53 +102,43 @@ suite.define(() => {
         `${suite.server.baseUrl}settings/advanced?section=transcripts#config-section-transcripts`,
       );
       const capture = page.locator("openclaw-meeting-capture-settings");
-      await capture.getByRole("button", { name: "Add source", exact: true }).click();
+      await click(capture, "Add source");
       const redirected = new URL(page.url());
-      expect(redirected.pathname).toBe("/settings/communications");
-      expect(redirected.searchParams.get("advanced")).toBe("1");
-      expect(redirected.hash).toBe("#config-section-transcripts");
-      const save = capture.getByRole("button", { name: "Save source", exact: true });
+      expect([
+        redirected.pathname,
+        redirected.searchParams.get("advanced"),
+        redirected.hash,
+      ]).toEqual(["/settings/communications", "1", "#config-section-transcripts"]);
+      const save = control(capture, "button", "Save source");
       expect(await save.isDisabled()).toBe(true);
-      expect(await capture.getByRole("textbox", { name: "Guild ID", exact: true }).count()).toBe(0);
+      expect(await control(capture, "textbox", "Guild ID").count()).toBe(0);
 
-      await capture
-        .getByRole("combobox", { name: "Provider", exact: true })
-        .selectOption("test-voice");
-      const guild = capture.getByRole("textbox", { name: "Guild ID", exact: true });
-      const channel = capture.getByRole("textbox", { name: "Channel ID", exact: true });
+      await control(capture, "combobox", "Provider").selectOption("test-voice");
+      const guild = control(capture, "textbox", "Guild ID");
+      const channel = control(capture, "textbox", "Channel ID");
       await guild.waitFor();
       expect(await guild.getAttribute("required")).not.toBeNull();
       expect(await channel.getAttribute("required")).not.toBeNull();
       await expect.poll(() => save.isEnabled()).toBe(true);
       await guild.fill("synthetic-guild");
       await channel.fill("synthetic-room");
-      await capture.getByRole("textbox", { name: "Title", exact: true }).fill("New capture source");
+      await control(capture, "textbox", "Title").fill("New capture source");
       await save.scrollIntoViewIfNeeded();
-      await screenshot(page, "meeting-capture-new-source");
       await save.click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.set")).at(-1)?.params)
-        .toMatchObject({ raw: expect.stringContaining("New capture source") });
-      const write = (await gateway.getRequests("config.set")).at(-1)?.params as { raw: string };
-      expect(JSON.parse(write.raw).transcripts.autoStart).toEqual([
-        {
-          providerId: "test-voice",
-          title: "New capture source",
-          guildId: "synthetic-guild",
-          channelId: "synthetic-room",
-        },
-      ]);
+      await expectSource(gateway, {
+        providerId: "test-voice",
+        title: "New capture source",
+        guildId: "synthetic-guild",
+        channelId: "synthetic-room",
+      });
     });
   });
 
   it("reads, searches, extracts, downloads and edits capture through normal navigation", async () => {
     await suite.withPage(pageOptions(), async ({ page }) => {
       const source = {
-        providerId: "test-voice",
-        title: "Design review",
-        accountId: "team",
-        guildId: "guild",
-        channelId: "room",
+        ...meetingEntry.source,
+        title: meetingEntry.title,
         sessionId: "custom-session",
       };
       const config = { transcripts: { enabled: true, autoStart: [source] } };
@@ -143,22 +151,14 @@ suite.define(() => {
           "transcripts.list": { sessions: [meetingEntry], nextCursor: "list-next" },
           "transcripts.get": {
             cases: [
-              { match: { query: "quiet" }, response: { ...meetingPage, nextCursor: null } },
-              {
-                match: { cursor: "reader-page-2" },
-                response: {
-                  ...meetingPage,
-                  utterances: [
-                    {
-                      sequence: 1,
-                      speakerLabel: "Blair",
-                      text: "The next page is readable too.",
-                    },
-                  ],
-                  nextCursor: null,
-                },
-              },
-              { match: {}, response: meetingPage },
+              transcriptCase({ query: "quiet" }, transcriptPage(meetingPage.utterances)),
+              transcriptCase(
+                { cursor: "reader-page-2" },
+                transcriptPage([
+                  { sequence: 1, speakerLabel: "Blair", text: "The next page is readable too." },
+                ]),
+              ),
+              transcriptCase({}),
             ],
           },
           "transcripts.status": meetingStatus,
@@ -172,34 +172,31 @@ suite.define(() => {
       await gateway.resolveDeferred("transcripts.list");
       await library.getByRole("link", { name: /Design review/ }).waitFor();
       expect(await library.getAttribute("aria-busy")).toBe("false");
-      await library.getByRole("searchbox", { name: "Search meetings" }).fill("design");
-      await library.getByRole("button", { name: "Filter", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("transcripts.list")).at(-1)?.params)
-        .toMatchObject({ query: "design", limit: 50 });
-      await library.getByRole("button", { name: "Next page" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("transcripts.list")).at(-1)?.params)
-        .toMatchObject({ cursor: "list-next", query: "design" });
+      await control(library, "searchbox", "Search meetings").fill("design");
+      await click(library, "Filter");
+      await expectParams(gateway, "transcripts.list", { query: "design", limit: 50 });
+      await click(library, "Next page");
+      await expectParams(gateway, "transcripts.list", { cursor: "list-next", query: "design" });
       await gateway.deferNext("transcripts.get", { selector: meetingEntry.selector });
       await library.getByRole("link", { name: /Design review/ }).click();
-      const reader = page.getByRole("article", { name: "Transcript reader" });
+      const reader = control(page, "article", "Transcript reader");
       await reader.getByRole("status").getByText("Loading summary…").waitFor();
       expect(await reader.getAttribute("aria-busy")).toBe("true");
       await gateway.resolveDeferred("transcripts.get");
-      await reader.getByText("Reader layout discussed.", { exact: true }).waitFor();
+      await text(reader, "Reader layout discussed.").waitFor();
       expect(await reader.getAttribute("aria-busy")).toBe("false");
-      await reader.getByRole("tab", { name: "Transcript", exact: true }).click();
-      await reader.getByText("Keep the reader quiet and readable.", { exact: true }).waitFor();
-      await reader.getByText("The next page is readable too.", { exact: true }).waitFor();
-      await screenshot(page, "meetings-transcript-desktop");
-      await reader.getByRole("searchbox", { name: "Search within this transcript" }).fill("quiet");
-      await reader.getByRole("button", { name: "Search", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("transcripts.get")).at(-1)?.params)
-        .toMatchObject({ selector: meetingEntry.selector, query: "quiet", limit: 50 });
-      await reader.getByRole("tab", { name: "Summary" }).click();
-      await reader.getByText("Reader layout discussed.", { exact: true }).waitFor();
+      await control(reader, "tab", "Transcript").click();
+      await text(reader, "Keep the reader quiet and readable.").waitFor();
+      await text(reader, "The next page is readable too.").waitFor();
+      await control(reader, "searchbox", "Search within this transcript").fill("quiet");
+      await click(reader, "Search");
+      await expectParams(gateway, "transcripts.get", {
+        selector: meetingEntry.selector,
+        query: "quiet",
+        limit: 50,
+      });
+      await control(reader, "tab", "Summary").click();
+      await text(reader, "Reader layout discussed.").waitFor();
       await expect
         .poll(() => reader.textContent())
         .toContain("Notes extracted using text heuristics");
@@ -213,32 +210,21 @@ suite.define(() => {
       await gateway.setMethodResponse("transcripts.export", {
         __mockError: { code: "INVALID_REQUEST", message: "Transcript export exceeds 4 MiB" },
       });
-      await reader.getByRole("button", { name: "Download JSONL" }).click();
+      await click(reader, "Download JSONL");
       await reader.getByRole("alert").filter({ hasText: "Download failed" }).waitFor();
-      await page.getByRole("link", { name: "Meeting capture", exact: true }).click();
+      await control(page, "link", "Meeting capture").click();
       const capture = page.locator("openclaw-meeting-capture-settings");
-      await capture.getByText("Not active", { exact: true }).waitFor();
-      await screenshot(page, "meeting-capture-settings");
-      await capture.getByRole("button", { name: "Edit source 1" }).click();
-      await capture
-        .getByRole("textbox", { name: "Title", exact: true })
-        .fill("Weekly design review");
-      await capture.getByRole("button", { name: "Save source" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.set")).at(-1)?.params)
-        .toMatchObject({ raw: expect.stringContaining("Weekly design review") });
-      const write = (await gateway.getRequests("config.set")).at(-1)?.params as { raw: string };
-      expect(JSON.parse(write.raw).transcripts.autoStart).toEqual([
-        { ...source, title: "Weekly design review" },
-      ]);
+      await text(capture, "Not active").waitFor();
+      await click(capture, "Edit source 1");
+      await control(capture, "textbox", "Title").fill("Weekly design review");
+      await click(capture, "Save source");
+      await expectSource(gateway, { ...source, title: "Weekly design review" });
       await gateway.deferNext("transcripts.list");
       await capture.getByRole("button", { name: /Transcript library/ }).click();
       await library.getByRole("status").getByText("Loading meetings…").waitFor();
       await gateway.resolveDeferred("transcripts.list");
       await library.getByRole("link", { name: /Design review/ }).waitFor();
-      expect(
-        (await gateway.getRequests()).some((request) => request.method === "sessions.search"),
-      ).toBe(false);
+      expect(await gateway.getRequests("sessions.search")).toHaveLength(0);
     });
   });
 
@@ -248,11 +234,9 @@ suite.define(() => {
         featureMethods: methods,
         methodResponses: {
           "transcripts.list": { sessions: [meetingEntry], nextCursor: null },
-          "transcripts.get": {
-            ...meetingPage,
-            utterances: [{ sequence: 0, text: "<script>unsafe()</script> Plain transcript text." }],
-            nextCursor: null,
-          },
+          "transcripts.get": transcriptPage([
+            { sequence: 0, text: "<script>unsafe()</script> Plain transcript text." },
+          ]),
         },
       });
       await page.goto(`${suite.server.baseUrl}meetings?selector=`);
@@ -260,23 +244,20 @@ suite.define(() => {
       await page.goto(
         `${suite.server.baseUrl}meetings?tab=transcript&selector=${encodeURIComponent(meetingEntry.selector)}`,
       );
-      const reader = page.getByRole("article", { name: "Transcript reader" });
-      await reader
-        .getByText("<script>unsafe()</script> Plain transcript text.", { exact: true })
-        .waitFor();
+      const reader = control(page, "article", "Transcript reader");
+      await text(reader, "<script>unsafe()</script> Plain transcript text.").waitFor();
       expect(await page.locator(".transcripts-library").isVisible()).toBe(false);
-      await screenshot(page, "meetings-transcript-mobile");
       expect(await reader.locator("script").count()).toBe(0);
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
-      await reader.getByRole("link", { name: "Back to library" }).click();
+      await control(reader, "link", "Back to library").click();
       await page.locator(".transcripts-library").waitFor({ state: "visible" });
       await gateway.setMethodResponse("transcripts.list", {
         __mockError: { code: "FORBIDDEN", message: "Shared archive restricted" },
       });
-      await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      await page.getByRole("heading", { name: "Transcript access is restricted" }).waitFor();
+      await click(page, "Refresh");
+      await control(page, "heading", "Transcript access is restricted").waitFor();
       expect(await page.locator(".transcripts-list__entry").count()).toBe(0);
     });
   });

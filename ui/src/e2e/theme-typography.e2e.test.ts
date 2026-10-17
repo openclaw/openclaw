@@ -1,5 +1,3 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -9,14 +7,9 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  captureUiProof,
-  createThemedChatOpener,
-  themeConfigResponse,
-} from "./theme-typography.test-support.ts";
+import { createThemedChatOpener, themeConfigResponse } from "./theme-typography.test-support.ts";
 
-// Every pair JetBrains Mono ligates, each closed by the trailing space that
-// triggers the corruption reported in issue #137473.
+// Trailing spaces trigger the JetBrains Mono corruption from #137473.
 const COMPOSER_LIGATURE_SEQUENCE = ">= ... -> => != <= :: ";
 
 const suite = createControlUiE2eSuite({
@@ -29,6 +22,14 @@ const suite = createControlUiE2eSuite({
 const openThemedChat = createThemedChatOpener(suite);
 const composerSelector = ".agent-chat__composer-combobox textarea";
 const waitForComposer = (page: Page) => page.locator(composerSelector).waitFor();
+const cssToken = (page: Page, token: string) =>
+  page.evaluate(
+    (key) => getComputedStyle(document.documentElement).getPropertyValue(key).trim(),
+    token,
+  );
+const styleToken = (page: Page, token: string) =>
+  page.evaluate((key) => document.documentElement.style.getPropertyValue(key), token);
+const attribute = (page: Page, name: string) => page.locator("html").getAttribute(name);
 const expectTheme = (page: Page, theme: string) =>
   expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(theme);
 const historyMessage = (role: "user" | "assistant", text: string, timestamp: number) => ({
@@ -36,19 +37,6 @@ const historyMessage = (role: "user" | "assistant", text: string, timestamp: num
   timestamp,
   content: [{ text, type: "text" }],
 });
-
-async function captureTypography(
-  page: Awaited<ReturnType<typeof openThemedChat>>["page"],
-  name: string,
-) {
-  if (captureUiProof) {
-    await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
-    await page.evaluate(() => document.fonts.ready);
-    await page.screenshot({
-      path: path.join(path.join(suite.artifactDir, "theme-typography"), `${name}.png`),
-    });
-  }
-}
 
 suite.define(() => {
   it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
@@ -59,9 +47,7 @@ suite.define(() => {
     const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
     const fontRequests = () =>
-      themeRequests.filter(
-        (request) => request.includes(".css") && !request.startsWith("dash.css"),
-      );
+      themeRequests.filter((r) => r.includes(".css") && !r.startsWith("dash.css"));
     await preview.waitFor();
     expect(await ui.locator("..").locator("..").textContent()).toContain(
       "Stored in this browser only",
@@ -71,35 +57,32 @@ suite.define(() => {
       new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
     );
     const families = () =>
-      preview.evaluate((panel) => ({
-        ui: getComputedStyle(panel.querySelector(".settings-typography-preview__caption")!)
-          .fontFamily,
-        chat: getComputedStyle(panel.querySelector(".settings-typography-preview__prose")!)
-          .fontFamily,
-        code: getComputedStyle(panel.querySelector("code")!).fontFamily,
-      }));
-    const chatSmoothing = () =>
-      page.evaluate(() => document.documentElement.style.getPropertyValue("--chat-font-smoothing"));
+      preview.evaluate((panel) => {
+        const font = (selector: string) =>
+          getComputedStyle(panel.querySelector(selector)!).fontFamily;
+        return {
+          ui: font(".settings-typography-preview__caption"),
+          chat: font(".settings-typography-preview__prose"),
+          code: font("code"),
+        };
+      });
+    const chatSmoothing = () => styleToken(page, "--chat-font-smoothing");
     const initial = await families();
-    expect(initial.ui).toContain("DM Sans");
-    expect(initial.chat).toContain("Fraunces");
-    expect(initial.code).toContain("JetBrains Mono");
+    expect(initial).toEqual({
+      ui: expect.stringContaining("DM Sans"),
+      chat: expect.stringContaining("Fraunces"),
+      code: expect.stringContaining("JetBrains Mono"),
+    });
     expect(await chatSmoothing()).toBe("auto");
-    if (captureUiProof) {
-      await preview.scrollIntoViewIfNeeded();
-    }
-    await captureTypography(page, "picker-default");
     await openPicker(ui);
     await ui.locator('[role="option"][data-value="geist"]').waitFor({ state: "visible" });
     await expect.poll(() => fontRequests().length).toBe(9);
     expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
-    await captureTypography(page, "picker-specimens");
     await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     expect((await families()).chat).toContain("Fraunces");
     await selectPickerValue(chat, "geist");
     await expect.poll(async () => (await families()).chat).toContain("Geist");
-    // A sans chat override on a serif theme drops the serif smoothing opt-in.
     await expect.poll(chatSmoothing).toBe("");
     await selectPickerValue(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
@@ -113,7 +96,6 @@ suite.define(() => {
       .toEqual(expect.arrayContaining(["Geist", "Lora"]));
     expect((await families()).code).toBe(initial.code);
     expect(await gateway.getRequests("config.patch")).toEqual([]);
-    await captureTypography(page, "picker-overrides");
     await page.reload();
     await waitForControlUiSettingsTakeover(page);
     await expect.poll(async () => (await families()).ui).toContain("Geist");
@@ -124,16 +106,14 @@ suite.define(() => {
     await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
     expect(
-      await page.evaluate(() =>
-        ["--font-body", "--font-chat"].map((key) =>
-          document.documentElement.style.getPropertyValue(key),
-        ),
+      await page.evaluate(
+        (keys) => keys.map((key) => document.documentElement.style.getPropertyValue(key)),
+        ["--font-body", "--font-chat"],
       ),
     ).toEqual(["", ""]);
   });
 
-  // Issue #137473: incremental input corrupts glyphs, not the value; compare
-  // its pixels with a whole-value assignment and retain transcript ligatures.
+  // #137473: compare incremental input pixels with a whole-value assignment.
   it.each(["crt", "phosphor"])(
     "paints typed operator sequences like their own value in the %s composer",
     async (theme) => {
@@ -153,8 +133,7 @@ suite.define(() => {
       await textarea.click();
       await textarea.pressSequentially(COMPOSER_LIGATURE_SEQUENCE);
       expect(await textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
-      // Blur first: the corruption outlives focus, and an unfocused control
-      // paints no caret, so the two shots differ only in how the text arrived.
+      // Blur removes the caret without hiding the corruption.
       await textarea.evaluate((element) => (element as HTMLTextAreaElement).blur());
       const typedPixels = await textarea.screenshot();
 
@@ -171,28 +150,23 @@ suite.define(() => {
 
       expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);
 
-      const report = await page.evaluate(() => {
-        const composer = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox textarea",
-        );
-        const chat = document.querySelector(".chat-text");
-        return {
-          chatLigatures: chat ? getComputedStyle(chat).fontVariantLigatures : null,
-          composerFontFamily: composer
-            ? (getComputedStyle(composer).fontFamily.split(",")[0] ?? "")
-                .trim()
-                .replace(/^["']|["']$/gu, "")
-            : null,
-        };
-      });
-      // The composer is still in the theme's mono face, and the transcript is
-      // untouched — the opt-out is scoped to controls text is edited in.
-      expect(report.composerFontFamily).toBe("JetBrains Mono");
-      expect(report.chatLigatures).toBe("normal");
+      expect(
+        await textarea.evaluate((el) =>
+          getComputedStyle(el)
+            .fontFamily.split(",")[0]
+            ?.trim()
+            .replace(/^["']|["']$/gu, ""),
+        ),
+      ).toBe("JetBrains Mono");
+      expect(
+        await page
+          .locator(".chat-text")
+          .first()
+          .evaluate((el) => getComputedStyle(el).fontVariantLigatures),
+      ).toBe("normal");
     },
   );
 
-  // CodeMirror owns its text layer; only native controls need the opt-out.
   it("scopes the ligature opt-out to native controls, not the file editor", async () => {
     const { gateway, page } = await openThemedChat("crt", "dark", {
       featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.set"],
@@ -228,8 +202,7 @@ suite.define(() => {
     const composer = page.locator(composerSelector);
     await composer.waitFor({ state: "visible" });
 
-    // Open the file first: fetching it needs the gateway, and queuing below
-    // deliberately takes the connection offline.
+    // Capture CodeMirror while online; disconnecting replaces its editable node.
     await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
     await page.locator(".cm-content").waitFor({ state: "visible" });
     await page.getByRole("button", { name: "Edit file" }).first().click();
@@ -238,13 +211,10 @@ suite.define(() => {
 
     const ligaturesOf = (locator: Locator) =>
       locator.evaluate((element) => getComputedStyle(element).fontVariantLigatures);
-    // Read the editor now: dropping the connection below returns the panel to
-    // its read-only view, which would take the editable node with it.
     const fileEditorLigatures = await ligaturesOf(editableContent);
     const fileLineLigatures = await ligaturesOf(page.locator(".cm-line").first());
 
-    // A queued draft reopened for editing is a bare textarea outside the
-    // composer wrapper, so it only inherits the opt-out from the shared rule.
+    // The queued draft is a bare textarea outside the composer wrapper.
     await gateway.setOnline(false);
     await gateway.closeLatest();
     await composer.fill(COMPOSER_LIGATURE_SEQUENCE.trim());
@@ -255,20 +225,20 @@ suite.define(() => {
     const queueEditor = queueRow.locator(".chat-queue__edit-input");
     await queueEditor.waitFor();
 
-    expect(await ligaturesOf(composer)).toBe("no-contextual");
-    expect(await ligaturesOf(queueEditor)).toBe("no-contextual");
-    expect(fileEditorLigatures).toBe("normal");
-    expect(fileLineLigatures).toBe("normal");
+    expect([
+      await ligaturesOf(composer),
+      await ligaturesOf(queueEditor),
+      fileEditorLigatures,
+      fileLineLigatures,
+    ]).toEqual(["no-contextual", "no-contextual", "normal", "normal"]);
   });
 
   it.each([["knot", "openknot", "#080808", "#f9f9fb"]])(
     "loads %s before paint in both modes without the app bundle",
     async (theme, resolved, dark, light) => {
-      // Bundle aborts isolate the boot document; resource timing verifies the
-      // browser actually blocks rendering, not merely that a link exists later.
+      // Resource timing proves the palette blocks paint before app upgrade.
       for (const mode of ["dark", "light"] as const) {
         const { page } = await openThemedChat(theme, mode, {
-          // The app bundle is blocked to inspect the boot document before upgrade.
           awaitInitialRoster: false,
         });
         await page.route("**/assets/**.js", (route) => route.abort());
@@ -287,11 +257,13 @@ suite.define(() => {
                 .renderBlockingStatus,
             })),
         }));
-        expect(report.resolvedTheme).toBe(mode === "dark" ? resolved : `${resolved}-light`);
-        expect(report.background).toBe(mode === "dark" ? dark : light);
-        expect(report.palette).toEqual([
-          { pathname: `/themes/${theme}.css`, version: report.buildId, blocking: "blocking" },
-        ]);
+        expect(report).toMatchObject({
+          resolvedTheme: mode === "dark" ? resolved : `${resolved}-light`,
+          background: mode === "dark" ? dark : light,
+          palette: [
+            { pathname: `/themes/${theme}.css`, version: report.buildId, blocking: "blocking" },
+          ],
+        });
       }
     },
   );
@@ -312,27 +284,31 @@ suite.define(() => {
           (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
         ),
       }));
-    const expectChrome = async (color: string) => {
-      await expect.poll(readChrome).toEqual({
+    const expectChrome = (color: string) =>
+      expect.poll(readChrome).toEqual({
         color,
         metas: [
           { color, media: null },
           { color, media: null },
         ],
       });
-    };
     const pageColor = "#faf9f7";
     const chatColor = "#f4f1ec";
     await expectChrome(chatColor);
 
-    // Use the shell's actual shortcut and browser history without rebuilding the runtime.
-    await page.locator(".shell-skip-link").focus();
-    await page.keyboard.press("ControlOrMeta+Shift+,");
-    await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
-    await expectChrome(pageColor);
-    await page.goBack();
-    await waitForComposer(page);
-    await expectChrome(chatColor);
+    const visitSettingsAndBack = async (returnSelector: string) => {
+      await page.locator(".shell-skip-link").focus();
+      await page.keyboard.press("ControlOrMeta+Shift+,");
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/appearance",
+        routeId: "appearance",
+      });
+      await expectChrome(pageColor);
+      await page.goBack();
+      await page.locator(returnSelector).waitFor();
+      await expectChrome(chatColor);
+    };
+    await visitSettingsAndBack(composerSelector);
     await page.locator(".chat-pane__nav-toggle").first().click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
@@ -348,7 +324,6 @@ suite.define(() => {
       await expectChrome(color);
     }
 
-    // Reparenting a plain Solid host keeps its mounted root and route alive.
     const reconnect = await page.locator("openclaw-app-shell").evaluate((element) => {
       const shell = element;
       const parent = shell.parentNode!;
@@ -372,13 +347,7 @@ suite.define(() => {
     });
     expect(reconnect).toEqual({ removed: chatColor, reconnected: chatColor, sameShell: true });
     await expectChrome(chatColor);
-    await page.locator(".shell-skip-link").focus();
-    await page.keyboard.press("ControlOrMeta+Shift+,");
-    await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
-    await expectChrome(pageColor);
-    await page.goBack();
-    await page.locator(".new-session-page__message").waitFor();
-    await expectChrome(chatColor);
+    await visitSettingsAndBack(".new-session-page__message");
   });
 
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
@@ -413,12 +382,10 @@ suite.define(() => {
       const request = page.waitForRequest(tidePaletteUrl);
       await changeTheme("tide");
       await request;
-      expect(await page.locator("html").getAttribute("data-theme")).toBe("openknot-light");
-      expect(
-        await page.evaluate(() =>
-          getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
-        ),
-      ).toBe("#f9f9fb");
+      expect([await attribute(page, "data-theme"), await cssToken(page, "--bg")]).toEqual([
+        "openknot-light",
+        "#f9f9fb",
+      ]);
       await changeTheme("beacon");
       await expectTheme(page, "beacon-light");
       const response = page.waitForResponse(tidePaletteUrl);
@@ -430,11 +397,9 @@ suite.define(() => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
-      expect(await page.locator("html").getAttribute("data-theme")).toBe("beacon-light");
+      expect(await attribute(page, "data-theme")).toBe("beacon-light");
       await changeTheme("tide");
-      await expect
-        .poll(() => page.locator("html").getAttribute("data-observed-theme-background"))
-        .toBe("#f7f9fb");
+      await expect.poll(() => attribute(page, "data-observed-theme-background")).toBe("#f7f9fb");
       expect(await page.locator('meta[name="theme-color"]').first().getAttribute("content")).toBe(
         "#eef2f7",
       );
@@ -446,15 +411,11 @@ suite.define(() => {
   });
 
   it("resolves the font stylesheet against a configured mount path", async () => {
-    // A gateway mounted at a base path serves the bundle below that prefix, so
-    // root-absolute font URLs 404 there and the theme silently falls back to
-    // system faces while its palette still applies.
     const basePath = "/openclaw";
     const { page } = await openThemedChat("absolutely", "dark", { basePath });
     const requested: string[] = [];
     const fontRequests: URL[] = [];
-    // The preview server does not stamp Gateway HTML. Reproduce the actual
-    // document contract, rather than letting runtime repair a wrong boot URL.
+    // Stamp Gateway's mount contract onto preview-server HTML.
     await page.route("**/*", async (route) => {
       if (
         route.request().resourceType() !== "document" ||
@@ -486,12 +447,10 @@ suite.define(() => {
       .locator(".agent-chat__composer-combobox textarea")
       .waitFor({ state: "visible", timeout: 30_000 });
 
-    const buildId = await page.locator("html").getAttribute("data-openclaw-control-ui-build-id");
+    const buildId = await attribute(page, "data-openclaw-control-ui-build-id");
     if (buildId !== null) {
       expect(buildId).not.toBe("");
     }
-    // Failed optional stylesheets are removed so another selection can retry.
-    // The actual request still has to carry the mount prefix and build identity.
     await expect
       .poll(() => fontRequests.some((url) => url.pathname.endsWith("/space-grotesk.css")))
       .toBe(true);
@@ -499,8 +458,6 @@ suite.define(() => {
     expect(fontUrl?.pathname).toBe(`${basePath}/fonts/space-grotesk.css`);
     expect(fontUrl?.searchParams.get("v")).toBe(buildId);
     await expect.poll(() => page.locator("#openclaw-typeface-space-grotesk").count()).toBe(0);
-    // The palette link is built in the first-paint script from the mount prefix
-    // the gateway stamps on <html>, so it has to follow the mount too.
     const paletteHref = await page.evaluate(
       () =>
         document.getElementById("openclaw-theme-palette-absolutely")?.getAttribute("href") ?? null,
@@ -509,10 +466,6 @@ suite.define(() => {
     expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
     expect(paletteUrl.searchParams.get("v")).toBe(buildId);
     expect(requested).toContain(`${basePath}/themes/absolutely.css`);
-    expect(
-      await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
-      ),
-    ).toBe("#1c1c1a");
+    expect(await cssToken(page, "--bg")).toBe("#1c1c1a");
   });
 });
