@@ -155,7 +155,7 @@ export function beginModelCatalogSnapshot(
   };
   // Failed bootstrap replies are unsolicited responses. A missing snapshot must
   // fall back to the ordinary read, without waiting its full RPC timeout.
-  const timer = setTimeout(resolve, 1_000);
+  const timer = setTimeout(release, 1_000);
   const snapshot = { ...read, promise, release };
   read.cache.snapshot?.release();
   read.cache.snapshot = snapshot;

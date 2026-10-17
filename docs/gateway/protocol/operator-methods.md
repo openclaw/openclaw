@@ -181,7 +181,9 @@ catalog consumers, retaining cancellation and any explicit request deadline.
 
 The Control UI shares the initial `models.snapshot` with matching configured
 catalog readers. If bootstrap does not deliver it within one second, readers
-fall back to `models.list`. Cached catalogs, including pending discovery results,
+fall back to `models.list` and ignore a late bootstrap snapshot. This wait precedes
+the ordinary per-RPC timeout; explicit refreshes and sub-second timeout budgets
+bypass it. Cached catalogs, including pending discovery results,
 remain reusable until a catalog or session-model change invalidates their scope
 or a reported cooldown expires. A different session or account requires its own
 projection; returning to a cached scope does not fetch it again.

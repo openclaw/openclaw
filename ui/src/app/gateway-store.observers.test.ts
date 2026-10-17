@@ -124,16 +124,14 @@ describe("createApplicationGateway connection ownership", () => {
         return;
       }
       expect(await outcome).toEqual(catalog);
-      if (recovery !== "timeout") {
-        current().opts.onEvent?.(
-          createGatewayEvent("models.snapshot", {
-            target: scope,
-            scope,
-            catalog: { models: [{ id: "retired", provider: "fixture", name: "Retired" }] },
-          }),
-        );
-        expect(await loadModelCatalog(client, scope)).toEqual(catalog);
-      }
+      current().opts.onEvent?.(
+        createGatewayEvent("models.snapshot", {
+          target: scope,
+          scope,
+          catalog: { models: [{ id: "retired", provider: "fixture", name: "Retired" }] },
+        }),
+      );
+      expect(await loadModelCatalog(client, scope)).toEqual(catalog);
       expect(
         current().request.mock.calls.filter(([method]) => method === "models.list"),
       ).toHaveLength(1);
