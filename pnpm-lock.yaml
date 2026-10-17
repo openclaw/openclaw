@@ -3085,6 +3085,9 @@ importers:
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
+      katex:
+        specifier: 0.16.47
+        version: 0.16.47
       markdown-it:
         specifier: 15.0.2
         version: 15.0.2

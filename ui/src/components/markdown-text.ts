@@ -1,3 +1,5 @@
+import { t } from "../i18n/index.ts";
+
 const BLOCK_ART_LINE_RE = /^[\t \u00a0▀▄█]+$/u;
 const BLOCK_ART_GLYPH_RE = /[▀▄█]/u;
 
@@ -25,4 +27,18 @@ export function isMarkdownBlockArtText(value: string): boolean {
     artLines.every((line) => BLOCK_ART_LINE_RE.test(line) && BLOCK_ART_GLYPH_RE.test(line)) &&
     value.match(/[▀▄█]/gu)!.length >= 8
   );
+}
+
+export function appendMarkdownTruncationNotice(truncated: {
+  text: string;
+  truncated: boolean;
+  total: number;
+}): string {
+  const notice = truncated.truncated
+    ? `\n\n${t("chat.markdown.truncated", {
+        total: String(truncated.total),
+        shown: String(truncated.text.length),
+      })}`
+    : "";
+  return `${truncated.text}${notice}`;
 }
