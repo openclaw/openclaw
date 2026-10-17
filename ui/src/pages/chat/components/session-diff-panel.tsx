@@ -126,6 +126,7 @@ function SessionDiffContent(props: SessionDiffProps) {
   const unavailableFileText = new WeakSet<FileSource>();
   let generation = 0;
   const nativeGateways = nativeGatewaysCapability();
+  // Dismiss the menu at native-owner replacement before another menu action can run.
   const unsubscribe = nativeGateways?.subscribe(() => setMenu(null));
   onCleanup(() => {
     generation += 1;

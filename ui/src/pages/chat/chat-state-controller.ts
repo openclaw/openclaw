@@ -202,6 +202,7 @@ export function createChatState<TState extends ChatPageHost>(
       previousChatStream = state.chatStream;
       const renderLifecycle = state.renderLifecycle;
       state.requestUpdate = () => renderLifecycle.invalidate();
+      // Each discarded item has its own completion callback, not a latest-value presentation.
       cleanups.push(
         chatOutboxOwner(state).subscribe(state, (item) => {
           if (stateValue === state) {

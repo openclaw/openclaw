@@ -61,6 +61,7 @@ export function ChatComposer(props: ChatComposerProps) {
     ),
   );
   const voice = { dictation: state.dictation, picker: microphonePicker };
+  // Dictation admission invalidates edits and dismisses errors before the next input event.
   onCleanup(
     voice.dictation.subscribe(() => {
       if (voice.dictation.locksComposer) {

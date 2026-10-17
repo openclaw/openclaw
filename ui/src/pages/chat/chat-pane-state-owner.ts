@@ -119,10 +119,12 @@ export abstract class ChatPaneStateOwner {
     this.isConnected = true;
     this.transcript.start();
     this.refreshBoardSubscriptions();
+    // Focus ownership hands off draft persistence synchronously, before another input event.
     this.chatState.addCleanup(
       chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
     );
     this.activeChanged(this.active);
+    // Approval publications reconcile live request ownership even when rendering is parked.
     this.chatState.addCleanup(
       this.context.overlays?.subscribe((snapshot) => {
         if (this.state) {
@@ -131,6 +133,7 @@ export abstract class ChatPaneStateOwner {
         this.invalidate();
       }) ?? (() => {}),
     );
+    // Configuration publications reconcile the scoped swarm hydrator outside rendering.
     this.chatState.addCleanup(
       this.context.runtimeConfig?.subscribe(() => {
         this.refreshSwarmRoster();
