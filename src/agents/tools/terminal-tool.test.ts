@@ -6,6 +6,7 @@ import { TerminalSessionManager } from "../../gateway/terminal/session-manager.j
 import {
   agentTerminalOwner,
   baseOpenRequest,
+  expectTerminalOpen,
   makeFakePty,
 } from "../../gateway/terminal/session-manager.test-helpers.js";
 import {
@@ -45,31 +46,46 @@ vi.mock("../bash-tools.exec-approval-request.js", () => ({
 const agentOwner = agentTerminalOwner("agent:main:main", "main-session-id");
 type TerminalToolOptions = NonNullable<Parameters<typeof createTerminalTool>[0]>;
 
+function emptyManager() {
+  return new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+}
+
 function makeContext(manager: TerminalSessionManager) {
   return { terminalSessions: manager };
 }
 
+const agentToolOptions = {
+  agentId: "main",
+  agentSessionKey: agentOwner.agentSessionKey,
+  sessionId: agentOwner.agentSessionId,
+};
+
 function makeTool(manager: TerminalSessionManager, options: TerminalToolOptions = {}) {
   return createTerminalTool({
-    agentId: "main",
-    agentSessionKey: agentOwner.agentSessionKey,
-    sessionId: agentOwner.agentSessionId,
+    ...agentToolOptions,
     execSession: {},
     getGatewayContext: () => makeContext(manager),
     ...options,
   });
 }
 
-async function openAgentTerminal() {
+async function openAgentTerminal(options: TerminalToolOptions = {}) {
   const backend = makeFakePty();
   const spawn = vi.fn(async () => backend);
   const manager = new TerminalSessionManager({ emit: vi.fn(), spawn });
-  const opened = await manager.open(baseOpenRequest({ owner: agentOwner }));
-  if (!opened.ok) {
-    throw new Error("expected operator-opened terminal");
-  }
+  const { sessionId } = expectTerminalOpen(
+    await manager.open(baseOpenRequest({ owner: agentOwner })),
+  );
   spawn.mockClear();
-  return { backend, manager, sessionId: opened.sessionId, spawn };
+  const tool = makeTool(manager, options);
+  const input = (data = "echo unsafe\r", id = "input") =>
+    tool.execute(id, { action: "input", sessionId, data });
+  const rejectInput = async (error: string | RegExp) => {
+    const check = () => expect(input()).rejects.toThrow(error);
+    await withActiveRun(manager, check);
+    expect(backend.writes).toEqual([]);
+  };
+  return { backend, manager, sessionId, spawn, tool, input, rejectInput };
 }
 
 async function withActiveRun<T>(
@@ -130,8 +146,7 @@ describe("terminal tool", () => {
   });
 
   it("cannot open or spawn a gateway terminal even when an existing terminal is available", async () => {
-    const { backend, manager, sessionId, spawn } = await openAgentTerminal();
-    const tool = makeTool(manager);
+    const { backend, manager, sessionId, spawn, tool } = await openAgentTerminal();
 
     await expect(tool.execute("open", { action: "open", sessionId })).rejects.toThrow(
       "terminal action unavailable",
@@ -145,18 +160,14 @@ describe("terminal tool", () => {
   });
 
   it("uses the admitted caller Gateway before ambient context", async () => {
-    const callerManager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
-    const ambientManager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const callerManager = emptyManager();
+    const ambientManager = emptyManager();
     const callerList = vi.spyOn(callerManager, "listAgent");
     const ambientList = vi.spyOn(ambientManager, "listAgent");
     const gatewayContextResolver = vi.fn();
     gatewayContextResolver.mockReturnValue(makeContext(callerManager));
     getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
-    const tool = createTerminalTool({
-      agentId: "main",
-      agentSessionKey: agentOwner.agentSessionKey,
-      sessionId: agentOwner.agentSessionId,
-    });
+    const tool = createTerminalTool(agentToolOptions);
 
     const result = await withGatewayToolCallerIdentity(
       {
@@ -173,14 +184,10 @@ describe("terminal tool", () => {
   });
 
   it("fails closed when the admitted caller Gateway has retired", async () => {
-    const ambientManager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const ambientManager = emptyManager();
     const ambientList = vi.spyOn(ambientManager, "listAgent");
     getInProcessGatewayToolContext.mockReturnValue(makeContext(ambientManager));
-    const tool = createTerminalTool({
-      agentId: "main",
-      agentSessionKey: agentOwner.agentSessionKey,
-      sessionId: agentOwner.agentSessionId,
-    });
+    const tool = createTerminalTool(agentToolOptions);
 
     await expect(
       withGatewayToolCallerIdentity(
@@ -196,14 +203,10 @@ describe("terminal tool", () => {
   });
 
   it("uses ambient Gateway context without an admitted caller", async () => {
-    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const manager = emptyManager();
     const list = vi.spyOn(manager, "listAgent");
     getInProcessGatewayToolContext.mockReturnValue(makeContext(manager));
-    const tool = createTerminalTool({
-      agentId: "main",
-      agentSessionKey: agentOwner.agentSessionKey,
-      sessionId: agentOwner.agentSessionId,
-    });
+    const tool = createTerminalTool(agentToolOptions);
 
     await expect(tool.execute("list", { action: "list" })).resolves.toMatchObject({
       details: { sessions: [] },
@@ -214,12 +217,9 @@ describe("terminal tool", () => {
   it("lists, reads, resizes, and closes only its existing operator-opened terminal", async () => {
     const backend = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const opened = await manager.open(
-      baseOpenRequest({ owner: agentOwner, viewerConnId: "operator" }),
+    const opened = expectTerminalOpen(
+      await manager.open(baseOpenRequest({ owner: agentOwner, viewerConnId: "operator" })),
     );
-    if (!opened.ok) {
-      throw new Error("expected operator-opened terminal");
-    }
     const tool = makeTool(manager);
 
     expect(tool.outputSchema).toBeDefined();
@@ -269,15 +269,14 @@ describe("terminal tool", () => {
 
   it("cannot inspect, resize, or close connection-owned and replacement-incarnation terminals", async () => {
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => makeFakePty() });
-    const connectionOwned = await manager.open(baseOpenRequest());
-    const replacementOwned = await manager.open(
-      baseOpenRequest({
-        owner: agentTerminalOwner(agentOwner.agentSessionKey, "replacement-session-id"),
-      }),
+    const connectionOwned = expectTerminalOpen(await manager.open(baseOpenRequest()));
+    const replacementOwned = expectTerminalOpen(
+      await manager.open(
+        baseOpenRequest({
+          owner: agentTerminalOwner(agentOwner.agentSessionKey, "replacement-session-id"),
+        }),
+      ),
     );
-    if (!connectionOwned.ok || !replacementOwned.ok) {
-      throw new Error("expected operator-opened terminals");
-    }
     const tool = makeTool(manager);
 
     for (const sessionId of [connectionOwned.sessionId, replacementOwned.sessionId]) {
@@ -306,12 +305,9 @@ describe("terminal tool", () => {
   ] satisfies Array<{ label: string; options: TerminalToolOptions }>)(
     "rejects terminal input under $label without requesting approval",
     async ({ options }) => {
-      const { backend, manager, sessionId } = await openAgentTerminal();
-      const tool = makeTool(manager, options);
+      const { backend, input } = await openAgentTerminal(options);
 
-      await expect(
-        tool.execute("blocked-input", { action: "input", sessionId, data: "echo unsafe\r" }),
-      ).rejects.toThrow("Terminal input denied by execution policy");
+      await expect(input()).rejects.toThrow("Terminal input denied by execution policy");
 
       expect(backend.writes).toEqual([]);
       expect(approvalMocks.register).not.toHaveBeenCalled();
@@ -348,13 +344,9 @@ describe("terminal tool", () => {
   });
 
   it("rejects terminal input when the authoritative persisted session is missing", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
+    const { backend, input } = await openAgentTerminal({ execSession: undefined });
     setRuntimeConfigSnapshot({});
-    const tool = makeTool(manager, { execSession: undefined });
-
-    await expect(
-      tool.execute("missing-session-input", { action: "input", sessionId, data: "echo unsafe\r" }),
-    ).rejects.toThrow("Terminal session unavailable");
+    await expect(input()).rejects.toThrow("Terminal session unavailable");
 
     expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith({
       cfg: expect.any(Object),
@@ -366,24 +358,17 @@ describe("terminal tool", () => {
   });
 
   it("rejects full terminal input without an active admitted run", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, { execSession: { permissionMode: "full" } });
-
-    await expect(
-      tool.execute("unadmitted-full-input", {
-        action: "input",
-        sessionId,
-        data: "echo unsafe\r",
-      }),
-    ).rejects.toThrow("agent run is no longer active");
+    const { backend, input } = await openAgentTerminal({ execSession: { permissionMode: "full" } });
+    await expect(input()).rejects.toThrow("agent run is no longer active");
 
     expect(backend.writes).toEqual([]);
     expect(approvalMocks.register).not.toHaveBeenCalled();
   });
 
   it("rejects full terminal input after its exact run authority is replaced", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, { execSession: { permissionMode: "full" } });
+    const { backend, manager, input } = await openAgentTerminal({
+      execSession: { permissionMode: "full" },
+    });
 
     await withActiveRun(manager, async (authority) => {
       const replacement = claimAgentRunDelegatedAuthority({
@@ -392,13 +377,7 @@ describe("terminal tool", () => {
       });
 
       try {
-        await expect(
-          tool.execute("stale-full-input", {
-            action: "input",
-            sessionId,
-            data: "echo unsafe\r",
-          }),
-        ).rejects.toThrow("agent run is no longer active");
+        await expect(input()).rejects.toThrow("agent run is no longer active");
       } finally {
         releaseAgentRunDelegatedAuthority(replacement);
       }
@@ -409,19 +388,14 @@ describe("terminal tool", () => {
   });
 
   it("requires a fresh explicit operator approval for every input in a workspace session", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, {
+    const { backend, manager, input } = await openAgentTerminal({
       execSession: { permissionMode: "workspace" },
       approvalReviewerDeviceIds: ["reviewer-device"],
     });
 
     await withActiveRun(manager, async () => {
       for (const [index, data] of ["echo first\r", "echo second\r"].entries()) {
-        const result = await tool.execute(`guarded-input-${index}`, {
-          action: "input",
-          sessionId,
-          data,
-        });
+        const result = await input(data, `guarded-input-${index}`);
         expect(result.details).toEqual({ ok: true });
       }
     });
@@ -450,8 +424,7 @@ describe("terminal tool", () => {
   });
 
   it("waits for an explicit one-shot decision before writing guarded input", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, {
+    const { backend, manager, input } = await openAgentTerminal({
       execSession: { permissionMode: "guarded" },
     });
     let resolveDecision!: (decision: string) => void;
@@ -463,11 +436,7 @@ describe("terminal tool", () => {
     );
 
     await withActiveRun(manager, async () => {
-      const pending = tool.execute("pending-input", {
-        action: "input",
-        sessionId,
-        data: "echo pending\r",
-      });
+      const pending = input("echo pending\r", "pending-input");
       await vi.waitFor(() => expect(approvalMocks.decide).toHaveBeenCalledOnce());
       expect(backend.writes).toEqual([]);
 
@@ -479,37 +448,28 @@ describe("terminal tool", () => {
   });
 
   it("rejects guarded input when the operator decision is allow-always", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, { execSession: { permissionMode: "guarded" } });
+    const { rejectInput } = await openAgentTerminal({
+      execSession: { permissionMode: "guarded" },
+    });
     approvalMocks.decide.mockResolvedValueOnce("allow-always");
 
-    await withActiveRun(manager, async () => {
-      await expect(
-        tool.execute("rejected-input", { action: "input", sessionId, data: "echo rejected\r" }),
-      ).rejects.toThrow("operator approval required");
-    });
-
-    expect(backend.writes).toEqual([]);
+    await rejectInput("operator approval required");
   });
 
   it("rejects guarded input when no operator approval route is available", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, { execSession: { permissionMode: "guarded" } });
+    const { rejectInput } = await openAgentTerminal({
+      execSession: { permissionMode: "guarded" },
+    });
     approvalMocks.register.mockRejectedValueOnce(new Error("no approval delivery route"));
 
-    await withActiveRun(manager, async () => {
-      await expect(
-        tool.execute("unroutable-input", { action: "input", sessionId, data: "echo unsafe\r" }),
-      ).rejects.toThrow(/approval|route/i);
-    });
-
-    expect(backend.writes).toEqual([]);
+    await rejectInput(/approval|route/i);
     expect(approvalMocks.decide).not.toHaveBeenCalled();
   });
 
   it("rejects guarded input that loses its exact run authority during operator approval", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, { execSession: { permissionMode: "guarded" } });
+    const { backend, manager, input } = await openAgentTerminal({
+      execSession: { permissionMode: "guarded" },
+    });
 
     await withActiveRun(manager, async (authority) => {
       approvalMocks.decide.mockImplementationOnce(async () => {
@@ -517,34 +477,27 @@ describe("terminal tool", () => {
         return "allow-once";
       });
 
-      await expect(
-        tool.execute("stale-run-input", { action: "input", sessionId, data: "echo unsafe\r" }),
-      ).rejects.toThrow("agent run is no longer active");
+      await expect(input()).rejects.toThrow("agent run is no longer active");
     });
 
     expect(backend.writes).toEqual([]);
   });
 
   it("rejects guarded input that loses its terminal session during operator approval", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, { execSession: { permissionMode: "guarded" } });
+    const { manager, sessionId, rejectInput } = await openAgentTerminal({
+      execSession: { permissionMode: "guarded" },
+    });
     approvalMocks.decide.mockImplementationOnce(async () => {
       manager.closeAgent(agentOwner, sessionId);
       return "allow-once";
     });
 
-    await withActiveRun(manager, async () => {
-      await expect(
-        tool.execute("stale-session-input", { action: "input", sessionId, data: "echo unsafe\r" }),
-      ).rejects.toThrow("Terminal session unavailable");
-    });
-
-    expect(backend.writes).toEqual([]);
+    await rejectInput("Terminal session unavailable");
   });
 
   it("rejects guarded input when its admitted Gateway changes during operator approval", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();
-    const replacement = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const replacement = emptyManager();
     let currentManager = manager;
     const tool = makeTool(manager, {
       execSession: { permissionMode: "guarded" },
@@ -568,7 +521,7 @@ describe("terminal tool", () => {
     { options: { sessionId: "main-session-id" }, error: "agent session required" },
     { options: { agentSessionKey: "agent:main:main" }, error: "agent session id required" },
   ])("requires exact session ownership before reading: $error", async ({ options, error }) => {
-    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: vi.fn() });
+    const manager = emptyManager();
     const tool = createTerminalTool({
       ...options,
       getGatewayContext: () => makeContext(manager),

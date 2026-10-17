@@ -20,6 +20,18 @@ import { createSessionsTool } from "./sessions-tool.js";
 
 const currentKey = "agent:main:main";
 const targetKeys = ["agent:main:dashboard:first", "agent:main:dashboard:second"];
+const session = (sessionKey: string) => loadSessionEntry({ agentId: "main", sessionKey });
+const createTool = (
+  callGateway: AgentToolGatewayRequestCaller,
+  config: OpenClawConfig = {},
+  agentSessionId?: string,
+) =>
+  createSessionsTool({
+    agentSessionKey: currentKey,
+    ...(agentSessionId ? { agentSessionId } : {}),
+    config,
+    callGateway,
+  });
 
 afterEach(() => flushPendingSessionsChangedEvents());
 
@@ -66,12 +78,7 @@ function createStoredSessionTool(config: OpenClawConfig = {}) {
     }
     return payload as T;
   };
-  return createSessionsTool({
-    agentSessionKey: currentKey,
-    agentSessionId: "current-session",
-    config,
-    callGateway,
-  });
+  return createTool(callGateway, config, "current-session");
 }
 
 async function seedSessions(config: OpenClawConfig = {}) {
@@ -103,7 +110,7 @@ describe("sessions tool batch patch", () => {
       });
       expect(grouped.details).toMatchObject({ status: "updated", succeeded: [0, 1], failed: [] });
       for (const sessionKey of targetKeys) {
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.category).toBe("Reviews");
+        expect(session(sessionKey)?.category).toBe("Reviews");
       }
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: targetKeys[1]! },
@@ -120,15 +127,11 @@ describe("sessions tool batch patch", () => {
         failed: [1],
         errors: [{ index: 1, message: expect.stringContaining("changed") }],
       });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: targetKeys[0]! })?.category).toBe(
+      expect([...targetKeys, currentKey].map((key) => session(key)?.category)).toEqual([
         "Done",
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey: targetKeys[1]! })?.category).toBe(
         "Replacement",
-      );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: currentKey })?.category,
-      ).toBeUndefined();
+        undefined,
+      ]);
     });
   });
 
@@ -146,15 +149,11 @@ describe("sessions tool batch patch", () => {
         archived: true,
       });
       expect(result.details).toMatchObject({ status: "partial", succeeded: [2], failed: [0, 1] });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: currentKey })?.archivedAt,
-      ).toBeUndefined();
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: targetKeys[0]! })?.archivedAt,
-      ).toBeUndefined();
-      expect(loadSessionEntry({ agentId: "main", sessionKey: targetKeys[1]! })?.archivedAt).toEqual(
+      expect([currentKey, ...targetKeys].map((key) => session(key)?.archivedAt)).toEqual([
+        undefined,
+        undefined,
         expect.any(Number),
-      );
+      ]);
     });
   });
 
@@ -169,12 +168,8 @@ describe("sessions tool batch patch", () => {
         pinned: true,
       });
       expect(result.details).toMatchObject({ status: "partial", succeeded: [1], failed: [0] });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: currentKey })?.pinnedAt).toEqual(
-        expect.any(Number),
-      );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: targetKeys[0]! })?.pinnedAt,
-      ).toBeUndefined();
+      expect(session(currentKey)?.pinnedAt).toEqual(expect.any(Number));
+      expect(session(targetKeys[0]!)?.pinnedAt).toBeUndefined();
     });
   });
 
@@ -189,11 +184,7 @@ describe("sessions tool batch patch", () => {
     },
   ])("rejects $name before dispatch", async ({ args }) => {
     const callGateway = vi.fn();
-    const tool = createSessionsTool({
-      agentSessionKey: currentKey,
-      config: {},
-      callGateway,
-    });
+    const tool = createTool(callGateway);
     await expect(
       tool.execute("invalid-batch", { action: "patch", pinned: true, ...args }),
     ).rejects.toThrow();
@@ -208,11 +199,7 @@ describe("sessions tool batch patch", () => {
         error: { code: "INVALID_REQUEST", message: "界".repeat(10_000) },
       })),
     }));
-    const tool = createSessionsTool({
-      agentSessionKey: currentKey,
-      config: {},
-      callGateway: callGateway as AgentToolGatewayRequestCaller,
-    });
+    const tool = createTool(callGateway as AgentToolGatewayRequestCaller);
     const result = await tool.execute("failed-batch", {
       action: "patch",
       pinned: true,

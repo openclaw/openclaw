@@ -10,6 +10,18 @@ import {
 } from "./structured-output-tool.js";
 
 const runId = "structured-output-tool-test";
+const countSchema = {
+  type: "object",
+  properties: { count: { type: "number" } },
+  required: ["count"],
+};
+function makeTool(options: Partial<Parameters<typeof createStructuredOutputTool>[0]> = {}) {
+  return createStructuredOutputTool({ runId, schema: countSchema, ...options });
+}
+function expectRejected(result: Awaited<ReturnType<ReturnType<typeof makeTool>["execute"]>>) {
+  expect(result.details).toMatchObject({ status: "rejected", success: false });
+  expect(isToolResultError(result)).toBe(true);
+}
 
 describe("structured_output", () => {
   afterEach(() => {
@@ -20,8 +32,7 @@ describe("structured_output", () => {
     { label: "object", result: { answer: "yes" } },
     { label: "encoded object", result: '{"answer":"yes"}' },
   ])("records a valid $label result", async ({ result: input }) => {
-    const tool = createStructuredOutputTool({
-      runId,
+    const tool = makeTool({
       schema: {
         type: "object",
         properties: { answer: { type: "string" } },
@@ -38,7 +49,7 @@ describe("structured_output", () => {
   });
 
   it("preserves unsafe integer literals when decoding a result", async () => {
-    const tool = createStructuredOutputTool({ runId, schema: { type: "object" } });
+    const tool = makeTool({ schema: { type: "object" } });
     await tool.execute("call-1", { result: '{"id":9007199254740993}' });
     expect(consumeSwarmStructuredOutput(runId)?.structured).toEqual({ id: "9007199254740993" });
   });
@@ -46,7 +57,7 @@ describe("structured_output", () => {
   it.each([{ type: "string" }, {}, { anyOf: [{ type: "string" }, { type: "object" }] }])(
     "preserves JSON-looking strings that satisfy schema %j",
     async (schema) => {
-      const tool = createStructuredOutputTool({ runId, schema });
+      const tool = makeTool({ schema });
       const result = '{"answer":"yes"}';
       await tool.execute("call-1", { result });
       expect(consumeSwarmStructuredOutput(runId)?.structured).toBe(result);
@@ -60,23 +71,12 @@ describe("structured_output", () => {
     '{"count":9007199254740993}',
     JSON.stringify('{"count":3}'),
   ])("nudges once then freezes schemaError for %j", async (result) => {
-    const tool = createStructuredOutputTool({
-      runId,
-      schema: {
-        type: "object",
-        properties: { count: { type: "number" } },
-        required: ["count"],
-      },
-    });
+    const tool = makeTool();
     expect(Value.Check(tool.parameters, { result })).toBe(true);
     expect(tool.description).toContain('"count"');
     await expect(tool.execute("call-1", { result })).rejects.toThrow("Retry once");
-    const rejectedRetry = await tool.execute("call-2", { result });
-    const rejectedLaterCall = await tool.execute("call-3", { result: '{"count":3}' });
-    expect(rejectedRetry.details).toMatchObject({ status: "rejected", success: false });
-    expect(rejectedLaterCall.details).toMatchObject({ status: "rejected", success: false });
-    expect(isToolResultError(rejectedRetry)).toBe(true);
-    expect(isToolResultError(rejectedLaterCall)).toBe(true);
+    expectRejected(await tool.execute("call-2", { result }));
+    expectRejected(await tool.execute("call-3", { result: '{"count":3}' }));
     expect(peekSwarmStructuredOutput(runId)).toMatchObject({
       structured: undefined,
       invalidAttempts: 2,
@@ -93,7 +93,7 @@ describe("structured_output", () => {
       expect(validateStructuredOutputSchema({ type: "object", properties: "invalid" })).toContain(
         "Invalid sessions_spawn outputSchema",
       );
-      const tool = createStructuredOutputTool({ runId, schema: arraySchema });
+      const tool = makeTool({ schema: arraySchema });
       await expect(tool.execute("call-array", { result })).resolves.toBeDefined();
       expect(peekSwarmStructuredOutput(runId)?.structured).toEqual(["one", "two"]);
     },
@@ -101,14 +101,7 @@ describe("structured_output", () => {
 
   it("resumes the one-retry budget from durable state", async () => {
     let durableState: ReturnType<typeof peekSwarmStructuredOutput>;
-    const schema = {
-      type: "object",
-      properties: { count: { type: "number" } },
-      required: ["count"],
-    };
-    const first = createStructuredOutputTool({
-      runId,
-      schema,
+    const first = makeTool({
       onStateChange: (state) => {
         durableState = state;
       },
@@ -118,28 +111,14 @@ describe("structured_output", () => {
     );
 
     consumeSwarmStructuredOutput(runId);
-    const restored = createStructuredOutputTool({
-      runId,
-      schema,
-      initialState: durableState,
-    });
-    const rejected = await restored.execute("call-2", { result: { count: "still bad" } });
-    expect(rejected.details).toMatchObject({ status: "rejected", success: false });
-    expect(isToolResultError(rejected)).toBe(true);
+    const restored = makeTool({ initialState: durableState });
+    expectRejected(await restored.execute("call-2", { result: { count: "still bad" } }));
     expect(peekSwarmStructuredOutput(runId)?.invalidAttempts).toBe(2);
   });
 
   it("preserves the retry budget when asynchronously persisting an invalid retry fails", async () => {
     const persist = vi.fn();
-    const tool = createStructuredOutputTool({
-      runId,
-      schema: {
-        type: "object",
-        properties: { count: { type: "number" } },
-        required: ["count"],
-      },
-      onStateChange: persist,
-    });
+    const tool = makeTool({ onStateChange: persist });
     await expect(tool.execute("initial", { result: { count: "bad" } })).rejects.toThrow(
       "Retry once",
     );
@@ -168,10 +147,7 @@ describe("structured_output", () => {
     expect((await tool.execute("corrected", { result: corrected })).details).toEqual({
       status: "recorded",
     });
-    expect(peekSwarmStructuredOutput(runId)).toEqual({
-      structured: corrected,
-      invalidAttempts: 0,
-    });
+    expect(peekSwarmStructuredOutput(runId)).toEqual({ structured: corrected, invalidAttempts: 0 });
     expect(persist).toHaveBeenLastCalledWith({ structured: corrected, invalidAttempts: 0 });
     await expect(tool.execute("duplicate", { result: { count: 3 } })).rejects.toThrow(
       "already recorded",
@@ -186,7 +162,7 @@ describe("structured_output", () => {
       entered.resolve();
       await release.promise;
     });
-    const tool = createStructuredOutputTool({ runId, schema: {}, onStateChange: persist });
+    const tool = makeTool({ schema: {}, onStateChange: persist });
     const first = tool.execute("first", { result: { answer: "first" } });
     await entered.promise;
     const duplicate = expect(

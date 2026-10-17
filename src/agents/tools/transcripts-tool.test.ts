@@ -22,6 +22,19 @@ const testState = useTranscriptTestState();
 const plugins = { allow: ["transcript-test-fixture"] };
 const startCapture: Start = async ({ session }) => ({ ok: true, session });
 const stopCapture: Stop = async ({ sessionId }) => ({ ok: true, sessionId });
+const authorize: NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"] = async ({
+  caller,
+  source,
+}) =>
+  caller.kind === "operator" ||
+  (caller.channel === "discord" && caller.accountId === source.accountId)
+    ? { ok: true, value: undefined }
+    : { ok: false, error: "account denied" };
+const expectDetails = (
+  result: ReturnType<ReturnType<typeof createTranscriptsTool>["execute"]>,
+  details: unknown,
+) => expect(result).resolves.toMatchObject({ details });
+const emptyStatus = { active: [] };
 
 function harness(overrides: Partial<TranscriptSourceProvider> = {}) {
   const { stateDir, store } = testState();
@@ -145,11 +158,7 @@ describe("transcripts tool", () => {
       accessControl: {
         channelId: "discord",
         resolveAccountId: () => ({ ok: true, value: undefined }),
-        authorize: async ({ caller, source }) =>
-          caller.kind === "operator" ||
-          (caller.channel === "discord" && caller.accountId === source.accountId)
-            ? { ok: true, value: undefined }
-            : { ok: false, error: "account denied" },
+        authorize,
       },
     });
     await expect(
@@ -270,14 +279,8 @@ function fixture(overrides: Partial<TranscriptSourceProvider> = {}) {
   const resolveAccountId = vi.fn<
     NonNullable<TranscriptSourceProvider["accessControl"]>["resolveAccountId"]
   >(({ source }) => ({ ok: true, value: source.accountId }));
-  const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async ({ session }) => ({
-    ok: true,
-    session,
-  }));
-  const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => ({
-    ok: true,
-    sessionId,
-  }));
+  const start = vi.fn(startCapture);
+  const stop = vi.fn(stopCapture);
   const provider: TranscriptSourceProvider = {
     id: "discord-voice",
     name: "Discord Voice",
@@ -287,11 +290,7 @@ function fixture(overrides: Partial<TranscriptSourceProvider> = {}) {
     accessControl: {
       channelId: "discord",
       resolveAccountId,
-      authorize: async ({ caller, source }) =>
-        caller.kind === "operator" ||
-        (caller.channel === "discord" && caller.accountId === source.accountId)
-          ? { ok: true, value: undefined }
-          : { ok: false, error: "account denied" },
+      authorize,
     },
     ...overrides,
   };
@@ -319,7 +318,50 @@ function fixture(overrides: Partial<TranscriptSourceProvider> = {}) {
       await expect(result).rejects.toThrow(`transcripts session not found: ${sessionId}`);
     }
   };
-  return { provider, resolveAccountId, start, stop, store, execute, save, access };
+  const capture = (
+    sessionId: string,
+    origin?: Origin,
+    agentId = "main",
+    source: Record<string, unknown> = {},
+  ) =>
+    execute(
+      {
+        action: "start",
+        providerId: provider.id,
+        accountId: "account-a",
+        guildId: "guild-a",
+        channelId: "voice-a",
+        sessionId,
+        ...source,
+      },
+      origin,
+      agentId,
+    );
+  const historical = (
+    sessionId: string,
+    day: string,
+    metadata?: TranscriptSessionDescriptor["metadata"],
+    accountId: string | null = "account-a",
+  ) =>
+    save({
+      sessionId,
+      source: { providerId: provider.id, ...(accountId === null ? {} : { accountId }) },
+      startedAt: `2026-07-${day}T12:00:00.000Z`,
+      stoppedAt: `2026-07-${day}T12:05:00.000Z`,
+      metadata,
+    });
+  return {
+    provider,
+    resolveAccountId,
+    start,
+    stop,
+    store,
+    execute,
+    save,
+    access,
+    capture,
+    historical,
+  };
 }
 
 describe("transcripts tool account ownership", () => {
@@ -359,17 +401,11 @@ describe("transcripts tool account ownership", () => {
 
   it("binds same-channel capture and lifecycle access to the trusted turn account", async () => {
     const h = fixture();
-    const result = await h.execute(
-      {
-        action: "start",
-        providerId: h.provider.id,
-        accountId: "account-b",
-        guildId: "guild-b",
-        channelId: "channel-b",
-        sessionId: "account-bound",
-      },
-      owner,
-    );
+    const result = await h.capture("account-bound", owner, "main", {
+      accountId: "account-b",
+      guildId: "guild-b",
+      channelId: "channel-b",
+    });
     expect(h.start.mock.calls[0]?.[0].session.source.accountId).toBe("account-a");
     expect(h.resolveAccountId.mock.calls[0]?.[0].source.accountId).toBe("account-a");
     expect(await h.store.readSession("account-bound")).toMatchObject({
@@ -379,9 +415,7 @@ describe("transcripts tool account ownership", () => {
     expect(result.details).toMatchObject({ accountId: "account-a" });
     const otherAccount = { ...owner, accountId: "account-b" };
     for (const origin of [otherAccount, { ...owner, channel: "slack" }, remote]) {
-      await expect(h.execute({ action: "status" }, origin)).resolves.toMatchObject({
-        details: { active: [] },
-      });
+      await expectDetails(h.execute({ action: "status" }, origin), emptyStatus);
     }
     await expect(
       h.execute({ action: "stop", sessionId: "account-bound" }, otherAccount),
@@ -389,9 +423,7 @@ describe("transcripts tool account ownership", () => {
     expect(h.stop).not.toHaveBeenCalled();
     setActivePluginRegistry(createEmptyPluginRegistry());
     for (const origin of [remote, owner]) {
-      await expect(h.execute({ action: "status" }, origin)).resolves.toMatchObject({
-        details: { active: [] },
-      });
+      await expectDetails(h.execute({ action: "status" }, origin), emptyStatus);
     }
     await expect(h.execute({ action: "status" })).resolves.toMatchObject({
       details: { active: [expect.objectContaining({ sessionId: "account-bound" })] },
@@ -414,17 +446,7 @@ describe("transcripts tool account ownership", () => {
       return { ok: true, value: "account-b" };
     });
     await expect(
-      h.execute(
-        {
-          action: "start",
-          providerId: h.provider.id,
-          accountId: "account-b",
-          guildId: "guild-a",
-          channelId: "voice-a",
-          sessionId: "invalid-owner",
-        },
-        owner,
-      ),
+      h.capture("invalid-owner", owner, "main", { accountId: "account-b" }),
     ).rejects.toThrow(
       'transcripts provider discord-voice could not use trusted account "account-a"',
     );
@@ -435,19 +457,7 @@ describe("transcripts tool account ownership", () => {
 
   it("starts account-bound providers only from a binding channel or local tool", async () => {
     const h = fixture();
-    const start = (sessionId: string, origin?: Origin, agentId = "main") =>
-      h.execute(
-        {
-          action: "start",
-          providerId: h.provider.id,
-          accountId: "account-a",
-          guildId: "guild-a",
-          channelId: "voice-a",
-          sessionId,
-        },
-        origin,
-        agentId,
-      );
+    const start = h.capture;
     await expect(start("webchat-start", remote)).rejects.toThrow(
       "transcripts provider discord-voice can only start from discord or a channel-less local tool",
     );
@@ -493,34 +503,10 @@ describe("transcripts tool account ownership", () => {
 
   it("applies provider access to historical rows after the agent boundary", async () => {
     const h = fixture();
-    const sessions: TranscriptSessionDescriptor[] = [
-      {
-        sessionId: "stable-ownerless",
-        source: { providerId: h.provider.id, accountId: "account-a" },
-        startedAt: "2026-07-01T12:00:00.000Z",
-      },
-      {
-        sessionId: "beta-agent-only",
-        source: { providerId: h.provider.id, accountId: "account-a" },
-        startedAt: "2026-07-02T12:00:00.000Z",
-        metadata: { agentId: "main" },
-      },
-      {
-        sessionId: "beta-named-agent",
-        source: { providerId: h.provider.id, accountId: "account-a" },
-        startedAt: "2026-07-03T12:00:00.000Z",
-        metadata: { agentId: "research" },
-      },
-      {
-        sessionId: "beta-accountless",
-        source: { providerId: h.provider.id },
-        startedAt: "2026-07-04T12:00:00.000Z",
-        metadata: { agentId: "main" },
-      },
-    ];
-    for (const session of sessions) {
-      await h.save({ ...session, stoppedAt: session.startedAt.replace("12:00", "12:05") });
-    }
+    await h.historical("stable-ownerless", "01");
+    await h.historical("beta-agent-only", "02", { agentId: "main" });
+    await h.historical("beta-named-agent", "03", { agentId: "research" });
+    await h.historical("beta-accountless", "04", { agentId: "main" }, null);
     for (const sessionId of ["stable-ownerless", "beta-agent-only"]) {
       await h.access(sessionId, true, owner);
       await h.access(sessionId, false, remote);
