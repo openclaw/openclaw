@@ -18,6 +18,8 @@ Restart the Gateway after installing or updating the plugin.
 - `memory_recall`
 - `memory_forget`
 - LanceDB vector storage and hybrid memory retrieval.
+- Host memory status, search, and retrieval on hosts supporting
+  `MemoryPluginCapability.providerRuntime`.
 
 ## Configure
 
@@ -30,6 +32,6 @@ Use the memory plugin docs for embedding provider setup, storage paths, indexing
 - Plugin id: `memory-lancedb`
 - Package: `@openclaw/memory-lancedb`
 - Enforced minimum OpenClaw host (`openclaw.install.minHostVersion`): `>=2026.5.31`
-- Enforced plugin API compatibility (`openclaw.compat.pluginApi`): `>=2026.9.3`
+- Enforced plugin API compatibility (`openclaw.compat.pluginApi`): `>=2026.9.9`
 
 The installer checks these ranges independently. Both must be satisfied.

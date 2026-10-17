@@ -77,6 +77,37 @@ openclaw plugins inspect memory-lancedb --runtime --json
 See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 and [Hot reload](/gateway/configuration/hot-reload).
 
+## Host memory status and search
+
+On hosts supporting `MemoryPluginCapability.providerRuntime`, the selected
+LanceDB plugin answers the Gateway `memory.status`, `memory.search` with
+`version: 2`, and `memory.get` methods from its own agent-scoped store. Doctor,
+`openclaw memory status`, and the Control UI Memory overview report it as the
+memory provider. Operator searches and owner-private sessions can read that
+agent's memories. Other session audiences receive no stored hits. The plugin's
+`memory_recall` tool and automatic recall keep their existing paths.
+
+The Control UI Memories tab does not search or open LanceDB memories yet. It
+sends the unversioned `memory.search` request, which this provider answers with
+a retry-with-`version: 2` error. Use `memory_recall`, `openclaw ltm`, or the
+Gateway methods above to read stored memories.
+
+Status reads the store without making an embedding request. A readable store
+with no recorded embedding failure reports `ready`; the latest embedding failure
+reports `degraded`; an unreadable store reports `unavailable`. A successful
+embedding request clears the recorded failure. Status is not a live probe of the
+embedding service.
+
+If embedding credentials are unavailable, inspect the Gateway log, resolve the
+secret-provider failure, run `openclaw secrets reload`, and retry memory search.
+GPG-backed secret providers may require unlocking the key before reloading.
+
+Hosts exposing only the older `MemoryPluginCapability.runtime` contract cannot
+use this provider registration. Updating only the plugin on such a host does
+not enable the Memory page; update the host to a build supporting
+`providerRuntime` as well. The plugin's tools and `openclaw ltm` remain available
+on those hosts.
+
 ## Embedding config
 
 `embedding` is required and must include at least one field. `provider`
