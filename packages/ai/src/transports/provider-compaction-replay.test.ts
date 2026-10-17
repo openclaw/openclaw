@@ -8,18 +8,18 @@ import {
 } from "./anthropic-compaction-replay.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
-  captureOpenAIResponsesCompaction,
-  suppressOpenAIResponsesCompaction,
+  captureOpenAIResponsesCompaction as captureCompaction,
+  suppressOpenAIResponsesCompaction as suppressCompaction,
 } from "./openai-responses-compaction-replay.js";
 import type { OpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 import {
   CompactionReplayRefreshRequiredError,
-  preserveCompactionReplayWindow,
-  replaceCompactionReplayOwnerContent,
-  requiresCompactionReplayRefresh,
-  resolveCompactionReplayEligibility,
-  resolveCompactionReplayPressure,
+  preserveCompactionReplayWindow as preserveWindow,
+  replaceCompactionReplayOwnerContent as replaceOwnerContent,
+  requiresCompactionReplayRefresh as requiresRefresh,
+  resolveCompactionReplayEligibility as resolveEligibility,
+  resolveCompactionReplayPressure as measurePressure,
 } from "./provider-compaction-replay.js";
 
 const model = {
@@ -35,12 +35,22 @@ const model = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
+function wire(messages: Context["messages"]) {
+  return convertResponsesMessages(model, { messages }, new Set(["openai"]), replayIdentity);
+}
+function replayPressure(messages: Context["messages"]) {
+  return measurePressure(messages, model, replayIdentity, estimator);
+}
+function project(source: Context["messages"], windowed: Context["messages"]) {
+  return preserveWindow(source, windowed, model, replayIdentity);
+}
 
 function createAssistant(
   content: AssistantMessage["content"],
   replayIndex: number,
 ): AssistantMessage {
-  const replayContext = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
+  const replayContext = replayMetadata;
   return {
     role: "assistant",
     content,
@@ -70,18 +80,18 @@ describe("compaction replay owner rewrites", () => {
   it("uses persisted V2 output usage rather than ciphertext length for checkpoint pressure", () => {
     const owner = createAssistant([], 0);
     const item = { type: "compaction" as const, encrypted_content: "opaque".repeat(100_000) };
-    captureOpenAIResponsesCompaction(
+    captureCompaction(
       owner,
       item,
       "retained-users",
       model,
-      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      replayMetadata,
       [{ type: "message", role: "user", content: [{ type: "input_text", text: "keep" }] }, item],
       123,
     );
     const serializedOwner = JSON.stringify(owner);
     const restored: AssistantMessage = JSON.parse(serializedOwner);
-    const pressure = resolveCompactionReplayPressure([restored], model, replayIdentity, {
+    const pressure = measurePressure([restored], model, replayIdentity, {
       text: (value) => value.length,
       image: () => 2000,
       json: () => 1,
@@ -95,10 +105,7 @@ describe("compaction replay owner rewrites", () => {
     const covered = { type: "text" as const, text: "covered" };
     const suffix = { type: "toolCall" as const, id: "call_1", name: "read", arguments: {} };
     const owner = createAssistant([covered, suffix], 1);
-    const rewritten = replaceCompactionReplayOwnerContent(owner, [
-      { ...covered, text: "rewritten" },
-      suffix,
-    ]);
+    const rewritten = replaceOwnerContent(owner, [{ ...covered, text: "rewritten" }, suffix]);
 
     expect(rewritten.providerReplay).toBeUndefined();
     expect(owner.providerReplay?.replayIndex).toBe(1);
@@ -107,15 +114,8 @@ describe("compaction replay owner rewrites", () => {
   it("keeps a reindexed call paired with its output", () => {
     const toolCall = { type: "toolCall" as const, id: "call_1", name: "read", arguments: {} };
     const owner = createAssistant([{ type: "text", text: "" }, toolCall], 1);
-    const reindexed = replaceCompactionReplayOwnerContent(owner, [toolCall]);
-    const input = convertResponsesMessages(
-      model,
-      {
-        messages: [reindexed, makeTextToolResult("call_1", "read", "ok", false, 1)],
-      },
-      new Set(["openai"]),
-      replayIdentity,
-    );
+    const reindexed = replaceOwnerContent(owner, [toolCall]);
+    const input = wire([reindexed, makeTextToolResult("call_1", "read", "ok", false, 1)]);
 
     expect(reindexed.providerReplay?.replayIndex).toBe(0);
     expect(input.map((item) => item.type)).toEqual([
@@ -126,22 +126,15 @@ describe("compaction replay owner rewrites", () => {
   });
 
   it("falls back to full history when owner content is emptied", () => {
-    const stripped = replaceCompactionReplayOwnerContent(
+    const stripped = replaceOwnerContent(
       createAssistant([{ type: "text", text: "removed" }], 0),
       [],
     );
-    const input = convertResponsesMessages(
-      model,
-      {
-        messages: [
-          { role: "user", content: "full history prefix", timestamp: 1 },
-          stripped,
-          { role: "user", content: "current turn", timestamp: 2 },
-        ],
-      },
-      new Set(["openai"]),
-      replayIdentity,
-    );
+    const input = wire([
+      { role: "user", content: "full history prefix", timestamp: 1 },
+      stripped,
+      { role: "user", content: "current turn", timestamp: 2 },
+    ]);
 
     expect(stripped.providerReplay).toBeUndefined();
     expect(input.some((item) => item.type === "compaction")).toBe(false);
@@ -150,7 +143,7 @@ describe("compaction replay owner rewrites", () => {
 
   it("keeps a compaction-only checkpoint through an unchanged empty-content projection", () => {
     const owner = createAssistant([], 0);
-    const projected = replaceCompactionReplayOwnerContent(owner, []);
+    const projected = replaceOwnerContent(owner, []);
 
     expect(projected.providerReplay).toBe(owner.providerReplay);
   });
@@ -161,13 +154,10 @@ describe("compaction replay owner rewrites", () => {
     if (!providerReplay) {
       throw new Error("expected replay state");
     }
-    retained.providerReplay = {
-      ...providerReplay,
-      type: "openai-responses-retained-compaction",
-    };
+    retained.providerReplay = { ...providerReplay, type: "openai-responses-retained-compaction" };
     delete retained.providerReplay.replayIndex;
 
-    const rewritten = replaceCompactionReplayOwnerContent(retained, []);
+    const rewritten = replaceOwnerContent(retained, []);
 
     expect(rewritten.providerReplay).toMatchObject({
       type: "openai-responses-retained-compaction",
@@ -183,40 +173,28 @@ describe("bounded compaction replay projection", () => {
   it("projects only the newest evicted owner without old content or source mutation", () => {
     const prelude = { role: "user" as const, content: "covered history prelude", timestamp: 0 };
     const old = createAssistant([{ type: "text", text: "older owner" }], 1);
-    captureOpenAIResponsesCompaction(
+    captureCompaction(
       old,
       { type: "compaction", encrypted_content: "older opaque state" },
       1,
       model,
-      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      replayMetadata,
     );
     const newest = createAssistant([{ type: "text", text: "covered owner" }], 1);
     const replay = newest.providerReplay;
     const source = [prelude, old, newest, latest];
-    const projected = preserveCompactionReplayWindow(
-      source,
-      [prelude, latest],
-      model,
-      replayIdentity,
-    );
+    const projected = project(source, [prelude, latest]);
     expect(projected[0]).toMatchObject({ content: [], providerReplay: { replayIndex: 0 } });
     expect(newest.providerReplay).toBe(replay);
     expect(newest.providerReplay?.replayIndex).toBe(1);
     expect(newest.content).toEqual([{ type: "text", text: "covered owner" }]);
-    expect(preserveCompactionReplayWindow(projected, projected, model, replayIdentity)).toBe(
-      projected,
-    );
-    const input = convertResponsesMessages(
-      model,
-      { messages: projected },
-      new Set(["openai"]),
-      replayIdentity,
-    );
+    expect(project(projected, projected)).toBe(projected);
+    const input = wire(projected);
     expect(input[0]).toMatchObject({
       type: "compaction",
       encrypted_content: "opaque-replay-compaction",
     });
-    const pressure = resolveCompactionReplayPressure(projected, model, replayIdentity, estimator);
+    const pressure = replayPressure(projected);
     expect({
       wireContainsCoveredPrelude: JSON.stringify(input).includes(prelude.content),
       pressureContainsCoveredPrelude: JSON.stringify(pressure?.messages).includes(prelude.content),
@@ -237,15 +215,11 @@ describe("bounded compaction replay projection", () => {
     } else if (kind === "mismatched") {
       barrier.providerReplay = { ...barrier.providerReplay, model: "different-model" };
     } else {
-      suppressOpenAIResponsesCompaction(barrier, model, replayIdentity);
+      suppressCompaction(barrier, model, replayIdentity);
     }
     const windowed = [latest];
-    expect(
-      preserveCompactionReplayWindow([old, barrier, latest], windowed, model, replayIdentity),
-    ).toBe(windowed);
-    expect(
-      resolveCompactionReplayPressure([old, barrier, latest], model, replayIdentity, estimator),
-    ).toBeUndefined();
+    expect(project([old, barrier, latest], windowed)).toBe(windowed);
+    expect(replayPressure([old, barrier, latest])).toBeUndefined();
   });
 
   it("keeps missing retained-user windows as refresh barriers without an invented index", () => {
@@ -255,20 +229,13 @@ describe("bounded compaction replay projection", () => {
     }
     const { replayIndex: _index, ...replay } = owner.providerReplay;
     owner.providerReplay = { ...replay, type: "openai-responses-retained-compaction" };
-    const projected = preserveCompactionReplayWindow(
-      [owner, latest],
-      [latest],
-      model,
-      replayIdentity,
-    );
+    const projected = project([owner, latest], [latest]);
     expect(projected[0]).toMatchObject({
       providerReplay: { type: "openai-responses-retained-compaction" },
     });
     expect(projected[0]).not.toHaveProperty("providerReplay.replayIndex");
-    expect(requiresCompactionReplayRefresh(projected, model, replayIdentity)).toBe(true);
-    expect(() =>
-      resolveCompactionReplayPressure(projected, model, replayIdentity, estimator),
-    ).toThrow(CompactionReplayRefreshRequiredError);
+    expect(requiresRefresh(projected, model, replayIdentity)).toBe(true);
+    expect(() => replayPressure(projected)).toThrow(CompactionReplayRefreshRequiredError);
   });
 
   it.each(["openclaw-anthropic-messages-transport"])(
@@ -285,7 +252,7 @@ describe("bounded compaction replay projection", () => {
       const capture = createCompactionCapture(owner, anthropic, replayIdentity);
       capture.begin(0, { type: "compaction", content: "complete summary" }, 1);
       capture.complete(0);
-      const projected = preserveCompactionReplayWindow([owner, latest], [latest], anthropic, {
+      const projected = preserveWindow([owner, latest], [latest], anthropic, {
         ...replayIdentity,
         enabled: true,
       });
@@ -294,12 +261,8 @@ describe("bounded compaction replay projection", () => {
           .compaction,
       ).toEqual({ type: "compaction", content: "complete summary" });
       expect(
-        resolveCompactionReplayPressure(
-          projected,
-          anthropic,
-          { ...replayIdentity, enabled: true },
-          estimator,
-        )?.prefixTokens,
+        measurePressure(projected, anthropic, { ...replayIdentity, enabled: true }, estimator)
+          ?.prefixTokens,
       ).toBe("complete summary".length);
     },
   );
@@ -319,12 +282,8 @@ describe("bounded compaction replay projection", () => {
       capture.complete(0);
       const identity = { ...replayIdentity, enabled };
       const window = [latest];
-      expect(preserveCompactionReplayWindow([owner, latest], window, anthropic, identity)).toBe(
-        window,
-      );
-      expect(
-        resolveCompactionReplayPressure([owner, latest], anthropic, identity, estimator),
-      ).toBeUndefined();
+      expect(preserveWindow([owner, latest], window, anthropic, identity)).toBe(window);
+      expect(measurePressure([owner, latest], anthropic, identity, estimator)).toBeUndefined();
     },
   );
 });
@@ -350,24 +309,17 @@ describe("prepared compaction replay eligibility", () => {
   ])(
     "requires known eligible authentication and an enabled model: $expected",
     ({ expected, ...options }) => {
-      expect(resolveCompactionReplayEligibility(anthropic, options)).toBe(expected);
+      expect(resolveEligibility(anthropic, options)).toBe(expected);
     },
   );
 
   it("keeps Responses checkpoint replay independent of new compaction generation", () => {
-    expect(
-      resolveCompactionReplayEligibility(model, {
-        extraParams: { responsesServerCompaction: false },
-      }),
-    ).toBe(true);
+    expect(resolveEligibility(model, { extraParams: { responsesServerCompaction: false } })).toBe(
+      true,
+    );
     const owner = createAssistant([], 0);
     expect(
-      resolveCompactionReplayPressure(
-        [owner],
-        model,
-        { ...replayIdentity, enabled: false },
-        estimator,
-      ),
+      measurePressure([owner], model, { ...replayIdentity, enabled: false }, estimator),
     ).toBeUndefined();
   });
 });
@@ -379,12 +331,12 @@ describe("canonical compaction replay pressure", () => {
       { type: "message", role: "user", content: [{ type: "input_text", text: "canonical" }] },
       { type: "compaction", encrypted_content: "opaque" },
     ] satisfies OpenAIResponsesCompactionOutput;
-    captureOpenAIResponsesCompaction(
+    captureCompaction(
       owner,
       { type: "compaction", encrypted_content: "opaque" },
       "retained-users",
       model,
-      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      replayMetadata,
       output,
     );
     const later = createAssistant([{ type: "text", text: "later" }], 0);
@@ -402,14 +354,9 @@ describe("canonical compaction replay pressure", () => {
     expect(requestB.some((item) => item.type === "compaction")).toBe(false);
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
     const resumed: Context["messages"] = JSON.parse(JSON.stringify([...source, later]));
-    const requestA = convertResponsesMessages(
-      model,
-      { messages: resumed },
-      new Set(["openai"]),
-      replayIdentity,
-    );
+    const requestA = wire(resumed);
     expect(requestA.slice(0, output.length)).toEqual(output);
-    const plan = resolveCompactionReplayPressure(resumed, model, replayIdentity, estimator);
+    const plan = replayPressure(resumed);
     expect(plan?.prefixTokens).toBe(
       "canonical".length +
         "opaque".length +
@@ -444,15 +391,15 @@ describe("canonical compaction replay pressure", () => {
       { type: "message", role: "user", content: [image, remoteImage, file] },
       { type: "compaction", encrypted_content: "opaque" },
     ];
-    captureOpenAIResponsesCompaction(
+    captureCompaction(
       owner,
       { type: "compaction", encrypted_content: "opaque" },
       "retained-users",
       model,
-      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      replayMetadata,
       output,
     );
-    const plan = resolveCompactionReplayPressure([owner], model, replayIdentity, estimator);
+    const plan = replayPressure([owner]);
     expect(plan?.prefixTokens).toBe(
       200 +
         estimator.json({ type: "input_image", detail: "high" }) +

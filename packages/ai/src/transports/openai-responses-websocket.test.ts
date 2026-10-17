@@ -177,11 +177,8 @@ describe("native OpenAI Responses WebSocket transport", () => {
     });
     websocketState.responseBatches.push([completion("resp_1")]);
     const sentinelClient = {
+      ...clientFixture,
       apiKey: "SECRET_SENTINEL-key",
-      baseURL: "https://api.openai.com/v1",
-      withOptions(options: { apiKey?: string }) {
-        return { ...this, ...options };
-      },
     };
 
     const response = createOpenAIResponsesWebSocketStream({
@@ -196,9 +193,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
     await consumeResponse(response);
 
     expect(websocketState.clients[0]?.apiKey).toBe("resolved-key");
-    expect(websocketState.options[0]?.headers).toEqual({
-      "x-provider-auth": "resolved-header",
-    });
+    expect(websocketState.options[0]?.headers).toEqual({ "x-provider-auth": "resolved-header" });
   });
 
   it("does not retain a continuation after a terminal incomplete response", async () => {

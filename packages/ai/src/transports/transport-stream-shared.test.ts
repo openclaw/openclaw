@@ -1,4 +1,4 @@
-import type { Model, StreamOptions } from "@openclaw/llm-core";
+import type { Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-internal.js";
@@ -7,20 +7,20 @@ import {
   createModelStreamCooperativeScheduler,
   notifyProviderHttpMetadata,
   notifyProviderHttpResponse,
-  parseTerminalToolCallArguments,
+  parseTerminalToolCallArguments as parseArguments,
   withProviderAcceptanceObserver,
-  type ProviderAcceptance,
 } from "./transport-stream-shared.js";
 
 const MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE =
   "Provider completed tool call with malformed JSON arguments";
 const REPAIR = { repairStringLiterals: true } as const;
+const initialHost = getAiTransportHost();
+afterEach(() => configureAiTransportHost(initialHost));
 
 describe("transport failure diagnostics", () => {
   it.each(["error", "data"] as const)(
     "logs failure metadata without response.%s prose or generated content",
     (bodyField) => {
-      const host = getAiTransportHost();
       const logWarn = vi.fn();
       const body = {
         code: "invalid_prompt",
@@ -32,41 +32,37 @@ describe("transport failure diagnostics", () => {
         id: "fixture-model",
         api: "openai-responses",
       } as Model);
-      configureAiTransportHost({ ...host, logWarn });
-      try {
-        assignTransportErrorDetails(
-          output,
-          Object.assign(new Error(body.message), {
-            status: 400,
-            code: body.code,
-            request_id: "req_fixture",
-            errorType: body.type,
-            cause: Object.assign(new Error("PRIVATE CAUSE"), { code: "ECONNRESET" }),
-            response: {
-              id: "resp_fixture",
-              [bodyField]: body,
-              output: [{ text: "PRIVATE OUTPUT" }],
-            },
-          }),
-        );
-        expect(logWarn).toHaveBeenCalledWith("provider-error", "Model request failed", {
-          provider: "openai",
-          model: "fixture-model",
+      configureAiTransportHost({ ...initialHost, logWarn });
+      assignTransportErrorDetails(
+        output,
+        Object.assign(new Error(body.message), {
           status: 400,
-          code: "invalid_prompt",
-          type: "invalid_request_error",
-          causeName: "Error",
-          causeCode: "ECONNRESET",
-          requestId: "req_fixture",
-          responseId: "resp_fixture",
-        });
-        expect(output.errorType).toBe("invalid_request_error");
-        expect(output.errorBody?.length).toBeLessThan(6000);
-        expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE OUTPUT");
-        expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE PROMPT");
-        expect(JSON.stringify(logWarn.mock.calls)).not.toContain("PRIVATE CAUSE");
-      } finally {
-        configureAiTransportHost(host);
+          code: body.code,
+          request_id: "req_fixture",
+          errorType: body.type,
+          cause: Object.assign(new Error("PRIVATE CAUSE"), { code: "ECONNRESET" }),
+          response: {
+            id: "resp_fixture",
+            [bodyField]: body,
+            output: [{ text: "PRIVATE OUTPUT" }],
+          },
+        }),
+      );
+      expect(logWarn).toHaveBeenCalledWith("provider-error", "Model request failed", {
+        provider: "openai",
+        model: "fixture-model",
+        status: 400,
+        code: "invalid_prompt",
+        type: "invalid_request_error",
+        causeName: "Error",
+        causeCode: "ECONNRESET",
+        requestId: "req_fixture",
+        responseId: "resp_fixture",
+      });
+      expect(output.errorType).toBe("invalid_request_error");
+      expect(output.errorBody?.length).toBeLessThan(6000);
+      for (const secret of ["PRIVATE OUTPUT", "PRIVATE PROMPT", "PRIVATE CAUSE"]) {
+        expect(JSON.stringify(logWarn.mock.calls)).not.toContain(secret);
       }
     },
   );
@@ -84,9 +80,9 @@ function captureError(run: () => unknown): Error & { errorCode?: string; errorBo
 describe("parseTerminalToolCallArguments", () => {
   it("repairs invalid escapes by preserving the backslash the model meant", () => {
     // JS string is: {"command":"grep -E \d+ file"} — an unescaped regex backslash.
-    expect(
-      parseTerminalToolCallArguments('{"command":"grep -E \\d+ file"}', undefined, REPAIR),
-    ).toEqual({ command: "grep -E \\d+ file" });
+    expect(parseArguments('{"command":"grep -E \\d+ file"}', undefined, REPAIR)).toEqual({
+      command: "grep -E \\d+ file",
+    });
   });
 
   it.each([
@@ -95,7 +91,7 @@ describe("parseTerminalToolCallArguments", () => {
     '{"command":"rm -rf /srv/app/tmp/bu',
   ])("rejects non-object or malformed terminal input %# without exposing it", (value) => {
     for (const options of [undefined, REPAIR]) {
-      const thrown = captureError(() => parseTerminalToolCallArguments(value, undefined, options));
+      const thrown = captureError(() => parseArguments(value, undefined, options));
       expect(thrown).toMatchObject({ message: MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE });
       const diagnostics = {
         code: "malformed_tool_call_arguments",
@@ -114,20 +110,10 @@ describe("parseTerminalToolCallArguments", () => {
 
 const model = { id: "acceptance-test", provider: "test" } as Model;
 
-function observeAcceptance(
-  observer: (acceptance: ProviderAcceptance) => void,
-  options: StreamOptions = {},
-): StreamOptions {
-  return withProviderAcceptanceObserver(options, observer);
-}
-
 describe("private provider acceptance", () => {
   it("does not wait for unread response cancellation after the observer fails", async () => {
     const hookError = new Error("acceptance failed");
-    let markCancelStarted!: () => void;
-    const cancelStarted = new Promise<void>((resolve) => {
-      markCancelStarted = resolve;
-    });
+    const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
     const response = new Response(
       new ReadableStream<Uint8Array>({
         cancel() {
@@ -137,7 +123,7 @@ describe("private provider acceptance", () => {
       }),
       { status: 200 },
     );
-    const options = observeAcceptance(() => {
+    const options = withProviderAcceptanceObserver({}, () => {
       throw hookError;
     });
     const notification = notifyProviderHttpResponse({ options, response, model });
@@ -149,26 +135,20 @@ describe("private provider acceptance", () => {
   it.each(["resolve", "reject"] as const)(
     "observes actual callback and cancellation work when a callback later %ss",
     async (outcome) => {
-      const host = getAiTransportHost();
       const observed: Promise<unknown>[] = [];
       const events: string[] = [];
       const controller = new AbortController();
-      let callbackStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        callbackStarted = resolve;
-      });
+      const { promise: started, resolve: callbackStarted } = Promise.withResolvers<void>();
       const lateCallbackError = new Error("late response failure");
       const cleanupError = new Error("cancellation failure");
-      let finishCallback!: () => void;
-      const callback = new Promise<void>((resolve, reject) => {
-        finishCallback = () => (outcome === "resolve" ? resolve() : reject(lateCallbackError));
-      });
-      let finishCleanup!: () => void;
-      const cleanup = new Promise<void>((_resolve, reject) => {
-        finishCleanup = () => reject(cleanupError);
-      });
+      const callbackWork = Promise.withResolvers<void>();
+      const callback = callbackWork.promise;
+      const finishCallback = () =>
+        outcome === "resolve" ? callbackWork.resolve() : callbackWork.reject(lateCallbackError);
+      const { promise: cleanup, reject: rejectCleanup } = Promise.withResolvers<void>();
+      const finishCleanup = () => rejectCleanup(cleanupError);
       configureAiTransportHost({
-        ...host,
+        ...initialHost,
         observePendingProviderWork: (pending) => {
           events.push("observed");
           observed.push(pending);
@@ -210,7 +190,6 @@ describe("private provider acceptance", () => {
         finishCallback();
         finishCleanup();
         await Promise.allSettled([notification, callback, cleanup, ...observed]);
-        configureAiTransportHost(host);
       }
     },
   );
