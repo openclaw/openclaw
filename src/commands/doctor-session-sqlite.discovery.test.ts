@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { loadExactSessionEntry as loadEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchTranscripts } from "../config/sessions/session-transcript-search.js";
 import {
   readMigrationArtifactIdentity,
   moveMigrationArtifact,
@@ -19,11 +19,53 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawAgentDatabasesForTest as closeAgentHandles } from "../state/openclaw-agent-db.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+
+type MigrationTarget = Parameters<typeof createSessionSqliteMigrationRun>[1][number];
+type MigrationRun = ReturnType<typeof createSessionSqliteMigrationRun>;
+function discoveryState(state: OpenClawTestState) {
+  const sessions = state.sessionsDir();
+  fs.mkdirSync(sessions, { recursive: true });
+  const store = path.join(sessions, "sessions.json");
+  return {
+    sessions,
+    store,
+    target: {
+      agentId: "main",
+      storePath: store,
+      sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
+    },
+    archiveDir: path.join(path.dirname(sessions), "session-sqlite-import-archive"),
+    run: (mode: Parameters<typeof runDoctorSessionSqlite>[0]["mode"]) =>
+      runDoctorSessionSqlite({ mode, store, env: state.env }),
+  };
+}
+function protectedMove(sourcePath: string, archivePath: string): SessionSqliteMigrationMove {
+  return {
+    kind: "unreferenced-jsonl",
+    sourcePath,
+    archivePath,
+    artifact: {
+      identity: readMigrationArtifactIdentity(sourcePath),
+      classification: "protected",
+      reason: "unreferenced-history",
+      dependencies: [],
+      disposal: { state: "retained" },
+    },
+  };
+}
+function completeRun(run: MigrationRun, target: MigrationTarget) {
+  updateMigrationManifestTarget(run, target, [], { validationBeforeArchive: "passed" });
+  run.manifest.completedAt = new Date().toISOString();
+  writeSessionSqliteMigrationManifest(run);
+}
 
 function transcript(id: string, phrase: string) {
   return (
@@ -162,13 +204,10 @@ it.each([{ agent: "retired" }])(
       });
       expect(report.totals.importedEntries).toBe(1);
       expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
-      closeOpenClawAgentDatabasesForTest();
+      closeAgentHandles();
       expect(
-        searchSessionTranscripts({
-          agentId: "retired",
-          env: state.env,
-          query: "retiredhistoryneedle",
-        }).hits,
+        searchTranscripts({ agentId: "retired", env: state.env, query: "retiredhistoryneedle" })
+          .hits,
       ).toEqual([expect.objectContaining({ sessionId: id })]);
       const archived = report.targets.flatMap((target) => target.archivedTranscriptFiles);
       expect(archived).toHaveLength(1);
@@ -191,9 +230,7 @@ it.each(["lineage", "generated"] as const)(
   "imports primary history without changing its logical owner (%s)",
   async (variant) => {
     await withOpenClawTestState({ label: "doctor-primary-history" }, async (state) => {
-      const sessions = state.sessionsDir();
-      fs.mkdirSync(sessions, { recursive: true });
-      const store = path.join(sessions, "sessions.json");
+      const { sessions, store, run } = discoveryState(state);
       const key = "agent:main:main";
       const id =
         variant === "lineage"
@@ -232,25 +269,21 @@ it.each(["lineage", "generated"] as const)(
           );
         }
       }
-      const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
+      const report = await run("import");
       expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
       const scope = { agentId: "main", env: state.env };
-      expect(searchSessionTranscripts({ ...scope, query }).hits).toEqual([
+      expect(searchTranscripts({ ...scope, query }).hits).toEqual([
         expect.objectContaining({ sessionKey: key, sessionId: id }),
       ]);
       {
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: key, storePath: store })?.entry,
-        ).toMatchObject(
+        expect(loadEntry({ ...scope, sessionKey: key, storePath: store })?.entry).toMatchObject(
           variant === "lineage"
             ? { sessionId: "current", updatedAt: 42 }
             : { sessionId: id, updatedAt: 123, label: "retained-label" },
         );
       }
       if (variant === "lineage") {
-        expect(
-          searchSessionTranscripts({ ...scope, query: "oldstandaloneneedle" }).hits,
-        ).toHaveLength(1);
+        expect(searchTranscripts({ ...scope, query: "oldstandaloneneedle" }).hits).toHaveLength(1);
       }
     });
   },
@@ -258,18 +291,11 @@ it.each(["lineage", "generated"] as const)(
 
 it("recovers a completed old archive once, preserves bytes, and does not resurrect user-deleted history", async () => {
   await withOpenClawTestState({ label: "doctor-archive-discovery" }, async (state) => {
-    const sessions = state.sessionsDir();
-    fs.mkdirSync(sessions, { recursive: true });
-    const store = path.join(sessions, "sessions.json");
+    const { sessions, store, target, run } = discoveryState(state);
     const id = "33333333-3333-4333-8333-333333333333";
     const original = path.join(sessions, `${id}.jsonl`);
     const bytes = transcript(id, "archivedneedle");
     fs.writeFileSync(original, bytes);
-    const target = {
-      agentId: "main",
-      storePath: store,
-      sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
-    };
     const archive = path.join(
       path.dirname(sessions),
       "session-sqlite-import-archive",
@@ -277,28 +303,15 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
     );
     fs.mkdirSync(path.dirname(archive), { recursive: true });
     const old = createSessionSqliteMigrationRun(state.env, [target]);
-    const move: SessionSqliteMigrationMove = {
-      kind: "unreferenced-jsonl",
-      sourcePath: original,
-      archivePath: archive,
-      artifact: {
-        identity: readMigrationArtifactIdentity(original),
-        classification: "protected",
-        reason: "unreferenced-history",
-        dependencies: [],
-        disposal: { state: "retained" },
-      },
-    };
+    const move = protectedMove(original, archive);
     recordPlannedMigrationMoves(old, target, [move]);
     await moveMigrationArtifact(original, archive, move.artifact!.identity);
     recordCompletedMigrationMoves(old, target, [move]);
-    updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
-    old.manifest.completedAt = new Date().toISOString();
-    writeSessionSqliteMigrationManifest(old);
+    completeRun(old, target);
     const completed = migrationRun.recordCompletedMigrationMoves;
     const interrupted = vi
       .spyOn(migrationRun, "recordCompletedMigrationMoves")
-      .mockImplementation((run, owner, moves) => {
+      .mockImplementation((activeRun, owner, moves) => {
         if (
           moves.some(
             (candidateMove) => candidateMove.artifact?.reason === "indexed-historical-primary",
@@ -306,29 +319,24 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
         ) {
           throw new Error("simulated interruption before recovery receipt");
         }
-        return completed(run, owner, moves);
+        return completed(activeRun, owner, moves);
       });
     try {
-      await expect(
-        runDoctorSessionSqlite({ mode: "import", store, env: state.env }),
-      ).rejects.toThrow("simulated interruption");
+      await expect(run("import")).rejects.toThrow("simulated interruption");
     } finally {
       interrupted.mockRestore();
-      closeOpenClawAgentDatabasesForTest();
+      closeAgentHandles();
     }
-    const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
+    const report = await run("import");
     expect(report.targets.flatMap((item) => item.issues)).toEqual([]);
     expect(report.totals.importedEntries).toBe(1);
     const scope = { agentId: "main", env: state.env };
-    const hit = searchSessionTranscripts({ ...scope, query: "archivedneedle" }).hits[0];
+    const hit = searchTranscripts({ ...scope, query: "archivedneedle" }).hits[0];
     expect(hit).toMatchObject({ sessionId: id });
     expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
-    closeOpenClawAgentDatabasesForTest();
-    expect(searchSessionTranscripts({ ...scope, query: "archivedneedle" }).hits).toHaveLength(1);
-    expect(
-      (await runDoctorSessionSqlite({ mode: "import", store, env: state.env })).totals
-        .importedEntries,
-    ).toBe(0);
+    closeAgentHandles();
+    expect(searchTranscripts({ ...scope, query: "archivedneedle" }).hits).toHaveLength(1);
+    expect((await run("import")).totals.importedEntries).toBe(0);
     const key = hit!.sessionKey;
     await deleteSessionEntryLifecycle({
       ...scope,
@@ -337,7 +345,7 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
       archiveTranscript: false,
       deleteTranscriptWithoutArchive: true,
     });
-    expect(searchSessionTranscripts({ ...scope, query: "archivedneedle" }).hits).toEqual([]);
+    expect(searchTranscripts({ ...scope, query: "archivedneedle" }).hits).toEqual([]);
     // Keep the acknowledgment when a later unacknowledged move coalesces onto it.
     const duplicate = `${archive}.duplicate`;
     fs.copyFileSync(archive, duplicate);
@@ -352,7 +360,7 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
     };
     recordPlannedMigrationMoves(acknowledged, target, [duplicateMove]);
     recordCompletedMigrationMoves(acknowledged, target, [duplicateMove]);
-    const settled = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
+    const settled = await run("import");
     expect(settled.targets.flatMap((item) => item.issues)).toEqual([
       expect.objectContaining({ code: "historical_duplicate_settled" }),
     ]);
@@ -367,11 +375,8 @@ it("recovers a completed old archive once, preserves bytes, and does not resurre
         artifact: expect.objectContaining({ reason: "indexed-historical-primary" }),
       }),
     ]);
-    expect(
-      (await runDoctorSessionSqlite({ mode: "import", store, env: state.env })).totals
-        .importedEntries,
-    ).toBe(0);
-    expect(searchSessionTranscripts({ ...scope, query: "archivedneedle" }).hits).toEqual([]);
+    expect((await run("import")).totals.importedEntries).toBe(0);
+    expect(searchTranscripts({ ...scope, query: "archivedneedle" }).hits).toEqual([]);
     expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
   });
 });
@@ -380,15 +385,7 @@ it.each(["recover"] as const)(
   "%s settles identical repeated archives across retained manifests and names differing pairs",
   async (mode) => {
     await withOpenClawTestState({ label: "doctor-duplicate-archives" }, async (state) => {
-      const sessions = state.sessionsDir();
-      fs.mkdirSync(sessions, { recursive: true });
-      const store = path.join(sessions, "sessions.json");
-      const target = {
-        agentId: "main",
-        storePath: store,
-        sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
-      };
-      const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
+      const { sessions, target, archiveDir, run } = discoveryState(state);
       fs.mkdirSync(archiveDir);
       const ids = ["identical", "different-1", "different-2", "different-3", "different-4"];
       const originals = new Map<string, string>();
@@ -403,18 +400,7 @@ it.each(["recover"] as const)(
           const bytes = transcript(id, id === "identical" ? "duplicateneedle" : `${id}-${copy}`);
           originals.set(archivePath, bytes);
           fs.writeFileSync(sourcePath, bytes);
-          const move: SessionSqliteMigrationMove = {
-            kind: "unreferenced-jsonl",
-            sourcePath,
-            archivePath,
-            artifact: {
-              identity: readMigrationArtifactIdentity(sourcePath),
-              classification: "protected",
-              reason: "unreferenced-history",
-              dependencies: [],
-              disposal: { state: "retained" },
-            },
-          };
+          const move = protectedMove(sourcePath, archivePath);
           recordPlannedMigrationMoves(old, target, [move]);
           await moveMigrationArtifact(sourcePath, archivePath, move.artifact!.identity);
           // Retained receipts predate the remount; publication still used the live device.
@@ -422,9 +408,7 @@ it.each(["recover"] as const)(
           recordCompletedMigrationMoves(old, target, [move]);
           moves.push(move);
         }
-        updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
-        old.manifest.completedAt = new Date().toISOString();
-        writeSessionSqliteMigrationManifest(old);
+        completeRun(old, target);
       }
       // Later retries retained both source claims; the latest failed run moved nothing.
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -434,13 +418,13 @@ it.each(["recover"] as const)(
         retry.manifest.failedAt = new Date().toISOString();
         writeSessionSqliteMigrationManifest(retry);
       }
-      const dry = await runDoctorSessionSqlite({ mode: "dry-run", store, env: state.env });
+      const dry = await run("dry-run");
       expect(dry.totals.legacyEntries).toBe(1);
       expect(
         dry.targets[0]!.issues.filter((issue) => issue.code === "historical_transcript_deferred"),
       ).toHaveLength(4);
       expect(fs.readdirSync(archiveDir)).toHaveLength(10);
-      const report = await runDoctorSessionSqlite({ mode, store, env: state.env });
+      const report = await run(mode);
       expect(report.targets.flatMap((item) => item.issues)).toContainEqual({
         code: "historical_duplicate_settled",
         message: expect.stringContaining("Retired 1 byte-identical duplicate archive(s)"),
@@ -455,8 +439,7 @@ it.each(["recover"] as const)(
         ).toBe(true);
       }
       expect(
-        searchSessionTranscripts({ agentId: "main", env: state.env, query: "duplicateneedle" })
-          .hits,
+        searchTranscripts({ agentId: "main", env: state.env, query: "duplicateneedle" }).hits,
       ).toEqual([expect.objectContaining({ sessionId: "identical" })]);
       const identical = moves.filter(
         (move) => path.basename(move.sourcePath) === "identical.jsonl",
@@ -493,7 +476,7 @@ it.each(["recover"] as const)(
         collectRecoveryInventory({ cfg: {}, env: state.env }).report.artifacts,
       ).not.toContainEqual(expect.objectContaining({ reason: "unexpectedly-missing-artifact" }));
       for (const next of ["dry-run", "recover"] as const) {
-        const repeated = await runDoctorSessionSqlite({ mode: next, store, env: state.env });
+        const repeated = await run(next);
         expect(repeated.targets.flatMap((item) => item.issues)).toEqual(deferred);
         expect(repeated.totals.importedEntries).toBe(0);
       }
@@ -503,9 +486,7 @@ it.each(["recover"] as const)(
 
 it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchable history", async () => {
   await withOpenClawTestState({ label: "doctor-discovery-negative" }, async (state) => {
-    const sessions = state.sessionsDir();
-    fs.mkdirSync(sessions, { recursive: true });
-    const store = path.join(sessions, "sessions.json");
+    const { sessions, store, target, archiveDir, run } = discoveryState(state);
     fs.writeFileSync(store, "{}");
     const primary = "44444444-4444-4444-8444-444444444444";
     const duplicate = "55555555-5555-4555-8555-555555555555";
@@ -532,31 +513,14 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
     }
     const archivedId = "88888888-8888-4888-8888-888888888888";
     const archivedBytes = transcript(archivedId, "distinctoriginalneedle");
-    const target = {
-      agentId: "main",
-      storePath: store,
-      sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
-    };
     const old = createSessionSqliteMigrationRun(state.env, [target]);
-    const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
     fs.mkdirSync(archiveDir);
     const archivedPaths: string[] = [];
     for (const name of [`${archivedId}.jsonl`, `2026-06-15T00-00-00-000Z_${archivedId}.jsonl`]) {
       const sourcePath = path.join(sessions, name);
       const archivePath = path.join(archiveDir, `${name}.imported-1`);
       fs.writeFileSync(sourcePath, archivedBytes);
-      const move: SessionSqliteMigrationMove = {
-        kind: "unreferenced-jsonl",
-        sourcePath,
-        archivePath,
-        artifact: {
-          identity: readMigrationArtifactIdentity(sourcePath),
-          classification: "protected",
-          reason: "unreferenced-history",
-          dependencies: [],
-          disposal: { state: "retained" },
-        },
-      };
+      const move = protectedMove(sourcePath, archivePath);
       recordPlannedMigrationMoves(old, target, [move]);
       await moveMigrationArtifact(sourcePath, archivePath, move.artifact!.identity);
       recordCompletedMigrationMoves(old, target, [move]);
@@ -565,7 +529,7 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
     updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
     old.manifest.completedAt = old.manifest.startedAt;
     writeSessionSqliteMigrationManifest(old);
-    const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
+    const report = await run("import");
     expect(report.totals.importedEntries).toBe(1);
     expect(report.targets[0]!.issues.map((issue) => issue.code)).toEqual([
       "historical_transcript_deferred",
@@ -578,9 +542,7 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
       message: `${archivedId}: multiple primary files claim this identity; originals retained without importing`,
     });
     const scope = { agentId: "main", env: state.env };
-    expect(
-      searchSessionTranscripts({ ...scope, query: "eligibleprimaryneedle" }).hits,
-    ).toHaveLength(1);
+    expect(searchTranscripts({ ...scope, query: "eligibleprimaryneedle" }).hits).toHaveLength(1);
     for (const query of [
       "diagnosticneedle",
       "deletedneedle",
@@ -589,7 +551,7 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
       "secondambiguousneedle",
       "distinctoriginalneedle",
     ]) {
-      expect(searchSessionTranscripts({ ...scope, query }).hits).toEqual([]);
+      expect(searchTranscripts({ ...scope, query }).hits).toEqual([]);
     }
     const manifest = JSON.parse(fs.readFileSync(report.migrationRun!.manifestPath, "utf8"));
     const moves: SessionSqliteMigrationMove[] = manifest.targets.flatMap(
@@ -610,9 +572,7 @@ it.each(["device changed", "metadata changed"])(
   "uses a 2026.9.4 archived registry under current SQLite state: %s",
   async (archiveState) => {
     await withOpenClawTestState({ label: "doctor-archived-lineage" }, async (state) => {
-      const sessions = state.sessionsDir();
-      fs.mkdirSync(sessions, { recursive: true });
-      const store = path.join(sessions, "sessions.json");
+      const { sessions, store, target, archiveDir, run } = discoveryState(state);
       const key = "agent:main:main";
       const id = "66666666-6666-4666-8666-666666666666";
       const original = path.join(sessions, `2026-06-15T00-00-00-000Z_${id}.jsonl`);
@@ -628,16 +588,10 @@ it.each(["device changed", "metadata changed"])(
           },
         }),
       );
-      const target = {
-        agentId: "main",
-        storePath: store,
-        sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
-      };
       const old = createSessionSqliteMigrationRun(state.env, [target]);
       // v2026.9.4 wrote manifest v3 with the same dev/ino/mtimeNs/size/sha256 identity.
       old.manifest.openClawVersion = "2026.9.4";
       old.manifest.manifestVersion = 3;
-      const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
       fs.mkdirSync(archiveDir, { recursive: true });
       const saved = new Map<string, string>();
       for (const source of [store, original]) {
@@ -665,9 +619,7 @@ it.each(["device changed", "metadata changed"])(
         }
         recordCompletedMigrationMoves(old, target, [move]);
       }
-      updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
-      old.manifest.completedAt = new Date().toISOString();
-      writeSessionSqliteMigrationManifest(old);
+      completeRun(old, target);
       const scope = { agentId: "main", env: state.env };
       await importSqliteSessionRows({
         ...scope,
@@ -680,19 +632,14 @@ it.each(["device changed", "metadata changed"])(
           label: "newer-user-label",
         },
       });
-      const before = loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key });
-      const preview = await runDoctorSessionSqlite({ mode: "dry-run", store, env: state.env });
+      const before = loadEntry({ ...scope, storePath: store, sessionKey: key });
+      const preview = await run("dry-run");
       expect(preview.totals).toMatchObject({ legacyEntries: 1, issues: 0, sqliteEntries: 1 });
       if (archiveState === "metadata changed") {
         const registry = [...saved.keys()].find((file) => file.includes("legacy-store."))!;
-        if (archiveState === "metadata changed") {
-          fs.utimesSync(registry, new Date(0), new Date(0));
-        } else {
-          fs.appendFileSync(registry, "\n");
-          saved.set(registry, saved.get(registry)! + "\n");
-        }
+        fs.utimesSync(registry, new Date(0), new Date(0));
         for (const mode of ["dry-run", "validate", "import", "import"] as const) {
-          const report = await runDoctorSessionSqlite({ mode, store, env: state.env });
+          const report = await run(mode);
           expect(report.totals).toMatchObject({
             importedEntries: 0,
             importedTranscriptEvents: 0,
@@ -720,21 +667,17 @@ it.each(["device changed", "metadata changed"])(
             expect(receipt.targets[0]!.completedMoves).toEqual([]);
           }
         }
-        const inspected = await runDoctorSessionSqlite({ mode: "inspect", store, env: state.env });
+        const inspected = await run("inspect");
         expect(inspected.totals).toMatchObject({ sqliteEntries: 1, issues: 0 });
-        expect(searchSessionTranscripts({ ...scope, query: "archivedfamilyneedle" }).hits).toEqual(
-          [],
-        );
+        expect(searchTranscripts({ ...scope, query: "archivedfamilyneedle" }).hits).toEqual([]);
       } else {
-        const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
+        const report = await run("import");
         expect(report.targets.flatMap((item) => item.issues)).toEqual([]);
-        expect(searchSessionTranscripts({ ...scope, query: "archivedfamilyneedle" }).hits).toEqual([
+        expect(searchTranscripts({ ...scope, query: "archivedfamilyneedle" }).hits).toEqual([
           expect.objectContaining({ sessionId: id, sessionKey: key }),
         ]);
       }
-      expect(loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key })).toEqual(
-        before,
-      );
+      expect(loadEntry({ ...scope, storePath: store, sessionKey: key })).toEqual(before);
       for (const [archivePath, bytes] of saved) {
         expect(fs.readFileSync(archivePath, "utf8")).toBe(bytes);
       }
@@ -744,9 +687,7 @@ it.each(["device changed", "metadata changed"])(
 
 it("preserves retained shared aliases after the old migration cleared their filenames", async () => {
   await withOpenClawTestState({ label: "doctor-shared-archive" }, async (state) => {
-    const sessions = state.sessionsDir();
-    fs.mkdirSync(sessions, { recursive: true });
-    const store = path.join(sessions, "sessions.json");
+    const { sessions, store, target, archiveDir, run } = discoveryState(state);
     const id = "shared-session";
     const entries = {
       "agent:main:shared-a": { sessionId: id, updatedAt: 42 },
@@ -756,12 +697,6 @@ it("preserves retained shared aliases after the old migration cleared their file
     for (const [sessionKey, entry] of Object.entries(entries)) {
       await importSqliteSessionRows({ agentId: "main", storePath: store, sessionKey, entry });
     }
-    const target = {
-      agentId: "main",
-      storePath: store,
-      sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
-    };
-    const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
     fs.mkdirSync(archiveDir, { recursive: true });
     const old = createSessionSqliteMigrationRun(state.env, [target]);
     const originals = new Map<string, string>();
@@ -788,11 +723,9 @@ it("preserves retained shared aliases after the old migration cleared their file
       await moveMigrationArtifact(source, archive, move.artifact!.identity);
       recordCompletedMigrationMoves(old, target, [move]);
     }
-    updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
-    old.manifest.completedAt = new Date().toISOString();
-    writeSessionSqliteMigrationManifest(old);
+    completeRun(old, target);
     for (const mode of ["validate", "import"] as const) {
-      const report = await runDoctorSessionSqlite({ mode, store, env: state.env });
+      const report = await run(mode);
       expect(report.totals).toMatchObject({
         importedEntries: 0,
         importedTranscriptEvents: 0,
@@ -803,13 +736,12 @@ it("preserves retained shared aliases after the old migration cleared their file
       expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
     }
     for (const [sessionKey, entry] of Object.entries(entries)) {
-      expect(
-        loadExactSessionEntry({ agentId: "main", storePath: store, sessionKey })?.entry,
-      ).toMatchObject(entry);
+      expect(loadEntry({ agentId: "main", storePath: store, sessionKey })?.entry).toMatchObject(
+        entry,
+      );
     }
     expect(
-      searchSessionTranscripts({ agentId: "main", env: state.env, query: "sharedaliasneedle" })
-        .hits,
+      searchTranscripts({ agentId: "main", env: state.env, query: "sharedaliasneedle" }).hits,
     ).toEqual([]);
   });
 });

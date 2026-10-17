@@ -3,52 +3,103 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionStoreMigrationRequiredError } from "../config/sessions/migration-required.js";
 import {
-  loadExactSessionEntry,
-  upsertSessionEntryCore,
+  loadExactSessionEntry as loadEntry,
+  upsertSessionEntryCore as upsertEntry,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
+import { resolveSqliteTargetFromSessionStorePath as resolveTarget } from "../config/sessions/session-sqlite-target.js";
+import { assertSessionStoreMigrationComplete as assertMigrated } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  readDeferredPluginMigrations,
-  recordDeferredPluginMigrations,
+  readDeferredPluginMigrations as readPending,
+  recordDeferredPluginMigrations as recordPending,
 } from "../infra/deferred-plugin-migrations.js";
 import * as directoryDurability from "../infra/directory-durability.js";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
-import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
+import { readMigrationArtifactIdentity as artifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import { isSessionSqliteMigrationWarning as isWarning } from "../infra/session-sqlite-migration-issues.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesForTest as closeAgentHandles,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseForTest as closeStateHandles,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
 import {
   editAndDeleteImportedSessions,
   seedConcurrentDeferredPluginMigration,
-  seedDeferredPluginSessionSource,
+  seedDeferredPluginSessionSource as seedSource,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-type SessionScope = Awaited<ReturnType<typeof seedDeferredPluginSessionSource>>["scope"];
+function importSessions(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
+}
+function expectReady(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  expect(() => assertMigrated({ cfg, env })).not.toThrow();
+}
+function expectOriginals(originals: Map<string, Buffer>) {
+  for (const [file, bytes] of originals) {
+    expect(fs.readFileSync(file)).toEqual(bytes);
+  }
+}
+function resolvePlugin(env: NodeJS.ProcessEnv) {
+  return recordPending({
+    env,
+    pending: [],
+    resolvedPluginIds: ["fixture-plugin"],
+  });
+}
+async function emptySource(state: Parameters<typeof seedSource>[0]) {
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+  const directory = state.sessionsDir("main");
+  fs.mkdirSync(directory, { recursive: true });
+  const storePath = path.join(directory, "sessions.json");
+  fs.writeFileSync(storePath, "{}");
+  await recordPending({
+    env: state.env,
+    pending: [
+      {
+        pluginId: "fixture-plugin",
+        reason: "Plugin is unavailable.",
+        command: "openclaw doctor --fix",
+      },
+    ],
+  });
+  return { cfg, directory, storePath };
+}
+function settlementScenario(
+  overrides: Partial<{
+    changeSource: boolean | string;
+    siblingPending: boolean;
+    pendingChange: string;
+    missingTranscript: string;
+  }> = {},
+) {
+  return {
+    changeSource: false,
+    siblingPending: false,
+    pendingChange: "none",
+    missingTranscript: "none",
+    ...overrides,
+  };
+}
+
+type SessionScope = Awaited<ReturnType<typeof seedSource>>["scope"];
 
 function expectCanonicalSessions(scope: SessionScope, label: string) {
-  expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
-    label,
-  );
-  expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
+  expect(loadEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(label);
+  expect(loadEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
 }
 
 describe("session sources needed by deferred plugin migrations", () => {
@@ -58,11 +109,8 @@ describe("session sources needed by deferred plugin migrations", () => {
   ])(
     "admits verified partial imports with $damage without replaying or retiring damaged history (archive interrupted: $interrupted)",
     async ({ damage, interrupted }) => {
-      await withOpenClawTestState({ label: "deferred-damaged-session-source" }, async (state) => {
-        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
-          state,
-          "default",
-        );
+      await withState({ label: "deferred-damaged-session-source" }, async (state) => {
+        const { cfg, storePath, originals, scope } = await seedSource(state, "default");
         const transcript = path.join(path.dirname(storePath), "legacy-kept.jsonl");
         if (damage !== "transcript_malformed") {
           const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
@@ -74,37 +122,26 @@ describe("session sources needed by deferred plugin migrations", () => {
           fs.appendFileSync(transcript, '{broken\n{"type":"message","id":"unimported"}\n');
           originals.set(transcript, fs.readFileSync(transcript));
         }
-        const run = () =>
-          runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+        const run = () => importSessions(cfg, state.env);
         const imported = await run();
         expect(imported.totals.importedEntries).toBe(2);
         expect(imported.totals.importedTranscriptEvents).toBe(4);
         // This is the same readiness decision made by doctor --non-interactive --fix.
-        expect(() =>
-          assertSessionStoreMigrationComplete({ cfg, env: state.env, operation: "doctor" }),
-        ).not.toThrow();
+        expect(() => assertMigrated({ cfg, env: state.env, operation: "doctor" })).not.toThrow();
         const issues = imported.targets.flatMap((target) => target.issues);
-        expect(issues.every(isSessionSqliteMigrationWarning)).toBe(true);
+        expect(issues.every(isWarning)).toBe(true);
         for (const code of damage === "both"
           ? ["entry_invalid", "transcript_malformed"]
           : [damage]) {
           expect(issues).toContainEqual(expect.objectContaining({ code }));
         }
-        for (const [file, bytes] of originals) {
-          expect(fs.readFileSync(file)).toEqual(bytes);
-        }
+        expectOriginals(originals);
         await editAndDeleteImportedSessions(scope, "changed after partial import");
         const retried = await run();
         expect(retried.totals.importedEntries).toBe(0);
-        expect(
-          retried.targets.flatMap((target) => target.issues).every(isSessionSqliteMigrationWarning),
-        ).toBe(true);
+        expect(retried.targets.flatMap((target) => target.issues).every(isWarning)).toBe(true);
         expectCanonicalSessions(scope, "changed after partial import");
-        await recordDeferredPluginMigrations({
-          env: state.env,
-          pending: [],
-          resolvedPluginIds: ["fixture-plugin"],
-        });
+        await resolvePlugin(state.env);
         if (interrupted) {
           const publication = vi
             .spyOn(migrationRun, "recordCompletedMigrationMoves")
@@ -117,11 +154,9 @@ describe("session sources needed by deferred plugin migrations", () => {
         const settled = await run();
         expect(settled.totals.importedEntries).toBe(0);
         expect(settled.targets.flatMap((target) => target.issues)).toContainEqual(
-          expect.objectContaining({
-            code: "transcript_malformed",
-          }),
+          expect.objectContaining({ code: "transcript_malformed" }),
         );
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+        expectReady(cfg, state.env);
         const moves = migrationRun
           .listSessionSqliteMigrationManifestPaths(state.env)
           .flatMap((file) => migrationRun.readSessionSqliteMigrationManifest(file)?.targets ?? [])
@@ -141,22 +176,14 @@ describe("session sources needed by deferred plugin migrations", () => {
   ])(
     "retains an ordinary import's $kind when another Doctor records pending work before unlink (unused agent: $unusedAgent)",
     async ({ kind, unusedAgent }) => {
-      await withOpenClawTestState({ label: "deferred-plugin-archive-race" }, async (state) => {
-        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(state);
-        const unusedDatabase = resolveSqliteTargetFromSessionStorePath(storePath, {
-          agentId: "ops",
-          env: state.env,
-        }).path;
+      await withState({ label: "deferred-plugin-archive-race" }, async (state) => {
+        const { cfg, storePath, originals, scope } = await seedSource(state);
+        const unusedDatabase = resolveTarget(storePath, { agentId: "ops", env: state.env }).path;
         if (unusedAgent) {
           cfg.agents = { ...cfg.agents, entries: { ...cfg.agents?.entries, ops: {} } };
         }
-        const run = () =>
-          runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
-        await recordDeferredPluginMigrations({
-          env: state.env,
-          pending: [],
-          resolvedPluginIds: ["fixture-plugin"],
-        });
+        const run = () => importSessions(cfg, state.env);
+        await resolvePlugin(state.env);
         const protectedSource =
           kind === "legacy-store"
             ? storePath
@@ -169,7 +196,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             const result = await publish(options);
             if (!pendingChanged && options.sourcePath === protectedSource) {
               pendingChanged = true;
-              await recordDeferredPluginMigrations({
+              await recordPending({
                 env: state.env,
                 pending: [
                   {
@@ -193,7 +220,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         expect(fs.existsSync(protectedSource)).toBe(true);
         expect(fs.statSync(protectedSource).nlink).toBe(1);
         expect(fs.readFileSync(protectedSource)).toEqual(originals.get(protectedSource));
-        expect(readDeferredPluginMigrations({ env: state.env })).toEqual([
+        expect(readPending({ env: state.env })).toEqual([
           expect.objectContaining({ pluginId: "fixture-plugin", requiresStateMigration: true }),
         ]);
         expect(interrupted.targets.flatMap((target) => target.issues)).toContainEqual(
@@ -207,11 +234,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         expectCanonicalSessions(scope, "edited after interrupted archival");
         expect(fs.readFileSync(protectedSource)).toEqual(originals.get(protectedSource));
 
-        await recordDeferredPluginMigrations({
-          env: state.env,
-          pending: [],
-          resolvedPluginIds: ["fixture-plugin"],
-        });
+        await resolvePlugin(state.env);
         const resumed = await run();
         expect(resumed.totals.importedEntries).toBe(0);
         expect(resumed.targets.flatMap((target) => target.issues)).toEqual([]);
@@ -226,47 +249,22 @@ describe("session sources needed by deferred plugin migrations", () => {
   );
 
   it.each([
-    {
-      changeSource: false,
-      siblingPending: false,
-      pendingChange: "none",
-      missingTranscript: "none",
-    },
-    {
-      changeSource: "orphan",
-      siblingPending: false,
-      pendingChange: "none",
-      missingTranscript: "absent",
-    },
-    { changeSource: false, siblingPending: true, pendingChange: "none", missingTranscript: "none" },
-    {
-      changeSource: false,
-      siblingPending: false,
-      pendingChange: "plugin",
-      missingTranscript: "none",
-    },
-    {
-      changeSource: false,
-      siblingPending: false,
-      pendingChange: "publication",
-      missingTranscript: "none",
-    },
-    {
-      changeSource: false,
-      siblingPending: false,
-      pendingChange: "none",
-      missingTranscript: "absent",
-    },
+    settlementScenario(),
+    settlementScenario({ changeSource: "orphan", missingTranscript: "absent" }),
+    settlementScenario({ siblingPending: true }),
+    settlementScenario({ pendingChange: "plugin" }),
+    settlementScenario({ pendingChange: "publication" }),
+    settlementScenario({ missingTranscript: "absent" }),
   ])(
     "settles a retained source in the same Doctor after late plugin completion (source changed: $changeSource, sibling pending: $siblingPending, pending change: $pendingChange, missing transcript: $missingTranscript)",
     async ({ changeSource, siblingPending, pendingChange, missingTranscript }) => {
-      await withOpenClawTestState({ label: "deferred-plugin-late-settlement" }, async (state) => {
+      await withState({ label: "deferred-plugin-late-settlement" }, async (state) => {
         const {
           cfg: seededConfig,
           storePath,
           originals,
           scope,
-        } = await seedDeferredPluginSessionSource(
+        } = await seedSource(
           state,
           "external",
           "fixture-plugin",
@@ -292,7 +290,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             ? path.join(path.dirname(storePath), "deleted-orphan-one.jsonl")
             : storePath;
         if (siblingPending) {
-          await recordDeferredPluginMigrations({
+          await recordPending({
             env: state.env,
             pending: [
               {
@@ -303,12 +301,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             ],
           });
         }
-        await runDoctorSessionSqlite({
-          cfg: seededConfig,
-          env: state.env,
-          allAgents: true,
-          mode: "import",
-        });
+        await importSessions(seededConfig, state.env);
         await editAndDeleteImportedSessions(scope, "changed after import");
         const pluginRoot = state.path("fixture-plugin");
         const marker = state.path("late-migration-pending");
@@ -399,7 +392,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         expectCanonicalSessions(scope, "changed after import");
         if (pendingChange !== "none") {
           expect(pendingChanged).toBe(true);
-          const pending = readDeferredPluginMigrations({ env: state.env });
+          const pending = readPending({ env: state.env });
           expect(pending.map((plugin) => plugin.pluginId)).toEqual(
             pendingChange === "plugin" ? ["fixture-plugin"] : ["fixture-plugin", "new-plugin"],
           );
@@ -416,24 +409,22 @@ describe("session sources needed by deferred plugin migrations", () => {
             }
           }
         } else if (changeSource || missingTranscript === "appears") {
-          expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-          expect(readDeferredPluginMigrations({ env: state.env })).toEqual([
+          expectReady(cfg, state.env);
+          expect(readPending({ env: state.env })).toEqual([
             expect.objectContaining({ pluginId: "fixture-plugin" }),
           ]);
           expect(fs.readFileSync(changedSource, "utf8")).toBe(
             originals.get(changedSource)?.toString() + (changeSource ? "\n" : ""),
           );
         } else if (siblingPending) {
-          expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-          expect(readDeferredPluginMigrations({ env: state.env })).toEqual([
+          expectReady(cfg, state.env);
+          expect(readPending({ env: state.env })).toEqual([
             expect.objectContaining({ pluginId: "waiting-plugin" }),
           ]);
-          for (const [file, bytes] of originals) {
-            expect(fs.readFileSync(file)).toEqual(bytes);
-          }
+          expectOriginals(originals);
         } else {
-          expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-          expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
+          expectReady(cfg, state.env);
+          expect(readPending({ env: state.env })).toEqual([]);
           expect(fs.existsSync(storePath)).toBe(false);
           const archived = migrationRun
             .listSessionSqliteMigrationManifestPaths(state.env)
@@ -473,14 +464,14 @@ describe("session sources needed by deferred plugin migrations", () => {
   );
 
   it.each([
-    { layout: "default", missingTranscript: false },
-    { layout: "configured-root", missingTranscript: false },
-    { layout: "relocated-interrupted", missingTranscript: false },
+    { layout: "default" },
+    { layout: "configured-root" },
+    { layout: "relocated-interrupted" },
   ] as const)(
-    "verifies canonical import and retains $layout originals until resolution without replay (missing transcript: $missingTranscript)",
+    "verifies canonical import and retains $layout originals until resolution without replay",
     async ({ layout }) => {
-      await withOpenClawTestState({ label: "deferred-plugin-session-source" }, async (state) => {
-        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
+      await withState({ label: "deferred-plugin-session-source" }, async (state) => {
+        const { cfg, storePath, originals, scope } = await seedSource(
           state,
           layout === "configured-root"
             ? "legacy-root"
@@ -511,36 +502,27 @@ describe("session sources needed by deferred plugin migrations", () => {
           fs.writeFileSync(storePath, JSON.stringify(entries));
           originals.set(storePath, fs.readFileSync(storePath));
         }
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).toThrow(
+        expect(() => assertMigrated({ cfg, env: state.env })).toThrow(
           "Legacy session store requires migration",
         );
-        const run = () =>
-          runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+        const run = () => importSessions(cfg, state.env);
         const imported = await run();
         expect(imported.totals.importedEntries).toBe(2);
         expect(imported.targets.flatMap((target) => target.issues)).toEqual([
           expect.objectContaining({ code: "plugin_migration_source_retained" }),
         ]);
-        for (const [file, bytes] of originals) {
-          expect(fs.readFileSync(file)).toEqual(bytes);
-        }
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+        expectOriginals(originals);
+        closeAgentHandles();
+        closeStateHandles();
+        expectReady(cfg, state.env);
         await editAndDeleteImportedSessions(scope, "changed after import");
         expect((await run()).totals.importedEntries).toBe(0);
         expectCanonicalSessions(scope, "changed after import");
-        for (const [file, bytes] of originals) {
-          expect(fs.readFileSync(file)).toEqual(bytes);
-        }
-        await recordDeferredPluginMigrations({
-          env: state.env,
-          pending: [],
-          resolvedPluginIds: ["fixture-plugin"],
-        });
+        expectOriginals(originals);
+        await resolvePlugin(state.env);
         if (layout === "default" || layout === "configured-root") {
           const identities = new Map(
-            [...originals.keys()].map((file) => [file, readMigrationArtifactIdentity(file)]),
+            [...originals.keys()].map((file) => [file, artifactIdentity(file)]),
           );
           await autoMigrateLegacyState({
             cfg,
@@ -550,7 +532,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
           });
           for (const [file, identity] of identities) {
-            expect(readMigrationArtifactIdentity(file), file).toEqual(identity);
+            expect(artifactIdentity(file), file).toEqual(identity);
           }
         }
         if (layout === "relocated-interrupted") {
@@ -579,7 +561,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           layout === "relocated-interrupted" ? 0 : 2,
         );
         expectCanonicalSessions(scope, "changed after import");
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+        expectReady(cfg, state.env);
         if (foreignSource) {
           expect(fs.readFileSync(foreignSource.path)).toEqual(foreignSource.bytes);
         }
@@ -588,37 +570,15 @@ describe("session sources needed by deferred plugin migrations", () => {
   );
 
   it("lets startup proceed for an empty index when the owner has no database yet", async () => {
-    await withOpenClawTestState({ label: "deferred-empty-index-no-db" }, async (state) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      const directory = state.sessionsDir("main");
-      fs.mkdirSync(directory, { recursive: true });
-      const storePath = path.join(directory, "sessions.json");
-      fs.writeFileSync(storePath, "{}");
-      await recordDeferredPluginMigrations({
-        env: state.env,
-        pending: [
-          {
-            pluginId: "fixture-plugin",
-            reason: "Plugin is unavailable.",
-            command: "openclaw doctor --fix",
-          },
-        ],
-      });
+    await withState({ label: "deferred-empty-index-no-db" }, async (state) => {
+      const { cfg, storePath } = await emptySource(state);
       // No owner can hold a replayable receipt without a database, and a
       // zero-record source has nothing to replay: startup must not demand one.
-      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-      const report = await runDoctorSessionSqlite({
-        cfg,
-        env: state.env,
-        allAgents: true,
-        mode: "import",
-      });
+      expectReady(cfg, state.env);
+      const report = await importSessions(cfg, state.env);
       expect(report.totals.importedEntries).toBe(0);
-      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: "main",
-        env: state.env,
-      }).path;
+      expectReady(cfg, state.env);
+      const sqlitePath = resolveTarget(storePath, { agentId: "main", env: state.env }).path;
       expect(fs.existsSync(sqlitePath)).toBe(false);
       expect(fs.readFileSync(storePath, "utf8")).toBe("{}");
     });
@@ -627,27 +587,12 @@ describe("session sources needed by deferred plugin migrations", () => {
   it.each(["unindexed history", "a removed receipt database"] as const)(
     "keeps startup blocked for an empty index with %s",
     async (kind) => {
-      await withOpenClawTestState({ label: "deferred-empty-index-required" }, async (state) => {
+      await withState({ label: "deferred-empty-index-required" }, async (state) => {
         openOpenClawStateDatabase({ env: state.env });
-        const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-        const directory = state.sessionsDir("main");
-        fs.mkdirSync(directory, { recursive: true });
-        const storePath = path.join(directory, "sessions.json");
-        fs.writeFileSync(storePath, "{}");
+        const { cfg, directory, storePath } = await emptySource(state);
         const scope = { agentId: "main", storePath, env: state.env };
-        const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
-        await recordDeferredPluginMigrations({
-          env: state.env,
-          pending: [
-            {
-              pluginId: "fixture-plugin",
-              reason: "Plugin is unavailable.",
-              command: "openclaw doctor --fix",
-            },
-          ],
-        });
-        const run = () =>
-          runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+        const sqlitePath = resolveTarget(storePath, scope).path;
+        const run = () => importSessions(cfg, state.env);
         if (kind === "unindexed history") {
           fs.writeFileSync(
             path.join(directory, "historical.jsonl"),
@@ -664,7 +609,7 @@ describe("session sources needed by deferred plugin migrations", () => {
               .join("\n") + "\n",
           );
         } else {
-          await upsertSessionEntryCore(
+          await upsertEntry(
             { ...scope, sessionKey: "agent:main:current" },
             { sessionId: "current", updatedAt: 1 },
           );
@@ -673,12 +618,12 @@ describe("session sources needed by deferred plugin migrations", () => {
           expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
             expect.objectContaining({ code: "plugin_migration_source_retained" }),
           );
-          expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-          closeOpenClawAgentDatabasesForTest();
+          expectReady(cfg, state.env);
+          closeAgentHandles();
           fs.unlinkSync(sqlitePath);
         }
         expect(fs.existsSync(sqlitePath)).toBe(false);
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).toThrow(
+        expect(() => assertMigrated({ cfg, env: state.env })).toThrow(
           kind === "unindexed history"
             ? SessionStoreMigrationRequiredError
             : expect.objectContaining({
@@ -694,10 +639,9 @@ describe("session sources needed by deferred plugin migrations", () => {
             expect.objectContaining({ code: "plugin_migration_source_retained" }),
           ]);
           expect(
-            loadExactSessionEntry({ ...scope, sessionKey: "agent:main:recovered:historical" })
-              ?.entry.sessionId,
+            loadEntry({ ...scope, sessionKey: "agent:main:recovered:historical" })?.entry.sessionId,
           ).toBe("historical");
-          expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+          expectReady(cfg, state.env);
         }
         expect(fs.readFileSync(storePath, "utf8")).toBe("{}");
       });
@@ -705,18 +649,15 @@ describe("session sources needed by deferred plugin migrations", () => {
   );
 
   it("admits a configured shared source only after the live owner has a verified import", async () => {
-    await withOpenClawTestState({ label: "deferred-mixed-retained-owner" }, async (state) => {
-      const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(state);
+    await withState({ label: "deferred-mixed-retained-owner" }, async (state) => {
+      const { cfg, storePath, originals, scope } = await seedSource(state);
       cfg.agents = { ownership: "explicit", entries: { main: {}, retired: {} } };
       const retiredPath = openOpenClawAgentDatabase({
         agentId: "retired",
         env: state.env,
-        path: resolveSqliteTargetFromSessionStorePath(storePath, {
-          agentId: "retired",
-          env: state.env,
-        }).path,
+        path: resolveTarget(storePath, { agentId: "retired", env: state.env }).path,
       }).path;
-      closeOpenClawAgentDatabasesForTest();
+      closeAgentHandles();
       const deletion = beginAgentDeletionJournal(
         {
           agentId: "retired",
@@ -759,29 +700,21 @@ describe("session sources needed by deferred plugin migrations", () => {
       for (const file of [storePath, retiredPath, retiredTranscript]) {
         originals.set(file, fs.readFileSync(file));
       }
-      const assertReady = () =>
-        assertSessionStoreMigrationComplete({ cfg, env: state.env, operation: "doctor" });
+      const assertReady = () => assertMigrated({ cfg, env: state.env, operation: "doctor" });
       expect(assertReady).toThrow("Legacy session store requires migration");
 
-      const imported = await runDoctorSessionSqlite({
-        cfg,
-        env: state.env,
-        allAgents: true,
-        mode: "import",
-      });
+      const imported = await importSessions(cfg, state.env);
       expect(imported.totals).toMatchObject({ importedEntries: 2, importedTranscriptEvents: 4 });
       expect(imported.targets.flatMap((target) => target.issues)).toContainEqual(
         expect.objectContaining({ code: "plugin_migration_source_retained" }),
       );
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      closeAgentHandles();
+      closeStateHandles();
       expect(assertReady).not.toThrow();
-      expect(
-        loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.sessionId,
-      ).toBe("legacy-kept");
-      for (const [file, bytes] of originals) {
-        expect(fs.readFileSync(file)).toEqual(bytes);
-      }
+      expect(loadEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.sessionId).toBe(
+        "legacy-kept",
+      );
+      expectOriginals(originals);
 
       fs.appendFileSync(storePath, "\n");
       expect(assertReady).not.toThrow();
@@ -796,8 +729,8 @@ describe("session sources needed by deferred plugin migrations", () => {
   it.each(["unimported-owner", "malformed", "unreadable"] as const)(
     "keeps readiness blocked for a retained source with %s state",
     async (kind) => {
-      await withOpenClawTestState({ label: `deferred-readiness-${kind}` }, async (state) => {
-        const { cfg, storePath } = await seedDeferredPluginSessionSource(state);
+      await withState({ label: `deferred-readiness-${kind}` }, async (state) => {
+        const { cfg, storePath } = await seedSource(state);
         cfg.agents = {
           ownership: "explicit",
           ...(kind === "unimported-owner"
@@ -837,12 +770,9 @@ describe("session sources needed by deferred plugin migrations", () => {
           }
         }
         expect(
-          fs.existsSync(
-            resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops", env: state.env })
-              .path,
-          ),
+          fs.existsSync(resolveTarget(storePath, { agentId: "ops", env: state.env }).path),
         ).toBe(false);
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).toThrow(
+        expect(() => assertMigrated({ cfg, env: state.env })).toThrow(
           "Legacy session store requires migration",
         );
         expect(fs.existsSync(storePath)).toBe(true);
@@ -853,32 +783,24 @@ describe("session sources needed by deferred plugin migrations", () => {
   it.each(["declared", "metadata-only"] as const)(
     "imports a previously %s missing transcript without replaying canonical metadata",
     async (kind) => {
-      await withOpenClawTestState({ label: "deferred-transcript-appears" }, async (state) => {
-        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
+      await withState({ label: "deferred-transcript-appears" }, async (state) => {
+        const { cfg, storePath, originals, scope } = await seedSource(
           state,
           "default",
           "fixture-plugin",
           kind,
         );
-        await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
-        await upsertSessionEntryCore(
-          { ...scope, sessionKey: "agent:main:kept" },
-          { label: "current" },
-        );
+        await importSessions(cfg, state.env);
+        await upsertEntry({ ...scope, sessionKey: "agent:main:kept" }, { label: "current" });
         const transcript = path.join(path.dirname(storePath), "legacy-missing.jsonl");
         const contents = '{"type":"session","version":3,"id":"legacy-missing"}\n';
         fs.writeFileSync(transcript, contents);
-        const retry = await runDoctorSessionSqlite({
-          cfg,
-          env: state.env,
-          allAgents: true,
-          mode: "import",
-        });
+        const retry = await importSessions(cfg, state.env);
         const issues = retry.targets.flatMap((target) => target.issues);
         expect(issues).toContainEqual(
           expect.objectContaining({ code: "retained_plugin_source_conflict" }),
         );
-        expect(issues.every(isSessionSqliteMigrationWarning)).toBe(true);
+        expect(issues.every(isWarning)).toBe(true);
         expect(retry.totals.importedEntries).toBe(0);
         expect(retry.totals.archivedTranscriptFiles).toBe(1);
         expect(fs.existsSync(transcript)).toBe(false);
@@ -893,13 +815,9 @@ describe("session sources needed by deferred plugin migrations", () => {
           expect.objectContaining({ type: "session", id: "legacy-missing" }),
         ]);
         expect(fs.readFileSync(archived.archivePath, "utf8")).toBe(contents);
-        for (const [file, bytes] of originals) {
-          expect(fs.readFileSync(file)).toEqual(bytes);
-        }
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
-        ).toBe("current");
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+        expectOriginals(originals);
+        expect(loadEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe("current");
+        expectReady(cfg, state.env);
       });
     },
   );
