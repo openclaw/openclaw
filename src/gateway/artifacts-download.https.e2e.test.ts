@@ -18,6 +18,14 @@ import type { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
 
+const fileFixture = (title: string, bytes: Buffer, sizeBytes?: number) => ({
+  title,
+  bytes,
+  sizeBytes,
+  type: "file",
+  mimeType: "application/octet-stream",
+});
+
 test("downloads inline artifacts over authenticated WSS and HTTPS with live ticket authority", async () => {
   await withOpenClawTestState(
     {
@@ -46,13 +54,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
       const scope = { agentId: "main", sessionKey, sessionId, env: state.env };
       const binary = Buffer.from(Array.from({ length: 8192 }, (_, index) => index % 256));
       const fixtures = [
-        {
-          title: "binary.bin",
-          type: "file",
-          mimeType: "application/octet-stream",
-          bytes: binary,
-          sizeBytes: 1,
-        },
+        fileFixture("binary.bin", binary, 1),
         {
           title: "drawing.svg",
           type: "image",
@@ -61,12 +63,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
             '<svg xmlns="http://www.w3.org/2000/svg"><text>synthetic</text></svg>',
           ),
         },
-        {
-          title: "empty.bin",
-          type: "file",
-          mimeType: "application/octet-stream",
-          bytes: Buffer.alloc(0),
-        },
+        fileFixture("empty.bin", Buffer.alloc(0)),
       ];
       const timestamp = new Date().toISOString();
       const transcript = (firstBytes = binary) => [
