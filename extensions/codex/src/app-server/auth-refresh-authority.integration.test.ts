@@ -8,6 +8,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   saveAuthProfileStore,
   type AuthProfileCredential,
+  type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -24,13 +25,14 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { withEnvAsync, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";
 import {
   ensureCodexAppServerClientRuntime,
   recordCodexAppServerAuthHandoff,
 } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
+import type { RpcRequest, RpcResponse } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
@@ -38,31 +40,18 @@ const PROFILE_ID = "openai:work";
 const ACCOUNT_ID = "account-a";
 const INITIAL_ACCESS = "initial-access";
 
-type Harness = Pick<
-  ReturnType<typeof createClientHarness>,
-  "client" | "writes" | "send" | "waitForWrite"
->;
-type JsonRpcResponse = {
-  id?: string | number;
-  result?: unknown;
-  error?: { code?: number; message?: string };
-};
-
-function rotatedTokens(prefix: string, accountId = ACCOUNT_ID) {
-  return {
-    access: `${prefix}-access`,
-    refresh: `${prefix}-refresh`,
-    expires: Date.now() + 60_000,
-    accountId,
-  };
-}
+type Harness = ReturnType<typeof createStdioAuthRefreshHarness>;
+type RefreshOAuth = (credential: OAuthCredential) => Promise<OAuthCredential>;
 
 function oauthProfile(prefix: string, overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
     type: "oauth",
     provider: "openai",
-    ...rotatedTokens(prefix),
     ...overrides,
+    access: `${prefix}-access`,
+    refresh: `${prefix}-refresh`,
+    expires: Date.now() + 60_000,
+    accountId: overrides.accountId ?? ACCOUNT_ID,
   };
 }
 
@@ -74,40 +63,35 @@ function sendRefresh(harness: Harness, id: string) {
   });
 }
 
-async function refreshResponse(harness: Harness, id: string) {
+async function refreshResponse(harness: Harness, id: string): Promise<RpcResponse> {
   sendRefresh(harness, id);
-  return waitForResponse(harness, id);
-}
-
-function expectRefreshError(response: JsonRpcResponse, message: string | RegExp) {
-  expect(response).toMatchObject({
-    error: {
-      code: -32603,
-      message:
-        typeof message === "string"
-          ? expect.stringContaining(message)
-          : expect.stringMatching(message),
-    },
-  });
-  expect(response.result).toBeUndefined();
-}
-
-function rotateCredential(credential: OAuthCredential, prefix: string, accountId = ACCOUNT_ID) {
-  return { ...credential, ...rotatedTokens(prefix, accountId) };
-}
-
-async function waitForResponse(harness: Harness, id: string): Promise<JsonRpcResponse> {
   for (let index = 0; ; index++) {
-    const response = JSON.parse(await harness.waitForWrite(index)) as JsonRpcResponse;
+    const response = JSON.parse(await harness.waitForWrite(index)) as RpcResponse;
     if (response.id === id) {
       return response;
     }
   }
 }
 
-function createStdioAuthRefreshHarness(): Harness {
-  // These real pipe handles must be created in the first turn, not just their
-  // listeners: later reads inherit the async context of the retained handles.
+function expectRefreshError(response: RpcResponse, message: string | RegExp) {
+  const matching =
+    typeof message === "string" ? expect.stringContaining(message) : expect.stringMatching(message);
+  expect(response).toMatchObject({
+    error: { code: -32603, message: matching },
+  });
+  expect(response.result).toBeUndefined();
+}
+
+function expectStoredRotation(store: AuthProfileStore, prefix: string) {
+  expect(store.profiles[PROFILE_ID]).toMatchObject({
+    access: `${prefix}-access`,
+    refresh: `${prefix}-refresh`,
+    accountId: ACCOUNT_ID,
+  });
+}
+
+function createStdioAuthRefreshHarness() {
+  // Retained pipe handles carry the first turn's async context, not their listeners'.
   const child = spawn(
     process.execPath,
     [fileURLToPath(new URL("./test-support/auth-refresh-child.test-support.mjs", import.meta.url))],
@@ -115,71 +99,61 @@ function createStdioAuthRefreshHarness(): Harness {
   );
   const client = CodexAppServerClient.fromTransportForTests(child);
   const writes: string[] = [];
-  const pendingWrites = new Map<number, ReturnType<typeof createDeferred<string>>>();
+  const responses: ReturnType<typeof createDeferred<string>>[] = [];
+  const responseAt = (index: number) => (responses[index] ??= createDeferred<string>());
   client.addNotificationHandler((notification) => {
     if (notification.method !== "fixture/refresh-response") {
       return;
     }
     const line = JSON.stringify(notification.params);
     const index = writes.push(line) - 1;
-    pendingWrites.get(index)?.resolve(line);
-    pendingWrites.delete(index);
+    responseAt(index).resolve(line);
   });
   client.addCloseHandler(() => {
-    for (const pending of pendingWrites.values()) {
+    for (const pending of responses) {
       pending.reject(new Error("Auth refresh fixture closed before returning its response"));
     }
-    pendingWrites.clear();
   });
   return {
     client,
     writes,
-    waitForWrite(index) {
-      if (writes[index] !== undefined) {
-        return Promise.resolve(writes[index]);
-      }
-      const pending = createDeferred<string>();
-      pendingWrites.set(index, pending);
-      return pending.promise;
-    },
-    send(message) {
+    waitForWrite: (index: number) => responseAt(index).promise,
+    send(message: RpcRequest) {
       child.stdin.write(`${JSON.stringify({ method: "fixture/send-request", params: message })}\n`);
     },
   };
 }
 
 async function withAuthRefreshHarness(
-  refreshOAuth: (credential: OAuthCredential) => Promise<OAuthCredential>,
   run: (fixture: {
     agentDir: string;
     harness: Harness;
+    refreshOAuth: Mock<RefreshOAuth>;
     otherProviderRefresh: ReturnType<typeof vi.fn>;
-    retainedStore: ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>;
+    retainedStore: AuthProfileStore;
     authRefreshFailed: Promise<void>;
   }) => Promise<void>,
   createHarness: () => Harness = createClientHarness,
 ): Promise<void> {
+  const refreshOAuth = vi.fn<RefreshOAuth>(async (profile) => oauthProfile("rotated", profile));
   await withStateDirEnv("openclaw-codex-auth-refresh-authority-", async ({ stateDir }) => {
     const bundledRoot = path.join(stateDir, "bundled");
     for (const id of ["openai", "anthropic"]) {
       const rootDir = path.join(bundledRoot, id);
       fs.mkdirSync(rootDir, { recursive: true });
-      const files = {
-        "package.json": JSON.stringify({
-          name: `auth-refresh-fixture-${id}`,
-          openclaw: { extensions: ["./index.js"] },
-        }),
-        "openclaw.plugin.json": JSON.stringify({
+      fs.writeFileSync(
+        path.join(rootDir, "openclaw.plugin.json"),
+        JSON.stringify({
           id,
           providers: [id],
           enabledByDefault: true,
           configSchema: { type: "object", properties: {} },
         }),
-        "index.js": 'throw new Error("Unexpected fixture cold load");\n',
-      };
-      for (const [name, contents] of Object.entries(files)) {
-        fs.writeFileSync(path.join(rootDir, name), contents);
-      }
+      );
+      fs.writeFileSync(
+        path.join(rootDir, "index.js"),
+        'throw new Error("Unexpected fixture cold load");\n',
+      );
     }
     await withEnvAsync(
       {
@@ -195,7 +169,7 @@ async function withAuthRefreshHarness(
           activateGlobalSideEffects: false,
         });
         const otherProviderRefresh = vi.fn(async (credential: OAuthCredential) => credential);
-        for (const [id, label, refresh] of [
+        for (const [id, label, providerRefresh] of [
           ["openai", "OpenAI", refreshOAuth],
           ["anthropic", "Anthropic", otherProviderRefresh],
         ] as const) {
@@ -209,7 +183,6 @@ async function withAuthRefreshHarness(
             rootDir: manifest.rootDir,
             origin: "bundled",
             format: "bundle",
-            enabled: true,
             providerIds: [id],
             configSchema: true,
           });
@@ -218,7 +191,7 @@ async function withAuthRefreshHarness(
             id,
             label,
             auth: [],
-            refreshOAuth: refresh,
+            refreshOAuth: providerRefresh,
           });
         }
         const harness = createHarness();
@@ -247,6 +220,7 @@ async function withAuthRefreshHarness(
           await run({
             agentDir,
             harness,
+            refreshOAuth,
             otherProviderRefresh,
             retainedStore,
             authRefreshFailed: authRefreshFailed.promise,
@@ -266,179 +240,126 @@ async function withAuthRefreshHarness(
   });
 }
 
-describe("Codex app-server auth refresh authority", () => {
-  it.each<[string, AuthProfileCredential | undefined]>([
-    ["is deleted", undefined],
-    [
-      "becomes an OpenAI API key",
-      { type: "api_key", provider: "openai", key: "replacement-api-key" },
-    ],
-    ["becomes an OpenAI token", { type: "token", provider: "openai", token: "replacement-token" }],
-    [
-      "becomes another provider's OAuth credential",
-      oauthProfile("other-provider", {
-        provider: "anthropic",
-        expires: Date.now() + 24 * 60 * 60_000,
-      }),
-    ],
-  ])(
-    "rejects a retained persisted OAuth profile when canonical authority %s",
-    async (_name, credential) => {
-      const refreshOAuth = vi.fn(async (current: OAuthCredential) =>
-        rotateCredential(current, "retired-profile-rotated"),
-      );
-
-      await withAuthRefreshHarness(
-        refreshOAuth,
-        async ({ agentDir, harness, otherProviderRefresh, retainedStore }) => {
-          saveAuthProfileStore(
-            {
-              version: 1,
-              profiles: credential ? { [PROFILE_ID]: credential } : {},
-            },
-            agentDir,
-            {
-              filterExternalAuthProfiles: false,
-              sharedStoreWrite: true,
-              syncExternalCli: false,
-            },
-          );
-          expect(retainedStore.profiles[PROFILE_ID]).toMatchObject({
-            type: "oauth",
-            access: INITIAL_ACCESS,
-          });
-
-          const response = await refreshResponse(harness, "refresh-authority-lost");
-          expectRefreshError(
-            response,
-            `auth profile "${PROFILE_ID}" is no longer an OpenAI OAuth credential in its persisted OpenClaw store.`,
-          );
-          expect(response.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
-          expect(refreshOAuth).not.toHaveBeenCalled();
-          expect(otherProviderRefresh).not.toHaveBeenCalled();
-
-          const serialized = JSON.stringify(response);
-          expect(serialized).not.toContain(INITIAL_ACCESS);
-          expect(serialized).not.toContain("retired-profile-rotated-access");
+it.each<[string, AuthProfileCredential | undefined]>([
+  ["is deleted", undefined],
+  ["becomes an API key", { type: "api_key", provider: "openai", key: "replacement-api-key" }],
+  ["becomes an OpenAI token", { type: "token", provider: "openai", token: "replacement-token" }],
+  ["changes OAuth provider", oauthProfile("other", { provider: "anthropic" })],
+])("rejects a retained persisted OAuth profile when canonical authority %s", (_name, credential) =>
+  withAuthRefreshHarness(
+    async ({ agentDir, harness, refreshOAuth, otherProviderRefresh, retainedStore }) => {
+      saveAuthProfileStore(
+        { version: 1, profiles: credential ? { [PROFILE_ID]: credential } : {} },
+        agentDir,
+        {
+          filterExternalAuthProfiles: false,
+          sharedStoreWrite: true,
+          syncExternalCli: false,
         },
       );
+      expect(retainedStore.profiles[PROFILE_ID]).toMatchObject({
+        type: "oauth",
+        access: INITIAL_ACCESS,
+      });
+
+      const response = await refreshResponse(harness, "refresh-authority-lost");
+      expectRefreshError(
+        response,
+        `auth profile "${PROFILE_ID}" is no longer an OpenAI OAuth credential in its persisted OpenClaw store.`,
+      );
+      expect(response.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
+      expect(refreshOAuth).not.toHaveBeenCalled();
+      expect(otherProviderRefresh).not.toHaveBeenCalled();
+
+      expect(JSON.stringify(response)).not.toMatch(/initial-access|rotated-access/);
     },
+  ),
+);
+
+it("keeps a retained client fenced after a rejected account rotation", () =>
+  withAuthRefreshHarness(async ({ harness, refreshOAuth }) => {
+    refreshOAuth.mockImplementation(async (credential) =>
+      oauthProfile("other-account", { ...credential, accountId: "account-b" }),
+    );
+    const rejected = await refreshResponse(harness, "refresh-rejected");
+    expectRefreshError(rejected, /different OAuth account/i);
+
+    const afterFence = await refreshResponse(harness, "refresh-after-fence");
+    expectRefreshError(
+      afterFence,
+      `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
+    );
+    expect(afterFence.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
+    expect(refreshOAuth).toHaveBeenCalledTimes(1);
+
+    expect(JSON.stringify([rejected, afterFence])).not.toMatch(
+      /initial-access|other-account-access/,
+    );
+  }, createStdioAuthRefreshHarness));
+
+it("returns and persists a retained stdio refresh after its first-turn scope closes", async () => {
+  const firstTurn = new AsyncWorkScope();
+  await withAuthRefreshHarness(
+    async ({ agentDir, harness, retainedStore, refreshOAuth }) => {
+      await firstTurn.drain();
+      expect(() => firstTurn.run(() => undefined)).toThrow("Async work scope is closed");
+      await expect(refreshResponse(harness, "refresh-accepted")).resolves.toEqual({
+        id: "refresh-accepted",
+        result: {
+          accessToken: "rotated-access",
+          chatgptAccountId: ACCOUNT_ID,
+          chatgptPlanType: null,
+        },
+      });
+      expect(refreshOAuth).toHaveBeenCalledTimes(1);
+      expectStoredRotation(retainedStore, "rotated");
+      clearRuntimeAuthProfileStoreSnapshots();
+      expectStoredRotation(loadAuthProfileStoreForSecretsRuntime(agentDir), "rotated");
+    },
+    () => firstTurn.run(createStdioAuthRefreshHarness),
   );
+});
 
-  it("keeps a retained client fenced after a rejected account rotation", async () => {
-    const refreshOAuth = vi.fn(async (credential: OAuthCredential) =>
-      rotateCredential(credential, "other-account", "account-b"),
-    );
+it("joins an admitted rotation through persistence without replying or admitting refreshes after close", async () => {
+  const providerStarted = createDeferred<void>();
+  const releaseProvider = createDeferred<void>();
+  const transport = createClientHarness({ autoEmitExit: false });
 
-    await withAuthRefreshHarness(
-      refreshOAuth,
-      async ({ harness }) => {
-        const rejected = await refreshResponse(harness, "refresh-rejected");
-        expectRefreshError(rejected, /different OAuth account/i);
+  await withAuthRefreshHarness(
+    async ({ agentDir, harness, authRefreshFailed, refreshOAuth }) => {
+      refreshOAuth.mockImplementation(async (credential) => {
+        providerStarted.resolve();
+        await releaseProvider.promise;
+        return oauthProfile("closing-rotated", credential);
+      });
+      sendRefresh(harness, "refresh-before-close");
+      await providerStarted.promise;
+      let closed = false;
+      const closing = harness.client.closeAndWait().then((result) => {
+        closed = true;
+        return result;
+      });
+      try {
+        sendRefresh(harness, "refresh-after-close");
+        transport.emitExit();
+        await closeCodexAppServerTransportAndWait(transport.process);
+        // Physical-exit barrier exposes early close without waiting for the provider.
+        await setImmediate();
+        expect(closed).toBe(false);
 
-        const afterFence = await refreshResponse(harness, "refresh-after-fence");
-        expectRefreshError(
-          afterFence,
-          `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
-        );
-        expect(afterFence.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
-        expect(refreshOAuth).toHaveBeenCalledTimes(1);
-
-        const responses = JSON.stringify([rejected, afterFence]);
-        expect(responses).not.toContain(INITIAL_ACCESS);
-        expect(responses).not.toContain("other-account-access");
-      },
-      createStdioAuthRefreshHarness,
-    );
-  });
-
-  it("returns and persists a retained stdio refresh after its first-turn scope closes", async () => {
-    const firstTurn = new AsyncWorkScope();
-    const refreshOAuth = vi.fn(async (credential: OAuthCredential) =>
-      rotateCredential(credential, "rotated"),
-    );
-
-    await withAuthRefreshHarness(
-      refreshOAuth,
-      async ({ agentDir, harness, retainedStore }) => {
-        await firstTurn.drain();
-        expect(() => firstTurn.run(() => undefined)).toThrow("Async work scope is closed");
-        await expect(refreshResponse(harness, "refresh-accepted")).resolves.toEqual({
-          id: "refresh-accepted",
-          result: {
-            accessToken: "rotated-access",
-            chatgptAccountId: ACCOUNT_ID,
-            chatgptPlanType: null,
-          },
-        });
-        expect(refreshOAuth).toHaveBeenCalledTimes(1);
-        expect(retainedStore.profiles[PROFILE_ID]).toMatchObject({
-          access: "rotated-access",
-          refresh: "rotated-refresh",
-          accountId: ACCOUNT_ID,
-        });
-
+        releaseProvider.resolve();
+        await closing;
         clearRuntimeAuthProfileStoreSnapshots();
-        expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles[PROFILE_ID]).toMatchObject({
-          access: "rotated-access",
-          refresh: "rotated-refresh",
-          accountId: ACCOUNT_ID,
-        });
-      },
-      () => firstTurn.run(createStdioAuthRefreshHarness),
-    );
-  });
-
-  it("joins an admitted rotation through persistence without replying or admitting refreshes after close", async () => {
-    const providerStarted = createDeferred<void>();
-    const releaseProvider = createDeferred<void>();
-    const refreshOAuth = vi.fn(async (credential: OAuthCredential) => {
-      providerStarted.resolve();
-      await releaseProvider.promise;
-      return rotateCredential(credential, "closing-rotated");
-    });
-    const transport = createClientHarness({ autoEmitExit: false });
-
-    await withAuthRefreshHarness(
-      refreshOAuth,
-      async ({ agentDir, harness, authRefreshFailed }) => {
-        sendRefresh(harness, "refresh-before-close");
-        await providerStarted.promise;
-        let closed = false;
-        const closing = harness.client.closeAndWait().then((result) => {
-          closed = true;
-          return result;
-        });
-        try {
-          sendRefresh(harness, "refresh-after-close");
-          transport.emitExit();
-          await closeCodexAppServerTransportAndWait(transport.process);
-          // An event-loop barrier after physical exit lets an incorrectly early
-          // close settle; it does not wait an arbitrary amount for the provider.
-          await setImmediate();
-          expect(closed).toBe(false);
-
-          releaseProvider.resolve();
-          await closing;
-          clearRuntimeAuthProfileStoreSnapshots();
-          expect(
-            loadAuthProfileStoreForSecretsRuntime(agentDir).profiles[PROFILE_ID],
-          ).toMatchObject({
-            access: "closing-rotated-access",
-            refresh: "closing-rotated-refresh",
-            accountId: ACCOUNT_ID,
-          });
-          expect(refreshOAuth).toHaveBeenCalledTimes(1);
-          expect(harness.writes).toEqual([]);
-        } finally {
-          releaseProvider.resolve();
-          // Also settle the owner on a pre-fix assertion failure before removing
-          // the private database; the closed-client callback follows persistence.
-          await authRefreshFailed;
-          await closing;
-        }
-      },
-      () => transport,
-    );
-  });
+        expectStoredRotation(loadAuthProfileStoreForSecretsRuntime(agentDir), "closing-rotated");
+        expect(refreshOAuth).toHaveBeenCalledTimes(1);
+        expect(harness.writes).toEqual([]);
+      } finally {
+        releaseProvider.resolve();
+        // Settle persistence before private DB cleanup even on assertion failure.
+        await authRefreshFailed;
+        await closing;
+      }
+    },
+    () => transport,
+  );
 });
