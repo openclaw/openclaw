@@ -82,4 +82,20 @@ describe("resolveFutureConfigActionBlock", () => {
       }),
     ).toBeNull();
   });
+
+  it("refuses the override without recommending it when the caller disallows it", () => {
+    const block = expectFutureActionBlock(
+      resolveFutureConfigActionBlock({
+        action: "start the gateway service",
+        currentVersion: "2026.4.5",
+        snapshot: snapshotWithTouchedVersion("2026.4.23"),
+        env: { [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" },
+        allowOverride: false,
+      }),
+    );
+
+    const text = formatFutureConfigActionBlock(block);
+    expect(text).not.toContain(`Set ${ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV}=1`);
+    expect(text).toContain("rollback-and-recovery#downgrade");
+  });
 });
