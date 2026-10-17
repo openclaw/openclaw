@@ -4900,7 +4900,7 @@ describe("right-click Reply", () => {
       "rendered message bubble",
     );
     document.body.appendChild(container);
-    transcript.hostConnected();
+    transcript.start();
 
     try {
       dispatchContextMenu(bubble);
@@ -4923,7 +4923,7 @@ describe("right-click Reply", () => {
         container.querySelector(".agent-chat__composer-combobox textarea"),
       );
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       disposeChatView(container);
       container.remove();
     }
