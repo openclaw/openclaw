@@ -47,10 +47,8 @@ function registry<T extends { listConnected: () => NodeSession[] }>(params: T) {
   return Object.assign(value, { dispose });
 }
 
-function schedule(registryValue: object, source: NodeSession): void {
-  scheduleNodeConnectionNotification(registryValue as never, source, {
-    isFirstConnection: true,
-  });
+function schedule(registryValue: object, source: NodeSession, isFirstConnection = true): void {
+  scheduleNodeConnectionNotification(registryValue as never, source, { isFirstConnection });
 }
 
 beforeEach(() => {
@@ -125,16 +123,12 @@ describe("node connection notification routing", () => {
     await clock.advanceBy(1);
     expect(invoke).toHaveBeenCalledTimes(2);
 
-    scheduleNodeConnectionNotification(registryValue as never, source, {
-      isFirstConnection: false,
-    });
+    schedule(registryValue, source, false);
     await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
     expect(invoke).toHaveBeenCalledTimes(2);
 
     await clock.advanceBy(5 * 60_000 + 1);
-    scheduleNodeConnectionNotification(registryValue as never, source, {
-      isFirstConnection: false,
-    });
+    schedule(registryValue, source, false);
     await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
     expect(invoke).toHaveBeenCalledTimes(2);
   });
@@ -149,9 +143,7 @@ describe("node connection notification routing", () => {
 
     schedule(registryValue, oldSource);
     connected = [replacement, desk];
-    scheduleNodeConnectionNotification(registryValue as never, replacement, {
-      isFirstConnection: false,
-    });
+    schedule(registryValue, replacement, false);
     await clock.advanceBy(PRIMARY_DELAY_MS);
 
     expect(invoke).toHaveBeenCalledTimes(1);
@@ -215,9 +207,7 @@ describe("node connection notification routing", () => {
     await clock.advanceBy(PRIMARY_DELAY_MS);
 
     connected = [source];
-    scheduleNodeConnectionNotification(registryValue as never, source, {
-      isFirstConnection: false,
-    });
+    schedule(registryValue, source, false);
     await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -241,9 +231,7 @@ describe("node connection notification routing", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
 
     connected = [replacement, desk];
-    scheduleNodeConnectionNotification(registryValue as never, replacement, {
-      isFirstConnection: false,
-    });
+    schedule(registryValue, replacement, false);
     resolveInvoke?.({ ok: true });
     await firstDelivery;
     await clock.advanceBy(PRIMARY_DELAY_MS);

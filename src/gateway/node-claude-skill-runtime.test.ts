@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
@@ -58,6 +58,7 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const content =
   "---\nname: guide\ndescription: A pinned node procedure\n---\n# Guide\nRun scripts/check.sh and read references/data.bin.\n";
+const nodeConnection = { nodeId: "node-1", connId: "connection-1" };
 
 async function fixture(
   source: string,
@@ -165,8 +166,7 @@ async function fixture(
   const progress = (chunk: string, seq: number) =>
     registry.handleInvokeProgress({
       invokeId: currentFrame!.id,
-      nodeId: "node-1",
-      connId: "connection-1",
+      ...nodeConnection,
       chunk,
       seq,
     });
@@ -241,8 +241,7 @@ async function fixture(
           });
           registry.handleInvokeResult({
             id: frame.id,
-            nodeId: "node-1",
-            connId: "connection-1",
+            ...nodeConnection,
             ok: true,
             payload: {
               exitCode: result.exitCode,
@@ -253,8 +252,7 @@ async function fixture(
         } catch (error) {
           registry.handleInvokeResult({
             id: frame.id,
-            nodeId: "node-1",
-            connId: "connection-1",
+            ...nodeConnection,
             ok: false,
             error: { message: String(error) },
           });
@@ -312,7 +310,6 @@ async function fixture(
     pins,
     authority,
     context,
-    root,
     workspace,
     placements,
     claim,
@@ -325,8 +322,7 @@ async function fixture(
     completeInvocation() {
       registry.handleInvokeResult({
         id: currentFrame!.id,
-        nodeId: "node-1",
-        connId: "connection-1",
+        ...nodeConnection,
         ok: true,
         payload: { exitCode: 0, stderrTail: "", truncated: false },
       });
@@ -396,12 +392,12 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
           mode: number;
           executed: string;
         };
-        expect(actual.instruction).toBe(content);
-        expect(actual.executed).toBe("pinned");
-        expect(actual.mode).toBe(0o500);
-        expect(actual.hash).toBe(
-          createHash("sha256").update(Buffer.alloc(150_000, 129)).digest("hex"),
-        );
+        expect(actual).toMatchObject({
+          instruction: content,
+          executed: "pinned",
+          mode: 0o500,
+          hash: createHash("sha256").update(Buffer.alloc(150_000, 129)).digest("hex"),
+        });
         expect(actual.prompt).toContain(f.pins[0]!.name);
         expect(actual.input).toContain(actual.skillPath);
         expect(actual.input).not.toContain(selected.baseDir);
@@ -466,12 +462,11 @@ let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end
     const running = f.execute();
     const outcome = Promise.allSettled([running]);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         pairingStarted.promise,
-        running.then(() => {
-          throw new Error("Node turn completed before pairing resolution");
-        }),
-      ]);
+        running,
+        "Node turn completed before pairing resolution",
+      );
       current = false;
       pairing.resolve({ identity: "node-1", generation: "generation-1" });
 
@@ -556,12 +551,11 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
       try {
         running = f.execute();
         void running.catch(() => {});
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           publishing.promise,
-          running.then(() => {
-            throw new Error("Node turn ended before the publication boundary");
-          }),
-        ]);
+          running,
+          "Node turn ended before the publication boundary",
+        );
         if (failure === "run-close") {
           f.admission.close();
         }

@@ -1,6 +1,3 @@
-/**
- * Node connect reconciliation tests.
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -29,6 +26,37 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
     commands: ["canvas.snapshot"],
     ...overrides,
   };
+}
+
+function hostConnectParams(overrides: Partial<ConnectParams> = {}, platform = "macos") {
+  return makeNodeConnectParams({
+    client: {
+      id: GATEWAY_CLIENT_IDS.NODE_HOST,
+      version: "test",
+      platform,
+      deviceFamily: platform === "macos" ? "Mac" : "Windows",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    },
+    ...overrides,
+  });
+}
+
+function desktopConnectParams() {
+  return hostConnectParams({
+    caps: ["screen", "computer"],
+    commands: ["screen.snapshot", "computer.act"],
+    computerUse: computerUseDescriptor(),
+  });
+}
+
+type ReconcileInput = Parameters<typeof reconcileNodePairingOnConnect>[0];
+function reconcile(overrides: Pick<ReconcileInput, "requestPairing"> & Partial<ReconcileInput>) {
+  return reconcileNodePairingOnConnect({
+    cfg: {},
+    connectParams: makeNodeConnectParams(),
+    pairedNode: null,
+    ...overrides,
+  });
 }
 
 function makePairedNode(overrides?: Partial<PairedDeviceNode>): PairedDeviceNode {
@@ -94,10 +122,7 @@ describe("reconcileNodePairingOnConnect", () => {
   it("marks the first-surface request silent when device pairing was non-interactive", async () => {
     const requestPairing = makePendingPairingRequest("req-silent");
 
-    await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams(),
-      pairedNode: null,
+    await reconcile({
       initialSurfaceSilent: true,
       requestPairing,
     });
@@ -108,8 +133,7 @@ describe("reconcileNodePairingOnConnect", () => {
   it("keeps surface upgrade requests interactive even when the device paired silently", async () => {
     const requestPairing = makePendingPairingRequest("req-upgrade-loud");
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
+    const result = await reconcile({
       connectParams: makeNodeConnectParams({
         caps: ["camera", "screen"],
         commands: [],
@@ -130,21 +154,12 @@ describe("reconcileNodePairingOnConnect", () => {
   it("keeps first-time pending node surfaces declared but not effective", async () => {
     const requestPairing = makePendingPairingRequest("req-pending");
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        client: {
-          id: GATEWAY_CLIENT_IDS.NODE_HOST,
-          version: "test",
-          platform: "macos",
-          deviceFamily: "Mac",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
+    const result = await reconcile({
+      connectParams: hostConnectParams({
         caps: ["talk"],
         commands: ["system.run"],
         permissions: { camera: true },
       }),
-      pairedNode: null,
       requestPairing,
     });
 
@@ -172,21 +187,10 @@ describe("reconcileNodePairingOnConnect", () => {
       "system.execApprovals.set",
     ];
     const previouslyApprovedCommands = ["system.run.prepare", "system.run", "system.which"];
-    const connectParams = makeNodeConnectParams({
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        version: "test",
-        platform: "windows",
-        deviceFamily: "Windows",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
-      caps: ["system"],
-      commands,
-    });
+    const connectParams = hostConnectParams({ caps: ["system"], commands }, "windows");
     const requestPairing = makePendingPairingRequest("req-windows");
 
-    const upgrade = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
+    const upgrade = await reconcile({
       connectParams,
       pairedNode: makePairedNode({ caps: ["system"], commands: previouslyApprovedCommands }),
       requestPairing,
@@ -194,15 +198,10 @@ describe("reconcileNodePairingOnConnect", () => {
 
     expect(upgrade.declaredCommands).toEqual(commands);
     expect(upgrade.effectiveCommands).toEqual(previouslyApprovedCommands);
-    expect(requestPairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commands,
-      }),
-    );
+    expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ commands }));
 
     const approvedPairingRequest = vi.fn();
-    const approvedReconnect = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
+    const approvedReconnect = await reconcile({
       connectParams,
       pairedNode: makePairedNode({ caps: ["system"], commands }),
       requestPairing: approvedPairingRequest,
@@ -213,9 +212,7 @@ describe("reconcileNodePairingOnConnect", () => {
   });
 
   it("keeps an approved computer.act surface effective while a computer-use provider plugin is active", async () => {
-    // Reproduces a default macOS Gateway: the bundled computer-use provider plugin
-    // auto-starts there, so its own registrations are in the active registry while
-    // a native macOS node reconnects on an already-approved desktop surface.
+    // The default macOS Gateway's provider is active while the approved node reconnects.
     const registry = createEmptyPluginRegistry();
     registerComputerUseProvider(
       {
@@ -254,20 +251,8 @@ describe("reconcileNodePairingOnConnect", () => {
     setActivePluginRegistry(registry);
     const requestPairing = vi.fn();
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        client: {
-          id: GATEWAY_CLIENT_IDS.NODE_HOST,
-          version: "test",
-          platform: "macos",
-          deviceFamily: "Mac",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
-        caps: ["screen", "computer"],
-        commands: ["screen.snapshot", "computer.act"],
-        computerUse: computerUseDescriptor(),
-      }),
+    const result = await reconcile({
+      connectParams: desktopConnectParams(),
       pairedNode: makePairedNode({
         caps: ["screen", "computer"],
         commands: ["screen.snapshot", "computer.act"],
@@ -290,27 +275,14 @@ describe("reconcileNodePairingOnConnect", () => {
   });
 
   it("drops a capability whose declared commands were all filtered by policy", async () => {
-    // Capability and command are one advertisement. An operator deny that removes
-    // every declared computer command must remove the capability with it instead
-    // of leaving a surface that reads as available and rejects every invoke.
+    // Denying every command must also remove the advertised capability.
     const requestPairing = makePendingPairingRequest("req-denied-computer");
 
-    const result = await reconcileNodePairingOnConnect({
+    const result = await reconcile({
       cfg: {
         gateway: { nodes: { commands: { deny: ["computer.act"] } } },
-      } as never,
-      connectParams: makeNodeConnectParams({
-        client: {
-          id: GATEWAY_CLIENT_IDS.NODE_HOST,
-          version: "test",
-          platform: "macos",
-          deviceFamily: "Mac",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
-        caps: ["screen", "computer"],
-        commands: ["screen.snapshot", "computer.act"],
-        computerUse: computerUseDescriptor(),
-      }),
+      },
+      connectParams: desktopConnectParams(),
       pairedNode: makePairedNode({
         caps: ["screen", "computer"],
         commands: ["screen.snapshot"],
@@ -328,20 +300,8 @@ describe("reconcileNodePairingOnConnect", () => {
   it("requests pairing when a macOS node first declares computer.act", async () => {
     const requestPairing = makePendingPairingRequest("req-computer");
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        client: {
-          id: GATEWAY_CLIENT_IDS.NODE_HOST,
-          version: "test",
-          platform: "macos",
-          deviceFamily: "Mac",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
-        caps: ["screen", "computer"],
-        commands: ["screen.snapshot", "computer.act"],
-        computerUse: computerUseDescriptor(),
-      }),
+    const result = await reconcile({
+      connectParams: desktopConnectParams(),
       pairedNode: makePairedNode({
         caps: ["screen"],
         commands: ["screen.snapshot"],
@@ -388,28 +348,15 @@ describe("reconcileNodePairingOnConnect", () => {
     setActivePluginRegistry(registry);
     const requestPairing = makePendingPairingRequest("req-plugin-tool");
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
-      connectParams: makeNodeConnectParams({
-        client: {
-          id: GATEWAY_CLIENT_IDS.NODE_HOST,
-          version: "test",
-          platform: "macos",
-          deviceFamily: "Mac",
-          mode: GATEWAY_CLIENT_MODES.NODE,
-        },
-        commands: ["remote.echo"],
-      }),
-      pairedNode: null,
+    const result = await reconcile({
+      connectParams: hostConnectParams({ commands: ["remote.echo"] }),
       requestPairing,
     });
 
     expect(result.declaredCommands).toEqual(["remote.echo"]);
     expect(result.effectiveCommands).toEqual([]);
     expect(requestPairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commands: ["remote.echo"],
-      }),
+      expect.objectContaining({ commands: ["remote.echo"] }),
     );
   });
 
@@ -419,8 +366,7 @@ describe("reconcileNodePairingOnConnect", () => {
   ])("filters host commands when canonical platform %s", async (_label, clientExtra) => {
     const requestPairing = makePendingPairingRequest("req-mismatch");
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
+    const result = await reconcile({
       connectParams: makeNodeConnectParams({
         client: {
           id: "openclaw-ios",
@@ -431,23 +377,17 @@ describe("reconcileNodePairingOnConnect", () => {
         },
         commands: ["system.run", "system.which"],
       }),
-      pairedNode: null,
       requestPairing,
     });
 
     expect(result.declaredCommands).toEqual([]);
-    expect(requestPairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commands: [],
-      }),
-    );
+    expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ commands: [] }));
   });
 
   it("keeps the approved surface when paired-node reapproval is throttled", async () => {
     const requestPairing = vi.fn(async () => null);
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
+    const result = await reconcile({
       connectParams: makeNodeConnectParams({
         caps: ["camera", "screen"],
         commands: [],
@@ -470,8 +410,7 @@ describe("reconcileNodePairingOnConnect", () => {
   it("requires a fresh pairing request when paired node permissions widen", async () => {
     const requestPairing = makePendingPairingRequest("req-permissions");
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
+    const result = await reconcile({
       connectParams: makeNodeConnectParams({
         commands: [],
         permissions: { camera: true, notifications: true },
@@ -495,8 +434,7 @@ describe("reconcileNodePairingOnConnect", () => {
   it("applies declared capability and permission downgrades without reapproval", async () => {
     const requestPairing = vi.fn();
 
-    const result = await reconcileNodePairingOnConnect({
-      cfg: {} as never,
+    const result = await reconcile({
       connectParams: makeNodeConnectParams({
         caps: ["camera"],
         commands: [],
