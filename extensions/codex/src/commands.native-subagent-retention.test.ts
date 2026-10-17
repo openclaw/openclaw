@@ -6,16 +6,16 @@ import { expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
-  isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadClaimed as isClaimed,
   releaseCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
 import { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexPluginConfig } from "./app-server/config.js";
-import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import {
   collabItem,
   itemNotification,
   nativeCompletionNotification,
+  registerCodexNativeSubagentMonitor as registerParent,
 } from "./app-server/native-subagent-monitor.test-support.js";
 import { isJsonObject, type CodexServerNotification } from "./app-server/protocol.js";
 import {
@@ -26,7 +26,7 @@ import { createCodexAppServerBindingStore } from "./app-server/session-binding.j
 import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient as releaseClient,
 } from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { createCodexCommandHost } from "./command-host.test-support.js";
@@ -57,8 +57,8 @@ it.each(["claimed-successor", "retained-successor"] as const)(
     await fs.mkdir(nativeHome);
     vi.stubEnv("CODEX_HOME", nativeHome);
     const threadId = "r5-native-child";
-    const parentThreadId = "r5-native-parent";
-    const parentTurnId = "r5-original-parent-turn";
+    const parentThreadId = "parent-thread";
+    const turnId = "parent-turn";
     const bindingStore = createCodexAppServerBindingStore(
       createCodexSqliteTestBindingStateStore({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -80,6 +80,13 @@ it.each(["claimed-successor", "retained-successor"] as const)(
     let nativeLoaded = true;
     let replyToLoadedSnapshot: (() => void) | undefined;
     const unsubscribeGenerations: number[] = [];
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: "codex-cli/0.154.0", codexHome: nativeHome },
+      "account/read": { account: null, requiresOpenaiAuth: false },
+      "config/read": { config: {}, origins: {}, layers: [] },
+      "thread/resume": response,
+      "thread/unsubscribe": { status: "unsubscribed" },
+    };
     const harness = createClientHarness({
       onWrite(line, send) {
         const message: unknown = JSON.parse(line);
@@ -90,61 +97,39 @@ it.each(["claimed-successor", "retained-successor"] as const)(
         ) {
           return;
         }
-        let result: unknown;
-        switch (message.method) {
-          case "initialize":
-            result = { userAgent: "codex-cli/0.154.0", codexHome: nativeHome };
-            break;
-          case "account/read":
-            result = { account: null, requiresOpenaiAuth: false };
-            break;
-          case "config/read":
-            result = { config: {}, origins: {}, layers: [] };
-            break;
-          case "thread/read":
-            result = {
-              thread: {
-                ...response.thread,
-                status: { type: nativeLoaded ? "idle" : "notLoaded" },
-              },
-            };
-            break;
-          case "thread/resume":
-            nativeGeneration += 1;
-            nativeLoaded = true;
-            result = response;
-            break;
-          case "thread/unsubscribe":
-            unsubscribeGenerations.push(nativeGeneration);
-            nativeLoaded = false;
-            result = { status: "unsubscribed" };
-            break;
-          case "thread/loaded/list": {
-            const snapshot = { data: nativeLoaded ? [threadId] : [], nextCursor: null };
-            replyToLoadedSnapshot = () => send({ id: message.id, result: snapshot });
-            return;
-          }
-          default:
-            send({
-              id: message.id,
-              error: { code: -32601, message: `Unexpected R5 wire method ${message.method}` },
-            });
-            return;
+        const { id, method } = message;
+        let result = Object.hasOwn(responses, method) ? responses[method] : undefined;
+        if (method === "thread/loaded/list") {
+          const snapshot = { data: nativeLoaded ? [threadId] : [], nextCursor: null };
+          replyToLoadedSnapshot = () => send({ id, result: snapshot });
+          return;
         }
-        send({ id: message.id, result });
+        if (method === "thread/read") {
+          result = {
+            thread: { ...response.thread, status: { type: nativeLoaded ? "idle" : "notLoaded" } },
+          };
+        } else if (method === "thread/resume") {
+          nativeGeneration += 1;
+          nativeLoaded = true;
+        } else if (method === "thread/unsubscribe") {
+          unsubscribeGenerations.push(nativeGeneration);
+          nativeLoaded = false;
+        }
+        send(
+          result === undefined
+            ? { id, error: { code: -32601, message: `Unexpected R5 wire method ${method}` } }
+            : { id, result },
+        );
       },
     });
-    const notifications: Array<{
-      notification: CodexServerNotification;
-      completion: Promise<void> | void;
-    }> = [];
+    const notifications: [CodexServerNotification, Promise<void> | void][] = [];
     const addNotificationHandler = harness.client.addNotificationHandler.bind(harness.client);
     const notificationObserver = vi
       .spyOn(harness.client, "addNotificationHandler")
       .mockImplementation((handler) =>
         addNotificationHandler((notification) => {
           const completion = handler(notification);
-          notifications.push({ notification, completion });
+          notifications.push([notification, completion]);
           return completion;
         }),
       );
@@ -156,7 +141,11 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       return harness.client;
     });
     const transitionObservation = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
-    const drainTransitions = async () => {
+    const settleNotification = async (cursor: number, notification: CodexServerNotification) => {
+      await vi.waitFor(() =>
+        expect(notifications.slice(cursor).map(([seen]) => seen)).toContainEqual(notification),
+      );
+      await Promise.all(notifications.slice(cursor).map(([, completion]) => completion));
       let joined = 0;
       while (joined < transitionObservation.mock.results.length) {
         const pending = transitionObservation.mock.results.slice(joined);
@@ -166,24 +155,9 @@ it.each(["claimed-successor", "retained-successor"] as const)(
         );
       }
     };
-    const settleNotification = async (cursor: number, notification: CodexServerNotification) => {
-      await vi.waitFor(() =>
-        expect(notifications.slice(cursor).map((entry) => entry.notification)).toContainEqual(
-          notification,
-        ),
-      );
-      await Promise.all(notifications.slice(cursor).map((entry) => entry.completion));
-      await drainTransitions();
-    };
-    const readBinding = () =>
-      bindingStore.read({
-        kind: "session",
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: context.sessionKey,
-      });
+    const readBinding = () => bindingStore.read({ kind: "session", ...context.sessionTarget });
     let leasedClient: CodexAppServerClient | undefined;
-    let parent: Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>> | undefined;
+    let parent: Awaited<ReturnType<typeof registerParent>> | undefined;
     let successor: Awaited<ReturnType<typeof consumeCodexAppServerLiveThread>>;
     try {
       leasedClient = await getLeasedSharedCodexAppServerClient({
@@ -192,61 +166,38 @@ it.each(["claimed-successor", "retained-successor"] as const)(
         agentDir: resolveDefaultAgentDir(context.config),
       });
       expect(leasedClient).toBe(harness.client);
-      parent = await codexNativeSubagentMonitorRuntime.register({
-        client: leasedClient,
-        parentThreadId,
-      });
-      parent.bindTurn(parentTurnId);
+      parent = await registerParent({ client: leasedClient, parentThreadId });
+      parent.bindTurn(turnId);
+      const spawn = { parent_thread_id: parentThreadId, depth: 1, agent_path: threadId };
       harness.send({
         method: "thread/started",
         params: {
           thread: {
             id: threadId,
             parentThreadId,
-            source: {
-              subAgent: {
-                thread_spawn: {
-                  parent_thread_id: parentThreadId,
-                  depth: 1,
-                  agent_path: threadId,
-                },
-              },
-            },
+            source: { subAgent: { thread_spawn: spawn } },
           },
         },
       });
-      await vi.waitFor(() =>
-        expect(isCodexAppServerLiveThreadClaimed(harness.client, threadId)).toBe(true),
-      );
-      harness.send(
-        nativeCompletionNotification({
-          parentThreadId,
-          turnId: parentTurnId,
-          agentPath: threadId,
-        }),
-      );
+      await vi.waitFor(() => expect(isClaimed(harness.client, threadId)).toBe(true));
+      harness.send(nativeCompletionNotification({ turnId, agentPath: threadId }));
       await vi.waitFor(() => {
-        expect(isCodexAppServerLiveThreadClaimed(harness.client, threadId)).toBe(false);
+        expect(isClaimed(harness.client, threadId)).toBe(false);
         expect(hasCodexAppServerLiveThread(harness.client, threadId)).toBe(true);
       });
       const closeItem = collabItem("closeAgent", [threadId], {
         id: "r5-original-close",
-        senderThreadId: parentThreadId,
         agentsStates: { [threadId]: { status: "completed" } },
       });
-      const closeStart = itemNotification(
-        { ...closeItem, status: "inProgress" },
-        parentTurnId,
-        parentThreadId,
-        "started",
-      );
+      const startedItem = { ...closeItem, status: "inProgress" };
+      const closeStart = itemNotification(startedItem, turnId, parentThreadId, "started");
       const startCursor = notifications.length;
       harness.send(closeStart);
       await settleNotification(startCursor, closeStart);
       await expect(releaseCodexAppServerLiveThread(harness.client, threadId)).resolves.toBe(true);
       nativeLoaded = false;
       const unsubscribesBeforeClose = unsubscribeGenerations.length;
-      const closeCompletion = itemNotification(closeItem, parentTurnId, parentThreadId);
+      const closeCompletion = itemNotification(closeItem, turnId, parentThreadId);
       const completionCursor = notifications.length;
       harness.send(closeCompletion);
       await vi.waitFor(() => expect(replyToLoadedSnapshot).toBeTypeOf("function"));
@@ -269,11 +220,8 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       const bindingBeforeClose = readBinding();
       replyToLoadedSnapshot?.();
       await settleNotification(completionCursor, closeCompletion);
-      const bindingAfterClose = readBinding();
-      if (scenario !== "claimed-successor") {
-        successor = await consumeCodexAppServerLiveThread(harness.client, threadId);
-      }
-      expect(bindingAfterClose).toEqual(bindingBeforeClose);
+      expect(readBinding()).toEqual(bindingBeforeClose);
+      successor ??= await consumeCodexAppServerLiveThread(harness.client, threadId);
       expect(unsubscribeGenerations.slice(unsubscribesBeforeClose)).toEqual([]);
       expect(nativeLoaded).toBe(true);
       expect(successor).toBeDefined();
@@ -282,8 +230,7 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       await parent?.unregister();
       await successor?.release(threadId);
       if (leasedClient) {
-        expect(releaseLeasedSharedCodexAppServerClient(leasedClient)).toBe(true);
-        expect(releaseLeasedSharedCodexAppServerClient(leasedClient)).toBe(false);
+        expect([releaseClient(leasedClient), releaseClient(leasedClient)]).toEqual([true, false]);
       }
       await harness.client.closeAndWait();
       transitionObservation.mockRestore();

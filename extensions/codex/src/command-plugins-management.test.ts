@@ -64,9 +64,7 @@ describe("Codex /codex plugins subcommand", () => {
   });
 
   it("renders the plugins menu as portable slash-command buttons", async () => {
-    const io = inMemoryIO();
-
-    const result = await command(["menu"], io);
+    const result = await command(["menu"]);
 
     expect(result.text).toContain("/codex plugins list");
     expect(buttonCommands(result)).toEqual([
@@ -423,9 +421,7 @@ describe("Codex /codex plugins subcommand", () => {
     expect(result.text).toContain("GitHub: ChatGPT setup/manage link unavailable");
     expect(result.text).toContain("In Codex CLI, run /apps and select this app");
     expect(presentationButtons(result).some((button) => button.action?.type === "url")).toBe(false);
-    if (installUrl) {
-      expect(result.text).not.toContain(installUrl);
-    }
+    expect(result.text).not.toContain(installUrl);
     expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
   });
 
@@ -475,8 +471,7 @@ describe("Codex /codex plugins subcommand", () => {
   });
 
   it("reports when a target plugin is not configured rather than silently no-oping", async () => {
-    const io = inMemoryIO();
-    const result = await command(["disable", "chrome_@ops"], io);
+    const result = await command(["disable", "chrome_@ops"]);
     expect(result.text).toContain("not configured");
     expect(result.text).toContain("chrome＿＠ops");
     expect(result.text).not.toContain("@ops");

@@ -33,11 +33,8 @@ useCodexControlTestState({
 });
 
 function accountToken(accountId: string) {
-  return `e30.${Buffer.from(
-    JSON.stringify({
-      "https://api.openai.com/auth": { chatgpt_account_id: accountId },
-    }),
-  ).toString("base64url")}.test-signature`;
+  const claims = { "https://api.openai.com/auth": { chatgpt_account_id: accountId } };
+  return `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.test-signature`;
 }
 
 async function fixture(stableAccount = true) {
@@ -55,15 +52,10 @@ async function fixture(stableAccount = true) {
       ...(stableAccount ? { accountId: "test-second-account" } : {}),
     },
   });
-  const current = {
-    enabled: true,
-    plugins: { notes: { marketplaceName: "company-tools", pluginName: "notes", enabled: true } },
-  };
-  const bindingStore = createCodexTestBindingStore();
   const deps = createCodexCommandHost({
-    bindingStore,
+    bindingStore: createCodexTestBindingStore(),
     codexPluginsManagementIo: {
-      readConfig: async () => structuredClone(current),
+      readConfig: async () => ({ enabled: true }),
       mutate: vi.fn(),
     },
   });
@@ -89,55 +81,46 @@ async function fixture(stableAccount = true) {
   await writeSession();
   const harness = createClientHarness();
   clients.push(harness);
-  const acquire = vi
-    .spyOn(sharedClients, "getLeasedSharedCodexAppServerClient")
-    .mockResolvedValue(harness.client);
-  const release = vi
-    .spyOn(sharedClients, "releaseLeasedSharedCodexAppServerClient")
-    .mockReturnValue(true);
-  const request = vi.spyOn(harness.client, "request").mockResolvedValue({ apps: [] });
   const run = <T>(
     callback: Parameters<typeof withCodexPluginCommandContext<T>>[1],
     pluginConfig: Parameters<typeof withCodexPluginCommandContext>[0]["pluginConfig"] = {},
   ) => withCodexPluginCommandContext({ deps, ctx, pluginConfig }, callback);
-  const installed = (forceRefresh = false) =>
-    run(async (context) => context.request("app/installed", { forceRefresh }));
-  const accountUpdated = () =>
-    harness.send({
-      method: "account/updated",
-      params: { authMode: "chatgptAuthTokens", planType: "team" },
-    });
-  const readWrite = async (index: number) => JSON.parse(await harness.waitForWrite(index));
   return {
     deps,
     ctx,
     harness,
-    acquire,
-    release,
-    request,
+    acquire: vi
+      .spyOn(sharedClients, "getLeasedSharedCodexAppServerClient")
+      .mockResolvedValue(harness.client),
+    release: vi
+      .spyOn(sharedClients, "releaseLeasedSharedCodexAppServerClient")
+      .mockReturnValue(true),
+    request: vi.spyOn(harness.client, "request").mockResolvedValue({ apps: [] }),
     agentDir,
     workspaceDir,
     run,
     writeSession,
-    installed,
-    accountUpdated,
-    readWrite,
+    installed: (forceRefresh = false, pluginConfig = {}) =>
+      run(async (context) => context.request("app/installed", { forceRefresh }), pluginConfig),
+    accountUpdated: () =>
+      harness.send({
+        method: "account/updated",
+        params: { authMode: "chatgptAuthTokens", planType: "team" },
+      }),
+    readWrite: async (index: number) => JSON.parse(await harness.waitForWrite(index)),
   };
 }
 
 async function inspectPending(
   test: Awaited<ReturnType<typeof fixture>>,
   operation: Promise<unknown>,
-  inspect: (failure: () => unknown, pending: Promise<void>) => Promise<void>,
+  inspect: (failure: () => unknown, pending: Promise<unknown>) => Promise<void>,
   cleanup?: () => void,
 ) {
   let failure: unknown;
-  const pending = operation.then(
-    () => undefined,
-    (error: unknown) => {
-      failure = error;
-    },
-  );
+  const pending = operation.catch((error: unknown) => {
+    failure = error;
+  });
   try {
     await inspect(() => failure, pending);
   } finally {
@@ -164,19 +147,17 @@ describe("Codex plugin command context", () => {
     const prepare = commandRpc.prepareCodexControlSessionAuth;
     vi.spyOn(commandRpc, "prepareCodexControlSessionAuth").mockImplementation(async (...args) => {
       const auth = await prepare(...args);
-      const store =
+      const profile =
         "authProfileStore" in auth.clientOptions
-          ? structuredClone(auth.clientOptions.authProfileStore)
+          ? auth.clientOptions.authProfileStore?.profiles["openai:second"]
           : undefined;
-      const profile = store?.profiles["openai:second"];
-      if (!store || profile?.type !== "oauth") {
+      if (profile?.type !== "oauth") {
         throw new Error("Expected the prepared fixture profile");
       }
-      profile.access = accountToken("test-replacement-account");
       await upsertAuthProfileAsync({
         agentDir: test.agentDir,
         profileId: "openai:second",
-        credential: profile,
+        credential: { ...profile, access: accountToken("test-replacement-account") },
       });
       return auth;
     });
@@ -186,7 +167,7 @@ describe("Codex plugin command context", () => {
     expect(test.acquire).not.toHaveBeenCalled();
   });
 
-  it("accepts delayed startup notifications for the unchanged managed account", async () => {
+  it("accepts delayed startup notifications for the same account", async () => {
     const test = await fixture();
     let pendingStartupNotification = true;
     test.acquire.mockImplementation(async () => {
@@ -223,40 +204,29 @@ describe("Codex plugin command context", () => {
   });
 
   it.each([
-    { unansweredMethod: "account/read", pluginConfig: {}, timeoutMs: 60_000 },
-    {
-      unansweredMethod: "app/installed",
-      pluginConfig: { appServer: { requestTimeoutMs: 30_000 } },
-      timeoutMs: 30_000,
-    },
-  ])(
-    "bounds an unanswered $unansweredMethod RPC by the $timeoutMs ms operation deadline and releases its lease",
-    async ({ unansweredMethod, pluginConfig, timeoutMs }) => {
+    ["account/read", {}, 60_000],
+    ["app/installed", { appServer: { requestTimeoutMs: 30_000 } }, 30_000],
+  ] as const)(
+    "bounds unanswered %s by its operation deadline and releases its lease",
+    async (unansweredMethod, pluginConfig, timeoutMs) => {
       const test = await fixture();
       test.request.mockRestore();
       // Install the clock before acquisition can create a deadline; leave filesystem work real.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      await inspectPending(
-        test,
-        test.run(
-          async (context) => context.request("app/installed", { forceRefresh: false }),
-          pluginConfig,
-        ),
-        async (failure) => {
-          const startup = await test.readWrite(0);
-          expect(startup.method).toBe("account/read");
-          const startupDelayMs = unansweredMethod === "app/installed" ? 20_000 : 0;
-          if (startupDelayMs) {
-            await vi.advanceTimersByTimeAsync(startupDelayMs);
-            test.harness.send({ id: startup.id, result: {} });
-            expect((await test.readWrite(1)).method).toBe("app/installed");
-          }
-          await vi.advanceTimersByTimeAsync(timeoutMs - startupDelayMs + 1);
-          expect(failure()).toBeInstanceOf(Error);
-          expect(String(failure())).toMatch(/timed out|startup could not be confirmed/);
-          expect(test.release).toHaveBeenCalledOnce();
-        },
-      );
+      await inspectPending(test, test.installed(false, pluginConfig), async (failure) => {
+        const startup = await test.readWrite(0);
+        expect(startup.method).toBe("account/read");
+        const startupDelayMs = unansweredMethod === "app/installed" ? 20_000 : 0;
+        if (startupDelayMs) {
+          await vi.advanceTimersByTimeAsync(startupDelayMs);
+          test.harness.send({ id: startup.id, result: {} });
+          expect((await test.readWrite(1)).method).toBe("app/installed");
+        }
+        await vi.advanceTimersByTimeAsync(timeoutMs - startupDelayMs + 1);
+        expect(failure()).toBeInstanceOf(Error);
+        expect(String(failure())).toMatch(/timed out|startup could not be confirmed/);
+        expect(test.release).toHaveBeenCalledOnce();
+      });
     },
   );
 
@@ -332,33 +302,30 @@ describe("Codex plugin command context", () => {
     },
   );
 
-  it.each([true, false])(
-    "only exposes a thread owned by this physical client (%s)",
-    async (sameClient) => {
-      const test = await fixture();
-      await test.deps.bindingStore.mutate(
-        {
-          kind: "session",
-          agentId: "second",
-          sessionId: "session-original",
-          sessionKey: test.ctx.sessionKey,
+  it.each([true, false])("exposes only this physical client's thread (%s)", async (sameClient) => {
+    const test = await fixture();
+    await test.deps.bindingStore.mutate(
+      {
+        kind: "session",
+        agentId: "second",
+        sessionId: "session-original",
+        sessionKey: test.ctx.sessionKey,
+      },
+      {
+        kind: "set",
+        binding: {
+          threadId: "owned-thread",
+          clientId: sameClient ? test.harness.client.getInstanceId() : "retired-client",
+          cwd: test.workspaceDir,
+          authProfileId: "openai:second",
         },
-        {
-          kind: "set",
-          binding: {
-            threadId: "owned-thread",
-            clientId: sameClient ? test.harness.client.getInstanceId() : "retired-client",
-            cwd: test.workspaceDir,
-            authProfileId: "openai:second",
-          },
-        },
-      );
-      const threadId = await test.run(async (context) => context.threadId);
-      expect(threadId).toBe(sameClient ? "owned-thread" : undefined);
-    },
-  );
+      },
+    );
+    const threadId = await test.run(async (context) => context.threadId);
+    expect(threadId).toBe(sameClient ? "owned-thread" : undefined);
+  });
 
-  it("does not publish a refresh response after its conversation session changes and releases the client", async () => {
+  it("rejects stale conversation refreshes without publishing and releases the client", async () => {
     const test = await fixture();
     const appCache = new CodexAppInventoryCache();
     let appCacheKey = "";
@@ -396,11 +363,7 @@ describe("Codex plugin command context", () => {
     await expect(
       test.run(async (context) => {
         appCacheKey = context.appCacheKey;
-        await refreshCodexAppRuntimeState({
-          request: context.request,
-          appCache,
-          appCacheKey,
-        });
+        await refreshCodexAppRuntimeState({ ...context, appCache });
       }),
     ).rejects.toThrow("Codex session generation is no longer current");
     expect(

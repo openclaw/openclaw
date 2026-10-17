@@ -185,8 +185,6 @@ describe("codex conversation controls", () => {
     });
     const target = await boundTarget({
       threadId: "thread-1",
-      model: "gpt-5.4",
-      modelProvider: "openai",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
@@ -210,8 +208,6 @@ describe("codex conversation controls", () => {
     const prepared = {
       threadId: "thread-prepared",
       cwd: tempDir,
-      model: "gpt-5.4",
-      modelProvider: "openai",
     };
     const target = await boundTarget(prepared);
     await testCodexAppServerBindingStore.mutate(target.identity, {
@@ -329,8 +325,6 @@ describe("codex conversation controls", () => {
         threadId: "thread-1",
         model: previousModel,
         modelProvider: "lmstudio",
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
       });
       await expect(setModel({ ...target, model })).resolves.toBe(`Codex model set to ${display}.`);
 
@@ -355,9 +349,6 @@ describe("codex conversation controls", () => {
     },
   ])("$name", async ({ recordedProvider, expectedProfile }) => {
     const sessionKey = "agent:main:model-provider-switch";
-    const sessionId = "session-provider-switch";
-    const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
-    const storePath = resolveStorePath(undefined, { agentId: "main" });
     const agentDir = path.join(tempDir, "agent");
     if (recordedProvider) {
       await upsertAuthProfileAsync({
@@ -366,17 +357,15 @@ describe("codex conversation controls", () => {
         credential: { type: "api_key", provider: recordedProvider, key: "test-key" },
       });
     }
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId,
-        updatedAt: Date.now(),
+    const { session, storePath } = await permissionSession(
+      "session-provider-switch",
+      {
         authProfileOverride: "lmstudio:work",
         authProfileOverrideSource: "user",
       },
-    });
+      sessionKey,
+    );
+    const identity = { kind: "session" as const, ...session };
     await testCodexAppServerBindingStore.mutate(identity, {
       kind: "set",
       binding: {

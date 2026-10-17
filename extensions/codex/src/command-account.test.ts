@@ -10,14 +10,14 @@ import {
   createContext,
   createDeps,
   installCodexCommandMocks,
-  type SafeCodexControlRequestFn,
+  type SafeCodexControlRequestFn as AccountRequest,
   oauthProfile,
   supervisedTestBinding,
   useCodexCommandTestState,
   writeTestBinding,
 } from "./commands.test-support.js";
 
-type AccountRequest = SafeCodexControlRequestFn;
+type Profiles = AuthProfileStore["profiles"];
 const session = { kind: "session", agentId: "main", sessionId: "session-1" } as const;
 const success = <T>(value: T) => ({ ok: true as const, value });
 const bindProfile = (name: string) =>
@@ -26,23 +26,10 @@ const bindProfile = (name: string) =>
     cwd: "/repo",
     authProfileId: `openai:${name}`,
   });
-function expectText(text: string | undefined, ...included: string[]) {
-  for (const fragment of included) {
-    expect(text).toContain(fragment);
-  }
-}
-function expectRequests(request: ReturnType<typeof accountRequests>, authProfileId: string | null) {
-  expect(request).toHaveBeenCalledTimes(2);
-  for (const call of request.mock.calls) {
-    expect(call[3]).toMatchObject({ authProfileId });
-  }
+function expectRequests(request: ReturnType<typeof accountRequests>, profileId: string | null) {
+  expect(request.mock.calls.map((call) => call[3]?.authProfileId)).toEqual([profileId, profileId]);
 }
 function accountRequests(email: string) {
-  const window = (usedPercent: number, windowDurationMins: number, hours: number) => ({
-    usedPercent,
-    windowDurationMins,
-    resetsAt: Math.ceil(Date.now() / 1000) + hours * 3600,
-  });
   return vi.fn<AccountRequest>(async (_pluginConfig, method): ReturnType<AccountRequest> => {
     if (method === CODEX_CONTROL_METHODS.account) {
       return success({ account: { type: "chatgpt", email, planType: "pro" } });
@@ -51,8 +38,8 @@ function accountRequests(email: string) {
       return success({
         rateLimits: {
           limitId: "codex",
-          primary: window(17, 300, 1),
-          secondary: window(100, 10080, 2),
+          primary: { usedPercent: 17, windowDurationMins: 300 },
+          secondary: { usedPercent: 100, windowDurationMins: 10080 },
           rateLimitReachedType: "rate_limit_reached",
         },
       });
@@ -60,7 +47,7 @@ function accountRequests(email: string) {
     throw new Error(`Unexpected account request: ${method}`);
   });
 }
-function account(safeCodexControlRequest: SafeCodexControlRequestFn, pluginConfig = {}) {
+function account(safeCodexControlRequest: AccountRequest, pluginConfig = {}) {
   return createCodexCommand({
     pluginConfig,
     deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
@@ -75,11 +62,7 @@ describe("Codex account workspace identity", () => {
     },
   });
 
-  function installStore(
-    profiles: AuthProfileStore["profiles"],
-    order: string[],
-    lastGood = order[0],
-  ) {
+  function installStore(profiles: Profiles, order: string[], lastGood = order[0]) {
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir: path.join(tempDir, "agents", "main", "agent"),
@@ -89,7 +72,7 @@ describe("Codex account workspace identity", () => {
   }
 
   function installProfiles(includeWork = true) {
-    const profiles: AuthProfileStore["profiles"] = {};
+    const profiles: Profiles = {};
     for (const name of includeWork ? ["personal", "work"] : ["personal"]) {
       profiles[`openai:${name}`] = {
         ...oauthProfile("operator@example.test", Date.now()),
@@ -105,12 +88,9 @@ describe("Codex account workspace identity", () => {
     await bindProfile("work");
     const request = accountRequests("operator@example.test");
     const { text } = await account(request);
-    expectText(
-      text,
-      "Subscription  Work",
-      "Weekly 100% · Short-term 17%",
-      "Work   ChatGPT subscription   — active now",
-    );
+    expect(text).toContain("Subscription  Work");
+    expect(text).toContain("Weekly 100% · Short-term 17%");
+    expect(text).toContain("Work   ChatGPT subscription   — active now");
     expect(text).not.toContain("Personal   ChatGPT subscription   — active now");
     expectRequests(request, "openai:work");
   });
@@ -129,13 +109,10 @@ describe("Codex account workspace identity", () => {
     }
     const request = accountRequests(email);
     const { text } = await account(request, pluginConfig);
-    expectText(
-      text,
-      `Account: ${email}`,
-      "Your weekly Codex usage limit is reached.",
-      "Auth order",
-      "Personal   ChatGPT subscription   — available if needed",
-    );
+    expect(text).toContain(`Account: ${email}`);
+    expect(text).toContain("Your weekly Codex usage limit is reached.");
+    expect(text).toContain("Auth order");
+    expect(text).toContain("Personal   ChatGPT subscription   — available if needed");
     for (const absent of ["Subscription  Personal", "active now", "no working credential"]) {
       expect(text).not.toContain(absent);
     }
@@ -160,34 +137,27 @@ describe("Codex account workspace identity", () => {
 
   it("does not mark any profile active when all explicit-order token credentials are expired", async () => {
     const now = Date.now();
-    installStore(
-      Object.fromEntries<AuthProfileStore["profiles"][string]>(
-        ["fresh", "stale"].map((name, index) => [
-          `openai:${name}@example.com`,
-          {
-            type: "token",
-            provider: "openai",
-            token: `${name}-token`,
-            expires: now - (index + 1) * 1000,
-            email: `${name}@example.com`,
-          },
-        ]),
-      ),
-      ["openai:fresh@example.com", "openai:stale@example.com"],
-      "openai:stale@example.com",
-    );
+    const profiles: Profiles = {};
+    for (const [index, name] of ["fresh", "stale"].entries()) {
+      profiles[`openai:${name}@example.com`] = {
+        type: "token",
+        provider: "openai",
+        token: `${name}-token`,
+        expires: now - (index + 1) * 1000,
+        email: `${name}@example.com`,
+      };
+    }
+    const order = ["openai:fresh@example.com", "openai:stale@example.com"];
+    installStore(profiles, order, order[1]);
 
     const request = vi
       .fn()
       .mockResolvedValueOnce(success({ account: { type: "unknown" }, requiresOpenaiAuth: true }))
       .mockResolvedValueOnce({ ok: false, error: "rate limits unavailable" });
     const { text } = await account(request);
-    expectText(
-      text,
-      "Rate limits: rate limits unavailable",
-      "\n  1. fresh@example.com   ChatGPT subscription   — sign-in expired",
-      "\n  2. stale@example.com   ChatGPT subscription   — sign-in expired",
-    );
+    expect(text).toContain("Rate limits: rate limits unavailable");
+    expect(text).toContain("\n  1. fresh@example.com   ChatGPT subscription   — sign-in expired");
+    expect(text).toContain("\n  2. stale@example.com   ChatGPT subscription   — sign-in expired");
     expect(text).not.toContain("active now");
     expect(request).toHaveBeenCalledTimes(2);
   });
