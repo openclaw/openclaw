@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -76,28 +76,18 @@ function sessionRuntime(scope: ReturnType<typeof requesterScope>, cfg: OpenClawC
     workspaceDir: process.cwd(),
   });
 }
-
-type AuthenticatedMcpProofEndpoint = {
-  owner: string;
-  authorization: string;
-  path: string;
-  server: McpServer;
-  transport: StreamableHTTPServerTransport;
-  requests: number;
-  streamedResponses: number;
-  toolCalls: number;
-  url: string;
-};
+function resolveFor(serverNames: string[], requesterSenderId?: string) {
+  return resolveRequesterScopedMcpConnections({ serverNames, requesterSenderId });
+}
+function connection({ url, authorization }: { url: string; authorization: string }) {
+  return { url, headers: { Authorization: authorization } };
+}
 
 async function startAuthenticatedMcpProofServer() {
-  const endpoints: AuthenticatedMcpProofEndpoint[] = [];
-
   const addEndpoint = async (owner: string, authorization: string) => {
     const server = new McpServer({ name: `openclaw-${owner}-proof`, version: "1.0.0" });
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: randomUUID,
-    });
-    const endpoint: AuthenticatedMcpProofEndpoint = {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
+    const endpoint = {
       owner,
       authorization,
       path: `/mcp/${owner}`,
@@ -108,22 +98,18 @@ async function startAuthenticatedMcpProofServer() {
       toolCalls: 0,
       url: "",
     };
-    server.registerTool(
-      "owner_probe",
-      { description: "Prove MCP resolver ownership" },
-      async () => {
-        endpoint.toolCalls += 1;
-        return { content: [{ type: "text" as const, text: endpoint.owner }] };
-      },
-    );
+    server.registerTool("owner_probe", {}, async () => {
+      endpoint.toolCalls += 1;
+      return { content: [{ type: "text" as const, text: endpoint.owner }] };
+    });
     await server.connect(transport);
-    endpoints.push(endpoint);
     return endpoint;
   };
 
   const mail = await addEndpoint("mail", "Bearer test-mcp-mail-owner");
   const activeDrive = await addEndpoint("active-drive", "Bearer test-mcp-active-drive-owner");
   const pinnedDrive = await addEndpoint("pinned-drive", "Bearer test-mcp-pinned-drive-owner");
+  const endpoints = [mail, activeDrive, pinnedDrive];
   const endpointsByPath = new Map(endpoints.map((endpoint) => [endpoint.path, endpoint]));
   const server = http.createServer((request, response) => {
     const endpoint = endpointsByPath.get(request.url ?? "");
@@ -237,19 +223,11 @@ describe("mcp connection resolver helpers", () => {
     setActivePluginRegistry(root.registry);
 
     await withPluginRuntimeRegistryScope(scoped.registry, async () => {
-      await expect(
-        resolveRequesterScopedMcpConnections({
-          serverNames: ["scoped-mail"],
-          requesterSenderId: "requester",
-        }),
-      ).resolves.toEqual(new Map([["scoped-mail", { url: "https://scoped.example.test" }]]));
+      await expect(resolveFor(["scoped-mail"], "requester")).resolves.toEqual(
+        new Map([["scoped-mail", { url: "https://scoped.example.test" }]]),
+      );
     });
-    await expect(
-      resolveRequesterScopedMcpConnections({
-        serverNames: ["scoped-mail"],
-        requesterSenderId: "requester",
-      }),
-    ).resolves.toEqual(new Map());
+    await expect(resolveFor(["scoped-mail"], "requester")).resolves.toEqual(new Map());
   });
 
   it("revokes MCP credentials during a full gateway plugin-disable replacement", async () => {
@@ -269,16 +247,12 @@ describe("mcp connection resolver helpers", () => {
       vi.spyOn(await import("./context.js"), "refreshContextWindowCache").mockResolvedValue(
         undefined,
       );
-      const previous = resolverRegistry("startup-mail", "user-mail", async () => ({
-        url: proof.mail.url,
-        headers: { Authorization: proof.mail.authorization },
-      }));
+      const previous = resolverRegistry("startup-mail", "user-mail", async () =>
+        connection(proof.mail),
+      );
       setActivePluginRegistry(previous.registry);
 
-      const beforeDisable = await resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail"],
-        requesterSenderId: "existing-before-disable",
-      });
+      const beforeDisable = await resolveFor(["user-mail"], "existing-before-disable");
       const previousConnection = beforeDisable.get("user-mail");
       expect(previousConnection?.url).toBe(proof.mail.url);
       if (!previousConnection) {
@@ -300,16 +274,12 @@ describe("mcp connection resolver helpers", () => {
         disposeMcpRuntimes: true,
       });
 
-      const replacement = resolverRegistry("active-drive", "user-drive", async () => ({
-        url: proof.activeDrive.url,
-        headers: { Authorization: proof.activeDrive.authorization },
-      }));
+      const replacement = resolverRegistry("active-drive", "user-drive", async () =>
+        connection(proof.activeDrive),
+      );
       expect(isPluginRegistryRetired(previous.registry)).toBe(false);
 
-      type GatewayReloadProofState = ReturnType<
-        Parameters<typeof createGatewayReloadHandlers>[0]["getState"]
-      >;
-      let gatewayState: GatewayReloadProofState = createDefaultGatewayReloadState({
+      let gatewayState = createDefaultGatewayReloadState({
         hooksConfig: null,
         hookClientIpConfig: { trustedProxies: undefined, allowRealIpFallback: false },
         cronState: createTestCronState({
@@ -387,21 +357,8 @@ describe("mcp connection resolver helpers", () => {
       );
       expect(proof.mail.requests).toBe(legacyRequests);
       await expect(
-        resolveRequesterScopedMcpConnections({
-          serverNames: ["user-drive", "user-mail"],
-          requesterSenderId: "brand-new-after-disable",
-        }),
-      ).resolves.toEqual(
-        new Map([
-          [
-            "user-drive",
-            {
-              url: proof.activeDrive.url,
-              headers: { Authorization: proof.activeDrive.authorization },
-            },
-          ],
-        ]),
-      );
+        resolveFor(["user-drive", "user-mail"], "brand-new-after-disable"),
+      ).resolves.toEqual(new Map([["user-drive", connection(proof.activeDrive)]]));
 
       const nextScope = requesterScope(
         "gateway-plugin-disable-brand-new-mcp-proof",
@@ -417,8 +374,7 @@ describe("mcp connection resolver helpers", () => {
       await expect(nextRuntime.callTool("user-mail", "owner_probe", {})).rejects.toThrow();
       expect(proof.activeDrive.toolCalls).toBe(1);
       expect(proof.activeDrive.streamedResponses).toBeGreaterThanOrEqual(3);
-      expect(proof.mail.requests).toBe(legacyRequests);
-      expect(proof.mail.toolCalls).toBe(1);
+      expect(proof.mail).toMatchObject({ requests: legacyRequests, toolCalls: 1 });
       expect(proof.pinnedDrive.requests).toBe(0);
     } finally {
       await disposeAllSessionMcpRuntimes();
@@ -433,23 +389,11 @@ describe("mcp connection resolver helpers", () => {
       register("test-plugin", "user-mail", async (ctx) =>
         ctx.requesterSenderId === "ok" ? { url: "https://example.test/ok" } : null,
       );
-      await expect(
-        resolveRequesterScopedMcpConnections({
-          serverNames: ["user-mail"],
-        }),
-      ).resolves.toEqual(new Map());
-      await expect(
-        resolveRequesterScopedMcpConnections({
-          serverNames: ["user-mail"],
-          requesterSenderId: "nope",
-        }),
-      ).resolves.toEqual(new Map());
-      await expect(
-        resolveRequesterScopedMcpConnections({
-          serverNames: ["user-mail"],
-          requesterSenderId: "ok",
-        }),
-      ).resolves.toEqual(new Map([["user-mail", { url: "https://example.test/ok" }]]));
+      await expect(resolveFor(["user-mail"])).resolves.toEqual(new Map());
+      await expect(resolveFor(["user-mail"], "nope")).resolves.toEqual(new Map());
+      await expect(resolveFor(["user-mail"], "ok")).resolves.toEqual(
+        new Map([["user-mail", { url: "https://example.test/ok" }]]),
+      );
     });
   });
 
@@ -462,20 +406,15 @@ describe("mcp connection resolver helpers", () => {
       const { resetSecretRedactionRegistryForTest } =
         await import("../logging/secret-redaction-registry.test-support.js");
       resetSecretRedactionRegistryForTest();
-      await resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail"],
-        requesterSenderId: "sender",
-      });
-      expect(isSecretValueRegisteredForRedaction("Bearer test-auth-token")).toBe(true);
-      expect(isSecretValueRegisteredForRedaction("test-auth-token")).toBe(true);
-      expect(isSecretValueRegisteredForRedaction("placeholder-signature")).toBe(true);
-      // Full URL too: transport connect errors embed it verbatim (path-borne
-      // session tokens would otherwise leak through fetch/undici error strings).
-      expect(
-        isSecretValueRegisteredForRedaction(
-          "https://mcp.example.test/mail?sig=placeholder-signature",
-        ),
-      ).toBe(true);
+      await resolveFor(["user-mail"], "sender");
+      for (const secret of [
+        "Bearer test-auth-token",
+        "test-auth-token",
+        "placeholder-signature",
+        "https://mcp.example.test/mail?sig=placeholder-signature",
+      ]) {
+        expect(isSecretValueRegisteredForRedaction(secret)).toBe(true);
+      }
       resetSecretRedactionRegistryForTest();
     });
   });
@@ -489,19 +428,14 @@ describe("mcp connection resolver helpers", () => {
       const logWarn = vi
         .spyOn(await import("../logger.js"), "logWarn")
         .mockImplementation(() => {});
-      await expect(
-        resolveRequesterScopedMcpConnections({
-          serverNames: ["user-mail", "other"],
-          requesterSenderId: "sender",
-        }),
-      ).resolves.toEqual(new Map([["other", { url: "https://example.test/other" }]]));
+      await expect(resolveFor(["user-mail", "other"], "sender")).resolves.toEqual(
+        new Map([["other", { url: "https://example.test/other" }]]),
+      );
       expect(logWarn).toHaveBeenCalledWith(
         'bundle-mcp: connection resolver for server "user-mail" (plugin "broken-plugin") failed with resolver error',
       );
       const logged = JSON.stringify(logWarn.mock.calls);
-      expect(logged).not.toContain("secret-token");
-      expect(logged).not.toContain("Bearer");
-      expect(logged).not.toContain("Authorization");
+      expect(logged).not.toMatch(/secret-token|Bearer|Authorization/);
     });
   });
 
@@ -511,10 +445,7 @@ describe("mcp connection resolver helpers", () => {
       register("hang-b", "mail-b", () => new Promise(() => {}));
       register("ok-plugin", "other", async () => ({ url: "https://example.test/other" }));
       vi.useFakeTimers();
-      const pending = resolveRequesterScopedMcpConnections({
-        serverNames: ["mail-a", "mail-b", "other"],
-        requesterSenderId: "sender",
-      });
+      const pending = resolveFor(["mail-a", "mail-b", "other"], "sender");
       // Concurrent resolves: one timeout window covers both stalls, not two sequential waits.
       const settled = vi.fn();
       void pending.then(settled);
@@ -529,7 +460,6 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("uses an ephemeral keyed digest, not a plain SHA-256 of credentials", async () => {
-    const crypto = await import("node:crypto");
     const connections = (headers: Record<string, string>) =>
       new Map([["mail", { url: "https://example.test/a", headers }]]);
     const a = connections({ Authorization: "Bearer test-auth-token", "X-B": "2" });
@@ -544,40 +474,33 @@ describe("mcp connection resolver helpers", () => {
       [
         "mail",
         "https://example.test/a",
-        [
-          ["Authorization", "Bearer test-auth-token"],
-          ["X-B", "2"],
-        ],
+        Object.entries({ Authorization: "Bearer test-auth-token", "X-B": "2" }),
       ],
     ]);
-    const plainSha = crypto.createHash("sha256").update(plainTuples).digest("hex");
+    const plainSha = createHash("sha256").update(plainTuples).digest("hex");
     expect(digest).not.toBe(plainSha);
   });
 
   it("normalizes incompatible static fields when applying connection overrides", () => {
+    const retained = {
+      transport: "stdio",
+      type: "stdio",
+      auth: "oauth",
+      oauth: { scope: "mail" },
+      toolFilter: { include: ["send"] },
+    };
     const servers = {
       "user-mail": {
-        transport: "stdio",
-        type: "stdio",
+        ...retained,
         command: "/bin/echo",
         args: ["serve"],
-        auth: "oauth",
-        oauth: { scope: "mail" },
         url: "https://placeholder.example",
         headers: { Authorization: "test-auth-token" },
-        toolFilter: { include: ["send"] },
       },
     };
     const redacted = redactMcpServersForFingerprint(servers, new Set(["user-mail"]));
     expect(redacted).toEqual({
-      "user-mail": {
-        transport: "stdio",
-        type: "stdio",
-        toolFilter: { include: ["send"] },
-        auth: "oauth",
-        oauth: { scope: "mail" },
-        connection: "requester-scoped",
-      },
+      "user-mail": { ...retained, connection: "requester-scoped" },
     });
 
     const applied = applyMcpConnectionOverride(servers["user-mail"], {
