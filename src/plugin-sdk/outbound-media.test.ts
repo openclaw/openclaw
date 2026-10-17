@@ -205,22 +205,22 @@ describe("createHostedOutboundMediaStore", () => {
     "serializes deletion against an admitted %s read",
     async (kind) => {
       const { metadataStore, chunkStore, store } = createStoreFixture(`pending-${kind}-media`);
-    await prepare(store);
-    const { lookupStarted, releaseLookup } = delayLookup(metadataStore);
+      await prepare(store);
+      const { lookupStarted, releaseLookup } = delayLookup(metadataStore);
       const pending = kind === "metadata" ? store.readMetadata(MEDIA_ID) : store.read(MEDIA_ID);
-    await lookupStarted;
+      await lookupStarted;
       await store.delete(MEDIA_ID);
       if (kind === "complete") {
-    expect(await metadataStore.entries()).toHaveLength(1);
-    expect(await chunkStore.entries()).toHaveLength(3);
+        expect(await metadataStore.entries()).toHaveLength(1);
+        expect(await chunkStore.entries()).toHaveLength(3);
       }
-    releaseLookup();
+      releaseLookup();
       if (kind === "metadata") {
         await expect(pending).resolves.toBeNull();
       } else {
         await expect(pending).resolves.toMatchObject({ buffer: Buffer.from("image-bytes") });
-    expect(await metadataStore.entries()).toEqual([]);
-    expect(await chunkStore.entries()).toEqual([]);
+        expect(await metadataStore.entries()).toEqual([]);
+        expect(await chunkStore.entries()).toEqual([]);
       }
     },
   );
@@ -331,7 +331,7 @@ describe("createHostedOutboundMediaStore", () => {
     const replacement = prepare(store, "https://example.com/second.png");
     let replacementSettled = false;
     const markSettled = () => {
-        replacementSettled = true;
+      replacementSettled = true;
     };
     void replacement.then(markSettled, markSettled);
     await setImmediate();

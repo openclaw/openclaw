@@ -472,15 +472,15 @@ describe("ShellGatewayOwner config invalidation", () => {
     config.patchForm(["count"], 2);
     await config.flushFormChanges();
     await config.discardFormValue(["count"]);
-      await server.request("config.set", heldParams);
+    await server.request("config.set", heldParams);
     await config.refresh();
     config.patchForm(["count"], 3);
     await expect(config.save()).resolves.toBe(true);
     expectDraft(config, 3);
-      expect(server.submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
-        { count: 2 },
-        { count: 3 },
-      ]);
+    expect(server.submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
+      { count: 2 },
+      { count: 3 },
+    ]);
   });
 
   it("retries persisted but unapplied configuration on the confirmed revision after reconnect", async () => {
@@ -513,13 +513,13 @@ describe("ShellGatewayOwner config invalidation", () => {
     await config.ensureLoaded();
     config.patchForm(["count"], 2);
     await expect(config.apply()).resolves.toBe(false);
-      publish(false);
-      publish(true);
-      await vi.advanceTimersByTimeAsync(0);
+    publish(false);
+    publish(true);
+    await vi.advanceTimersByTimeAsync(0);
     expect(config.state.lastError).toContain("was not applied");
     expectDraft(config, 2);
     await expect(config.apply()).resolves.toBe(true);
-      expect(attempts).toBe(2);
+    expect(attempts).toBe(2);
     expectState(config, { configNeedsApply: false, lastError: null });
   });
 
@@ -592,15 +592,15 @@ describe("ShellGatewayOwner config invalidation", () => {
         heldRead.resolve({});
       });
       await beginRevertedSave(config);
-        interceptRead = true;
-        publish(false);
-        publish(true);
-        await vi.advanceTimersByTimeAsync(0);
+      interceptRead = true;
+      publish(false);
+      publish(true);
+      await vi.advanceTimersByTimeAsync(0);
       await config.refresh();
-        heldRead.resolve({ config: { count: 1 }, raw: '{"count":1}', hash: "hash-1", valid: true });
-        await vi.advanceTimersByTimeAsync(0);
+      heldRead.resolve({ config: { count: 1 }, raw: '{"count":1}', hash: "hash-1", valid: true });
+      await vi.advanceTimersByTimeAsync(0);
       expectDraft(config, 1, { configFormDirty: true, configDraftBaseHash: "hash-2" });
-        expect(submissions).toHaveLength(1);
+      expect(submissions).toHaveLength(1);
     },
   );
 
@@ -629,23 +629,23 @@ describe("ShellGatewayOwner config invalidation", () => {
     const { runtimeConfig: config, owner } = createShellConfig(request);
     managedConfig({ runtimeConfig: config, owner });
     await beginRevertedSave(config);
-      firstSet.reject(new Error("Request timed out"));
-      await vi.advanceTimersByTimeAsync(0);
-      failRecoveryRead = true;
+    firstSet.reject(new Error("Request timed out"));
+    await vi.advanceTimersByTimeAsync(0);
+    failRecoveryRead = true;
     await expect(config.save()).resolves.toBe(false);
-      await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
     expect(config.state.lastError).toContain("Recovery read failed");
     expect(config.state.configAutoSaveStatus).toBe("error");
-      await expect(
+    await expect(
       config.patch({ raw: { featureEnabled: true }, note: "synthetic toggle" }),
-      ).resolves.toBe(false);
-      expect(patchRequest).not.toHaveBeenCalled();
+    ).resolves.toBe(false);
+    expect(patchRequest).not.toHaveBeenCalled();
     expectDraft(config, 1);
-      failRecoveryRead = false;
-      configChanged(owner);
-      await vi.advanceTimersByTimeAsync(0);
+    failRecoveryRead = false;
+    configChanged(owner);
+    await vi.advanceTimersByTimeAsync(0);
     expectDraft(config, 1, { configFormDirty: true });
-      expect(saves).toBe(2);
+    expect(saves).toBe(2);
   });
 
   it.each([false, true])(
@@ -672,21 +672,21 @@ describe("ShellGatewayOwner config invalidation", () => {
       managedConfig({ runtimeConfig: config, owner });
       await config.ensureLoaded();
       await startAutosave(config);
-        firstSet.reject(new Error("Request timed out"));
-        await vi.advanceTimersByTimeAsync(0);
-        configChanged(owner);
+      firstSet.reject(new Error("Request timed out"));
+      await vi.advanceTimersByTimeAsync(0);
+      configChanged(owner);
       config.patchForm(["count"], 3);
-        if (explicitRefresh) {
+      if (explicitRefresh) {
         await config.refresh();
-        }
-        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-        expect(writes).toBe(2);
+      }
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(writes).toBe(2);
       expectDraft(config, 3);
-        if (!explicitRefresh) {
+      if (!explicitRefresh) {
         expectState(config, { configDraftBaseHash: "hash-2", configAutoSaveStatus: "error" });
         await expect(config.retry()).resolves.toBe(true);
-        }
-        expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([{ count: 2 }, { count: 3 }]);
+      }
+      expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([{ count: 2 }, { count: 3 }]);
       expectDraft(config, 3, { configFormDirty: false });
     },
   );
@@ -707,36 +707,36 @@ describe("ShellGatewayOwner config invalidation", () => {
       };
       const protocol = configServerTransport(
         async (frame) => {
-            if (frame.method === "config.apply") {
+          if (frame.method === "config.apply") {
             storedRaw = (frame.params as { raw?: string }).raw ?? storedRaw;
-              revision++;
+            revision++;
             const response = createDeferred<{
               ok: false;
               error: { code: string; message: string };
             }>();
-              rejectApply = () =>
+            rejectApply = () =>
               response.resolve({
-                    ok: false,
-                    error: {
-                      code: "UNAVAILABLE",
-                      message: "config.apply persisted but was not applied to the active Gateway",
-                    },
+                ok: false,
+                error: {
+                  code: "UNAVAILABLE",
+                  message: "config.apply persisted but was not applied to the active Gateway",
+                },
               });
             return response.promise;
           }
           return {
-                  ok: true,
-                  payload: {
-                    config: JSON.parse(storedRaw),
-                    raw: storedRaw,
-                    hash: `hash-${revision}`,
-                    configRevisionHash: `revision-${revision}`,
-                    appliedConfigHash: `revision-${appliedRevision}`,
-                    valid: true,
-                    issues: [],
-                  },
+            ok: true,
+            payload: {
+              config: JSON.parse(storedRaw),
+              raw: storedRaw,
+              hash: `hash-${revision}`,
+              configRevisionHash: `revision-${revision}`,
+              appliedConfigHash: `revision-${appliedRevision}`,
+              valid: true,
+              issues: [],
+            },
           };
-          },
+        },
         () => "synthetic-request",
       );
       protocol.start();
@@ -794,21 +794,21 @@ describe("ShellGatewayOwner config invalidation", () => {
       const { runtimeConfig: config, owner } = createShellConfig(request);
       managedConfig({ runtimeConfig: config, owner }, () => firstSet.resolve({}));
       await beginRevertedSave(config);
-        if (foreign) {
-          serverRequest.mockResolvedValueOnce(configSnapshot(3));
-        }
-        configChanged(owner);
-        await vi.advanceTimersByTimeAsync(0);
-        firstSet.reject(new Error("Request timed out"));
-        await vi.advanceTimersByTimeAsync(0);
+      if (foreign) {
+        serverRequest.mockResolvedValueOnce(configSnapshot(3));
+      }
+      configChanged(owner);
+      await vi.advanceTimersByTimeAsync(0);
+      firstSet.reject(new Error("Request timed out"));
+      await vi.advanceTimersByTimeAsync(0);
 
-        await expect(
+      await expect(
         config.patch({ raw: { featureEnabled: true }, note: "synthetic toggle" }),
-        ).resolves.toBe(!foreign);
-        expect(patchRequest).toHaveBeenCalledTimes(foreign ? 0 : 1);
+      ).resolves.toBe(!foreign);
+      expect(patchRequest).toHaveBeenCalledTimes(foreign ? 0 : 1);
       expect(config.state.configForm?.count).toBe(1);
       expect(config.state.configDraftBaseHash).toBe(foreign ? "hash-1" : "patch-hash");
-        if (!foreign) {
+      if (!foreign) {
         expect(config.state.configForm?.featureEnabled).toBe(true);
         expect(config.state.configFormDirty).toBe(true);
       }
@@ -831,17 +831,17 @@ describe("ShellGatewayOwner config invalidation", () => {
       const originalRaw = config.state.configRawOriginal;
       await startAutosave(config);
       config.patchForm(["count"], 1);
-        firstSet.reject(new Error("Request timed out"));
-        await vi.advanceTimersByTimeAsync(0);
-        if (mode === "raw") {
+      firstSet.reject(new Error("Request timed out"));
+      await vi.advanceTimersByTimeAsync(0);
+      if (mode === "raw") {
         config.setRaw(originalRaw);
-        } else {
+      } else {
         config.patchForm(["count"], 1);
-        }
+      }
 
-        if (foreign) {
-          request.mockResolvedValueOnce(configSnapshot(3));
-        }
+      if (foreign) {
+        request.mockResolvedValueOnce(configSnapshot(3));
+      }
       await invalidateConfig(harness, refresh);
 
       expect(config.state.configSnapshot?.config).toEqual({ count: foreign ? 3 : 2 });
@@ -850,32 +850,32 @@ describe("ShellGatewayOwner config invalidation", () => {
         configDraftBaseHash: foreign ? "hash-1" : "hash-2",
         configFormDirty: true,
       });
-        expect(submissions).toHaveLength(1);
-        if (foreign) {
+      expect(submissions).toHaveLength(1);
+      if (foreign) {
         expectState(config, { configRawOriginal: originalRaw, configAutoSaveStatus: "conflict" });
-          await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-          expect(submissions).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+        expect(submissions).toHaveLength(1);
         config.dispose();
-          expect(submissions).toHaveLength(1);
-        } else {
+        expect(submissions).toHaveLength(1);
+      } else {
         expect(config.state.lastError).toBeNull();
         await expect(config.save()).resolves.toBe(true);
-          expect(submissions[1]).toEqual({ raw: originalRaw, baseHash: "hash-2" });
-        }
+        expect(submissions[1]).toEqual({ raw: originalRaw, baseHash: "hash-2" });
+      }
     },
   );
 
   it("adopts a preserved foreign snapshot after a definitive save rejection", async () => {
     const { request, firstSet, config, owner } = createDeferredConfig(false);
     await beginRevertedSave(config);
-      request.mockResolvedValueOnce(configSnapshot(3));
-      configChanged(owner);
-      await vi.advanceTimersByTimeAsync(0);
+    request.mockResolvedValueOnce(configSnapshot(3));
+    configChanged(owner);
+    await vi.advanceTimersByTimeAsync(0);
     expectDraft(config, 1);
-      firstSet.reject(
-        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Write rejected" }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
+    firstSet.reject(
+      new GatewayRequestError({ code: "INVALID_REQUEST", message: "Write rejected" }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
     expectDraft(config, 3, { configDraftBaseHash: "foreign-hash", configFormDirty: false });
   });
 
@@ -887,31 +887,31 @@ describe("ShellGatewayOwner config invalidation", () => {
       await startAutosave(config);
       config.patchForm(["count"], 3);
       config.patchForm(["count"], 1);
-        firstSet.reject(
-          rejected
-            ? new GatewayRequestError({ code: "INVALID_REQUEST", message: "Write rejected" })
-            : new Error("Request timed out"),
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        if (rejected) {
+      firstSet.reject(
+        rejected
+          ? new GatewayRequestError({ code: "INVALID_REQUEST", message: "Write rejected" })
+          : new Error("Request timed out"),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      if (rejected) {
         expectState(config, { configAutoSaveStatus: "idle", lastError: null });
-          request.mockResolvedValueOnce(configSnapshot(1, "hash-1"));
-        }
+        request.mockResolvedValueOnce(configSnapshot(1, "hash-1"));
+      }
 
-        configChanged(owner);
-        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+      configChanged(owner);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
 
       expectDraft(config, 1, {
         configFormDirty: !rejected,
         configAutoSaveStatus: rejected ? "idle" : "error",
       });
-        if (!rejected) {
+      if (!rejected) {
         expect(config.state.lastError).toContain("Request timed out");
-        }
-        expect(submissions).toHaveLength(1);
+      }
+      expect(submissions).toHaveLength(1);
       config.dispose();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(submissions).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(submissions).toHaveLength(1);
     },
   );
 
@@ -939,11 +939,11 @@ describe("ShellGatewayOwner config invalidation", () => {
     managedConfig({ runtimeConfig: config, owner }, () => patchAck.resolve({}), false);
     await config.ensureLoaded();
     const patched = config.patch({ raw: { count: 2 }, note: "synthetic patch" });
-      configChanged(owner);
-      await vi.advanceTimersByTimeAsync(0);
-      patchAck.reject(new Error("Acknowledgement lost"));
+    configChanged(owner);
+    await vi.advanceTimersByTimeAsync(0);
+    patchAck.reject(new Error("Acknowledgement lost"));
 
-      await expect(patched).resolves.toBe(false);
+    await expect(patched).resolves.toBe(false);
     expect(config.state.configSnapshot?.config).toEqual({ count: 2 });
     expectDraft(config, 2, { configDraftBaseHash: "hash-2", configFormDirty: false });
   });
@@ -955,33 +955,33 @@ describe("ShellGatewayOwner config invalidation", () => {
       await config.ensureLoaded();
       const originalRaw = config.state.configRawOriginal;
       await startAutosave(config);
-        expect(submissions).toHaveLength(1);
+      expect(submissions).toHaveLength(1);
 
       config.patchForm(["count"], 1);
-        configChanged(owner);
-        await vi.advanceTimersByTimeAsync(0);
-        if (mode === "raw") {
+      configChanged(owner);
+      await vi.advanceTimersByTimeAsync(0);
+      if (mode === "raw") {
         config.setRaw(originalRaw);
         expectState(config, {
           configRaw: originalRaw,
           configRawOriginal: originalRaw,
           configDraftBaseHash: "hash-1",
         });
-        }
+      }
       const draftBeforeAck = config.state.configForm;
 
-        firstSet.resolve({});
-        await vi.advanceTimersByTimeAsync(0);
-        if (mode === "raw") {
-          expect(submissions).toHaveLength(1);
+      firstSet.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      if (mode === "raw") {
+        expect(submissions).toHaveLength(1);
         await expect(config.save()).resolves.toBe(true);
-        }
+      }
 
-        expect(draftBeforeAck).toEqual({ count: 1 });
-        expect(submissions).toEqual([
-          { raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
-          { raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" },
-        ]);
+      expect(draftBeforeAck).toEqual({ count: 1 });
+      expect(submissions).toEqual([
+        { raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
+        { raw: '{\n  "count": 1\n}\n', baseHash: "hash-2" },
+      ]);
       expectDraft(config, 1, { configFormDirty: false, configAutoSaveStatus: "saved" });
     },
   );

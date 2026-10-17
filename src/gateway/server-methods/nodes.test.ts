@@ -229,29 +229,29 @@ function expectDisconnected(context: ReturnType<typeof createContext>, nodeId: s
 }
 
 it("node.skills.update stores and publishes a validated replacement catalog for the calling node", async () => {
-    const skill = {
-      name: "release-helper",
-      description: "Prepare a release",
-      content: "---\nname: release-helper\ndescription: Prepare a release\n---\n",
-    };
-    const { context, opts } = createOptions(
-      { skills: [skill] },
-      {
-        client: {
-          connId: "conn-1",
-          connect: { device: { id: "node-1" }, client: { id: "node-client" } },
-        } as never,
-      },
-    );
-    context.nodeRegistry.updateNodeSkills.mockReturnValue({
-      nodeId: "node-1",
-      nodeSkills: [skill],
-    });
+  const skill = {
+    name: "release-helper",
+    description: "Prepare a release",
+    content: "---\nname: release-helper\ndescription: Prepare a release\n---\n",
+  };
+  const { context, opts } = createOptions(
+    { skills: [skill] },
+    {
+      client: {
+        connId: "conn-1",
+        connect: { device: { id: "node-1" }, client: { id: "node-client" } },
+      } as never,
+    },
+  );
+  context.nodeRegistry.updateNodeSkills.mockReturnValue({
+    nodeId: "node-1",
+    nodeSkills: [skill],
+  });
 
-    await invokeNode("node.skills.update", opts);
+  await invokeNode("node.skills.update", opts);
 
-    expect(context.nodeRegistry.updateNodeSkills).toHaveBeenCalledWith("node-1", "conn-1", [skill]);
-    expectSuccess(opts, { nodeId: "node-1", skills: [skill] });
+  expect(context.nodeRegistry.updateNodeSkills).toHaveBeenCalledWith("node-1", "conn-1", [skill]);
+  expectSuccess(opts, { nodeId: "node-1", skills: [skill] });
 });
 
 function expectApproved(opts: GatewayRequestHandlerOptions, nodeId: string) {
@@ -306,42 +306,42 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
 }
 
 it("node.describe projects exact runner slots with derived launch eligibility", async () => {
-    const { nodeId } = await createNodeState("node-1", { surface: true });
-    const pairingState = await captureNodePairingState(nodeId);
-    expect(pairingState?.generation).not.toBeNull();
+  const { nodeId } = await createNodeState("node-1", { surface: true });
+  const pairingState = await captureNodePairingState(nodeId);
+  expect(pairingState?.generation).not.toBeNull();
 
-    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+  const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
   const { client } = connectNode(nodeId, pairingState, runtime.nodeRegistry);
   await publishRunner(runtime.nodeRegistry, client, true);
-    const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
-    expect(proof).toBeDefined();
-    expect(
-      proof &&
-        runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
-          bundleHash: "a".repeat(64),
-          status: { status: "installed", version: "2026.8.9" },
-        }),
-    ).toBe(true);
+  const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+  expect(proof).toBeDefined();
+  expect(
+    proof &&
+      runtime.nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
+        bundleHash: "a".repeat(64),
+        status: { status: "installed", version: "2026.8.9" },
+      }),
+  ).toBe(true);
 
-    const listCall = createOptions({}, undefined, runtime.nodeRegistry);
-    await invokeNode("node.list", listCall.opts);
-    const describeCall = createOptions({ nodeId }, undefined, runtime.nodeRegistry);
-    await invokeNode("node.describe", describeCall.opts);
+  const listCall = createOptions({}, undefined, runtime.nodeRegistry);
+  await invokeNode("node.list", listCall.opts);
+  const describeCall = createOptions({ nodeId }, undefined, runtime.nodeRegistry);
+  await invokeNode("node.describe", describeCall.opts);
 
   const projected = {
     nodeId,
     workerSlots: { total: 2, available: 2 },
     workerBundle: { status: "installed", version: "2026.8.9" },
   };
-    expectSuccess(
-      listCall.opts,
-      expect.objectContaining({
+  expectSuccess(
+    listCall.opts,
+    expect.objectContaining({
       nodes: expect.arrayContaining([expect.objectContaining(projected)]),
-      }),
-    );
+    }),
+  );
   expectSuccess(describeCall.opts, expect.objectContaining({ ...projected, sessionHost: true }));
-    expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
-    expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
+  expect(JSON.stringify(listCall.respond.mock.calls)).not.toContain("bundleHash");
+  expect(JSON.stringify(describeCall.respond.mock.calls)).not.toContain("bundleHash");
   runtime.nodeRegistry.unregister(client.connId);
 });
 
@@ -684,15 +684,15 @@ describe("nodeHandlers node.pair.remove", () => {
     );
     expect(captured.events).toMatchObject([
       {
-      type: "security.event",
-      category: "auth",
-      action: "device.role.removed",
-      outcome: "success",
-      severity: "medium",
-      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
-      policy: { id: "gateway.device-pairing", decision: "allow" },
-      control: { id: "node.pair.remove", family: "auth" },
-      attributes: { role: "node", removed_device: true },
+        type: "security.event",
+        category: "auth",
+        action: "device.role.removed",
+        outcome: "success",
+        severity: "medium",
+        target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+        policy: { id: "gateway.device-pairing", decision: "allow" },
+        control: { id: "node.pair.remove", family: "auth" },
+        attributes: { role: "node", removed_device: true },
       },
     ]);
     expect(JSON.stringify(captured.events)).not.toContain(nodeId);
@@ -757,16 +757,16 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expect(captured.events).toMatchObject([
       {
-      action: "device.role.removal_denied",
-      outcome: "denied",
-      severity: "medium",
-      policy: {
-        id: "gateway.device-pairing",
-        decision: "deny",
-        reason: "role-management-requires-admin",
-      },
-      control: { id: "node.pair.remove", family: "auth" },
-      attributes: { role: "node" },
+        action: "device.role.removal_denied",
+        outcome: "denied",
+        severity: "medium",
+        policy: {
+          id: "gateway.device-pairing",
+          decision: "deny",
+          reason: "role-management-requires-admin",
+        },
+        control: { id: "node.pair.remove", family: "auth" },
+        attributes: { role: "node" },
       },
     ]);
   });

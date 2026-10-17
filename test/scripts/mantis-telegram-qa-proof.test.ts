@@ -66,29 +66,29 @@ const qaFile = <T extends object>(kind: string, fields: T) => ({
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64");
 const observations = (status: "pass" | "fail" = "pass") => ({
   "qa-execution.json": qaFile("qa-execution", {
-      request_id: identity.request_id,
-      candidate_sha: identity.candidate_sha,
-      harness_sha: identity.harness.sha,
-      run_id: identity.run.id,
-      run_attempt: 1,
-      transport: "Crabline",
-      live_service: false,
-      candidate_quiescent: true,
+    request_id: identity.request_id,
+    candidate_sha: identity.candidate_sha,
+    harness_sha: identity.harness.sha,
+    run_id: identity.run.id,
+    run_attempt: 1,
+    transport: "Crabline",
+    live_service: false,
+    candidate_quiescent: true,
   }),
   "qa-result.json": qaFile("qa-result", {
-      status,
-      steps: [{ name: "preserves four exact Markdown payloads through Gateway send", status }],
+    status,
+    steps: [{ name: "preserves four exact Markdown payloads through Gateway send", status }],
   }),
   "qa-observations.json": qaFile("qa-observations", {
-      cases: ["all-space-code", "unclosed-link-label", "ipv6-link", "table-code-leading-space"].map(
-        (item, index) => ({
-          case: item,
-          messageId: String(index + 1),
-          expectedHtml: "fixture",
-          outboundHtml: "fixture",
-          acceptedPayloads: [{ text: "fixture", parseMode: status === "pass" ? "HTML" : null }],
-        }),
-      ),
+    cases: ["all-space-code", "unclosed-link-label", "ipv6-link", "table-code-leading-space"].map(
+      (item, index) => ({
+        case: item,
+        messageId: String(index + 1),
+        expectedHtml: "fixture",
+        outboundHtml: "fixture",
+        acceptedPayloads: [{ text: "fixture", parseMode: status === "pass" ? "HTML" : null }],
+      }),
+    ),
   }),
 });
 const receipt = (files: ReturnType<typeof observations>) =>
@@ -133,26 +133,26 @@ describe("canonical Telegram QA evidence contract", () => {
 });
 
 const sha = "a".repeat(40),
-    main = "b".repeat(40);
+  main = "b".repeat(40);
 const branch = (name: string, value: string) => ({
   name,
   protected: true,
   commit: { sha: value },
 });
 it.each([
-    "complete",
-    "main",
-    "advanced-main",
-    "wrong-main-base",
-    "unprotected",
-    "moved-pin",
-    "not-ancestor",
-    "moved-main",
-    "missing-protection",
-    "api-denied",
-    "redirect",
+  "complete",
+  "main",
+  "advanced-main",
+  "wrong-main-base",
+  "unprotected",
+  "moved-pin",
+  "not-ancestor",
+  "moved-main",
+  "missing-protection",
+  "api-denied",
+  "redirect",
 ])("protected workflow admission handles %s without auto-trusting main changes", async (fault) => {
-    let mainReads = 0;
+  let mainReads = 0;
   const responses: Record<string, () => unknown> = {
     "branches/qa-proof": () => ({
       ...branch("qa-proof", fault === "moved-pin" ? main : sha),
@@ -166,32 +166,32 @@ it.each([
       base_commit: { sha: fault === "wrong-main-base" ? main : sha },
     }),
   };
-    const fetchImpl = async (url: string | URL | Request, options?: RequestInit) => {
-      expect(options?.redirect).toBe("error");
-      if (fault === "redirect") {
-        return new Response(null, { status: 302 });
-      }
-      const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+  const fetchImpl = async (url: string | URL | Request, options?: RequestInit) => {
+    expect(options?.redirect).toBe("error");
+    if (fault === "redirect") {
+      return new Response(null, { status: 302 });
+    }
+    const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
     const response = responses[requestUrl.split("openclaw/openclaw/")[1] ?? ""];
     if (!response) {
       throw new Error("Unexpected trust route");
     }
     return Response.json(response());
-    };
-    const admission = assertRequestWorkflowRef({
-      repository: "openclaw/openclaw",
-      ref: ["main", "advanced-main", "wrong-main-base"].includes(fault)
-        ? "refs/heads/main"
-        : "refs/heads/qa-proof",
-      sha,
-      token: "synthetic-only",
-      fetchImpl,
-    });
-    if (["complete", "advanced-main"].includes(fault)) {
-      await expect(admission).resolves.toBeUndefined();
-    } else if (fault === "wrong-main-base") {
-      await expect(admission).rejects.toThrow("Workflow SHA is not verified main ancestry");
-    } else {
-      await expect(admission).rejects.toThrow();
-    }
+  };
+  const admission = assertRequestWorkflowRef({
+    repository: "openclaw/openclaw",
+    ref: ["main", "advanced-main", "wrong-main-base"].includes(fault)
+      ? "refs/heads/main"
+      : "refs/heads/qa-proof",
+    sha,
+    token: "synthetic-only",
+    fetchImpl,
+  });
+  if (["complete", "advanced-main"].includes(fault)) {
+    await expect(admission).resolves.toBeUndefined();
+  } else if (fault === "wrong-main-base") {
+    await expect(admission).rejects.toThrow("Workflow SHA is not verified main ancestry");
+  } else {
+    await expect(admission).rejects.toThrow();
+  }
 });

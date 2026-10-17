@@ -213,9 +213,9 @@ describe("matrix qa e2ee client", () => {
         }
       });
       runtimeFixture[stage === "encryption" ? "encrypt" : "upload"].mockImplementation(async () => {
-          await finish.promise;
+        await finish.promise;
         return stage === "encryption" ? encryptedMedia() : "mxc://matrix.test/image";
-        });
+      });
       const operation = client.sendImageMessage(image);
       const settled = Promise.allSettled([operation]);
       await vi.advanceTimersByTimeAsync(0);
@@ -387,10 +387,10 @@ describe("matrix qa e2ee event recording", () => {
     recorder.record(replacement);
     recorder.record(
       makeEvent("$preview", {
-      kind: "notice",
-      body: "preview",
-      msgtype: "m.notice",
-      relatesTo: relation,
+        kind: "notice",
+        body: "preview",
+        msgtype: "m.notice",
+        relatesTo: relation,
       }),
     );
 

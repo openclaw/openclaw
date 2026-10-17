@@ -206,11 +206,11 @@ describe("agent session resolution", () => {
   });
 
   it.each([
-      ["canonical done main", "done"],
-      ["raw done main alias", "done", "main", "main"],
-      ["custom done main alias", "done", "work"],
-      ["killed main", "killed"],
-      ["endedAt-only main", undefined],
+    ["canonical done main", "done"],
+    ["raw done main alias", "done", "main", "main"],
+    ["custom done main alias", "done", "work"],
+    ["killed main", "killed"],
+    ["endedAt-only main", undefined],
   ] as const)(
     "uses explicit outcomes for %s with a newer transcript",
     async (label, status, mainKey = "main", requestedSessionKey = "agent:main:main") => {

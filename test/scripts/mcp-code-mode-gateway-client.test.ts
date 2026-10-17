@@ -72,17 +72,17 @@ describe("MCP code-mode matched failure diagnostics", () => {
       [
         { message: user },
         message("assistant", [
-              {
-                type: "toolCall",
-                id: `${id}|fc_mock_exec_0123456789`,
-                name: "exec",
-                arguments: {},
-              },
+          {
+            type: "toolCall",
+            id: `${id}|fc_mock_exec_0123456789`,
+            name: "exec",
+            arguments: {},
+          },
         ]),
         toolResult("unrelated", "fixture-note-alpha"),
         toolResult(`${id}|fc_mock_exec_0123456789`, JSON.stringify(output), {
-            isError: true,
-            details: output,
+          isError: true,
+          details: output,
         }),
       ],
     );
@@ -129,14 +129,14 @@ describe("MCP code-mode matched failure diagnostics", () => {
           outputFor(
             textContent(
               JSON.stringify({
-                  status: "completed",
-                  value: {
-                    marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
-                    note: "fixture-note-alpha",
-                    privateText,
-                    [privateText]: privateText,
-                  },
-                }),
+                status: "completed",
+                value: {
+                  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
+                  note: "fixture-note-alpha",
+                  privateText,
+                  [privateText]: privateText,
+                },
+              }),
               "input_text",
             ),
           ),
@@ -404,19 +404,19 @@ describe("MCP code-mode current-attempt completion proof", () => {
     ...steps.map((step) =>
       "name" in step
         ? message("assistant", [
-                {
-                  type: "toolCall",
-                  id: step.id,
-                  name: step.name,
-                  arguments:
-                    step.name === "wait" && step.args.cell_id
-                      ? { arguments: JSON.stringify(step.args) }
-                      : step.args,
-                },
+            {
+              type: "toolCall",
+              id: step.id,
+              name: step.name,
+              arguments:
+                step.name === "wait" && step.args.cell_id
+                  ? { arguments: JSON.stringify(step.args) }
+                  : step.args,
+            },
           ])
         : message("toolResult", textContent(encoded(step.output)), {
-              toolCallId: step.id,
-              isError: step.isError,
+            toolCallId: step.id,
+            isError: step.isError,
           }),
     ),
   ];
@@ -487,7 +487,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
             { id: "fixture-wait-2", output: completed },
           ],
           "fixture-wait-2",
-          ],
+        ],
         [
           "completed wait with explicit matching run",
           afterWait({ ...completed, runId: "fixture-run" }),
@@ -507,7 +507,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
         const { note, ...fields } = value;
         expect(
           validate([
-              exec,
+            exec,
             resultWith({ status: "completed", value: { ...fields, resultText: note } }),
           ]).matchedExecCallIds,
         ).toEqual(["fixture-exec"]);
@@ -545,9 +545,9 @@ describe("MCP code-mode current-attempt completion proof", () => {
       it("accepts the current command and run_id aliases", () => {
         expect(
           validate([
-              { ...exec, args: { command: code, code: "" } },
+            { ...exec, args: { command: code, code: "" } },
             suspended,
-              { ...wait, args: { run_id: "fixture-run" } },
+            { ...wait, args: { run_id: "fixture-run" } },
             resumed,
           ]).matchedCompletionCallIds,
         ).toEqual(["fixture-wait"]);
@@ -562,7 +562,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
         [
           "malformed output",
           [exec, resultWith("MCP_CODE_MODE_FILE_TOOL_RESULT fixture-note-alpha")],
-          ],
+        ],
         ["nested success only", [exec, resultWith({ value: completed })]],
         ["result before call", [result, exec]],
         ["orphan wait", [wait, resumed]],
@@ -704,7 +704,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
       [
         message("user", [
           ...textContent(marker),
-              { type: "toolCall", name: "exec", id: "fixture-exec", arguments: { code } },
+          { type: "toolCall", name: "exec", id: "fixture-exec", arguments: { code } },
         ]),
         message("assistant", textContent(code)),
         ...transcript([result]).slice(1),

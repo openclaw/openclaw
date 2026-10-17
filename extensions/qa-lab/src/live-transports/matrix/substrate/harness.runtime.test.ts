@@ -215,7 +215,7 @@ describe("matrix harness runtime", () => {
             "port matrix-qa-homeserver 8008": () =>
               `127.0.0.1:${++portReadCount === 1 ? 49_152 : 49_153}\n`,
             "ps --format json": () => '[{"State":"running"}]\n',
-        },
+          },
           calls,
         ),
         fetchImpl: vi.fn(async () => ({ ok: true })),
