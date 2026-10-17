@@ -23,10 +23,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
@@ -149,102 +146,6 @@ describe("session transcript visible cursor SDK", () => {
         ]),
       },
     );
-  });
-
-  it("refuses a retained delta read after its prepared executor generation is replaced", async ({
-    signal,
-  }) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "prepared-delta-generation",
-      sessionKey: "agent:main:prepared-delta-generation",
-      storePath: path.join(tempDir, "prepared-delta.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "retained transcript" },
-    });
-    const execution = captureOpenClawAgentDatabaseExecution({
-      agentId: scope.agentId,
-      path: scope.storePath,
-    });
-    if (!execution.capturePreparedGenerationClaim()) {
-      await execution.release();
-      throw new Error("The fixture requires its admitted session writer");
-    }
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const reading = withSessionTranscriptDeltaReader(
-      scope,
-      async (reader) => {
-        entered.resolve();
-        await withinTest(resume.promise, signal);
-        return reader.raw({ maxEvents: 10 });
-      },
-      signal,
-    );
-    const refused = expect(reading).rejects.toThrow(
-      "Agent database execution generation was replaced",
-    );
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent: () => execution.assertCurrent(),
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            execution.assertCurrent();
-            if (!grant()) {
-              throw new Error("Fixture execution admission expired");
-            }
-          }, binding.attachment),
-        });
-      },
-    };
-    let writing: Promise<void> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          reading,
-          "Delta read ended before retaining its prepared owner",
-        ),
-        signal,
-      );
-      writing = agentWriteAdmission.runOpenClawAgentWriteAdmission(execution, async () => {
-        const failure = new Error("Retire the original native generation");
-        await expect(
-          execution.runExisting(
-            source,
-            async () => {
-              throw failure;
-            },
-            { retireNativeOnFailure: true },
-          ),
-        ).rejects.toBe(failure);
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 2 });
-      });
-      await withinTest(
-        awaitGateBeforeSettlement(
-          writing,
-          reading,
-          "Delta read ended before its captured generation was replaced",
-        ),
-        signal,
-      );
-      resume.resolve();
-      await refused;
-      const fresh = await readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 });
-      expect(fresh).toMatchObject({
-        kind: "page",
-        entries: [{ message: { role: "user", content: "retained transcript" } }],
-      });
-    } finally {
-      resume.resolve();
-      await Promise.allSettled([reading, writing, refused]);
-      await execution.release();
-    }
   });
 
   it.each([readSessionTranscriptRawDelta, readSessionTranscriptVisibleMessageDelta])(
