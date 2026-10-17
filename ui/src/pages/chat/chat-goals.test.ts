@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { Value } from "typebox/value";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SessionsGoalUpdateParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
@@ -7,6 +8,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsListResult, SessionGoal } from "../../api/types.ts";
 import { retireStoredGoalOperations } from "../../lib/chat/goal-operation-storage.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -14,7 +16,7 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { chatGoalRecovery, mutateChatGoal } from "./chat-goals.ts";
+import { chatGoalOperations, chatGoalRecovery, mutateChatGoal } from "./chat-goals.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
@@ -76,6 +78,39 @@ function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.up
 }
 
 describe("Goal control requests", () => {
+  it("publishes pending and uncertain recovery while preserving the saved operation", async () => {
+    const pending = createDeferred<never>();
+    const host = goalHost({ "sessions.goal.update": () => pending.promise });
+    const states: Array<boolean | undefined> = [];
+    const dispose = createRoot((stop) => {
+      const operations = projectOwner(chatGoalOperations(host), (owner) => owner);
+      createEffect(
+        () => {
+          operations.read();
+          return chatGoalRecovery(host)?.pending;
+        },
+        (value) => {
+          states.push(value);
+        },
+      );
+      return stop;
+    });
+    onTestFinished(dispose);
+    flush();
+    const submitted = mutateChatGoal(host, { action: "pause", goalId: goal.id });
+    expect(chatGoalRecovery(host)?.pending).toBe(true);
+    flush();
+    expect(states).toEqual([undefined, true]);
+    const saved = sessionStorage.getItem(sessionStorage.key(0)!);
+    expect(saved).not.toBeNull();
+    pending.reject(new Error("ACK lost"));
+    expect(await submitted).toBe(false);
+    expect(chatGoalRecovery(host)?.pending).toBe(false);
+    flush();
+    expect(states).toEqual([undefined, true, false]);
+    expect(sessionStorage.getItem(sessionStorage.key(0)!)).toBe(saved);
+  });
+
   it("reconciles an unavailable Resume within the original action", async () => {
     vi.useFakeTimers();
     const current = observedRoster();

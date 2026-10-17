@@ -1861,6 +1861,7 @@ src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts
 src/state/openclaw-agent-db-registry.worker.ts
 src/state/openclaw-agent-db-resources.ts
+src/state/openclaw-agent-db-schema-admission.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts
 src/state/openclaw-agent-db-schema-read.ts

@@ -31,6 +31,7 @@ import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
+import { admitOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema-admission.js";
 import {
   assertOpenClawAgentSchemaContains,
   assertSupportedAgentSchemaVersion,
@@ -119,6 +120,7 @@ async function migrateAgentDatabase(params: {
     return inspectPostgresMediaPersistence(params);
   }
   const database = openNodeSqliteDatabase(params.pathname);
+  const nativeVersionMigration = params.migratedFromVersion !== undefined && !agentEngineInput();
   const schemaWarnings: string[] = [];
   const schemaOptions = {
     agentId: params.agentId,
@@ -132,20 +134,13 @@ async function migrateAgentDatabase(params: {
     runSqliteIntegrityOperationInWorker(operation, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       signal: params.maintenance.signal,
-      beforeResume: () => {
-        assertAgentDatabaseMaintenanceAuthority(params.maintenance);
-        assertOpenClawAgentDatabaseOwner(database, params);
-        assertSupportedAgentSchemaVersion(database, params.pathname);
-      },
+      beforeResume: () => assertAgentDatabaseMaintenanceAuthority(params.maintenance),
     });
   try {
     configureSqliteMaintenanceCache(database);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     enableNodeSqliteKyselyStatementCache(database);
-    let metadata = assertOpenClawAgentDatabaseOwner(database, {
-      agentId: params.agentId,
-      pathname: params.pathname,
-    });
+    let metadata = assertOpenClawAgentDatabaseOwner(database, params);
     assertSupportedAgentSchemaVersion(database, params.pathname);
     let userVersion = readSqliteUserVersion(database);
     if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
@@ -179,7 +174,9 @@ async function migrateAgentDatabase(params: {
         finalVersion: userVersion,
       };
     }
-    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
+    if (!nativeVersionMigration) {
+      invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
+    }
     const initialVersion = params.migratedFromVersion ?? userVersion;
     const prepareSchema = async () => {
       userVersion = readSqliteUserVersion(database);
@@ -187,10 +184,7 @@ async function migrateAgentDatabase(params: {
         await runSchema(
           migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(database, schemaOptions),
         );
-        metadata = assertOpenClawAgentDatabaseOwner(database, {
-          agentId: params.agentId,
-          pathname: params.pathname,
-        });
+        metadata = assertOpenClawAgentDatabaseOwner(database, params);
         userVersion = readSqliteUserVersion(database);
       }
       if (metadata.schemaVersion !== userVersion) {
@@ -205,7 +199,10 @@ async function migrateAgentDatabase(params: {
           // The version phase verified this file under the same Doctor custody.
           // Only ordinary additive maintenance remains before readers can open it.
           ensureOpenClawAgentSchema(database, params.agentId, params.pathname);
-          registerOpenClawAgentDatabase(schemaOptions);
+          const admittedDb = nativeVersionMigration
+            ? admitOpenClawAgentDatabaseSchema(database, schemaOptions)
+            : undefined;
+          registerOpenClawAgentDatabase({ ...schemaOptions, admittedDb });
         } else {
           await runSchema(ensureOpenClawAgentDatabaseSchemaSteps(database, schemaOptions));
         }

@@ -113,6 +113,28 @@ function recordDiagnosticEvent(
         );
       }
       return;
+    case "sessions.list.retention":
+      if (metadata.trusted) {
+        store.gauge(
+          "openclaw_sessions_list_retained_views",
+          "Retained session-list views across all publications.",
+          {},
+          evt.views,
+        );
+        store.gauge(
+          "openclaw_sessions_list_retained_refs",
+          "Row references and selection entries retained by session-list views.",
+          {},
+          evt.refs,
+        );
+        store.gauge(
+          "openclaw_sessions_list_retained_bytes",
+          "Estimated memory retained by session-list views.",
+          {},
+          evt.estimatedBytes,
+        );
+      }
+      return;
     case "worker.request":
       if (metadata.trusted) {
         recordWorkerRequest(store, evt);
