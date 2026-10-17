@@ -251,7 +251,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
           stale: { source: "npm", spec: "stale@1.0.0" },
           missing: { source: "npm", spec: "missing@1.0.0" },
           codex: { source: "npm", spec: "codex@1.0.0" },
-          constructor: { source: "npm", spec: "constructor@1.0.0" },
+          constructor: { source: "npm", spec: "constructor@1.0.0" } satisfies PluginInstallRecord,
           ["__proto__"]: { source: "npm", spec: "proto@1.0.0" },
         },
       },
@@ -259,7 +259,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     const existingRecords: Record<string, PluginInstallRecord> = {
       stale: { source: "npm", spec: "stale@2.0.0" },
       codex: { source: "npm", spec: "codex@2.0.0" },
-      constructor: { source: "npm", spec: "constructor@2.0.0" },
+      constructor: { source: "npm", spec: "constructor@2.0.0" } satisfies PluginInstallRecord,
       ["__proto__"]: { source: "npm", spec: "proto@2.0.0" },
     };
     const nextConfig: OpenClawConfig = {

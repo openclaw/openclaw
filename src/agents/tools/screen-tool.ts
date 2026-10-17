@@ -7,7 +7,7 @@ import { requesterProfileSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { withGatewayPersonalToolUser } from "./gateway-caller-context.js";
-import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import { callInProcessGatewayTool } from "./in-process-gateway.js";
 
 const ACTIONS = [
   "split_right",
@@ -46,7 +46,6 @@ const ScreenToolSchema = Type.Object(
 type ScreenToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
-  callGateway?: InProcessGatewayCaller;
 };
 
 function resolveSessionKey(
@@ -127,7 +126,6 @@ function commandForAction(
 }
 
 export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
-  const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   return {
     label: "Screen",
     name: "screen",
@@ -148,7 +146,7 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
       };
       return jsonResult(
         await withGatewayPersonalToolUser(readToolStringParam(params, "user"), () =>
-          gatewayCall("ui.command", payload),
+          callInProcessGatewayTool("ui.command", payload),
         ),
       );
     },

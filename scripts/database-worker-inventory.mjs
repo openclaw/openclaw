@@ -414,6 +414,7 @@ const reviewedOperations = new Map([
         operations: [
           "readTranscriptExportSnapshotReadOnlySync",
           "readTranscriptExportSnapshotFromDatabase",
+          "readTranscriptExportSnapshotsFromDatabase",
         ],
         evidence:
           "Transcript hydration, memory-entry export, and reset-recall dispatch run in transcript workers. Main-thread buildSessionEntry supplies a worker snapshot for SQLite; its in-process branch has no SQLite identity. Actor projection also receives a supplied snapshot. Other readers retain native SDK callers.",

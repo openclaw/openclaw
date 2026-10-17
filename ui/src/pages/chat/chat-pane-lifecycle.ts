@@ -1,10 +1,9 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { onCleanup } from "solid-js";
-import {
-  validateSessionReactionEvent,
-  type SessionSuggestionEvent,
-  type SessionTypingEvent,
-  type TaskSuggestionEvent,
+import type {
+  SessionSuggestionEvent,
+  SessionTypingEvent,
+  TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
@@ -17,6 +16,7 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
+import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -494,7 +494,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           if (event.event === "session.suggestion" && event.payload) {
             this.handleSessionSuggestionEvent(event.payload as SessionSuggestionEvent);
           }
-          if (event.event === "session.reaction" && validateSessionReactionEvent(event.payload)) {
+          if (event.event === "session.reaction" && isSessionReactionEvent(event.payload)) {
             this.handleSessionReactionEvent(event.payload);
           }
           if (event.event === "session.typing" && event.payload) {

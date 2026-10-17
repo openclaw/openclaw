@@ -41,6 +41,11 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+After a Doctor child settles, the updater drains its retained handles for the
+affected shared-state database and revokes their schema admission, even when
+Doctor exits unsuccessfully. The next parent access admits the resulting schema
+again and refuses a version newer than the running updater supports.
+
 ### Migration integrity checks
 
 SQLite upgrades default to a whole-database `quick_check`, a full

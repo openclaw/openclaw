@@ -24,6 +24,15 @@ export function getAgentRunRegistryState(): AgentRunRegistryState {
   return registryState;
 }
 
+/** Reads the process-local version of the active-run projection inputs. */
+export function readAgentRunIndexVersion(): number {
+  return registryState.version;
+}
+
+export function getAgentRunLifecycleGeneration(): string {
+  return registryState.lifecycleGeneration;
+}
+
 /** Lists registered runs bound to one current session identity. */
 export function listAgentRunsForSession(params: {
   sessionKey: string;

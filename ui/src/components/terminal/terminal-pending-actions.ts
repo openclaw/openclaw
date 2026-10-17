@@ -53,7 +53,6 @@ export type TerminalIntentHost = {
  * over one storage key drop each other's intents and run the same open twice.
  * Hosts bind while connected; the most recent binding executes.
  */
-export type TerminalIntentQueue = ReturnType<typeof createTerminalIntentQueue>;
 export function createTerminalIntentQueue(persistent = true) {
   let ownedActions: QueuedTerminalAction[] = [];
   let ownedRefreshPending = false;

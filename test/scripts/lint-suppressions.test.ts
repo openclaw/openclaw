@@ -16,6 +16,9 @@ afterAll(() => parser.close());
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set([".cache", ".git", "build", "coverage", "dist", "node_modules"]);
 const ROOTS = ["src", "extensions", "scripts", "ui"] as const;
+// Match the generated-source exclusions in the oxlint handwritten-code ratchets.
+const GENERATED_SOURCE_PATH =
+  /(?:^|\/)(?:__generated__|generated|[^/]+\.generated|protocol-gen|dist)(?:\/|$)|\.generated\.[^/]+$/u;
 
 type SuppressionEntry = {
   file: string;
@@ -33,6 +36,7 @@ function collectFileSuppressions(file: string, source: string): SuppressionEntry
 function isProductionCodeFile(relativePath: string): boolean {
   return (
     CODE_EXTENSIONS.has(path.extname(relativePath)) &&
+    !GENERATED_SOURCE_PATH.test(relativePath) &&
     !path.posix.basename(relativePath).startsWith("__rootdir_boundary_canary__.") &&
     !(relativePath.includes("/test/") || /\.(?:test|spec)\.tsx?$/.test(relativePath))
   );
@@ -94,6 +98,20 @@ const productionLintSuppressions = listSuppressionFiles().flatMap((file) =>
 );
 
 describe("production lint suppressions", () => {
+  it.each([
+    ["ui/src/lib/protocol-validators.generated/approvals.js", false],
+    ["src/schema.generated.ts", false],
+    ["src/__generated__/schema.ts", false],
+    ["src/generated/schema.ts", false],
+    ["extensions/demo/protocol-gen/schema.ts", false],
+    ["extensions/demo/dist/index.js", false],
+    ["scripts/generate-schema.ts", true],
+    ["ui/src/lib/protocol-validators.generated-reader.ts", true],
+    ["src/agents/blobster-renderer.ts", true],
+  ])("classifies handwritten suppression scope for %s", (file, handwritten) => {
+    expect(isProductionCodeFile(file)).toBe(handwritten);
+  });
+
   it.each([
     ["/* oxlint-disable\nmax-lines, no-console\n-- TODO: split this file. */", ["no-console"]],
     ["/* oxlint-disable eslint/max-lines, no-debugger */", ["no-debugger"]],

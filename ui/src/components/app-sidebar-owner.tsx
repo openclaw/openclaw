@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createRoot, runWithOwner, Show } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -25,9 +25,9 @@ import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail, renderSidebarPages } from "./app-sidebar-rail.tsx";
-import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
 import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
@@ -49,7 +49,7 @@ import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
 import type { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
-import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
 import {
@@ -78,7 +78,22 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override readonly sessionOrganizer = new SessionOrganizer(this, () => this.requestUpdate());
-  override readonly sidebarMenus = new SidebarMenusController(this);
+  // Native sidebar custody outlives provider/view roots.
+  private readonly menuRoot = runWithOwner(null, () =>
+    createRoot((dispose) => ({
+      menus: createSidebarMenus({
+        host: this,
+        element: this.hostElement,
+        commit: () => {
+          this.requestUpdate();
+          return this.updateComplete;
+        },
+      }),
+      dispose,
+    })),
+  );
+  override readonly sidebarMenus = this.menuRoot.menus;
+  readonly disposeMenus = this.menuRoot.dispose;
   readonly people = new SidebarPeoplePreferences(() => this.requestUpdate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
@@ -253,6 +268,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override disconnectedCallback() {
+    this.sidebarMenus.disconnect();
     this.sessionData.disconnect();
     this.peopleView?.dismiss();
     this.narration?.disconnect();
@@ -306,6 +322,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override connectedCallback() {
+    this.sidebarMenus.connect();
     this.sessionData.connect();
     this.snapshot.connect();
     super.connectedCallback();
@@ -474,7 +491,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const pages = renderSidebarPages(this);
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
-      const menus = untrack(() => this.sidebarMenus).render();
+      const menus = this.sidebarMenus.render(this);
       return (
         <aside
           class="sidebar sidebar--rail"

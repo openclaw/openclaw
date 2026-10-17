@@ -1,5 +1,3 @@
-// Public web-search registration helpers for provider plugins.
-
 export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,

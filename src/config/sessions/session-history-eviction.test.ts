@@ -218,7 +218,7 @@ describe("SQLite historical session disk budget", () => {
         expect(reclamationWorkers).toBe(execution === "in-process" ? 0 : 1);
         expect(archiveReplies.map(({ message }) => message.type)).toEqual(["done", "published"]);
         expect(new Set(archiveReplies.map(({ worker }) => worker)).size).toBe(1);
-        expect(archiveReplies.every(({ worker }) => worker.threadId === -1)).toBe(true);
+        expect(archiveReplies.every(({ worker }) => worker.threadId > 0)).toBe(true);
         expect(result?.removedEntries).toBe(1);
         expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
         expect(result?.totalBytesAfter).toBe(
@@ -237,6 +237,8 @@ describe("SQLite historical session disk budget", () => {
         expect(database().db.prepare("PRAGMA analysis_limit").get()).toEqual({
           analysis_limit: 37,
         });
+        await closeOpenClawAgentDatabaseByPathAsync(database().path);
+        expect(archiveReplies.every(({ worker }) => worker.threadId === -1)).toBe(true);
       };
       if (execution === "worker") {
         await run();

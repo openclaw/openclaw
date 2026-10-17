@@ -124,6 +124,7 @@ describe("normalizeAssistantReplayContent", () => {
     const converted = convertMessages(
       model,
       {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
         messages: normalizeAssistantReplayContent(messages).filter(
           (message) =>
             message.role === "user" ||

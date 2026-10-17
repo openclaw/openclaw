@@ -29,7 +29,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
-import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
+import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
 const archiveHook = vi.hoisted(() => ({ afterMaterialize: undefined as (() => void) | undefined }));
@@ -213,49 +213,33 @@ function observeColdAdmission(
     return Promise.all([work, hostRelease.promise]).then(() => undefined);
   });
   if (mode === "historical-check") {
-    const withWorker = reclamationWorker.withSqliteReclamationWorker;
-    vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-      (options, claim, run, assertCurrent, signal) =>
-        withWorker(
-          options,
-          claim,
-          async (worker) => {
-            const execute = worker.run.bind(worker);
-            const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
-              if (
-                !probe.armed ||
-                probe.held ||
-                params.plan.databaseOptions.path !== probe.databasePath ||
-                params.plan.kind !== "deletion-plan" ||
-                params.plan.planning.operation !== "check"
-              ) {
-                return execute(params);
+    const withWorker = sessionWorker.withSessionEntryWorker;
+    vi.spyOn(sessionWorker, "withSessionEntryWorker").mockImplementation((...args) => {
+      const options = args[0];
+      const run = args[3];
+      args[3] = (execution, source, context) =>
+        run(
+          {
+            ...execution,
+            get fileIdentity() {
+              return execution.fileIdentity;
+            },
+            async prepare(...prepareArgs) {
+              await execution.prepare(...prepareArgs);
+              if (probe.armed && !probe.held && options.path === probe.databasePath) {
+                probe.held = true;
+                entered.resolve();
+                await hostRelease.promise;
               }
-              return execute({
-                ...params,
-                withWriteAdmission: (performWrite, diagnostics) =>
-                  params.withWriteAdmission(async (...admissionArgs) => {
-                    const [refusal] = admissionArgs;
-                    if (!refusal && !probe.held) {
-                      probe.held = true;
-                      entered.resolve();
-                      await hostRelease.promise;
-                    }
-                    return performWrite(...admissionArgs);
-                  }, diagnostics),
-              });
-            });
-            try {
-              return await run(worker);
-            } finally {
-              spy.mockRestore();
-            }
+            },
           },
-          assertCurrent,
-          signal,
-        ),
-    );
+          source,
+          context,
+        );
+      return withWorker(...args);
+    });
   }
+
   return {
     entered,
     release,

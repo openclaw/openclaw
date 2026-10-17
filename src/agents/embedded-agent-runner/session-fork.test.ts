@@ -592,16 +592,20 @@ describe("prepared session fork provider boundary", () => {
         api,
         provider,
       };
+      const replayContext: Context = {
+        ...context,
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      };
       const completed = await (
-        await parent(requestModel, context, { apiKey: "synthetic-key" })
+        await parent(requestModel, replayContext, { apiKey: "synthetic-key" })
       ).result();
       await (
         await parent(
           requestModel,
           {
-            ...context,
+            ...replayContext,
             messages: [
-              ...context.messages,
+              ...replayContext.messages,
               {
                 ...completed,
                 ...(api !== "openai-responses"

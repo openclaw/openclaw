@@ -374,12 +374,21 @@ The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
 `actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
 `sampleLossCount: null` because the native profilers do not expose an explicit lost-sample count.
 Node samples V8; Bun samples JavaScriptCore and returns the same profile format.
-The complete result is limited to 1 MiB; larger profiles fail without truncating
-nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
+The complete result is limited to 1 MiB. When the full graph exceeds that limit,
+the result contains `summary` instead of `profile`, with `truncated: true`,
+`originalNodeCount`, `sampleCount`, and `omittedSampleCount`. Each summary row
+contains a leaf-first `stack` of up to eight frames and its recorded `sampleCount`.
+Identical stacks are combined; the most sampled stacks come first, with at most
+128 rows within the same byte limit. These counts are samples, not exact CPU time.
+This preserves useful attribution during busy startup windows, when deep stacks
+and V8 deoptimization samples can enlarge the graph despite the sampling interval.
+The input limits of 16,384 nodes and 65,536 samples still apply; captures exceeding
+either limit remain unavailable to bound processing work.
+Code locations inside the OpenClaw package use `openclaw:` paths;
 Node builtin locations use `node:` paths. External paths, eval labels, and other
 unrecognized names are redacted. Bounded code-symbol names at recognized locations
 are retained; their syntax does not prove that a computed name is public. Review
-the profile before sharing it. Graph edges, native signed script IDs, and sample order remain intact. V8 can
+the profile before sharing it. Full profiles retain graph edges, native signed script IDs, and sample order. V8 can
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
 
@@ -402,12 +411,16 @@ attribute capture-induced stalls when analyzing an individual capture; it cannot
 be subtracted from aggregate event-loop maxima or percentiles. The measurement
 reports the cost; it does not prevent or interrupt the native stall.
 
-From a source checkout, attribute native self samples to their nearest JavaScript
-parent with:
+For a full `profile` result, a source checkout can attribute native self samples
+to their nearest JavaScript parent with:
 
 ```bash
 node scripts/diagnostic-cpu-native-parents.mts cpu-1.json cpu-2.json
 ```
+
+This analyzer requires a full profile. For a truncated result, inspect its
+`summary` rows directly: each `stack` starts at the sampled function and continues
+through its nearest callers, with `sampleCount` recording how often it was sampled.
 
 The script accepts saved RPC results or raw V8 profiles and prints the top 20
 parents for each capture. Add `--json` for all parent rows. Percentages use elapsed

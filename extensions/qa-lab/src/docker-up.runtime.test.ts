@@ -2,9 +2,9 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runQaDockerUp } from "./docker-up.runtime.js";
-import { shellQuote } from "./shell-quote.js";
 
 type QaDockerUpDeps = NonNullable<Parameters<typeof runQaDockerUp>[1]>;
 

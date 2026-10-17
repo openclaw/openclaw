@@ -56,7 +56,8 @@ still counts the complete window, including owner-first rows. Require a matching
 base revision before applying a delta. Revision misses, retired views, and reads
 without a useful delta return the normal full row array. Current authorization
 and selection always precede this comparison. The Gateway retains up to 32 prior
-vectors per bounded query view and clears them with the presentation owner.
+vectors per bounded query view, including across runtime activity updates.
+Configuration, identity, and selection resets retire the view and its history.
 
 This mode is optional: bare revision tokens never receive deltas, and older
 Gateways treat the prefixed token as a miss and return full rows.

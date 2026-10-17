@@ -772,5 +772,6 @@ export class SessionOrganizer {
     this.deps.sessionData.resetSessionList();
     storeSidebarSessionStatusFilter(statusFilter);
     void this.deps.sessionData.refreshSidebarSessions();
+    this.notify();
   }
 }

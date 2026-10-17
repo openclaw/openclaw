@@ -45,39 +45,25 @@ export type PreparedTranscriptPayload = {
   payload: TranscriptPayloadRecord;
 };
 
+export type TranscriptEventInsertRow = {
+  seq: number;
+  eventJson: string;
+  createdAt: number;
+  eventId?: string;
+  parsedEvent?: unknown;
+  preparedPayload?: PreparedTranscriptPayload;
+};
+
+// Fourteen bound columns per row stay below SQLite's conservative 999-parameter limit.
+export const TRANSCRIPT_INSERT_BATCH_SIZE = 64;
+
 export type TranscriptPayloadAlias = "transcript_events" | "event" | "te" | "parent";
 
 /** Physical payload writes participate in the transcript owner's admitted transaction. */
 export function createTranscriptEventInserter(database: EngineConnection, sessionId: string) {
-  const insert = prepareSqliteQuerySync<
-    TranscriptPayloadRecord & { seq: number; createdAt: number }
-  >(database, (parameter) =>
-    getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
-      .insertInto("transcript_events")
-      .values({
-        session_id: sessionId,
-        seq: parameter((row) => row.seq),
-        event_json: parameter((row) => row.event_json),
-        event_zstd: parameter((row) => row.event_zstd),
-        event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
-        navigation_json: parameter((row) => row.navigation_json),
-        navigation_type: parameter((row) => row.navigation_type),
-        navigation_custom_type: parameter((row) => row.navigation_custom_type),
-        navigation_display: parameter((row) => row.navigation_display),
-        message_role: parameter((row) => row.message_role),
-        navigation_last_type: parameter((row) => row.navigation_last_type),
-        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
-        navigation_valid: parameter((row) => row.navigation_valid),
-        created_at: parameter((row) => row.createdAt),
-      }),
-  );
-  return (row: {
-    seq: number;
-    eventJson: string;
-    createdAt: number;
-    parsedEvent?: unknown;
-    preparedPayload?: PreparedTranscriptPayload;
-  }) => {
+  const kysely =
+    getNodeSqliteKysely<Pick<DB, "transcript_events" | "transcript_event_identities">>(database);
+  const prepareRow = (row: TranscriptEventInsertRow) => {
     const prepared = row.preparedPayload;
     const payload =
       prepared?.eventJson === row.eventJson &&
@@ -85,8 +71,101 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
       (!isPostgresSqlConnection(database) || prepared.payload.event_zstd === null)
         ? prepared.payload
         : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
-    return insert({ ...row, ...payload });
+    return { session_id: sessionId, seq: row.seq, ...payload, created_at: row.createdAt };
   };
+  type StoredRow = ReturnType<typeof prepareRow>;
+  const columns = [
+    "session_id",
+    "seq",
+    "event_json",
+    "event_zstd",
+    "event_utf8_bytes",
+    "navigation_json",
+    "navigation_type",
+    "navigation_custom_type",
+    "navigation_display",
+    "message_role",
+    "navigation_last_type",
+    "navigation_last_custom_type",
+    "navigation_valid",
+    "created_at",
+  ] as const;
+  // Each executor is used only with the chunk length that defines its bound indexes.
+  const createBatchInsert = (count: number) =>
+    prepareSqliteQuerySync<readonly StoredRow[]>(database, (parameter) =>
+      kysely.insertInto("transcript_events").values(
+        Array.from({ length: count }, (_, index) => ({
+          session_id: sessionId,
+          seq: parameter((rows) => rows[index]!.seq),
+          event_json: parameter((rows) => rows[index]!.event_json),
+          event_zstd: parameter((rows) => rows[index]!.event_zstd),
+          event_utf8_bytes: parameter((rows) => rows[index]!.event_utf8_bytes),
+          navigation_json: parameter((rows) => rows[index]!.navigation_json),
+          navigation_type: parameter((rows) => rows[index]!.navigation_type),
+          navigation_custom_type: parameter((rows) => rows[index]!.navigation_custom_type),
+          navigation_display: parameter((rows) => rows[index]!.navigation_display),
+          message_role: parameter((rows) => rows[index]!.message_role),
+          navigation_last_type: parameter((rows) => rows[index]!.navigation_last_type),
+          navigation_last_custom_type: parameter(
+            (rows) => rows[index]!.navigation_last_custom_type,
+          ),
+          navigation_valid: parameter((rows) => rows[index]!.navigation_valid),
+          created_at: parameter((rows) => rows[index]!.created_at),
+        })),
+      ),
+    );
+  const batchInserts = new Map<number, ReturnType<typeof createBatchInsert>>();
+  const batch = (rows: readonly TranscriptEventInsertRow[]) => {
+    for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+      const prepared = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE).map(prepareRow);
+      let insert = batchInserts.get(prepared.length);
+      if (!insert) {
+        insert = createBatchInsert(prepared.length);
+        batchInserts.set(prepared.length, insert);
+      }
+      insert(prepared);
+    }
+  };
+  const createIdentityInsert = () =>
+    prepareSqliteQueryTakeFirstSync<StoredRow & { eventId: string }, { seq: number }>(
+      database,
+      (parameter) =>
+        kysely
+          .insertInto("transcript_events")
+          .columns(columns)
+          .expression(
+            kysely
+              .selectNoFrom(columns.map((column) => parameter((row) => row[column]).as(column)))
+              .where((eb) =>
+                eb.not(
+                  eb.exists(
+                    eb
+                      .selectFrom("transcript_event_identities")
+                      .select("event_id")
+                      .where("session_id", "=", sessionId)
+                      .where(
+                        "event_id",
+                        "=",
+                        parameter((row) => row.eventId),
+                      ),
+                  ),
+                ),
+              ),
+          )
+          .returning("seq"),
+    );
+  let insertIdentity: ReturnType<typeof createIdentityInsert> | undefined;
+  return Object.assign(
+    (row: TranscriptEventInsertRow): boolean => {
+      if (row.eventId === undefined) {
+        batch([row]);
+        return true;
+      }
+      insertIdentity ??= createIdentityInsert();
+      return insertIdentity({ ...prepareRow(row), eventId: row.eventId }) !== undefined;
+    },
+    { batch },
+  );
 }
 
 export function createTranscriptPayloadUpdater(database: EngineConnection, sessionId: string) {

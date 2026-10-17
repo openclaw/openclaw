@@ -465,6 +465,12 @@ Doctor also shares one private shared-state snapshot across a synchronous
 workspace-alias check. The next check reads fresh state, so committed repairs are
 visible without taking a separate snapshot for every configured workspace.
 
+Destructive Doctor session migrations refuse when the shared-state database is
+missing but its SQLite sidecars remain. Restore the matching database before
+retrying; keep those sidecars intact. This refusal happens before importing or
+archiving legacy session sources, including stores with canonical agent paths
+that need no registry lookup.
+
 Memory search and maintenance managers retain the per-agent publication worker
 and its admitted schema, physical identity, and index facts. Acquisition does not
 open a second main-thread reader. Worker lifetime and accepted writes drain with

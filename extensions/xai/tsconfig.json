@@ -974,6 +974,9 @@
       ],
       "openclaw/plugin-sdk/http-response-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/http-response-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/node-crypto-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/node-crypto-runtime.d.ts"
       ]
     }
   }

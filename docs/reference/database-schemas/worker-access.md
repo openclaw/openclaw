@@ -267,8 +267,11 @@ credential, lease, and external-effect authority stays with the execution owner.
 Cron retains a memory-only clock check for future jobs so forward clock changes
 can trigger overdue work without reloading SQL every minute.
 
-Cron history reads selection metadata in bounded keyset batches using the
-`created_at, task_id` indexes. Completion-time ordering, exact totals, search,
+Cron history streams selection metadata through one SQLite statement using the
+`created_at, task_id` indexes; that statement owns the read snapshot. The
+PostgreSQL bridge buffers query results, so its reader retains bounded keyset
+batches within one snapshot. Both readers retain only selection metadata after
+matching. Completion-time ordering, exact totals, search,
 and live session visibility still select the response page; only that page's
 response fields are hydrated. Summary pages exclude diagnostics and delivery
 traces in SQL, and neither view loads trigger or script recovery state.
@@ -5518,10 +5521,12 @@ including unchanged projection revisions, and returns only matching messages.
 Cold archive decoding and restoration retain the existing archive worker and
 host generation/commit authorization; transcript read fences still bind the
 subsequent read. No validation cache or new restoration owner is introduced.
-The archive FIFO can hand its idle worker between scopes using the same captured
-state directory. Each request closes its native handles before handoff; the new
-scope supplies its own authority. Different state directories and retiring workers
-still require native exit before replacement. Schema and update behavior are unchanged.
+The archive FIFO retains one idle worker after successful scopes and can hand it
+to the next scope using the same captured state directory. Each request closes
+its native handles before handoff; the new scope supplies its own authority.
+Released scopes refuse further work, and the idle worker does not keep the process
+alive. Failures, database shutdown, different state directories, and retiring
+workers still require native exit before replacement. Schema and update behavior are unchanged.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing
@@ -5642,6 +5647,8 @@ compressed-payload bound, before streaming 64 KiB frames; oversized identity tex
 keeps native slice queries. Large compressed-event frame buffers transfer ownership to the host. The
 cursor and follow-up reads retain one SQLite snapshot across transport
 acknowledgments.
+SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
+16-row keyset batches because its bridge buffers results.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry
@@ -6356,13 +6363,17 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
-Bulk appends retain attempt recency and projection watermarks in that cursor,
-then flush the index once and fold final recency into the transcript mutation
-write. Rejected identities still update attempt recency without advancing the
-mutation watermark. If an iterator fails, its accepted prefix's index and
-recency settle before the error escapes; the enclosing transaction still owns
-rollback. Identity and foreign-key checks, rewrite generations, stored payloads,
-and commit boundaries are unchanged.
+Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
+one read, then insert payloads, identities, and active projection rows in bounded
+groups. Streaming imports retain per-row acceptance feedback and buffer only the
+accepted writes. Payloads precede their dependent rows, preserving immediate
+foreign keys. The cursor flushes its watermark once and folds final recency into
+the transcript mutation write. Rejected identities still update attempt recency
+without advancing the mutation watermark. If an iterator fails, its accepted
+prefix settles before the error escapes; the enclosing transaction owns rollback.
+Scalar appends without complete actor facts fold identity rejection into the
+payload insertion. Rewrite generations, stored payloads, and commit boundaries
+are unchanged.
 
 Awaited metadata and compaction retain the database executor without opening a
 native handle on the Gateway thread. The worker prepares storage and publishes

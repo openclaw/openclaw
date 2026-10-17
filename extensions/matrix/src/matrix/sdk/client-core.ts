@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { EventType, MatrixError, MsgType, Preset } from "matrix-js-sdk/lib/matrix.js";
 import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { formatMatrixErrorReason } from "../errors.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import { MatrixClientBase } from "./client-base.js";
@@ -85,15 +85,9 @@ export abstract class MatrixClientCore extends MatrixClientBase {
         this.transactionScopeDeviceId = deviceId;
         // Include both device and token identities. This deliberately fails closed
         // across credential rotation even where a homeserver could reuse a device txn scope.
-        return createHash("sha256")
-          .update(this.transactionScopeHomeserver)
-          .update("\0")
-          .update(userId)
-          .update("\0")
-          .update(deviceId ?? "")
-          .update("\0")
-          .update(this.transactionScopeAccessTokenHash)
-          .digest("hex");
+        return sha256Hex(
+          `${this.transactionScopeHomeserver}\0${userId}\0${deviceId ?? ""}\0${this.transactionScopeAccessTokenHash}`,
+        );
       });
     this.transactionScopePromise = active;
     try {

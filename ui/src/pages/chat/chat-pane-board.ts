@@ -1,4 +1,4 @@
-import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   hasOperatorApprovalsAccess,

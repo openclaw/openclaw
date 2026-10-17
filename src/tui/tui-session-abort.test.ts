@@ -1,6 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { createEventHandlers } from "./tui-event-handlers.js";
+import { createMockBtwPresenter, createMockChatLog } from "./tui-event-test-support.js";
 import {
   createBaseState,
   createTestSessionActions,
@@ -104,6 +106,46 @@ it("drops a queued row that terminalizes while session abort is pending", async 
   expect(h.dropPendingUser).toHaveBeenCalledExactlyOnceWith("run-queued");
 });
 
+it("keeps the terminal event's cancellation notice when the abort acknowledgment arrives", async () => {
+  vi.useFakeTimers();
+  const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
+  const h = abortHarness({ activeChatRunId: "run-old" });
+  h.abortChat.mockImplementation(() => deferred.promise);
+  h.setActivityStatus.mockImplementation((text: string) => {
+    h.state.activityStatus = text;
+  });
+  const handlers = createEventHandlers({
+    state: h.state,
+    setActivityStatus: h.setActivityStatus,
+    chatLog: createMockChatLog(),
+    btw: createMockBtwPresenter(),
+    tui: { requestRender: h.requestRender },
+    updateFooter: vi.fn(),
+    loadHistory: async () => ({ loaded: false }),
+  });
+  onTestFinished(() => {
+    handlers.dispose();
+    vi.useRealTimers();
+  });
+  const pendingAbort = h.abortActive();
+  handlers.handleChatEvent({
+    runId: "run-old",
+    sessionKey: h.state.currentSessionKey,
+    state: "aborted",
+    localModelMayStillBeFinishing: true,
+  });
+  expect(h.state.activityStatus).toBe(
+    "Cancellation requested; the local model may still be finishing.",
+  );
+  deferred.resolve({ ok: true, aborted: true, runIds: ["run-old"] });
+  await pendingAbort;
+  expect(h.state.activityStatus).toBe(
+    "Cancellation requested; the local model may still be finishing.",
+  );
+  vi.advanceTimersByTime(5_000);
+  expect(h.state.activityStatus).toBe("aborted");
+});
+
 it.each([true, undefined])(
   "preserves a non-abortable run until the session is idle (hasActiveRun=%s)",
   async (hasActiveRun) => {
@@ -129,19 +171,38 @@ it.each([true, undefined])(
   },
 );
 
-it("preserves a newer run when an older abort reports no active run", async () => {
+it.each([false, true])(
+  "preserves a newer run after an older abort (aborted=%s)",
+  async (aborted) => {
+    const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
+    const h = abortHarness({ activeChatRunId: "run-old" });
+    h.abortChat.mockImplementation(() => deferred.promise);
+    h.loadHistory.mockResolvedValue({ messages: [] });
+
+    const pendingAbort = h.abortActive();
+    h.state.activeChatRunId = "run-new";
+    deferred.resolve({ ok: true, aborted, runIds: ["run-old"] });
+    await pendingAbort;
+
+    expect(h.state.activeChatRunId).toBe("run-new");
+    expect(h.invalidateRunOwnership).not.toHaveBeenCalled();
+    expect(h.setActivityStatus).not.toHaveBeenCalled();
+  },
+);
+
+it("preserves a newer pending submission after an older abort succeeds", async () => {
   const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
-  const h = abortHarness({ activeChatRunId: "run-old" });
+  const h = abortHarness({
+    activeChatRunId: "run-old",
+    pendingSubmit: acceptedSubmit("old-pending"),
+  });
   h.abortChat.mockImplementation(() => deferred.promise);
-  h.loadHistory.mockResolvedValue({ messages: [] });
-
   const pendingAbort = h.abortActive();
-  h.state.activeChatRunId = "run-new";
-  deferred.resolve({ ok: true, aborted: false });
+  const next = { phase: "sending", runId: "run-new", draftText: "Next question" } as const;
+  h.state.pendingSubmit = next;
+  deferred.resolve({ ok: true, aborted: true, runIds: ["run-old", "old-pending"] });
   await pendingAbort;
-
-  expect(h.state.activeChatRunId).toBe("run-new");
-  expect(h.invalidateRunOwnership).not.toHaveBeenCalled();
+  expect(h.state.pendingSubmit).toEqual(next);
   expect(h.setActivityStatus).not.toHaveBeenCalled();
 });
 
