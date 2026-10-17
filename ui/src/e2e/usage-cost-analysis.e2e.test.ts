@@ -1,8 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { BrowserContextOptions, Locator } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -13,7 +11,6 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
-const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 const viewport = { height: 1_000, width: 1_440 };
 const pageOptions: BrowserContextOptions = { locale: "en-US", serviceWorkers: "block", viewport };
 const costMessages = {
@@ -62,18 +59,12 @@ function dayOffset(offset: number): string {
 
 function dailyEntry(offset: number, totalCost: number, totalTokens: number) {
   return {
-    ...totals,
+    ...emptyTotals,
     date: dayOffset(offset),
     input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens,
     totalCost,
     inputCost: totalCost,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
   };
 }
 
@@ -94,31 +85,13 @@ const modelUsage = [
   },
 ];
 
-function tokenUsage(
-  inputTokens: number,
-  cacheReadTokens: number,
-  cacheWriteTokens: number,
-  outputTokens: number,
-  totalTokens: number,
-  requests?: number,
-) {
-  return {
-    inputTokens,
-    cacheReadTokens,
-    cacheWriteTokens,
-    outputTokens,
-    totalTokens,
-    ...(requests === undefined ? {} : { requests }),
-  };
-}
-
 function providerHistory(
   provider: string,
   displayName: string,
   amount: number,
   category: string,
-  rows: Array<[offset: number, amount: number, ...tokens: Parameters<typeof tokenUsage>]>,
-  [name, ...tokens]: [name: string, ...tokens: Parameters<typeof tokenUsage>],
+  rows: Array<[offset: number, amount: number, requests?: number]>,
+  name: string,
 ) {
   return {
     provider,
@@ -129,12 +102,16 @@ function providerHistory(
     costHistory: {
       unit: "USD",
       periodDays: 30,
-      daily: rows.map(([offset, dayAmount, ...dayTokens]) => ({
+      daily: rows.map(([offset, dayAmount, requests]) => ({
         date: dayOffset(offset),
         amount: dayAmount,
-        ...tokenUsage(...dayTokens),
+        inputTokens: 1_000,
+        cacheReadTokens: 100,
+        cacheWriteTokens: 0,
+        outputTokens: 100,
+        requests,
       })),
-      models: [{ name, ...tokenUsage(...tokens) }],
+      models: [{ name, totalTokens: 1_000 }],
       categories: [{ name: category, amount }],
     },
   };
@@ -152,6 +129,28 @@ function expectTexts(locator: Locator, expected: string[]) {
 
 function expectText(locator: Locator) {
   return expect.poll(() => locator.textContent());
+}
+
+async function trimmedTexts(locator: Locator) {
+  return (await locator.allTextContents()).map((text) => text.trim());
+}
+
+function makeSession(
+  key: string,
+  label: string,
+  updatedAt: number,
+  usage: SessionUsageEntry["usage"],
+  model: Pick<SessionUsageEntry, "model" | "modelProvider"> = {},
+) {
+  return { key, label, updatedAt, usage, agentId: "main", ...model };
+}
+
+function usageOnDay(date: string) {
+  return {
+    ...totals,
+    activityDates: [date],
+    dailyBreakdown: [{ ...totals, date, cost: totals.totalCost, tokens: totals.totalTokens }],
+  };
 }
 
 function emptyUsageResponses() {
@@ -204,15 +203,10 @@ suite.define(() => {
           ? { mode: "utc" }
           : { mode: "specific", timeZone: "America/New_York" }),
       };
-      const artifactDir = recordVisuals ? path.join(suite.artifactDir, "usage-hour-labels") : null;
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
       await suite.withPage(
         {
           ...pageOptions,
           timezoneId: "America/New_York",
-          ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
         },
         async ({ page }) => {
           await page.clock.setFixedTime(new Date("2026-03-07T17:00:00Z"));
@@ -235,19 +229,13 @@ suite.define(() => {
                       endDate: date,
                       totals: usageTotals,
                       sessions: [
-                        {
-                          key: "agent:main:historical-hour",
-                          label: "Historical hour",
-                          agentId: "main",
-                          updatedAt,
-                          usage: {
-                            ...usageTotals,
-                            activityDates: [date],
-                            messageCounts: messages,
-                            utcQuarterHourMessageCounts: [{ date, quarterIndex, ...messages }],
-                            utcQuarterHourTokenUsage: [{ date, quarterIndex, ...usageTotals }],
-                          },
-                        },
+                        makeSession("agent:main:historical-hour", "Historical hour", updatedAt, {
+                          ...usageTotals,
+                          activityDates: [date],
+                          messageCounts: messages,
+                          utcQuarterHourMessageCounts: [{ date, quarterIndex, ...messages }],
+                          utcQuarterHourTokenUsage: [{ date, quarterIndex, ...usageTotals }],
+                        }),
                       ],
                       aggregates: {
                         ...empty["sessions.usage"].aggregates,
@@ -287,10 +275,7 @@ suite.define(() => {
           const refresh = page
             .locator("openclaw-usage-page")
             .getByRole("button", { name: "Refresh", exact: true });
-          for (const [stage, now] of [
-            ["control", "2026-03-07T17:00:00Z"],
-            ["dst-gap", "2026-03-08T16:00:00Z"],
-          ] as const) {
+          for (const now of ["2026-03-07T17:00:00Z", "2026-03-08T16:00:00Z"]) {
             await page.clock.setFixedTime(new Date(now));
             const requests = (await gateway.getRequests("sessions.usage")).length;
             await refresh.click();
@@ -306,23 +291,11 @@ suite.define(() => {
               .toBe("January 15, 2026: 100 tokens, $0.00");
             await hours.scrollIntoViewIfNeeded();
             await expect.poll(() => hours.isVisible()).toBe(true);
-            if (artifactDir) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, `${timeZone}-${stage}.png`),
-              });
-            }
             await expect
               .poll(async () => ({
-                labels: (await hours.locator(".usage-error-date").allTextContents()).map((text) =>
-                  text.trim(),
-                ),
-                rates: (await hours.locator(".usage-error-rate").allTextContents()).map((text) =>
-                  text.trim(),
-                ),
-                details: (await hours.locator(".usage-error-sub").allTextContents()).map((text) =>
-                  text.trim(),
-                ),
+                labels: await trimmedTexts(hours.locator(".usage-error-date")),
+                rates: await trimmedTexts(hours.locator(".usage-error-rate")),
+                details: await trimmedTexts(hours.locator(".usage-error-sub")),
               }))
               .toEqual({ labels: ["2 AM"], rates: ["50.00%"], details: ["5 errors · 10 msgs"] });
           }
@@ -351,13 +324,13 @@ suite.define(() => {
         { label: "Hidden", tokens: 300 },
         { label: "Visible B", tokens: 100 },
         { label: "Visible C", tokens: 200 },
-      ].map(({ label, tokens }, index) => ({
-        key: `agent:main:range-${index}`,
-        label,
-        agentId: "main",
-        updatedAt: updatedAt - index,
-        usage: { ...emptyTotals, input: tokens, totalTokens: tokens },
-      }));
+      ].map(({ label, tokens }, index) =>
+        makeSession(`agent:main:range-${index}`, label, updatedAt - index, {
+          ...emptyTotals,
+          input: tokens,
+          totalTokens: tokens,
+        }),
+      );
       const empty = emptyUsageResponses();
       await suite.withPage(pageOptions, async ({ page }) => {
         await installMockGateway(page, {
@@ -399,10 +372,6 @@ suite.define(() => {
         await list
           .getByRole("button", { name: "Visible C", exact: true })
           .click({ modifiers: ["Shift"] });
-        if (recordVisuals) {
-          const artifactDir = path.join(suite.artifactDir, "usage-range-selection");
-          await card.screenshot({ path: path.join(artifactDir, `${scenario}.png`) });
-        }
         await expect
           .poll(async () =>
             (
@@ -429,7 +398,7 @@ suite.define(() => {
   it.each([
     { outcome: "request-failed", failed: true },
     { outcome: "empty", failed: false },
-  ])("handles provider usage status $outcome", async ({ outcome, failed }) => {
+  ])("handles provider usage status $outcome", async ({ failed }) => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -452,17 +421,6 @@ suite.define(() => {
       } else {
         await content.not.toContain(warning);
       }
-      if (recordVisuals) {
-        await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
-        await page.locator(".usage-page").screenshot({
-          animations: "disabled",
-          path: path.join(
-            suite.artifactDir,
-            "provider-usage-outcomes",
-            `usage-status-${outcome}.png`,
-          ),
-        });
-      }
     });
   });
 
@@ -481,31 +439,8 @@ suite.define(() => {
               startDate: selectedDay,
               endDate: selectedDay,
               sessions: [
-                {
-                  key: cachedSessionKey,
-                  label: "Cached session",
-                  agentId: "main",
-                  updatedAt,
-                  usage: {
-                    ...totals,
-                    activityDates: [selectedDay],
-                    dailyBreakdown: [
-                      {
-                        ...totals,
-                        date: selectedDay,
-                        cost: totals.totalCost,
-                        tokens: totals.totalTokens,
-                      },
-                    ],
-                  },
-                },
-                {
-                  key: pendingSessionKey,
-                  label: "Pending session",
-                  agentId: "main",
-                  updatedAt,
-                  usage: null,
-                },
+                makeSession(cachedSessionKey, "Cached session", updatedAt, usageOnDay(selectedDay)),
+                makeSession(pendingSessionKey, "Pending session", updatedAt, null),
               ],
               totals,
               aggregates: {
@@ -553,109 +488,65 @@ suite.define(() => {
     const sessions = [
       { provider: "openai", label: "Team Planning" },
       { provider: "anthropic", label: "Research Review" },
-    ].map(({ provider, label }) => ({
-      key: `agent:main:${provider}`,
-      label,
-      agentId: "main",
-      modelProvider: provider,
-      model: `${provider}-model`,
-      updatedAt,
-      usage: {
-        ...totals,
-        activityDates: [date],
-        dailyBreakdown: [{ ...totals, date, cost: totals.totalCost, tokens: totals.totalTokens }],
-      },
-    }));
-    const empty = emptyUsageResponses();
-    if (recordVisuals) {
-      await mkdir(path.join(suite.artifactDir, "usage-filter-repair"), { recursive: true });
-    }
-
-    await suite.withPage(
-      {
-        ...pageOptions,
-        ...(recordVisuals
-          ? {
-              recordVideo: {
-                dir: path.join(suite.artifactDir, "usage-filter-repair"),
-                size: viewport,
-              },
-            }
-          : {}),
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "sessions.usage": {
-              ...empty["sessions.usage"],
-              sessions,
-              totals,
-              aggregates: {
-                ...empty["sessions.usage"].aggregates,
-                costDaily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
-              },
-            },
-            "usage.status": { updatedAt, providers: [] },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}usage`);
-        const sessionLabels = page.locator(".session-bar-title");
-        await expect
-          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
-          .toEqual(["Research Review", "Team Planning"]);
-
-        const providerFilter = page.locator(".usage-filter-select").filter({
-          has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
-        });
-        await providerFilter.locator(".usage-filter-trigger").click();
-        await providerFilter.locator('[data-value="command:select-all"]').click();
-        await expectText(providerFilter.locator(".settings-count")).toBe("2");
-        await expect
-          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
-          .toEqual(["Research Review", "Team Planning"]);
-        if (recordVisuals) {
-          await writeFile(
-            path.join(
-              path.join(suite.artifactDir, "usage-filter-repair"),
-              "01-provider-alternatives.png",
-            ),
-            await takeControlUiViewportScreenshot(page, providerFilter.locator('[role="menu"]'), [
-              providerFilter.locator('[data-value="option:openai"]'),
-            ]),
-          );
-        }
-
-        const query = page.locator(".usage-query-input");
-        await page.keyboard.press("Escape");
-        for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
-          await query.fill(`${token} provider:anthropic`);
-          await query.press("Enter");
-          await expect
-            .poll(async () => (await sessionLabels.allTextContents()).toSorted())
-            .toEqual(["Research Review", "Team Planning"]);
-          await providerFilter.locator(".usage-filter-trigger").click();
-          const openai = providerFilter.locator('[data-value="option:openai"]');
-          await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
-          await openai.click();
-          await expectTexts(sessionLabels, ["Research Review"]);
-          await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
-          await page.keyboard.press("Escape");
-        }
-        await query.fill('label:"Team Planning"');
-        await query.press("Enter");
-        await expectTexts(sessionLabels, ["Team Planning"]);
-        if (recordVisuals) {
-          await writeFile(
-            path.join(
-              path.join(suite.artifactDir, "usage-filter-repair"),
-              "02-quoted-session-label.png",
-            ),
-            await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [query]),
-          );
-        }
-      },
+    ].map(({ provider, label }) =>
+      makeSession(`agent:main:${provider}`, label, updatedAt, usageOnDay(date), {
+        modelProvider: provider,
+        model: `${provider}-model`,
+      }),
     );
+    const empty = emptyUsageResponses();
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.usage": {
+            ...empty["sessions.usage"],
+            sessions,
+            totals,
+            aggregates: {
+              ...empty["sessions.usage"].aggregates,
+              costDaily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
+            },
+          },
+          "usage.status": { updatedAt, providers: [] },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}usage`);
+      const sessionLabels = page.locator(".session-bar-title");
+      await expect
+        .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+        .toEqual(["Research Review", "Team Planning"]);
+
+      const providerFilter = page.locator(".usage-filter-select").filter({
+        has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
+      });
+      await providerFilter.locator(".usage-filter-trigger").click();
+      await providerFilter.locator('[data-value="command:select-all"]').click();
+      await expectText(providerFilter.locator(".settings-count")).toBe("2");
+      await expect
+        .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+        .toEqual(["Research Review", "Team Planning"]);
+
+      const query = page.locator(".usage-query-input");
+      await page.keyboard.press("Escape");
+      for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
+        await query.fill(`${token} provider:anthropic`);
+        await query.press("Enter");
+        await expect
+          .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+          .toEqual(["Research Review", "Team Planning"]);
+        await providerFilter.locator(".usage-filter-trigger").click();
+        const openai = providerFilter.locator('[data-value="option:openai"]');
+        await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
+        await openai.click();
+        await expectTexts(sessionLabels, ["Research Review"]);
+        await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
+        await page.keyboard.press("Escape");
+      }
+      await query.fill('label:"Team Planning"');
+      await query.press("Enter");
+      await expectTexts(sessionLabels, ["Team Planning"]);
+    });
   });
 
   it("renders cost analysis from Gateway usage data", async () => {
@@ -679,13 +570,7 @@ suite.define(() => {
             endDate: dayOffset(0),
             sessions: [
               {
-                key: "agent:main:cost-analysis",
-                label: "Cost analysis",
-                agentId: "main",
-                modelProvider: "openai",
-                model: "gpt-5.5",
-                updatedAt: Date.now(),
-                usage: {
+                ...makeSession("agent:main:cost-analysis", "Cost analysis", Date.now(), {
                   ...totals,
                   activityDates: daily.map((entry) => entry.date),
                   dailyBreakdown: daily.map((entry) => ({
@@ -695,7 +580,9 @@ suite.define(() => {
                   })),
                   messageCounts: costMessages,
                   modelUsage,
-                },
+                }),
+                modelProvider: "openai",
+                model: "gpt-5.5",
               },
             ],
             totals,
@@ -730,10 +617,10 @@ suite.define(() => {
                 98.75,
                 "Responses",
                 [
-                  [-6, 38.5, 4_200_000, 2_100_000, 0, 850_000, 5_050_000, 12_300],
-                  [0, 60.25, 6_100_000, 3_400_000, 0, 1_200_000, 7_300_000, 18_450],
+                  [-6, 38.5, 12_300],
+                  [0, 60.25, 18_450],
                 ],
-                ["gpt-5.5", 10_300_000, 5_500_000, 0, 2_050_000, 12_350_000, 30_750],
+                "gpt-5.5",
               ),
               providerHistory(
                 "anthropic",
@@ -741,10 +628,10 @@ suite.define(() => {
                 42.4,
                 "Claude API",
                 [
-                  [-6, 17.15, 1_800_000, 900_000, 200_000, 350_000, 3_250_000],
-                  [0, 25.25, 2_600_000, 1_400_000, 300_000, 500_000, 4_800_000],
+                  [-6, 17.15],
+                  [0, 25.25],
                 ],
-                ["claude-opus-4-8", 4_400_000, 2_300_000, 500_000, 850_000, 8_050_000],
+                "claude-opus-4-8",
               ),
               {
                 provider: "openrouter",
@@ -796,9 +683,7 @@ suite.define(() => {
       await expect
         .poll(async () => ({
           labels: await windowCards.locator(".cost-window-card__label").allTextContents(),
-          values: (await windowCards.locator(".cost-window-card__value").allTextContents()).map(
-            (value) => value.trim(),
-          ),
+          values: await trimmedTexts(windowCards.locator(".cost-window-card__value")),
         }))
         .toEqual({
           labels: ["Selected Range", "Today", "Last 7 days", "Last 30 days"],
@@ -848,13 +733,6 @@ suite.define(() => {
       const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
       await expectText(topProviders).toContain("No provider data");
       await expectText(topProviders).not.toContain("openai");
-
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const artifactDir = path.join(suite.artifactDir, "provider-plans");
-        await page.locator(".usage-page").screenshot({
-          path: path.join(artifactDir, "after.png"),
-        });
-      }
     });
   });
 });

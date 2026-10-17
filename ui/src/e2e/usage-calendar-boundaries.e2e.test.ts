@@ -59,27 +59,12 @@ async function expectUsageRange(
 
 suite.define(() => {
   it.each([
-    {
-      timezoneId: "Asia/Shanghai",
-      instant: "2026-09-13T16:30:00Z",
-      utcDate: "2026-09-13",
-      localDate: "2026-09-14",
-    },
-    {
-      timezoneId: "America/Los_Angeles",
-      instant: "2026-09-14T02:30:00Z",
-      utcDate: "2026-09-14",
-      localDate: "2026-09-13",
-    },
-    {
-      timezoneId: "Asia/Shanghai",
-      instant: "2026-09-14T04:30:00Z",
-      utcDate: "2026-09-14",
-      localDate: "2026-09-14",
-    },
+    ["Asia/Shanghai", "2026-09-13T16:30:00Z", "2026-09-13", "2026-09-14"],
+    ["America/Los_Angeles", "2026-09-14T02:30:00Z", "2026-09-14", "2026-09-13"],
+    ["Asia/Shanghai", "2026-09-14T04:30:00Z", "2026-09-14", "2026-09-14"],
   ])(
-    "uses the selected calendar for date presets in $timezoneId at $instant",
-    async ({ timezoneId, instant, utcDate, localDate }) => {
+    "uses the selected calendar for date presets in %s at %s",
+    async (timezoneId, instant, utcDate, localDate) => {
       const updatedAt = Date.parse(instant);
       const totals = {
         ...emptyTotals,
@@ -188,13 +173,11 @@ suite.define(() => {
                 .poll(() => page.locator(".usage-page .usage-loading-spinner").count())
                 .toBe(0);
               expect(request.params).toMatchObject({ startDate, endDate: date, mode });
-              expect(
-                await page
-                  .locator(".usage-date-input")
-                  .evaluateAll((inputs) =>
-                    inputs.map((input) => (input as HTMLInputElement).value),
-                  ),
-              ).toEqual([startDate, date]);
+              const inputs = await page.locator(".usage-date-input").all();
+              expect(await Promise.all(inputs.map((input) => input.inputValue()))).toEqual([
+                startDate,
+                date,
+              ]);
               await expect
                 .poll(() => page.locator(".usage-metric-badge strong").first().textContent())
                 .toBe("1.2K");
@@ -376,29 +359,17 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.usage.timeseries");
         const bars = page.locator(".session-detail-panel .ts-bar");
         await expect.poll(() => bars.count()).toBe(2);
-        await expect
-          .poll(() =>
-            bars.evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("aria-label")),
-            ),
-          )
-          .toEqual([
-            "Sep 6, 01:00 AM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-            "Sep 6, 11:59 PM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-          ]);
+        const barLabels = () =>
+          bars.evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute("aria-label")),
+          );
+        const expectedBar = (time: string) =>
+          `Sep 6, ${time} · 100 tokens · Out 0 · In 100 · CW 0 · CR 0`;
+        await expect.poll(barLabels).toEqual([expectedBar("01:00 AM"), expectedBar("11:59 PM")]);
         await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
         await expectUsageRange(gateway, date);
         await page.getByRole("button", { name: "Skipped midnight", exact: true }).click();
-        await expect
-          .poll(() =>
-            bars.evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("aria-label")),
-            ),
-          )
-          .toEqual([
-            "Sep 6, 03:59 AM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-            "Sep 6, 04:00 AM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
-          ]);
+        await expect.poll(barLabels).toEqual([expectedBar("03:59 AM"), expectedBar("04:00 AM")]);
       },
     );
   });

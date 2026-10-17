@@ -1,7 +1,5 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -66,32 +64,16 @@ async function expectFailureGuidance(page: Page) {
 }
 
 async function withTriage(
-  name: string,
   options: Parameters<typeof suite.withPage>[0],
-  scenario: (
-    page: Page,
-    traffic: MockGatewayRequest[],
-    capture: (name: string) => Promise<void>,
-  ) => Promise<void>,
+  scenario: (page: Page, traffic: MockGatewayRequest[]) => Promise<void>,
 ) {
-  const artifactDir = createControlUiE2eArtifactDir(name);
-  const viewport = { height: 1_000, width: 1_400 };
   await suite.withPage(
-    {
-      ...options,
-      viewport,
-      recordVideo:
-        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? { dir: artifactDir, size: viewport }
-          : undefined,
-    },
+    { ...options, viewport: { height: 1_000, width: 1_400 } },
     async ({ page }) => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(String(error)));
       const traffic = await recordUpdateTraffic(page);
-      await scenario(page, traffic, async (fileName) => {
-        await page.screenshot({ animations: "disabled", path: path.join(artifactDir, fileName) });
-      });
+      await scenario(page, traffic);
       expect(errors).toEqual([]);
     },
   );
@@ -132,9 +114,10 @@ suite.define(() => {
     "requires a button press to diagnose a pre-ledger %s failure without retrying the update",
     async (source) => {
       await withTriage(
-        `update-triage-${source.replaceAll(" ", "-")}`,
         { colorScheme: "dark", locale: "en-US", serviceWorkers: "block" },
-        async (page, traffic, capture) => {
+        async (page, traffic) => {
+          const dialog = page.locator("openclaw-modal-dialog");
+          const panel = page.locator("openclaw-assistant-panel");
           if (source === "missing triage module") {
             // A replaced installation can retire the current document's lazy chunks.
             await page.route(
@@ -185,13 +168,9 @@ suite.define(() => {
             await page.getByText("Applying update…", { exact: true }).waitFor();
           } else {
             await page.getByRole("button", { name: "Update now", exact: true }).click();
-            await page
-              .locator("openclaw-modal-dialog")
-              .getByRole("button", { name: "Update and restart", exact: true })
-              .click();
+            await dialog.getByRole("button", { name: "Update and restart", exact: true }).click();
             await gateway.waitForRequest("update.run");
           }
-          await capture("01-before-failure.png");
           await gateway.setMethodResponse("update.status", {
             sentinel: FAILURE,
             schedule: SCHEDULE,
@@ -206,7 +185,6 @@ suite.define(() => {
             });
           }
           if (source !== "automatic") {
-            const dialog = page.locator("openclaw-modal-dialog");
             await dialog.getByRole("button", { name: "Retry update", exact: true }).waitFor();
             expect(await dialog.textContent()).toContain("ENOSPC");
             await dialog.getByRole("button", { name: "Close", exact: true }).click();
@@ -217,7 +195,6 @@ suite.define(() => {
           expect(await page.locator(".custodian__alert-card").count()).toBe(0);
           expect(readQuestions()).toHaveLength(0);
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-          await capture("02-failure-awaiting-action.png");
           const replacementDocument =
             source === "missing triage module" ? page.waitForEvent("domcontentloaded") : null;
           await diagnose.click();
@@ -230,7 +207,6 @@ suite.define(() => {
             expect(readQuestions()).toHaveLength(0);
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
           } else {
-            const panel = page.locator("openclaw-assistant-panel");
             await panel
               .locator(".custodian__alert-card")
               .getByText("Diagnose failed update", { exact: true })
@@ -241,11 +217,10 @@ suite.define(() => {
             expect(question).toMatchObject({
               message: expect.stringContaining("Do not retry the update"),
             });
-            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+            expect(await dialog.count()).toBe(0);
             await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
             expect(await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).count()).toBe(1);
           }
-          await capture("03-triage-outcome.png");
           await expect.poll(updateRuns).toHaveLength(source === "automatic" ? 0 : 1);
           if (source !== "missing triage module") {
             // Loading the same retained failure never repeats the user's action.
@@ -253,14 +228,11 @@ suite.define(() => {
             await gateway.waitForRequest("update.status");
             await expectFailureGuidance(page);
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
-            expect(
-              await page.locator("openclaw-assistant-panel .assistant-panel").isVisible(),
-            ).toBe(false);
+            expect(await panel.locator(".assistant-panel").isVisible()).toBe(false);
             expect(await page.locator("openclaw-assistant-panel-content").count()).toBe(0);
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
             expect(readQuestions()).toHaveLength(1);
             expect(updateRuns()).toHaveLength(source === "automatic" ? 0 : 1);
-            await capture("04-reloaded-without-replay.png");
           }
         },
       );
@@ -270,67 +242,56 @@ suite.define(() => {
   it.each(["denied", "full"] as const)(
     "diagnoses only on demand even when session storage is %s",
     async (storageFailure) => {
-      await withTriage(
-        `update-triage-storage-${storageFailure}`,
-        {},
-        async (page, traffic, capture) => {
-          await page.addInitScript((failure) => {
-            if (failure === "denied") {
-              Object.defineProperty(window, "sessionStorage", {
-                get: () => {
-                  throw new DOMException("Storage denied", "SecurityError");
-                },
-              });
-            } else {
-              const session = window.sessionStorage;
-              const setItem: unknown = Object.getOwnPropertyDescriptor(
-                Storage.prototype,
-                "setItem",
-              )?.value;
-              if (typeof setItem !== "function") {
-                throw new Error("Storage.setItem is unavailable");
-              }
-              Storage.prototype.setItem = function (key, value) {
-                if (this === session) {
-                  throw new DOMException("Storage full", "QuotaExceededError");
-                }
-                Reflect.apply(setItem, this, [key, value]);
-              };
-            }
-          }, storageFailure);
-          // The server retains the failure independently of denied browser storage.
-          const gateway = await installMockGateway(page, {
-            featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
-            methodResponses: {
-              "update.status": { sentinel: FAILURE, schedule: SCHEDULE },
-              "openclaw.chat": diagnosticReply("storage-failure-session", "Ready to help."),
-            },
-          });
-          await page.goto(`${suite.server.baseUrl}settings/updates`);
-          for (let load = 0; load < 2; load += 1) {
-            if (load > 0) {
-              await page.reload();
-            }
-            await gateway.waitForRequest("update.status");
-            await expectFailureGuidance(page);
-            const diagnose = page.getByRole("button", { name: "Diagnose update", exact: true });
-            await diagnose.waitFor();
-            expect(await page.locator(".custodian__alert-card").count()).toBe(0);
-            expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-            expect(questions(traffic)).toHaveLength(load);
-            await diagnose.click();
-            const panel = page.locator("openclaw-assistant-panel");
-            await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
-            const messages = questions(traffic);
-            expect(messages).toHaveLength(load + 1);
-            expect(messages.at(-1)?.params).toMatchObject({
-              message: expect.stringContaining("ENOSPC"),
+      await withTriage({}, async (page, traffic) => {
+        await page.addInitScript((failure) => {
+          if (failure === "denied") {
+            Object.defineProperty(window, "sessionStorage", {
+              get: () => {
+                throw new DOMException("Storage denied", "SecurityError");
+              },
             });
-            expect(traffic.filter(({ method }) => method === "update.run")).toHaveLength(0);
-            await capture(`0${load + 1}-failure-guidance.png`);
+          } else {
+            const session = window.sessionStorage;
+            const setItem = Storage.prototype.setItem;
+            Storage.prototype.setItem = function (key, value) {
+              if (this === session) {
+                throw new DOMException("Storage full", "QuotaExceededError");
+              }
+              Reflect.apply(setItem, this, [key, value]);
+            };
           }
-        },
-      );
+        }, storageFailure);
+        // The server retains the failure independently of denied browser storage.
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
+          methodResponses: {
+            "update.status": { sentinel: FAILURE, schedule: SCHEDULE },
+            "openclaw.chat": diagnosticReply("storage-failure-session", "Ready to help."),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        for (let load = 0; load < 2; load += 1) {
+          if (load > 0) {
+            await page.reload();
+          }
+          await gateway.waitForRequest("update.status");
+          await expectFailureGuidance(page);
+          const diagnose = page.getByRole("button", { name: "Diagnose update", exact: true });
+          await diagnose.waitFor();
+          expect(await page.locator(".custodian__alert-card").count()).toBe(0);
+          expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+          expect(questions(traffic)).toHaveLength(load);
+          await diagnose.click();
+          const panel = page.locator("openclaw-assistant-panel");
+          await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
+          const messages = questions(traffic);
+          expect(messages).toHaveLength(load + 1);
+          expect(messages.at(-1)?.params).toMatchObject({
+            message: expect.stringContaining("ENOSPC"),
+          });
+          expect(traffic.filter(({ method }) => method === "update.run")).toHaveLength(0);
+        }
+      });
     },
   );
 });

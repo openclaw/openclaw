@@ -1,6 +1,3 @@
-// Proves the operator-visible lifecycle of a dev-channel Gateway update: the
-// confirmation, the multi-minute install, the reconnect result, and a failure
-// that names the cause the updater recorded.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
@@ -29,9 +26,9 @@ const DEV_UPDATE_SCHEDULE = {
   install: { kind: "git" as const, git: { status: "behind" as const, commitsBehind: 246 } },
   target: {
     kind: "git" as const,
-    commitsBehind: 246,
-    upstreamRef: "origin/main",
-    upstreamSha: "9f3c21a0000000000000000000000000000000aa",
+    commitsBehind: DEV_UPDATE_AVAILABLE.commitsBehind,
+    upstreamRef: DEV_UPDATE_AVAILABLE.upstreamRef,
+    upstreamSha: DEV_UPDATE_AVAILABLE.upstreamSha,
   },
 };
 

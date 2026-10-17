@@ -41,6 +41,45 @@ suite.define(() => {
       cumulativeTokens: 120 * (index + 1),
       cumulativeCost: 0,
     }));
+    const usageAt = (updatedAt: number, usageTotals = totals, assistant = 3) => ({
+      updatedAt,
+      startDate: date,
+      endDate: date,
+      sessions: [
+        {
+          key: "agent:main:tool-count",
+          label: "Review two files",
+          agentId: "main",
+          updatedAt,
+          usage: {
+            ...usageTotals,
+            activityDates: [date],
+            toolUsage: tools,
+            messageCounts: { ...messages, total: assistant, assistant },
+          },
+        },
+      ],
+      totals: usageTotals,
+      aggregates: {
+        messages,
+        tools,
+        byModel: [],
+        byProvider: [],
+        byAgent: [],
+        byChannel: [],
+        daily: [],
+        costDaily: [{ date, ...usageTotals }],
+      },
+    });
+    const logs = (
+      [
+        [0, "assistant", "[Tool: read]\n[Tool: read]"],
+        [500, "toolResult", "[Tool: read]\n[Tool Result]\nFirst file"],
+        [1000, "toolResult", "[Tool: read]\n[Tool Result]\nSecond file"],
+        [2000, "assistant", "Both files reviewed."],
+        [4000, "assistant", "[Tool: exec]"],
+      ] as const
+    ).map(([offset, role, content]) => ({ timestamp: start + offset, role, content }));
     await suite.withPage(
       {
         locale: "en-US",
@@ -52,55 +91,10 @@ suite.define(() => {
         await page.clock.setFixedTime(new Date(start + 5000));
         const scenario = {
           methodResponses: {
-            "sessions.usage": {
-              updatedAt: start + 5000,
-              startDate: date,
-              endDate: date,
-              sessions: [
-                {
-                  key: "agent:main:tool-count",
-                  label: "Review two files",
-                  agentId: "main",
-                  updatedAt: start + 5000,
-                  usage: {
-                    ...totals,
-                    activityDates: [date],
-                    toolUsage: tools,
-                    messageCounts: messages,
-                  },
-                },
-              ],
-              totals,
-              aggregates: {
-                messages,
-                tools,
-                byModel: [],
-                byProvider: [],
-                byAgent: [],
-                byChannel: [],
-                daily: [],
-                costDaily: [{ date, ...totals }],
-              },
-            },
+            "sessions.usage": usageAt(start + 5000),
             "usage.status": { updatedAt: start + 5000, providers: [] },
             "sessions.usage.timeseries": { points },
-            "sessions.usage.logs": {
-              logs: [
-                { timestamp: start, role: "assistant", content: "[Tool: read]\n[Tool: read]" },
-                {
-                  timestamp: start + 500,
-                  role: "toolResult",
-                  content: "[Tool: read]\n[Tool Result]\nFirst file",
-                },
-                {
-                  timestamp: start + 1000,
-                  role: "toolResult",
-                  content: "[Tool: read]\n[Tool Result]\nSecond file",
-                },
-                { timestamp: start + 2000, role: "assistant", content: "Both files reviewed." },
-                { timestamp: start + 4000, role: "assistant", content: "[Tool: exec]" },
-              ],
-            },
+            "sessions.usage.logs": { logs },
           },
         };
         const gateway = await installMockGateway(page, scenario);
@@ -142,38 +136,17 @@ suite.define(() => {
         await expect.poll(() => count.textContent()).toBe("3");
 
         const refreshedTotals = { ...totals, input: 400, output: 80, totalTokens: 480 };
-        const usage = scenario.methodResponses["sessions.usage"];
-        const session = usage.sessions[0]!;
         const latestReply = "The newly completed reply is included after Refresh.";
         await page.clock.setFixedTime(new Date(start + 7000));
-        await gateway.setMethodResponse("sessions.usage", {
-          ...usage,
-          updatedAt: start + 7000,
-          sessions: [
-            {
-              ...session,
-              updatedAt: start + 7000,
-              usage: {
-                ...session.usage,
-                ...refreshedTotals,
-                messageCounts: { ...messages, total: 4, assistant: 4 },
-              },
-            },
-          ],
-          totals: refreshedTotals,
-          aggregates: {
-            ...usage.aggregates,
-            costDaily: [{ date, ...refreshedTotals }],
-          },
-        });
+        await gateway.setMethodResponse(
+          "sessions.usage",
+          usageAt(start + 7000, refreshedTotals, 4),
+        );
         await gateway.setMethodResponse("sessions.usage.timeseries", {
           points: [...points, { ...points[2]!, timestamp: start + 6000, cumulativeTokens: 480 }],
         });
         await gateway.setMethodResponse("sessions.usage.logs", {
-          logs: [
-            ...scenario.methodResponses["sessions.usage.logs"].logs,
-            { timestamp: start + 6000, role: "assistant", content: latestReply },
-          ],
+          logs: [...logs, { timestamp: start + 6000, role: "assistant", content: latestReply }],
         });
         const detailMethods = ["sessions.usage.timeseries", "sessions.usage.logs"] as const;
         const previousDetailRequests = await Promise.all(

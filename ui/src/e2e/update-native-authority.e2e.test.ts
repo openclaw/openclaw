@@ -14,10 +14,24 @@ const updateAvailable = {
   currentVersion: "1.0.0",
   latestVersion: "2.0.0",
 };
-const withPage = (run: (fixture: { page: Page }) => Promise<void>) =>
+const originalProfile = "11111111-1111-4111-8111-111111111111";
+const replacementProfile = "22222222-2222-4222-8222-222222222222";
+const withPage = (
+  run: (page: Page, gateway: MockGatewayControls) => Promise<void>,
+  scenario: Parameters<typeof installMockGateway>[1] = {},
+) =>
   suite.withPage(
     { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-    run,
+    async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        updateAvailable,
+        ...scenario,
+        methodResponses: { "update.status": { updateAvailable }, ...scenario.methodResponses },
+      });
+      expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
+      await run(page, gateway);
+    },
   );
 const nativePosts = (page: Page) => page.locator("html").getAttribute("data-native-update-posts");
 const updateCard = (page: Page) =>
@@ -25,20 +39,13 @@ const updateCard = (page: Page) =>
 
 async function installNativeBridge(page: Page) {
   await page.evaluate(() => {
+    const postMessage = () => {
+      const root = document.documentElement;
+      root.dataset.nativeUpdatePosts = String(Number(root.dataset.nativeUpdatePosts ?? 0) + 1);
+    };
     Object.defineProperty(window, "webkit", {
       configurable: true,
-      value: {
-        messageHandlers: {
-          openclawUpdate: {
-            postMessage: () => {
-              const root = document.documentElement;
-              root.dataset.nativeUpdatePosts = String(
-                Number(root.dataset.nativeUpdatePosts ?? 0) + 1,
-              );
-            },
-          },
-        },
-      },
+      value: { messageHandlers: { openclawUpdate: { postMessage } } },
     });
   });
 }
@@ -62,13 +69,7 @@ suite.define(() => {
   it.each(["allowed", "before-restoration", "before-native-post", "initial-native"] as const)(
     "checks live Inbox native authority with revocation=%s",
     async (revokeAt) => {
-      await withPage(async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          updateAvailable,
-          methodResponses: { "update.status": { updateAvailable } },
-        });
-        expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
-        await gateway.waitForRequest("chat.startup");
+      await withPage(async (page, gateway) => {
         if (revokeAt === "initial-native") {
           await installNativeBridge(page);
         }
@@ -77,14 +78,9 @@ suite.define(() => {
         await card.locator("summary").click();
         await card.locator(".sidebar-update-card__action").click();
         const copy = page.locator("openclaw-modal-dialog");
-        const nativeConfirm = copy.getByRole("button", {
-          name: "Update Mac app and restart",
-          exact: true,
-        });
-        const gatewayConfirm = copy.getByRole("button", {
-          name: "Update and restart",
-          exact: true,
-        });
+        const confirm = (name: string) => copy.getByRole("button", { name, exact: true });
+        const nativeConfirm = confirm("Update Mac app and restart");
+        const gatewayConfirm = confirm("Update and restart");
         // Wait for the initial async freshness check and confirmation before changing its owner.
         await (revokeAt === "initial-native" ? nativeConfirm : gatewayConfirm).waitFor();
         if (revokeAt === "before-restoration") {
@@ -120,104 +116,84 @@ suite.define(() => {
   it.each(["profile", "authority"] as const)(
     "keeps a delayed native decline bound to its admitted %s",
     async (changedOwner) => {
-      await withPage(async ({ page }) => {
-        const originalProfile = "11111111-1111-4111-8111-111111111111";
-        const replacementProfile = "22222222-2222-4222-8222-222222222222";
-        const gateway = await installMockGateway(page, {
-          updateAvailable,
-          presenceUsers: [{ id: originalProfile, name: "Alex", self: true }],
-          methodResponses: {
-            "update.status": { updateAvailable },
-            "update.run": { ok: true, restart: null, result: { status: "ok" } },
-          },
-        });
-        const waitForProfile = async (profileId: string) => {
-          await expect
-            .poll(() =>
-              evaluateControlUiContext(page, (context) => context.gateway.snapshot.selfUser?.id),
-            )
-            .toBe(profileId);
-        };
-        const decline = () =>
-          evaluateControlUiContext(page, (context) => {
-            window.dispatchEvent(new CustomEvent("openclaw:native-update-declined"));
-            // Admission publishes synchronously before draining configuration writes.
-            return context.overlays.snapshot.updateRunning;
-          });
-        const postNativeUpdate = async () => {
-          const card = updateCard(page);
-          if (!(await card.isVisible())) {
-            await page.locator(".sidebar-issues-button:visible").click();
-          }
-          const action = card.locator(".sidebar-update-card__action");
-          if (!(await action.isVisible())) {
-            await card.locator("summary").click();
-          }
-          await action.click();
-          await page
-            .locator("openclaw-modal-dialog")
-            .getByRole("button", { name: "Update Mac app and restart", exact: true })
-            .click();
-          await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
-        };
-        expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
-        await gateway.waitForRequest("chat.startup");
-        await waitForProfile(originalProfile);
-        await installNativeBridge(page);
-        await page.locator(".sidebar-issues-button:visible").click();
-        await page.locator("#sidebar-issues-panel").waitFor();
-        await postNativeUpdate();
-        expect(await nativePosts(page)).toBe("1");
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      await withPage(
+        async (page, gateway) => {
+          const waitForProfile = (profileId: string) =>
+            expect
+              .poll(() =>
+                evaluateControlUiContext(page, (context) => context.gateway.snapshot.selfUser?.id),
+              )
+              .toBe(profileId);
+          const decline = () =>
+            evaluateControlUiContext(page, (context) => {
+              window.dispatchEvent(new CustomEvent("openclaw:native-update-declined"));
+              // Admission publishes synchronously before draining configuration writes.
+              return context.overlays.snapshot.updateRunning;
+            });
+          const postNativeUpdate = async () => {
+            const card = updateCard(page);
+            if (!(await card.isVisible())) {
+              await page.locator(".sidebar-issues-button:visible").click();
+            }
+            const action = card.locator(".sidebar-update-card__action");
+            if (!(await action.isVisible())) {
+              await card.locator("summary").click();
+            }
+            await action.click();
+            await page
+              .locator("openclaw-modal-dialog")
+              .getByRole("button", { name: "Update Mac app and restart", exact: true })
+              .click();
+            await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+          };
+          await waitForProfile(originalProfile);
+          await installNativeBridge(page);
+          await page.locator(".sidebar-issues-button:visible").click();
+          await page.locator("#sidebar-issues-panel").waitFor();
+          await postNativeUpdate();
+          expect(await nativePosts(page)).toBe("1");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-        if (changedOwner === "profile") {
-          await gateway.setMethodResponse("users.self", {
-            profile: {
-              id: replacementProfile,
-              displayName: "Sam",
-              emails: [],
-              avatarMime: null,
-              hasAvatar: false,
-              githubIdentity: null,
-              mergedInto: null,
-              createdAt: 1,
-              updatedAt: 2,
-            },
-          });
-          const connect = await gateway.waitForRequest("connect");
-          const instanceId = (connect.params as { client: { instanceId: string } }).client
-            .instanceId;
-          await gateway.emitGatewayEvent("presence", {
-            presence: [
-              {
-                instanceId,
-                mode: "webchat",
-                reason: "connect",
-                user: { id: replacementProfile, name: "Sam" },
-                watchedSessions: [],
+          if (changedOwner === "profile") {
+            await gateway.setMethodResponse("users.self", {
+              profile: {
+                id: replacementProfile,
+                displayName: "Sam",
+                emails: [],
+                updatedAt: 2,
               },
-            ],
-          });
-          await waitForProfile(replacementProfile);
-        } else {
-          await setScopes(page, gateway, ["operator.read"]);
-        }
-        expect(await decline()).toBe(false);
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+            });
+            const connect = await gateway.waitForRequest("connect");
+            const instanceId = (connect.params as { client: { instanceId: string } }).client
+              .instanceId;
+            await gateway.emitGatewayEvent("presence", {
+              presence: [{ instanceId, user: { id: replacementProfile, name: "Sam" } }],
+            });
+            await waitForProfile(replacementProfile);
+          } else {
+            await setScopes(page, gateway, ["operator.read"]);
+          }
+          expect(await decline()).toBe(false);
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-        if (changedOwner === "authority") {
-          await setScopes(page, gateway, ["operator.admin"]);
-        }
-        // The declined intent is consumed even if authority later returns.
-        expect(await decline()).toBe(false);
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        await postNativeUpdate();
-        expect(await nativePosts(page)).toBe("2");
-        expect(await decline()).toBe(true);
-        await gateway.waitForRequest("update.run");
-        await decline();
-        expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      });
+          if (changedOwner === "authority") {
+            await setScopes(page, gateway, ["operator.admin"]);
+          }
+          // The declined intent is consumed even if authority later returns.
+          expect(await decline()).toBe(false);
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          await postNativeUpdate();
+          expect(await nativePosts(page)).toBe("2");
+          expect(await decline()).toBe(true);
+          await gateway.waitForRequest("update.run");
+          await decline();
+          expect(await gateway.getRequests("update.run")).toHaveLength(1);
+        },
+        {
+          presenceUsers: [{ id: originalProfile, name: "Alex", self: true }],
+          methodResponses: { "update.run": { ok: true, restart: null, result: { status: "ok" } } },
+        },
+      );
     },
   );
 });
