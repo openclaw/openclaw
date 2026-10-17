@@ -369,8 +369,8 @@ importers:
         specifier: 10.2.6
         version: 10.2.6
       node-edge-tts:
-        specifier: 1.2.10
-        version: 1.2.10(supports-color@10.2.2)
+        specifier: 1.2.11
+        version: 1.2.11(supports-color@10.2.2)
       npm:
         specifier: 11.20.0
         version: 11.20.0
@@ -1672,8 +1672,8 @@ importers:
   extensions/microsoft:
     dependencies:
       node-edge-tts:
-        specifier: 1.2.10
-        version: 1.2.10(supports-color@10.2.2)
+        specifier: 1.2.11
+        version: 1.2.11(supports-color@10.2.2)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -8670,8 +8670,8 @@ packages:
     engines: {node: '>=14.18'}
     hasBin: true
 
-  node-edge-tts@1.2.10:
-    resolution: {integrity: sha512-bV2i4XU54D45+US0Zm1HcJRkifuB3W438dWyuJEHLQdKxnuqlI1kim2MOvR6Q3XUQZvfF9PoDyR1Rt7aeXhPdQ==}
+  node-edge-tts@1.2.11:
+    resolution: {integrity: sha512-u+sekYUq+Y0JbNt12tOAK3J+iwT8NaGGbIdx2dtX+n7QSXT5YGCIUqZL58UK4YbpvpRjKI0PtQFwDKwcs1uC/A==}
     hasBin: true
 
   node-fetch@2.7.0:
@@ -16635,7 +16635,7 @@ snapshots:
 
   node-downloader-helper@2.1.11: {}
 
-  node-edge-tts@1.2.10(supports-color@10.2.2):
+  node-edge-tts@1.2.11(supports-color@10.2.2):
     dependencies:
       https-proxy-agent: 7.0.6(supports-color@10.2.2)
       ws: 8.21.3

@@ -27,6 +27,8 @@ minimumReleaseAgeExclude:
   - "@openclaw/fs-safe-linux-x64-gnu@0.21.1"
   - "@openclaw/fs-safe-linux-x64-musl@0.21.1"
   - "@openclaw/fs-safe-win32-x64-msvc@0.21.1"
+  # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
+  - "node-edge-tts@1.2.11"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated

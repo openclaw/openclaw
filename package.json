@@ -2302,7 +2302,7 @@
     "kysely": "0.29.6",
     "linkedom": "0.18.13",
     "minimatch": "10.2.6",
-    "node-edge-tts": "1.2.10",
+    "node-edge-tts": "1.2.11",
     "npm": "11.20.0",
     "openai": "7.20.0",
     "p-limit": "7.3.3",
