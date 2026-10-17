@@ -25,6 +25,29 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hostPlatform = process.platform;
 const syncExec = vi.fn<typeof execFileSync>();
 
+// The sync probe redirects the login shell's stdout/stderr to temp files instead of pipes,
+// so mocks must answer through the stdout fd rather than the return value.
+function answerSyncProbe(output: string | Buffer) {
+  const data = typeof output === "string" ? Buffer.from(output) : output;
+  return syncExec.mockImplementation((_file, _args, options) => {
+    fs.writeSync((options as { stdio: [string, number, number] }).stdio[1], data);
+    return Buffer.alloc(0);
+  });
+}
+
+// The sync probe wraps the login shell in a `ulimit -f` shim; assert the wrapped argv.
+function expectWrappedProbeArgv(
+  received: readonly [string, readonly string[]] | undefined,
+  shell: string,
+  args: readonly string[],
+) {
+  expect(received?.[0]).toBe("/bin/sh");
+  const argv = received?.[1] ?? [];
+  expect(argv[0]).toBe("-c");
+  expect(argv[1]).toContain("ulimit -f 4096");
+  expect(argv.slice(2)).toStrictEqual([shell, ...args]);
+}
+
 beforeEach(async () => {
   syncExec.mockReset();
   syncExec.mockImplementation(() => {
@@ -122,9 +145,19 @@ describe("async login-shell PATH preparation", () => {
     const probe = await holdProbe();
     const options = { env: {} };
     const pending = prepareShellPathFromLoginShell(options);
-    probe.sync.mockReturnValue(Buffer.from("\0PATH=/sync/bin\0"));
+    // The sync probe redirects stdout to a temp file; answer through the fd.
+    probe.sync.mockImplementation(((_file: string, _args: readonly string[], execOptions) => {
+      const stdio = (execOptions as { stdio: [string, number, number] }).stdio;
+      fs.writeSync(stdio[1], "\0PATH=/sync/bin\0");
+      return Buffer.alloc(0);
+    }) as typeof childProcess.execFileSync);
     expect(getShellPathFromLoginShell(options)).toBe("/sync/bin");
-    expect(probe.exec.mock.calls[0]).toEqual(probe.sync.mock.calls[0]);
+    // The sync probe wraps the shell in a ulimit shim; the wrapped tail matches the async spec.
+    expect(probe.sync.mock.calls[0]?.[1]?.slice(2)).toEqual([
+      probe.exec.mock.calls[0]?.[0],
+      ...(probe.exec.mock.calls[0]?.[1] ?? []),
+    ]);
+    expect(probe.sync.mock.calls[0]?.[2]).toMatchObject({ detached: true });
     expect(probe.exec.mock.calls[0]?.[2]).toMatchObject({
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -187,7 +220,7 @@ describe("async login-shell PATH preparation", () => {
       expect(probe.exec).toHaveBeenCalledTimes(calls);
       expect(probe.sync).not.toHaveBeenCalled();
     } else {
-      const exec = syncExec.mockReturnValue(Buffer.from(output));
+      const exec = answerSyncProbe(Buffer.from(output));
       const options = { env: {} };
       expect(getShellPathFromLoginShell(options)).toBeNull();
       expect(getShellPathFromLoginShell(options)).toBeNull();
@@ -278,6 +311,109 @@ describe("async login-shell PATH preparation", () => {
   });
 });
 
+describe("sync login-shell probe stdio", () => {
+  // Route the real execFileSync through a fake login-shell script so tests control the
+  // shell's exit and the descendants its startup leaves behind.
+  function routeSyncProbeThroughScript(script: string) {
+    const root = tempDirs.make("openclaw-shell-env-probe-");
+    const scriptPath = path.join(root, "fake-login-shell.sh");
+    fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+    const realExecFileSync = childProcess.execFileSync;
+    const calls: Array<readonly [string, readonly string[]]> = [];
+    syncExec.mockImplementation((file, args, options) => {
+      calls.push([file, args ?? []]);
+      return realExecFileSync(
+        scriptPath,
+        [],
+        options as childProcess.ExecFileSyncOptionsWithBufferEncoding,
+      );
+    });
+    return calls;
+  }
+
+  it.skipIf(hostPlatform === "win32")(
+    "returns the login-shell env without waiting on descendant-held pipes",
+    () => {
+      const calls = routeSyncProbeThroughScript(
+        "#!/bin/sh\nprintf '\\0PATH=/login-shell/bin\\0OPENAI_API_KEY=from-shell\\0'\nsleep 30 &\nexit 0\n",
+      );
+      const started = Date.now();
+      expect(getShellPathFromLoginShell({ env: {}, timeoutMs: 10_000 })).toBe("/login-shell/bin");
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expectWrappedProbeArgv(calls[0], "/bin/sh", ["-l", "-c", "printf '\\0'; env -0"]);
+    },
+    20_000,
+  );
+
+  it.skipIf(hostPlatform === "win32")(
+    "returns identical output for a login shell without background children",
+    () => {
+      routeSyncProbeThroughScript(
+        "#!/bin/sh\nprintf 'startup banner\\n'\nprintf '\\0PATH=/login-shell/bin:/usr/bin\\0OPENAI_API_KEY=from-shell\\0'\nexit 0\n",
+      );
+      expect(getShellPathFromLoginShell({ env: {} })).toBe("/login-shell/bin:/usr/bin");
+    },
+    20_000,
+  );
+
+  it.skipIf(hostPlatform === "win32")("keeps startup stderr in probe failure errors", () => {
+    routeSyncProbeThroughScript("#!/bin/sh\necho 'profile exploded' >&2\nexit 3\n");
+    const result = loadShellEnvFallback({
+      enabled: true,
+      env: {},
+      expectedKeys: ["OPENAI_API_KEY"],
+      logger: { warn: () => {} },
+    });
+    if (result.ok) {
+      throw new Error("expected the failing login shell to fail the probe");
+    }
+    expect(result.error).toContain("profile exploded");
+  });
+
+  it.skipIf(hostPlatform === "win32")("still times out a login shell that never exits", () => {
+    routeSyncProbeThroughScript("#!/bin/sh\nsleep 60\n");
+    const started = Date.now();
+    expect(getShellPathFromLoginShell({ env: {}, timeoutMs: 1_000 })).toBeNull();
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it.skipIf(hostPlatform === "win32")(
+    "enforces the combined capture budget across stdout and stderr",
+    () => {
+      // 1.5 MiB on each stream passes a per-stream 2 MiB bound but exceeds it combined.
+      routeSyncProbeThroughScript(
+        "#!/bin/sh\nhead -c 1500000 /dev/zero | tr '\\0' 'a'\nhead -c 1500000 /dev/zero | tr '\\0' 'b' >&2\nexit 0\n",
+      );
+      expect(getShellPathFromLoginShell({ env: {}, timeoutMs: 10_000 })).toBeNull();
+    },
+    20_000,
+  );
+
+  it.skipIf(hostPlatform === "win32")(
+    "stays prompt when a startup-spawned writer keeps the capture fds",
+    () => {
+      routeSyncProbeThroughScript(
+        "#!/bin/sh\nprintf '\\0PATH=/login-shell/bin\\0'\nyes >&2 &\nexit 0\n",
+      );
+      const started = Date.now();
+      expect(getShellPathFromLoginShell({ env: {}, timeoutMs: 10_000 })).toBe("/login-shell/bin");
+      expect(Date.now() - started).toBeLessThan(5_000);
+    },
+    20_000,
+  );
+
+  it.skipIf(hostPlatform === "win32")(
+    "fails promptly when startup output floods past the capture budget",
+    () => {
+      routeSyncProbeThroughScript("#!/bin/sh\nhead -c 4000000 /dev/zero | tr '\\0' 'a'\nexit 0\n");
+      const started = Date.now();
+      expect(getShellPathFromLoginShell({ env: {}, timeoutMs: 10_000 })).toBeNull();
+      expect(Date.now() - started).toBeLessThan(5_000);
+    },
+    20_000,
+  );
+});
+
 describe("shell env fallback", () => {
   beforeEach(() => {
     mockProcessPlatform("linux");
@@ -330,13 +466,15 @@ describe("shell env fallback", () => {
 
   function withEtcShells(shells: string[], fn: () => void) {
     const etcShellsContent = `${shells.join("\n")}\n`;
+    const realReadFileSync = fs.readFileSync;
     const readFileSyncSpy = vi
       .spyOn(fs, "readFileSync")
       .mockImplementation((filePath, encoding?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
         if (filePath === "/etc/shells" && encoding === "utf8") {
           return etcShellsContent;
         }
-        throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
+        // The sync probe reads back its temp-file capture; pass other reads through.
+        return realReadFileSync(filePath as fs.PathOrFileDescriptor, encoding as null) as never;
       });
     try {
       fn();
@@ -376,7 +514,7 @@ describe("shell env fallback", () => {
 
   it("imports missing expected keys even when another expected key already exists", () => {
     const env: NodeJS.ProcessEnv = { OPENCLAW_GATEWAY_TOKEN: "set" };
-    const exec = syncExec.mockImplementation(() =>
+    const exec = answerSyncProbe(
       framedShellEnv(
         "OPENCLAW_GATEWAY_TOKEN=from-shell\0TWILIO_ACCOUNT_SID=AC123\0TWILIO_AUTH_TOKEN=secret\0TWILIO_FROM_NUMBER=+15550001234\0",
       ),
@@ -405,7 +543,7 @@ describe("shell env fallback", () => {
 
   it("treats explicitly empty env vars as intentional overrides", () => {
     const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "" };
-    const exec = syncExec.mockReturnValue(framedShellEnv("OPENAI_API_KEY=from-shell\0"));
+    const exec = answerSyncProbe(framedShellEnv("OPENAI_API_KEY=from-shell\0"));
 
     const res = runShellEnvFallback({ env });
 
@@ -418,11 +556,12 @@ describe("shell env fallback", () => {
 
   it.each(["environment", "PATH"])("retries failed %s probes and caches recovery", (mode) => {
     const logger = { warn: vi.fn() };
-    const exec = syncExec
-      .mockReturnValue(framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0"))
-      .mockImplementationOnce(() => {
-        throw new Error(mode === "environment" ? "shell unavailable" : "exec failed");
-      });
+    const exec = answerSyncProbe(
+      framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0"),
+    );
+    exec.mockImplementationOnce(() => {
+      throw new Error(mode === "environment" ? "shell unavailable" : "exec failed");
+    });
     const read = (env: NodeJS.ProcessEnv) =>
       mode === "environment"
         ? runShellEnvFallback({ env, logger })
@@ -449,7 +588,7 @@ describe("shell env fallback", () => {
 
   it("tracks last applied keys across success, skip, and failure paths", () => {
     const successEnv: NodeJS.ProcessEnv = {};
-    const exec = syncExec.mockImplementation(() =>
+    const exec = answerSyncProbe(
       framedShellEnv("OPENAI_API_KEY=from-shell\0DISCORD_BOT_TOKEN=\0EXTRA=ignored\0"),
     );
     expect(
@@ -489,7 +628,7 @@ describe("shell env fallback", () => {
   });
 
   it("clears only discarded shell-applied keys", () => {
-    syncExec.mockReturnValue(
+    answerSyncProbe(
       framedShellEnv("OPENAI_API_KEY=openai-shell\0ANTHROPIC_API_KEY=anthropic-shell\0"),
     );
     runShellEnvFallback({
@@ -514,16 +653,17 @@ describe("shell env fallback", () => {
           : kind === "unregistered"
             ? "/opt/homebrew/bin/evil-shell"
             : trustedShell;
-      const exec = syncExec.mockReturnValue(framedShellEnv("OPENAI_API_KEY=from-shell\0"));
+      const exec = answerSyncProbe(framedShellEnv("OPENAI_API_KEY=from-shell\0"));
       withEtcShells(["/bin/sh", "/bin/bash", "/bin/zsh", trustedShell], () => {
         const res = runShellEnvFallback({ env: { SHELL: requested } });
         expect(res.ok).toBe(true);
         expect(exec).toHaveBeenCalledTimes(1);
-        expect(exec).toHaveBeenCalledWith(
+        expectWrappedProbeArgv(
+          exec.mock.calls[0] as unknown as [string, readonly string[]],
           kind === "registered" ? trustedShell : "/bin/sh",
           ["-l", "-c", "printf '\\0'; env -0"],
-          expect.objectContaining({ windowsHide: true }),
         );
+        expect(exec.mock.calls[0]?.[2]).toMatchObject({ windowsHide: true });
       });
     },
   );
@@ -551,7 +691,11 @@ describe("shell env fallback", () => {
     const exec = syncExec.mockImplementation((_shell, _args, options) => {
       receivedEnv = options?.env;
       receivedTimeout = options?.timeout;
-      return framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0");
+      fs.writeSync(
+        (options as { stdio: [string, number, number] }).stdio[1],
+        "\0OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0",
+      );
+      return Buffer.alloc(0);
     });
     const timeoutMs = Number.MAX_SAFE_INTEGER;
     if (mode === "environment") {
@@ -572,8 +716,14 @@ describe("shell env fallback", () => {
     const env: NodeJS.ProcessEnv = { SHELL: shell };
     const realExec = execFileSync;
     const exec = syncExec.mockImplementation((file, args, options) => {
-      expect(args).toStrictEqual(["-lic", "printf '\\0'; env -0"]);
-      return realExec(file, ["-lic", "set -u; : \"$PS1\"; printf '\\0'; env -0"], options);
+      // The sync probe wraps the shell in a ulimit shim; rewrite the inner command.
+      const argv = [...(args ?? [])] as string[];
+      expect(argv[0]).toBe("-c");
+      expect(argv[1]).toContain("ulimit -f ");
+      expect(argv[2]).toBe("/bin/bash");
+      expect(argv[3]).toBe("-lic");
+      argv[4] = "set -u; : \"$PS1\"; printf '\\0'; env -0";
+      return realExec(file, argv, options);
     });
 
     withEtcShells([shell], () => {
@@ -591,15 +741,14 @@ describe("shell env fallback", () => {
       const env: NodeJS.ProcessEnv = { SHELL: shell };
       const realExec = execFileSync;
       const probe = syncExec.mockImplementation((file, args, options) => {
-        expect(args).toStrictEqual(["-lic", "printf '\\0'; env -0"]);
-        return realExec(
-          file,
-          [
-            "-lic",
-            'printf \'\\0OPENCLAW_PROBE_PID=%s\\0OPENCLAW_PROBE_SID=%s\\0\' "$$" "$(ps -o sid= -p $$)"; env -0',
-          ],
-          options,
-        );
+        // The sync probe wraps the shell in a ulimit shim; rewrite the inner command.
+        const argv = [...(args ?? [])] as string[];
+        expect(argv[0]).toBe("-c");
+        expect(argv[2]).toBe("/bin/bash");
+        expect(argv[3]).toBe("-lic");
+        argv[4] =
+          'printf \'\\0OPENCLAW_PROBE_PID=%s\\0OPENCLAW_PROBE_SID=%s\\0\' "$$" "$(ps -o sid= -p $$)"; env -0';
+        return realExec(file, argv, options);
       });
       try {
         withEtcShells([shell], () => {
@@ -621,7 +770,7 @@ describe("shell env fallback", () => {
   it("keeps Bash PATH discovery noninteractive and cached separately from env imports", () => {
     const shell = "/bin/bash";
     const env: NodeJS.ProcessEnv = { SHELL: shell };
-    const exec = syncExec.mockImplementation(() =>
+    const exec = answerSyncProbe(
       framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0"),
     );
 
@@ -631,8 +780,17 @@ describe("shell env fallback", () => {
     });
 
     expect(exec).toHaveBeenCalledTimes(2);
-    expect(exec.mock.calls[0]?.[1]).toStrictEqual(["-lic", "printf '\\0'; env -0"]);
-    expect(exec.mock.calls[1]?.[1]).toStrictEqual(["-l", "-c", "printf '\\0'; env -0"]);
+    expect(exec.mock.calls[0]?.[1]?.slice(2)).toStrictEqual([
+      "/bin/bash",
+      "-lic",
+      "printf '\\0'; env -0",
+    ]);
+    expect(exec.mock.calls[1]?.[1]?.slice(2)).toStrictEqual([
+      "/bin/bash",
+      "-l",
+      "-c",
+      "printf '\\0'; env -0",
+    ]);
   });
 
   it.each([
@@ -658,7 +816,7 @@ describe("shell env fallback", () => {
       expectedExecutable = path.join(shellBin, executable);
       fs.writeFileSync(expectedExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     }
-    const exec = syncExec.mockReturnValue(framedShellEnv(`PATH=${shellBin}\0`));
+    const exec = answerSyncProbe(framedShellEnv(`PATH=${shellBin}\0`));
     const result = resolveExecutableFromUserShellPath(executable, {
       env: { PATH: daemonBin, SHELL: "/bin/sh" },
       strategy,

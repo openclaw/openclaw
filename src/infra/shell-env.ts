@@ -122,6 +122,89 @@ function createLoginShellExecSpec(params: LoginShellExecParams) {
   return { shell: params.shell, args, options };
 }
 
+/**
+ * execFileSync waits for EOF on piped stdio. A login startup file that leaves a background
+ * process holding the pipes open (keychain, ssh-agent, …) stalls the probe until the timeout
+ * even though the shell itself exited long ago, and the env import fails. Redirecting stdio
+ * to temp files removes the pipes, so the probe settles as soon as the login shell exits.
+ *
+ * File capture loses the pipe's maxBuffer enforcement, so the shell is wrapped in a
+ * `ulimit -f` (RLIMIT_FSIZE) shim: the limit is set before the login shell starts, therefore
+ * startup files and anything they background inherit it and cannot grow either capture file
+ * past the budget (writers hit EFBIG/SIGXFSZ instead of consuming disk after unlink). The
+ * exact combined budget is still enforced when reading back below.
+ */
+function execLoginShellEnvZeroSync(spec: ReturnType<typeof createLoginShellExecSpec>): Buffer {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-env-"));
+  const stdoutPath = path.join(tempDir, "stdout");
+  const stderrPath = path.join(tempDir, "stderr");
+  // POSIX sh counts 512-byte blocks for ulimit -f. A failed ulimit still falls through to
+  // exec so the probe degrades to the read-back bound instead of failing on odd shells.
+  const wrapper = `ulimit -f ${Math.ceil(spec.options.maxBuffer / 512)} 2>/dev/null; exec "$0" "$@"`;
+  // File capture cannot abort a noisy shell mid-write like a full pipe does, so enforce the
+  // combined maxBuffer budget when reading back and never load more than maxBuffer+1 bytes.
+  const readCaptureBounded = (filePath: string): Buffer => {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(spec.options.maxBuffer + 1);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
+  let stdoutFd: number | undefined;
+  let stderrFd: number | undefined;
+  const closeDescriptors = () => {
+    for (const fd of [stdoutFd, stderrFd]) {
+      if (fd !== undefined) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // Best effort; the probe result does not depend on close failures.
+        }
+      }
+    }
+    stdoutFd = undefined;
+    stderrFd = undefined;
+  };
+  try {
+    stdoutFd = fs.openSync(stdoutPath, "wx", 0o600);
+    stderrFd = fs.openSync(stderrPath, "wx", 0o600);
+    try {
+      execFileSync(DEFAULT_SHELL, ["-c", wrapper, spec.shell, ...spec.args], {
+        ...spec.options,
+        stdio: ["ignore", stdoutFd, stderrFd],
+      });
+    } catch (err) {
+      closeDescriptors();
+      // execFileSync embeds captured stderr in thrown errors; preserve that diagnostic
+      // now that stderr is redirected to a file.
+      const stderr = readCaptureBounded(stderrPath);
+      if (stderr.length > 0 && err instanceof Error) {
+        // execFileSync errors carry optional captured-stream fields; only fill the empty slot.
+        // SAFETY: err comes from execFileSync, whose error objects expose optional stderr.
+        (err as Error & { stderr?: Buffer }).stderr ??= stderr;
+        const text = stderr.toString("utf8");
+        if (!err.message.includes(text)) {
+          err.message = `${err.message}\n${text}`;
+        }
+      }
+      throw err;
+    }
+    closeDescriptors();
+    const stdout = readCaptureBounded(stdoutPath);
+    const stderr = readCaptureBounded(stderrPath);
+    if (stdout.length + stderr.length > spec.options.maxBuffer) {
+      throw Object.assign(new Error(`spawnSync ${spec.shell} ENOBUFS`), { code: "ENOBUFS" });
+    }
+    return stdout;
+  } finally {
+    closeDescriptors();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffer> {
   const { shell, args, options } = createLoginShellExecSpec(params);
   return new Promise((resolve, reject) => {
@@ -271,7 +354,7 @@ function probeLoginShellEnv(
 
   try {
     const spec = createLoginShellExecSpec(request);
-    const stdout = execFileSync(spec.shell, spec.args, spec.options);
+    const stdout = execLoginShellEnvZeroSync(spec);
     const shellEnv = parseShellEnv(stdout);
     // Failed startup can recover on the next lookup; retain only successful probes.
     loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
