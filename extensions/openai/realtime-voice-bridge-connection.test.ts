@@ -57,6 +57,7 @@ const {
   openSocket,
   emitServerEvent,
   emitSessionUpdated,
+  connectReadyBridge,
   expectedResponseCreateEvent,
   requireRecord,
   expectRecordFields,
@@ -70,30 +71,56 @@ const {
   createQuicksilverBrowserBrokerFixture,
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
+type Socket = ReturnType<typeof requireSocket>;
+let onClose: ReturnType<typeof vi.fn>;
+let onError: ReturnType<typeof vi.fn>;
+let onReady: ReturnType<typeof vi.fn>;
+
+function sentEvents(socket: Socket, type: string) {
+  return parseSent(socket).filter((event) => event.type === type);
+}
+
+const vadDefaults = {
+  type: "server_vad",
+  threshold: 0.5,
+  prefix_padding_ms: 300,
+  silence_duration_ms: 500,
+};
+function serverVad(
+  create_response = true,
+  overrides: Partial<typeof vadDefaults> & { interrupt_response?: boolean } = {},
+) {
+  return { ...vadDefaults, create_response, ...overrides };
+}
+
+function azureVadUpdate(createResponse: boolean) {
+  return { type: "session.update", session: { turn_detection: serverVad(createResponse) } };
+}
+
+function createConfiguredBridge(providerConfig: Record<string, unknown>) {
+  return createNativeBridge({ providerConfig });
+}
+
 describe("OpenAI realtime voice bridge connection", () => {
   beforeEach(() => {
     resetTestState();
+    onClose = vi.fn();
+    onError = vi.fn();
+    onReady = vi.fn();
   });
-
-  afterEach(() => {
-    restoreTestEnvironment();
-  });
+  afterEach(restoreTestEnvironment);
 
   it.each([
     "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
   ])(
     "uses the configured realtime endpoint %s without minting a client secret",
     async (baseUrl) => {
-      const provider = buildOpenAIRealtimeVoiceProvider();
-      const bridge = provider.createBridge({
-        providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
+      const bridge = createConfiguredBridge({
+        apiKey: "test-realtime-key",
+        baseUrl,
+        model: "custom/realtime model",
       });
-      const { connecting, socket } = beginBridgeConnection(bridge);
-      openSocket(socket);
-      emitSessionUpdated(socket);
-      await connecting;
+      const socket = await connectReadyBridge(bridge);
       try {
         const url = new URL(String(socket.args[0]));
         const expected = new URL(baseUrl);
@@ -120,27 +147,19 @@ describe("OpenAI realtime voice bridge connection", () => {
     "wss://voice.example.test/realtime#secret",
     123,
   ])("rejects invalid realtime baseUrl without opening a socket (%s)", (baseUrl) => {
-    expect(() =>
-      buildOpenAIRealtimeVoiceProvider().createBridge({
-        providerConfig: { apiKey: "test-realtime-key", baseUrl },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-      }),
-    ).toThrow("Invalid OpenAI realtime baseUrl");
+    expect(() => createConfiguredBridge({ apiKey: "test-realtime-key", baseUrl })).toThrow(
+      "Invalid OpenAI realtime baseUrl",
+    );
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("rejects mixing a realtime baseUrl with Azure routing", () => {
     expect(() =>
-      buildOpenAIRealtimeVoiceProvider().createBridge({
-        providerConfig: {
-          apiKey: "test-realtime-key",
-          baseUrl: "wss://voice.example.test/realtime",
-          azureEndpoint: "https://example.openai.azure.com",
-        },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
+      createConfiguredBridge({
+        apiKey: "test-realtime-key",
+        baseUrl: "wss://voice.example.test/realtime",
+        azureEndpoint: "https://example.openai.azure.com",
       }),
     ).toThrow("cannot be combined with Azure");
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -158,8 +177,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       const bindBridge = vi.fn();
       const bindControl = vi.fn<NonNullable<RealtimeVoiceGatewayControl["bindControl"]>>();
       const onEvent = vi.fn();
-      const onReady = vi.fn();
-      const onClose = vi.fn(() => {
+      onClose.mockImplementation(() => {
         if (throwingCloseCallback) {
           throw new Error("close callback failed");
         }
@@ -223,14 +241,12 @@ describe("OpenAI realtime voice bridge connection", () => {
           input: {
             format: { type: "audio/pcm", rate: 24000 },
             noise_reduction: { type: "near_field" },
-            turn_detection: {
-              type: "server_vad",
+            turn_detection: serverVad(true, {
               threshold: 0.7,
               prefix_padding_ms: 420,
               silence_duration_ms: 650,
-              create_response: true,
               interrupt_response: true,
-            },
+            }),
           },
           output: { format: { type: "audio/pcm", rate: 24000 }, voice: "marin" },
         },
@@ -255,7 +271,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
       openSocket(socket);
       await Promise.resolve();
-      const sessionUpdates = parseSent(socket).filter((event) => event.type === "session.update");
+      const sessionUpdates = sentEvents(socket, "session.update");
       expect(sessionUpdates).toHaveLength(1);
       expect(sessionUpdates[0]?.session).toEqual(gaSession);
       emitServerEvent(socket, {
@@ -265,7 +281,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       await Promise.resolve();
       expect(connectResolved).toBe(false);
       expect(onReady).not.toHaveBeenCalled();
-      expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(1);
+      expect(sentEvents(socket, "session.update")).toHaveLength(1);
       emitSessionUpdated(socket);
       await connecting;
       expect(connectResolved).toBe(true);
@@ -323,7 +339,6 @@ describe("OpenAI realtime voice bridge connection", () => {
   );
 
   it("waits for session.updated before draining audio and firing onReady", async () => {
-    const onReady = vi.fn();
     const bridge = createNativeBridge({
       instructions: "Be helpful.",
       language: "de",
@@ -357,14 +372,7 @@ describe("OpenAI realtime voice bridge connection", () => {
               format: { type: "audio/pcmu" },
               noise_reduction: null,
               transcription: { model: "gpt-4o-mini-transcribe", language: "de" },
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.5,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 500,
-                create_response: true,
-                interrupt_response: true,
-              },
+              turn_detection: serverVad(true, { interrupt_response: true }),
             },
             output: { format: { type: "audio/pcmu" }, voice: "alloy" },
           },
@@ -397,9 +405,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     emitSessionUpdated(socket);
     await connecting;
 
-    const audioEvents = parseSent(socket).filter(
-      (event) => event.type === "input_audio_buffer.append",
-    );
+    const audioEvents = sentEvents(socket, "input_audio_buffer.append");
     expect(audioEvents).toHaveLength(2);
     expect(
       audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
@@ -422,9 +428,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     emitSessionUpdated(socket);
     await connecting;
 
-    expect(
-      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
-    ).toHaveLength(0);
+    expect(sentEvents(socket, "input_audio_buffer.append")).toHaveLength(0);
     expect(logger.warn).toHaveBeenCalledWith(
       "OpenAI realtime input audio backpressure; droppedFrames=1",
     );
@@ -432,7 +436,6 @@ describe("OpenAI realtime voice bridge connection", () => {
   });
 
   it("discards audio closed before the first connection and reconnects fresh", async () => {
-    const onClose = vi.fn();
     const bridge = createNativeBridge({ onClose });
 
     bridge.sendAudio(Buffer.from("queued-before-connect"));
@@ -443,18 +446,12 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
 
-    const { connecting, socket } = beginBridgeConnection(bridge);
-    openSocket(socket);
-    emitSessionUpdated(socket);
-    await connecting;
+    const socket = await connectReadyBridge(bridge);
 
-    expect(
-      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
-    ).toHaveLength(0);
+    expect(sentEvents(socket, "input_audio_buffer.append")).toHaveLength(0);
 
     void bridge.close();
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
   });
 
   it("does not carry queued audio across terminal close and explicit reconnect", async () => {
@@ -468,23 +465,16 @@ describe("OpenAI realtime voice bridge connection", () => {
     await firstConnect;
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
-    const { connecting: reconnecting, socket: secondSocket } = beginBridgeConnection(bridge, 1);
-    openSocket(secondSocket);
-    emitSessionUpdated(secondSocket);
-    await reconnecting;
+    const secondSocket = await connectReadyBridge(bridge, 1);
 
-    expect(
-      parseSent(secondSocket).filter((event) => event.type === "input_audio_buffer.append"),
-    ).toHaveLength(0);
+    expect(sentEvents(secondSocket, "input_audio_buffer.append")).toHaveLength(0);
     await bridge.close();
   });
 
   it("fails terminally when the readiness callback throws", async () => {
     vi.useFakeTimers();
     const readyError = new Error("readiness callback failed");
-    const onClose = vi.fn();
-    const onError = vi.fn();
-    const onReady = vi.fn(() => {
+    onReady.mockImplementation(() => {
       throw readyError;
     });
     const bridge = createNativeBridge({ onClose, onError, onReady });
@@ -505,15 +495,11 @@ describe("OpenAI realtime voice bridge connection", () => {
 
     expect(immediateConnectError).toBe(readyError);
     expect(onReady).toHaveBeenCalledOnce();
-    expect(onError).toHaveBeenCalledOnce();
-    expect(onError).toHaveBeenCalledWith(readyError);
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("error");
+    expect(onError).toHaveBeenCalledExactlyOnceWith(readyError);
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
     expect(socket.closed).toBe(true);
     expect(bridge.isConnected()).toBe(false);
-    expect(
-      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
-    ).toHaveLength(0);
+    expect(sentEvents(socket, "input_audio_buffer.append")).toHaveLength(0);
 
     emitSessionUpdated(socket);
     await expect(bridge.connect()).rejects.toBe(readyError);
@@ -598,34 +584,12 @@ describe("OpenAI realtime voice bridge connection", () => {
 
     bridge.triggerGreeting?.("Say hello.");
     expect(parseSent(socket).slice(-2)).toEqual([
-      {
-        type: "session.update",
-        session: {
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 500,
-            create_response: false,
-          },
-        },
-      },
+      azureVadUpdate(false),
       expectedResponseCreateEvent(),
     ]);
 
     emitServerEvent(socket, { type: "response.done" });
-    expect(parseSent(socket).at(-1)).toEqual({
-      type: "session.update",
-      session: {
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
-          create_response: true,
-        },
-      },
-    });
+    expect(parseSent(socket).at(-1)).toEqual(azureVadUpdate(true));
   });
 
   it("rejects connection when the socket closes before session readiness", async () => {
@@ -656,7 +620,6 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it("does not report startup timeout shutdown as a clean close", async () => {
     vi.useFakeTimers();
-    const onClose = vi.fn();
     const bridge = createNativeBridge({ onClose });
     const { connecting, socket } = beginBridgeConnection(bridge);
 
@@ -675,8 +638,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     const { port1, port2 } = new MessageChannel();
     const state = new SharedArrayBuffer(4);
     const onAudio = vi.fn();
-    const onReady = vi.fn();
-    const onClose = vi.fn();
     const onTranscript = vi.fn();
     const runAgentConsult = vi.fn(async () => ({ text: "Delegated answer" }));
     const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
@@ -749,7 +710,6 @@ describe("OpenAI realtime voice bridge connection", () => {
   });
 
   it("settles cleanly when closed before the websocket opens", async () => {
-    const onClose = vi.fn();
     const bridge = createNativeBridge({ onClose });
     const { connecting, socket } = beginBridgeConnection(bridge);
 
@@ -759,7 +719,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     await expect(connecting).resolves.toBeUndefined();
     expect(socket.closed).toBe(true);
     expect(socket.terminated).toBe(false);
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledWith("completed");
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
   });
 });
