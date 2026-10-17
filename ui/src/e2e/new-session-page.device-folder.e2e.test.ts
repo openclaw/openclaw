@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -26,26 +27,40 @@ const DEVICE_FOLDER_MODELS = ["worker", "remote"].map<ModelCatalogEntry>((id) =>
 }));
 
 const suite = createNewSessionPageE2eSuite();
+const environment = {
+  id: "node:paired-runner",
+  type: "node",
+  label: "Paired runner",
+  status: "available",
+  sessionHost: true,
+  workerSlots: { total: 2, available: 1 },
+};
+const folderEnvironment = { ...environment, workerHost: { deviceFolders: true } };
+const deviceDefaults = {
+  operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+  workspace: "/srv/gateway-workspace",
+  workspaceGit: false,
+  agentModel: "example/worker",
+  models: DEVICE_FOLDER_MODELS,
+};
+async function openDeviceProjects(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+) {
+  await page.goto(`${suite.server.baseUrl}new`);
+  await gateway.waitForRequest("environments.list");
+  await page.locator("#new-session-where-trigger").click();
+  await page.locator('[data-value="device:paired-runner"]').click();
+  await page.locator("#new-session-project-trigger").click();
+}
 
 suite.define(() => {
   it("creates and dispatches an existing folder on exactly the selected capable device", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:existing-device-folder";
       const deviceFolder = { deviceId: "paired-runner", path: "/srv/existing project" };
-      const environment = {
-        id: "node:paired-runner",
-        type: "node",
-        label: "Paired runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 2, available: 1 },
-      };
       const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-        workspace: "/srv/gateway-workspace",
-        workspaceGit: false,
-        agentModel: "example/worker",
-        models: DEVICE_FOLDER_MODELS,
+        ...deviceDefaults,
         methodResponses: {
           "environments.list": { environments: [environment], profiles: [] },
           "sessions.create": { key: sessionKey },
@@ -71,17 +86,13 @@ suite.define(() => {
         );
         await writeFile(path.join(proofDir, name), frame.png);
       };
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page.locator('[data-value="device:paired-runner"]').click();
-      await page.locator("#new-session-project-trigger").click();
+      await openDeviceProjects(page, gateway);
       expect(await page.locator('[data-value="device-folder"]').count()).toBe(0);
       await page.keyboard.press("Escape");
       await capture("before-no-device-folder.png");
 
       await gateway.setMethodResponse("environments.list", {
-        environments: [{ ...environment, workerHost: { deviceFolders: true } }],
+        environments: [folderEnvironment],
         profiles: [],
       });
       const previous = (await gateway.getRequests("environments.list")).length;
@@ -164,19 +175,9 @@ suite.define(() => {
   it("browses folders on the selected device and creates the session in the chosen one", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:browsed-device-folder";
-      const environment = {
-        id: "node:paired-runner",
-        type: "node",
-        label: "Paired runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 2, available: 1 },
-        workerHost: { deviceFolders: true },
-        invocableCommands: ["fs.listDir"],
-      };
       const home = { path: "/Users/dev", home: "/Users/dev", parent: "/Users" };
       const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        ...deviceDefaults,
         featureMethods: [
           "agent.wait",
           "chat.metadata",
@@ -186,12 +187,11 @@ suite.define(() => {
           "sessions.dispatch",
           "worktrees.branches",
         ],
-        workspace: "/srv/gateway-workspace",
-        workspaceGit: false,
-        agentModel: "example/worker",
-        models: DEVICE_FOLDER_MODELS,
         methodResponses: {
-          "environments.list": { environments: [environment], profiles: [] },
+          "environments.list": {
+            environments: [{ ...folderEnvironment, invocableCommands: ["fs.listDir"] }],
+            profiles: [],
+          },
           "fs.listDir": { ...home, entries: [{ name: "src", path: "/Users/dev/src" }] },
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
@@ -199,11 +199,7 @@ suite.define(() => {
           "sessions.send": { runId: "run-browsed-folder", status: "started" },
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page.locator('[data-value="device:paired-runner"]').click();
-      await page.locator("#new-session-project-trigger").click();
+      await openDeviceProjects(page, gateway);
       await page.getByRole("button", { name: "Browse folders on Paired runner" }).click();
       expect((await gateway.waitForRequest("fs.listDir")).params).toEqual({
         nodeId: "paired-runner",
@@ -241,34 +237,16 @@ suite.define(() => {
   it("offers device browsing only to admins", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        ...deviceDefaults,
         operatorScopes: ["operator.read", "operator.write"],
-        workspace: "/srv/gateway-workspace",
-        workspaceGit: false,
-        agentModel: "example/worker",
-        models: DEVICE_FOLDER_MODELS,
         methodResponses: {
           "environments.list": {
-            environments: [
-              {
-                id: "node:paired-runner",
-                type: "node",
-                label: "Paired runner",
-                status: "available",
-                sessionHost: true,
-                workerSlots: { total: 2, available: 1 },
-                workerHost: { deviceFolders: true },
-                invocableCommands: ["fs.listDir"],
-              },
-            ],
+            environments: [{ ...folderEnvironment, invocableCommands: ["fs.listDir"] }],
             profiles: [],
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page.locator('[data-value="device:paired-runner"]').click();
-      await page.locator("#new-session-project-trigger").click();
+      await openDeviceProjects(page, gateway);
       await page.locator('[data-value="device-folder"]').waitFor();
       expect(await page.locator('[data-value="browse-device"]').count()).toBe(0);
     });
@@ -277,36 +255,19 @@ suite.define(() => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const deviceFolder = { deviceId: "paired-runner", path: "/srv/existing" };
       const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        ...deviceDefaults,
         deferredMethods: ["sessions.create"],
         workspace: "/srv/gateway",
-        workspaceGit: false,
-        agentModel: "example/worker",
-        models: DEVICE_FOLDER_MODELS,
         methodResponses: {
           "environments.list": {
-            environments: [
-              {
-                id: "node:paired-runner",
-                type: "node",
-                label: "Paired runner",
-                status: "available",
-                sessionHost: true,
-                workerSlots: { total: 2, available: 1 },
-                workerHost: { deviceFolders: true },
-              },
-            ],
+            environments: [folderEnvironment],
             profiles: [],
           },
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
           "sessions.send": { runId: "run-recovered-folder", status: "started" },
         },
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page.locator('[data-value="device:paired-runner"]').click();
-      await page.locator("#new-session-project-trigger").click();
+      await openDeviceProjects(page, gateway);
       await page.locator('[data-value="device-folder"]').click();
       await page.getByRole("textbox", { name: "Absolute path on device" }).fill(deviceFolder.path);
       await page.locator(".new-session-page__message").fill("Keep this folder");

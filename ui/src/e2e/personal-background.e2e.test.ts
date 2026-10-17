@@ -32,8 +32,27 @@ function placement(page: Page, label: string): Locator {
     .getByRole("switch");
 }
 
-async function checked(toggle: Locator): Promise<boolean> {
-  return toggle.isChecked();
+const source = (scope: Page | Locator, kind: string) =>
+  scope.locator(`[data-background-source="${kind}"]`);
+const expectSelected = (scope: Page | Locator, kind: string) =>
+  expect.poll(() => source(scope, kind).getAttribute("aria-pressed")).toBe("true");
+const presenceUsers = [{ id: profileId, name: "Background demo", self: true }];
+const backgroundMethods = [
+  "users.background.get",
+  "users.background.upload",
+  "users.background.remove",
+];
+function imageAsset(jpeg: Buffer): UserBackgroundAsset {
+  return { assetId, width: 960, height: 640, mime: "image/jpeg", byteLength: jpeg.length };
+}
+async function uploadImage(page: Page, section: Locator, name: string, buffer: Buffer) {
+  const chooser = page.waitForEvent("filechooser");
+  await section.locator("[data-background-upload]").click();
+  await (await chooser).setFiles({ name, mimeType: "image/png", buffer });
+}
+async function openRoute(page: Page, routePath: string, routeId: "new-session" | "chat") {
+  await page.goto(suite.server.baseUrl + routePath);
+  await waitForControlUiRoute(page, { routeId });
 }
 
 async function openAppearance(page: Page) {
@@ -128,27 +147,21 @@ suite.define(() => {
       const section = page.locator(sectionSelector);
       await section.scrollIntoViewIfNeeded();
       expect(await section.locator("[data-background-upload]").isDisabled()).toBe(true);
-      await section.locator('[data-background-source="none"]').click();
-      await expect
-        .poll(() => section.locator('[data-background-source="none"]').getAttribute("aria-pressed"))
-        .toBe("true");
+      await source(section, "none").click();
+      await expectSelected(section, "none");
       await page.reload();
       await section.scrollIntoViewIfNeeded();
-      await expect
-        .poll(() => section.locator('[data-background-source="none"]').getAttribute("aria-pressed"))
-        .toBe("true");
+      await expectSelected(section, "none");
       expect(await section.getByRole("alert").count()).toBe(0);
       await section.getByText("Saved in this browser.", { exact: false }).waitFor();
-      await section.locator('[data-background-source="theme"]').click();
+      await source(section, "theme").click();
       await placement(page, "Conversations").click();
       await page.reload();
       await section.scrollIntoViewIfNeeded();
-      expect(await checked(placement(page, "Conversations"))).toBe(false);
-      await page.goto(suite.server.baseUrl + "new");
-      await waitForControlUiRoute(page, { routeId: "new-session" });
+      expect(await placement(page, "Conversations").isChecked()).toBe(false);
+      await openRoute(page, "new", "new-session");
       await page.locator("openclaw-session-background .session-background__image--theme").waitFor();
-      await page.goto(suite.server.baseUrl + "chat");
-      await waitForControlUiRoute(page, { routeId: "chat" });
+      await openRoute(page, "chat", "chat");
       expect(
         await page.locator("openclaw-session-background .session-background__image").count(),
       ).toBe(0);
@@ -180,14 +193,12 @@ suite.define(() => {
             assistantName: "Assistant",
             agentModel: "demo/example",
             models: [{ id: "example", name: "Example model", provider: "demo" }],
-            presenceUsers: [{ id: profileId, name: "Background demo", self: true }],
+            presenceUsers,
             featureMethods: [
               ...defaultControlUiFeatureMethods,
               "users.prefs.get",
               "users.prefs.set",
-              "users.background.get",
-              "users.background.upload",
-              "users.background.remove",
+              ...backgroundMethods,
             ],
             historyMessages: [
               {
@@ -216,21 +227,11 @@ suite.define(() => {
           const section = page.locator(sectionSelector);
           await section.scrollIntoViewIfNeeded();
           expect(await section.locator("[data-background-source]").count()).toBe(3);
-          await expect
-            .poll(() =>
-              section.locator('[data-background-source="theme"]').getAttribute("aria-pressed"),
-            )
-            .toBe("true");
+          await expectSelected(section, "theme");
           await capture("desktop-controls-before-upload");
 
           const imageFixture = await busyImage(page);
-          const asset: UserBackgroundAsset = {
-            assetId,
-            width: 960,
-            height: 640,
-            mime: "image/jpeg",
-            byteLength: imageFixture.jpeg.length,
-          };
+          const asset = imageAsset(imageFixture.jpeg);
           const reads: string[] = [];
           await page.route("**/__openclaw__/users/background/*", async (route) => {
             reads.push(route.request().url());
@@ -249,15 +250,7 @@ suite.define(() => {
           };
           await gateway.deferNext("users.background.upload");
           const priorWrites = (await gateway.getRequests("users.prefs.set")).length;
-          const chooser = page.waitForEvent("filechooser");
-          await section.locator("[data-background-upload]").click();
-          await (
-            await chooser
-          ).setFiles({
-            name: "bright-checker.png",
-            mimeType: "image/png",
-            buffer: imageFixture.png,
-          });
+          await uploadImage(page, section, "bright-checker.png", imageFixture.png);
           const upload = await gateway.waitForRequest("users.background.upload");
           expect(upload.params).toEqual({
             expectedAssetId: null,
@@ -274,14 +267,10 @@ suite.define(() => {
             .getByRole("status")
             .filter({ hasText: "Background image saved." })
             .waitFor();
-          await expect
-            .poll(() =>
-              section.locator('[data-background-source="custom"]').getAttribute("aria-pressed"),
-            )
-            .toBe("true");
+          await expectSelected(section, "custom");
           expect((await gateway.getRequests("users.prefs.set")).length).toBe(priorWrites);
-          expect(await checked(placement(page, "New session page"))).toBe(true);
-          expect(await checked(placement(page, "Conversations"))).toBe(false);
+          expect(await placement(page, "New session page").isChecked()).toBe(true);
+          expect(await placement(page, "Conversations").isChecked()).toBe(false);
           await expect
             .poll(() =>
               section
@@ -294,8 +283,7 @@ suite.define(() => {
             .toBe(true);
           await capture("desktop-custom-uploaded");
 
-          await page.goto(suite.server.baseUrl + "new");
-          await waitForControlUiRoute(page, { routeId: "new-session" });
+          await openRoute(page, "new", "new-session");
           await page.locator(".new-session-page openclaw-session-background img").waitFor();
           await capture("desktop-custom-new");
           reads.length = 0;
@@ -310,30 +298,21 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.fill("An unfinished thought stays here.");
           await openAppearance(page);
-          let previousPreference = preference;
-          preference = { ...preference, showInSessions: true };
-          await changePreference(
-            page,
-            gateway,
-            () => placement(page, "Conversations").click(),
-            preference,
-            previousPreference,
-            asset,
-            mode,
-          );
-          expect(await checked(placement(page, "New session page"))).toBe(true);
-          previousPreference = preference;
-          preference = { ...preference, showOnNewSession: false, visibility: 0.5 };
-          await changePreference(
-            page,
-            gateway,
-            () => placement(page, "New session page").click(),
-            preference,
-            previousPreference,
-            asset,
-            mode,
-          );
-          expect(await checked(placement(page, "Conversations"))).toBe(true);
+          const change = async (
+            action: () => Promise<unknown>,
+            patch: Partial<BackgroundPreference>,
+          ) => {
+            const previous = preference;
+            preference = { ...preference, ...patch };
+            await changePreference(page, gateway, action, preference, previous, asset, mode);
+          };
+          await change(() => placement(page, "Conversations").click(), { showInSessions: true });
+          expect(await placement(page, "New session page").isChecked()).toBe(true);
+          await change(() => placement(page, "New session page").click(), {
+            showOnNewSession: false,
+            visibility: 0.5,
+          });
+          expect(await placement(page, "Conversations").isChecked()).toBe(true);
           await page.getByRole("button", { name: "Back to app" }).click();
           await waitForControlUiRoute(page, { routeId: "chat" });
           expect(await composer.inputValue()).toBe("An unfinished thought stays here.");
@@ -360,8 +339,7 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe("An unfinished thought stays here.");
           expect(await page.evaluate(() => document.body.scrollWidth <= innerWidth)).toBe(true);
           await capture("mobile-custom-chat");
-          await page.goto(suite.server.baseUrl + "new");
-          await waitForControlUiRoute(page, { routeId: "new-session" });
+          await openRoute(page, "new", "new-session");
           expect(
             await page.locator(".new-session-page openclaw-session-background img").count(),
           ).toBe(0);
@@ -370,39 +348,17 @@ suite.define(() => {
           await capture("mobile-independent-placements");
 
           await page.setViewportSize({ width: 1440, height: 1000 });
-          previousPreference = preference;
-          preference = { ...preference, source: { kind: "none" } };
-          await changePreference(
-            page,
-            gateway,
-            () => section.locator('[data-background-source="none"]').click(),
-            preference,
-            previousPreference,
-            asset,
-            mode,
-          );
+          await change(() => source(section, "none").click(), { source: { kind: "none" } });
           await page.locator(".settings-theme-card--tide").click();
           await gateway.waitForRequest("themes.set");
-          await expect
-            .poll(() =>
-              section.locator('[data-background-source="none"]').getAttribute("aria-pressed"),
-            )
-            .toBe("true");
+          await expectSelected(section, "none");
           await page
             .getByRole("radio", { name: mode === "light" ? "Dark" : "Light", exact: true })
             .click();
-          await expect
-            .poll(() =>
-              section.locator('[data-background-source="none"]').getAttribute("aria-pressed"),
-            )
-            .toBe("true");
+          await expectSelected(section, "none");
           await page.reload();
           await page.locator(sectionSelector).scrollIntoViewIfNeeded();
-          await expect
-            .poll(() =>
-              section.locator('[data-background-source="none"]').getAttribute("aria-pressed"),
-            )
-            .toBe("true");
+          await expectSelected(section, "none");
           await capture("desktop-none-after-theme-and-reload");
           await page.goto(suite.server.baseUrl + "chat");
           await page.getByText("A readable conversation", { exact: true }).waitFor();
@@ -418,7 +374,7 @@ suite.define(() => {
   it("saves an initial explicit None only with the absent-value CAS", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        presenceUsers: [{ id: profileId, name: "Background demo", self: true }],
+        presenceUsers,
         methodResponses: {
           "config.get": configResponse({}, "background-absent-cas"),
           "users.prefs.get": { status: "ok", entries: {} },
@@ -436,16 +392,14 @@ suite.define(() => {
       await changePreference(
         page,
         gateway,
-        () => page.locator('[data-background-source="none"]').click(),
+        () => source(page, "none").click(),
         preference,
         null,
         null,
         "light",
       );
       await page.reload();
-      await expect
-        .poll(() => page.locator('[data-background-source="none"]').getAttribute("aria-pressed"))
-        .toBe("true");
+      await expectSelected(page, "none");
     });
   });
 
@@ -458,21 +412,10 @@ suite.define(() => {
           ...DEFAULT_BACKGROUND_PREFERENCE,
           source: { kind },
         };
-        const asset: UserBackgroundAsset = {
-          assetId,
-          width: 960,
-          height: 640,
-          mime: "image/jpeg",
-          byteLength: image.jpeg.length,
-        };
+        const asset = imageAsset(image.jpeg);
         const gateway = await installMockGateway(page, {
-          presenceUsers: [{ id: profileId, name: "Background demo", self: true }],
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "users.background.get",
-            "users.background.upload",
-            "users.background.remove",
-          ],
+          presenceUsers,
+          featureMethods: [...defaultControlUiFeatureMethods, ...backgroundMethods],
           methodResponses: {
             "config.get": configResponse({}, "background-retained-invalidation"),
             "users.prefs.get": { status: "ok", entries: { "ui.background": preference } },
@@ -503,11 +446,7 @@ suite.define(() => {
           .toBeGreaterThan(before);
         await expect.poll(() => thumbnail.count()).toBe(0);
         expect(await section.locator("[data-background-remove]").count()).toBe(0);
-        expect(
-          await section
-            .locator('[data-background-source="' + kind + '"]')
-            .getAttribute("aria-pressed"),
-        ).toBe("true");
+        expect(await source(section, kind).getAttribute("aria-pressed")).toBe("true");
         const chooser = page.waitForEvent("filechooser");
         await section.locator('[data-background-source="custom"]').click();
         await (await chooser).setFiles([]);
@@ -523,7 +462,7 @@ suite.define(() => {
         source: { kind: "none" },
       };
       const gateway = await installMockGateway(page, {
-        presenceUsers: [{ id: profileId, name: "Background demo", self: true }],
+        presenceUsers,
         methodResponses: {
           "config.get": configResponse({}, "background-conflict"),
           "users.prefs.get": { status: "ok", entries: { "ui.background": preference } },
@@ -535,19 +474,13 @@ suite.define(() => {
       const section = page.locator(sectionSelector);
       await section.scrollIntoViewIfNeeded();
       const imageFixture = await busyImage(page);
-      const chooser = page.waitForEvent("filechooser");
-      await section.locator("[data-background-upload]").click();
-      await (
-        await chooser
-      ).setFiles({ name: "replacement.png", mimeType: "image/png", buffer: imageFixture.png });
+      await uploadImage(page, section, "replacement.png", imageFixture.png);
       await gateway.waitForRequest("users.background.upload");
       await section
         .getByRole("alert")
         .filter({ hasText: "Your background changed elsewhere." })
         .waitFor();
-      expect(
-        await section.locator('[data-background-source="none"]').getAttribute("aria-pressed"),
-      ).toBe("true");
+      expect(await source(section, "none").getAttribute("aria-pressed")).toBe("true");
       expect(await section.locator("[data-background-upload]").isEnabled()).toBe(true);
       expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
     });

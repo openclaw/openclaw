@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -8,8 +9,39 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   openEnvironmentPicker,
+  pollAttribute,
 } from "./new-session-page.test-support.ts";
 const suite = createNewSessionPageE2eSuite();
+const desktop = { width: 1280, height: 900 };
+const mobile = { width: 393, height: 852 };
+async function withPage(
+  viewport: { width: number; height: number },
+  run: (page: Page) => Promise<void>,
+) {
+  const context = await suite.browser.newContext({ viewport, colorScheme: "dark" });
+  try {
+    await run(await context.newPage());
+  } finally {
+    await context.close();
+  }
+}
+const trigger = (page: Page, name: string) => page.locator(`#new-session-${name}-trigger`);
+async function capture(
+  page: Page,
+  name: string,
+  surface: Locator,
+  content: Locator[],
+  viewport?: { width: number; height: number },
+) {
+  const frame = await takeControlUiScreenshotFrame(page, surface, content, {
+    animations: "disabled",
+    ...(viewport ? { viewport } : {}),
+  });
+  await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
+}
+async function darkTheme(page: Page) {
+  await evaluateControlUiContext(page, (application) => application.theme.setMode("dark"));
+}
 const models: ModelCatalogEntry[] = [
   {
     id: "gpt-5.5",
@@ -60,12 +92,7 @@ const responses = {
 };
 suite.define(() => {
   it("pairs the hosted environment with its runtime and preserves local draft intent on return", async () => {
-    const context = await suite.browser.newContext({
-      viewport: { width: 1280, height: 900 },
-      colorScheme: "dark",
-    });
-    const page = await context.newPage();
-    try {
+    await withPage(desktop, async (page) => {
       const gateway = await installMockGateway(page, {
         workspace: "/home/peter/openclaw",
         workspaceGit: true,
@@ -82,45 +109,35 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "new");
       await page.locator(".new-session-page__message").waitFor();
-      await evaluateControlUiContext(page, (application) => {
-        application.theme.setMode("dark");
-      });
+      await darkTheme(page);
       await openEnvironmentPicker(page);
       const surface = page.locator(".oc-popover.new-session-page__where-popover");
       const option = surface.locator('[data-value="runtime:agentsapi"]');
       await option.waitFor();
-      const frame = await takeControlUiScreenshotFrame(
+      await capture(
         page,
+        "after",
         surface,
         [surface.getByRole("searchbox", { name: "Search environments" }), option],
-        { animations: "disabled", viewport: { width: 1280, height: 900 } },
+        desktop,
       );
-      await writeFile(path.join(suite.artifactDir, "after.png"), frame.png);
       await surface.getByRole("searchbox").fill("Agents API");
       expect(await option.isVisible()).toBe(true);
       await option.focus();
       await page.keyboard.press("Enter");
-      const where = page.locator("#new-session-where-trigger");
-      await expect.poll(() => where.getAttribute("data-hosted-runtime")).toBe("agentsapi");
+      const where = trigger(page, "where");
+      await pollAttribute(where, "data-hosted-runtime").toBe("agentsapi");
       expect(await where.textContent()).toContain("OpenAI (Agents API)");
-      expect(await page.locator("#new-session-project-trigger").count()).toBe(0);
-      expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
-      const selected = await takeControlUiScreenshotFrame(
-        page,
-        page.locator(".new-session-page__triggers"),
-        [where],
-        { animations: "disabled" },
-      );
-      await writeFile(path.join(suite.artifactDir, "hosted-selected.png"), selected.png);
+      expect(await trigger(page, "project").count()).toBe(0);
+      expect(await trigger(page, "checkout").count()).toBe(0);
+      await capture(page, "hosted-selected", page.locator(".new-session-page__triggers"), [where]);
       await openEnvironmentPicker(page);
       expect(await option.getAttribute("aria-pressed")).toBe("true");
       await surface.getByRole("searchbox").fill("");
       await surface.locator('[data-value="gateway"]').click();
-      await expect.poll(() => where.getAttribute("data-hosted-runtime")).toBeNull();
-      await page.locator("#new-session-project-trigger").waitFor();
-      expect(await page.locator("#new-session-project-trigger").textContent()).toContain(
-        "openclaw",
-      );
+      await pollAttribute(where, "data-hosted-runtime").toBeNull();
+      await trigger(page, "project").waitFor();
+      expect(await trigger(page, "project").textContent()).toContain("openclaw");
       await openEnvironmentPicker(page);
       await option.click();
       await page.locator(".new-session-page__message").fill("Calculate a small table");
@@ -144,17 +161,10 @@ suite.define(() => {
         expect(create.params).not.toHaveProperty(key);
       }
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
   it("keeps loading and unavailable hosted choices honest on mobile", async () => {
-    const context = await suite.browser.newContext({
-      viewport: { width: 393, height: 852 },
-      colorScheme: "dark",
-    });
-    const page = await context.newPage();
-    try {
+    await withPage(mobile, async (page) => {
       const gateway = await installMockGateway(page, {
         workspace: "/home/peter/openclaw",
         deferredMethods: ["models.list"],
@@ -162,51 +172,30 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "new");
       await page.locator(".new-session-page__message").waitFor();
-      await evaluateControlUiContext(page, (application) => {
-        application.theme.setMode("dark");
-      });
+      await darkTheme(page);
       await openEnvironmentPicker(page);
       const picker = page.locator(".oc-popover.new-session-page__where-popover");
-      const surface = picker;
       await picker.getByRole("searchbox").fill("Agents API");
       await picker.getByRole("status").waitFor();
-      let frame = await takeControlUiScreenshotFrame(page, surface, [picker.getByRole("status")], {
-        animations: "disabled",
-      });
-      await writeFile(path.join(suite.artifactDir, "mobile-loading.png"), frame.png);
+      await capture(page, "mobile-loading", picker, [picker.getByRole("status")]);
       const unavailable = models.map((model) => ({
         ...model,
         runtimeChoices: model.runtimeChoices!.map((choice) =>
-          Object.assign({}, choice, {
-            available: false,
-            unavailableReason: "missing-auth",
-          }),
+          Object.assign({}, choice, { available: false, unavailableReason: "missing-auth" }),
         ),
       }));
       await gateway.resolveDeferred("models.list", { models: unavailable });
       const option = picker.locator('[data-value="runtime:agentsapi"]');
-      await expect.poll(() => option.getAttribute("aria-disabled")).toBe("true");
+      await pollAttribute(option, "aria-disabled").toBe("true");
       await option.focus();
       await page.keyboard.press("Enter");
-      expect(
-        await page.locator("#new-session-where-trigger").getAttribute("data-hosted-runtime"),
-      ).toBeNull();
-      frame = await takeControlUiScreenshotFrame(page, surface, [option], {
-        animations: "disabled",
-      });
-      await writeFile(path.join(suite.artifactDir, "mobile-unavailable.png"), frame.png);
+      expect(await trigger(page, "where").getAttribute("data-hosted-runtime")).toBeNull();
+      await capture(page, "mobile-unavailable", picker, [option]);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
   it("restores the hosted environment from model preferences without exposing local projects", async () => {
-    const context = await suite.browser.newContext({
-      viewport: { width: 393, height: 852 },
-      colorScheme: "dark",
-    });
-    const page = await context.newPage();
-    try {
+    await withPage(mobile, async (page) => {
       const label = "OpenAI (Agents API) · Research and analysis workspace";
       const hosted = models[0]!.runtimeChoices![0]!;
       const configured = {
@@ -223,20 +212,17 @@ suite.define(() => {
         methodResponses: { ...responses, "models.list": { models: [configured] } },
       });
       await page.goto(suite.server.baseUrl + "new");
-      const trigger = page.locator("#new-session-where-trigger");
-      await expect.poll(() => trigger.getAttribute("data-hosted-runtime")).toBe("agentsapi");
-      await evaluateControlUiContext(page, (application) => {
-        application.theme.setMode("dark");
-      });
-      expect(await page.locator("#new-session-project-trigger").count()).toBe(0);
-      expect(await trigger.getAttribute("aria-label")).toContain(label);
-      const frame = await takeControlUiScreenshotFrame(
+      const where = trigger(page, "where");
+      await pollAttribute(where, "data-hosted-runtime").toBe("agentsapi");
+      await darkTheme(page);
+      expect(await trigger(page, "project").count()).toBe(0);
+      expect(await where.getAttribute("aria-label")).toContain(label);
+      await capture(
         page,
+        "mobile-restored-long-label",
         page.locator(".new-session-page__triggers"),
-        [trigger],
-        { animations: "disabled" },
+        [where],
       );
-      await writeFile(path.join(suite.artifactDir, "mobile-restored-long-label.png"), frame.png);
       await openEnvironmentPicker(page);
       expect(
         await page.locator('[data-value="runtime:agentsapi"]').getAttribute("aria-pressed"),
@@ -244,8 +230,6 @@ suite.define(() => {
       expect(await page.locator('[data-value="gateway"]').getAttribute("aria-disabled")).toBe(
         "true",
       );
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

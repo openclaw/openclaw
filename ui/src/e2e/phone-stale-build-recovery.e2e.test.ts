@@ -1,6 +1,7 @@
 // Phone stale-build proof covers artifact identity, reconnect retention, and service workers.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -46,6 +47,16 @@ let RECOVERY_ARTIFACT_DIR: string;
 beforeEach(() => {
   RECOVERY_ARTIFACT_DIR = createControlUiE2eArtifactDir("zombie-reload");
 });
+async function capture(page: Page, name: string, content: Locator) {
+  await writeFile(
+    path.join(RECOVERY_ARTIFACT_DIR, name + ".png"),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
+  );
+}
+
+function requestsFor<T extends { method: string }>(requests: T[], ...methods: string[]) {
+  return requests.filter((request) => methods.includes(request.method));
+}
 
 suite.define(() => {
   it.each([
@@ -163,30 +174,17 @@ suite.define(() => {
             valid: true,
           },
           "users.list": {
-            profiles: [
-              {
-                id: "profile-ada",
-                displayName: "Ada",
-                avatarMime: null,
-                mergedInto: null,
-                createdAt: 1,
-                updatedAt: 1,
-                emails: [],
-                githubIdentity: null,
-                hasAvatar: false,
-              },
-              {
-                id: "profile-bob",
-                displayName: "Bob",
-                avatarMime: null,
-                mergedInto: null,
-                createdAt: 1,
-                updatedAt: 1,
-                emails: [],
-                githubIdentity: null,
-                hasAvatar: false,
-              },
-            ],
+            profiles: ["Ada", "Bob"].map((displayName) => ({
+              id: `profile-${displayName.toLowerCase()}`,
+              displayName,
+              avatarMime: null,
+              mergedInto: null,
+              createdAt: 1,
+              updatedAt: 1,
+              emails: [],
+              githubIdentity: null,
+              hasAvatar: false,
+            })),
           },
         },
         presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
@@ -297,18 +295,10 @@ suite.define(() => {
         );
         const timeoutAfterReconnect = await retainedTimeout.isVisible();
         const retentionRequests = await observeGatewayRequests(page);
-        const retentionConnects = retentionRequests.filter(
-          (request) => request.method === "connect",
-        );
-        const retentionTranscripts = retentionRequests.filter(
-          (request) => request.method === "chat.history" || request.method === "chat.startup",
-        );
-        const retentionModelWakes = retentionRequests.filter(
-          (request) => request.method === "chat.send",
-        );
-        const retentionAssignmentMutations = retentionRequests.filter(
-          (request) => request.method === "sessions.assignOwner",
-        );
+        const retentionConnects = requestsFor(retentionRequests, "connect");
+        const retentionTranscripts = requestsFor(retentionRequests, "chat.history", "chat.startup");
+        const retentionModelWakes = requestsFor(retentionRequests, "chat.send");
+        const retentionAssignmentMutations = requestsFor(retentionRequests, "sessions.assignOwner");
         expect(imageBeforeReconnect).toBe(true);
         expect(imageAfterReconnect).toBe(true);
         expect(timeoutBeforeReconnect).toBe(true);
@@ -421,10 +411,7 @@ suite.define(() => {
           focused: recoveryFocused,
           terminalInvocationCount,
         };
-        await writeFile(
-          path.join(RECOVERY_ARTIFACT_DIR, `01-${serviceWorker}-reload-required.png`),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [recovery]),
-        );
+        await capture(page, `01-${serviceWorker}-reload-required`, recovery);
         expect(terminalInvocationCount).toBe(0);
 
         const documentCountBeforeFailedProbe = documentRequests.length;
@@ -536,10 +523,7 @@ suite.define(() => {
           routePath: new URL(page.url()).pathname,
         };
         const actions = page.getByRole("button", { name: "Actions for Main" });
-        await writeFile(
-          path.join(RECOVERY_ARTIFACT_DIR, `02-${serviceWorker}-recovered.png`),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [actions]),
-        );
+        await capture(page, `02-${serviceWorker}-recovered`, actions);
         await actions.tap();
         const assignment = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignment.waitFor();
@@ -559,18 +543,15 @@ suite.define(() => {
           );
         expect(selectedOwners).toEqual(["Bob"]);
         const observedGatewayRequests = await observeGatewayRequests(page);
-        const connectRequests = observedGatewayRequests.filter(
-          (request) => request.method === "connect",
-        );
+        const connectRequests = requestsFor(observedGatewayRequests, "connect");
         expect(connectRequests).toHaveLength(4);
         expect(connectRequests.map((request) => request.documentOrdinal)).toEqual([1, 2, 3, 4]);
         expect(new Set(connectRequests.map((request) => request.requestId)).size).toBe(4);
-        const modelWakeCount = observedGatewayRequests.filter(
-          (request) => request.method === "chat.send",
-        ).length;
+        const modelWakeCount = requestsFor(observedGatewayRequests, "chat.send").length;
         expect(modelWakeCount).toBe(0);
-        const assignmentMutationCount = observedGatewayRequests.filter(
-          (request) => request.method === "sessions.assignOwner",
+        const assignmentMutationCount = requestsFor(
+          observedGatewayRequests,
+          "sessions.assignOwner",
         ).length;
         expect(assignmentMutationCount).toBe(0);
         observation.assignment = {
@@ -580,10 +561,7 @@ suite.define(() => {
           selectedOwners,
           visible: await selectedOwner.isVisible(),
         };
-        await writeFile(
-          path.join(RECOVERY_ARTIFACT_DIR, `03-${serviceWorker}-assignment-menu.png`),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [selectedOwner]),
-        );
+        await capture(page, `03-${serviceWorker}-assignment-menu`, selectedOwner);
         observation.scenarioCompleted = true;
       } finally {
         if (!page.isClosed()) {
@@ -595,26 +573,23 @@ suite.define(() => {
             observation.serviceWorkerState.final = finalServiceWorker;
           }
           observation.gatewayRequests = await observeGatewayRequests(page).catch(() => []);
-          const connectRequestCount = observation.gatewayRequests.filter(
-            (request) => request.method === "connect",
-          ).length;
-          const modelWakeCount = observation.gatewayRequests.filter(
-            (request) => request.method === "chat.send",
-          ).length;
-          observation.final = {
-            appShellCount: await page
-              .locator("openclaw-app-shell")
+          const connectRequestCount = requestsFor(observation.gatewayRequests, "connect").length;
+          const modelWakeCount = requestsFor(observation.gatewayRequests, "chat.send").length;
+          const safeCount = (selector: string) =>
+            page
+              .locator(selector)
               .count()
-              .catch(() => 0),
-            connectRequestCount,
-            loginGateCount: await page
-              .locator("openclaw-login-gate")
-              .count()
-              .catch(() => 0),
-            mainInert: await page
-              .locator("#control-ui-main")
+              .catch(() => 0);
+          const inert = (selector: string) =>
+            page
+              .locator(selector)
               .evaluate((element) => element.hasAttribute("inert"))
-              .catch(() => null),
+              .catch(() => null);
+          observation.final = {
+            appShellCount: await safeCount("openclaw-app-shell"),
+            connectRequestCount,
+            loginGateCount: await safeCount("openclaw-login-gate"),
+            mainInert: await inert("#control-ui-main"),
             modelWakeCount,
             recoveryActionCount: await page
               .getByRole("button", { name: /Server updated/u })
@@ -633,10 +608,7 @@ suite.define(() => {
               })
               .catch(() => null),
             routePath: new URL(page.url()).pathname,
-            routerOutletInert: await page
-              .locator("openclaw-router-outlet")
-              .evaluate((element) => element.hasAttribute("inert"))
-              .catch(() => null),
+            routerOutletInert: await inert("openclaw-router-outlet"),
             terminalInvocationCount: (await gateway.getRequests("terminal.open")).length,
           };
         }

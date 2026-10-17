@@ -1,5 +1,6 @@
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -18,57 +19,39 @@ const suite = createControlUiE2eSuite({
 });
 const credentialPath = ["plugins", "entries", "workboard", "config", "search", "apiKey"];
 const originalRef = { source: "file", provider: "team", id: "/search/apiKey" };
-const sourceConfig = {
-  plugins: {
-    entries: {
-      workboard: {
-        enabled: true,
-        config: {
-          search: {
-            apiKey: originalRef,
-            mode: "web",
-            otherSecret: REDACTED_SENTINEL,
-          },
-        },
-      },
-    },
-  },
-};
-const schema = {
-  type: "object",
-  properties: {
-    plugins: {
-      type: "object",
-      properties: {
-        entries: {
-          type: "object",
-          properties: {
-            workboard: {
-              type: "object",
-              properties: {
-                config: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    search: {
-                      type: "object",
-                      additionalProperties: false,
-                      properties: {
-                        apiKey: { type: ["string", "object"] },
-                        mode: { type: "string" },
-                        otherSecret: { type: "string" },
-                      },
-                    },
-                  },
-                },
+const searchConfig = { apiKey: originalRef, mode: "web", otherSecret: REDACTED_SENTINEL };
+function configWithSearch(search: Record<string, unknown>) {
+  return { plugins: { entries: { workboard: { enabled: true, config: { search } } } } };
+}
+const sourceConfig = configWithSearch(searchConfig);
+function objectSchema(properties: Record<string, unknown>, strict = false) {
+  return { type: "object", ...(strict ? { additionalProperties: false } : {}), properties };
+}
+const schema = objectSchema({
+  plugins: objectSchema({
+    entries: objectSchema({
+      workboard: objectSchema({
+        config: objectSchema(
+          {
+            search: objectSchema(
+              {
+                apiKey: { type: ["string", "object"] },
+                mode: { type: "string" },
+                otherSecret: { type: "string" },
               },
-            },
+              true,
+            ),
           },
-        },
-      },
-    },
-  },
-};
+          true,
+        ),
+      }),
+    }),
+  }),
+});
+
+function keyButton(page: Page, action: "Show" | "Hide") {
+  return page.getByRole("button", { name: `${action} API key: Search API key`, exact: true });
+}
 const prefix = "plugins.entries.workboard.config.search";
 const featureMethods = [
   "config.get",
@@ -165,10 +148,7 @@ suite.define(() => {
               .getByLabel("Search settings", { exact: true })
               .click();
             expect(await gateway.getRequests("config.set")).toHaveLength(0);
-            const reveal = page.getByRole("button", {
-              name: "Show API key: Search API key",
-              exact: true,
-            });
+            const reveal = keyButton(page, "Show");
             await expect
               .poll(async () => (await gateway.getRequests("plugins.credentials.inspect")).length)
               .toBe(1);
@@ -190,9 +170,7 @@ suite.define(() => {
                 baseHash: configMocks["config.get"].hash,
                 reveal: true,
               });
-              await page
-                .getByRole("button", { name: "Hide API key: Search API key", exact: true })
-                .click();
+              await keyButton(page, "Hide").click();
               expect(await input.inputValue()).toBe("");
               expect(await gateway.getRequests("config.set")).toHaveLength(0);
             } else {
@@ -200,31 +178,18 @@ suite.define(() => {
               expect(await input.getAttribute("placeholder")).toBe("demo-key");
             }
             await input.fill("synthetic-new-key");
-            await page
-              .getByRole("button", { name: "Show API key: Search API key", exact: true })
-              .click();
+            await keyButton(page, "Show").click();
             expect(await input.getAttribute("type")).toBe("text");
-            await page
-              .getByRole("button", { name: "Hide API key: Search API key", exact: true })
-              .click();
+            await keyButton(page, "Hide").click();
             await gateway.deferNext("config.set");
             await input.press("Enter");
             const request = await gateway.waitForRequest("config.set");
-            expect(JSON.parse(String(asRecord(request.params).raw))).toEqual({
-              plugins: {
-                entries: {
-                  workboard: {
-                    enabled: true,
-                    config: {
-                      search: {
-                        ...initial.plugins.entries.workboard.config.search,
-                        apiKey: "synthetic-new-key",
-                      },
-                    },
-                  },
-                },
-              },
-            });
+            expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
+              configWithSearch({
+                ...initial.plugins.entries.workboard.config.search,
+                apiKey: "synthetic-new-key",
+              }),
+            );
             expect(await input.isDisabled()).toBe(true);
             await gateway.setMethodResponse("plugins.credentials.inspect", {
               baseHash: "mock-config-hash-1",
@@ -248,11 +213,7 @@ suite.define(() => {
           expect(await other.getAttribute("type")).toBe("password");
           expect(await other.inputValue()).toBe("");
           expect(await page.locator('input[aria-label$="Search mode"]').inputValue()).toBe("web");
-          expect(
-            await page
-              .getByRole("button", { name: "Edit reference: Search API key", exact: true })
-              .count(),
-          ).toBe(1);
+          expect(await reference.count()).toBe(1);
           expect(await page.locator("body").textContent()).not.toContain(REDACTED_SENTINEL);
           if (readOnly) {
             expect(await reference.isDisabled()).toBe(true);
@@ -272,6 +233,8 @@ suite.define(() => {
             .getByRole("dialog", { name: "Secret reference: Search API key", exact: true })
             .waitFor();
           const dialog = page.locator("openclaw-modal-dialog");
+          const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+          const save = dialog.getByRole("button", { name: "Save", exact: true });
           expect(await dialog.getByLabel("Source", { exact: true }).inputValue()).toBe("file");
           expect(await dialog.getByLabel("Provider", { exact: true }).inputValue()).toBe("team");
           const identifier = dialog.getByLabel("Identifier", { exact: true });
@@ -283,39 +246,25 @@ suite.define(() => {
             });
           }
           await identifier.fill("/search/cancelled");
-          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+          await cancel.click();
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
           await reference.click();
           expect(await identifier.inputValue()).toBe("/search/apiKey");
           await identifier.fill("/search/updated");
           await gateway.deferNext("config.set");
-          await dialog.getByRole("button", { name: "Save", exact: true }).click();
+          await save.click();
           const request = await gateway.waitForRequest("config.set");
           expect(await dialog.isVisible()).toBe(true);
-          expect(
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).isDisabled(),
-          ).toBe(true);
+          expect(await cancel.isDisabled()).toBe(true);
           await page.keyboard.press("Escape");
           expect(await dialog.isVisible()).toBe(true);
           expect(
             await dialog.getByRole("button", { name: "Saving…", exact: true }).isDisabled(),
           ).toBe(true);
           const changedRef = { ...originalRef, id: "/search/updated" };
-          expect(JSON.parse(String(asRecord(request.params).raw))).toEqual({
-            plugins: {
-              entries: {
-                workboard: {
-                  enabled: true,
-                  config: {
-                    search: {
-                      ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey: changedRef,
-                    },
-                  },
-                },
-              },
-            },
-          });
+          expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
+            configWithSearch({ ...searchConfig, apiKey: changedRef }),
+          );
           await gateway.setMethodResponse("plugins.credentials.inspect", {
             baseHash: "mock-config-hash-1",
             credential: { kind: "reference", ref: changedRef, unresolved: false },
@@ -331,7 +280,7 @@ suite.define(() => {
           await identifier.fill("/search/failed");
           const writesBeforeFailure = (await gateway.getRequests("config.set")).length;
           await gateway.deferNext("config.set");
-          await dialog.getByRole("button", { name: "Save", exact: true }).click();
+          await save.click();
           const uncertainWrite = await gateway.waitForRequest("config.set", {
             after: writesBeforeFailure,
           });
@@ -343,25 +292,21 @@ suite.define(() => {
             .poll(() => dialog.getByRole("alert").textContent())
             .toContain("Fixture write rejected");
           expect(await identifier.inputValue()).toBe("/search/failed");
-          expect(
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).isEnabled(),
-          ).toBe(true);
+          expect(await cancel.isEnabled()).toBe(true);
           if (width === 1174) {
             // Arm the failure and click in one task so a poll cannot consume Cancel's deferral.
-            const readsBeforeCancel = await dialog
-              .getByRole("button", { name: "Cancel", exact: true })
-              .evaluate((button: HTMLButtonElement) => {
-                const mock = (
-                  window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-                ).openclawControlUiE2eGateway;
-                if (!mock) {
-                  throw new Error("Mock Gateway is not installed");
-                }
-                const reads = mock.findRequests("config.get").length;
-                mock.deferNext("config.get");
-                button.click();
-                return reads;
-              });
+            const readsBeforeCancel = await cancel.evaluate((button: HTMLButtonElement) => {
+              const mock = (
+                window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
+              ).openclawControlUiE2eGateway;
+              if (!mock) {
+                throw new Error("Mock Gateway is not installed");
+              }
+              const reads = mock.findRequests("config.get").length;
+              mock.deferNext("config.get");
+              button.click();
+              return reads;
+            });
             await gateway.waitForRequest("config.get", { after: readsBeforeCancel });
             await gateway.rejectDeferred("config.get", {
               code: "UNAVAILABLE",
@@ -372,7 +317,7 @@ suite.define(() => {
               .toContain("Fixture config read unavailable");
             expect(await dialog.isVisible()).toBe(true);
             expect(await identifier.inputValue()).toBe("/search/failed");
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+            await cancel.click();
             await expect
               .poll(() => dialog.getByRole("alert").textContent())
               .toContain("The last save could not be confirmed");
@@ -397,7 +342,7 @@ suite.define(() => {
               },
             });
           }
-          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+          await cancel.click();
           await dialog.waitFor({ state: "hidden" });
           const writesBeforeSibling = (await gateway.getRequests("config.set")).length;
           const mode = page.locator('input[aria-label$="Search mode"]');
@@ -406,23 +351,13 @@ suite.define(() => {
           const siblingWrite = await gateway.waitForRequest("config.set", {
             after: writesBeforeSibling,
           });
-          expect(JSON.parse(String(asRecord(siblingWrite.params).raw))).toEqual({
-            plugins: {
-              entries: {
-                workboard: {
-                  enabled: true,
-                  config: {
-                    search: {
-                      ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey:
-                        width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
-                      mode: "llm-context",
-                    },
-                  },
-                },
-              },
-            },
-          });
+          expect(JSON.parse(String(asRecord(siblingWrite.params).raw))).toEqual(
+            configWithSearch({
+              ...searchConfig,
+              apiKey: width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
+              mode: "llm-context",
+            }),
+          );
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           ).toBe(true);

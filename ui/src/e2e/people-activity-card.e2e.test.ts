@@ -2,11 +2,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   reconnectMockGateway,
+  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
@@ -34,6 +36,39 @@ const rawSession = "agent:main:raw-watch";
 const profileSession = "agent:main:profile-watch";
 const profile = { id, identity: { type: "profile" as const, id }, name: "Profile person" };
 const raw = { id, name: "Unqualified sender" };
+const focused = (target: Locator) =>
+  target.evaluate((element) => document.activeElement === element);
+const shift = (title: Locator) =>
+  title.evaluate((element) => element.style.getPropertyValue("--hover-marquee-shift"));
+const pollScrolling = (title: Locator) =>
+  expect.poll(() =>
+    title.evaluate((element) => element.classList.contains("hover-marquee--scrolling")),
+  );
+const onlinePerson = (page: Page, personId: string) =>
+  page.locator(`[data-online-user-id="${personId}"]`);
+const activityCard = (page: Page) => page.getByRole("dialog", { name: "Activity for Alice" });
+const pollCount = (target: Locator) => expect.poll(() => target.count());
+function sessionRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  extra: Partial<Omit<GatewaySessionRow, "key" | "kind" | "label" | "updatedAt">> = {},
+) {
+  return { key, kind: "direct" as const, label, updatedAt, ...extra };
+}
+
+async function updateRecent(gateway: MockGatewayControls, title: Locator, label: string) {
+  const reads = (await gateway.getRequests("sessions.list")).length;
+  await gateway.setSessionsListResponse(scenario(label).methodResponses["sessions.list"]);
+  await gateway.emitGatewayEvent("sessions.changed", {
+    reason: "update",
+    sessionKey: "agent:main:card-recent",
+  });
+  await expect
+    .poll(async () => (await gateway.getRequests("sessions.list")).length)
+    .toBeGreaterThan(reads);
+  await expect.poll(() => title.textContent()).toBe(label);
+}
 
 function scenario(recentSessionLabel = recentLabel) {
   const now = Date.now();
@@ -54,22 +89,14 @@ function scenario(recentSessionLabel = recentLabel) {
     ],
     methodResponses: {
       "sessions.list": chatSessionListResponse([
-        { key: "agent:main:main", kind: "direct", label: "", updatedAt: now - 90_000 },
-        { key: selected, kind: "direct", label: "Selected session", updatedAt: now },
-        {
-          key: watched,
-          kind: "direct",
-          label: "Release checklist",
-          updatedAt: now - 60_000,
+        sessionRow("agent:main:main", "", now - 90_000),
+        sessionRow(selected, "Selected session", now),
+        sessionRow(watched, "Release checklist", now - 60_000, {
           boardFace: "dashboard",
-        },
-        {
-          key: "agent:main:card-recent",
-          kind: "direct",
-          label: recentSessionLabel,
-          updatedAt: now - 120_000,
+        }),
+        sessionRow("agent:main:card-recent", recentSessionLabel, now - 120_000, {
           createdActor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
-        },
+        }),
       ]),
     },
   };
@@ -119,13 +146,13 @@ async function selectOnlineView(page: Page, touch = false) {
   }
 }
 
-async function capturePeopleCard(page: Page, filename: string) {
+async function capturePeopleCard(page: Page, filename: string, fullPage = true) {
   if (!captureUiProofEnabled) {
     return;
   }
   await page.screenshot({
     path: path.join(proofDirectory, filename),
-    fullPage: true,
+    fullPage,
     animations: "disabled",
   });
 }
@@ -168,23 +195,21 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
         await selectOnlineView(page);
-        const person = page.locator('[data-online-user-id="alice"]');
+        const person = onlinePerson(page, "alice");
         await person.hover();
-        const card = page.getByRole("dialog", { name: "Activity for Alice" });
+        const card = activityCard(page);
         await card.waitFor({ state: "visible" });
         await capturePeopleCard(page, "online-idle-desktop.png");
         expect(await card.locator(".person-activity-card__status").textContent()).toContain("Idle");
         expect(await card.textContent()).toContain("Online for");
         expect(await card.textContent()).toContain("Last interaction");
         expect(await person.getAttribute("data-presence-activity")).toBe("idle");
-        expect(
-          await page.locator('[data-online-user-id="bob"]').getAttribute("data-presence-activity"),
-        ).toBe("active");
-        expect(
-          await page
-            .locator('[data-online-user-id="charlie"]')
-            .getAttribute("data-presence-activity"),
-        ).toBe("unknown");
+        expect(await onlinePerson(page, "bob").getAttribute("data-presence-activity")).toBe(
+          "active",
+        );
+        expect(await onlinePerson(page, "charlie").getAttribute("data-presence-activity")).toBe(
+          "unknown",
+        );
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {
@@ -209,7 +234,7 @@ suite.define(() => {
           sessionKey: selected,
           methodResponses: {
             "sessions.list": chatSessionListResponse([
-              { key: selected, kind: "direct", label: "Synthetic audit session", updatedAt: 1 },
+              sessionRow(selected, "Synthetic audit session", 1),
             ]),
           },
         });
@@ -230,7 +255,7 @@ suite.define(() => {
             { user: { id: "example-person", name: "Example person" } },
           ],
         });
-        const owner = page.locator('[data-online-user-id="gateway-owner"]');
+        const owner = onlinePerson(page, "gateway-owner");
         await owner.hover();
         const card = page.locator(".person-activity-hovercard");
         await card.waitFor({ state: "visible" });
@@ -246,9 +271,9 @@ suite.define(() => {
         expect(await card.getByRole("link", { name: "View activity" }).getAttribute("href")).toBe(
           "/activity/gateway-owner",
         );
-        expect(
-          await page.locator('[data-online-user-id="example-person"]').textContent(),
-        ).toContain("Example person");
+        expect(await onlinePerson(page, "example-person").textContent()).toContain(
+          "Example person",
+        );
         expect(
           await page
             .locator('.chat-pane__presence [data-viewer-id="gateway-owner"]')
@@ -278,32 +303,28 @@ suite.define(() => {
               .click();
           }
           await selectOnlineView(page, touch);
-          const person = page.locator('[data-online-user-id="alice"]');
+          const person = onlinePerson(page, "alice");
           if (action === "Enter") {
             await page.keyboard.press("Tab");
             await person.focus();
-            await page
-              .getByRole("dialog", { name: "Activity for Alice" })
-              .waitFor({ state: "visible" });
+            await activityCard(page).waitFor({ state: "visible" });
             await person.press("Enter");
           } else if (touch) {
             if (action === "tap with loaded preview") {
               // Warm the real card before a fresh touch gesture, not during its click.
               await page.keyboard.press("Tab");
               await person.focus();
-              const card = page.getByRole("dialog", { name: "Activity for Alice" });
+              const card = activityCard(page);
               await card.waitFor({ state: "visible" });
               await page.keyboard.press("Shift+Tab");
-              await expect.poll(() => card.count()).toBe(0);
+              await pollCount(card).toBe(0);
             }
             await person.tap();
           } else {
             await person.click();
           }
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
-          await expect
-            .poll(() => page.getByRole("dialog", { name: "Activity for Alice" }).count())
-            .toBe(0);
+          await pollCount(activityCard(page)).toBe(0);
           await expect
             .poll(
               async () =>
@@ -334,9 +355,9 @@ suite.define(() => {
         await selectOnlineView(page);
         const row = page
           .locator(".sidebar-online__row")
-          .filter({ has: page.locator('[data-online-user-id="alice"]') });
+          .filter({ has: onlinePerson(page, "alice") });
         const person = row.getByRole("link", { name: "Activity for Alice" });
-        const card = page.getByRole("dialog", { name: "Activity for Alice" });
+        const card = activityCard(page);
         await person.waitFor({ state: "visible" });
         expect(await card.count()).toBe(0);
         expect(await row.locator("a, button").count()).toBe(2);
@@ -378,42 +399,16 @@ suite.define(() => {
           .getByRole("link");
         const recentTitle = recent.locator(".person-activity-card__session-name");
         await recent.hover();
-        const initialShift = await recentTitle.evaluate((element) =>
-          element.style.getPropertyValue("--hover-marquee-shift"),
-        );
+        const initialShift = await shift(recentTitle);
         expect(initialShift).not.toBe("");
-        const listRequests = (await gateway.getRequests("sessions.list")).length;
-        const updatedScenario = scenario(updatedRecentLabel);
-        await gateway.setSessionsListResponse(updatedScenario.methodResponses["sessions.list"]);
-        await gateway.emitGatewayEvent("sessions.changed", {
-          reason: "update",
-          sessionKey: "agent:main:card-recent",
-        });
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.list")).length)
-          .toBeGreaterThan(listRequests);
-        await expect.poll(() => recentTitle.textContent()).toBe(updatedRecentLabel);
-        await expect
-          .poll(() =>
-            recentTitle.evaluate((element) =>
-              element.style.getPropertyValue("--hover-marquee-shift"),
-            ),
-          )
-          .not.toBe(initialShift);
+        await updateRecent(gateway, recentTitle, updatedRecentLabel);
+        await expect.poll(() => shift(recentTitle)).not.toBe(initialShift);
         await page.mouse.move(cardBounds.x + 8, cardBounds.y + 20);
-        await expect
-          .poll(() =>
-            recentTitle.evaluate((element) =>
-              element.classList.contains("hover-marquee--scrolling"),
-            ),
-          )
-          .toBe(false);
+        await pollScrolling(recentTitle).toBe(false);
         await person.focus();
         await page.keyboard.press("Tab");
         const session = card.getByRole("link", { name: "Release checklist" });
-        await expect
-          .poll(() => session.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await expect.poll(() => focused(session)).toBe(true);
         expect(await session.getAttribute("href")).toContain("/dashboard/");
         const current = scenario().presenceUsers[0]!;
         await gateway.emitGatewayEvent("presence", {
@@ -432,66 +427,32 @@ suite.define(() => {
             page.locator(".sidebar-online__person").first().getAttribute("data-online-user-id"),
           )
           .toBe("bob");
-        expect(await session.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await focused(session)).toBe(true);
         await page.keyboard.press("Tab");
         await page.keyboard.press("Tab");
-        await expect
-          .poll(() => recent.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        await expect
-          .poll(() =>
-            recentTitle.evaluate((element) =>
-              element.classList.contains("hover-marquee--scrolling"),
-            ),
-          )
-          .toBe(true);
-        const focusedShift = await recentTitle.evaluate((element) =>
-          element.style.getPropertyValue("--hover-marquee-shift"),
-        );
-        const focusedListRequests = (await gateway.getRequests("sessions.list")).length;
-        const focusUpdatedScenario = scenario(focusUpdatedRecentLabel);
-        await gateway.setSessionsListResponse(
-          focusUpdatedScenario.methodResponses["sessions.list"],
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          reason: "update",
-          sessionKey: "agent:main:card-recent",
-        });
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.list")).length)
-          .toBeGreaterThan(focusedListRequests);
-        await expect.poll(() => recentTitle.textContent()).toBe(focusUpdatedRecentLabel);
-        await expect
-          .poll(() =>
-            recentTitle.evaluate((element) =>
-              element.style.getPropertyValue("--hover-marquee-shift"),
-            ),
-          )
-          .not.toBe(focusedShift);
-        await expect
-          .poll(() =>
-            recentTitle.evaluate((element) =>
-              element.classList.contains("hover-marquee--scrolling"),
-            ),
-          )
-          .toBe(true);
+        await expect.poll(() => focused(recent)).toBe(true);
+        await pollScrolling(recentTitle).toBe(true);
+        const focusedShift = await shift(recentTitle);
+        await updateRecent(gateway, recentTitle, focusUpdatedRecentLabel);
+        await expect.poll(() => shift(recentTitle)).not.toBe(focusedShift);
+        await pollScrolling(recentTitle).toBe(true);
         await page.keyboard.press("Tab");
         await page.emulateMedia({ reducedMotion: "reduce" });
         await expectMultilineTitle(recentTitle);
         await page.emulateMedia({ reducedMotion: "no-preference" });
         await page.keyboard.press("Escape");
-        await expect.poll(() => card.count()).toBe(0);
-        expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
+        await pollCount(card).toBe(0);
+        expect(await focused(person)).toBe(true);
         await page.mouse.click(1100, 200);
         await person.hover();
         await card.waitFor({ state: "visible" });
         await page.mouse.click(1100, 200);
-        await expect.poll(() => card.count()).toBe(0);
+        await pollCount(card).toBe(0);
         await person.hover();
         await card.waitFor({ state: "visible" });
         await card.getByRole("link", { name: "View activity", exact: true }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
-        await expect.poll(() => card.count()).toBe(0);
+        await pollCount(card).toBe(0);
       },
     );
   });
@@ -520,16 +481,16 @@ suite.define(() => {
         const person = page.getByRole("link", { name: "Activity for Alice" });
         await page.keyboard.press("Tab");
         await person.focus();
-        const card = page.getByRole("dialog", { name: "Activity for Alice" });
+        const card = activityCard(page);
         await card.waitFor({ state: "visible" });
         await page.keyboard.press("Tab");
         await expect
           .poll(() => card.evaluate((element) => element.contains(document.activeElement)))
           .toBe(true);
         await page.keyboard.press("Escape");
-        await expect.poll(() => card.count()).toBe(0);
+        await pollCount(card).toBe(0);
         expect(await person.isVisible()).toBe(true);
-        expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await focused(person)).toBe(true);
         await page.keyboard.press("Shift+Tab");
         await person.focus();
         await card.waitFor({ state: "visible" });
@@ -556,7 +517,7 @@ suite.define(() => {
         await capturePeopleCard(page, "touch-dark-open.png");
         await session.tap();
         await expect.poll(() => page.url()).toContain("/dashboard/");
-        await expect.poll(() => card.count()).toBe(0);
+        await pollCount(card).toBe(0);
       },
     );
   });
@@ -569,24 +530,21 @@ suite.define(() => {
         serviceWorkers: "block",
       },
       async ({ page }) => {
-        const actor = { type: "human", id, identity: profile.identity, label: profile.name };
+        const actor = {
+          type: "human" as const,
+          id,
+          identity: profile.identity,
+          label: profile.name,
+        };
         const sessions = chatSessionListResponse([
-          {
-            key: selected,
-            kind: "direct",
-            label: "Namespace isolation",
-            updatedAt: 3,
+          sessionRow(selected, "Namespace isolation", 3, {
             owner: { actor },
             participantCount: 1,
-          },
-          {
-            key: profileSession,
-            kind: "direct",
-            label: "Profile watch",
-            updatedAt: 2,
+          }),
+          sessionRow(profileSession, "Profile watch", 2, {
             createdActor: actor,
-          },
-          { key: rawSession, kind: "direct", label: "Raw watch", updatedAt: 1 },
+          }),
+          sessionRow(rawSession, "Raw watch", 1),
         ]);
         const gateway = await installMockGateway(page, {
           sessionKey: selected,
@@ -604,12 +562,7 @@ suite.define(() => {
           exact: true,
         });
         await profileButton.waitFor({ state: "visible" });
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            path: path.join(proofDirectory, "initial.png"),
-            animations: "disabled",
-          });
-        }
+        await capturePeopleCard(page, "initial.png", false);
         expect(await page.locator(".sidebar-online__person").count()).toBe(3);
         const rawButton = page.getByRole("button", {
           name: "Details for Unqualified sender",
@@ -628,12 +581,7 @@ suite.define(() => {
         ).toBe(0);
         const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
         await expect.poll(() => headerFaces.getAttribute("aria-label")).toBe(raw.name);
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            path: path.join(proofDirectory, "raw-card.png"),
-            animations: "disabled",
-          });
-        }
+        await capturePeopleCard(page, "raw-card.png", false);
         const rawLink = rawCard.getByRole("link", { name: /^Raw watch(?:\s|$)/ });
         await rawLink.focus();
         await gateway.emitGatewayEvent("presence", {
@@ -650,14 +598,12 @@ suite.define(() => {
             },
           ],
         });
-        await expect
-          .poll(() => rawLink.evaluate((element) => document.activeElement === element))
-          .toBe(true);
+        await expect.poll(() => focused(rawLink)).toBe(true);
         await gateway.emitGatewayEvent("presence", {
           presence: [{ user: raw, watchedSessions: [rawSession, selected] }],
         });
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(1);
-        expect(await rawLink.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await focused(rawLink)).toBe(true);
         expect(await rawCard.count()).toBe(1);
         await gateway.emitGatewayEvent("presence", {
           presence: [
@@ -675,12 +621,7 @@ suite.define(() => {
         expect(await profileCard.getByRole("link", { name: /^Raw watch(?:\s|$)/ }).count()).toBe(0);
         const activity = profileCard.getByRole("link", { name: "View activity", exact: true });
         expect(await activity.getAttribute("href")).toBe(`/activity/${id}`);
-        if (captureUiProofEnabled) {
-          await page.screenshot({
-            path: path.join(proofDirectory, "profile-card.png"),
-            animations: "disabled",
-          });
-        }
+        await capturePeopleCard(page, "profile-card.png", false);
         expect((await gateway.getRequests("connect")).length).toBeGreaterThan(0);
         expect((await gateway.getRequests("sessions.list")).length).toBeGreaterThan(0);
       },
@@ -704,13 +645,9 @@ suite.define(() => {
             methodResponses: {
               "session.typing": { ok: true, broadcast: true },
               "sessions.list": chatSessionListResponse([
-                {
-                  key: selected,
-                  kind: "direct",
-                  label: "Namespace isolation",
-                  updatedAt: 1,
+                sessionRow(selected, "Namespace isolation", 1, {
                   sessionId: "namespace-session",
-                },
+                }),
               ]),
             },
           });
