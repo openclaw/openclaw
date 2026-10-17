@@ -6,8 +6,8 @@ import type {
   SessionMenuAction,
   SessionMenuActionKind,
   SessionMenuWork,
-} from "../components/session-menu.ts";
-import "../components/session-menu.ts";
+} from "../components/session-menu-solid.tsx";
+import "../components/session-menu-solid.tsx";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { flush } from "./solid-settle.ts";
