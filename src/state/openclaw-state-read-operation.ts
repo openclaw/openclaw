@@ -187,12 +187,14 @@ export function startOpenClawStateReadOperation(
         : read.value.type !== "admit" && read.value.sourceAdmitted;
     if (admitted === true) {
       receipt.phase = "read";
-      borrowed?.observe();
     } else if (admitted === false && receipt.phase !== "read") {
       receipt.phase = "before-read";
     }
     if ("error" in read) {
       throw read.error;
+    }
+    if (admitted === true) {
+      borrowed?.observe();
     }
     return read.value;
   }

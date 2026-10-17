@@ -232,6 +232,31 @@ it("retains the borrowed source through pending preparation and failed published
   expect(release).toHaveBeenCalledOnce();
 });
 
+it.each(["failure", "success"] as const)(
+  "preserves read errors and checks successful reads before returning data (%s)",
+  async (outcome) => {
+    const options = source();
+    const readFailure = new Error("worker query failed");
+    const observationFailure = new Error("native read owner retired");
+    const release = vi.fn();
+    mock.independent.mockReturnValue({
+      database: { db: {} },
+      assertCurrent() {},
+      observe() {
+        throw observationFailure;
+      },
+      release,
+    });
+    if (outcome === "failure") {
+      mock.read.mockResolvedValue({ error: readFailure, sourceAdmitted: true });
+    }
+    await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).rejects.toBe(
+      outcome === "failure" ? readFailure : observationFailure,
+    );
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
+
 it("retains ordered cleanup for canonical retry after a read failure", async () => {
   const options = source();
   const readFailure = new Error("read failed");
