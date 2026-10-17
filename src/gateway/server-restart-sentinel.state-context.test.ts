@@ -11,7 +11,11 @@ import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
 import { writeRestartSentinelRowSync } from "../infra/restart-sentinel-store.js";
 import * as restartSentinel from "../infra/restart-sentinel.js";
-import { readRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
+import {
+  readRestartSentinel,
+  writeRestartSentinel,
+  type RestartSentinelPayload,
+} from "../infra/restart-sentinel.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import {
   createUpdateRun,
@@ -130,6 +134,27 @@ const realLoadSessionEntry: typeof import("./session-entry-load.test-support.js"
 const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
 const gatewayLocks: Array<{ release: () => Promise<void> }> = [];
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const ownerConfig = { commands: { ownerAllowFrom: ["matrix:!operator:example"] } };
+const sessionKey = "agent:main:main";
+const deliveryContext = { channel: "matrix", to: "!operator:example" };
+const restartPayload = (
+  overrides: Partial<RestartSentinelPayload> = {},
+): RestartSentinelPayload => ({
+  kind: "restart",
+  status: "ok",
+  ts: 123,
+  sessionKey,
+  deliveryContext,
+  ...overrides,
+});
+function wake(overrides: Partial<Parameters<typeof scheduleRestartSentinelWake>[0]> = {}) {
+  return scheduleRestartSentinelWake({
+    scheduler,
+    signal: scheduler.signal,
+    deps: {},
+    ...overrides,
+  });
+}
 let envSnapshot: ReturnType<typeof captureEnv>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -164,10 +189,10 @@ beforeEach(() => {
   ]);
   setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
   vi.clearAllMocks();
-  setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: ["matrix:!operator:example"] } });
+  setRuntimeConfigSnapshot(ownerConfig);
   configureRestartSessionEventMocks(mocks, "synthetic-session");
   mocks.loadSessionEntryAsync.mockResolvedValue({
-    cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
+    cfg: ownerConfig,
     agentId: "main",
     entry: { sessionId: "synthetic-session", updatedAt: 1 },
     store: {},
@@ -314,75 +339,46 @@ it.each(["queued", "running", "admission"] as const)(
   },
 );
 
-it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
-  "refuses retired %s without consuming canonical restart state",
-  async (filename) => {
+it.each([
+  { filename: "restart-sentinel.json", startup: false },
+  { filename: "restart-sentinel.json.doctor-importing", startup: false },
+  { filename: "restart-sentinel.json", startup: true },
+  { filename: "restart-sentinel.json.doctor-importing", startup: true },
+])(
+  "refuses retired $filename without consuming canonical state (startup=$startup)",
+  async ({ filename, startup }) => {
     const stateDir = tempDirs.make("openclaw-retired-restart-sentinel-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    const lock = await acquireGatewayLock({ env, allowInTests: true });
-    if (!lock) {
-      throw new Error("Expected Gateway lifecycle ownership");
+    let retained: Awaited<ReturnType<typeof readRestartSentinel>> = null;
+    if (!startup) {
+      const lock = await acquireGatewayLock({ env, allowInTests: true });
+      if (!lock) {
+        throw new Error("Expected Gateway lifecycle ownership");
+      }
+      gatewayLocks.push(lock);
+      retained = await writeRestartSentinel(
+        restartPayload({ message: "Retained canonical notice" }),
+        env,
+      );
     }
-    gatewayLocks.push(lock);
-    const retained = await writeRestartSentinel(
-      {
-        kind: "restart",
-        status: "ok",
-        ts: 123,
-        sessionKey: "agent:main:main",
-        deliveryContext: { channel: "matrix", to: "!operator:example" },
-        message: "Retained canonical notice",
-      },
-      env,
-    );
     const sourcePath = path.join(stateDir, filename);
     const source = JSON.stringify({
       version: 1,
       payload: { kind: "update", status: "ok", ts: 124, stats: { mode: "npm" } },
     });
     await fs.writeFile(sourcePath, source);
-
     await expect(
-      scheduleRestartSentinelWake({
-        scheduler,
-        signal: scheduler.signal,
-        deps: {},
-        context: captureDeliveryQueueStateContext(),
-        shouldRun: () => true,
-      }),
+      startup
+        ? startRegisteredSentinel({
+            cfg: {},
+            defaultWorkspaceDir: stateDir,
+            startChannels: async () => {},
+          })
+        : wake({ context: captureDeliveryQueueStateContext(), shouldRun: () => true }),
     ).rejects.toThrow('Run "openclaw doctor --fix" to migrate or archive them, then retry.');
-
     expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
     expect(await readRestartSentinel(env)).toEqual(retained);
-    expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
-    expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
-  "refuses retired %s at registered startup without canonical restart state",
-  async (filename) => {
-    const stateDir = tempDirs.make("openclaw-retired-restart-startup-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    const sourcePath = path.join(stateDir, filename);
-    const source = JSON.stringify({
-      version: 1,
-      payload: { kind: "update", status: "ok", ts: 124, stats: { mode: "npm" } },
-    });
-    await fs.writeFile(sourcePath, source);
-
-    await expect(
-      startRegisteredSentinel({
-        cfg: {},
-        defaultWorkspaceDir: stateDir,
-        startChannels: async () => {},
-      }),
-    ).rejects.toThrow('Run "openclaw doctor --fix" to migrate or archive them, then retry.');
-
-    expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
-    expect(await readRestartSentinel(env)).toBeNull();
     expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
     expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
   },
@@ -397,13 +393,7 @@ it.each([false, true])(
     const unrelatedEnv = { OPENCLAW_STATE_DIR: unrelatedRoot };
     setTestEnvValue("OPENCLAW_STATE_DIR", originalRoot);
     const context = captureDeliveryQueueStateContext();
-    const payload = {
-      kind: "restart" as const,
-      status: "ok" as const,
-      ts: 123,
-      sessionKey: "agent:main:main",
-      deliveryContext: { channel: "matrix", to: "!operator:example" },
-    };
+    const payload = restartPayload();
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const original = runOpenClawStateWriteTransaction(
       ({ db }) => writeRestartSentinelRowSync(db, payload),
@@ -427,7 +417,7 @@ it.each([false, true])(
       return undefined;
     });
 
-    await scheduleRestartSentinelWake({ scheduler, signal: scheduler.signal, deps: {} });
+    await wake();
 
     expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
     expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
@@ -450,7 +440,6 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
     const unrelatedEnv = { OPENCLAW_STATE_DIR: unrelatedRoot };
     setTestEnvValue("OPENCLAW_STATE_DIR", originalRoot);
     const context = captureDeliveryQueueStateContext();
-    const sessionKey = "agent:main:main";
     const run = createUpdateRun({ trigger: "cli", origin: { sessionKey } }, { env: originalEnv });
     const payload = {
       kind: "update" as const,
@@ -503,13 +492,7 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
       shouldRun = replacement !== "stopped";
       return pending;
     });
-    await scheduleRestartSentinelWake({
-      scheduler,
-      signal: scheduler.signal,
-      deps: {},
-      context,
-      shouldRun: () => shouldRun,
-    });
+    await wake({ context, shouldRun: () => shouldRun });
 
     if (replacement === "stopped") {
       expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
@@ -538,7 +521,7 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
           }),
         }),
       );
-      await scheduleRestartSentinelWake({ scheduler, signal: scheduler.signal, deps: {}, context });
+      await wake({ context });
       expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledOnce();
     }
   },
@@ -553,10 +536,9 @@ it.each(["verifying", "terminal-before-marker", "replaced-handoff", "replaced-ki
     const unrelatedEnv = { OPENCLAW_STATE_DIR: unrelatedRoot };
     setTestEnvValue("OPENCLAW_STATE_DIR", originalRoot);
     const context = captureDeliveryQueueStateContext();
-    const cfg = { commands: { ownerAllowFrom: ["matrix:!operator:example"] } };
+    const cfg = ownerConfig;
     setRuntimeConfigSnapshot(cfg);
     mocks.loadSessionEntryAsync.mockImplementation(realLoadSessionEntry);
-    const sessionKey = "agent:main:main";
     for (const [env, sessionId, to] of [
       [originalEnv, "original-session", "!operator:example"],
       [unrelatedEnv, "unrelated-session", "!unrelated:example"],
@@ -679,13 +661,7 @@ it("leaves durable notices queued when the Gateway stops during sentinel consump
   const stateDir = tempDirs.make("openclaw-restart-consume-stop-");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   const context = captureDeliveryQueueStateContext();
-  const sentinel = await writeRestartSentinel({
-    kind: "restart",
-    status: "ok",
-    ts: 123,
-    sessionKey: "agent:main:main",
-    deliveryContext: { channel: "matrix", to: "!operator:example" },
-  });
+  const sentinel = await writeRestartSentinel(restartPayload());
   const controller = new AbortController();
   const clear = restartSentinel.clearRestartSentinelIfRevision;
   vi.spyOn(restartSentinel, "clearRestartSentinelIfRevision").mockImplementationOnce(
@@ -695,7 +671,7 @@ it("leaves durable notices queued when the Gateway stops during sentinel consump
       return consumed;
     },
   );
-  await scheduleRestartSentinelWake({ scheduler, signal: controller.signal, deps: {}, context });
+  await wake({ context, signal: controller.signal });
   expect(await readRestartSentinel()).toBeNull();
   expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
   expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
