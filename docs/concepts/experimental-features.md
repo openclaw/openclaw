@@ -276,6 +276,9 @@ Behavior and limits:
 
 - Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
   runs are not.
+- A due review waits until every running tool call has its result, so the fork
+  never sees a missing or synthetic tool outcome. A stalled call delays the
+  review rather than forcing it.
 - Each conversation has at most one review in flight. The run ending, a new user
   message, session reset, plugin disable, or service stop cancels it.
 - Reviews use the session's model, context and credentials. The fork cannot run

@@ -29,7 +29,8 @@ run already ended, the correction is dropped. Reviews run when a trigger is due:
 - `reviewInstructions`: optional guidance that replaces the built-in definition
   of "off course". Changes apply to the next review.
 
-Only user-triggered runs are reviewed. Each conversation has at most one review
+A due review waits until every running tool call has its result, so the fork never
+sees a missing or synthetic tool outcome. Only user-triggered runs are reviewed. Each conversation has at most one review
 in flight; the run ending or a new user message cancels it. Gateway info logs
 record review token usage and whether a correction was steered.
 

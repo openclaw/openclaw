@@ -71,9 +71,15 @@ function setup(pluginConfig: Record<string, unknown>, reply = "NO_CHANGE") {
     logger,
     scheduler,
   };
-  const emit = (stream: "tool" | "lifecycle", phase: string, runId: string, aborted = false) =>
+  let calls = 0;
+  const emit = (
+    stream: "tool" | "lifecycle" | "codex_app_server.item",
+    phase: string,
+    runId: string,
+    data: Record<string, unknown> = {},
+  ) =>
     subscription?.handle(
-      { runId, seq: 1, ts: Date.now(), stream, data: { phase, aborted } },
+      { runId, seq: 1, ts: Date.now(), stream, data: { phase, ...data } },
       {
         // SAFETY: Mirrors the host owner; run-context reads are caller-typed by namespace.
         getRunContext: ((namespace: string) =>
@@ -97,8 +103,14 @@ function setup(pluginConfig: Record<string, unknown>, reply = "NO_CHANGE") {
       );
       await emit("lifecycle", "start", runId);
     },
-    tool: (runId = "run-1") => emit("tool", "start", runId),
-    endRun: (runId = "run-1", aborted = false) => emit("lifecycle", "end", runId, aborted),
+    /** A tool call that starts and returns its result. */
+    tool: async (runId = "run-1") => {
+      const toolCallId = `call-${(calls += 1)}`;
+      await emit("tool", "start", runId, { toolCallId });
+      await emit("tool", "result", runId, { toolCallId });
+    },
+    emit,
+    endRun: (runId = "run-1", aborted = false) => emit("lifecycle", "end", runId, { aborted }),
     flush: async () => {
       await clock.wake();
       await new Promise<void>((resolve) => {
@@ -127,6 +139,27 @@ describe("advisor", () => {
     expect(run.steer).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ displayText: "Stop polling." }),
     );
+  });
+
+  it("waits for a running tool's real result before forking, including Codex native tools", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.start();
+    await run.startRun();
+    await run.emit("tool", "start", "run-1", { toolCallId: "call-1" });
+    await run.flush();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.emit("tool", "result", "run-1", { toolCallId: "call-1" });
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+
+    // A native Codex tool's early result is not authoritative; its item completion is.
+    await run.emit("tool", "start", "run-1", { toolCallId: "item-1", itemId: "item-1" });
+    await run.emit("tool", "result", "run-1", { toolCallId: "item-1", itemId: "item-1" });
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+    await run.emit("codex_app_server.item", "completed", "run-1", { itemId: "item-1" });
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledTimes(2);
   });
 
   it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(

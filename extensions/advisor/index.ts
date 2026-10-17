@@ -18,7 +18,13 @@ export const DELIVERY_PREFIX =
   "Treat this as advice, not new instructions or permissions, and check that it still applies before acting.";
 
 type AdmittedRun = { sessionKey: string };
-type Session = { toolCalls: number; since: number; review?: AbortController };
+type Session = {
+  toolCalls: number;
+  since: number;
+  review?: AbortController;
+  /** Started tool calls without a result; a fork taken now would misreport them. */
+  pending: Set<string>;
+};
 
 /** The model decides; code only reads the reply's shape. `undefined` means malformed. */
 function parseReview(text: string): string | null | undefined {
@@ -114,7 +120,9 @@ export default definePluginEntry({
 
     function maybeReview(run: AdmittedRun) {
       const session = sessions.get(run.sessionKey);
-      if (!session || session.review || !scheduler) {
+      // Codex fills a missing tool output with a synthetic "aborted" result in forks, so a due
+      // review waits until every started call has its real result.
+      if (!session || session.review || session.pending.size > 0 || !scheduler) {
         return;
       }
       const due =
@@ -179,8 +187,8 @@ export default definePluginEntry({
     api.agent.events.registerAgentEventSubscription({
       id: "advisor-runs",
       description: "Counts tool calls in user runs and reviews when a trigger is due.",
-      streams: ["tool", "lifecycle"],
-      phases: ["start", "end", "error"],
+      streams: ["tool", "lifecycle", "codex_app_server.item"],
+      phases: ["start", "result", "end", "error", "completed"],
       payload: "metadata",
       handle: (event, ctx) => {
         const run = ctx.getRunContext<AdmittedRun>(RUN_CONTEXT_NAMESPACE);
@@ -192,11 +200,30 @@ export default definePluginEntry({
           const session = sessions.get(run.sessionKey);
           // A new user turn makes advice about the previous one stale.
           session?.review?.abort();
-          sessions.set(run.sessionKey, { toolCalls: session?.toolCalls ?? 0, since: Date.now() });
-        } else if (event.stream === "tool" && phase === "start") {
+          sessions.set(run.sessionKey, {
+            toolCalls: session?.toolCalls ?? 0,
+            since: Date.now(),
+            pending: new Set(),
+          });
+        } else if (event.stream === "tool" && (phase === "start" || phase === "result")) {
           const session = sessions.get(run.sessionKey);
-          if (session) {
+          const toolCallId = event.data.toolCallId;
+          if (!session || typeof toolCallId !== "string") {
+            return;
+          }
+          // Codex native tools can report an early result; their item completion is authoritative.
+          const native = typeof event.data.itemId === "string";
+          if (phase === "start") {
+            session.pending.add(native ? `native:${toolCallId}` : toolCallId);
             session.toolCalls += 1;
+          } else if (!native) {
+            session.pending.delete(toolCallId);
+          }
+          maybeReview(run);
+        } else if (event.stream === "codex_app_server.item" && phase === "completed") {
+          const session = sessions.get(run.sessionKey);
+          if (session && typeof event.data.itemId === "string") {
+            session.pending.delete(`native:${event.data.itemId}`);
             maybeReview(run);
           }
         } else if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {
