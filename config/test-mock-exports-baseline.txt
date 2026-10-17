@@ -4201,8 +4201,6 @@
 ["src/cli/plugins-install-preflight-config.test.ts","../plugins/marketplace.js","cfad477ac3067c88a025e2a63c108ec1c3f2857d19b82b60708fe39f687f86fa",1]
 ["src/cli/plugins-install-preflight.test.ts","../plugins/plugin-lifecycle-lease.js","d0b70b5e0abd9787cd518242842a3eec5c0ff821ee5e9787e04bf8ed6dcfbc49",1]
 ["src/cli/plugins-lifecycle-client.test.ts","../infra/gateway-lock.js","ad40c0e4a768066f959ae65e5abf45bb02c76615a869cae69c83602e9b5373d8",1]
-["src/cli/plugins-list-command.test.ts","../../packages/terminal-core/src/table.js","4805e363c7d16d27b4aa14e22cd2066f08fd6d45b7de8b72b703839681d57a56",1]
-["src/cli/plugins-list-command.test.ts","../../packages/terminal-core/src/theme.js","aad1ca4bda171d0e0bee842385410353d67c1dccb7e2b49e135fffc15715d84c",1]
 ["src/cli/plugins-list-command.test.ts","../plugins/source-display.js","052a0e2f890a358787a2b0b9aa4c59b3845dec7e7f9a2f87bbf519d4f768c4cf",1]
 ["src/cli/plugins-list-command.test.ts","../plugins/status-snapshot.js","9e447a1d83a0ba49aa4773b2378cc42ed46f1c21bfe3b893be348a1dfca5088a",1]
 ["src/cli/plugins-list-command.test.ts","../plugins/status.js","cf613a29b31964072a5358d7452a2fab49b7c440fca4d0a0359ba7e559f310fc",1]
