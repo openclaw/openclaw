@@ -88,29 +88,21 @@ struct ChatProTab: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let headerSidebarAction {
-                    OpenClawSidebarToolbarItem(
-                        action: headerSidebarAction,
-                        placement: .topBarLeading)
-                }
-                if #available(iOS 26.0, *) {
                     ToolbarItem(placement: .topBarLeading) {
-                        self.headerAgentIdentity
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .topBarLeading) {
-                        self.headerAgentIdentity
+                        Button(action: headerSidebarAction.action) {
+                            Image(systemName: headerSidebarAction.systemName)
+                                .font(OpenClawType.subheadSemiBold)
+                                .foregroundStyle(OpenClawBrand.accent)
+                        }
+                        .accessibilityLabel(headerSidebarAction.accessibilityLabel.text)
+                        .accessibilityIdentifier(headerSidebarAction.accessibilityIdentifier ?? "RootTabs.Sidebar.Show")
                     }
                 }
-                if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.chatActionsMenu
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.chatActionsMenu
-                    }
+                ToolbarItem(placement: .principal) {
+                    self.headerAgentIdentity
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    self.chatActionsMenu
                 }
             }
             .sheet(item: self.$transcriptShareItem) { item in
@@ -432,12 +424,9 @@ struct ChatProTab: View {
         Button {
             self.showsChatActions.toggle()
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
                 .foregroundStyle(OpenClawBrand.accent)
         }
-        .frame(width: 44, height: 44)
-        .contentShape(Rectangle())
-        .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
         .popover(isPresented: self.$showsChatActions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
             self.chatActionsPopover

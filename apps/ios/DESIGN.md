@@ -47,7 +47,9 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 
 ## Liquid Glass rules
 
-Use `openClawGlassButton` for primary actions and navigation-adjacent controls. Use the prominent style for one primary action per region. Wrap nearby controls in `OpenClawGlassControlGroup`. Shared sidebar reveal controls and Chat actions are the background-free header exceptions; they retain 44-point hit targets without adding separate circles around their glyphs.
+Use `openClawGlassButton` for primary actions and navigation-adjacent controls. Use the prominent style for one primary action per region. Wrap nearby controls in `OpenClawGlassControlGroup`. Shared sidebar reveal controls are background-free header exceptions; they retain 44-point hit targets without adding separate circles around their glyphs. Chat uses the system toolbar backgrounds for its sidebar and actions controls, with assistant identity centered between them, to separate navigation from scrolling conversation content.
+
+On iOS 26 and later, standard Chat with the clean composer uses a continuous transcript beneath the native toolbar and a bottom `safeAreaBar`. Keep horizontal message gutters inside the scroll content so the existing soft scroll-edge effect spans the viewport. The system bar supplies composer clearance; do not add a second overlay or a separate keyboard inset owner. Older iOS, onboarding, composer-free views, and macOS retain the stacked layout.
 
 Do not place Liquid Glass behind reading content, forms, metrics, or every card in a scroll view. Excess glass weakens hierarchy, increases rendering cost, and competes with the sidebar and navigation chrome.
 
