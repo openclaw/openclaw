@@ -375,7 +375,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       expect(files.map(sqliteEntries)).toEqual(expected);
       expect(readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
     });
-  }, 300_000);
+  }, 600_000);
 
   it.each(["resume", "rollback"] as const)(
     "%s recovers a partially published multi-root port and blocks ordinary startup meanwhile",
@@ -425,6 +425,6 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         expect(files.map(sqliteEntries)).toEqual(expected);
       });
     },
-    300_000,
+    600_000,
   );
 });

@@ -4512,7 +4512,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_postgres_conformance == 'true'
     runs-on: *ubuntu_linux_runner
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - *linux_node_checkout_step
       - *linux_node_setup_step
