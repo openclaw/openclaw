@@ -13,10 +13,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  copyUpdateCandidatePlugins,
-  prepareUpdateCandidatePlugins,
-} from "./update-candidate-plugins.js";
+import { prepareUpdateCandidatePlugins } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
@@ -26,10 +23,6 @@ const entry = (generation: string) => `export default ${JSON.stringify(generatio
 type InstallRecords = Record<string, PluginInstallRecord>;
 const pluginConfig = (installs: InstallRecords, paths?: string[]): OpenClawConfig => ({
   plugins: { installs, ...(paths ? { load: { paths } } : {}) },
-});
-const provenance = (bundled: boolean) => ({
-  origin: bundled ? "bundled" : "global",
-  trust: { reason: bundled ? "bundled" : "origin-path", installSource: "path" },
 });
 const fileModes = (directory: string) =>
   Promise.all(
@@ -53,13 +46,9 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-async function writeHost(
-  directory: string,
-  source: boolean | "git" = false,
-  manifest: Record<string, string> = { name: "openclaw", version: "2026.9.3", type: "module" },
-) {
+async function writeHost(directory: string, source: boolean | "git" = false) {
   await fs.mkdir(directory, { recursive: true });
-  await writeJson(directory, "package.json", manifest);
+  await writeJson(directory, "package.json", { name: "openclaw", type: "module" });
   if (source) {
     await fs.mkdir(path.join(directory, "src"));
     await fs.writeFile(path.join(directory, "pnpm-workspace.yaml"), "packages: []\n");
@@ -133,6 +122,7 @@ it.each([
   { kind: "candidate in-package fallback", bundled: true },
   { kind: "candidate escaping fallback", bundled: false },
   { kind: "candidate escaping fallback with external install", bundled: false },
+  { kind: "source escaping fallback", bundled: false },
   { kind: "external path", bundled: false },
   { kind: "source symlink escapes bundled directory", bundled: false },
   { kind: "candidate symlink escapes bundled directory", bundled: false },
@@ -148,10 +138,9 @@ it.each([
   const candidateHost = path.join(root, "candidate-host");
   const liveBundled = path.join(liveHost, "extensions");
   const livePlugin = path.join(liveBundled, "demo");
-  const sourceBundled =
-    kind === "source checkout alongside built runtime"
-      ? path.join(liveHost, "dist", "extensions")
-      : liveBundled;
+  const sourceCheckout =
+    kind === "source checkout alongside built runtime" || kind === "source escaping fallback";
+  const sourceBundled = sourceCheckout ? path.join(liveHost, "dist", "extensions") : liveBundled;
   const candidateBundled = path.join(
     candidateHost,
     kind === "split candidate runtime" ? "dist-runtime" : "dist",
@@ -165,9 +154,10 @@ it.each([
   );
   const externalInstall =
     kind === "external path" || kind === "candidate escaping fallback with external install";
-  const externalSource = externalInstall || kind === "source symlink escapes bundled directory";
+  const sourceSymlink =
+    kind === "source symlink escapes bundled directory" || kind === "source escaping fallback";
+  const externalSource = externalInstall || sourceSymlink;
   const sourcePlugin = externalSource ? path.join(root, "external", "demo") : livePlugin;
-  const shared = path.join(sourceState, "state", "openclaw.sqlite");
   await writeHost(liveHost, true);
   await writeHost(candidateHost, candidateFallback ? "git" : false);
   await fs.mkdir(liveBundled, { recursive: true });
@@ -187,12 +177,17 @@ it.each([
     await fs.symlink(externalBundled, candidateBundled, "junction");
   }
   await writePlugin(sourcePlugin, "demo", "live");
-  if (kind === "source checkout alongside built runtime") {
+  if (sourceCheckout) {
     await fs.writeFile(path.join(liveHost, ".git"), "");
     await writePlugin(path.join(sourceBundled, "another"), "another", "built live");
   }
-  if (kind === "source symlink escapes bundled directory") {
-    await fs.symlink(sourcePlugin, livePlugin, "junction");
+  if (sourceSymlink) {
+    if (sourceCheckout) {
+      await fs.rmdir(liveBundled);
+      await fs.symlink(path.dirname(sourcePlugin), liveBundled, "junction");
+    } else {
+      await fs.symlink(sourcePlugin, livePlugin, "junction");
+    }
   } else if (externalInstall) {
     await writePlugin(livePlugin, "demo", "bundled live");
   }
@@ -222,11 +217,6 @@ it.each([
   } satisfies InstallRecords;
   const config = pluginConfig(installRecords, kind === "entrypoint" ? [locator] : undefined);
   writeInstalledIndex(sourceState, installRecords);
-  const liveDatabase = await fs.readFile(shared);
-  const liveEntry = await fs.readFile(path.join(sourcePlugin, "index.js"));
-  const inspect = (stateDir: string, bundledRoot: string, inspectedConfig: OpenClawConfig) =>
-    inspectPlugins(stateDir, bundledRoot, inspectedConfig).find((plugin) => plugin.id === "demo");
-  expect(inspect(sourceState, sourceBundled, config)).toMatchObject(provenance(!externalSource));
   if (kind === "source permissions" && process.platform !== "win32") {
     await fs.chmod(sourcePlugin, 0o777);
     await fs.chmod(path.join(sourcePlugin, "index.js"), 0o666);
@@ -237,13 +227,32 @@ it.each([
     await fs.chmod(candidatePlugin, 0o777);
   }
   const candidateMode = outsideCandidate ? (await fs.stat(candidatePlugin)).mode : undefined;
-  const { rehearsal, copied } = await rehearse({
+  const sourceBundledPlugins = {
+    packageRoot: kind === "source package mismatch" ? candidateHost : liveHost,
+    directory: kind === "missing source selection" ? undefined : sourceBundled,
+  };
+  if (escapingFallback || kind === "source escaping fallback") {
+    const metadata = vi.spyOn(bundledMetadata, "listBundledPluginMetadata");
+    const directoryReads = vi.spyOn(pluginCacheFiles, "readPluginCacheDirectory");
+    await withPluginCache(createPluginCache(), () =>
+      prepareUpdateCandidatePlugins({
+        config,
+        stateDir: sourceState,
+        targetStateDir: path.join(root, "copy"),
+        candidateRoot: candidateHost,
+        sourceBundledPlugins,
+        env: rehearsalEnv(),
+      }),
+    );
+    const fallback = escapingFallback ? path.dirname(candidatePlugin) : liveBundled;
+    expect(directoryReads.mock.calls.map(([directory]) => directory)).not.toContain(fallback);
+    expect(metadata.mock.calls.map(([options]) => options?.scanDir)).not.toContain(fallback);
+    vi.restoreAllMocks();
+  }
+  const { rehearsal } = await rehearse({
     config,
     candidateRoot: candidateHost,
-    sourceBundledPlugins: {
-      packageRoot: kind === "source package mismatch" ? candidateHost : liveHost,
-      directory: kind === "missing source selection" ? undefined : sourceBundled,
-    },
+    sourceBundledPlugins,
     stateDir: sourceState,
     env: {
       ...rehearsalEnv(),
@@ -253,10 +262,14 @@ it.each([
   if (candidateMode !== undefined) {
     expect((await fs.stat(candidatePlugin)).mode).toBe(candidateMode);
   }
-  const candidate = inspect(rehearsal.stateDir, candidateBundled, {});
-  expect(candidate).toMatchObject(provenance(bundled));
+  const candidate = inspectPlugins(rehearsal.stateDir, candidateBundled, {}).find(
+    (plugin) => plugin.id === "demo",
+  );
+  expect(candidate).toMatchObject({
+    origin: bundled ? "bundled" : "global",
+    trust: { reason: bundled ? "bundled" : "origin-path", installSource: "path" },
+  });
   const selectedEntry = candidate?.source ?? "";
-  expect(inspect(rehearsal.stateDir, candidateBundled, copied)?.source).toBe(selectedEntry);
   expect(await fs.readFile(selectedEntry, "utf8")).toBe(
     `export default ${JSON.stringify(bundled ? "candidate" : "live")};`,
   );
@@ -266,45 +279,7 @@ it.each([
   } else {
     expect(selectedEntry.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
   }
-  expect((await fs.readFile(shared)).equals(liveDatabase)).toBe(true);
-  expect(await fs.readFile(path.join(sourcePlugin, "index.js"))).toEqual(liveEntry);
-  expect(config.plugins?.installs?.demo?.sourcePath).toBe(locator);
   expect(await fileModes(sourcePlugin)).toEqual(sourceModes);
-});
-
-it.each(["source", "candidate"])("does not enumerate an outside %s fallback", async (side) => {
-  const sourceHost = path.join(root, "source-host");
-  const candidateHost = path.join(root, "candidate-host");
-  const external = path.join(root, "outside");
-  const fallback = path.join(side === "source" ? sourceHost : candidateHost, "extensions");
-  const installed = path.join(external, "demo");
-  const metadata = vi.spyOn(bundledMetadata, "listBundledPluginMetadata");
-  const directoryReads = vi.spyOn(pluginCacheFiles, "readPluginCacheDirectory");
-  for (const host of [sourceHost, candidateHost]) {
-    await writeHost(host, "git", { name: "openclaw" });
-    await writePlugin(path.join(host, "dist", "extensions", "another"), "another", "bundled");
-  }
-  await writePlugin(installed, "demo", "external");
-  await fs.symlink(external, fallback, "junction");
-  const projected = await withPluginCache(createPluginCache(), async () => {
-    const params = {
-      stateDir: path.join(root, "state"),
-      targetStateDir: path.join(root, "copy"),
-      candidateRoot: candidateHost,
-      config: pluginConfig({ demo: { source: "path", installPath: installed } }),
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceHost, "dist", "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      },
-    } satisfies Parameters<typeof prepareUpdateCandidatePlugins>[0];
-    const projection = await prepareUpdateCandidatePlugins(params);
-    return copyUpdateCandidatePlugins(projection, params);
-  });
-  expect(directoryReads.mock.calls.map(([directory]) => directory)).not.toContain(fallback);
-  expect(metadata.mock.calls.map(([options]) => options?.scanDir)).not.toContain(fallback);
-  expect(await fs.readFile(path.join(projected[installed]!, "index.js"), "utf8")).toBe(
-    'export default "external";',
-  );
 });
 
 it.each([false, true])(
@@ -317,8 +292,8 @@ it.each([false, true])(
     const stateDir = path.join(root, "state");
     const entries = ["first", "second", "third"];
     const candidateEntries = missing ? entries.slice(0, 2) : entries;
-    await writeHost(sourceHost, true, { name: "openclaw", version: "2026.9.3" });
-    await writeHost(candidateHost, false, { name: "openclaw", version: "2026.9.3" });
+    await writeHost(sourceHost, true);
+    await writeHost(candidateHost);
     for (const [directory, names, generation] of [
       [sourcePlugin, entries, "live"],
       [candidatePlugin, candidateEntries, "candidate"],

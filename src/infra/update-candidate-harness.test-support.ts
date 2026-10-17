@@ -32,6 +32,15 @@ export function createCanaryHarness(
   return {
     child,
     children,
+    snapshotDirectory: () =>
+      (JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as { targetStateDir: string })
+        .targetStateDir,
+    overrideSpawn(flag: string, launch: (args: string[], options: SpawnOptions) => FakeChild) {
+      const original = mocks.spawn.getMockImplementation()!;
+      mocks.spawn.mockImplementation((command, args: string[], options: SpawnOptions) =>
+        args.includes(flag) ? launch(args, options) : original(command, args, options),
+      );
+    },
     options: (timeoutMs?: number) => ({ root, stateDir: root, config: {}, env: {}, timeoutMs }),
     async reset(directory: string) {
       vi.clearAllMocks();

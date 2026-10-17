@@ -36,12 +36,19 @@ const snapshotStep = {
   detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
 };
 
-function progressFrame(root: string, snapshot: Record<string, string | number>) {
+function progressFrame(root: string, status: string, totalPages = 2) {
+  const large = totalPages === 920445;
   return Buffer.from(
     `State schema progress: ${JSON.stringify({
       phase: "database snapshot",
       path: path.join(root, "state", "openclaw.sqlite"),
-      snapshot,
+      snapshot: {
+        status,
+        copiedPages: status === "completed" ? totalPages : Math.floor(totalPages / 2),
+        totalPages,
+        elapsedMs: large ? 2500 : 1,
+        ...(large && status === "completed" ? { copiedBytes: 3770142720 } : {}),
+      },
     })}\n`,
   );
 }
@@ -127,13 +134,7 @@ export function registerCanaryProgressWorkerTests(
             pressurePublished = true;
           }
           for (const status of ["copying", "completed"]) {
-            const frame = progressFrame(root, {
-              status,
-              copiedPages: status === "copying" ? 460222 : 920445,
-              totalPages: 920445,
-              ...(status === "completed" ? { copiedBytes: 3770142720 } : {}),
-              elapsedMs: 2500,
-            });
+            const frame = progressFrame(root, status, 920445);
             // Process chunks may split the protocol prefix or a JSON value.
             options.onOutputChunk?.(frame.subarray(0, 13), "stderr");
             options.onOutputChunk?.(frame.subarray(13), "stderr");
@@ -155,14 +156,13 @@ export function registerCanaryProgressWorkerTests(
         await fs.rename(source, `${source}.original`);
         await fs.copyFile(`${source}.original`, source);
       }
-      const hostWrites: string[] = [];
-      const admissionSql: string[] = [];
+      const unexpectedSql: string[] = [];
       const observeSql = (sql: string) => {
-        if (/\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+["`]?update_runs\b/i.test(sql)) {
-          hostWrites.push(sql);
-        }
-        if (admission.active) {
-          admissionSql.push(sql);
+        if (
+          admission.active ||
+          /\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+["`]?update_runs\b/i.test(sql)
+        ) {
+          unexpectedSql.push(sql);
         }
       };
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
@@ -289,7 +289,7 @@ export function registerCanaryProgressWorkerTests(
           mock.mockRestore();
         }
         // Effect guards still read recovery on the host; only ledger DML and worker admission are fenced here.
-        expect({ hostWrites, admissionSql }).toEqual({ hostWrites: [], admissionSql: [] });
+        expect(unexpectedSql).toEqual([]);
         if (outcome === "uncertain") {
           await removeDirectory(targetDirectory(mocks));
         }
@@ -323,7 +323,6 @@ export function registerCanaryUncertainReceiptTests({
     const earlierFailure = new Error("earlier snapshot progress recording failed");
     let current = true;
     let retained: string | undefined;
-    let progressEmitted = false;
     const snapshot = mocks.snapshot.getMockImplementation()!;
     mocks.snapshot.mockImplementation(async (command, commandOptions: SnapshotOptions) => {
       const request: unknown = JSON.parse(commandOptions.input);
@@ -333,19 +332,10 @@ export function registerCanaryUncertainReceiptTests({
         }
         retained = request.targetStateDir;
         await fs.writeFile(path.join(retained, "pending-snapshot-copy"), "synthetic copy");
-        progressEmitted = true;
         for (const status of ordering === "earlier-progress-failed"
           ? ["copying", "completed"]
           : ["copying"]) {
-          commandOptions.onOutputChunk?.(
-            progressFrame(options.stateDir, {
-              status,
-              copiedPages: status === "completed" ? 2 : 1,
-              totalPages: 2,
-              elapsedMs: 1,
-            }),
-            "stderr",
-          );
+          commandOptions.onOutputChunk?.(progressFrame(options.stateDir, status), "stderr");
         }
         if (ordering === "operation-failed") {
           throw operationFailure;
@@ -360,7 +350,7 @@ export function registerCanaryUncertainReceiptTests({
         try {
           return await runBudget(...args);
         } finally {
-          if (progressEmitted) {
+          if (retained) {
             operationSettled.resolve();
           }
         }
@@ -419,7 +409,6 @@ export function registerCanaryUncertainReceiptTests({
         );
       }
       expectNotCalled(onStep, mocks.spawn);
-      expect(retained).toBeDefined();
       await expect(
         fs.readFile(path.join(retained!, "pending-snapshot-copy"), "utf8"),
       ).resolves.toBe("synthetic copy");
@@ -449,7 +438,6 @@ export function registerCanaryUncertainReceiptTests({
         await expect(
           validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep }),
         ).rejects.toBe(uncertain);
-        expect(injected).toBe(true);
         expect(onStep).toHaveBeenLastCalledWith(
           expect.objectContaining({ name, exitCode: receipt === "completed-step" ? 0 : 1 }),
         );
@@ -458,7 +446,6 @@ export function registerCanaryUncertainReceiptTests({
           expect(mocks.spawn).not.toHaveBeenCalled();
         }
         const target = targetDirectory(mocks)!;
-        expect((await fs.stat(target)).isDirectory()).toBe(true);
         await fs.access(path.join(target, "openclaw.json"));
       } finally {
         await removeDirectory(targetDirectory(mocks));

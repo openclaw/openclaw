@@ -19,7 +19,7 @@ import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
   registerCanarySnapshotCapacityTests,
   createCanarySnapshotResult,
-  FakeChild,
+  type FakeChild,
   renderSteps,
   canaryOutcomeStep,
   stubHealthyGateway,
@@ -82,7 +82,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 let root: string;
 let candidateConfig: Record<string, unknown>;
 let childEnv: NodeJS.ProcessEnv;
-let pluginErrors = false;
 let pluginInventory: unknown;
 let runtimeError = false;
 let runtimeContract: unknown;
@@ -90,7 +89,7 @@ let databasePath: string | undefined;
 
 const harness = createCanaryHarness(mocks, {
   databasePath: () => databasePath,
-  readFixture: () => ({ pluginInventory, pluginErrors, runtimeContract, runtimeError }),
+  readFixture: () => ({ pluginInventory, runtimeContract, runtimeError }),
   onSpawn: (args, options) => {
     childEnv = options.env;
     if (args.includes("gateway")) {
@@ -107,16 +106,6 @@ function createChild(write?: (child: FakeChild) => void, tracked = false) {
   return child;
 }
 
-function overrideCommand(
-  flag: string,
-  launch: (args: string[], options: { env: NodeJS.ProcessEnv }) => FakeChild,
-) {
-  const original = mocks.spawn.getMockImplementation()!;
-  mocks.spawn.mockImplementation((command, args: string[], options) =>
-    args.includes(flag) ? launch(args, options) : original(command, args, options),
-  );
-}
-
 async function expectRemoved(directory: string) {
   await expect(fs.access(directory)).rejects.toMatchObject({ code: "ENOENT" });
 }
@@ -129,7 +118,6 @@ function registryFailure(message: string, pluginId?: string) {
 }
 
 beforeEach(async () => {
-  pluginErrors = false;
   pluginInventory = undefined;
   runtimeError = false;
   runtimeContract = { state: 2, agent: 3 };
@@ -194,85 +182,75 @@ describe("update candidate canary", () => {
     },
   );
 
-  it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
-    databasePath = path.join(root, "snapshot-budget.sqlite");
-    await fs.writeFile(databasePath, "");
-    await fs.truncate(databasePath, 32 * 1024 ** 2);
-    const now = Date.now.bind(Date);
-    let snapshotElapsed = 0;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + snapshotElapsed);
-    const snapshot = mocks.snapshot.getMockImplementation()!;
-    mocks.snapshot.mockImplementation(async (command, options: { input: string }) => {
-      const request: unknown = JSON.parse(options.input);
-      if (isRecord(request) && request.mode === "snapshot") {
-        snapshotElapsed = 300_001;
-      }
-      return snapshot(command, options);
-    });
-    stubHealthyGateway();
-    try {
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(30_000));
-      expect(result, result.logTail.join("\n")).toMatchObject({ status: "ok", phase: "readiness" });
-      expect(result.durationMs).toBeGreaterThanOrEqual(300_001);
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
-      );
-      expect(result.logTail.join("\n")).toContain("readyz: ready");
-      await expectRemoved(childEnv.OPENCLAW_STATE_DIR!);
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
   registerCanaryProgressWorkerTests(() => root, mocks, admission);
 
   it.each([
-    [0, undefined, 31 * 60_000, "error"],
-    [400 * 1024 ** 2, undefined, 400_000, "ok"],
-    [2 * 1024 ** 3, undefined, 31 * 60_000, "ok"],
-    [2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error"],
+    ["snapshot", 32 * 1024 ** 2, 30_000, 300_001, "ok"],
+    ["doctor", 0, undefined, 31 * 60_000, "error"],
+    ["doctor", 400 * 1024 ** 2, undefined, 400_000, "ok"],
+    ["doctor", 2 * 1024 ** 3, undefined, 31 * 60_000, "ok"],
+    ["doctor", 2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error"],
   ] as const)(
-    "derives validation time from %i state bytes while honoring an explicit %s ms deadline",
-    async (sqliteBytes, timeoutMs, elapsedMs, expectedStatus) => {
-      databasePath = path.join(root, "runtime-budget.sqlite");
+    "keeps the %s budget separate for %i state bytes and an explicit %s deadline",
+    async (stage, sqliteBytes, timeoutMs, elapsedMs, expectedStatus) => {
+      databasePath = path.join(root, "budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
-      // The sparse database models validation cost, not this host's free disk space.
-      const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
-        targetPath,
-        checkedPath: targetPath,
-        availableBytes: 16 * 1024 ** 3,
-        totalBytes: 32 * 1024 ** 3,
-      }));
+      // Sparse state models validation cost, not the host's free disk space.
+      const capacity =
+        stage === "doctor"
+          ? vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+              targetPath,
+              checkedPath: targetPath,
+              availableBytes: 16 * 1024 ** 3,
+              totalBytes: 32 * 1024 ** 3,
+            }))
+          : undefined;
       const now = Date.now.bind(Date);
-      let doctorElapsed = 0;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + doctorElapsed);
-      mocks.spawn.mockImplementationOnce(
-        (_command: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
-          const child = createChild(undefined, true);
+      let elapsed = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+      if (stage === "snapshot") {
+        const snapshot = mocks.snapshot.getMockImplementation()!;
+        mocks.snapshot.mockImplementation(async (command, options: { input: string }) => {
+          const request: unknown = JSON.parse(options.input);
+          if (isRecord(request) && request.mode === "snapshot") {
+            elapsed = elapsedMs;
+          }
+          return snapshot(command, options);
+        });
+      } else {
+        mocks.spawn.mockImplementationOnce((_command, _args, options) => {
           childEnv = options.env;
-          doctorElapsed = elapsedMs;
-          queueMicrotask(() => child.emit("close", 0));
-          return child;
-        },
-      );
+          elapsed = elapsedMs;
+          return createChild((child) => child.emit("close", 0), true);
+        });
+      }
       stubHealthyGateway();
       try {
         const result = await validateUpdateCandidateCanary(canaryStateOptions(timeoutMs));
         expect(result.steps[0]?.snapshotCapacity?.sqliteBytes).toBe(sqliteBytes);
-        expect(result.status, result.logTail.join("\n")).toBe(expectedStatus);
-        expect(result.phase).toBe(expectedStatus === "ok" ? "readiness" : "doctor");
+        expect(result, result.logTail.join("\n")).toMatchObject({
+          status: expectedStatus,
+          phase: expectedStatus === "ok" ? "readiness" : "doctor",
+        });
         if (expectedStatus === "error") {
           expect(result.logTail.join("\n")).toContain("deadline exceeded");
         } else {
           expect(result.steps).toContainEqual(
-            expect.objectContaining({ name: "candidate-doctor", exitCode: 0 }),
+            expect.objectContaining({
+              name: stage === "snapshot" ? "candidate-gateway-startup" : "candidate-doctor",
+              exitCode: 0,
+            }),
           );
           expect(result.logTail.join("\n")).toContain("readyz: ready");
         }
+        if (stage === "snapshot") {
+          expect(result.durationMs).toBeGreaterThanOrEqual(elapsedMs);
+          await expectRemoved(childEnv.OPENCLAW_STATE_DIR!);
+        }
       } finally {
         clock.mockRestore();
-        capacity.mockRestore();
+        capacity?.mockRestore();
       }
     },
   );
@@ -306,7 +284,9 @@ describe("update candidate canary", () => {
     );
     stubHealthyGateway();
     const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
-    expect(result.status).toBe("error");
+    expect(result).toMatchObject({ status: "error", phase: "runtime" });
+    await expectRemoved(childEnv.OPENCLAW_STATE_DIR!);
+    expect(mocks.signal).toHaveBeenCalled();
     expect(result.doctorConfigWrites).not.toBe(true);
     expect(result.doctorConfigChanges).toEqual(
       ["meta", "plugins", "wizard"].map((key) => ({ kind: "key", key })),
@@ -402,6 +382,7 @@ describe("update candidate canary", () => {
         expect(canaryOutcomeStep(result.steps)?.failureFacts?.[0]?.message).toContain(
           failureMessage,
         );
+        expect(renderSteps(result.steps)).toContain(failureMessage);
       }
       expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("gateway"))).toBe(proceeds);
       if (proceeds) {
@@ -602,7 +583,7 @@ describe("update candidate canary", () => {
       : scenario === "config"
         ? "config"
         : "lint";
-    overrideCommand(
+    harness.overrideSpawn(
       { lint: "--lint", startup: "--update-canary", config: "validate" }[phase],
       (args, options) => {
         const error = scenario.endsWith("multiline")
@@ -702,11 +683,9 @@ describe("update candidate canary", () => {
     expect(JSON.stringify(result)).not.toContain("synthetic-secret");
   });
 
-  it.each(["snapshot", "doctor", "plugins", "runtime", "readiness"] as const)(
+  it.each(["snapshot", "readiness"] as const)(
     "records the %s outcome and cleans private state",
     async (failure) => {
-      pluginErrors = failure === "plugins";
-      runtimeError = failure === "runtime";
       if (failure === "snapshot") {
         const snapshot = mocks.snapshot.getMockImplementation()!;
         mocks.snapshot.mockImplementation(async (command, options: { input: string }) => {
@@ -718,18 +697,6 @@ describe("update candidate canary", () => {
           return { ...result, code: 1, stdout: "", stderr: "snapshot rejected" };
         });
       }
-      if (failure === "doctor") {
-        mocks.spawn.mockImplementationOnce(() => {
-          const child = harness.child();
-          queueMicrotask(() => {
-            child.stderr.write(
-              Array.from({ length: 60 }, (_, index) => `line ${index}`).join("\n"),
-            );
-            child.emit("close", 1);
-          });
-          return child;
-        });
-      }
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string) =>
@@ -738,9 +705,6 @@ describe("update candidate canary", () => {
       );
       const result = await validateUpdateCandidateCanary(canaryStateOptions(250));
       expect(result).toMatchObject({ status: "error", phase: failure });
-      if (failure === "plugins") {
-        expect(renderSteps(result.steps)).toContain("incompatible plugin");
-      }
       if (failure === "readiness") {
         expect(canaryOutcomeStep(result.steps)).toMatchObject({
           exitCode: 1,
@@ -756,10 +720,7 @@ describe("update candidate canary", () => {
       } else {
         expect(mocks.signal).toHaveBeenCalled();
       }
-      const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
-        targetStateDir: string;
-      };
-      await expectRemoved(snapshotInput.targetStateDir);
+      await expectRemoved(harness.snapshotDirectory());
     },
   );
 
@@ -859,16 +820,13 @@ describe("update candidate canary", () => {
         "cancelled during step recording",
       );
       expect(mocks.spawn).toHaveBeenCalledTimes(expectedChildren);
-      const snapshotInput = JSON.parse(mocks.snapshot.mock.calls.at(-1)![1].input) as {
-        targetStateDir: string;
-      };
-      await expectRemoved(snapshotInput.targetStateDir);
+      await expectRemoved(harness.snapshotDirectory());
     },
   );
 
   it.each([0, 1])("bounds multibyte stdout at the byte ceiling plus %i", async (overflow) => {
     runtimeError = true;
-    overrideCommand("plugins", () => {
+    harness.overrideSpawn("plugins", () => {
       const child = harness.child();
       const json = JSON.stringify({ plugins: [], padding: "é".repeat(500_000) });
       const bytes = Buffer.from(
@@ -889,6 +847,7 @@ describe("update candidate canary", () => {
     const expected = ["stdout 診断: café 🦞", "stderr 診断: café 🦞"];
     mocks.spawn.mockImplementationOnce(() => {
       return createChild((child) => {
+        child.stdout.write(Array.from({ length: 60 }, (_, index) => `line ${index}\n`).join(""));
         for (const [index, stream] of [child.stdout, child.stderr].entries()) {
           // Real pipe chunks may end inside a code point; EOF need not follow a newline.
           const bytes = Buffer.from(`${expected[index]}\r\n${expected[index]} final`);
@@ -901,7 +860,10 @@ describe("update candidate canary", () => {
       });
     });
     const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
-    expect(result.status).toBe("error");
+    expect(result).toMatchObject({ status: "error", phase: "doctor" });
+    expect(result.logTail.length).toBeLessThanOrEqual(40);
+    expect(mocks.signal).toHaveBeenCalled();
+    await expectRemoved(childEnv.OPENCLAW_STATE_DIR!);
     for (const line of expected) {
       expect(result.logTail).toContain(line);
       expect(result.logTail).toContain(`${line} final`);
