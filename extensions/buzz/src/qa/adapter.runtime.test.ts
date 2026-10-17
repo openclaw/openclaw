@@ -1,16 +1,27 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   parseQaTarget,
   type QaBusInboundMessageInput,
   type QaBusMessage,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { parseBuzzQaCredentialPayload } from "./credentials.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseBuzzQaCredentialPayload, type BuzzQaCredentials } from "./credentials.js";
 
-const credentials = parseBuzzQaCredentialPayload({
+const credentialPayload = {
   relayUrl: "wss://relay.qa.example",
   roomId: "123e4567-e89b-42d3-a456-426614174000",
   driverPrivateKey: "01".repeat(32),
   sutPrivateKey: "02".repeat(32),
+};
+const credentials = parseBuzzQaCredentialPayload(credentialPayload);
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map(async (dir) => await fs.rm(dir, { force: true, recursive: true })),
+  );
 });
 
 const release = vi.hoisted(() => vi.fn(async () => {}));
@@ -121,6 +132,53 @@ describe("Buzz QA transport adapter", () => {
     expect(acquireQaCredentialLease).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "buzz", source: "env" }),
     );
+  });
+
+  it("selects the literal file when its name has surrounding whitespace", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-buzz-qa-"));
+    tempDirs.push(repoRoot);
+    const neighbor = path.join(repoRoot, "buzz.json");
+    const literal = path.join(repoRoot, " buzz.json ");
+    const neighborPayload = {
+      ...credentialPayload,
+      roomId: "123e4567-e89b-42d3-a456-426614174001",
+    };
+    await fs.writeFile(neighbor, JSON.stringify(neighborPayload), { mode: 0o600 });
+    await fs.writeFile(literal, JSON.stringify(credentialPayload), { mode: 0o600 });
+
+    const { readBuzzQaCredentialFile: realReader } =
+      await vi.importActual<typeof import("./credentials.js")>("./credentials.js");
+    readBuzzQaCredentialFile.mockImplementation(realReader);
+    acquireQaCredentialLease.mockImplementationOnce(async (options: unknown) => {
+      const payload = (options as { resolveEnvPayload?: () => unknown }).resolveEnvPayload?.() as
+        | BuzzQaCredentials
+        | undefined;
+      return {
+        source: "env" as const,
+        kind: "buzz",
+        payload: payload ?? credentials,
+        heartbeatIntervalMs: 0,
+        leaseTtlMs: 0,
+        heartbeat: vi.fn(async () => {}),
+        release,
+      };
+    });
+
+    await createAdapter({
+      credentialFile: " buzz.json ",
+      repoRoot,
+    });
+
+    expect(readBuzzQaCredentialFile).toHaveBeenCalledWith({
+      filePath: " buzz.json ",
+      repoRoot,
+    });
+    const acquireCall = acquireQaCredentialLease.mock.calls.at(-1)?.[0] as
+      | { resolveEnvPayload?: () => unknown }
+      | undefined;
+    const resolvedPayload = acquireCall?.resolveEnvPayload?.() as BuzzQaCredentials | undefined;
+    expect(resolvedPayload?.roomId).toBe(credentials.roomId);
+    expect(resolvedPayload?.roomId).not.toBe(neighborPayload.roomId);
   });
 
   it("delegates the profile credential source to the shared manager", async () => {
