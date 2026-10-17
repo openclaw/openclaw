@@ -137,7 +137,7 @@ describe("SQLite transcript history events", () => {
     expect(readTranscriptDisplayDelta(other)).toEqual({ kind: "missing" });
     await persistSessionTranscriptTurn(other, {
       messages: ["other-first", "other-middle", "other-last"].map((eventId, index, ids) =>
-        message(eventId, index === 0 ? null : ids[index - 1], "user", eventId),
+        message(eventId, index === 0 ? null : ids[index - 1]!, "user", eventId),
       ),
       touchSessionEntry: false,
     });
@@ -615,7 +615,7 @@ describe("SQLite transcript history events", () => {
     for (const [id, assignments] of [
       ["oversized-older", "event_json = '{', event_zstd = NULL"],
       ["closing-reset", "event_json = NULL, event_zstd = X'00'"],
-    ]) {
+    ] as const) {
       corruptPayload(id, assignments);
       const page = closedPage();
       expectEvents(page.events, ["fitting-newer"]);

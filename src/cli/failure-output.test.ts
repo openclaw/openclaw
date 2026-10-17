@@ -175,14 +175,14 @@ it("prints the actionable offline maintenance refusal without debug", () => {
 });
 
 it("emits expected guidance only when not already written even with debug output", () => {
-  const pending = new ExpectedCliError({
+  const options = {
     message: "bad input",
     humanOutput: "\u001B[31mfirst\u001B[39m\nsecond\n",
     machineOutput: "first\nsecond\n",
-  });
+  };
+  const pending = new ExpectedCliError(options);
   const written = new ExpectedCliError({
-    ...pending,
-    message: pending.message,
+    ...options,
     humanOutputWritten: true,
   });
 

@@ -200,6 +200,9 @@ describe("Memory watch configuration", () => {
       state: "unavailable",
       failure: { operation: "scan", code: "EIO", error: new Error("temporary scan failure") },
     });
+    await active.search("Amber lantern", { minScore: 0 });
+    await idle();
+    expect(sync).toHaveBeenCalledWith({ reason: "search" });
     await vi.advanceTimersByTimeAsync(500);
     await vi.waitFor(() =>
       expect(active.status().custom?.watcher).toEqual(

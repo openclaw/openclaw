@@ -133,7 +133,7 @@ it.runIf(nativeHost).each(
         commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
       );
       try {
-        const { platform, identity, phase, splitRoot = true } = scenario;
+        const { platform, identity, phase, splitRoot } = scenario;
         const replacedAtStop = identity === "replaced at stop";
         const authorized = identity === "current updater";
         const unresolved = scenario.ancestry === "unavailable ancestry";

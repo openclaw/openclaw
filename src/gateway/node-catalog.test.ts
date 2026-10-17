@@ -140,36 +140,35 @@ it("publishes existing-folder consent only for a connected device", () => {
 });
 
 it("uses the newest durable last-seen source for offline nodes", () => {
-  expect(
-    catalogNode({
-      device: {
-        deviceId: "ios-1",
-        displayName: "iPhone",
-        lastSeenAtMs: 300,
-        lastSeenReason: "silent_push",
-        approvedAtMs: 10,
-      },
-      paired: {
-        nodeId: "ios-1",
-        platform: "ios",
-        caps: [],
-        commands: [],
-        sessionHost: true,
-        lastConnectedAtMs: 200,
-        lastDisconnectedAtMs: 250,
-        lastSeenAtMs: 100,
-        lastSeenReason: "bg_app_refresh",
-        approvedAtMs: 11,
-      },
-    }),
-  ).toMatchObject({
+  const node = catalogNode({
+    device: {
+      deviceId: "ios-1",
+      displayName: "iPhone",
+      lastSeenAtMs: 300,
+      lastSeenReason: "silent_push",
+      approvedAtMs: 10,
+    },
+    paired: {
+      nodeId: "ios-1",
+      platform: "ios",
+      caps: [],
+      commands: [],
+      sessionHost: true,
+      lastConnectedAtMs: 200,
+      lastDisconnectedAtMs: 250,
+      lastSeenAtMs: 100,
+      lastSeenReason: "bg_app_refresh",
+      approvedAtMs: 11,
+    },
+  });
+  expect(node).toMatchObject({
     lastConnectedAtMs: 200,
     lastDisconnectedAtMs: 250,
     lastSeenAtMs: 300,
     lastSeenReason: "silent_push",
     sessionHost: true,
-    workerSlots: undefined,
   });
+  expect(node?.workerSlots).toBeUndefined();
 });
 
 it("uses pending request metadata as the final fallback for pending-only nodes", () => {

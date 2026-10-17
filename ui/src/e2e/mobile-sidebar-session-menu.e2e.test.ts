@@ -31,7 +31,7 @@ const pageOptions = (width: number, height: number, hasTouch: boolean): BrowserC
 });
 async function box(item: Locator) {
   const bounds = await item.boundingBox();
-  expect(bounds, `visible bounds for ${item}`).not.toBeNull();
+  expect(bounds, `visible bounds for ${item.toString()}`).not.toBeNull();
   return bounds!;
 }
 

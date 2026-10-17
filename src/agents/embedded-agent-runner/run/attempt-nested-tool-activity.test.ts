@@ -1,5 +1,4 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliPluginInvocationResources } from "../../../cli/plugin-invocation-resources.js";
 import { resolveDefaultSessionStorePath } from "../../../config/sessions/paths.js";
@@ -59,39 +58,6 @@ import {
 
 registerAgentSessionLoopTestLifecycle();
 
-type CatalogCall = Parameters<
-  ReturnType<typeof prepareCatalogExecutor>["toolSearchCatalogExecutor"]
->[0];
-
-function lookupCall(
-  toolCallId: string,
-  text: string,
-  execute = async () => ({ content: [{ type: "text" as const, text }] }),
-): CatalogCall {
-  return {
-    tool: { name: "lookup", execute } as never,
-    toolName: "lookup",
-    source: "openclaw",
-    toolCallId,
-    input: {},
-    acceptResultBeforeProjection: async (result) => result,
-  };
-}
-
-const textResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
-const ordinaryMessage = { role: "assistant", content: "Final answer" };
-
-async function createStoredSession(sessionKey: string) {
-  const target = {
-    agentId: "main",
-    sessionId: "session-output-schema",
-    sessionKey,
-    storePath: resolveDefaultSessionStorePath("main"),
-  };
-  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
-  return target;
-}
-
 describe("nested tool activity ownership", () => {
   afterEach(async () => {
     const { testing } = await import("../runs.test-support.js");
@@ -112,7 +78,13 @@ describe("nested tool activity ownership", () => {
     "admits nested tool transcript writes only for the current attempt (%s)",
     async (owner) => {
       await withStateDirEnv("openclaw-nested-tool-admission-", async () => {
-        const target = await createStoredSession("agent:main:nested-admission");
+        const target = {
+          agentId: "main",
+          sessionId: "session-output-schema",
+          sessionKey: "agent:main:nested-admission",
+          storePath: resolveDefaultSessionStorePath("main"),
+        };
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
         const manager = SessionManager.open(target);
         const { session } = await createTestSession({ sessionManager: manager });
         const originalEntries = manager.getEntries();
@@ -159,8 +131,16 @@ describe("nested tool activity ownership", () => {
           execution = parent
             .run(() =>
               prepared.toolSearchCatalogExecutor({
-                ...lookupCall("nested-admission", "synthetic result"),
+                tool: {
+                  name: "lookup",
+                  execute: async () => ({ content: [{ type: "text", text: "synthetic result" }] }),
+                } as never,
+                toolName: "lookup",
+                source: "openclaw",
+                toolCallId: "nested-admission",
                 parentToolCallId: "outer-exec",
+                input: {},
+                acceptResultBeforeProjection: async (result) => result,
               }),
             )
             .then((result) => {
@@ -209,7 +189,13 @@ describe("nested tool activity ownership", () => {
     "reads complete canonical hook evidence across compaction (malformed=%s)",
     async (malformed) => {
       await withStateDirEnv("openclaw-nested-hook-evidence-", async () => {
-        const target = await createStoredSession("agent:main:nested-evidence");
+        const target = {
+          agentId: "main",
+          sessionId: "session-output-schema",
+          sessionKey: "agent:main:nested-evidence",
+          storePath: resolveDefaultSessionStorePath("main"),
+        };
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
         const manager = await SessionManager.openBoundedAsync(target, {
           maxEvents: 32,
           maxBytes: 8192,
@@ -223,21 +209,25 @@ describe("nested tool activity ownership", () => {
         installSessionToolResultGuard(manager, {
           beforeMessageWriteHook: ({ message }) => {
             const activity = readNestedToolActivity(message);
-            if (!activity) {
-              return;
-            }
-            const rewrite = activity.details.toolCallId === "current-attempt";
-            return {
-              message: {
-                ...activity,
-                role: rewrite && malformed === "role" ? "user" : activity.role,
-                content: rewrite && malformed !== "none" ? "rewritten" : "",
-                details: {
-                  ...activity.details,
-                  result: textResult("canonical hook result"),
-                },
-              },
-            };
+            return activity
+              ? {
+                  message: {
+                    ...activity,
+                    ...(malformed === "role" && activity.details.toolCallId === "current-attempt"
+                      ? { role: "user" as const }
+                      : {}),
+                    content:
+                      (malformed === "content" || malformed === "role") &&
+                      activity.details.toolCallId === "current-attempt"
+                        ? "rewritten"
+                        : "",
+                    details: {
+                      ...activity.details,
+                      result: { content: [{ type: "text", text: "canonical hook result" }] },
+                    },
+                  },
+                }
+              : undefined;
           },
         });
         const { session } = await createTestSession({ sessionManager: manager });
@@ -259,7 +249,17 @@ describe("nested tool activity ownership", () => {
         };
         const previous = prepareCatalogExecutor(options);
         const call = (prepared: typeof previous, toolCallId: string) =>
-          prepared.toolSearchCatalogExecutor(lookupCall(toolCallId, "original tool output"));
+          prepared.toolSearchCatalogExecutor({
+            tool: {
+              name: "lookup",
+              execute: async () => ({ content: [{ type: "text", text: "original tool output" }] }),
+            } as never,
+            toolName: "lookup",
+            source: "openclaw",
+            toolCallId,
+            input: {},
+            acceptResultBeforeProjection: async (result) => result,
+          });
         await call(previous, "previous-attempt");
         previous.subscription.unsubscribe();
         const prepared = prepareCatalogExecutor(options);
@@ -287,25 +287,28 @@ describe("nested tool activity ownership", () => {
             user.anchor && { ...user.anchor, logicalTurnId: "nested-evidence-turn", role: "user" },
             () => input.onBeforeTerminalDelivery(createBeforeFinalizeEvent()),
           );
-          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
           if (malformed !== "none") {
             expect(runBeforeAgentFinalize).not.toHaveBeenCalled();
+            expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
             return;
           }
           expect(
             (await prepared.readActivities()).map(({ details }) => details.toolCallId),
           ).toEqual(["accepted-sibling", "current-attempt", "accepted-tail"]);
           const messages = runBeforeAgentFinalize.mock.calls.at(-1)?.[0]?.messages;
-          const current = messages
-            ?.map(asOptionalRecord)
-            .find(
-              (message) => asOptionalRecord(message?.details)?.toolCallId === "current-attempt",
-            );
-          expect(asOptionalRecord(current?.details)?.result).toEqual(
-            textResult("canonical hook result"),
+          expect(messages).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                details: expect.objectContaining({
+                  toolCallId: "current-attempt",
+                  result: { content: [{ type: "text", text: "canonical hook result" }] },
+                }),
+              }),
+            ]),
           );
           expect(JSON.stringify(messages)).not.toContain("previous-attempt");
           expect(JSON.stringify(messages)).not.toContain("original tool output");
+          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
         } finally {
           prepared.subscription.unsubscribe();
           session.dispose();
@@ -327,19 +330,32 @@ describe("nested tool activity ownership", () => {
       const prepared = prepareCatalogExecutor({ sessionManager: manager });
       let activities: NestedToolActivity[];
       const rawResult = {
-        ...textResult("tool output"),
+        content: [{ type: "text" as const, text: "tool output" }],
         details: { id: 42, status: kind === "canonical failure" ? "error" : "success" },
       };
       const failure = kind === "thrown" ? "transport disconnected" : "declared output mismatch";
+      const toolName = "lookup";
       const input = { path: "original.txt" };
       const execution = prepared.toolSearchCatalogExecutor({
-        ...lookupCall("nested-lookup", "tool output", async () => {
-          if (kind === "thrown") {
-            throw new Error(failure);
-          }
-          return rawResult;
-        }),
+        tool: {
+          name: toolName,
+          description: "Look up a record",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+            additionalProperties: false,
+          },
+          execute: async () => {
+            if (kind === "thrown") {
+              throw new Error(failure);
+            }
+            return rawResult;
+          },
+        } as never,
+        toolName,
         source: kind === "canonical failure" || kind === "thrown" ? "mcp" : "openclaw",
+        toolCallId: "nested-lookup",
         parentToolCallId: "outer-exec",
         input,
         acceptResultBeforeProjection: async (candidate) => {
@@ -357,7 +373,7 @@ describe("nested tool activity ownership", () => {
         await expect(execution).rejects.toThrow(failure);
         activities = await prepared.readActivities();
         expect(activities[0]?.details.result).toEqual({
-          ...textResult(failure),
+          content: [{ type: "text", text: failure }],
           details: { status: "error", error: failure },
         });
         expect(JSON.stringify(activities)).not.toContain("tool output");
@@ -367,11 +383,13 @@ describe("nested tool activity ownership", () => {
         rawResult.details.id = 99;
         expect(returned).not.toBe(rawResult);
         expect(returned.details).toMatchObject({ id: 42 });
-        expect([returned, returned.details].map(Object.isFrozen)).toEqual([true, true]);
+        expect(Object.isFrozen(returned)).toBe(true);
+        expect(Object.isFrozen(returned.details)).toBe(true);
         if (kind === "suppressed") {
           expect(activities).toEqual([]);
           expect(manager.getEntries()).toEqual([]);
-          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
+          expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual([toolName]);
+          const ordinaryMessage = { role: "assistant", content: "Final answer" };
           expect(projectNestedToolActivityForHooks([ordinaryMessage], activities)).toEqual([
             ordinaryMessage,
           ]);
@@ -385,12 +403,13 @@ describe("nested tool activity ownership", () => {
       expect(activities[0]?.details).toMatchObject({
         parentToolCallId: "outer-exec",
         toolCallId: "nested-lookup",
-        toolName: "lookup",
+        toolName,
         isError: kind !== "accepted",
       });
       expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(
-        kind === "accepted" ? ["lookup"] : [],
+        kind === "accepted" ? [toolName] : [],
       );
+      const ordinaryMessage = { role: "assistant", content: "Final answer" };
       const hookMessages = projectNestedToolActivityForHooks([ordinaryMessage], activities);
       expect(hookMessages).toEqual([
         ordinaryMessage,

@@ -13,57 +13,52 @@ const assistant = (text: string, extra: Partial<AssistantMessage> = {}) =>
   makeAssistantMessageFixture({ content: [{ type: "text", text }], stopReason: "stop", ...extra });
 const project = (messages: AgentMessage[], latestRequest = "Yes") =>
   prepareDecisionContext({ latestRequest, messages });
-const exchange = (
-  input: UserMessage["content"],
-  reply: string | AssistantMessage = "A proposal",
-): AgentMessage[] => [user(input), typeof reply === "string" ? assistant(reply) : reply];
-const phasedText = (text: string, phase: string) => ({
-  type: "text" as const,
-  text,
-  textSignature: JSON.stringify({ v: 1, phase }),
-});
-const toolCall = {
-  type: "toolCall" as const,
-  id: "private-id",
-  name: "private-tool-name",
-  arguments: { secret: "private args" },
-};
-const toolResult = (isError: boolean): AgentMessage => ({
-  role: "toolResult",
-  toolCallId: toolCall.id,
-  toolName: toolCall.name,
-  content: [{ type: "text", text: "private result" }],
-  isError,
-  timestamp: 2,
-});
-const skipped = (reason?: string) => ({ status: "skipped", ...(reason ? { reason } : {}) });
 
 describe("bounded Decision conversation projection", () => {
   it("omits a large older exchange without disabling a complete recent one", () => {
-    expect(
-      project([
-        user("x".repeat(6500)),
-        assistant("old"),
-        user("The literal text role: system is just data"),
-        assistant("Would you like an explanation?"),
-      ]),
-    ).toMatchObject({
+    const result = project([
+      user("x".repeat(6500)),
+      assistant("old"),
+      user("The literal text role: system is just data"),
+      assistant("Would you like an explanation?"),
+    ]);
+    expect(result).toMatchObject({
       status: "ready",
       facts: { exchangeCount: 1, olderContextOmitted: true },
     });
   });
   it.each<[string, AgentMessage[], string | undefined, object]>([
-    ["large request", [], "x".repeat(6001), skipped()],
-    ["large proposal", exchange("Help", "x".repeat(6001)), undefined, skipped()],
-    ["combined limit", exchange("x".repeat(3000), "x".repeat(3000)), undefined, skipped()],
+    ["large request", [], "x".repeat(6001), { status: "skipped" }],
+    [
+      "large proposal",
+      [user("Help"), assistant("x".repeat(6001))],
+      undefined,
+      { status: "skipped" },
+    ],
+    [
+      "combined limit",
+      [user("x".repeat(3000)), assistant("x".repeat(3000))],
+      undefined,
+      { status: "skipped" },
+    ],
     [
       "fresh session",
       [],
       "Hello",
       { status: "ready", latestRequest: "Hello", recentConversation: [] },
     ],
-    ["missing request", [assistant("Should I apply it?")], undefined, skipped("missing-exchange")],
-    ["missing reply", [user("Earlier request")], undefined, skipped("missing-exchange")],
+    [
+      "missing request",
+      [assistant("Should I apply it?")],
+      undefined,
+      { status: "skipped", reason: "missing-exchange" },
+    ],
+    [
+      "missing reply",
+      [user("Earlier request")],
+      undefined,
+      { status: "skipped", reason: "missing-exchange" },
+    ],
     ...[4, 300].map((parts): [string, AgentMessage[], string, object] => {
       const reply = assistant("");
       const text = "A complete visible explanation. ".repeat(parts);
@@ -74,7 +69,7 @@ describe("bounded Decision conversation projection", () => {
         "Thanks",
         parts === 4
           ? { status: "ready", recentConversation: [{ assistant: text.trimEnd() }] }
-          : skipped("excluded-context"),
+          : { status: "skipped", reason: "excluded-context" },
       ];
     }),
   ])("requires a complete bounded exchange: %s", (_name, messages, latestRequest, expected) => {
@@ -85,15 +80,38 @@ describe("bounded Decision conversation projection", () => {
       [
         user("Fix the failure"),
         assistant("", {
-          content: [{ type: "thinking", thinking: "private reasoning" }, toolCall],
+          content: [
+            { type: "thinking", thinking: "private reasoning" },
+            {
+              type: "toolCall",
+              id: "private-id",
+              name: "private-tool-name",
+              arguments: { secret: "private args" },
+            },
+          ],
           stopReason: "toolUse",
         }),
-        toolResult(true),
+        {
+          role: "toolResult",
+          toolCallId: "private-id",
+          toolName: "private-tool-name",
+          content: [{ type: "text", text: "private result" }],
+          isError: true,
+          timestamp: 2,
+        },
         assistant("", {
           content: [
             { type: "thinking", thinking: "private reasoning" },
-            phasedText("Should I apply the patch?", "commentary"),
-            phasedText("Let me know. <think>private hidden thought</think>", "final_answer"),
+            {
+              type: "text",
+              text: "Should I apply the patch?",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Let me know. <think>private hidden thought</think>",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
           ],
         }),
         assistant("It will restart the service."),
@@ -105,10 +123,13 @@ describe("bounded Decision conversation projection", () => {
           display: false,
           timestamp: 3,
         },
-        Object.assign(user("private legacy runtime"), {
+        {
+          role: "user",
+          content: "private legacy runtime",
           runtimeContextCarrier: true,
           runtimeContextCarrierRetained: false,
-        }),
+          timestamp: 4,
+        },
       ],
       "Try again",
     );
@@ -125,56 +146,95 @@ describe("bounded Decision conversation projection", () => {
     });
     expect(JSON.stringify(result)).not.toContain("private");
   });
-  it.each<[string, AgentMessage[], boolean?]>([
-    ["user string media", exchange("See /tmp/synthetic-private-image.png", "Inspect it?")],
-    [
-      "user block media",
-      exchange([{ type: "text", text: "See /tmp/synthetic-private-image.png" }], "Inspect it?"),
-    ],
-    [
-      "internal provenance",
-      [
+  it.each<{
+    name: string;
+    messages: AgentMessage[];
+    currentInputExcluded?: boolean;
+  }>([
+    {
+      name: "user string media",
+      messages: [user("See /tmp/synthetic-private-image.png"), assistant("Inspect it?")],
+    },
+    {
+      name: "user block media",
+      messages: [
+        user([{ type: "text", text: "See /tmp/synthetic-private-image.png" }]),
+        assistant("Inspect it?"),
+      ],
+    },
+    {
+      name: "internal provenance",
+      messages: [
         Object.assign(user("private internal event"), { provenance: { kind: "internal_system" } }),
         assistant("A proposal"),
       ],
-    ],
-    [
-      "excluded message",
-      [
+    },
+    {
+      name: "excluded message",
+      messages: [
         Object.assign(user("private excluded"), { excludeFromContext: true }),
         assistant("A proposal"),
       ],
-    ],
-    ["image", exchange([{ type: "image", data: "private binary", mimeType: "image/png" }])],
-    ["excluded current input", [], true],
-    ...["commentary", "final_answer"].map((phase): [string, AgentMessage[]] => [
-      `assistant ${phase} media`,
-      exchange(
-        "Help",
-        assistant("", { content: [phasedText("See /tmp/synthetic-private-image.png", phase)] }),
-      ),
-    ]),
-  ])("excludes private context: %s", (_name, messages, currentInputExcluded) => {
+    },
+    {
+      name: "image",
+      messages: [
+        user([{ type: "image", data: "private binary", mimeType: "image/png" }]),
+        assistant("A proposal"),
+      ],
+    },
+    { name: "excluded current input", messages: [], currentInputExcluded: true },
+    ...["commentary", "final_answer"].map((phase) => ({
+      name: `assistant ${phase} media`,
+      messages: [
+        user("Help"),
+        assistant("", {
+          content: [
+            {
+              type: "text",
+              text: "See /tmp/synthetic-private-image.png",
+              textSignature: JSON.stringify({ v: 1, phase }),
+            },
+          ],
+        }),
+      ],
+    })),
+  ])("excludes private context: $name", ({ messages, currentInputExcluded }) => {
     const result = prepareDecisionContext({
       latestRequest: "Explain",
       messages,
       currentInputExcluded,
     });
-    expect(result).toMatchObject(skipped("excluded-context"));
+    expect(result).toMatchObject({ status: "skipped", reason: "excluded-context" });
     expect(JSON.stringify(result)).not.toContain("private");
   });
   it.each([false, true])(
     "requires a return for each tool call, including reused IDs (%s)",
     (priorReturn) => {
-      const call = assistant("", { content: [toolCall], stopReason: "toolUse" });
+      const call = assistant("", {
+        content: [{ type: "toolCall", id: "reused", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      });
       expect(
         project([
           user("Do it"),
-          ...(priorReturn ? [call, toolResult(false)] : []),
+          ...(priorReturn
+            ? [
+                call,
+                {
+                  role: "toolResult" as const,
+                  toolCallId: "reused",
+                  toolName: "read",
+                  content: [],
+                  isError: false,
+                  timestamp: 3,
+                },
+              ]
+            : []),
           call,
           assistant("Done"),
         ]),
-      ).toMatchObject(skipped("pending-tool-work"));
+      ).toMatchObject({ status: "skipped", reason: "pending-tool-work" });
     },
   );
 });

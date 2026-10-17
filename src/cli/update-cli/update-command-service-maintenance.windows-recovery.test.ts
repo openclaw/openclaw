@@ -213,7 +213,10 @@ it.each(["before-disable", "after-disable"] as const)(
   (interruption) =>
     withServiceHome(async (home) => {
       const root = process.cwd();
-      const run = { runId: randomUUID(), env: { HOME: home }, interrupted: false };
+      const run: NonNullable<Parameters<typeof createUpdateCommandExecutionGuards>[0]["run"]> = {
+        runId: randomUUID(),
+        env: { HOME: home },
+      };
       const task = mutableTask(
         () => {
           if (interruption === "before-disable") {

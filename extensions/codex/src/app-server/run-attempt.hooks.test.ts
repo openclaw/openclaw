@@ -103,7 +103,11 @@ function captureDiagnostics(publicOnly = false) {
         content.set(event.type, privateData);
       });
   onTestFinished(stop);
-  return { events, content, find: (type: string) => events.find((event) => event.type === type) };
+  const find = <T extends DiagnosticEventPayload["type"]>(type: T) =>
+    events.find(
+      (event): event is Extract<DiagnosticEventPayload, { type: T }> => event.type === type,
+    );
+  return { events, content, find };
 }
 
 setupRunAttemptTestHooks();

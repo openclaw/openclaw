@@ -1,5 +1,8 @@
-import type { Locator, Page } from "playwright";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -11,47 +14,11 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile New conversation" });
-const viewport = { width: 390, height: 844 };
-const mobile = { viewport, hasTouch: true, colorScheme: "dark" as const };
-const currentSession = "agent:research:current";
-const draft = "Help me plan the next release.";
-const composerSelector = ".new-session-page__message";
-const headerSelector = ".chat-pane__header:visible, .header-new-session:visible";
-const drawerToggleSelector = ".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible";
-const chatUrl = () => controlUiSessionUrl(suite.server.baseUrl, currentSession);
-const newUrl = () => suite.server.baseUrl + "new?agent=research";
-
-const checkProofFrames = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const roster = {
-  defaultId: "research",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [
-    { id: "research", name: "Atlas" },
-    { id: "writer", name: "Scout" },
-  ],
+const mobile = {
+  viewport: { width: 390, height: 844 },
+  hasTouch: true,
+  colorScheme: "dark" as const,
 };
-
-async function checkFrame(
-  page: Page,
-  content: Locator[] = [page.locator(headerSelector).first()],
-  elementOnly = false,
-) {
-  if (!checkProofFrames) {
-    return;
-  }
-  await takeControlUiScreenshotFrame(page, page.locator(".shell"), content, {
-    animations: "disabled",
-    ...(elementOnly ? { elements: content } : {}),
-  });
-}
-
-async function openComposer(page: Page, route: "chat" | "new") {
-  await page.goto(route === "chat" ? chatUrl() : newUrl());
-  await page
-    .locator(route === "chat" ? ".agent-chat__composer-combobox textarea" : composerSelector)
-    .waitFor();
-}
 
 async function installScenario(page: Page, operatorScopes?: string[], team = false) {
   if (team) {
@@ -62,27 +29,76 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
   }
   return installMockGateway(page, {
     defaultAgentId: "research",
+    assistantAgentId: "research",
     assistantName: "Atlas",
     operatorScopes,
-    methodResponses: team ? { "agents.list": roster } : undefined,
+    ...(team
+      ? {
+          methodResponses: {
+            "agents.list": {
+              defaultId: "research",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [
+                { id: "research", name: "Atlas", model: { primary: "demo/demo-model" } },
+                { id: "writer", name: "Scout", model: { primary: "demo/demo-model" } },
+              ],
+            },
+          },
+        }
+      : {}),
     agentModel: "demo/demo-model",
     models: [{ id: "demo-model", provider: "demo", name: "Demo model", contextWindow: 32000 }],
-    sessionKey: currentSession,
-    sessions: [{ key: currentSession, kind: "direct", label: "Launch planning" }],
+    sessionKey: "agent:research:current",
+    sessions: [
+      {
+        key: "agent:research:current",
+        kind: "direct",
+        label: "Launch planning",
+        model: "demo-model",
+        modelProvider: "demo",
+        updatedAt: 1791871200000,
+      },
+    ],
     historyMessages: [
-      ["user", "Review the launch."],
-      ["assistant", "The release is ready."],
-    ].map(([role, text]) => ({ role, content: [{ type: "text", text }] })),
+      { role: "user", content: [{ type: "text", text: "Let's review the launch checklist." }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "The release notes and design review are ready. What would you like to work on next?",
+          },
+        ],
+      },
+    ],
   });
 }
 
 suite.define(() => {
-  it("keeps creation in chat navigation and non-chat page headers", () =>
-    suite.withPage(mobile, async ({ page }) => {
+  it("keeps creation in chat navigation and non-chat page headers", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page);
-      await openComposer(page, "chat");
+      const dir =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? createControlUiE2eArtifactDir("mobile-new-conversation-after")
+          : null;
+      const capture = async (name: string) => {
+        if (!dir) {
+          return;
+        }
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(dir, name + ".png"), frame.png);
+      };
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       expect(await page.locator(".header-new-session").count()).toBe(0);
-      await checkFrame(page);
+      await capture("chat");
       await page.locator(".chat-pane__nav-toggle").tap();
       await waitForMobileSidebarDrawerOpen(page);
       const create = page.getByRole("link", { name: "New conversation", exact: true });
@@ -96,9 +112,9 @@ suite.define(() => {
       expect(await page.locator(".sidebar-rail .sidebar-new-session").isVisible()).toBe(true);
       await create.tap();
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
-      await page.locator(composerSelector).waitFor();
+      await page.locator(".new-session-page__message").waitFor();
       expect(await page.locator(".topbar .header-new-session").count()).toBe(1);
-      await checkFrame(page);
+      await capture("topbar");
       await page.goto(suite.server.baseUrl + "agents");
       await waitForControlUiRoute(page, { routeId: "agents-home" });
       expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
@@ -109,93 +125,160 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "new-session" });
       expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe("/new?agent=research");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      if (checkProofFrames) {
-        await openComposer(page, "chat");
+      if (dir) {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
         await page.emulateMedia({ colorScheme: "light" });
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-        await checkFrame(page);
+        await capture("chat-light");
         await page.setViewportSize({ width: 1280, height: 800 });
         const sidebar = page.locator("openclaw-app-sidebar .sidebar");
-        await checkFrame(page, [sidebar], true);
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [sidebar], {
+          animations: "disabled",
+          elements: [sidebar],
+        });
+        await writeFile(path.join(dir, "rail-light.png"), frame.elements[0]!.png);
       }
-    }));
+    });
+  });
 
-  it("keeps the mobile welcome with its composer across phone and keyboard viewports", () =>
-    suite.withPage(mobile, async ({ page }) => {
+  it("keeps the mobile welcome with its composer across phone and keyboard viewports", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
       await installScenario(page, undefined, true);
-      await page.goto(newUrl());
-      const composer = page.locator(composerSelector);
-      await composer.fill(draft);
+      await page.goto(suite.server.baseUrl + "new?agent=research");
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("Help me plan the next release.");
       const identity = page.locator(".new-session-page .agent-chat__welcome-identity");
       const triggers = page.locator(".new-session-page__triggers");
       const surface = page.locator(".new-session-page__composer");
-      const agentLabel = page.locator(".new-session-page__select--agent .agent-select__label");
-      const scroll = page.locator(".new-session-page__scroll");
-      const content = [identity, triggers, surface];
-      for (const { width, height, theme } of [
-        { width: 390, height: 844, theme: "dark" },
-        { width: 430, height: 932, theme: "light" },
-        { width: 320, height: 568, theme: "dark" },
+      const dir =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? createControlUiE2eArtifactDir("mobile-composer-layout")
+          : null;
+      for (const state of [
+        { name: "portrait", width: 390, height: 844, theme: "dark" },
+        { name: "wide-phone", width: 430, height: 932, theme: "light" },
+        { name: "small-phone", width: 320, height: 568, theme: "dark" },
         // A resized content viewport exercises the layout used above a soft keyboard.
-        { width: 390, height: 480, theme: "dark" },
-        { width: 844, height: 390, theme: "dark" },
+        { name: "keyboard", width: 390, height: 480, theme: "dark" },
+        { name: "landscape", width: 844, height: 390, theme: "dark" },
       ] as const) {
-        await page.setViewportSize({ width, height });
-        await page.emulateMedia({ colorScheme: theme });
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
-        await takeControlUiScreenshotFrame(page, page.locator(".shell"), content, {
-          animations: "disabled",
-        });
+        await page.setViewportSize({ width: state.width, height: state.height });
+        await page.emulateMedia({ colorScheme: state.theme });
+        await expect
+          .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+          .toBe(state.theme);
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [identity, triggers, surface],
+          {
+            animations: "disabled",
+          },
+        );
+        if (dir) {
+          await writeFile(path.join(dir, state.name + ".png"), frame.png);
+        }
         const heroBox = await identity.boundingBox();
         const targetBox = await triggers.boundingBox();
         const composerBox = await surface.boundingBox();
-        expect([heroBox, targetBox, composerBox]).not.toContain(null);
+        expect(heroBox).not.toBeNull();
+        expect(targetBox).not.toBeNull();
+        expect(composerBox).not.toBeNull();
         expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeGreaterThanOrEqual(0);
         expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeLessThanOrEqual(24);
         expect(heroBox!.y).toBeGreaterThanOrEqual(58);
         const compositionCenter = (heroBox!.y + composerBox!.y + composerBox!.height) / 2;
-        const contentCenter = 58 + (height - 58) / 2;
+        const contentCenter = 58 + (state.height - 58) / 2;
         expect(Math.abs(compositionCenter - contentCenter)).toBeLessThanOrEqual(48);
         const local = page.locator("#new-session-where-trigger");
         expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
-        expect(await agentLabel.isVisible()).toBe(true);
+        expect(
+          await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
+        ).toBe(true);
         expect(composerBox!.height).toBeLessThanOrEqual(150);
-        expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(height);
+        expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(state.height);
         expect(composerBox!.x).toBeGreaterThanOrEqual(0);
-        expect(composerBox!.x + composerBox!.width).toBeLessThanOrEqual(width);
-        expect(await composer.inputValue()).toBe(draft);
-        expect(await scroll.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        expect(composerBox!.x + composerBox!.width).toBeLessThanOrEqual(state.width);
+        expect(await composer.inputValue()).toBe("Help me plan the next release.");
+        expect(
+          await page
+            .locator(".new-session-page__scroll")
+            .evaluate((element) => element.scrollWidth <= element.clientWidth),
+        ).toBe(true);
       }
-      await page.setViewportSize(viewport);
+      await page.setViewportSize({ width: 390, height: 844 });
+      const capture = async (name: string, content = [identity, triggers, surface]) => {
+        if (dir) {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), content, {
+            animations: "disabled",
+          });
+          await writeFile(path.join(dir, name + ".png"), frame.png);
+        }
+      };
       await composer.fill("");
       expect(await page.locator(".new-session-page__start-submit").isDisabled()).toBe(true);
-      await checkFrame(page, content);
+      await capture("empty");
       await page.locator("#new-session-where-trigger").tap();
       const destination = page.locator("#new-session-where-popover");
       await destination.waitFor();
-      await checkFrame(page, [destination]);
+      await capture("menu", [destination]);
       const destinationBox = await destination.boundingBox();
       expect(destinationBox!.x).toBeGreaterThanOrEqual(0);
       expect(destinationBox!.x + destinationBox!.width).toBeLessThanOrEqual(390);
       expect(await page.evaluate(() => window.scrollX)).toBe(0);
       await page.keyboard.press("Escape");
       await composer.fill("A detailed plan for the next release.\n".repeat(20));
-      expect(await composer.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-      await checkFrame(page, content);
-    }));
+      expect(
+        await composer.evaluate((element) => element.scrollHeight > element.clientHeight),
+      ).toBe(true);
+      await capture("long-prompt");
+    });
+  });
 
-  it.each(["chat", "new"] as const)("opens the team composer directly from %s", (route) =>
-    suite.withPage(mobile, async ({ page }) => {
+  it.each(["chat", "new"] as const)("opens the team composer directly from %s", async (route) => {
+    await suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page, undefined, true);
-      await openComposer(page, route);
+      const draft = "Help me plan the next release.";
+      await page.goto(
+        route === "chat"
+          ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
+          : suite.server.baseUrl + "new?agent=research",
+      );
+      await page
+        .locator(
+          route === "chat"
+            ? ".agent-chat__composer-combobox textarea"
+            : ".new-session-page__message",
+        )
+        .waitFor();
       if (route === "new") {
-        await page.locator(composerSelector).fill(draft);
+        await page.locator(".new-session-page__message").fill(draft);
       }
-      await checkFrame(page);
+      const dir =
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? createControlUiE2eArtifactDir("mobile-team-" + route)
+          : null;
+      const capture = async (name: string) => {
+        if (!dir) {
+          return;
+        }
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(dir, name + ".png"), frame.png);
+      };
+      await capture("closed");
       const action = page.getByRole("link", { name: "New conversation", exact: true });
       expect(await action.count()).toBe(route === "chat" ? 0 : 1);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
-      await page.locator(drawerToggleSelector).first().tap();
+      await page
+        .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+        .first()
+        .tap();
       await waitForMobileSidebarDrawerOpen(page);
       expect(await page.locator(".header-new-session:visible").count()).toBe(0);
       expect(await action.count()).toBe(1);
@@ -207,57 +290,64 @@ suite.define(() => {
       }
       await action.tap();
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
-      const composer = page.locator(composerSelector);
+      const composer = page.locator(".new-session-page__message");
       await composer.waitFor();
       if (route === "chat") {
         await expect
-          .poll(() => composer.evaluate((el) => el === document.activeElement))
+          .poll(() => composer.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await page.keyboard.type(draft);
       }
       // Reopening the current composer keeps its draft instead of resetting it.
       expect(await composer.inputValue()).toBe(draft);
-      await checkFrame(page);
+      await capture("composer");
       const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await picker.locator(".agent-select__trigger").tap();
       await picker.getByRole("menuitemradio", { name: "Scout", exact: true }).tap();
       await expect.poll(() => picker.locator(".agent-select__label").textContent()).toBe("Scout");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    }),
-  );
+    });
+  });
 
   it.each([
     { state: "denied", team: false },
     { state: "disconnected", team: false },
     { state: "denied", team: true },
-  ] as const)("blocks $state creation (team: $team)", ({ state, team }) =>
-    suite.withPage(mobile, async ({ page }) => {
-      const gateway = await installScenario(
-        page,
-        state === "denied" ? ["operator.read"] : undefined,
-        team,
-      );
-      await page.goto(state === "denied" ? chatUrl() : newUrl());
-      if (state === "denied") {
-        await page.locator(".chat-pane__nav-toggle").tap();
-        await waitForMobileSidebarDrawerOpen(page);
-      }
-      const create = page.locator(
-        state === "denied" ? ".sidebar-rail .sidebar-new-session" : ".header-new-session",
-      );
-      await create.waitFor();
-      if (state === "disconnected") {
-        await gateway.setOnline(false);
-        await gateway.closeLatest(1001, "mobile creation offline proof");
-      }
-      await expect.poll(() => create.isDisabled()).toBe(true);
-      expect(await create.getAttribute("href")).toBeNull();
-      expect(await create.getAttribute("aria-disabled")).toBe("true");
-      expect(await create.getAttribute("tabindex")).toBe("-1");
-      const location = page.url();
-      await create.click({ force: true });
-      expect(page.url()).toBe(location);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    }),
+  ] as const)(
+    "keeps the $state creation action visible but non-navigable (team: $team)",
+    async ({ state, team }) => {
+      await suite.withPage(mobile, async ({ page }) => {
+        const gateway = await installScenario(
+          page,
+          state === "denied" ? ["operator.read"] : undefined,
+          team,
+        );
+        await page.goto(
+          state === "denied"
+            ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
+            : suite.server.baseUrl + "new?agent=research",
+        );
+        if (state === "denied") {
+          await page.locator(".chat-pane__nav-toggle").tap();
+          await waitForMobileSidebarDrawerOpen(page);
+        }
+        const create = page.locator(
+          state === "denied" ? ".sidebar-rail .sidebar-new-session" : ".header-new-session",
+        );
+        await create.waitFor();
+        if (state === "disconnected") {
+          await gateway.setOnline(false);
+          await gateway.closeLatest(1001, "mobile creation offline proof");
+        }
+        await expect.poll(() => create.isDisabled()).toBe(true);
+        expect(await create.getAttribute("href")).toBeNull();
+        expect(await create.getAttribute("aria-disabled")).toBe("true");
+        expect(await create.getAttribute("tabindex")).toBe("-1");
+        const location = page.url();
+        await create.click({ force: true });
+        expect(page.url()).toBe(location);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      });
+    },
   );
 });

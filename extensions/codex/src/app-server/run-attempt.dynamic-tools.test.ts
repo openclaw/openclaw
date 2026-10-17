@@ -68,7 +68,7 @@ async function startTool(
   );
   setCodexTestToolFactory(params, () => [tool]);
   setCodexTestModelSupportsTools(params, true);
-  await bindProductionHarnessHostCapabilitiesForTest(params);
+  onTestFinished(await bindProductionHarnessHostCapabilitiesForTest(params));
   if (clock) {
     fakeClock();
   }

@@ -220,7 +220,12 @@ it.each([
   "stops an idle resident with budgets $residentTimeout/$managerTimeout",
   async ({ residentTimeout, managerTimeout, drain, warning }) => {
     const f = fixture({
-      resident: { pid: 42, shutdownBudget: { timeoutMs: residentTimeout } },
+      resident: {
+        pid: 42,
+        ...(residentTimeout === undefined
+          ? {}
+          : { shutdownBudget: { timeoutMs: residentTimeout } }),
+      },
     });
     mocks.managerTimeout.mockResolvedValue(managerTimeout);
     await expect(f.run()).resolves.toBe("stopped");
