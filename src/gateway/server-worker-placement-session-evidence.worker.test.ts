@@ -164,7 +164,7 @@ async function resolveEvidence(subject: Awaited<ReturnType<typeof placement>>) {
   return (await createResolver([subject]))(subject);
 }
 
-function withState<T>(run: () => Promise<T>): Promise<T> {
+function withState<T>(run: Parameters<typeof withOpenClawTestState<T>>[1]): Promise<T> {
   return withOpenClawTestState({ scenario: "minimal" }, run);
 }
 

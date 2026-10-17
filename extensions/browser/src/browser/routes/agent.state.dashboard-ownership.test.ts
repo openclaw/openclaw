@@ -39,6 +39,7 @@ vi.mock("../pw-session-connection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../pw-session-connection.js")>()),
   getPageForTargetId: () => sessionMocks().getPageForTargetId(),
 }));
+// mock-isolation: Bind real storage and session actions to the suite-owned page, not a global connection.
 vi.mock("../pw-ai-module.js", () => ({
   getPwAiModule: async () => ({
     ...(await import("../pw-tools-core.state.js")),

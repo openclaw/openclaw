@@ -104,6 +104,7 @@ function runOnFlush(entries: Array<Record<string, unknown>>): Promise<void> {
   return flush.completion;
 }
 
+// mock-isolation: Exercise debounce and adoption dispatch without a real agent run or channel send.
 vi.mock("./message-handler/pipeline.runtime.js", () => ({
   prepareSlackMessage: prepareMock,
   dispatchPreparedSlackMessage: dispatchMock,

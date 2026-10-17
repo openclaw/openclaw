@@ -51,6 +51,7 @@ const navigation = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+// mock-isolation: Supply this suite's synthetic Playwright module without process-wide browser state.
 vi.mock("../pw-ai-module.js", () => ({
   getPwAiModule: vi.fn(async () => playwright.module),
   getLoadedPwAiModule: () => null,
@@ -69,6 +70,7 @@ vi.mock("../chrome-mcp.js", () => ({
   takeChromeMcpSnapshot: vi.fn(),
 }));
 
+// mock-isolation: Observe navigation policy checks without resolving or connecting fixture URLs.
 vi.mock("../navigation-guard.js", () => navigation);
 
 vi.mock("./agent.shared.js", () => ({
