@@ -2455,6 +2455,7 @@ jobs:
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
+            resolve("ui/src/e2e/mobile-chat-session-menu.e2e.test.ts"),
           ].filter(existsSync));
           let requiresWebkit = false;
           if (webkitSuites.size > 0) {

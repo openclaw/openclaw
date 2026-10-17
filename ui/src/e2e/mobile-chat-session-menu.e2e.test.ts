@@ -1,20 +1,101 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { webkit, type Browser } from "playwright";
 import { expect, it } from "vitest";
 import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  startControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
-  createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+let webkitBrowser: Browser;
+const suite = createControlUiE2eSuite({
+  name: "Control UI mobile chat menus",
+  startServer: () => startControlUiE2eServer(undefined, { source: true }),
+  resources: {
+    async run() {
+      webkitBrowser = await webkit.launch();
+    },
+    async close() {
+      await webkitBrowser?.close();
+    },
+  },
+});
 
 suite.define(() => {
+  it.each(["chromium", "webkit"] as const)(
+    "toggles chat header menus closed on a second mobile tap in %s",
+    async (engine) => {
+      const options = {
+        hasTouch: true,
+        isMobile: true,
+        locale: "en-US",
+        serviceWorkers: "block" as const,
+        viewport: { width: 390, height: 844 },
+      };
+      const context =
+        engine === "chromium"
+          ? await suite.newBrowserContext(options)
+          : await webkitBrowser.newContext(options);
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      try {
+        const sessionKey = "agent:main:mobile-toggle";
+        await installMockGateway(page, {
+          sessionKey,
+          terminalEnabled: true,
+          sessions: [sessionRow(sessionKey, "Mobile menu", 1)],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const session = page.locator(".chat-header-session-menu__trigger");
+        const panels = page.locator(".chat-pane__layout-trigger");
+        for (const [name, trigger] of [
+          ["session", session],
+          ["panels", panels],
+        ] as const) {
+          // Open with a click so a missing native touch click fails at the reported close boundary.
+          await trigger.click();
+          await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+          await trigger.tap();
+          await captureUiProof(suite, page, `mobile-toggle-${engine}-${name}-second-tap.png`);
+          await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+          await trigger.tap();
+          await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+          await trigger.tap();
+          await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+        }
+        await session.tap();
+        await panels.tap();
+        await expect.poll(() => session.getAttribute("aria-expanded")).toBe("false");
+        await expect.poll(() => panels.getAttribute("aria-expanded")).toBe("true");
+        await page.locator(".chat-pane__session-title-text").tap();
+        await expect.poll(() => panels.getAttribute("aria-expanded")).toBe("false");
+        await page.setViewportSize({ width: 1280, height: 900 });
+        for (const trigger of [session, panels]) {
+          await trigger.click();
+          await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+          await trigger.click();
+          await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+        }
+      } finally {
+        if (engine === "chromium") {
+          await suite.closeBrowserContext(context);
+        } else {
+          await context.close();
+        }
+      }
+    },
+  );
+
   it.each(["light", "dark"] as const)(
     "keeps the %s mobile Layout menu bounded and its actions reachable without desktop shortcuts",
     async (colorScheme) => {

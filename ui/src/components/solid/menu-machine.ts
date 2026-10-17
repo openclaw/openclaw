@@ -491,6 +491,18 @@ export function useMenuMachine(
         ...result,
         "aria-disabled": disabled ? "true" : undefined,
         "data-disabled": disabled ? "" : undefined,
+        // WebKit drops touch clicks when pointerdown is canceled. Cancel the
+        // compatibility mousedown instead so ancestor focus cannot dismiss and reopen the menu.
+        onPointerDown: (event: PointerEvent) => {
+          if (event.pointerType !== "touch") {
+            result.onPointerDown?.(event);
+          }
+        },
+        onMouseDown: (event: MouseEvent) => {
+          if (!disabled && event.button === 0) {
+            event.preventDefault();
+          }
+        },
         onClick: (event: MouseEvent) => {
           if (disabled) {
             return;
