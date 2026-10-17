@@ -1,7 +1,9 @@
+// Subagent registry archive tests cover keep/delete cleanup modes, retryable
+// session deletion, and context-engine lifecycle callbacks.
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
@@ -11,7 +13,6 @@ import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
@@ -34,10 +35,14 @@ let currentConfig = {
 };
 const loadConfigMock = vi.mocked(getRuntimeConfig);
 
-const respondToGatewayRequest = vi.hoisted(
-  () => async (request: { method?: string }) =>
-    request.method === "agent.wait" ? { status: "pending" } : {},
-);
+const respondToGatewayRequest = vi.hoisted(() => async (request: unknown) => {
+  const method = (request as { method?: string }).method;
+  if (method === "agent.wait") {
+    // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
+    return { status: "pending" };
+  }
+  return {};
+});
 
 vi.mock("../../../gateway/call.js", () => ({
   callGateway: vi.fn(respondToGatewayRequest),
@@ -112,290 +117,419 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-let settleRootWork: ReturnType<typeof observeRootWork>;
-let mod: typeof import("./subagent-registry.test-helpers.js");
+describe("subagent registry archive behavior", () => {
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  let mod: typeof import("./subagent-registry.test-helpers.js");
+  let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
+  let createSubagentRunRecord: typeof import("../../subagent-test-fixtures.test-helpers.js").createSubagentRunRecord;
 
-beforeAll(async () => {
-  mod = await import("./subagent-registry.test-helpers.js");
-});
+  beforeAll(async () => {
+    ({ createCanonicalSubagentRunFixture } =
+      await import("./subagent-registry.persistence.test-support.js"));
+    ({ createSubagentRunRecord } = await import("../../subagent-test-fixtures.test-helpers.js"));
+    mod = await import("./subagent-registry.test-helpers.js");
+  });
 
-type RunInput = Parameters<typeof mod.addSubagentRunForTests>[0];
-const addCanonicalSubagentRunForTests = (
-  entry: Required<Pick<RunInput, "runId" | "childSessionKey" | "task">> & Partial<RunInput>,
-) => {
-  const suffix = entry.childSessionKey.replace("agent:main:subagent:", "");
-  return mod.addSubagentRunForTests({
-    childSessionIdentity: {
-      sessionId: `session-${suffix}`,
-      lifecycleRevision: `lifecycle-${suffix}`,
-    },
-    ...entry,
-  });
-};
-const deleteCalls = () =>
-  vi.mocked(callGateway).mock.calls.filter(([request]) => request.method === "sessions.delete");
-const setArchiveMinutes = (archiveAfterMinutes: number) => {
-  currentConfig = { agents: { defaults: { subagents: { archiveAfterMinutes } } } };
-  setRuntimeConfigSnapshot(currentConfig);
-};
+  const addCanonicalSubagentRunForTests = (
+    entry: Parameters<typeof mod.addSubagentRunForTests>[0],
+  ) =>
+    mod.addSubagentRunForTests(createCanonicalSubagentRunFixture(createSubagentRunRecord(entry)));
 
-const addRun = (suffix: string, overrides: Partial<RunInput> = {}) =>
-  addCanonicalSubagentRunForTests({
-    runId: `run-${suffix}`,
-    childSessionKey: `agent:main:subagent:${suffix}`,
-    task: suffix,
-    cleanup: "delete",
-    ...overrides,
-  });
-const prepareDelete = (suffix: string, onDelete: () => void | Promise<void>) => {
-  setArchiveMinutes(1);
-  sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockResolvedValue({
-    sessionId: `session-${suffix}`,
-    lifecycleRevision: `lifecycle-${suffix}`,
-    updatedAt: Date.now(),
-  });
-  vi.mocked(callGateway).mockImplementation(async (request) => {
-    if (request.method === "sessions.delete") {
-      await onDelete();
+  const sweepAndSettleCleanup = async () => {
+    try {
+      await mod.testing.sweepOnceForTests();
+    } finally {
+      // Sweeping admits detached cleanup and requester-settlement work. Join
+      // those real promises; a fixed number of microtasks cannot prove retirement.
+      await settleRootWork(true);
     }
-    return respondToGatewayRequest(request);
-  });
-};
-const expectDelete = (suffix: string) =>
-  expect(callGateway).toHaveBeenCalledWith({
-    assertDispatchCurrent: expect.any(Function),
-    method: "sessions.delete",
-    timeoutMs: 10_000,
-    params: {
-      key: `agent:main:subagent:${suffix}`,
-      agentId: "main",
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-      expectedSessionId: `session-${suffix}`,
-      expectedLifecycleRevision: `lifecycle-${suffix}`,
-    },
-  });
-const requesterRuns = () => mod.listSubagentRunsForRequester("agent:main:main");
+  };
 
-const sweepAndSettleCleanup = async () => {
-  try {
-    await mod.testing.sweepOnceForTests();
-  } finally {
-    // Sweeping admits detached cleanup and requester-settlement work. Join
-    // those real promises; a fixed number of microtasks cannot prove retirement.
-    await settleRootWork(true);
-  }
-};
+  const waitForNoRequesterRuns = async () => {
+    await vi.waitFor(() => {
+      expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    });
+  };
 
-const waitForNoRequesterRuns = () => vi.waitFor(() => expect(requesterRuns()).toHaveLength(0));
-
-beforeEach(async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-  setArchiveMinutes(60);
-  vi.mocked(callGateway).mockReset().mockImplementation(respondToGatewayRequest);
-  loadConfigMock.mockReset().mockImplementation(() => currentConfig);
-  vi.mocked(ensureContextEnginesInitialized).mockReset();
-  vi.mocked(resolveContextEngine).mockReset();
-  vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
-  vi.mocked(captureSubagentCompletionReply).mockReset();
-  vi.mocked(runSubagentAnnounceFlow).mockReset();
-  vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
-  sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockReset();
-  await mod.resetSubagentRegistryForTests({ persist: false });
-  settleRootWork = observeRootWork();
-});
-
-afterEach(async () => {
-  try {
-    await settleRootWork();
-  } finally {
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
+    };
+    setRuntimeConfigSnapshot(currentConfig);
+    vi.mocked(callGateway).mockReset();
+    vi.mocked(callGateway).mockImplementation(respondToGatewayRequest);
+    loadConfigMock.mockReset().mockImplementation(() => currentConfig);
+    vi.mocked(ensureContextEnginesInitialized).mockReset();
+    vi.mocked(resolveContextEngine).mockReset();
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    vi.mocked(captureSubagentCompletionReply).mockReset();
+    vi.mocked(runSubagentAnnounceFlow).mockReset();
+    vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
+    sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockReset();
     await mod.resetSubagentRegistryForTests({ persist: false });
-    vi.useRealTimers();
-    clearRuntimeConfigSnapshot();
-  }
-});
+    settleRootWork = observeRootWork();
+  });
 
-it("starts delete-mode retention when its terminal lifecycle event completes", async () => {
-  setArchiveMinutes(1);
-  vi.mocked(getAgentRunContext).mockReturnValue({} as never);
-  vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
-  vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
+  afterEach(async () => {
+    try {
+      await settleRootWork();
+    } finally {
+      await mod.resetSubagentRegistryForTests({ persist: false });
+      vi.useRealTimers();
+      clearRuntimeConfigSnapshot();
+    }
+  });
 
-  await mod.registerSubagentRun(
-    createSubagentRunParams({
+  it("starts delete-mode retention when its terminal lifecycle event completes", async () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    };
+    setRuntimeConfigSnapshot(currentConfig);
+    vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
+
+    await mod.registerSubagentRun({
       runId: "run-delete-completed",
       childSessionKey: "agent:main:subagent:delete-completed",
+      childAgentId: "main",
       sessionEntry: {
         sessionId: "session-delete-completed",
         lifecycleRevision: "lifecycle-delete-completed",
       },
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
       task: "finish after a long run",
       cleanup: "delete",
       expectsCompletionMessage: true,
-    }),
-  );
-  await vi.advanceTimersByTimeAsync(90_000);
-
-  const endedAt = Date.now();
-  const lifecycleHandler = vi.mocked(onAgentEvent).mock.calls.at(-1)?.[0];
-  expect(lifecycleHandler).toBeTypeOf("function");
-  const terminalPublished = createDeferred();
-  const stop = subscribeSubagentRunChanges("projection", () => {
-    const run = subagentRuns.get("run-delete-completed");
-    if (run?.execution.status === "terminal" && run.execution.endedAt === endedAt) {
-      terminalPublished.resolve();
-    }
-  });
-  try {
-    lifecycleHandler?.({
-      runId: "run-delete-completed",
-      stream: "lifecycle",
-      seq: 1,
-      ts: endedAt,
-      data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
     });
-    await terminalPublished.promise;
-  } finally {
-    stop();
-  }
+    await vi.advanceTimersByTimeAsync(90_000);
 
-  await settleRootWork(true);
-  expect(requesterRuns()[0]).toMatchObject({
-    execution: { status: "terminal", endedAt },
-    archiveAtMs: endedAt + 60_000,
-  });
-});
-
-it.each(["queued", "running"] as const)("keeps %s runs past the stale grace", async (status) => {
-  const queued = status === "queued";
-  const suffix = queued ? "queued-collector" : "delete-stale-deadline";
-  const createdAt = Date.now() - 120_000;
-  if (!queued) {
-    vi.mocked(getAgentRunContext).mockReturnValue({} as never);
-  }
-  await addRun(
-    suffix,
-    queued
-      ? { createdAt, cleanup: "keep", collect: true, execution: { status: "queued" } }
-      : { createdAt, startedAt: createdAt, archiveAtMs: Date.now() - 60_000 },
-  );
-  await mod.testing.sweepOnceForTests();
-  const run = requesterRuns()[0];
-  expect(run).toMatchObject({ runId: `run-${suffix}`, execution: { status } });
-  if (queued) {
-    expect(run?.collectorCompletion).toBeUndefined();
-  } else {
-    expect(deleteCalls()).toHaveLength(0);
-  }
-});
-
-it("keeps pending delivery until completion before archival", async () => {
-  const deliveryStatus = "pending";
-  const now = Date.now();
-  await addRun(`delete-delivery-${deliveryStatus}`, {
-    expectsCompletionMessage: true,
-    createdAt: now - 120_000,
-    endedAt: now - 60_000,
-    archiveAtMs: now - 1,
-    delivery: { status: deliveryStatus },
-  });
-
-  await mod.testing.sweepOnceForTests();
-
-  const entry = requesterRuns()[0];
-  expect(entry?.delivery?.status).toBe(deliveryStatus);
-  expect(deleteCalls()).toHaveLength(0);
-
-  await mutateSubagentRuns([entry!.runId], (rows) => {
-    const current = rows.get(entry!.runId)!;
-    const next = { ...current, delivery: { ...current.delivery, status: "delivered" as const } };
-    return { value: undefined, postimages: new Map([[current.runId, next]]) };
-  });
-  await mod.testing.sweepOnceForTests();
-
-  await waitForNoRequesterRuns();
-});
-
-it("keeps archived delete-mode runs for retry when sessions.delete fails", async () => {
-  const onSubagentEnded = vi.fn(async () => undefined);
-  const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sweep-retry-"));
-  const attachmentsDir = path.join(attachmentsRootDir, "child");
-  await fs.mkdir(attachmentsDir, { recursive: true });
-  await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-  let deleteAttempts = 0;
-  prepareDelete("delete-retry", () => {
-    if (++deleteAttempts === 1) {
-      throw new Error("delete failed");
+    const endedAt = Date.now();
+    const lifecycleHandler = vi.mocked(onAgentEvent).mock.calls.at(-1)?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+    const terminalPublished = createDeferred();
+    const stop = subscribeSubagentRunChanges("projection", () => {
+      const run = subagentRuns.get("run-delete-completed");
+      if (run?.execution.status === "terminal" && run.execution.endedAt === endedAt) {
+        terminalPublished.resolve();
+      }
+    });
+    try {
+      lifecycleHandler?.({
+        runId: "run-delete-completed",
+        stream: "lifecycle",
+        seq: 1,
+        ts: endedAt,
+        data: { phase: "end", endedAt, terminalReply: { disposition: "visible", text: "done" } },
+      });
+      await terminalPublished.promise;
+    } finally {
+      stop();
     }
-  });
-  vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
-  vi.mocked(resolveContextEngine).mockResolvedValue({
-    info: { id: "test", name: "Test", version: "0.0.1" },
-    ingest: async () => ({ ingested: false }),
-    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-    compact: async () => ({ ok: false, compacted: false }),
-    onSubagentEnded,
+
+    await settleRootWork(true);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      execution: { status: "terminal", endedAt },
+      archiveAtMs: endedAt + 60_000,
+    });
   });
 
-  await addRun("delete-retry", {
-    createdAt: Date.now() - 60_000,
-    endedAt: Date.now() - 1,
-    archiveAtMs: Date.now(),
-    attachmentsDir,
-    attachmentsRootDir,
-  });
-
-  await mod.testing.sweepOnceForTests();
-  await vi.dynamicImportSettled();
-
-  expect(deleteAttempts).toBe(1);
-  expectDelete("delete-retry");
-  expect(requesterRuns()).toHaveLength(1);
-  expect(onSubagentEnded).not.toHaveBeenCalled();
-  await fs.access(attachmentsDir);
-
-  await mod.testing.sweepOnceForTests();
-  await vi.dynamicImportSettled();
-
-  expect(deleteAttempts).toBe(2);
-  expect(requesterRuns()).toHaveLength(0);
-});
-
-registerArchiveCancellationTests({
-  getRegistry: () => mod,
-  addCanonicalSubagentRunForTests,
-  sweepAndSettleCleanup,
-  waitForNoRequesterRuns,
-});
-
-it("does not overlap archive sweep retries while sessions.delete is still in flight", async () => {
-  const deleteGate = createDeferred();
-  const deleteEntered = createDeferred();
-  prepareDelete("delete-inflight", async () => {
-    deleteEntered.resolve();
-    await deleteGate.promise;
-  });
-
-  await addRun("delete-inflight", {
-    createdAt: Date.now() - 60_000,
-    endedAt: Date.now() - 1,
-    archiveAtMs: Date.now(),
-  });
-
-  const firstSweep = mod.testing.sweepOnceForTests();
-  try {
-    await deleteEntered.promise;
-    expect(deleteCalls()).toHaveLength(1);
-    expectDelete("delete-inflight");
+  it("does not reap a queued collector waiting for a swarm slot past the stale grace", async () => {
+    // Queued collectors have no gateway run context until FIFO dispatch; the
+    // stale-context reap must not fabricate a lost-context failure for them.
+    const now = Date.now();
+    await addCanonicalSubagentRunForTests({
+      runId: "run-queued-collector",
+      childSessionKey: "agent:main:subagent:queued-collector",
+      childSessionIdentity: {
+        sessionId: "session-queued-collector",
+        lifecycleRevision: "lifecycle-queued-collector",
+      },
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for a swarm slot",
+      cleanup: "keep",
+      collect: true,
+      createdAt: now - 120_000,
+      execution: { status: "queued" },
+    });
 
     await mod.testing.sweepOnceForTests();
-    expect(deleteCalls()).toHaveLength(1);
-    expect(requesterRuns()).toHaveLength(1);
-  } finally {
-    deleteGate.resolve();
-    await firstSweep;
-  }
-  await vi.dynamicImportSettled();
-  await waitForNoRequesterRuns();
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      runId: "run-queued-collector",
+      execution: { status: "queued" },
+    });
+    expect(
+      mod.listSubagentRunsForRequester("agent:main:main")[0]?.collectorCompletion,
+    ).toBeUndefined();
+  });
+
+  it("does not archive an active run carrying an obsolete persisted deadline", async () => {
+    vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    const now = Date.now();
+    await addCanonicalSubagentRunForTests({
+      runId: "run-delete-stale-deadline",
+      childSessionKey: "agent:main:subagent:delete-stale-deadline",
+      childSessionIdentity: {
+        sessionId: "session-delete-stale-deadline",
+        lifecycleRevision: "lifecycle-delete-stale-deadline",
+      },
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue running after retention migration",
+      cleanup: "delete",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      archiveAtMs: now - 60_000,
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")[0]).toMatchObject({
+      runId: "run-delete-stale-deadline",
+      execution: { status: "running" },
+    });
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.some(
+          ([request]) => (request as { method?: string }).method === "sessions.delete",
+        ),
+    ).toBe(false);
+  });
+
+  it.each(["pending"] as const)(
+    "does not archive a completed delete-mode run while delivery is %s",
+    async (deliveryStatus) => {
+      const now = Date.now();
+      await addCanonicalSubagentRunForTests({
+        runId: `run-delete-delivery-${deliveryStatus}`,
+        childSessionKey: `agent:main:subagent:delete-delivery-${deliveryStatus}`,
+        childSessionIdentity: {
+          sessionId: `session-delete-delivery-${deliveryStatus}`,
+          lifecycleRevision: `lifecycle-delete-delivery-${deliveryStatus}`,
+        },
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "deliver completion before archival",
+        cleanup: "delete",
+        expectsCompletionMessage: true,
+        createdAt: now - 120_000,
+        endedAt: now - 60_000,
+        archiveAtMs: now - 1,
+        delivery: { status: deliveryStatus },
+      });
+
+      await mod.testing.sweepOnceForTests();
+
+      const entry = mod.listSubagentRunsForRequester("agent:main:main")[0];
+      expect(entry?.delivery?.status).toBe(deliveryStatus);
+      expect(
+        vi
+          .mocked(callGateway)
+          .mock.calls.some(
+            ([request]) => (request as { method?: string }).method === "sessions.delete",
+          ),
+      ).toBe(false);
+
+      await mutateSubagentRuns([entry!.runId], (rows) => {
+        const current = rows.get(entry!.runId)!;
+        return {
+          value: undefined,
+          postimages: new Map([
+            [
+              current.runId,
+              {
+                ...current,
+                delivery: { ...current.delivery, status: "delivered" as const },
+              },
+            ],
+          ]),
+        };
+      });
+      await mod.testing.sweepOnceForTests();
+
+      await waitForNoRequesterRuns();
+    },
+  );
+
+  it("keeps archived delete-mode runs for retry when sessions.delete fails", async () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    };
+    setRuntimeConfigSnapshot(currentConfig);
+    const onSubagentEnded = vi.fn(async () => undefined);
+    const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sweep-retry-"));
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+    sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockResolvedValue({
+      sessionId: "session-delete-retry",
+      lifecycleRevision: "lifecycle-delete-retry",
+      updatedAt: Date.now(),
+    });
+    let deleteAttempts = 0;
+    vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) {
+          throw new Error("delete failed");
+        }
+      }
+      return {};
+    });
+    vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
+    vi.mocked(resolveContextEngine).mockResolvedValue({
+      info: { id: "test", name: "Test", version: "0.0.1" },
+      ingest: async () => ({ ingested: false }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: false, compacted: false }),
+      onSubagentEnded,
+    });
+
+    await addCanonicalSubagentRunForTests({
+      runId: "run-delete-retry",
+      childSessionKey: "agent:main:subagent:delete-retry",
+      childSessionIdentity: {
+        sessionId: "session-delete-retry",
+        lifecycleRevision: "lifecycle-delete-retry",
+      },
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry delete",
+      cleanup: "delete",
+      createdAt: Date.now() - 60_000,
+      endedAt: Date.now() - 1,
+      archiveAtMs: Date.now(),
+      attachmentsDir,
+      attachmentsRootDir,
+    });
+
+    await mod.testing.sweepOnceForTests();
+    await vi.dynamicImportSettled();
+
+    expect(deleteAttempts).toBe(1);
+    expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
+      assertDispatchCurrent: expect.any(Function),
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:delete-retry",
+        agentId: "main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+        expectedSessionId: "session-delete-retry",
+        expectedLifecycleRevision: "lifecycle-delete-retry",
+      },
+      timeoutMs: 10_000,
+    });
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+    expect(onSubagentEnded).not.toHaveBeenCalled();
+    await fs.access(attachmentsDir);
+
+    await mod.testing.sweepOnceForTests();
+    await vi.dynamicImportSettled();
+
+    expect(deleteAttempts).toBe(2);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  registerArchiveCancellationTests({
+    getRegistry: () => mod,
+    addCanonicalSubagentRunForTests,
+    sweepAndSettleCleanup,
+    waitForNoRequesterRuns,
+  });
+
+  it("does not overlap archive sweep retries while sessions.delete is still in flight", async () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    };
+    setRuntimeConfigSnapshot(currentConfig);
+    const deleteGate = createDeferred();
+    const deleteEntered = createDeferred();
+    sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockResolvedValue({
+      sessionId: "session-delete-inflight",
+      lifecycleRevision: "lifecycle-delete-inflight",
+      updatedAt: Date.now(),
+    });
+    vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (method === "sessions.delete") {
+        deleteEntered.resolve();
+        await deleteGate.promise;
+      }
+      return {};
+    });
+
+    await addCanonicalSubagentRunForTests({
+      runId: "run-delete-inflight",
+      childSessionKey: "agent:main:subagent:delete-inflight",
+      childSessionIdentity: {
+        sessionId: "session-delete-inflight",
+        lifecycleRevision: "lifecycle-delete-inflight",
+      },
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "inflight delete",
+      cleanup: "delete",
+      createdAt: Date.now() - 60_000,
+      endedAt: Date.now() - 1,
+      archiveAtMs: Date.now(),
+    });
+
+    const firstSweep = mod.testing.sweepOnceForTests();
+    try {
+      await deleteEntered.promise;
+      expect(
+        vi
+          .mocked(callGateway)
+          .mock.calls.filter(
+            ([request]) =>
+              (request as { method?: string } | undefined)?.method === "sessions.delete",
+          ),
+      ).toHaveLength(1);
+      expect(vi.mocked(callGateway)).toHaveBeenCalledWith({
+        assertDispatchCurrent: expect.any(Function),
+        method: "sessions.delete",
+        params: {
+          key: "agent:main:subagent:delete-inflight",
+          agentId: "main",
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+          expectedSessionId: "session-delete-inflight",
+          expectedLifecycleRevision: "lifecycle-delete-inflight",
+        },
+        timeoutMs: 10_000,
+      });
+
+      await mod.testing.sweepOnceForTests();
+      expect(
+        vi
+          .mocked(callGateway)
+          .mock.calls.filter(
+            ([request]) =>
+              (request as { method?: string } | undefined)?.method === "sessions.delete",
+          ),
+      ).toHaveLength(1);
+      expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+    } finally {
+      deleteGate.resolve();
+      await firstSweep;
+    }
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => {
+      expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    });
+  });
 });
