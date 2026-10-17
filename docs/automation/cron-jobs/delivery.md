@@ -19,6 +19,8 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 | `webhook`  | POST finished event payload to a URL                               |
 | `none`     | No automatic conversation result or notification                   |
 
+If a visible report finishes after you last read its persistent `session:<key>` conversation, the Control UI marks that conversation unread, including when delivery is `none`. Empty results, text-only silent replies, and heartbeat acknowledgments leave its read state unchanged.
+
 A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
 
 Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection

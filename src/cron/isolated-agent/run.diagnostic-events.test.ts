@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   type DiagnosticEventPayload,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
@@ -29,6 +32,7 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   resolveCronSessionMock,
+  resolveCronPayloadOutcomeMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -183,6 +187,94 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       { type: "message.processed", sessionId: "persisted-run-session" },
     ]);
   });
+
+  it.each([
+    {
+      name: "visible report",
+      payloads: [{ text: "Report ready" }],
+      text: "Report ready",
+      visible: true,
+      capture: true,
+    },
+    {
+      name: "silent reply",
+      payloads: [{ text: "NO_REPLY" }],
+      text: "NO_REPLY",
+      visible: false,
+      capture: true,
+    },
+    { name: "empty reply", payloads: [], text: "", visible: false, capture: false },
+    {
+      name: "silent reply with media",
+      payloads: [{ text: "NO_REPLY", mediaUrl: "https://example.invalid/report.png" }],
+      text: "NO_REPLY",
+      visible: true,
+      capture: true,
+    },
+    {
+      name: "synthetic workflow error",
+      payloads: [{ text: "Delivery failed", isError: true }],
+      text: "",
+      visible: false,
+      capture: false,
+    },
+    {
+      name: "visible report without content capture",
+      payloads: [{ text: "Report ready" }],
+      text: "Report ready",
+      visible: true,
+      capture: false,
+    },
+  ])(
+    "publishes unread visibility before lifecycle end for $name",
+    async ({ payloads, text, visible, capture }) => {
+      const { resolveCronPayloadOutcome } =
+        await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+      resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          result: {
+            payloads,
+            meta: {
+              agentMeta: {},
+              finalAssistantVisibleText: text,
+              finalAssistantRawText: text,
+              finalAssistantMessageRawText: text,
+            },
+          },
+        },
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      });
+      const terminalVisibility: Array<boolean | undefined> = [];
+      const capturedResponses: Array<string | undefined> = [];
+      const unsubscribeRun = onAgentRuntimeEvent((event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "end") {
+          terminalVisibility.push(getAgentRunContext(event.runId)?.isControlUiVisible);
+        }
+      });
+      const unsubscribeDiagnostics = onTrustedInternalDiagnosticEvent(
+        (event, _metadata, privateData) => {
+          if (event.type === "message.processed") {
+            capturedResponses.push(privateData.messageContent?.finalResponse);
+          }
+        },
+      );
+      try {
+        await runWithEvents(
+          makeParams({
+            diagnostics: { enabled: true, otel: { enabled: true, captureContent: capture } },
+          }),
+        );
+        expect(terminalVisibility).toEqual([visible]);
+        expect(capturedResponses).toEqual([capture ? text : undefined]);
+      } finally {
+        unsubscribeRun();
+        unsubscribeDiagnostics();
+      }
+    },
+  );
 
   it("emits neither lifecycle nor usage events when diagnostics are disabled", async () => {
     const { result, events } = await runWithEvents(makeParams({ diagnostics: { enabled: false } }));
