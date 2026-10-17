@@ -156,16 +156,12 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
       if (clientOwner !== client || operationGeneration !== generation || questionId() !== id) {
         return;
       }
-      if (!isRecord(result) || !isRecord(result.question) || result.question.id !== id) {
+      if (result.question.id !== id) {
         setRequestError("unavailable");
         return;
       }
       const record = result.question;
       if (
-        (record.status !== "pending" &&
-          record.status !== "answered" &&
-          record.status !== "cancelled" &&
-          record.status !== "expired") ||
         !handleQuestionPromptEvent(questionState, {
           event: "question.requested",
           payload: { ...record, status: "pending" },

@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import {
   pathForRoute,
   pluginCatalogIdFromPath,
@@ -12,6 +12,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -25,7 +26,6 @@ import { createPluginDiscovery } from "./plugin-discovery.ts";
 import { createPluginHelp } from "./plugin-help.ts";
 import { createPluginMcpLogin } from "./plugin-mcp-login.ts";
 import { focusHeadingAfterRemoval } from "./plugin-removal-focus.ts";
-import { createPluginRequest } from "./plugin-request.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { createPluginSettings } from "./plugin-settings.ts";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
@@ -167,7 +167,7 @@ export function createPluginsPage(options: {
     refreshCatalogAfterMutation: refreshCatalog,
     onChange: publish,
   });
-  const catalogTask = createPluginRequest(publish, {
+  const catalogTask = createPageRequest(publish, {
     task: ([client]: readonly [NonNullable<GatewayPageBinding["client"]>], { signal }) =>
       client.request<PluginListResult>("plugins.list", {}, { signal }),
     onComplete: (result) => {
@@ -178,6 +178,7 @@ export function createPluginsPage(options: {
     },
     onError: (error) => setState({ error: formatUiError(error) }),
   });
+  onCleanup(catalogTask.cancel);
 
   onSettled(() => {
     const runtimeConfig = context.runtimeConfig;
