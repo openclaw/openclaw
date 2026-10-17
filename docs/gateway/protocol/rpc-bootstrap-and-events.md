@@ -234,6 +234,10 @@ or protocol-version change.
   `chat` stream. Subscribe to one text projection for a display; consuming both
   streams into one accumulator duplicates output. In-process agent observers
   retain their cumulative-text contract.
+  Non-tool agent events carry run/session identity and stream data, without a
+  session-row snapshot. Use `sessions.changed` and `session.message` for roster
+  metadata, including when observing channel-routed runs through an exact
+  session subscription.
   A client that renders assistant text solely from `chat` can advertise
   `chat-only-assistant-text` in its connect `caps`. The Gateway then omits
   text-bearing `agent` events with `stream: "assistant"` from that connection,

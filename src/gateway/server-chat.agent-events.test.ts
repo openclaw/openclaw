@@ -702,9 +702,7 @@ describe("agent event handler", () => {
       for (const run of runs) {
         expect(progressFor(run.clientRunId)).toHaveLength(leadingFrames);
       }
-      expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(runs.length);
       vi.advanceTimersByTime(75);
-      expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(runs.length * 2);
       for (const run of runs) {
         const progress = progressFor(run.clientRunId);
         expect(progress).toHaveLength(leadingFrames * 2);
@@ -1953,6 +1951,7 @@ describe("agent event handler", () => {
       h.register("run-hidden-global", "global", "client-hidden-global", { agentId });
       registerAgentRunContext("run-hidden-global", {
         sessionKey: "global",
+        sessionId: `${receiver}-global`,
         isControlUiVisible: false,
       });
       loadGatewaySessionLifecycleSnapshotMock.mockReturnValue({
@@ -1972,16 +1971,15 @@ describe("agent event handler", () => {
         { kind: "status", phase: "update", title: "Working" },
         { seq: 2 },
       );
-      expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledWith(
-        "global",
-        agentId ? { agentId } : undefined,
-      );
       const agentCall = h.targetedAgent()[0];
       expect(agentCall?.[2]).toEqual(new Set([`conn-${receiver}`]));
-      expect(agentCall?.[1].session).toMatchObject({
-        key: "global",
+      expect(agentCall?.[1]).toMatchObject({
+        sessionKey: "global",
         sessionId: `${receiver}-global`,
       });
+      expect(agentCall?.[1]).not.toHaveProperty("session");
+      expect(agentCall?.[1]).not.toHaveProperty("participants");
+      expect(loadGatewaySessionLifecycleSnapshotMock).not.toHaveBeenCalled();
     },
   );
 
@@ -2561,9 +2559,7 @@ describe("agent event handler", () => {
         }
         await stop.drain();
         expect(agentBroadcastCalls(delivery)).toHaveLength(2);
-        expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(
-          controlUiVisible ? 0 : 2,
-        );
+        expect(loadGatewaySessionLifecycleSnapshotMock).not.toHaveBeenCalled();
 
         releaseAgentRunContext(retiredRunId, retiredClaim);
         vi.advanceTimersByTime(75);
@@ -2582,9 +2578,7 @@ describe("agent event handler", () => {
             stream === "item" ? data.progressText : data.text,
           ]),
         ).toEqual(expected);
-        expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(
-          controlUiVisible ? 0 : 3,
-        );
+        expect(loadGatewaySessionLifecycleSnapshotMock).not.toHaveBeenCalled();
         if (controlUiVisible) {
           expect(h.nodeAgent().map((call) => call[2])).toEqual(delivered);
         } else {
@@ -2674,10 +2668,6 @@ describe("agent event handler", () => {
       vi.setSystemTime(10_000);
       const h = createHarness();
       const runId = "run-hidden-audience";
-      let label = "Before buffering";
-      loadGatewaySessionLifecycleSnapshotMock.mockImplementation((key: string) => ({
-        row: { key, kind: "direct", updatedAt: 10_000, label },
-      }));
       const claimId = claimOwnedRun(runId, { sessionKey: "session-A", isControlUiVisible: false });
       h.sessionMessageSubscribers.subscribe("conn-A", "session-A");
       h.sessionMessageSubscribers.subscribe("conn-B", "session-B");
@@ -2693,8 +2683,6 @@ describe("agent event handler", () => {
         preview("Old queued");
         await stop.drain();
         expect(h.targetedAgent()).toHaveLength(1);
-        expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(1);
-        label = "Current metadata";
 
         if (change === "session change") {
           registerAgentRunContext(runId, { sessionKey: "session-B" }, claimId);
@@ -2702,7 +2690,6 @@ describe("agent event handler", () => {
           h.sessionMessageSubscribers.unsubscribe("conn-A", "session-A");
           vi.advanceTimersByTime(75);
           expect(h.targetedAgent()).toHaveLength(1);
-          expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(1);
           h.sessionMessageSubscribers.subscribe("conn-replacement", "session-A");
         } else {
           h.sessionMessageSubscribers.unsubscribe("conn-A", "session-A");
@@ -2732,14 +2719,6 @@ describe("agent event handler", () => {
                 ["session-A", "New visible", new Set(["conn-replacement"])],
               ]),
         ]);
-        const delivered = h.targetedAgent();
-        expect(loadGatewaySessionLifecycleSnapshotMock).toHaveBeenCalledTimes(delivered.length);
-        for (const [index, [, event]] of delivered.entries()) {
-          const payload = requireRecord(event, "hidden preview metadata");
-          const expectedLabel = index === 0 ? "Before buffering" : "Current metadata";
-          expect(payload.label).toBe(expectedLabel);
-          expect(payload.session).toMatchObject({ key: payload.sessionKey, label: expectedLabel });
-        }
         expect(h.broadcast).not.toHaveBeenCalled();
         expect(h.nodeSendToSession).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
