@@ -109,12 +109,7 @@ describe("startup migration lease", () => {
   it.each([false, true])(
     "adopts captured native version-zero state before lease acquisition (existing lease tables: %s)",
     async (hasExistingLeaseTables) => {
-      const env = {
-        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-native-"),
-      };
-      const databasePath = resolveOpenClawStateSqlitePath(env);
       mkdirSync(path.dirname(databasePath), { recursive: true });
-      const { DatabaseSync } = requireNodeSqlite();
       const native = new DatabaseSync(databasePath);
       const identity = generateStoredDeviceIdentity(1);
       try {
