@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
+import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
@@ -22,6 +23,7 @@ import {
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
+  readCanvasContentPreview,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, type CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
@@ -81,6 +83,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { copyLiveTerminalIdentity, readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -450,6 +453,62 @@ export function buildChatItems(
       key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
       message: createCanvasAssistantMessage(preview, timestamp),
     });
+  }
+  // Tool receipts can own a visible preview before an assistant row arrives.
+  // Reconcile terminal copies only after all of those projections exist.
+  const ownedCanvas = items.flatMap((item) => {
+    if (
+      item.kind !== "message" ||
+      readLiveTerminalRunId(item.message) ||
+      hiddenHistoryKeys.has(item.key) ||
+      hiddenKeys.has(item.key)
+    ) {
+      return [];
+    }
+    const runId = transcriptRunId(item.message);
+    const message = runId ? safeNormalizeMessage(item.message) : null;
+    if (!message || normalizeRoleForGrouping(message.role) !== "assistant") {
+      return [];
+    }
+    return message.content.flatMap((block) =>
+      block.type === "canvas" ? [{ runId, preview: block.preview }] : [],
+    );
+  });
+  for (const item of items) {
+    if (item.kind !== "message") {
+      continue;
+    }
+    const runId = readLiveTerminalRunId(item.message);
+    const terminal = runId ? asRecord(item.message) : null;
+    if (!terminal || !Array.isArray(terminal.content)) {
+      continue;
+    }
+    const isOwned = (preview: Pick<CanvasToolPreview, "viewId" | "url">) =>
+      ownedCanvas.some(
+        (entry) => entry.runId === runId && canvasPreviewsMatch(entry.preview, preview),
+      );
+    let changed = false;
+    const content = terminal.content.flatMap((value) => {
+      const preview = readCanvasContentPreview(value);
+      if (preview && isOwned(preview)) {
+        changed = true;
+        return [];
+      }
+      const block = asRecord(value);
+      if (block?.type === "text" && typeof block.text === "string") {
+        const extracted = extractCanvasShortcodes(block.text, isOwned);
+        if (extracted.previews.length > 0) {
+          changed = true;
+          return [{ ...block, text: extracted.text }];
+        }
+      }
+      return [value];
+    });
+    if (changed) {
+      const projection = { ...terminal, content };
+      copyLiveTerminalIdentity(terminal, projection);
+      item.message = projection;
+    }
   }
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),

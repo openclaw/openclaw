@@ -18,10 +18,12 @@ import {
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { settleSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
 import {
   createSqliteDatabaseAdmissionRelay,
   createSqliteWorkerOperationAdmission,
+  deferCapturedSqliteWorkerCommitReceipt,
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
   requestSqliteWorkerOperationAdmission,
@@ -30,6 +32,7 @@ import {
   type SqliteWorkerAdmissionRequest,
 } from "./sqlite-worker-operation-admission.js";
 import {
+  captureSqliteWorkerCommitReceipt,
   settleSqliteWorkerOperationContext,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
@@ -394,9 +397,25 @@ it("reads a queued worker commit before settlement and message callbacks run", a
   }
 });
 
-it.each(["rollback", "unknown", "later rollback"] as const)(
-  "keeps committed facts distinct from %s settlement",
-  (outcome) => {
+function deferReceipt(db: DatabaseSync, facts: unknown, prepared: boolean) {
+  if (!prepared) {
+    deferSqliteWorkerCommitReceipt(db, facts);
+    return;
+  }
+  const captured = captureSqliteWorkerCommitReceipt(facts);
+  if (captured.kind !== "inline") {
+    throw new Error("Expected an inline test receipt");
+  }
+  deferCapturedSqliteWorkerCommitReceipt(db, captured);
+}
+
+it.each(
+  (["rollback", "unknown", "later rollback"] as const).flatMap((outcome) =>
+    [false, true].map((captured) => ({ outcome, captured })),
+  ),
+)(
+  "keeps committed facts distinct from $outcome settlement (captured: $captured)",
+  ({ outcome, captured }) => {
     const db = new DatabaseSync(":memory:");
     db.exec("CREATE TABLE proof (value INTEGER)");
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
@@ -411,7 +430,7 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
           withSqlitePostCommitPublications(db, () =>
             runSqliteImmediateTransactionSync(db, () => {
               db.prepare("INSERT INTO proof VALUES (?)").run(value);
-              deferSqliteWorkerCommitReceipt(db, { value });
+              deferReceipt(db, { value }, captured);
               if (rollback) {
                 throw new Error("Rollback the synthetic write");
               }
@@ -460,12 +479,16 @@ it.each(["rollback", "unknown", "later rollback"] as const)(
   },
 );
 
-it.each([
-  { receipt: "native commit", publicationFails: true },
-  { receipt: "failed commit delivery", publicationFails: false },
-] as const)(
-  "installs $receipt before reply acknowledgement (publication failure: $publicationFails)",
-  ({ receipt, publicationFails }) => {
+it.each(
+  [
+    { receipt: "native commit", publicationFails: true },
+    { receipt: "failed commit delivery", publicationFails: false },
+  ].flatMap(({ receipt, publicationFails }) =>
+    [false, true].map((captured) => ({ receipt, publicationFails, captured })),
+  ),
+)(
+  "installs $receipt before reply acknowledgement (publication failure: $publicationFails, captured: $captured)",
+  ({ receipt, publicationFails, captured }) => {
     const db = new DatabaseSync(":memory:");
     db.exec("CREATE TABLE proof (value INTEGER)");
     const ownerContext = new AsyncLocalStorage<string>();
@@ -517,7 +540,7 @@ it.each([
         withSqlitePostCommitPublications(db, () =>
           runSqliteImmediateTransactionSync(db, () => {
             db.prepare("INSERT INTO proof VALUES (1)").run();
-            deferSqliteWorkerCommitReceipt(db, { value: 1 });
+            deferReceipt(db, { value: 1 }, captured);
           }),
         ),
       );
@@ -562,6 +585,58 @@ it.each([
     }
   },
 );
+
+it("publishes the captured snapshot even when its producer changes before deferral", () => {
+  const db = new DatabaseSync(":memory:");
+  const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+  const owner = { port: admission.port };
+  const facts = { value: { text: "captured" }, bytes: Buffer.from([1, 2, 3]) };
+  const captured = captureSqliteWorkerCommitReceipt(facts);
+  if (captured.kind !== "inline") {
+    throw new Error("Expected an inline test receipt");
+  }
+  facts.value.text = "changed";
+  facts.bytes.fill(9);
+  try {
+    withSqliteWorkerOperationAdmission(owner, () =>
+      withSqlitePostCommitPublications(db, () =>
+        runSqliteImmediateTransactionSync(db, () => {
+          deferCapturedSqliteWorkerCommitReceipt(db, captured);
+          expect(admission.committed).toBeUndefined();
+        }),
+      ),
+    );
+    expect(admission.committed).toEqual({
+      facts: { value: { text: "captured" }, bytes: new Uint8Array([1, 2, 3]) },
+    });
+    settleSqliteWorkerOperationContext(owner, "completed");
+    expect(admission.waitForSettlement(performance.now()).committed).toEqual(admission.committed);
+  } finally {
+    admission.finish();
+    db.close();
+  }
+});
+
+it("keeps the exact transport limit inline and retains oversized bytes for transfer", () => {
+  // V8 header size can vary by runtime; both payloads stay in the same length encoding.
+  const overhead =
+    serialize("x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES)).byteLength -
+    SQLITE_WORKER_MAX_MESSAGE_BYTES;
+  const inline = captureSqliteWorkerCommitReceipt(
+    "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES - overhead),
+  );
+  expect(inline.kind).toBe("inline");
+  if (inline.kind === "inline") {
+    expect(inline.payloadBytes).toBe(SQLITE_WORKER_MAX_MESSAGE_BYTES);
+  }
+  const oversized = captureSqliteWorkerCommitReceipt(
+    "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES - overhead + 1),
+  );
+  expect(oversized.kind).toBe("oversized");
+  if (oversized.kind === "oversized") {
+    expect(oversized.serialized.byteLength).toBe(SQLITE_WORKER_MAX_MESSAGE_BYTES + 1);
+  }
+});
 
 it.each(["settlement", "settlement-only", "malformed"] as const)(
   "retains committed facts through %s receipt delivery",

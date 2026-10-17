@@ -92,8 +92,9 @@ async function prepareListFixture() {
   const client = identifiedClient("owner@example.com");
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
-  await projection.ensureMaterialized();
   const request = { agentId: "main", limit: 1 };
+  // Reuse metrics require actual display demand, not only catalog readiness.
+  await listSessions({ context, client, request });
   return { context, client, projection, list: () => listSessions({ context, client, request }) };
 }
 

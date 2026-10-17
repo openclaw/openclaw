@@ -3,12 +3,15 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withContendedConfigMutation } from "../../test/helpers/config-mutation-lock.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import * as config from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as gateway from "../gateway/call.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
+import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
-import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.format.js";
 import { registerHooksCli } from "./hooks-cli.js";
+import * as oneShotExit from "./one-shot-exit.js";
 
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn());
 const runPluginUpdateCommandMock = vi.hoisted(() => vi.fn());
@@ -34,9 +37,9 @@ function withHook(overrides: Partial<HookStatusEntry> = {}): HookStatusReport {
 }
 const eventless = withHook({ events: [], loadable: false, blockedReason: "no events defined" });
 const list = (overrides: Partial<HookStatusEntry>, verbose = true) =>
-  formatHooksList(withHook(overrides), { verbose });
+  runHooksReport(withHook(overrides), verbose ? ["list", "--verbose"] : ["list"]);
 const info = (overrides: Partial<HookStatusEntry>) =>
-  formatHookInfo({ ...hook, ...overrides }, overrides.name ?? hook.name, {});
+  runHooksReport(withHook(overrides), ["info", overrides.name ?? hook.name]);
 
 function hooksProgram() {
   const program = new Command().enablePositionalOptions().exitOverride();
@@ -49,11 +52,38 @@ beforeEach(() => {
   runPluginUpdateCommandMock.mockReset();
 });
 
+async function runHooksReport(statusReport: HookStatusReport, args: string[]): Promise<string> {
+  const fixtureConfig: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: { fixture: { workspace: statusReport.workspaceDir } },
+      defaults: { systemAgent: { agentId: "fixture" } },
+    },
+  };
+  const output: string[] = [];
+  const reader = Object.assign(async () => fixtureConfig, { assertCurrent() {} });
+  const spies = [
+    vi.spyOn(config, "captureRuntimeConfigAsyncReader").mockReturnValue(reader),
+    vi.spyOn(gateway, "callGateway").mockResolvedValue(statusReport),
+    vi.spyOn(defaultRuntime, "log").mockImplementation((value) => output.push(String(value))),
+    vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => output.push(value)),
+    vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
+  ];
+  try {
+    await hooksProgram().parseAsync(["hooks", ...args], { from: "user" });
+    return output.join("\n");
+  } finally {
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+  }
+}
+
 describe("hooks cli formatting", () => {
-  it.each<[name: string, render: () => string, includes: string[], excludes?: string[]]>([
+  it.each<[name: string, render: () => Promise<string>, includes: string[], excludes?: string[]]>([
     [
       "eventless list",
-      () => formatHooksList(eventless, { verbose: true }),
+      () => runHooksReport(eventless, ["list", "--verbose"]),
       ["0/1 ready", "no events defined"],
       ["missing requirements"],
     ],
@@ -76,7 +106,7 @@ describe("hooks cli formatting", () => {
     ],
     [
       "eventless info",
-      () => formatHookInfo(eventless.hooks[0], "session-memory", {}),
+      () => runHooksReport(eventless, ["info", "session-memory"]),
       ["No events defined", "Blocked reason: no events defined"],
       ["Missing requirements"],
     ],
@@ -104,11 +134,11 @@ describe("hooks cli formatting", () => {
     ],
     [
       "eventless check",
-      () => formatHooksCheck(eventless, {}),
+      () => runHooksReport(eventless, ["check"]),
       ["Ready: 0", "Not ready: 1", "session-memory - no events defined"],
     ],
-  ])("formats %s", (_name, render, includes, excludes = []) => {
-    const output = render();
+  ])("formats %s", async (_name, render, includes, excludes = []) => {
+    const output = await render();
     for (const text of includes) {
       expect(output).toContain(text);
     }
@@ -117,8 +147,8 @@ describe("hooks cli formatting", () => {
     }
   });
 
-  it("classifies eventless hooks as not eligible in JSON check output", () => {
-    const output = JSON.parse(formatHooksCheck(eventless, { json: true }));
+  it("classifies eventless hooks as not eligible in JSON check output", async () => {
+    const output = JSON.parse(await runHooksReport(eventless, ["check", "--json"]));
 
     expect(output).toMatchObject({
       total: 1,
@@ -212,7 +242,7 @@ it("preserves env references while disable waits for the write lock", async () =
         messages: { responsePrefix: "${OPENCLAW_TEST_HOOK_PREFIX}" },
         hooks: { internal: { entries: { "fixture-hook": { enabled: false } } } },
       });
-      expect(await readConfigFileSnapshot()).toMatchObject({
+      expect(await config.readConfigFileSnapshot()).toMatchObject({
         valid: true,
         sourceConfig: { messages: { responsePrefix: "after-lock" } },
       });

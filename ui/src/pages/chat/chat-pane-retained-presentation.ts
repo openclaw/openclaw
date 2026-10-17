@@ -564,8 +564,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // must not inherit a receipt for work its watch no longer owns.
       retirePullRequestRefreshes(this.state);
     }
-    this.swarmHydrator?.dispose();
-    this.swarmHydrator = null;
+    this.swarm.hydrator?.dispose();
+    this.swarm.hydrator = null;
     this.clearHistoryObserver();
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.syncActiveBindings();
@@ -687,7 +687,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           })
           .catch((error: unknown) => {
             if (isCurrent()) {
-              setChatError(state, formatUiError(error), true);
+              setChatError(state, formatUiError(error));
             }
           });
       });

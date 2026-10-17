@@ -17,6 +17,7 @@ packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
+packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts

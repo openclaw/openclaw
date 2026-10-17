@@ -23,7 +23,13 @@ import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
+import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
@@ -93,9 +99,11 @@ it.each([
   "failed terminal result",
   "replaced task",
   "changed protected task",
+  "terminal compensation refusal",
 ] as const)("hands off migrated Windows updates: %s", async (outcome) => {
   const succeeded = outcome === "plugin warning";
   const replaced = outcome === "replaced task" || outcome === "changed protected task";
+  const compensationRefusal = outcome === "terminal compensation refusal";
   const home = await fs.realpath(dirs.make("migrated-windows-"));
   await withEnvAsync(
     {
@@ -164,6 +172,12 @@ it.each([
       database.close();
       expect(() => getUpdateRun(runId)).toThrow(/newer schema version/);
       let enabledAtWorkerStart: boolean | undefined;
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      const onResult = vi.fn();
+      let terminalFromCandidate: unknown;
+      let databaseCountAtTerminal = 0;
+      const inspectTerminal = () =>
+        readMigratedUpdateRunRow(resolveOpenClawStateSqlitePath(), runId);
       vi.mocked(runUtf8CommandWithTimeout).mockImplementationOnce(async (_argv, options) => {
         assert(typeof options === "object");
         expect(options.timeoutMs).toBe(activationTimeoutMs);
@@ -202,38 +216,91 @@ it.each([
           mocks.enabled = true;
           running = true;
         }
-        return createCommandResult({ cleanup: "normal" });
+        if (compensationRefusal) {
+          // The candidate restored autostart, but another owner replaced the
+          // task before the parent can compensate the failed terminal result.
+          mocks.enabled = true;
+          programArguments = [
+            process.execPath,
+            path.join(home, "other-install", "openclaw.mjs"),
+            "gateway",
+          ];
+          const candidateDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
+          try {
+            candidateDatabase
+              .prepare(
+                "UPDATE update_runs SET status = 'failed', phase = 'finished', finished_at_ms = ?, reason = 'plugin-convergence-failed' WHERE run_id = ?",
+              )
+              .run(Date.now(), runId);
+          } finally {
+            candidateDatabase.close();
+          }
+          terminalFromCandidate = inspectTerminal();
+          databaseCountAtTerminal = databases.length;
+        }
+        return createCommandResult({
+          cleanup: "normal",
+          stdout: compensationRefusal ? "candidate terminal result\n" : "",
+        });
       });
-      const operation = continueMigratedUpdateInFreshProcess(
-        {
-          mutationStarted: true,
-          root,
-          result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
-          installKindChanged: false,
-          configSnapshot: {
-            ...createUpdateCliBaseSnapshot({}),
-            path: path.join(home, "openclaw.json"),
-            exists: false,
-            raw: null,
+      const continueUpdate = () =>
+        continueMigratedUpdateInFreshProcess(
+          {
+            mutationStarted: true,
+            root,
+            result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
+            installKindChanged: false,
+            configSnapshot: {
+              ...createUpdateCliBaseSnapshot({}),
+              path: path.join(home, "openclaw.json"),
+              exists: false,
+              raw: null,
+            },
+            requestedChannel: null,
+            storedChannel: "stable",
+            channel: "stable",
+            downgradeRisk: false,
+            shouldRestart: true,
+            opts: { json: true, run },
+            preManagedServiceStop: stopped,
+            controlPlaneUpdateSentinelMeta: null,
+            preUpdatePluginInstallRecords: {},
+            startedAt: Date.now(),
+            packageUpdateNodeRunner: process.execPath,
+            updateStepTimeoutMs: 1_000,
+            rollbackBlockedReason: "state-migrated-no-rollback",
           },
-          requestedChannel: null,
-          storedChannel: "stable",
-          channel: "stable",
-          downgradeRisk: false,
-          shouldRestart: true,
-          opts: { json: true, run },
-          preManagedServiceStop: stopped,
-          controlPlaneUpdateSentinelMeta: null,
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
-          packageUpdateNodeRunner: process.execPath,
-          updateStepTimeoutMs: 1_000,
-          rollbackBlockedReason: "state-migrated-no-rollback",
-        },
-        [],
-      );
+          [],
+        );
+      const refusesBeforeReceipt = outcome === "launch failure" || replaced;
+      const operation = refusesBeforeReceipt
+        ? continueUpdate()
+        : withUpdateCommandTerminalResult(
+            async (registerRun) => {
+              registerRun(run);
+              const continued = await continueUpdate();
+              if (continued.preparedFailure) {
+                throw continued.preparedFailure;
+              }
+              return continued;
+            },
+            { json: true, onResult },
+          );
       try {
-        if (outcome === "launch failure" || replaced) {
+        if (compensationRefusal) {
+          const failure = await operation.catch((error: unknown) => error);
+          expect(terminalFromCandidate).toMatchObject({
+            status: "failed",
+            phase: "finished",
+            reason: "plugin-convergence-failed",
+            finished_at_ms: expect.any(Number),
+          });
+          expect(failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+          expect(stdout).not.toHaveBeenCalled();
+          expect(onResult).not.toHaveBeenCalled();
+          expect(inspectTerminal()).toEqual(terminalFromCandidate);
+          expect(databases).toHaveLength(databaseCountAtTerminal);
+        } else if (refusesBeforeReceipt) {
           await expect(operation).rejects.toThrow(
             replaced ? /ownership or manager identity changed/ : "candidate finalizer unavailable",
           );
@@ -243,12 +310,19 @@ it.each([
             result: { status: "ok", postUpdate: { plugins: { status: "warning" } } },
           });
         } else {
-          await expect(operation).resolves.toMatchObject({ exitCode: 1 });
+          await expect(operation).rejects.toMatchObject({
+            result: expect.objectContaining({ status: "error" }),
+            exitCode: 1,
+          });
+          await expect(operation).rejects.toBeInstanceOf(UpdateCommandFailure);
         }
         expect(enabledAtWorkerStart).toBe(false);
-        expect(mocks.enabled).toBe(replaced || succeeded);
+        expect(mocks.enabled).toBe(replaced || compensationRefusal || succeeded);
         await recovery?.restore();
-        expect([mocks.enabled, running]).toEqual([replaced || succeeded, succeeded]);
+        expect([mocks.enabled, running]).toEqual([
+          replaced || compensationRefusal || succeeded,
+          succeeded,
+        ]);
       } finally {
         await recovery?.complete(false);
       }

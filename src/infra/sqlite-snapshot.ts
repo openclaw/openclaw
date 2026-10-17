@@ -543,6 +543,9 @@ async function publishSqliteFile(
         assertPublishedFileIdentitySync(options.targetPath, expectedIdentity, expectedContent);
         assertSynchronousCallbackResult(finalCheck?.(), "SQLite publication final check");
         assertPublishedFileIdentitySync(options.targetPath, expectedIdentity, expectedContent);
+        // Keep the pre-hash fingerprint: later timestamp changes must miss content reuse,
+        // including when publication's FUSE recheck accepted unchanged bytes.
+        return { stat: expectedIdentity, content: publishedContent };
       },
     };
     if (options.afterPublish) {

@@ -34,8 +34,7 @@ class RecoveryTranscriptElement extends TranscriptTestHost {
   override readonly transcript = createChatTranscript(() => this.props.paneId);
 
   override renderTranscript = () => {
-    const onThreadChange = () => this.requestRender();
-    return renderChatThread({ ...this.props, onRequestUpdate: onThreadChange }, this.transcript, {
+    return renderChatThread(this.props, this.transcript, {
       search: true,
     });
   };

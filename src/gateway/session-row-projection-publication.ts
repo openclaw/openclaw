@@ -171,7 +171,7 @@ export function createSessionRowPublication(owner: {
             transcriptPreview: sameTranscript ? previousFacts.transcriptPreview : undefined,
             transcriptAssistantMessage: sameTranscript
               ? previousFacts.transcriptAssistantMessage
-              : undefined,
+              : "unknown",
             transcriptTerminalModel: sameTranscript
               ? previousFacts.transcriptTerminalModel
               : undefined,

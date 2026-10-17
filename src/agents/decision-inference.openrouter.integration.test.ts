@@ -512,11 +512,20 @@ it("projects the declared Jev routes as decision-only without fabricated chat fi
     providerCatalog,
     source: "manifest",
   });
-  expect(rows.map((row) => row.id)).toEqual(["~typesafe/jev-latest", "typesafe/jev-1.13"]);
+  expect(rows.map((row) => row.id)).toEqual([
+    "~typesafe/jev-latest",
+    "typesafe/jev-1.13",
+    "typesafe/jev-1.14",
+  ]);
   for (const row of rows) {
     expect(row.maxTokens).toBeUndefined();
     expect(row.cost).toBeUndefined();
-    expect(row.inference?.decision?.limits?.maxStateAndQuestionTokens).toBe(32000);
+    expect(row.inference?.decision?.input).toEqual(["text", "image"]);
+    expect(row.inference?.decision?.limits).toMatchObject({
+      maxStateAndQuestionTokens: 262144,
+      image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg"], remoteUrls: false },
+    });
+    expect(Boolean(row.inference?.decision?.questions?.box)).toBe(row.id !== "typesafe/jev-1.13");
   }
   const conversational = buildAllowedModelSet({
     cfg: {},

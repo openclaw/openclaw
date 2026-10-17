@@ -430,8 +430,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeSessionObservation();
         const agentChanged = this.state?.assistantAgentId !== previousAgentId;
         if (agentChanged) {
-          this.swarmHydrator?.dispose();
-          this.swarmHydrator = null;
+          this.swarm.hydrator?.dispose();
+          this.swarm.hydrator = null;
         }
         this.synchronizeForegroundTranscript();
         if (agentChanged) {
@@ -725,8 +725,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       window.clearTimeout(this.headerCopiedTimer);
       this.headerCopiedTimer = null;
     }
-    this.swarmHydrator?.dispose();
-    this.swarmHydrator = null;
+    this.swarm.hydrator?.dispose();
+    this.swarm.hydrator = null;
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.presencePayload = undefined;

@@ -98,7 +98,7 @@ type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   /** Authorize and read fresh bytes for each explicit download. */
   download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
-    onRequestUpdate: () => void,
+    onSourceChange: () => void,
     runtime: AttachmentSidebarRuntime,
   ) => AttachmentSidebarState;
   rawText?: string | null;

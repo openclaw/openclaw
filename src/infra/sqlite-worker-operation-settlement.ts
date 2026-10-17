@@ -86,20 +86,36 @@ export type RetainedWorkerTransactionAdmission = {
   readonly settled: Promise<SqliteWorkerOperationSettlement>;
 };
 
+export type CapturedSqliteWorkerCommitReceipt =
+  | { kind: "inline"; facts: unknown; payloadBytes: number }
+  | { kind: "oversized"; serialized: Uint8Array };
+
+export function captureSqliteWorkerCommitReceipt(
+  facts: unknown,
+): CapturedSqliteWorkerCommitReceipt {
+  const serialized = serialize(facts);
+  const payloadBytes = serialized.byteLength;
+  if (payloadBytes > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+    return { kind: "oversized", serialized };
+  }
+  // Keep the size and detached facts together so transport selection and native
+  // publication use one capture, even if the producer mutates its result later.
+  return { kind: "inline", facts: structuredClone(facts), payloadBytes };
+}
+
 export function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
   database: DatabaseSync | PostgresSqlConnection,
-  facts: unknown,
+  captured: CapturedSqliteWorkerCommitReceipt,
   delivery: "commit" | "settlement",
 ): void {
-  const payloadBytes = serialize(facts).byteLength;
-  if (payloadBytes > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+  if (captured.kind === "oversized") {
     throw new SqliteWorkerError(
       "SQLite worker commit receipt exceeds the transport limit",
       "overloaded",
     );
   }
-  const captured = structuredClone(facts);
+  const { facts, payloadBytes } = captured;
   const anchor = sqlPublicationAnchor(database);
   const counts = (owner.pendingReceipts ??= new Map());
   const pending = (delta: number) => {
@@ -120,11 +136,11 @@ export function deferSqliteWorkerNativeCommitReceipt(
         const receipt: NativeCommitReceipt = {
           version: 1,
           sequence: (previous?.receipt.sequence ?? 0) + 1,
-          facts: captured,
+          facts,
         };
         const retained = { receipt, payloadBytes, delivered: false };
         nativeCommitReceipts.set(owner, retained);
-        owner.committed = { facts: captured };
+        owner.committed = { facts };
         if (delivery === "commit") {
           owner.port.postMessage({ kind: "native-commit", committed: receipt, payloadBytes }, []);
           retained.delivered = true;
