@@ -40,6 +40,17 @@ function mockConfig(
   };
 }
 
+async function writeSessionStoreSeed(
+  storePath: string,
+  sessions: Record<string, SessionEntry>,
+): Promise<void> {
+  await Promise.all(
+    Object.entries(sessions).map(([sessionKey, entry]) =>
+      replaceSessionEntry({ sessionKey, storePath }, entry),
+    ),
+  );
+}
+
 async function seedTerminalSession(home: string, mainKey: string, status?: SessionEntry["status"]) {
   const storePath = path.join(home, "sessions.json");
   const sessionKey = `agent:main:${mainKey}`;
@@ -205,13 +216,13 @@ describe("agent session resolution", () => {
     });
   });
 
-  it.each([
+  it.each<[string, SessionEntry["status"], string?, string?]>([
     ["canonical done main", "done"],
     ["raw done main alias", "done", "main", "main"],
     ["custom done main alias", "done", "work"],
     ["killed main", "killed"],
     ["endedAt-only main", undefined],
-  ] as const)(
+  ])(
     "uses explicit outcomes for %s with a newer transcript",
     async (label, status, mainKey = "main", requestedSessionKey = "agent:main:main") => {
       const storedSessionKey = `agent:main:${mainKey}`;

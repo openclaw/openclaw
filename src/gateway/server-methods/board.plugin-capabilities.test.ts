@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   errorShape,
@@ -59,7 +58,12 @@ async function widgetHarness(
           id: "dispatch",
           method: "workboard.cards.dispatch",
           description: "Dispatch fixture cards",
-          paramShape: Type.Object({ force: Type.Boolean() }, { additionalProperties: false }),
+          paramShape: {
+            type: "object",
+            properties: { force: { type: "boolean" } },
+            required: ["force"],
+            additionalProperties: false,
+          },
         },
       ],
     },

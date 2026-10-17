@@ -77,7 +77,7 @@ async function publishInventory(
 
 const host = (capacity: typeof AVAILABLE_CAPACITY | typeof FULL_CAPACITY) => ({
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true as const, capacity, bundlePrewarm: 1 },
+  workerHost: { enabled: true as const, capacity, bundlePrewarm: 1 as const },
 });
 const availableHost = host(AVAILABLE_CAPACITY);
 const fullHost = host(FULL_CAPACITY);
@@ -99,7 +99,9 @@ function register(
     pairingGeneration: "generation-1",
   },
 ) {
-  onTestFinished(() => registry.unregister(client.connId));
+  onTestFinished(() => {
+    registry.unregister(client.connId);
+  });
   return registry.register(client, identity);
 }
 
@@ -155,6 +157,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   it("publishes explicit runner consent and launch capacity for authenticated macOS", async () => {
     const clientId = GATEWAY_CLIENT_IDS.MACOS_APP;
     const client = nodeClient();
+    const send = vi.spyOn(client.socket, "send");
     client.connect.client.id = clientId;
     const { registry, transport, publish, inventoryChanged } = createCurrentRunner(client);
     await publish(availableHost);
@@ -188,7 +191,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       command: STATUS_COMMAND,
       isDispatchAuthorized: () => true,
     });
-    const frame = JSON.parse(String(vi.mocked(client.socket.send).mock.calls[0]?.[0]));
+    const frame = JSON.parse(String(send.mock.calls[0]?.[0]));
     expect(frame.payload.command).toBe(STATUS_COMMAND);
     expect(registry.get("node-1")?.clientId).toBe(clientId);
     registry.handleInvokeResult({

@@ -11,6 +11,7 @@ const processTreeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@lydell/node-pty", () => nodePtyMocks);
+// mock-isolation: synthetic PTY process ids must never signal host processes.
 vi.mock("../process/kill-tree.js", () => processTreeMocks);
 
 import { startPty } from "./tui-pty-test-support.js";

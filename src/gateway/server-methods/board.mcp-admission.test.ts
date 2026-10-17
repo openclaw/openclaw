@@ -34,7 +34,7 @@ import { createBoardHarness } from "./board.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
-const scopes = ["operator.read", "operator.write", "operator.approvals"];
+const scopes = ["operator.read", "operator.write", "operator.approvals"] as const;
 
 afterEach(() => {
   mcpUiResourceTesting.clearViewStore();

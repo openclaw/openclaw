@@ -121,6 +121,9 @@ function createPairingShell(params: {
     overlays: {
       snapshot: overlaySnapshot,
       openDevicePairSetup,
+      closeDevicePairSetup: vi.fn(() => {
+        overlaySnapshot.devicePairSetupOpen = false;
+      }),
       subscribe: () => () => undefined,
     },
     settingsAgentSelection: {
@@ -430,7 +433,7 @@ describe("application shell pairing access", () => {
     ["admin becoming pairing-only", admin, true, true, pairingOnly],
   ] satisfies [string, PairingAuth | null, boolean, boolean?, PairingAuth?][])(
     "gates the sidebar pairing entry for a %s operator",
-    async (_name, auth, canPair, connected, nextAuth) => {
+    async (_name, auth, canPair, connected?: boolean, nextAuth?: PairingAuth) => {
       const { snapshot, openDevicePairSetup, renderSidebar } = createPairingShell({
         auth,
         connected,

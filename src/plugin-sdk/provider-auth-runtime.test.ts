@@ -114,7 +114,7 @@ function preflight(port: number, origin: string, privateNetwork = true) {
 
 describe("plugin-sdk provider-auth-runtime", () => {
   it("exports the runtime-ready auth helper", () => {
-    expect(providerAuthRuntime.getRuntimeAuthForModel).toBeTypeOf("function");
+    expect(auth.getRuntimeAuthForModel).toBeTypeOf("function");
   });
 
   it("resolves non-secret provider auth profile metadata", async () => {

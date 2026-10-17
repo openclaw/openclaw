@@ -863,7 +863,7 @@ describe("agent request events", () => {
         updateNodeHostStats: (params) => registry.updateHostStats(params),
       });
       const current = connection === "current";
-      const stats = current
+      const stats: Parameters<typeof registry.updateHostStats>[0]["stats"] = current
         ? {
             cpuCount: 8,
             loadAverage: [1.5, 1, 0.5],
@@ -1000,4 +1000,3 @@ describe("chat subscribe/unsubscribe events", () => {
     expect(nodeSubscribe).not.toHaveBeenCalled();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

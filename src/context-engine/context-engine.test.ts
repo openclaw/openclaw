@@ -58,6 +58,7 @@ const { compactRuntime } = vi.hoisted(() => ({
   compactRuntime: vi.fn(),
 }));
 
+// mock-isolation: compaction delegation is observed without starting a provider-backed runner.
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
   compactEmbeddedAgentSessionOnDemand: compactRuntime,
 }));

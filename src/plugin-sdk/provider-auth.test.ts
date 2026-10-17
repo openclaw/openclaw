@@ -383,6 +383,7 @@ describe("provider auth profile helpers", () => {
       },
     );
 
+    // mock-isolation: fixture profiles must not refresh real OAuth credentials.
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({ resolveApiKeyForProfile }));
     await mockProfileAvailability(store);
 
@@ -415,6 +416,7 @@ describe("provider auth profile helpers", () => {
     vi.doMock("../agents/auth-profiles/external-cli-discovery.js", () => ({
       externalCliDiscoveryForProviderAuth: vi.fn(() => externalCli),
     }));
+    // mock-isolation: availability discovery must not refresh real OAuth credentials.
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({ resolveApiKeyForProfile: vi.fn() }));
     await mockProfileAvailability(primaryStore, loadAuthProfileStoreForSecretsRuntime);
 

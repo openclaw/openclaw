@@ -30,7 +30,7 @@ export const buildSessionLookup = (
   legacyKey: undefined,
 });
 
-export const runtimeMocks = vi.hoisted(() => ({
+const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
   deleteMediaBuffer: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
@@ -74,6 +74,8 @@ export const runtimeMocks = vi.hoisted(() => ({
   ),
   persistInboundImagesForTranscript: vi.fn(),
 }));
+
+export { runtimeMocks };
 
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),

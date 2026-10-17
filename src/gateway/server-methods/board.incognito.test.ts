@@ -32,7 +32,7 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/board-incognito-rpc" };
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
 const widget = {
   name: "status",
-  content: { kind: "html", html: "<p>Private status</p>" },
+  content: { kind: "html" as const, html: "<p>Private status</p>" },
   declared: { tools: ["health"] },
 };
 

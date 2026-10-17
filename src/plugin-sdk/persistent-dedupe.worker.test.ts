@@ -92,7 +92,7 @@ describe("persistent dedupe worker", () => {
           expect(await dedupe.claim("shared")).toEqual({ kind: "claimed" });
         }
         const original = phase === "lookup" ? dedupe.claim("shared") : dedupe.commit("shared");
-        const { outcome } = trackSettlement(original);
+        const { outcome } = trackSettlement<Awaited<typeof original>>(original);
         await ready.promise;
         const failure = new Error("original owner released");
         const forgetting =

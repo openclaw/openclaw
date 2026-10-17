@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK migration runtime facades and migration helper behavior.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,59 +22,58 @@ async function writeFile(filePath: string, contents: string): Promise<void> {
   await fs.writeFile(filePath, contents, "utf8");
 }
 
-function memoryFixture() {
-  const root = tempDirs.make("openclaw-memory-copy-");
-  const workspaceDir = path.join(root, "workspace");
-  const source = path.join(root, "source", "MEMORY.md");
-  const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
-  const item = createMigrationItem({
-    id: "memory:codex:MEMORY.md",
-    kind: "memory",
-    action: "copy",
-    source,
-    target,
-  });
-  const copy = (overwrite = false) =>
-    copyMemoryMigrationFileItem(item, path.join(root, "report"), { workspaceDir, overwrite });
-  return { root, workspaceDir, source, target, item, copy };
-}
-
 describe("withCachedMigrationConfigRuntime", () => {
   it("serves later config mutations from the same cached runtime snapshot", async () => {
     type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
     type RuntimeConfig = MigrationProviderContext["config"];
+    type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
+    type ReplaceConfigFileParams = Parameters<Runtime["config"]["replaceConfigFile"]>[0];
+    type MutateConfigFileResult = Awaited<ReturnType<Runtime["config"]["mutateConfigFile"]>>;
     type ReplaceConfigFileResult = Awaited<ReturnType<Runtime["config"]["replaceConfigFile"]>>;
 
-    const modelConfig = (name: string) => ({
-      agents: { defaults: { model: { primary: `openai/${name}` } } },
-    });
-    const fallbackConfig = modelConfig("base");
-    const receipt = (): ReplaceConfigFileResult => ({
-      path: "/tmp/openclaw.json",
-      previousHash: null,
-      persistedHash: "test-persisted-hash",
-      snapshot: {} as never,
-      nextConfig: runtimeConfig,
-      afterWrite: { mode: "auto" },
-      followUp: { mode: "auto", requiresRestart: false },
-    });
+    const fallbackConfig = { agents: { defaults: { model: { primary: "openai/base" } } } };
     let runtimeConfig: RuntimeConfig = structuredClone(fallbackConfig);
     const current = vi.fn(() => runtimeConfig);
-    const mutateConfigFile: Runtime["config"]["mutateConfigFile"] = async (params) => {
-      const draft = structuredClone(runtimeConfig);
-      const result = await params.mutate(draft, {
-        snapshot: {} as never,
-        previousHash: null,
-      });
-      runtimeConfig = structuredClone(draft);
-      return { ...receipt(), result };
-    };
-    const replaceConfigFile: Runtime["config"]["replaceConfigFile"] = async (params) => {
-      runtimeConfig = structuredClone(params.nextConfig);
-      return receipt();
-    };
+    const mutateConfigFile = vi.fn(
+      async (params: MutateConfigFileParams): Promise<MutateConfigFileResult> => {
+        const draft = structuredClone(runtimeConfig);
+        const result = await params.mutate(draft, {
+          snapshot: {} as never,
+          previousHash: null,
+        });
+        runtimeConfig = structuredClone(draft);
+        return {
+          path: "/tmp/openclaw.json",
+          previousHash: null,
+          persistedHash: "test-persisted-hash",
+          snapshot: {} as never,
+          nextConfig: runtimeConfig,
+          afterWrite: { mode: "auto" },
+          followUp: { mode: "auto", requiresRestart: false },
+          result,
+        };
+      },
+    );
+    const replaceConfigFile = vi.fn(
+      async (params: ReplaceConfigFileParams): Promise<ReplaceConfigFileResult> => {
+        runtimeConfig = structuredClone(params.nextConfig);
+        return {
+          path: "/tmp/openclaw.json",
+          previousHash: null,
+          persistedHash: "test-persisted-hash",
+          snapshot: {} as never,
+          nextConfig: runtimeConfig,
+          afterWrite: { mode: "auto" },
+          followUp: { mode: "auto", requiresRestart: false },
+        };
+      },
+    );
     const runtime = {
-      config: { current, mutateConfigFile, replaceConfigFile },
+      config: {
+        current,
+        mutateConfigFile,
+        replaceConfigFile,
+      },
     } as unknown as Runtime;
 
     const wrapped = withCachedMigrationConfigRuntime(runtime, fallbackConfig);
@@ -81,9 +83,9 @@ describe("withCachedMigrationConfigRuntime", () => {
       throw new Error("Expected the migration config snapshot");
     }
     expect(clonedConfig).not.toBe(wrapped?.config.current());
-    clonedConfig.agents = modelConfig("clone").agents;
+    clonedConfig.agents = { defaults: { model: { primary: "openai/clone" } } };
     expect(wrapped?.config.current()).toEqual(fallbackConfig);
-    runtimeConfig = modelConfig("external");
+    runtimeConfig = { agents: { defaults: { model: { primary: "openai/external" } } } };
 
     await wrapped?.config.mutateConfigFile({
       base: "runtime",
@@ -94,13 +96,17 @@ describe("withCachedMigrationConfigRuntime", () => {
         draft.agents.defaults.model = { primary: "openai/mutated" };
       },
     });
-    expect(wrapped?.config.current()).toEqual(modelConfig("mutated"));
+    expect(wrapped?.config.current()).toEqual({
+      agents: { defaults: { model: { primary: "openai/mutated" } } },
+    });
 
     await wrapped?.config.replaceConfigFile({
-      nextConfig: modelConfig("replaced"),
+      nextConfig: { agents: { defaults: { model: { primary: "openai/replaced" } } } },
       afterWrite: { mode: "auto" },
     });
-    expect(wrapped?.config.current()).toEqual(modelConfig("replaced"));
+    expect(wrapped?.config.current()).toEqual({
+      agents: { defaults: { model: { primary: "openai/replaced" } } },
+    });
     expect(current).toHaveBeenCalledTimes(1);
   });
 });
@@ -161,14 +167,28 @@ describe("copyMigrationFileItem", () => {
     await writeFile(targetOne, "old one");
     await writeFile(targetTwo, "old two");
 
-    const copy = (id: string, source: string, target: string) =>
-      copyMigrationFileItem(
-        createMigrationItem({ id, kind: "file", action: "copy", source, target }),
-        reportDir,
-        { overwrite: true },
-      );
-    const first = await copy("first", sourceOne, targetOne);
-    const second = await copy("second", sourceTwo, targetTwo);
+    const first = await copyMigrationFileItem(
+      createMigrationItem({
+        id: "first",
+        kind: "file",
+        action: "copy",
+        source: sourceOne,
+        target: targetOne,
+      }),
+      reportDir,
+      { overwrite: true },
+    );
+    const second = await copyMigrationFileItem(
+      createMigrationItem({
+        id: "second",
+        kind: "file",
+        action: "copy",
+        source: sourceTwo,
+        target: targetTwo,
+      }),
+      reportDir,
+      { overwrite: true },
+    );
 
     expect(first.status, first.reason).toBe("migrated");
     expect(second.status, second.reason).toBe("migrated");
@@ -187,49 +207,74 @@ describe("copyMigrationFileItem", () => {
 
 describe("copyMemoryMigrationFileItem", () => {
   it("rejects source bytes that changed after the reviewed plan", async () => {
-    const { root, workspaceDir, source, target, item: memoryItem } = memoryFixture();
+    const root = tempDirs.make("openclaw-memory-copy-");
+    const workspaceDir = path.join(root, "workspace");
+    const source = path.join(root, "source", "MEMORY.md");
+    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
     await writeFile(source, "reviewed memory");
-    const item = { ...memoryItem, details: { sourceSha256: "provider-owned" } };
+    const item = createMigrationItem({
+      id: "memory:codex:MEMORY.md",
+      kind: "memory",
+      action: "copy",
+      source,
+      target,
+      details: { sourceSha256: "provider-owned" },
+    });
     const bound = await bindMemoryMigrationPlanSources({
       providerId: "codex",
       source: path.dirname(source),
       target: workspaceDir,
-      summary: summarizeMigrationItems([item]),
+      summary: {
+        total: 1,
+        planned: 1,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
       items: [item],
     });
-    expect(bound.items[0]).toMatchObject({
-      details: { sourceSha256: "provider-owned" },
-      sourceRevision: { algorithm: "sha256" },
-    });
+    expect(bound.items[0]?.details?.sourceSha256).toBe("provider-owned");
+    expect(bound.items[0]?.sourceRevision).toMatchObject({ algorithm: "sha256" });
     await writeFile(source, "changed memory");
 
     const result = await copyMemoryMigrationFileItem(bound.items[0]!, path.join(root, "report"), {
       workspaceDir,
     });
 
-    expect(result).toMatchObject({
-      status: "error",
-      reason: expect.stringContaining("source changed"),
-    });
+    expect(result.status).toBe("error");
+    expect(result.reason).toContain("source changed");
     await expect(fs.access(target)).rejects.toThrow();
   });
 
   it.runIf(process.platform !== "win32")(
     "rejects a hardlinked memory source without creating the destination",
     async () => {
-      const { root, source, target, copy } = memoryFixture();
+      const root = tempDirs.make("openclaw-memory-copy-");
+      const workspaceDir = path.join(root, "workspace");
       const outside = path.join(root, "outside", "outside.md");
+      const source = path.join(root, "source", "MEMORY.md");
+      const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
       await writeFile(outside, "outside bytes");
       await fs.mkdir(path.dirname(source), { recursive: true });
       await fs.link(outside, source);
       expect((await fs.stat(source)).nlink).toBeGreaterThan(1);
 
-      const result = await copy();
+      const result = await copyMemoryMigrationFileItem(
+        createMigrationItem({
+          id: "memory:codex:MEMORY.md",
+          kind: "memory",
+          action: "copy",
+          source,
+          target,
+        }),
+        path.join(root, "report"),
+        { workspaceDir },
+      );
 
-      expect(result).toMatchObject({
-        status: "error",
-        reason: expect.stringContaining("hardlink"),
-      });
+      expect(result.status).toBe("error");
+      expect(result.reason).toContain("hardlink");
       await expect(fs.access(target)).rejects.toThrow();
     },
   );
@@ -248,7 +293,15 @@ describe("copyMemoryMigrationFileItem", () => {
     const bound = await bindMemoryMigrationPlanSources({
       providerId: "codex",
       source: path.dirname(missingSource),
-      summary: summarizeMigrationItems([item]),
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 0,
+        skipped: 1,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
       items: [item],
     });
 
@@ -259,14 +312,27 @@ describe("copyMemoryMigrationFileItem", () => {
     if (process.platform === "win32") {
       return;
     }
-    const { root, workspaceDir, source, copy } = memoryFixture();
+    const root = tempDirs.make("openclaw-memory-copy-");
+    const workspaceDir = path.join(root, "workspace");
     const outsideDir = path.join(root, "outside");
+    const source = path.join(root, "source", "MEMORY.md");
+    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
     await writeFile(source, "source memory");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.symlink(outsideDir, path.join(workspaceDir, "memory"));
 
-    const result = await copy(true);
+    const result = await copyMemoryMigrationFileItem(
+      createMigrationItem({
+        id: "memory:codex:MEMORY.md",
+        kind: "memory",
+        action: "copy",
+        source,
+        target,
+      }),
+      path.join(root, "report"),
+      { workspaceDir, overwrite: true },
+    );
 
     expect(result.status).toBe("error");
     await expect(
@@ -275,14 +341,27 @@ describe("copyMemoryMigrationFileItem", () => {
   });
 
   it("backs up and replaces an existing memory file within the workspace root", async () => {
-    const { workspaceDir, source, target, copy } = memoryFixture();
+    const root = tempDirs.make("openclaw-memory-copy-");
+    const workspaceDir = path.join(root, "workspace");
+    const source = path.join(root, "source", "MEMORY.md");
+    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
     await writeFile(source, "new memory");
     await writeFile(target, "old memory");
     if (process.platform !== "win32") {
       await fs.chmod(target, 0o644);
     }
 
-    const result = await copy(true);
+    const result = await copyMemoryMigrationFileItem(
+      createMigrationItem({
+        id: "memory:codex:MEMORY.md",
+        kind: "memory",
+        action: "copy",
+        source,
+        target,
+      }),
+      path.join(root, "report"),
+      { workspaceDir, overwrite: true },
+    );
 
     expect(result.status).toBe("migrated");
     await expect(fs.readFile(target, "utf8")).resolves.toBe("new memory");
@@ -300,11 +379,24 @@ describe("copyMemoryMigrationFileItem", () => {
   });
 
   it("does not clobber an existing memory file when replacement is disabled", async () => {
-    const { source, target, copy } = memoryFixture();
+    const root = tempDirs.make("openclaw-memory-copy-");
+    const workspaceDir = path.join(root, "workspace");
+    const source = path.join(root, "source", "MEMORY.md");
+    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
     await writeFile(source, "new memory");
     await writeFile(target, "concurrent memory");
 
-    const result = await copy();
+    const result = await copyMemoryMigrationFileItem(
+      createMigrationItem({
+        id: "memory:codex:MEMORY.md",
+        kind: "memory",
+        action: "copy",
+        source,
+        target,
+      }),
+      path.join(root, "report"),
+      { workspaceDir },
+    );
 
     expect(result.status).toBe("conflict");
     await expect(fs.readFile(target, "utf8")).resolves.toBe("concurrent memory");
@@ -316,31 +408,55 @@ describe("writeMigrationReport", () => {
     const root = tempDirs.make("openclaw-migration-report-");
     const reportDir = path.join(root, "report");
 
-    const mcp = {
-      env: { OPENAI_API_KEY: "short-dev-key", SAFE_FLAG: "visible" },
-      headers: { Authorization: "Bearer short-dev-key", "x-api-key": "another-short-dev-key" },
-    };
-    const item = createMigrationItem({
-      id: "config:mcp-servers",
-      kind: "config",
-      action: "merge",
-      status: "migrated",
-      details: { value: { mcp } },
-    });
     await writeMigrationReport({
       providerId: "hermes",
       source: path.join(root, "hermes"),
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 1,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        createMigrationItem({
+          id: "config:mcp-servers",
+          kind: "config",
+          action: "merge",
+          status: "migrated",
+          details: {
+            value: {
+              mcp: {
+                env: {
+                  OPENAI_API_KEY: "short-dev-key",
+                  SAFE_FLAG: "visible",
+                },
+                headers: {
+                  Authorization: "Bearer short-dev-key",
+                  "x-api-key": "another-short-dev-key",
+                },
+              },
+            },
+          },
+        }),
+      ],
       reportDir,
-      summary: summarizeMigrationItems([item]),
-      items: [item],
     });
 
     const report = await fs.readFile(path.join(reportDir, "report.json"), "utf8");
     expect(report).not.toContain("short-dev-key");
     expect(report).not.toContain("another-short-dev-key");
     expect(JSON.parse(report).items[0].details.value.mcp).toEqual({
-      env: { OPENAI_API_KEY: "[redacted]", SAFE_FLAG: "visible" },
-      headers: { Authorization: "[redacted]", "x-api-key": "[redacted]" },
+      env: {
+        OPENAI_API_KEY: "[redacted]",
+        SAFE_FLAG: "visible",
+      },
+      headers: {
+        Authorization: "[redacted]",
+        "x-api-key": "[redacted]",
+      },
     });
   });
 });

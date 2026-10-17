@@ -115,17 +115,15 @@ async function withNativeBoundedFixture(
     const gate = path.join(root, "exit");
     fs.writeFileSync(script, options.source);
     const children = channel("child_process");
-    const observed: { child?: ChildProcess } = {};
+    const observed: ChildProcess[] = [];
     const capture = (message: unknown) => {
       if (
         message &&
         typeof message === "object" &&
         "process" in message &&
-        message.process instanceof ChildProcess &&
-        message.process.spawnargs[0] === testNodeExecPath &&
-        message.process.spawnargs[1] === script
+        message.process instanceof ChildProcess
       ) {
-        observed.child ??= message.process;
+        observed.push(message.process);
       }
     };
     children.subscribe(capture);
@@ -141,7 +139,10 @@ async function withNativeBoundedFixture(
     } finally {
       children.unsubscribe(capture);
     }
-    child = observed.child;
+    child = observed.find(
+      (candidate) =>
+        candidate.spawnargs[0] === testNodeExecPath && candidate.spawnargs[1] === script,
+    );
     try {
       if (!child) {
         throw new Error("Expected the exact native fixture child");

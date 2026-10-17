@@ -344,8 +344,8 @@ test.each([
       seq: number,
       eventStream: AgentEventRuntimePayload["stream"],
       data: Record<string, unknown>,
-    ) =>
-      handler({
+    ) => {
+      const event: AgentEventRuntimePayload = {
         runId: "run-source-gap",
         sessionKey,
         seq,
@@ -354,7 +354,9 @@ test.each([
         data,
         projectSessionLifecycle: false,
         verboseLevel: "full",
-      });
+      };
+      return handler(event);
+    };
     try {
       await emit(1, "assistant", { text: "A", delta: "A" });
       await Promise.all(sends);

@@ -37,7 +37,7 @@ const methods = [
 const variants = <T extends string>(change: T, selected: readonly (typeof methods)[number][]) =>
   selected.map((method) => ({ method, change }));
 const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
-const scopes = ["operator.read", "operator.write", "operator.approvals"];
+const scopes = ["operator.read", "operator.write", "operator.approvals"] as const;
 
 it.each([
   ...variants("allow", methods),

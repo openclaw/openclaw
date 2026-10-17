@@ -264,6 +264,7 @@ vi.mock("../config/io.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => loadRuntimeConfig(),
   loadConfig: loadRuntimeConfig,
 }));
+// mock-isolation: exercise dispatch without opening a live Gateway connection.
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   isGatewayCredentialsRequiredError: (value: unknown) =>

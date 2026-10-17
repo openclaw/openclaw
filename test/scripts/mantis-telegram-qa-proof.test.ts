@@ -159,7 +159,10 @@ it.each([
       protected: fault === "missing-protection" ? undefined : fault !== "unprotected",
     }),
     "branches/main": () =>
-      branch("main", fault === "moved-main" && ++mainReads > 1 ? "c".repeat(40) : main),
+      branch(
+        "main",
+        fault === "main" ? sha : fault === "moved-main" && ++mainReads > 1 ? "c".repeat(40) : main,
+      ),
     [`compare/${sha}...${main}?per_page=1`]: () => ({
       status: fault === "not-ancestor" ? "diverged" : "ahead",
       merge_base_commit: { sha },
@@ -168,6 +171,9 @@ it.each([
   };
   const fetchImpl = async (url: string | URL | Request, options?: RequestInit) => {
     expect(options?.redirect).toBe("error");
+    if (fault === "api-denied") {
+      return new Response(null, { status: 403 });
+    }
     if (fault === "redirect") {
       return new Response(null, { status: 302 });
     }
@@ -187,7 +193,7 @@ it.each([
     token: "synthetic-only",
     fetchImpl,
   });
-  if (["complete", "advanced-main"].includes(fault)) {
+  if (["complete", "main", "advanced-main"].includes(fault)) {
     await expect(admission).resolves.toBeUndefined();
   } else if (fault === "wrong-main-base") {
     await expect(admission).rejects.toThrow("Workflow SHA is not verified main ancestry");

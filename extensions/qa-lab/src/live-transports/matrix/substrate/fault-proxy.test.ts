@@ -17,15 +17,17 @@ async function startTargetServer(params?: {
   responseHeaders?: Record<string, string>;
 }) {
   const requests: ForwardedRequest[] = [];
-  const server = createServer(async (req, res) => {
-    requests.push({
-      ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
-      body: await text(req),
-      method: req.method ?? "GET",
-      url: req.url ?? "/",
-    });
-    res.writeHead(200, { "content-type": "application/json", ...params?.responseHeaders });
-    res.end(params?.responseBody ?? JSON.stringify(forwardedBody));
+  const server = createServer((req, res) => {
+    void (async () => {
+      requests.push({
+        ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
+        body: await text(req),
+        method: req.method ?? "GET",
+        url: req.url ?? "/",
+      });
+      res.writeHead(200, { "content-type": "application/json", ...params?.responseHeaders });
+      res.end(params?.responseBody ?? JSON.stringify(forwardedBody));
+    })().catch((error) => res.destroy(error));
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
