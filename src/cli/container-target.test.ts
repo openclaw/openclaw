@@ -1,4 +1,3 @@
-// Container target tests cover CLI container target parsing and validation.
 import type { spawnSync as nodeSpawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
@@ -94,6 +93,20 @@ function mockSpawn(...results: SpawnResult[]): SpawnMock {
   return spawnSync as SpawnMock;
 }
 
+function runTarget(
+  spawnSync: SpawnMock,
+  env: NodeJS.ProcessEnv = {},
+  args = ["status"],
+  tty = false,
+) {
+  return runInContainer(["node", "openclaw", ...args], {
+    env: { ...(args.includes("--container") ? {} : { OPENCLAW_CONTAINER: "demo" }), ...env },
+    spawnSync,
+    stdinIsTTY: tty,
+    stdoutIsTTY: tty,
+  });
+}
+
 function expectRuntimeProbe(
   spawnSync: SpawnMock,
   index: number,
@@ -162,35 +175,19 @@ describe("parseCliContainerArgs", () => {
   });
 
   it("stops parsing --container after the -- terminator", () => {
-    expect(
-      parseCliContainerArgs([
-        "node",
-        "openclaw",
-        "nodes",
-        "run",
-        "--",
-        "docker",
-        "run",
-        "--container",
-        "demo",
-        "alpine",
-      ]),
-    ).toEqual({
-      ok: true,
-      container: null,
-      argv: [
-        "node",
-        "openclaw",
-        "nodes",
-        "run",
-        "--",
-        "docker",
-        "run",
-        "--container",
-        "demo",
-        "alpine",
-      ],
-    });
+    const argv = [
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--",
+      "docker",
+      "run",
+      "--container",
+      "demo",
+      "alpine",
+    ];
+    expect(parseCliContainerArgs([...argv])).toEqual({ ok: true, container: null, argv });
   });
 });
 
@@ -202,25 +199,16 @@ describe("maybeRunCliInContainer", () => {
     });
   });
 
-  it.each([
-    { result: { status: null, signal: "SIGTERM" as const }, exitCode: 143, outcome: "SIGTERM" },
-  ])("preserves exit code $exitCode when the container child returns $outcome", (testCase) => {
+  it("preserves exit code 143 when the container child returns SIGTERM", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, {
-      ...testCase.result,
+      status: null,
+      signal: "SIGTERM",
     });
-
-    expect(
-      runInContainer(["node", "openclaw", "status"], {
-        env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
-        spawnSync,
-      }),
-    ).toEqual({
-      handled: true,
-      exitCode: testCase.exitCode,
-    });
+    expect(runTarget(spawnSync)).toEqual({ handled: true, exitCode: 143 });
   });
 
-  it.each(["ENOENT"])("throws the original %s launch error from the container exec", (code) => {
+  it("throws the original ENOENT launch error from the container exec", () => {
+    const code = "ENOENT";
     const launchError = Object.assign(new Error(`spawnSync podman ${code}`), { code });
     const spawnSync = mockSpawn(runningContainer, missingContainer, {
       status: null,
@@ -229,10 +217,7 @@ describe("maybeRunCliInContainer", () => {
 
     let thrown: unknown;
     try {
-      runInContainer(["node", "openclaw", "status"], {
-        env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
-        spawnSync,
-      });
+      runTarget(spawnSync);
     } catch (error) {
       thrown = error;
     }
@@ -243,16 +228,12 @@ describe("maybeRunCliInContainer", () => {
   it("clears inherited host routing and gateway env before execing into the child CLI", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    runInContainer(["node", "openclaw", "status"], {
-      env: {
-        OPENCLAW_CONTAINER: "demo",
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_GATEWAY_PORT: "19001",
-        OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:18789",
-        OPENCLAW_GATEWAY_TOKEN: "token",
-        OPENCLAW_GATEWAY_PASSWORD: "password",
-      } as NodeJS.ProcessEnv,
-      spawnSync,
+    runTarget(spawnSync, {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_GATEWAY_PORT: "19001",
+      OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:18789",
+      OPENCLAW_GATEWAY_TOKEN: "token",
+      OPENCLAW_GATEWAY_PASSWORD: "password",
     });
 
     expectContainerExec(spawnSync);
@@ -271,13 +252,7 @@ describe("maybeRunCliInContainer", () => {
   it("passes the proxy URL env fallback into the child container CLI", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    runInContainer(["node", "openclaw", "status"], {
-      env: {
-        OPENCLAW_CONTAINER: "demo",
-        OPENCLAW_PROXY_URL: " http://proxy.internal:3128 ",
-      } as NodeJS.ProcessEnv,
-      spawnSync,
-    });
+    runTarget(spawnSync, { OPENCLAW_PROXY_URL: " http://proxy.internal:3128 " });
 
     expectContainerExec(spawnSync, {
       proxyUrl: "http://proxy.internal:3128",
@@ -290,15 +265,9 @@ describe("maybeRunCliInContainer", () => {
     (proxyUrl) => {
       const spawnSync = mockSpawn(runningContainer, missingContainer);
 
-      expect(() =>
-        runInContainer(["node", "openclaw", "status"], {
-          env: {
-            OPENCLAW_CONTAINER: "demo",
-            OPENCLAW_PROXY_URL: ` ${proxyUrl} `,
-          } as NodeJS.ProcessEnv,
-          spawnSync,
-        }),
-      ).toThrow("127.0.0.1 inside a container points at the container");
+      expect(() => runTarget(spawnSync, { OPENCLAW_PROXY_URL: ` ${proxyUrl} ` })).toThrow(
+        "127.0.0.1 inside a container points at the container",
+      );
 
       expect(spawnSync).toHaveBeenCalledTimes(2);
     },
@@ -309,38 +278,27 @@ describe("maybeRunCliInContainer", () => {
 
     let message = "";
     try {
-      runInContainer(["node", "openclaw", "status"], {
-        env: {
-          OPENCLAW_CONTAINER: "demo",
-          OPENCLAW_PROXY_URL:
-            "http://proxy-user:proxy-secret@127.1:3128?token=proxy-query-secret#proxy-fragment-secret",
-        } as NodeJS.ProcessEnv,
-        spawnSync,
+      runTarget(spawnSync, {
+        OPENCLAW_PROXY_URL:
+          "http://proxy-user:proxy-secret@127.1:3128?token=proxy-query-secret#proxy-fragment-secret",
       });
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
 
     expect(message).toContain("OPENCLAW_PROXY_URL=http://redacted:redacted@127.0.0.1:3128/");
-    expect(message).not.toContain("proxy-user");
-    expect(message).not.toContain("proxy-secret");
-    expect(message).not.toContain("proxy-query-secret");
-    expect(message).not.toContain("proxy-fragment-secret");
-    expect(message).not.toContain("?token=");
-    expect(message).not.toContain("#");
+    expect(message).not.toMatch(
+      /proxy-user|proxy-secret|proxy-query-secret|proxy-fragment-secret|\?token=|#/,
+    );
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
 
   it("allows explicitly overridden loopback proxy URL forwarding into a child container CLI", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    runInContainer(["node", "openclaw", "status"], {
-      env: {
-        OPENCLAW_CONTAINER: "demo",
-        OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
-        OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL: "1",
-      } as NodeJS.ProcessEnv,
-      spawnSync,
+    runTarget(spawnSync, {
+      OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+      OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL: "1",
     });
 
     const podmanCall = requireSpawnCall(spawnSync, 2);
@@ -354,12 +312,7 @@ describe("maybeRunCliInContainer", () => {
   it("checks docker after podman and before failing", () => {
     const spawnSync = mockSpawn(missingContainer, runningContainer, successfulExec, successfulExec);
 
-    expect(
-      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
-        env: { USER: "somalley" } as NodeJS.ProcessEnv,
-        spawnSync,
-      }),
-    ).toEqual({
+    expect(runTarget(spawnSync, { USER: "somalley" }, ["--container", "demo", "status"])).toEqual({
       handled: true,
       exitCode: 0,
     });
@@ -374,10 +327,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(missingContainer, missingContainer);
 
     expect(() =>
-      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
-        env: { USER: "somalley" } as NodeJS.ProcessEnv,
-        spawnSync,
-      }),
+      runTarget(spawnSync, { USER: "somalley" }, ["--container", "demo", "status"]),
     ).toThrow('No running container matched "demo" under podman or docker.');
 
     expect(spawnSync).toHaveBeenCalledTimes(2);
@@ -389,10 +339,7 @@ describe("maybeRunCliInContainer", () => {
     const spawnSync = mockSpawn(runningContainer, runningContainer, missingContainer);
 
     expect(() =>
-      runInContainer(["node", "openclaw", "--container", "demo", "status"], {
-        env: { USER: "somalley" } as NodeJS.ProcessEnv,
-        spawnSync,
-      }),
+      runTarget(spawnSync, { USER: "somalley" }, ["--container", "demo", "status"]),
     ).toThrow(
       'Container "demo" is running under multiple runtimes (podman, docker); use a unique container name.',
     );
@@ -401,12 +348,7 @@ describe("maybeRunCliInContainer", () => {
   it("allocates a tty for interactive terminal sessions", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);
 
-    runInContainer(["node", "openclaw", "--container", "demo", "setup"], {
-      env: {},
-      spawnSync,
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-    });
+    runTarget(spawnSync, {}, ["--container", "demo", "setup"], true);
 
     expectContainerExec(spawnSync, { argv: ["setup"], tty: true });
   });
@@ -414,7 +356,7 @@ describe("maybeRunCliInContainer", () => {
   it("skips recursion when the bypass env is set", () => {
     expect(
       runInContainer(["node", "openclaw", "--container", "demo", "status"], {
-        env: { OPENCLAW_CLI_CONTAINER_BYPASS: "1" } as NodeJS.ProcessEnv,
+        env: { OPENCLAW_CLI_CONTAINER_BYPASS: "1" },
       }),
     ).toEqual({
       handled: false,
@@ -425,12 +367,7 @@ describe("maybeRunCliInContainer", () => {
   it("blocks update after interleaved root flags", () => {
     const spawnSync = mockSpawn(runningContainer);
 
-    expect(() =>
-      runInContainer(["node", "openclaw", "--container", "demo", "--no-color", "update"], {
-        env: {},
-        spawnSync,
-      }),
-    ).toThrow(
+    expect(() => runTarget(spawnSync, {}, ["--container", "demo", "--no-color", "update"])).toThrow(
       "openclaw update is not supported with --container; rebuild or restart the container image instead.",
     );
     expect(spawnSync).not.toHaveBeenCalled();
@@ -439,12 +376,7 @@ describe("maybeRunCliInContainer", () => {
   it("blocks the --update shorthand from running inside the container", () => {
     const spawnSync = mockSpawn(runningContainer);
 
-    expect(() =>
-      runInContainer(["node", "openclaw", "--container", "demo", "--update"], {
-        env: {},
-        spawnSync,
-      }),
-    ).toThrow(
+    expect(() => runTarget(spawnSync, {}, ["--container", "demo", "--update"])).toThrow(
       "openclaw update is not supported with --container; rebuild or restart the container image instead.",
     );
     expect(spawnSync).not.toHaveBeenCalled();
