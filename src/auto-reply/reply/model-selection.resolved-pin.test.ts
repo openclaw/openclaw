@@ -225,3 +225,145 @@ test.each<[string, string, string, SelectionOptions]>([
     );
   });
 });
+
+type CodexLegacySelfOriginCase = {
+  name: string;
+  providerOverride?: string;
+  modelOverride: string;
+  originProvider?: string;
+  originModel?: string;
+  isHeartbeat?: boolean;
+  expectedReset: boolean;
+};
+
+test.each<CodexLegacySelfOriginCase>([
+  {
+    name: "complete self-origin automatic selection",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originProvider: "openai",
+    originModel: "gpt-x",
+    expectedReset: false,
+  },
+  {
+    name: "trimmed self-origin automatic selection",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originProvider: " openai ",
+    originModel: " gpt-x ",
+    expectedReset: false,
+  },
+  {
+    name: "legacy automatic selection without an origin",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    expectedReset: true,
+  },
+  {
+    name: "cross-origin provider",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originProvider: "retired-provider",
+    originModel: "gpt-x",
+    expectedReset: true,
+  },
+  {
+    name: "cross-origin model",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originProvider: "openai",
+    originModel: "gpt-old",
+    expectedReset: true,
+  },
+  {
+    name: "provider-only origin",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originProvider: "openai",
+    expectedReset: true,
+  },
+  {
+    name: "model-only origin",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originModel: "gpt-x",
+    expectedReset: true,
+  },
+  {
+    name: "blank provider origin",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originProvider: "   ",
+    originModel: "gpt-x",
+    expectedReset: true,
+  },
+  {
+    name: "case-different origin model",
+    providerOverride: "openai",
+    modelOverride: "gpt-x",
+    originProvider: "openai",
+    originModel: "gpt-X",
+    expectedReset: true,
+  },
+  {
+    name: "missing override provider with a foreign origin",
+    modelOverride: "gpt-x",
+    originProvider: "retired-provider",
+    originModel: "gpt-x",
+    expectedReset: true,
+  },
+  {
+    name: "blank override provider with a foreign origin",
+    providerOverride: "   ",
+    modelOverride: "gpt-x",
+    originProvider: "retired-provider",
+    originModel: "gpt-x",
+    expectedReset: true,
+  },
+  {
+    name: "heartbeat clears a self-origin selection after the primary changes",
+    providerOverride: "openai",
+    modelOverride: "gpt-old",
+    originProvider: "openai",
+    originModel: "gpt-old",
+    isHeartbeat: true,
+    expectedReset: true,
+  },
+])("Codex legacy self-origin boundary: $name", async (testCase) => {
+  await withStateDirEnv("reply-codex-self-origin-", async () => {
+    const entry: SessionEntry = {
+      sessionId: "child",
+      updatedAt: 1,
+      ...(testCase.providerOverride !== undefined
+        ? { providerOverride: testCase.providerOverride }
+        : {}),
+      modelOverride: testCase.modelOverride,
+      modelOverrideSource: "auto",
+      ...(testCase.originProvider !== undefined
+        ? { modelOverrideFallbackOriginProvider: testCase.originProvider }
+        : {}),
+      ...(testCase.originModel !== undefined
+        ? { modelOverrideFallbackOriginModel: testCase.originModel }
+        : {}),
+    };
+    const selection = await createModelSelectionState({
+      agentId: "main",
+      cfg: {
+        plugins: { enabled: false },
+        agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
+      },
+      agentCfg: undefined,
+      sessionEntry: entry,
+      sessionStore: { child: entry },
+      sessionKey: "child",
+      defaultProvider: "openai",
+      defaultModel: "gpt-x",
+      provider: "openai",
+      model: testCase.modelOverride,
+      hasModelDirective: false,
+      ...(testCase.isHeartbeat ? { isHeartbeat: true } : {}),
+    });
+    expect(selection.resetModelOverride).toBe(testCase.expectedReset);
+    expect(entry.modelOverride).toBe(testCase.expectedReset ? undefined : testCase.modelOverride);
+  });
+});
