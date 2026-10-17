@@ -10,6 +10,20 @@ const script = path.join(process.cwd(), "scripts/mobile-release.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const metadataPath = "apps/ios/CHANGELOG.md";
 const uploadRef = "refs/openclaw/mobile-releases/ios/2026.9.20-8";
+const originalMetadata = "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n";
+const read = (root: string, file: string) => fs.readFileSync(path.join(root, file), "utf8");
+const json = (root: string, file: string) => JSON.parse(read(root, file));
+const exists = (root: string, file: string) => fs.existsSync(path.join(root, file));
+const testflightPlan = (
+  builds: NonNullable<Parameters<typeof fixture>[1]>["builds"] = [],
+  pendingBuild: NonNullable<Parameters<typeof fixture>[1]>["pendingBuild"] = null,
+) => ({ groupId: "external-fixture", builds, pendingBuild });
+function expectResult(result: ReturnType<typeof spawnSync>, status: number, error?: string) {
+  expect(result.status, String(result.stderr)).toBe(status);
+  if (error) {
+    expect(String(result.stderr)).toContain(error);
+  }
+}
 
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -22,6 +36,16 @@ function write(root: string, relative: string, contents: string): void {
   const target = path.join(root, relative);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, contents);
+}
+function writeFiles(root: string, files: Record<string, string>) {
+  for (const [file, text] of Object.entries(files)) {
+    write(root, file, text);
+  }
+}
+function copyFiles(root: string, files: string[]) {
+  for (const file of files) {
+    write(root, file, read(process.cwd(), file));
+  }
 }
 function fixture(
   platform = "ios",
@@ -57,27 +81,22 @@ function fixture(
   git(root, "config", "user.name", "Release Fixture");
   git(root, "config", "user.email", "release@example.invalid");
   git(root, "config", "commit.gpgsign", "false");
-  write(root, metadataPath, "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n");
-  write(root, "README.md", "Original application source.\n");
-  write(
-    root,
-    ".gitignore",
-    "node_modules\napps/ios/build\napps/android/build\napps/ios/fastlane/screenshots\n",
-  );
-  write(
-    root,
-    "package.json",
-    '{"name":"mobile-release-fixture","type":"module","version":"2026.9.2"}\n',
-  );
-  write(root, "scripts/tsx.mjs", "export {};\n");
-  write(root, "node_modules/tsx/package.json", '{"name":"tsx","exports":"./index.mjs"}\n');
-  write(root, "node_modules/tsx/index.mjs", "export {};\n");
+  writeFiles(root, {
+    [metadataPath]: originalMetadata,
+    "README.md": "Original application source.\n",
+    ".gitignore":
+      "node_modules\napps/ios/build\napps/android/build\napps/ios/fastlane/screenshots\n",
+    "package.json": '{"name":"mobile-release-fixture","type":"module","version":"2026.9.2"}\n',
+    "scripts/tsx.mjs": "export {};\n",
+    "node_modules/tsx/package.json": '{"name":"tsx","exports":"./index.mjs"}\n',
+    "node_modules/tsx/index.mjs": "export {};\n",
+  });
   fs.symlinkSync(
     path.join(process.cwd(), "node_modules/zod"),
     path.join(root, "node_modules/zod"),
     "dir",
   );
-  for (const file of [
+  copyFiles(root, [
     "scripts/mobile-release-notes.ts",
     "scripts/lib/mobile-release-evidence.ts",
     "scripts/lib/mobile-release-notes.ts",
@@ -88,9 +107,7 @@ function fixture(
     "scripts/lib/android-store-version.ts",
     "scripts/lib/mobile-store-version.ts",
     "scripts/lib/release-version.mjs",
-  ]) {
-    write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
-  }
+  ]);
   write(
     root,
     "scripts/ios-release-plan.sh",
@@ -174,7 +191,7 @@ export const fetch = async (url, options = {}) => {
 };
 `,
     );
-    for (const file of [
+    copyFiles(root, [
       "scripts/android-sync-versioning.ts",
       "scripts/android-version.ts",
       "scripts/lib/android-version.ts",
@@ -185,25 +202,17 @@ export const fetch = async (url, options = {}) => {
       "apps/android/Config/ReleaseSigning.json",
       "apps/android/fastlane/Fastfile",
       "scripts/android-release-upload.sh",
-    ]) {
-      write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
-    }
-    write(root, "apps/android/version.json", '{"version":"2026.8.2","versionCode":2026080201}\n');
-    write(
-      root,
-      "apps/android/Config/Version.properties",
-      renderAndroidVersionProperties({ canonicalVersion: "2026.8.2", versionCode: 2026080201 }),
-    );
-    write(
-      root,
-      "apps/android/CHANGELOG.md",
-      "## Unreleased\n\nFuture manual notes.\n\n## 2026.8.2\n\nPrevious APK notes.\n",
-    );
-    write(
-      root,
-      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-      "Previous APK notes.\n",
-    );
+    ]);
+    writeFiles(root, {
+      "apps/android/version.json": '{"version":"2026.8.2","versionCode":2026080201}\n',
+      "apps/android/Config/Version.properties": renderAndroidVersionProperties({
+        canonicalVersion: "2026.8.2",
+        versionCode: 2026080201,
+      }),
+      "apps/android/CHANGELOG.md":
+        "## Unreleased\n\nFuture manual notes.\n\n## 2026.8.2\n\nPrevious APK notes.\n",
+      "apps/android/fastlane/metadata/android/en-US/release_notes.txt": "Previous APK notes.\n",
+    });
     write(
       root,
       "scripts/lib/android-fastlane.sh",
@@ -339,16 +348,16 @@ describe("mobile release CLI", () => {
         "apps/android/Config/Version.properties",
         "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
       ];
-      const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
+      const original = pinned.map((file) => read(f.root, file));
       const ci = workflowEnv(f.base);
       if (destination === "internal") {
         const rejected = f.invoke("run", ["--destination", destination], {
           ...ci,
           FIXTURE_FIREBASE_PREFLIGHT_FAIL: "1",
         });
-        expect(rejected.status).toBe(1);
+        expectResult(rejected, 1);
         expect(fs.existsSync(f.uploadAudit)).toBe(false);
-        expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+        expect(exists(f.recovery, "source")).toBe(false);
       }
       const result = f.invoke(
         "run",
@@ -360,10 +369,9 @@ describe("mobile release CLI", () => {
             : {},
       );
       if (destination === "internal") {
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("Play upload confirmed; Firebase incomplete");
+        expectResult(result, 1, "Play upload confirmed; Firebase incomplete");
         const recovered = f.invoke("firebase", [], { OPENAI_API_KEY: "" });
-        expect(recovered.status, recovered.stderr).toBe(0);
+        expectResult(recovered, 0);
         const calls = fs
           .readFileSync(f.firebaseAudit, "utf8")
           .trim()
@@ -382,15 +390,20 @@ describe("mobile release CLI", () => {
         expect(f.audit()).toHaveLength(1);
         expect(recovered.stdout).not.toContain("Android versionName:");
       } else {
-        expect(result.status, result.stderr).toBe(0);
+        expectResult(result, 0);
         expect(fs.existsSync(f.firebaseAudit)).toBe(false);
       }
-      expect(
-        JSON.parse(fs.readFileSync(path.join(f.recovery, "android-plan.json"), "utf8")),
-      ).toMatchObject({ destination, sourceSha: f.base });
-      expect(result.stdout).toContain("Android versionName: 2026.9.20");
-      expect(result.stdout).toContain("Android versionCode: 2026090250");
-      expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
+      expect(json(f.recovery, "android-plan.json")).toMatchObject({
+        destination,
+        sourceSha: f.base,
+      });
+      for (const line of [
+        "Android versionName: 2026.9.20",
+        "Android versionCode: 2026090250",
+        "Android Wear versionCode: 2026090251",
+      ]) {
+        expect(result.stdout).toContain(line);
+      }
       expect(f.audit()[0]).toMatchObject({
         version: "2026.9.20",
         versionCode: 2026090250,
@@ -409,7 +422,7 @@ describe("mobile release CLI", () => {
       ).toBe(f.base);
       expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
       for (const [index, file] of pinned.entries()) {
-        expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
+        expect(read(f.root, file)).toBe(original[index]);
       }
       const rebuilt = spawnSync(
         process.execPath,
@@ -424,7 +437,7 @@ describe("mobile release CLI", () => {
           },
         },
       );
-      expect(rebuilt.status, rebuilt.stderr).toBe(0);
+      expectResult(rebuilt, 0);
       expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
       expect(git(f.root, "status", "--porcelain")).toBe("");
     },
@@ -436,13 +449,12 @@ describe("mobile release CLI", () => {
       const f = fixture();
       const advanced = advanceMain(f);
       const stale = f.invoke("run");
-      expect(stale.status).toBe(1);
-      expect(stale.stderr).toContain("Local main differs from origin/main");
+      expectResult(stale, 1, "Local main differs from origin/main");
       expect(fs.existsSync(f.uploadAudit)).toBe(false);
       git(f.root, "checkout", "--detach", f.base);
       const ci = workflowEnv(f.base, event);
       const result = f.invoke("run", [], ci);
-      expect(result.status, result.stderr).toBe(0);
+      expectResult(result, 0);
       const invalidDispatches: Record<string, string>[] = [
         { GITHUB_SHA: advanced },
         { GITHUB_REF: "refs/heads/feature" },
@@ -451,12 +463,13 @@ describe("mobile release CLI", () => {
       ];
       for (const overrides of invalidDispatches) {
         const rejected = f.invoke("run", [], { ...ci, ...overrides });
-        expect(rejected.status, rejected.stderr).toBe(1);
-        expect(rejected.stderr).toContain(
+        expectResult(
+          rejected,
+          1,
           "exact workflow_dispatch or schedule commit on openclaw/openclaw main",
         );
         expect(f.audit()).toHaveLength(1);
-        expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+        expect(exists(f.recovery, "source")).toBe(false);
       }
       expect(f.audit()).toEqual([
         expect.objectContaining({
@@ -464,7 +477,7 @@ describe("mobile release CLI", () => {
           stampedSha: f.base,
           status: "",
           remoteMain: advanced,
-          metadata: "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n",
+          metadata: originalMetadata,
           notes: "Bug fixes and improvements.",
           stageOnly: false,
         }),
@@ -472,9 +485,9 @@ describe("mobile release CLI", () => {
       expect(git(f.remote, "rev-parse", "main")).toBe(advanced);
       expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
       expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
-      expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
-      expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(true);
-      expect(fs.existsSync(path.join(f.recovery, "release.bundle"))).toBe(false);
+      expect(
+        ["source", "release-notes.json", "release.bundle"].map((file) => exists(f.recovery, file)),
+      ).toEqual([false, true, false]);
       expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
         "refs/heads/main",
       );
@@ -487,19 +500,16 @@ describe("mobile release CLI", () => {
   it("retains safe screenshot diagnostics before archive and refuses staging without an upload", () => {
     const f = fixture();
     const result = f.invoke("run", [], { FIXTURE_UPLOAD_FAIL: "1" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Synthetic store upload refused");
-    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(true);
-    expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(true);
-    expect(fs.existsSync(path.join(f.recovery, "artifacts"))).toBe(false);
+    expectResult(result, 1, "Synthetic store upload refused");
+    expect(
+      ["source", "release-notes.json", "artifacts"].map((file) => exists(f.recovery, file)),
+    ).toEqual([true, true, false]);
     const diagnostics = path.join(f.recovery, "screenshot-diagnostics");
     expect(fs.readdirSync(diagnostics).toSorted()).toEqual([
       "capture-attempts.json",
       "screenshots",
     ]);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(diagnostics, "capture-attempts.json"), "utf8")),
-    ).toEqual({
+    expect(json(diagnostics, "capture-attempts.json")).toEqual({
       schemaVersion: 1,
       attempts: [
         {
@@ -510,15 +520,11 @@ describe("mobile release CLI", () => {
         },
       ],
     });
-    expect(
-      fs.readFileSync(
-        path.join(diagnostics, "screenshots/iPhone-01-control-connected.png"),
-        "utf8",
-      ),
-    ).toBe("Synthetic fixture screenshot");
+    expect(read(diagnostics, "screenshots/iPhone-01-control-connected.png")).toBe(
+      "Synthetic fixture screenshot",
+    );
     const recovery = f.invoke("stage");
-    expect(recovery.status).toBe(1);
-    expect(recovery.stderr).toContain("No matching upload record");
+    expectResult(recovery, 1, "No matching upload record");
     expect(f.audit()).toHaveLength(1);
     expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
   });
@@ -526,21 +532,15 @@ describe("mobile release CLI", () => {
   it.each(["app-store", "testflight"])(
     "recovers the saved %s destination with corrected tooling and original source without uploading twice",
     (destination) => {
-      const f = fixture(
-        "ios",
-        destination === "testflight"
-          ? { groupId: "external-fixture", builds: [], pendingBuild: null }
-          : undefined,
-      );
+      const f = fixture("ios", destination === "testflight" ? testflightPlan() : undefined);
       const result = f.invoke("run", ["--destination", destination], {
         FIXTURE_STAGE_FAIL: "1",
         OPENCLAW_IOS_RELEASE_SOURCE_ROOT: "/invalid-inherited-source",
       });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Synthetic metadata stage refused after upload");
+      expectResult(result, 1, "Synthetic metadata stage refused after upload");
       expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
-      const notes = fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8");
-      const plan = fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8");
+      const notes = read(f.recovery, "release-notes.json");
+      const plan = read(f.recovery, "ios-plan.json");
       write(
         f.root,
         "scripts/ios-release-upload.sh",
@@ -556,40 +556,36 @@ describe("mobile release CLI", () => {
       } else {
         write(source, "README.md", "Uncommitted recovery work.\n");
         const dirty = f.invoke("stage");
-        expect(dirty.status).toBe(1);
-        expect(dirty.stderr).toContain("require a clean checkout");
-        expect(fs.readFileSync(path.join(source, "README.md"), "utf8")).toBe(
-          "Uncommitted recovery work.\n",
-        );
+        expectResult(dirty, 1, "require a clean checkout");
+        expect(read(source, "README.md")).toBe("Uncommitted recovery work.\n");
         git(source, "checkout", "--", "README.md");
         git(source, "checkout", "--detach", toolingSha);
         const mismatched = f.invoke("stage");
-        expect(mismatched.status).toBe(1);
-        expect(mismatched.stderr).toContain("Retained source differs from the uploaded build");
+        expectResult(mismatched, 1, "Retained source differs from the uploaded build");
         expect(git(source, "rev-parse", "HEAD")).toBe(toolingSha);
         git(source, "checkout", "--detach", f.base);
         expect(f.audit()).toHaveLength(1);
       }
       const recovery = f.invoke("stage", [], { OPENAI_API_KEY: "" });
-      expect(recovery.status, recovery.stderr).toBe(0);
+      expectResult(recovery, 0);
       expect(recovery.stdout).toContain("Corrected staging tooling");
-      expect(f.audit().map((entry) => entry.sha)).toEqual([f.base, toolingSha]);
-      expect(f.audit().map((entry) => entry.stampedSha)).toEqual([f.base, f.base]);
-      expect(f.audit().map((entry) => entry.stageOnly)).toEqual([false, true]);
-      expect(f.audit().map((entry) => entry.destination)).toEqual([destination, destination]);
-      expect(fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8")).toBe(notes);
-      expect(fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8")).toBe(plan);
-      expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+      expect(f.audit()).toMatchObject([
+        { sha: f.base, stampedSha: f.base, stageOnly: false, destination },
+        { sha: toolingSha, stampedSha: f.base, stageOnly: true, destination },
+      ]);
+      expect(read(f.recovery, "release-notes.json")).toBe(notes);
+      expect(read(f.recovery, "ios-plan.json")).toBe(plan);
+      expect(exists(f.recovery, "source")).toBe(false);
       expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
       expect(git(f.remote, "rev-parse", uploadRef)).toBe(f.base);
     },
   );
 
   it("admits scheduled TestFlight on the exact main source", () => {
-    const f = fixture("ios", { groupId: "external-fixture", builds: [], pendingBuild: null });
+    const f = fixture("ios", testflightPlan());
     const ci = workflowEnv(f.base);
     const result = f.invoke("run", ["--destination", "testflight"], ci);
-    expect(result.status, result.stderr).toBe(0);
+    expectResult(result, 0);
     expect(f.audit()).toEqual([
       expect.objectContaining({ destination: "testflight", sha: f.base, stageOnly: false }),
     ]);
@@ -605,39 +601,32 @@ describe("mobile release CLI", () => {
       hasBetaNotes: false,
       selectedForAppStore: true,
     };
-    const f = fixture("ios", {
-      groupId: "external-fixture",
-      builds: [build],
-      pendingBuild: null,
-    });
+    const f = fixture("ios", testflightPlan([build]));
     const existingRef = "refs/openclaw/mobile-releases/ios/2026.9.20-7";
     git(f.root, "push", "origin", `${f.base}:${existingRef}`);
     const result = f.invoke("run", ["--destination", "testflight"], { FIXTURE_STAGE_FAIL: "1" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Synthetic metadata stage refused after upload");
+    expectResult(result, 1, "Synthetic metadata stage refused after upload");
     expect(f.audit()).toEqual([
       expect.objectContaining({ destination: "testflight", buildNumber: "7", stageOnly: true }),
     ]);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(f.recovery, "ios-plan.json"), "utf8")),
-    ).toMatchObject({
+    expect(json(f.recovery, "ios-plan.json")).toMatchObject({
       destination: "testflight",
       decision: "stage-existing",
       buildNumber: 7,
       sourceSha: f.base,
       testflight: { existingBuildId: build.id },
     });
-    const notes = fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8");
+    const notes = read(f.recovery, "release-notes.json");
     const recovered = f.invoke("stage", [], { OPENAI_API_KEY: "" });
-    expect(recovered.status, recovered.stderr).toBe(0);
+    expectResult(recovered, 0);
     expect(f.audit().map((entry) => [entry.stageOnly, entry.buildNumber])).toEqual([
       [true, "7"],
       [true, "7"],
     ]);
-    expect(fs.readFileSync(path.join(f.recovery, "release-notes.json"), "utf8")).toBe(notes);
+    expect(read(f.recovery, "release-notes.json")).toBe(notes);
     expect(git(f.root, "ls-remote", "--refs", "origin", uploadRef)).toBe("");
     expect(git(f.remote, "rev-parse", existingRef)).toBe(f.base);
-    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+    expect(exists(f.recovery, "source")).toBe(false);
   });
 
   it.each(["unchanged", "deferred-review", "recovery-required"])(
@@ -657,26 +646,26 @@ describe("mobile release CLI", () => {
         selectedForAppStore: outcome === "recovery-required",
         hasBetaNotes: true,
       };
-      const f = fixture("ios", {
-        groupId: "external-fixture",
-        builds: [build],
-        pendingBuild: outcome === "deferred-review" ? build : null,
-      });
+      const f = fixture(
+        "ios",
+        testflightPlan([build], outcome === "deferred-review" ? build : null),
+      );
       if (outcome !== "deferred-review") {
         git(f.root, "push", "origin", `${f.base}:refs/openclaw/mobile-releases/ios/2026.9.20-7`);
       }
       const result = f.invoke("run", ["--destination", "testflight"], { OPENAI_API_KEY: "" });
       expect(fs.existsSync(f.uploadAudit)).toBe(false);
-      expect(fs.existsSync(path.join(f.recovery, "release-notes.json"))).toBe(false);
+      expect(exists(f.recovery, "release-notes.json")).toBe(false);
       if (outcome === "recovery-required") {
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("Recover its saved destination");
+        expectResult(result, 1, "Recover its saved destination");
       } else {
-        expect(result.status, result.stderr).toBe(0);
-        expect(
-          JSON.parse(fs.readFileSync(path.join(f.recovery, "testflight-result.json"), "utf8")),
-        ).toMatchObject({ outcome, groupId: "external-fixture", sourceSha: f.base });
-        expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+        expectResult(result, 0);
+        expect(json(f.recovery, "testflight-result.json")).toMatchObject({
+          outcome,
+          groupId: "external-fixture",
+          sourceSha: f.base,
+        });
+        expect(exists(f.recovery, "source")).toBe(false);
       }
     },
   );
@@ -692,7 +681,7 @@ describe("mobile release CLI", () => {
     expect(f.invoke("run", [], { OPENAI_API_KEY: "" }).stderr).toContain(
       "OPENAI_API_KEY is required",
     );
-    expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+    expect(exists(f.recovery, "source")).toBe(false);
     expect(fs.existsSync(f.uploadAudit)).toBe(false);
   });
 });

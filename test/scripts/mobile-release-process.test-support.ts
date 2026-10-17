@@ -15,8 +15,7 @@ type SignalFault = (signal: Signal, forward: () => ReturnType<Kill>) => ReturnTy
 type Outcome = PromiseSettledResult<Awaited<ReturnType<typeof runBounded>>>;
 
 type NativeBoundedFixture = {
-  // Verifiers await only this cancellation-aware result; no external async work.
-  waitForOutcome: () => Promise<Outcome>;
+  waitForFailure: () => Promise<unknown>;
   exited: () => boolean;
   interceptSignals: (fault: SignalFault) => void;
   release: () => void;
@@ -73,9 +72,7 @@ async function withNativeBoundedFixture(
         if (child && !childClosed) {
           child.kill("SIGKILL");
         }
-        if (closed) {
-          await closed;
-        }
+        await closed;
         if (child?.pid) {
           // The exact child close reaps the only process in this fixture's group.
           inspectGroup();
@@ -83,15 +80,8 @@ async function withNativeBoundedFixture(
             throw new Error("Native fixture group exit was not confirmed");
           }
         }
-        if (outcome) {
-          await outcome;
-        }
-        if (verification) {
-          await verification.then(
-            () => {},
-            () => {},
-          );
-        }
+        await outcome;
+        await verification?.catch(() => {});
       } finally {
         restoreSignalObserver?.();
       }
@@ -121,15 +111,17 @@ async function withNativeBoundedFixture(
     const gate = path.join(root, "exit");
     fs.writeFileSync(script, options.source);
     const children = channel("child_process");
-    const observed: ChildProcess[] = [];
+    const observed: { child?: ChildProcess } = {};
     const capture = (message: unknown) => {
       if (
         message &&
         typeof message === "object" &&
         "process" in message &&
-        message.process instanceof ChildProcess
+        message.process instanceof ChildProcess &&
+        message.process.spawnargs[0] === testNodeExecPath &&
+        message.process.spawnargs[1] === script
       ) {
-        observed.push(message.process);
+        observed.child ??= message.process;
       }
     };
     children.subscribe(capture);
@@ -145,10 +137,7 @@ async function withNativeBoundedFixture(
     } finally {
       children.unsubscribe(capture);
     }
-    child = observed.find(
-      (candidate) =>
-        candidate.spawnargs[0] === testNodeExecPath && candidate.spawnargs[1] === script,
-    );
+    child = observed.child;
     try {
       if (!child) {
         throw new Error("Expected the exact native fixture child");
@@ -203,7 +192,14 @@ async function withNativeBoundedFixture(
       });
       restoreSignalObserver = () => signalObserver.mockRestore();
       const fixture: NativeBoundedFixture = {
-        waitForOutcome: () => racePromiseWithAbortSignal(commandOutcome, signal),
+        waitForFailure: async () => {
+          const result = await racePromiseWithAbortSignal(commandOutcome, signal);
+          expect(result.status).toBe("rejected");
+          if (result.status !== "rejected") {
+            throw new Error("Expected bounded command rejection");
+          }
+          return result.reason;
+        },
         exited: () => childExited,
         interceptSignals: (next) => {
           signal.throwIfAborted();
@@ -256,7 +252,6 @@ function signalError(code: string) {
   return Object.assign(new Error(`injected kill ${code}`), { code });
 }
 
-// Four independent owner/error contracts; none adds a production injection seam.
 export function registerBoundedSignalTests() {
   if (process.platform === "win32") {
     return;
@@ -287,21 +282,14 @@ export function registerBoundedSignalTests() {
             throw error;
           }
         });
-        const outcome = await fixture.waitForOutcome();
-        expect(outcome.status).toBe("rejected");
-        if (outcome.status !== "rejected") {
-          throw new Error("Expected bounded command rejection");
-        }
-        if (persistent) {
-          expect(outcome.reason).toMatchObject({
-            message: expect.stringContaining("owned process group did not terminate"),
-            cause: permission,
-          });
-        } else {
-          expect(outcome.reason).toMatchObject({
-            message: expect.stringContaining("exceeded the 4096-byte output limit"),
-          });
-        }
+        expect(await fixture.waitForFailure()).toMatchObject({
+          message: expect.stringContaining(
+            persistent
+              ? "owned process group did not terminate"
+              : "exceeded the 4096-byte output limit",
+          ),
+          ...(persistent ? { cause: permission } : {}),
+        });
         expect(probes).toBeGreaterThanOrEqual(3);
         expect(nonzeroAfterFault).toBe(0);
         fixture.assertGroupAbsent();
@@ -328,13 +316,13 @@ export function registerBoundedSignalTests() {
             throw error;
           }
         });
-        const outcome = await fixture.waitForOutcome();
-        expect(outcome).toMatchObject({
-          status: "rejected",
-          reason: { message: expect.stringContaining("exceeded the 4096-byte output limit") },
+        expect(await fixture.waitForFailure()).toMatchObject({
+          message: expect.stringContaining("exceeded the 4096-byte output limit"),
         });
-        expect(exitedBeforeSignal).toBe(true);
-        expect(permissionFaults).toBe(1);
+        expect({ exitedBeforeSignal, permissionFaults }).toEqual({
+          exitedBeforeSignal: true,
+          permissionFaults: 1,
+        });
         fixture.assertGroupAbsent();
       },
     );
@@ -357,12 +345,7 @@ export function registerBoundedSignalTests() {
         }
         return forward();
       });
-      const outcome = await fixture.waitForOutcome();
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status !== "rejected") {
-        throw new Error("Expected bounded command rejection");
-      }
-      expect(outcome.reason).toBe(ioFailure);
+      expect(await fixture.waitForFailure()).toBe(ioFailure);
       expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
       fixture.assertGroupAbsent();
     });

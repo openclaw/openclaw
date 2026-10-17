@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRequestReceipt, requestIdentitySchema } from "../../scripts/mantis/request-proof.ts";
 import { assertRequestWorkflowRef } from "../../scripts/mantis/request-workflow-admission.mjs";
 import { removeTelegramQaNetwork } from "../../scripts/mantis/telegram-qa-cleanup.ts";
@@ -35,12 +35,9 @@ it("admits canonical read-only probes without opening arbitrary GET or Bot API m
 });
 
 it("removes the created network with the supported Podman command", async () => {
-  const calls: string[][] = [];
-  await removeTelegramQaNetwork(async (args) => {
-    calls.push(args);
-    return "";
-  }, "mantis-qa-fixture");
-  expect(calls).toEqual([["network", "rm", "mantis-qa-fixture"]]);
+  const run = vi.fn(async () => "");
+  await removeTelegramQaNetwork(run, "mantis-qa-fixture");
+  expect(run.mock.calls).toEqual([[["network", "rm", "mantis-qa-fixture"]]]);
 });
 it("skips only an uncreated network and preserves genuine removal failures", async () => {
   const failure = new Error("network still in use");
@@ -61,36 +58,28 @@ const identity = requestIdentitySchema.parse({
   harness: { sha: "c".repeat(40) },
   run: { id: "456", attempt: 1 },
 });
-const evidence = {
-  artifact_id: "789",
-  artifact_name: "mantis-request-telegram-456-1",
-  sha256: "d".repeat(64),
-};
-// Synthetic schema fixtures, not proof that a Gateway ran. Canonical QA remains
-// the sole assertion interpreter; retained runtime output powers the paired test.
-function observations(status: "pass" | "fail" = "pass") {
-  return {
-    "qa-execution.json": {
-      schema: "mantis.telegram-qa-execution.v1",
+const qaFile = <T extends object>(kind: string, fields: T) => ({
+  schema: `mantis.telegram-${kind}.v1`,
+  scenario: telegramQaScenario,
+  ...fields,
+});
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64");
+const observations = (status: "pass" | "fail" = "pass") => ({
+  "qa-execution.json": qaFile("qa-execution", {
       request_id: identity.request_id,
       candidate_sha: identity.candidate_sha,
       harness_sha: identity.harness.sha,
       run_id: identity.run.id,
       run_attempt: 1,
-      scenario: telegramQaScenario,
       transport: "Crabline",
       live_service: false,
       candidate_quiescent: true,
-    },
-    "qa-result.json": {
-      schema: "mantis.telegram-qa-result.v1",
-      scenario: telegramQaScenario,
+  }),
+  "qa-result.json": qaFile("qa-result", {
       status,
       steps: [{ name: "preserves four exact Markdown payloads through Gateway send", status }],
-    },
-    "qa-observations.json": {
-      schema: "mantis.telegram-qa-observations.v1",
-      scenario: telegramQaScenario,
+  }),
+  "qa-observations.json": qaFile("qa-observations", {
       cases: ["all-space-code", "unclosed-link-label", "ipv6-link", "table-code-leading-space"].map(
         (item, index) => ({
           case: item,
@@ -100,40 +89,29 @@ function observations(status: "pass" | "fail" = "pass") {
           acceptedPayloads: [{ text: "fixture", parseMode: status === "pass" ? "HTML" : null }],
         }),
       ),
-    },
-  };
-}
-function receipt(files: ReturnType<typeof observations>) {
-  return createRequestReceipt(
+  }),
+});
+const receipt = (files: ReturnType<typeof observations>) =>
+  createRequestReceipt(
     identity,
     "completed",
-    evidence,
-    Object.fromEntries(
-      Object.entries(files).map(([name, value]) => [
-        name,
-        Buffer.from(JSON.stringify(value)).toString("base64"),
-      ]),
-    ),
+    { artifact_id: "789", artifact_name: "mantis-request-telegram-456-1", sha256: "d".repeat(64) },
+    Object.fromEntries(Object.entries(files).map(([name, value]) => [name, encode(value)])),
   );
-}
 
 describe("canonical Telegram QA evidence contract", () => {
   it.each(["pass", "fail"] as const)(
     "carries the complete canonical %s result with exact file digests",
     (status) => {
       const result = receipt(observations(status));
-      expect(result.assertion_outcome).toBe(status);
-      expect(result.observations.map(({ id }) => id)).toEqual([
-        "qa-execution",
-        "qa-result",
-        "qa-observations",
-      ]);
-      expect(
-        result.observations.every(
-          ({ authority, sha256 }) =>
-            authority === "trusted_observer" && /^[a-f0-9]{64}$/.test(sha256 ?? ""),
-        ),
-      ).toBe(true);
+      expect(result).toMatchObject({
+        assertion_outcome: status,
+        observations: ["qa-execution", "qa-result", "qa-observations"].map((id) => ({
+          id,
+          authority: "trusted_observer",
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        })),
+      });
       expect(result.limits.join(" ")).toContain("no Telegram Test Server");
     },
   );
@@ -154,10 +132,14 @@ describe("canonical Telegram QA evidence contract", () => {
   });
 });
 
-describe("protected workflow admission", () => {
-  const sha = "a".repeat(40),
+const sha = "a".repeat(40),
     main = "b".repeat(40);
-  it.each([
+const branch = (name: string, value: string) => ({
+  name,
+  protected: true,
+  commit: { sha: value },
+});
+it.each([
     "complete",
     "main",
     "advanced-main",
@@ -169,40 +151,32 @@ describe("protected workflow admission", () => {
     "missing-protection",
     "api-denied",
     "redirect",
-  ])("handles %s without auto-trusting main changes", async (fault) => {
+])("protected workflow admission handles %s without auto-trusting main changes", async (fault) => {
     let mainReads = 0;
+  const responses: Record<string, () => unknown> = {
+    "branches/qa-proof": () => ({
+      ...branch("qa-proof", fault === "moved-pin" ? main : sha),
+      protected: fault === "missing-protection" ? undefined : fault !== "unprotected",
+    }),
+    "branches/main": () =>
+      branch("main", fault === "moved-main" && ++mainReads > 1 ? "c".repeat(40) : main),
+    [`compare/${sha}...${main}?per_page=1`]: () => ({
+      status: fault === "not-ancestor" ? "diverged" : "ahead",
+      merge_base_commit: { sha },
+      base_commit: { sha: fault === "wrong-main-base" ? main : sha },
+    }),
+  };
     const fetchImpl = async (url: string | URL | Request, options?: RequestInit) => {
       expect(options?.redirect).toBe("error");
       if (fault === "redirect") {
         return new Response(null, { status: 302 });
       }
       const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-      const route = requestUrl.split("openclaw/openclaw/")[1];
-      if (route === "branches/qa-proof") {
-        return Response.json({
-          name: "qa-proof",
-          ...(fault === "missing-protection" ? {} : { protected: fault !== "unprotected" }),
-          commit: { sha: fault === "moved-pin" ? main : sha },
-        });
-      }
-      if (route === "branches/main") {
-        mainReads++;
-        return Response.json({
-          name: "main",
-          protected: true,
-          commit: {
-            sha: fault === "moved-main" && mainReads > 1 ? "c".repeat(40) : main,
-          },
-        });
-      }
-      if (route === `compare/${sha}...${main}?per_page=1`) {
-        return Response.json({
-          status: fault === "not-ancestor" ? "diverged" : "ahead",
-          merge_base_commit: { sha },
-          base_commit: { sha: fault === "wrong-main-base" ? main : sha },
-        });
-      }
+    const response = responses[requestUrl.split("openclaw/openclaw/")[1] ?? ""];
+    if (!response) {
       throw new Error("Unexpected trust route");
+    }
+    return Response.json(response());
     };
     const admission = assertRequestWorkflowRef({
       repository: "openclaw/openclaw",
@@ -220,5 +194,4 @@ describe("protected workflow admission", () => {
     } else {
       await expect(admission).rejects.toThrow();
     }
-  });
 });

@@ -16,13 +16,13 @@ const defaults = vi.hoisted(() => ({
   networkCommand: "slirp4netns",
 }));
 const fixture = vi.hoisted(() => ({ ...defaults, root: "", calls: [] as string[] }));
+const filesystems = (...entries: object[]) => ({ filesystems: entries });
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
   return {
     ...fs,
     appendFileSync: () => {},
     writeFileSync: () => {},
-    truncateSync: () => {},
     mkdirSync: () => {
       fixture.outputAllocated = true;
     },
@@ -32,13 +32,17 @@ vi.mock("node:fs", async (original) => {
     lstatSync: () => ({ isFile: () => true, uid: 1000, mode: 0o600 }),
     statSync: () => ({ size: 32 * 1024 ** 3, uid: 1000, mode: 0o600, isSocket: () => true }),
     readFileSync: (file: string) => {
-      fixture.calls.push(`read:${file}`);
-      if (fixture.readyConfigurations && file.endsWith("storage.conf")) {
+      if (fixture.readyConfigurations) {
         const mount = path.join(fixture.root, "volume");
-        return `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`;
-      }
-      if (fixture.readyConfigurations && file.endsWith("containers.conf")) {
-        return '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n';
+        const configs: Record<string, string> = {
+          "storage.conf": `[storage]\ndriver = "overlay"\nrunroot = "${mount}/runroot"\ngraphroot = "${mount}/graphroot"\n`,
+          "containers.conf":
+            '[containers]\nlog_driver = "k8s-file"\nlog_size_max = 1048576\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n',
+        };
+        const config = Object.keys(configs).find((suffix) => file.endsWith(suffix));
+        if (config) {
+          return configs[config];
+        }
       }
       if (!file.endsWith("manifest.json")) {
         throw new Error("Configuration is not initialized");
@@ -64,45 +68,45 @@ vi.mock("node:child_process", async (original) => {
     spawnSync: () => ({ status: fixture.mounted ? 0 : 1 }),
     execFileSync: (name: string, args: string[]) => {
       fixture.calls.push(`${name} ${args.join(" ")}`);
-      if (name === "slirp4netns") {
-        if (fixture.helperMissing) {
-          throw new Error("Required networking helper unavailable");
-        }
-        return "slirp4netns version 1.3.3";
+      const mount = path.join(fixture.root, "volume");
+      const operation =
+        name === "findmnt"
+          ? ["--mountpoint", "--list", "--target"].find((flag) => args.includes(flag))
+          : args[0];
+      const command = ["podman", "sudo", "git", "findmnt"].includes(name)
+        ? `${name} ${operation}`
+        : name;
+      const failures: Record<string, string> = {
+        fallocate: "Allocation failed: no space left",
+        "sudo mount": "Mount reached without backing reservation",
+        "podman create": "Candidate creation reached without verified storage",
+        ...(fixture.helperMissing ? { slirp4netns: "Required networking helper unavailable" } : {}),
+        ...(fixture.unmountFails ? { "sudo umount": "Mount has live holders" } : {}),
+      };
+      if (command === "podman create") {
+        fixture.candidateCreated = true;
       }
-      if (name === "podman" && args[0] === "info") {
-        const mount = path.join(fixture.root, "volume");
-        return JSON.stringify({
+      if (failures[command]) {
+        throw new Error(failures[command]);
+      }
+      if (command === "sudo umount") {
+        fixture.mounted = false;
+        return "";
+      }
+      const responses: Record<string, unknown> = {
+        slirp4netns: "slirp4netns version 1.3.3",
+        "mkfs.ext4": "",
+        "git diff": "",
+        "podman rm": "",
+        "podman info": {
           host: {
             security: { rootless: true },
             logDriver: "k8s-file",
             rootlessNetworkCmd: fixture.networkCommand,
           },
           store: { graphRoot: `${mount}/graphroot`, runRoot: `${mount}/runroot` },
-        });
-      }
-      if (name === "fallocate") {
-        throw new Error("Allocation failed: no space left");
-      }
-      if (name === "mkfs.ext4") {
-        return "";
-      }
-      if (name === "sudo" && args[0] === "mount") {
-        throw new Error("Mount reached without backing reservation");
-      }
-      if (name === "git" && args[0] === "diff") {
-        return "";
-      }
-      if (name === "podman" && args[0] === "create") {
-        fixture.candidateCreated = true;
-        throw new Error("Candidate creation reached without verified storage");
-      }
-      if (name === "podman" && args[0] === "rm") {
-        return "";
-      }
-      const mount = path.join(fixture.root, "volume");
-      if (name === "sudo" && args[0] === "losetup") {
-        return JSON.stringify({
+        },
+        "sudo losetup": {
           loopdevices: [
             {
               name: "/dev/loop7",
@@ -111,32 +115,23 @@ vi.mock("node:child_process", async (original) => {
                 : path.join(fixture.root, "storage.img"),
             },
           ],
-        });
+        },
+        "findmnt --mountpoint": filesystems({
+          target: mount,
+          source: "/dev/loop7",
+          fstype: "ext4",
+        }),
+        "findmnt --list": filesystems(
+          { target: mount },
+          ...(fixture.nested ? [{ target: path.join(mount, "nested") }] : []),
+        ),
+        "findmnt --target": filesystems({ target: "/" }),
+      };
+      if (!(command in responses)) {
+        throw new Error(`Unexpected cleanup command: ${name}`);
       }
-      if (name === "findmnt" && args.includes("--mountpoint")) {
-        return JSON.stringify({
-          filesystems: [{ target: mount, source: "/dev/loop7", fstype: "ext4" }],
-        });
-      }
-      if (name === "findmnt" && args.includes("--list")) {
-        return JSON.stringify({
-          filesystems: [
-            { target: mount },
-            ...(fixture.nested ? [{ target: path.join(mount, "nested") }] : []),
-          ],
-        });
-      }
-      if (name === "sudo" && args[0] === "umount") {
-        if (fixture.unmountFails) {
-          throw new Error("Mount has live holders");
-        }
-        fixture.mounted = false;
-        return "";
-      }
-      if (name === "findmnt" && args.includes("--target")) {
-        return JSON.stringify({ filesystems: [{ target: "/" }] });
-      }
-      throw new Error(`Unexpected cleanup command: ${name}`);
+      const response = responses[command];
+      return typeof response === "string" ? response : JSON.stringify(response);
     },
   };
 });
@@ -144,29 +139,26 @@ const originalArgv = process.argv;
 const cleanupPath = fileURLToPath(
   new URL("../../scripts/mantis/telegram-proof-storage.mts", import.meta.url),
 );
-const uidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
-const gidDescriptor = Object.getOwnPropertyDescriptor(process, "getgid");
-const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+const descriptors = ["getuid", "getgid", "platform"].map(
+  (name) => [name, Object.getOwnPropertyDescriptor(process, name)] as const,
+);
 beforeEach(() => {
   vi.resetModules();
   process.argv = [process.execPath, cleanupPath, "cleanup"];
   Object.assign(fixture, defaults, { root: path.resolve("mantis-podman-fixture"), calls: [] });
-  Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
-  Object.defineProperty(process, "getgid", { configurable: true, value: () => 1000 });
+  for (const name of ["getuid", "getgid"]) {
+    Object.defineProperty(process, name, { configurable: true, value: () => 1000 });
+  }
   vi.stubEnv("MANTIS_PODMAN_ROOT", fixture.root);
 });
 afterEach(() => {
   process.argv = originalArgv;
-  Object.defineProperty(process, "platform", platformDescriptor);
-  if (uidDescriptor) {
-    Object.defineProperty(process, "getuid", uidDescriptor);
-  } else {
-    Reflect.deleteProperty(process, "getuid");
-  }
-  if (gidDescriptor) {
-    Object.defineProperty(process, "getgid", gidDescriptor);
-  } else {
-    Reflect.deleteProperty(process, "getgid");
+  for (const [name, descriptor] of descriptors) {
+    if (descriptor) {
+      Object.defineProperty(process, name, descriptor);
+    } else {
+      Reflect.deleteProperty(process, name);
+    }
   }
   vi.unstubAllEnvs();
 });
@@ -179,12 +171,19 @@ function called(prefix: string) {
   return fixture.calls.some((call) => call.startsWith(prefix));
 }
 describe("interrupted mounted storage initialization", () => {
-  it("refuses setup before allocation when the networking helper is unavailable", async () => {
-    fixture.helperMissing = true;
+  it.each([
+    [true, "Required networking helper unavailable", "fallocate "],
+    [false, "Allocation failed: no space left", "sudo mount "],
+  ] as const)("refuses setup on %s: %s", async (helperMissing, error, forbidden) => {
+    fixture.helperMissing = helperMissing;
     setup();
-    await expect(loadStorage()).rejects.toThrow("Required networking helper unavailable");
-    expect(called("fallocate ")).toBe(false);
-    expect(fixture.candidateCreated).toBe(false);
+    vi.stubEnv("RUNNER_TEMP", fixture.root);
+    vi.stubEnv("GITHUB_ENV", path.join(fixture.root, "github-env"));
+    await expect(loadStorage()).rejects.toThrow(error);
+    expect({ forbidden: called(forbidden), candidateCreated: fixture.candidateCreated }).toEqual({
+      forbidden: false,
+      candidateCreated: false,
+    });
   });
   it.each(["slirp4netns", "pasta"])(
     "verifies the actual rootless networking helper (%s)",
@@ -206,14 +205,6 @@ describe("interrupted mounted storage initialization", () => {
       }
     },
   );
-  it("refuses mounting when backing allocation fails", async () => {
-    setup();
-    vi.stubEnv("RUNNER_TEMP", fixture.root);
-    vi.stubEnv("GITHUB_ENV", path.join(fixture.root, "github-env"));
-    await expect(loadStorage()).rejects.toThrow("Allocation failed: no space left");
-    expect(called("sudo mount ")).toBe(false);
-    expect(fixture.candidateCreated).toBe(false);
-  });
   it("refuses Web candidate creation before bounded storage is ready", async () => {
     process.argv = [
       process.execPath,
@@ -224,8 +215,7 @@ describe("interrupted mounted storage initialization", () => {
     await expect(import("../../scripts/mantis/run-request-web-ui.mts")).rejects.toThrow(
       "Proof storage initialization is incomplete",
     );
-    expect(fixture.outputAllocated).toBe(false);
-    expect(fixture.candidateCreated).toBe(false);
+    expect(fixture).toMatchObject({ outputAllocated: false, candidateCreated: false });
   });
   it("unmounts verified initialization without requiring absent configs or user bus", async () => {
     await loadStorage();

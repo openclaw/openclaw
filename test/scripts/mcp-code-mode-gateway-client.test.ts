@@ -18,7 +18,19 @@ import {
 } from "../../scripts/e2e/mcp-code-mode-gateway-client.ts";
 
 const finalText = "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none";
-const okResponse = { output: [{ type: "message", content: [{ text: finalText }] }] };
+const response = (text = finalText) => ({ output: [{ type: "message", content: [{ text }] }] });
+const okResponse = response();
+const textContent = (text: string, type = "text") => [{ type, text }];
+const message = (role: string, content: unknown, fields = {}) => ({
+  message: { role, content, ...fields },
+});
+const encoded = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
+const wireOutput = (output: unknown, call_id: string, fields = {}) => ({
+  type: "function_call_output",
+  call_id,
+  output,
+  ...fields,
+});
 
 describe("MCP code-mode matched failure diagnostics", () => {
   const id = "call_mock_exec_0123456789";
@@ -39,12 +51,9 @@ describe("MCP code-mode matched failure diagnostics", () => {
     body: JSON.stringify({ input }),
   });
   const output = { status: "failed", error: "TypeError: result.content is not a function" };
-  const wireOutput = (value: unknown, callId = id) => ({
-    type: "function_call_output",
-    call_id: callId,
-    output: value,
-  });
-  const toolMessage = (fields: Record<string, unknown>) => ({ message: fields });
+  const outputFor = (value: unknown, callId = id) => wireOutput(value, callId);
+  const toolResult = (callId: string, text: string, fields = {}) =>
+    message("toolResult", textContent(text), { toolCallId: callId, ...fields });
 
   it("binds only the current fixture exec output and its persisted pair before validation", () => {
     const diagnostics = projectMcpCodeModeDiagnostics(
@@ -54,35 +63,25 @@ describe("MCP code-mode matched failure diagnostics", () => {
           [
             user,
             call,
-            wireOutput("fixture-note-alpha", "unrelated"),
-            wireOutput(JSON.stringify(output)),
+            outputFor("fixture-note-alpha", "unrelated"),
+            outputFor(JSON.stringify(output)),
           ],
           2,
         ),
       ],
       [
         { message: user },
-        toolMessage({
-            role: "assistant",
-            content: [
+        message("assistant", [
               {
                 type: "toolCall",
                 id: `${id}|fc_mock_exec_0123456789`,
                 name: "exec",
                 arguments: {},
               },
-            ],
-        }),
-        toolMessage({
-            role: "toolResult",
-            toolCallId: "unrelated",
-            content: [{ type: "text", text: "fixture-note-alpha" }],
-        }),
-        toolMessage({
-            role: "toolResult",
-            toolCallId: `${id}|fc_mock_exec_0123456789`,
+        ]),
+        toolResult("unrelated", "fixture-note-alpha"),
+        toolResult(`${id}|fc_mock_exec_0123456789`, JSON.stringify(output), {
             isError: true,
-            content: [{ type: "text", text: JSON.stringify(output) }],
             details: output,
         }),
       ],
@@ -127,13 +126,9 @@ describe("MCP code-mode matched failure diagnostics", () => {
         record([
           user,
           call,
-          {
-            type: "function_call_output",
-            call_id: id,
-            output: [
-              {
-                type: "input_text",
-                text: JSON.stringify({
+          outputFor(
+            textContent(
+              JSON.stringify({
                   status: "completed",
                   value: {
                     marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
@@ -142,20 +137,12 @@ describe("MCP code-mode matched failure diagnostics", () => {
                     [privateText]: privateText,
                   },
                 }),
-              },
-            ],
-          },
+              "input_text",
+            ),
+          ),
         ]),
       ],
-      [
-        {
-          message: {
-            role: "toolResult",
-            toolCallId: id,
-            content: [{ type: "text", text: privateText }],
-          },
-        },
-      ],
+      [toolResult(id, privateText)],
     );
     const serialized = JSON.stringify(diagnostics);
     expect(serialized).not.toContain(createHash("sha256").update(privateText).digest("hex"));
@@ -181,7 +168,7 @@ describe("MCP code-mode matched failure diagnostics", () => {
           record([
             user,
             call,
-            { type: "function_call_output", call_id: id, output: "fixture-note-alpha" },
+            outputFor("fixture-note-alpha"),
             { role: "user", content: "another task" },
           ]),
           record([{ role: "user", content: "another task" }, call]),
@@ -237,17 +224,10 @@ describe("MCP code-mode matched failure diagnostics", () => {
     const diagnostics = projectMcpCodeModeDiagnostics(
       [
         record([user], 1),
-        record(
-          [user, call, { type: "function_call_output", call_id: id, output: "fixture-note-alpha" }],
-          2,
-        ),
+        record([user, call, outputFor("fixture-note-alpha")], 2),
         record([user], 3),
         record(
-          [
-            user,
-            { ...call, call_id: privateId },
-            { type: "function_call_output", call_id: privateId, output: JSON.stringify(output) },
-          ],
+          [user, { ...call, call_id: privateId }, outputFor(JSON.stringify(output), privateId)],
           4,
         ),
       ],
@@ -300,11 +280,7 @@ describe("MCP code-mode matched failure diagnostics", () => {
 
   it("bounds turns and result structure, and reports missing logs without replacing the failure", async () => {
     const nested = { content: Array.from({ length: 100 }, () => ({ text: "x".repeat(40_000) })) };
-    const largeRecord = record([
-      user,
-      call,
-      { type: "function_call_output", call_id: id, output: nested },
-    ]);
+    const largeRecord = record([user, call, outputFor(nested)]);
     const records = Array.from({ length: 300 }, () => largeRecord);
     const diagnostics = projectMcpCodeModeDiagnostics(records, []);
     expect(diagnostics).toMatchObject({ recordsTruncated: true, providerTurns: [{}, {}] });
@@ -316,17 +292,23 @@ describe("MCP code-mode matched failure diagnostics", () => {
 });
 
 describe("MCP code-mode gateway Docker client fetch helper", () => {
+  const url = "https://qa.example.invalid/v1/responses";
+  const fetchResponse = (body: BodyInit, options: Parameters<typeof fetchJson>[2] = {}) =>
+    fetchJson(url, undefined, {
+      timeoutMs: 25,
+      ...options,
+      fetchImpl: async () => new Response(body, { status: 200 }),
+    });
   it("rejects loose numeric env limits instead of parsing prefixes", () => {
-    expect(() =>
-      readMcpCodeModeClientFetchLimits({
-        OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS: 1e3");
-    expect(() =>
-      readMcpCodeModeClientFetchLimits({
-        OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES: "1000ms",
-      }),
-    ).toThrow("invalid OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES: 1000ms");
+    for (const [name, value] of [
+      ["TIMEOUT_MS", "1e3"],
+      ["BODY_MAX_BYTES", "1000ms"],
+    ]) {
+      const key = `OPENCLAW_MCP_CODE_MODE_CLIENT_${name}`;
+      expect(() => readMcpCodeModeClientFetchLimits({ [key]: value })).toThrow(
+        `invalid ${key}: ${value}`,
+      );
+    }
     expect(
       readMcpCodeModeClientFetchLimits({
         OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES: "4096",
@@ -357,13 +339,7 @@ describe("MCP code-mode gateway Docker client fetch helper", () => {
 
   it("times out while reading stalled response bodies", async () => {
     await expect(
-      fetchJson("https://qa.example.invalid/v1/responses", undefined, {
-        timeoutMs: 25,
-        fetchImpl: async () =>
-          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
-            status: 200,
-          }),
-      }),
+      fetchResponse(new ReadableStream<Uint8Array>({ start() {} })),
     ).rejects.toMatchObject({
       code: "ETIMEDOUT",
       message: "HTTP request to https://qa.example.invalid/v1/responses timed out after 25ms",
@@ -371,23 +347,14 @@ describe("MCP code-mode gateway Docker client fetch helper", () => {
   });
 
   it("parses successful JSON responses", async () => {
-    await expect(
-      fetchJson("https://qa.example.invalid/v1/responses", undefined, {
-        timeoutMs: 25,
-        fetchImpl: async () => new Response('{"ok":true}', { status: 200 }),
-      }),
-    ).resolves.toEqual({ ok: true });
+    await expect(fetchResponse('{"ok":true}')).resolves.toEqual({ ok: true });
   });
 
   it("bounds oversized response bodies", async () => {
     await expect(
-      fetchJson("https://qa.example.invalid/v1/responses", undefined, {
+      fetchResponse(JSON.stringify({ ok: true, padding: "x".repeat(128) }), {
         maxBodyBytes: 16,
         timeoutMs: 1000,
-        fetchImpl: async () =>
-          new Response(JSON.stringify({ ok: true, padding: "x".repeat(128) }), {
-            status: 200,
-          }),
       }),
     ).rejects.toMatchObject({
       code: "ETOOBIG",
@@ -418,29 +385,25 @@ describe("MCP code-mode current-attempt completion proof", () => {
     | { name: string; id: string; args: Record<string, unknown> }
     | { id: string; output: unknown; isError?: boolean };
   const exec: Step = { name: "exec", id: "fixture-exec", args: { code } };
+  const nativeExec: Step = { ...exec, args: { input: code } };
   const wait: Step = { name: "wait", id: "fixture-wait", args: { runId: "fixture-run" } };
   const result: Step = { id: "fixture-exec", output: completed };
   const suspended: Step = { id: "fixture-exec", output: waiting };
   const resumed: Step = { id: "fixture-wait", output: completed };
   const inputText = (text: string) => ({ type: "input_text", text });
-  const nativeOutput = () => [
-    inputText("Script completed\nWall time 0.1 seconds\nOutput:\n"),
-    inputText(JSON.stringify(value)),
-  ];
+  const nativeOutput = (status = "Script completed", ...progress: string[]) =>
+    [status + "\nWall time 0.1 seconds\nOutput:\n", ...progress, JSON.stringify(value)].map(
+      inputText,
+    );
   const resultWith = (output: unknown): Step => ({ id: "fixture-exec", output });
   const waitResult = (output: unknown): Step => ({ id: "fixture-wait", output });
   const afterWait = (output: unknown): Step[] => [exec, suspended, wait, waitResult(output)];
-  const user = (attempt: string) => ({
-    message: { role: "user", content: [{ type: "text", text: attempt }] },
-  });
+  const user = (attempt: string) => message("user", textContent(attempt));
   const transcript = (steps: Step[], attempt = marker) => [
     user(attempt),
     ...steps.map((step) =>
       "name" in step
-        ? {
-            message: {
-              role: "assistant",
-              content: [
+        ? message("assistant", [
                 {
                   type: "toolCall",
                   id: step.id,
@@ -450,22 +413,11 @@ describe("MCP code-mode current-attempt completion proof", () => {
                       ? { arguments: JSON.stringify(step.args) }
                       : step.args,
                 },
-              ],
-            },
-          }
-        : {
-            message: {
-              role: "toolResult",
+          ])
+        : message("toolResult", textContent(encoded(step.output)), {
               toolCallId: step.id,
               isError: step.isError,
-              content: [
-                {
-                  type: "text",
-                  text: typeof step.output === "string" ? step.output : JSON.stringify(step.output),
-                },
-              ],
-            },
-          },
+          }),
     ),
   ];
   const requests = (steps: Step[], attempt = marker) =>
@@ -480,21 +432,26 @@ describe("MCP code-mode current-attempt completion proof", () => {
         : {
             prompt: attempt,
             toolOutputCallId: step.id,
-            toolOutput: typeof step.output === "string" ? step.output : JSON.stringify(step.output),
+            toolOutput: encoded(step.output),
             toolOutputStructuredError: step.isError,
             body: {
               input: [
-                { role: "user", content: [{ type: "input_text", text: attempt }] },
-                {
-                  type: "function_call_output",
-                  call_id: step.id,
-                  output: step.output,
-                  is_error: step.isError,
-                },
+                { role: "user", content: textContent(attempt, "input_text") },
+                wireOutput(step.output, step.id, { is_error: step.isError }),
               ],
             },
           },
     );
+  const rawResult = (flags: Record<string, boolean | undefined>[], snapshotError: boolean) => ({
+    ...requests([result])[0],
+    toolOutputStructuredError: snapshotError,
+    body: {
+      input: [
+        { role: "user", content: marker },
+        ...flags.map((flag) => wireOutput(completed, "fixture-exec", flag)),
+      ],
+    },
+  });
   const routes = [
     {
       name: "persisted transcript",
@@ -507,15 +464,15 @@ describe("MCP code-mode current-attempt completion proof", () => {
   ] as const;
   const providerResult = (records: unknown[]) =>
     validateMcpCodeModeResult(okResponse, extractMcpCodeModeRequestEvidence(records, marker));
-  const rejectProvider = (records: unknown[], message = "no matched successful") =>
-    expect(() => providerResult(records)).toThrow(message);
+  const rejectProvider = (records: unknown[], error = "no matched successful") =>
+    expect(() => providerResult(records)).toThrow(error);
 
   for (const route of routes) {
     describe(route.name, () => {
       const validate = (steps: Step[]) =>
         validateMcpCodeModeResult(okResponse, route.extract(steps));
-      const reject = (steps: Step[], message = "no matched successful") =>
-        expect(() => validate(steps)).toThrow(message);
+      const reject = (steps: Step[], error = "no matched successful") =>
+        expect(() => validate(steps)).toThrow(error);
       it.each<[string, Step[], string]>([
         ["immediate", [exec, result], "fixture-exec"],
         ["one wait", afterWait(completed), "fixture-wait"],
@@ -554,7 +511,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
       });
 
       it.each([0, 1, 2])("accepts Codex native completion after %i waits", (waits) => {
-        const steps: Step[] = [{ ...exec, args: { input: code } }];
+        const steps: Step[] = [nativeExec];
         let id = "fixture-exec";
         for (let index = 1; index <= waits; index++) {
           steps.push({
@@ -570,11 +527,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
         }
         steps.push({
           id,
-          output: [
-            inputText("Script completed\nWall time 0.1 seconds\nOutput:\n"),
-            inputText("non-JSON progress before the final value"),
-            inputText(JSON.stringify(value)),
-          ],
+          output: nativeOutput("Script completed", "non-JSON progress before the final value"),
         });
         expect(validate(steps).matchedCompletionCallIds).toEqual([id]);
       });
@@ -582,16 +535,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
       it.each(["Script failed", "Script terminated", "quoted text: Script completed"])(
         "rejects native %s even when a success payload follows",
         (status) => {
-          reject([
-                { ...exec, args: { input: code } },
-                {
-                  id: "fixture-exec",
-                  output: [
-                inputText(`${status}\nWall time 0.1 seconds\nOutput:\n`),
-                inputText(JSON.stringify(value)),
-                  ],
-                },
-          ]);
+          reject([nativeExec, resultWith(nativeOutput(status))]);
         },
       );
 
@@ -701,10 +645,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
 
   it("uses current raw provider output rather than flattened or historical native output", () => {
     const output = nativeOutput();
-    const records = requests([
-      { ...exec, args: { input: code } },
-      { ...result, output },
-    ]);
+    const records = requests([nativeExec, resultWith(output)]);
     records[1]!.toolOutput = output.map((part) => part.text).join("\n");
     expect(providerResult(records).matchedCompletionCallIds).toEqual(["fixture-exec"]);
     const historical = {
@@ -721,17 +662,9 @@ describe("MCP code-mode current-attempt completion proof", () => {
 
   it.each([false, true])("checks all same-ID provider outputs (native=%s)", (native) => {
     const output = native ? nativeOutput() : completed;
-    const records = requests([
-      { ...exec, args: native ? { input: code } : { code } },
-      { ...result, output },
-    ]);
+    const records = requests([native ? nativeExec : exec, { ...result, output }]);
     const input = records[1]!.body!.input;
-    const duplicate = {
-      type: "function_call_output",
-      call_id: "fixture-exec",
-      output,
-      is_error: undefined,
-    };
+    const duplicate = wireOutput(output, "fixture-exec", { is_error: undefined });
     input.push(duplicate);
     expect(providerResult(records).matchedCompletionCallIds).toEqual(["fixture-exec"]);
     duplicate.output = native
@@ -757,44 +690,11 @@ describe("MCP code-mode current-attempt completion proof", () => {
       expected: "conflicting code-mode call evidence",
     },
   ])("retains each raw provider output's $name", ({ flags, expected }) => {
-    const records = [
-      ...requests([exec]),
-      {
-        ...requests([result])[0],
-        toolOutputStructuredError: false,
-        body: {
-          input: [
-            { role: "user", content: marker },
-            ...flags.map((flag) => ({
-              type: "function_call_output",
-              call_id: "fixture-exec",
-              output: completed,
-              ...flag,
-            })),
-          ],
-        },
-      },
-    ];
-    rejectProvider(records, expected);
+    rejectProvider([...requests([exec]), rawResult(flags, false)], expected);
   });
 
   it("uses raw error-flag precedence and snapshot flags only without raw input", () => {
-    const request = {
-      ...requests([result])[0],
-      toolOutputStructuredError: true,
-      body: {
-        input: [
-          { role: "user", content: marker },
-          {
-            type: "function_call_output",
-            call_id: "fixture-exec",
-            output: completed,
-            is_error: false,
-            isError: true,
-          },
-        ],
-      },
-    };
+    const request = rawResult([{ is_error: false, isError: true }], true);
     const withCall = (entry: unknown) => [...requests([exec]), entry];
     expect(providerResult(withCall(request)).matchedCompletionCallIds).toEqual(["fixture-exec"]);
     rejectProvider(withCall({ ...request, body: undefined }));
@@ -805,16 +705,11 @@ describe("MCP code-mode current-attempt completion proof", () => {
   it("does not infer tool calls from prompt blocks or assistant prose", () => {
     const evidence = extractMcpCodeModeTranscriptEvidence(
       [
-        {
-          message: {
-            role: "user",
-            content: [
-              { type: "text", text: marker },
+        message("user", [
+          ...textContent(marker),
               { type: "toolCall", name: "exec", id: "fixture-exec", arguments: { code } },
-            ],
-          },
-        },
-        { message: { role: "assistant", content: [{ type: "text", text: code }] } },
+        ]),
+        message("assistant", textContent(code)),
         ...transcript([result]).slice(1),
       ],
       marker,
@@ -825,14 +720,7 @@ describe("MCP code-mode current-attempt completion proof", () => {
   it("rejects a failed final answer even with matched completion evidence", () => {
     expect(() =>
       validateMcpCodeModeResult(
-        {
-          output: [
-            {
-              type: "message",
-              content: [{ text: "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha but MCP failed" }],
-            },
-          ],
-        },
+        response("MCP_CODE_MODE_FILE_OK note=fixture-note-alpha but MCP failed"),
         routes[0].extract([exec, result]),
       ),
     ).toThrow("agent reported MCP failure");
