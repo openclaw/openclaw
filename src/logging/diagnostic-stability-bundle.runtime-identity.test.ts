@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, it, expect, vi } from "vitest";
+import { mockNodeBuiltinModule } from "../plugin-sdk/test-helpers/node-builtin-mocks.js";
 
 afterEach(() => {
   vi.doUnmock("node:module");
@@ -25,21 +26,22 @@ it("records the loaded build after the installation changes before failure", asy
     );
     // Redirect only the metadata dependency; exercise the real runtime identity
     // owner before loading the failure writer, as Gateway startup does.
-    vi.doMock("node:module", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("node:module")>();
-      return {
-        ...actual,
-        createRequire: (moduleUrl: string | URL) =>
-          new Proxy(actual.createRequire(moduleUrl), {
-            apply(target, thisArg, args: unknown[]) {
-              if (typeof args[0] === "string" && args[0].endsWith("build-info.json")) {
-                return readBuild();
-              }
-              return Reflect.apply(target, thisArg, args);
-            },
-          }),
-      };
-    });
+    vi.doMock("node:module", (importOriginal) =>
+      mockNodeBuiltinModule(
+        () => importOriginal<typeof import("node:module")>(),
+        (actual) => ({
+          createRequire: (moduleUrl: string | URL) =>
+            new Proxy(actual.createRequire(moduleUrl), {
+              apply(target, thisArg, args: unknown[]) {
+                if (typeof args[0] === "string" && args[0].endsWith("build-info.json")) {
+                  return readBuild();
+                }
+                return Reflect.apply(target, thisArg, args);
+              },
+            }),
+        }),
+      ),
+    );
     vi.doMock("../infra/git-commit.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
       resolveLoadedCommitHash: loadedCommit,
