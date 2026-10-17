@@ -16,6 +16,7 @@ import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { publishChatRunState } from "./chat-state-render.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
@@ -32,7 +33,7 @@ type PendingInputRequest = {
   connectionEpoch: number;
 };
 
-type PendingInputView = {
+export type ChatPendingInputView = {
   sessionKey: string;
   sessionId: string | null;
   agentId: string | undefined;
@@ -47,7 +48,6 @@ type PendingInputView = {
   error?: string;
   request?: PendingInputRequest;
 };
-const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
 function reconcileQueuedInputs(
   queued: ChatPendingInputsPage["items"],
@@ -164,8 +164,8 @@ export function buildPendingInputItems(
   return items;
 }
 
-export function getChatPendingInputs(state: ChatState): PendingInputView | undefined {
-  const view = pendingInputViews.get(state);
+export function getChatPendingInputs(state: ChatState): ChatPendingInputView | undefined {
+  const view = state.chatPendingInputs;
   return view?.sessionKey === state.sessionKey &&
     view.sessionId === (state.currentSessionId ?? null) &&
     view.agentId === resolveUiSelectedSessionAgentId(state)
@@ -174,7 +174,7 @@ export function getChatPendingInputs(state: ChatState): PendingInputView | undef
 }
 
 export function clearChatPendingInputs(state: ChatState): void {
-  pendingInputViews.delete(state);
+  state.chatPendingInputs = undefined;
 }
 
 function collectChatInputRunIds(state: ChatState): string[] {
@@ -208,7 +208,7 @@ export function readChatInputRunIds(state: ChatState): string[] {
 
 function rotateInputReceipts(
   state: ChatState,
-  view: PendingInputView,
+  view: ChatPendingInputView,
   queriedRunIds: readonly string[] = [],
 ): void {
   const observed = new Set(queriedRunIds);
@@ -257,7 +257,7 @@ function reconcilePendingInputPage(
 
 function ownsPendingInputRequest(
   state: ChatState,
-  view: PendingInputView,
+  view: ChatPendingInputView,
   request: PendingInputRequest,
 ): boolean {
   return (
@@ -296,7 +296,7 @@ export function applyChatPendingInputs(
         return this.request?.kind === "navigation";
       },
     };
-    pendingInputViews.set(state, view);
+    state.chatPendingInputs = view;
   } else {
     view.queuedInputs = queuedInputs;
     view.queuedCount = displayPage.queuedCount ?? 0;
@@ -321,7 +321,7 @@ export function applyChatPendingInputs(
   ) {
     void requestPendingInputPage(state, view.queueBefore, "discovery");
   }
-  state.requestUpdate?.();
+  publishChatRunState(state);
 }
 
 async function requestPendingInputPage(
@@ -345,7 +345,7 @@ async function requestPendingInputPage(
   view.request = request;
   view.error = undefined;
   if (kind === "navigation") {
-    state.requestUpdate?.();
+    publishChatRunState(state);
   }
   const current = () => ownsPendingInputRequest(state, view, request);
   try {
@@ -399,7 +399,7 @@ async function requestPendingInputPage(
     if (view.request === request) {
       view.request = undefined;
       if (getChatPendingInputs(state) === view) {
-        state.requestUpdate?.();
+        publishChatRunState(state);
       }
     }
   }

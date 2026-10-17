@@ -804,7 +804,7 @@ describe("chat history run ownership recovery", () => {
     const loading = loadChatHistory(state);
     expect(request).toHaveBeenCalledOnce();
     if (change === "lifecycle restart") {
-      reconcileChatRunLifecycle(state, { clearLocalRun: true, requestUpdate: false });
+      reconcileChatRunLifecycle(state, { clearLocalRun: true, publishRunState: false });
       adoptStartedChatRun(state, "run-owned", 2);
     } else if (change === "pending send") {
       state.chatQueue.push({

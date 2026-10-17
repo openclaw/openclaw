@@ -1,7 +1,8 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 
@@ -33,6 +34,7 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     requestUpdate,
     ...overrides,
   } as unknown as ChatPageHost;
+  onTestFinished(chatRunPresentation(state).subscribe(requestUpdate));
   return { request, state };
 }
 

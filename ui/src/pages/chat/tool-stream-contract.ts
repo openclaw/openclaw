@@ -117,7 +117,6 @@ export type ToolStreamHost = {
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
-  requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "reconcileMutation">;
 };
 

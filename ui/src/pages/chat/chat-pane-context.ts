@@ -53,7 +53,6 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
@@ -326,7 +325,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const presentationChanged = presentation !== this.sessionPresentationKey;
     this.sessionPresentationKey = presentation;
     if (this.presented && presentationChanged) {
-      requestChatPageUpdate(state, "animation-frame");
+      state.requestUpdate?.();
     }
     // First canonical idle and changed run/branch identity can release a queue.
     // Re-decoding an unchanged row after foreign activity is not new delivery intent.
@@ -486,7 +485,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           clearLocalRun: true,
           clearToolStream: true,
           clearRunStatus: true,
-          requestUpdate: false,
+          publishRunState: false,
         });
         state.pendingAbort = null;
       }
