@@ -49,6 +49,16 @@ import {
   seedSessionsWithActivityTimes,
 } from "./sessions-read-cache.test-support.js";
 
+function activate(
+  context: ReturnType<typeof requestContext>,
+  runId: string,
+  agentId: string,
+  sessionKey: string,
+  sessionId: string,
+) {
+  context.chatAbortControllers.set(runId, { agentId, sessionKey, sessionId } as never);
+}
+
 async function changeDuringReadiness(
   context: ReturnType<typeof requestContext>,
   change: () => void | Promise<void>,
@@ -99,11 +109,7 @@ it("selects current work before pagination and represents an isolated cron run o
       });
       await replaceSessionEntry(scope, { ...entry!, updatedAt: recent + updatedAt });
     }
-    context.chatAbortControllers.set("local-run", {
-      sessionKey: "agent:main:local",
-      sessionId: "local-session",
-      agentId: "main",
-    } as never);
+    activate(context, "local-run", "main", "agent:main:local", "local-session");
     context.chatAbortControllers.set("hidden-run", {
       sessionKey: "agent:main:hidden",
       controlUiVisible: false,
@@ -292,11 +298,7 @@ it.for(["global", "unknown"] as const)(
           },
         );
         if (agentId !== "main") {
-          context.chatAbortControllers.set(`sentinel-run-${agentId}`, {
-            sessionKey: sentinel,
-            sessionId,
-            agentId,
-          } as never);
+          activate(context, `sentinel-run-${agentId}`, agentId, sentinel, sessionId);
         }
       }
       const childKey = `agent:ops:subagent:${sentinel}-child`;
@@ -340,11 +342,7 @@ it.for(["global", "unknown"] as const)(
         visibility: "shared",
       });
       await replaceSessionEntry(literalScope, { ...literalEntry!, updatedAt: now - 100 });
-      context.chatAbortControllers.set("literal-sentinel-run", {
-        sessionKey: literalKey,
-        sessionId: literalSessionId,
-        agentId: "ops",
-      } as never);
+      activate(context, "literal-sentinel-run", "ops", literalKey, literalSessionId);
       await new SqliteBoardStore({
         resolveSession: () => ({ agentId: "ops", path: storePathFor("ops"), sessionKey: sentinel }),
       }).applyOps({ sessionKey: sentinel }, [{ kind: "tab_create", tabId: "main", title: "Ops" }]);
@@ -483,11 +481,7 @@ it.each([{ activeMinutes: 1 }, { activeOnly: true }])(
       setRuntimeConfigSnapshot({ agents: { entries: { main: {}, work: {} } } });
       const { clock, config } = await seedSessionsWithActivityTimes();
       const context = requestContext(config);
-      context.chatAbortControllers.set("active-run", {
-        agentId: "main",
-        sessionKey: "agent:main:active",
-        sessionId: "main-active",
-      } as never);
+      activate(context, "active-run", "main", "agent:main:active", "main-active");
       const client = identifiedClient("owner@example.com");
       clock.mockReturnValue(60_400);
       const request = { ...filter, agentId: "main", limit: 100 };
@@ -523,11 +517,13 @@ it.each(["settled", "replaced"] as const)(
           throw new Error("Missing seeded active session");
         }
         await replaceSessionEntry(scope, { ...entry, updatedAt: agentId === "main" ? 400 : 100 });
-        context.chatAbortControllers.set(`run-${agentId}`, {
+        activate(
+          context,
+          `run-${agentId}`,
           agentId,
-          sessionKey: `agent:${agentId}:active`,
-          sessionId: `${agentId}-active`,
-        } as never);
+          `agent:${agentId}:active`,
+          `${agentId}-active`,
+        );
       }
       const readiness = await changeDuringReadiness(context, async () => {
         context.chatAbortControllers.delete("run-main");
@@ -536,11 +532,7 @@ it.each(["settled", "replaced"] as const)(
             { agentId: "main", sessionKey: "agent:main:active" },
             { sessionId: "replacement-session" },
           );
-          context.chatAbortControllers.set("run-replacement", {
-            agentId: "main",
-            sessionKey: "agent:main:active",
-            sessionId: "replacement-session",
-          } as never);
+          activate(context, "run-replacement", "main", "agent:main:active", "replacement-session");
         }
       });
       const request = { activeOnly: true, limit: 1 };

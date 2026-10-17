@@ -131,7 +131,7 @@ function controlProjectionClock(afterRow?: () => void) {
   return presented;
 }
 
-test.each(["slow-warning"])("attributes %s operations", async (mode) => {
+test("attributes slow-warning operations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = requestContext(await seedSessions());
     context.subscribeSessionEvents = vi.fn();
@@ -147,10 +147,7 @@ test.each(["slow-warning"])("attributes %s operations", async (mode) => {
     await getSessionRowProjection(context)!.ensureMaterialized();
     const owner = getSessionRowProjection(context)!;
     const ensure = owner.prepareSelection.bind(owner);
-    const warn = mode === "slow-warning";
-    const waitMs = warn ? 1_100 : 0;
-    setDiagnosticsEnabledForProcess(warn);
-    vi.mocked(sessionLog.isEnabled).mockReturnValue(warn);
+    const waitMs = 1_100;
     vi.spyOn(owner, "prepareSelection").mockImplementation(async (...args) => {
       await ensure(...args);
       clock += waitMs;
@@ -222,22 +219,14 @@ test.each(["slow-warning"])("attributes %s operations", async (mode) => {
         expect(serialized).not.toContain(privateValue);
       }
       expect(serialized).not.toContain("agent:main:");
-      if (warn) {
-        expect(records.map((record) => record.fields)).toEqual(events);
-      } else {
-        expect(sessionLog.warn).not.toHaveBeenCalled();
-      }
+      expect(records.map((record) => record.fields)).toEqual(events);
     } finally {
       diagnostics.unsubscribe(collect);
     }
     threadCpuProbe.mockClear();
     await listSessions({ client, context, request });
     expect(events).toHaveLength(2);
-    if (warn) {
-      expect(threadCpuProbe).toHaveBeenCalled();
-    } else {
-      expect(threadCpuProbe).not.toHaveBeenCalled();
-    }
+    expect(threadCpuProbe).toHaveBeenCalled();
   });
 });
 
@@ -406,12 +395,6 @@ test.each(["sink-throws", "cpu-start-throws", "cpu-finish-throws"])(
       if (mode === "cpu-start-throws") {
         cpuProbeFailure = new Error("synthetic CPU probe failure");
       }
-      if (mode === "disabled") {
-        setDiagnosticsEnabledForProcess(false);
-      }
-      if (mode === "sink-disabled") {
-        vi.mocked(sessionLog.isEnabled).mockReturnValue(false);
-      }
       if (mode === "sink-throws") {
         vi.mocked(sessionLog.warn).mockImplementation(() => {
           throw new Error("synthetic sink failure");
@@ -423,9 +406,6 @@ test.each(["sink-throws", "cpu-start-throws", "cpu-finish-throws"])(
         .mockImplementationOnce(async (...args) => {
           await ensure(...args);
           clock += 1_100;
-          if (mode === "disabled-during-request") {
-            setDiagnosticsEnabledForProcess(false);
-          }
         });
       const result = await listSessions({
         client,
@@ -434,14 +414,7 @@ test.each(["sink-throws", "cpu-start-throws", "cpu-finish-throws"])(
       });
       expect(readiness).toHaveBeenCalled();
       expect(result.sessions).toHaveLength(1);
-      if (mode === "sink-throws" || cpuThrows) {
-        expect(sessionLog.warn).toHaveBeenCalledOnce();
-      } else {
-        expect(sessionLog.warn).not.toHaveBeenCalled();
-      }
-      if (mode === "disabled" || mode === "sink-disabled") {
-        expect(threadCpuProbe).not.toHaveBeenCalled();
-      }
+      expect(sessionLog.warn).toHaveBeenCalledOnce();
       if (cpuThrows) {
         expect(threadCpuProbe.mock.results).toContainEqual({
           type: "throw",

@@ -69,6 +69,11 @@ function rowFacts(rows: readonly GatewaySessionRow[]) {
   return rows.map(({ snapshotAt: _snapshotAt, ...row }) => row);
 }
 
+async function listFixture() {
+  const context = requestContext(await seedSessions());
+  return { context, client: identifiedClient("owner@example.com") };
+}
+
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
   resetAgentEventsForTest();
@@ -82,9 +87,7 @@ afterEach(() => {
 describe("resident sessions.list", () => {
   it("omits unchanged sidebar rows without reusing membership or revoked access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
+      const { context, client } = await listFixture();
       const request = { agentId: "main", rowMode: "sidebar", limit: 50 } as const;
       // Cold admission can publish enriched facts after the first selected page.
       await listSessions({ client, context, request });
@@ -167,57 +170,41 @@ describe("resident sessions.list", () => {
     });
   });
 
-  it.each([{ search: "live" }])(
-    "refreshes reply activity including previously rejected candidates (%j)",
-    async (filter: SessionsListParams) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const config = await seedSessions();
-        const context = requestContext(config);
-        const client = identifiedClient("owner@example.com");
-        const request = { agentId: "main", ...filter, limit: 50 };
-        const filtered = Boolean(filter.search || filter.activeOnly);
-        const terminalScope = { agentId: "main", sessionKey: "agent:main:active" };
-        await replaceSessionEntry(terminalScope, {
-          ...loadSessionEntry(terminalScope)!,
-          status: "done",
-        });
-        context.chatAbortControllers.set("retained-terminal", {
-          sessionId: "main-active",
-          sessionKey: terminalScope.sessionKey,
-          agentId: "main",
-          projectSessionActive: false,
-        } as never);
-        if (filtered) {
-          expect((await listSessions({ client, context, request })).sessions).toEqual([]);
-        }
-        const operation = createReplyOperation({
-          sessionId: "main-active",
-          sessionKey: "agent:main:active",
-          resetTriggered: false,
-        });
-        try {
-          const active = await listSessions({ client, context, request });
-          expect(active.sessions.find((row) => row.key === terminalScope.sessionKey)).toMatchObject(
-            { hasActiveRun: true, status: "running" },
-          );
-          operation.complete();
-          if (!filtered) {
-            vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_000);
-          }
-          const settled = await listSessions({ client, context, request });
-          if (filtered) {
-            expect(settled.sessions).toEqual([]);
-          } else {
-            expect(
-              settled.sessions.find((row) => row.key === terminalScope.sessionKey),
-            ).toMatchObject({ hasActiveRun: false, status: "done" });
-          }
-        } finally {
-          operation.complete();
-        }
+  it("refreshes reply activity including previously rejected candidates", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { context, client } = await listFixture();
+      const request = { agentId: "main", search: "live", limit: 50 };
+      const terminalScope = { agentId: "main", sessionKey: "agent:main:active" };
+      await replaceSessionEntry(terminalScope, {
+        ...loadSessionEntry(terminalScope)!,
+        status: "done",
       });
-    },
-  );
+      context.chatAbortControllers.set("retained-terminal", {
+        sessionId: "main-active",
+        sessionKey: terminalScope.sessionKey,
+        agentId: "main",
+        projectSessionActive: false,
+      } as never);
+      expect((await listSessions({ client, context, request })).sessions).toEqual([]);
+      const operation = createReplyOperation({
+        sessionId: "main-active",
+        sessionKey: "agent:main:active",
+        resetTriggered: false,
+      });
+      try {
+        const active = await listSessions({ client, context, request });
+        expect(active.sessions.find((row) => row.key === terminalScope.sessionKey)).toMatchObject({
+          hasActiveRun: true,
+          status: "running",
+        });
+        operation.complete();
+        const settled = await listSessions({ client, context, request });
+        expect(settled.sessions).toEqual([]);
+      } finally {
+        operation.complete();
+      }
+    });
+  });
 
   it("presents current runner availability from resident bindings", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -378,9 +365,7 @@ describe("resident sessions.list", () => {
 
   it("excludes incognito sessions before and after their memory owner closes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
+      const { context, client } = await listFixture();
       client.connect.scopes = [...(client.connect.scopes ?? []), "operator.admin"];
       const request = { archived: "all" as const, configuredAgentsOnly: true, limit: 100 };
       const childKey = "agent:guest:subagent:incognito-residency";
@@ -414,9 +399,7 @@ describe("resident sessions.list", () => {
 
   it("refreshes the resident row after terminal lifecycle persistence", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
+      const { context, client } = await listFixture();
       const request = { archived: "all" as const, limit: 100 };
       const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
 
@@ -448,9 +431,7 @@ describe("resident sessions.list", () => {
 
   it("refreshes row previews after a committed transcript update", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
+      const { context, client } = await listFixture();
       const request = { archived: "all" as const, limit: 100, includeLastMessage: true };
       const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
 
@@ -556,9 +537,7 @@ describe("resident sessions.list", () => {
 
   it("admits a newly committed session after the roster was loaded", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
+      const { context, client } = await listFixture();
       const request = { archived: "all" as const, limit: 100 };
 
       const first = await listSessions({ client, context, request });

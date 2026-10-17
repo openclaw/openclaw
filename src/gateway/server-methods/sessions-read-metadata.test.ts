@@ -42,18 +42,12 @@ async function seedMetadataReads(prepareProjection = false) {
   }
   const storePath = path.join(stateDir, "shared-search.sqlite");
   const viewer = ensureProfileForEmail("viewer@example.com");
-  const definitions = {
-    reader: {
-      sessions: { others: "view" as const },
-      agents: "*" as const,
-      scopes: ["operator.read"],
-    },
-    restricted: {
-      sessions: { others: "none" as const },
-      agents: "*" as const,
-      scopes: ["operator.read"],
-    },
-  } satisfies Record<string, GatewayOperatorRoleDefinition>;
+  const role = (others: "view" | "none"): GatewayOperatorRoleDefinition => ({
+    sessions: { others },
+    agents: "*",
+    scopes: ["operator.read"],
+  });
+  const definitions = { reader: role("view"), restricted: role("none") };
   let cfg: OpenClawConfig = {
     agents: { defaults: { sessionStore: { agentId: "main" } }, entries: { main: {}, work: {} } },
     session: { store: storePath },
@@ -109,14 +103,9 @@ test.each([
   {
     method: "sessions.search",
     scope: "explicit keys",
-    sessionKeys: [
-      "agent:main:first",
-      "agent:main:second",
-      "agent:main:draft",
-      "agent:main:private",
-      "agent:main:missing",
-      "agent:main:first",
-    ],
+    sessionKeys: ["first", "second", "draft", "private", "missing", "first"].map(
+      (name) => `agent:main:${name}`,
+    ),
   },
   { method: "sessions.preview", scope: "explicit keys", sessionKeys: undefined },
 ] as const)(
@@ -203,54 +192,27 @@ test.each([
 );
 
 test.each([
-  {
-    change: "an unread row becoming draft",
-    key: "agent:main:second",
-    patch: { visibility: "draft" },
-    visible: false,
-  },
-  {
-    change: "a buffered row becoming draft",
-    key: "agent:main:first",
-    patch: { visibility: "draft" },
-    visible: false,
-  },
-  {
-    change: "a buffered row becoming incognito",
-    key: "agent:main:first",
-    patch: { incognito: true },
-    visible: false,
-  },
-  {
-    change: "a buffered row receiving a replacement session",
-    key: "agent:main:first",
-    patch: { sessionId: "replacement-session" },
-    visible: false,
-  },
-  {
-    change: "a buffered row receiving a replacement lifecycle",
-    key: "agent:main:first",
-    patch: { lifecycleRevision: "replacement-lifecycle" },
-    visible: false,
-  },
-  {
-    change: "a buffered row receiving an ordinary metadata update",
-    key: "agent:main:first",
-    patch: { label: "Renamed session" },
-    visible: true,
-  },
-  {
-    change: "the caller role losing other-session access",
+  ...(
+    [
+      ["unread draft", "second", { visibility: "draft" }, false],
+      ["buffered draft", "first", { visibility: "draft" }, false],
+      ["buffered incognito", "first", { incognito: true }, false],
+      ["replaced session", "first", { sessionId: "replacement-session" }, false],
+      ["replaced lifecycle", "first", { lifecycleRevision: "replacement-lifecycle" }, false],
+      ["ordinary metadata", "first", { label: "Renamed session" }, true],
+    ] as const
+  ).map(([change, name, patch, visible]) => ({
+    change,
+    key: `agent:main:${name}`,
+    patch,
+    visible,
+  })),
+  ...(["profile", "config"] as const).map((restrict) => ({
+    change: `the ${restrict} losing other-session access`,
     key: undefined,
     visible: false,
-    restrict: "profile",
-  },
-  {
-    change: "the runtime configuration losing other-session access",
-    key: undefined,
-    visible: false,
-    restrict: "config",
-  },
+    restrict,
+  })),
 ] as const)("sessions.preview rechecks $change before publishing the batch", async (scenario) => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const { opts, storePath, viewerId, restrictRuntimeConfig } = await seedMetadataReads(true);

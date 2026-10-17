@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AgentsListResult,
-  SessionsListParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
@@ -28,66 +25,55 @@ import {
   readPreparedGatewayModelCatalog,
   readPreparedGatewayModelCatalogBatch,
 } from "../server-model-catalog.js";
-import type { GatewaySessionRow, GatewaySessionsDefaults } from "../session-utils.types.js";
 import { agentsHandlers } from "./agents.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
+  listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
-
-const { sessionReadHandlers } = await import("./sessions-read.js");
-
-async function listSessions(params: {
-  client: GatewayClient;
-  context: GatewayRequestContext;
-  request: SessionsListParams;
-}) {
-  await initializeSessionReadContext(params.context);
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionReadHandlers["sessions.list"]?.({
-    req: { type: "req", id: "session-list-test", method: "sessions.list" },
-    params: params.request,
-    client: params.client,
-    context: params.context,
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
-  } as never);
-  expect(responses).toHaveLength(1);
-  expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1] as {
-    count: number;
-    defaults: GatewaySessionsDefaults;
-    nextOffset: number | null;
-    sessions: GatewaySessionRow[];
-    totalCount: number;
-  };
-}
+import type { GatewayRequestContext } from "./types.js";
 
 async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { entries: { main: {}, work: {} } },
   };
   setRuntimeConfigSnapshot(config);
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: "agent:main:active" },
-    {
-      sessionId: "main-active",
-      updatedAt: 400,
-      createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-      visibility: "shared",
-    },
-  );
-  await upsertSessionEntryCore(
-    { agentId: "work", sessionKey: "agent:work:active" },
-    {
-      sessionId: "work-active",
-      updatedAt: 100,
-      createdActor: { type: "human", source: "profile", id: "viewer@example.com" },
-      visibility: "shared",
-    },
-  );
+  for (const [agentId, updatedAt, id] of [
+    ["main", 400, "owner@example.com"],
+    ["work", 100, "viewer@example.com"],
+  ] as const) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: `agent:${agentId}:active` },
+      {
+        sessionId: `${agentId}-active`,
+        updatedAt,
+        createdActor: { type: "human", source: "profile", id },
+        visibility: "shared",
+      },
+    );
+  }
   return config;
+}
+
+function reasonerCatalog(efforts = ["low", "high", "max"]): ModelCatalogEntry[] {
+  return [
+    {
+      provider: "dynamic-router",
+      id: "reasoner",
+      name: "Reasoner",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: efforts },
+    },
+  ];
+}
+
+function expectThinking(
+  result: Awaited<ReturnType<typeof listSessions>>,
+  agentId: string,
+  levels: string[],
+) {
+  expect(result.sessions.find((row) => row.agentId === agentId)?.thinkingOptions).toEqual(levels);
 }
 
 function thinkingRegistry(
@@ -285,15 +271,7 @@ describe("sessions.list catalog scoping", () => {
         model: { primary: "dynamic-router/reasoner" },
         models: { "dynamic-router/reasoner": { agentRuntime: { id: "codex" } } },
       };
-      const entries: ModelCatalogEntry[] = [
-        {
-          provider: "dynamic-router",
-          id: "reasoner",
-          name: "Reasoner",
-          reasoning: true,
-          compat: { supportedReasoningEfforts: ["low", "high", "max"] },
-        },
-      ];
+      const entries = reasonerCatalog();
       const profile = (level: "low" | "ultra"): ProviderThinkingProfile => ({
         levels: [{ id: "off" }, { id: level }],
         defaultLevel: level,
@@ -328,15 +306,8 @@ describe("sessions.list catalog scoping", () => {
         request: { archived: "all" as const },
       };
       const first = await listSessions(request);
-      expect(first.sessions.find((row) => row.agentId === "main")?.thinkingOptions).toEqual([
-        "off",
-        "ultra",
-      ]);
-      expect(first.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
-        "off",
-        "low",
-        "ultra",
-      ]);
+      expectThinking(first, "main", ["off", "ultra"]);
+      expectThinking(first, "work", ["off", "low", "ultra"]);
       const catalogs = vi.spyOn(context, "readPreparedGatewayModelCatalogBatch");
       expect((await listSessions(request)).sessions).toEqual(first.sessions);
       expect(catalogs).not.toHaveBeenCalled();
@@ -363,20 +334,8 @@ describe("sessions.list catalog scoping", () => {
       owners.set("main", { ...mainOwner, pluginRegistry: createEmptyPluginRegistry() });
       notifyPreparedModelRuntimePublication({ phase: "published" });
       const replaced = await listSessions(request);
-      expect(replaced.sessions.find((row) => row.agentId === "main")?.thinkingOptions).toEqual([
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "max",
-        "ultra",
-      ]);
-      expect(replaced.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
-        "off",
-        "low",
-        "ultra",
-      ]);
+      expectThinking(replaced, "main", ["off", "minimal", "low", "medium", "high", "max", "ultra"]);
+      expectThinking(replaced, "work", ["off", "low", "ultra"]);
 
       failMainCatalogRead = true;
       notifyPreparedModelRuntimePublication({
@@ -384,19 +343,13 @@ describe("sessions.list catalog scoping", () => {
         error: new Error("main catalog owner replaced"),
       });
       const partial = await listSessions(request);
-      expect(partial.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
-        "off",
-        "low",
-        "ultra",
-      ]);
+      expectThinking(partial, "work", ["off", "low", "ultra"]);
       failMainCatalogRead = false;
 
       completed.catalog = { entries: [{ ...entries[0]!, reasoning: false }], routeVariants: [] };
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
       const promoted = await listSessions(request);
-      expect(promoted.sessions.find((row) => row.agentId === "main")?.thinkingOptions).toEqual([
-        "off",
-      ]);
+      expectThinking(promoted, "main", ["off"]);
       expect(mainOwner.loadFullModelCatalog).not.toHaveBeenCalled();
 
       const workAgentDir = `${resolveAgentDir(config, "work")}-replacement`;
@@ -410,9 +363,7 @@ describe("sessions.list catalog scoping", () => {
       });
       setRuntimeConfigSnapshot(config);
       const changedRoster = await listSessions(request);
-      expect(changedRoster.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual(
-        ["off", "ultra"],
-      );
+      expectThinking(changedRoster, "work", ["off", "ultra"]);
 
       const nextConfig: OpenClawConfig = {
         ...config,
@@ -436,9 +387,7 @@ describe("sessions.list catalog scoping", () => {
       });
       setRuntimeConfigSnapshot(nextConfig);
       const changedConfig = await listSessions(request);
-      expect(changedConfig.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual(
-        ["off", "low", "ultra"],
-      );
+      expectThinking(changedConfig, "work", ["off", "low", "ultra"]);
     });
   });
 
@@ -449,24 +398,8 @@ describe("sessions.list catalog scoping", () => {
         ...config.agents,
         defaults: { model: { primary: "dynamic-router/reasoner" } },
       };
-      const mainCatalog: ModelCatalogEntry[] = [
-        {
-          provider: "dynamic-router",
-          id: "reasoner",
-          name: "Reasoner",
-          reasoning: true,
-          compat: { supportedReasoningEfforts: ["low", "high", "max"] },
-        },
-      ];
-      const workCatalog: ModelCatalogEntry[] = [
-        {
-          provider: "dynamic-router",
-          id: "reasoner",
-          name: "Reasoner",
-          reasoning: true,
-          compat: { supportedReasoningEfforts: ["medium"] },
-        },
-      ];
+      const mainCatalog = reasonerCatalog();
+      const workCatalog = reasonerCatalog(["medium"]);
       const context = {
         ...requestContext(config),
         readPreparedGatewayModelCatalog: vi.fn(async (options?: { agentId?: string }) => ({
@@ -503,15 +436,7 @@ describe("sessions.list catalog scoping", () => {
         ...config.agents,
         defaults: { model: { primary: "dynamic-router/reasoner" } },
       };
-      const mainCatalog: ModelCatalogEntry[] = [
-        {
-          provider: "dynamic-router",
-          id: "reasoner",
-          name: "Reasoner",
-          reasoning: true,
-          compat: { supportedReasoningEfforts: ["low", "high", "max"] },
-        },
-      ];
+      const mainCatalog = reasonerCatalog();
       const context = {
         ...requestContext(config),
         readPreparedGatewayModelCatalog: vi.fn(async () => ({ entries: mainCatalog })),
