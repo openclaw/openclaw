@@ -3,6 +3,8 @@ import { getFlagValue, hasFlag } from "./argv.js";
 import { resolveCliDatabaseProcessRole } from "./database-process-role.js";
 
 const OWNED_DATABASE_SELECTION = new Set([
+  // Bare-root routing selects under its existing onboarding/TUI owner.
+  "",
   // Gateway processes own their final-target admission and engine selection.
   "gateway",
   // These commands use no operator database.
@@ -157,6 +159,7 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
   } = await import("../config/io.invalid-config.js");
   if (
     ["onboard", "setup", "crestodian"].includes(invocation.primary ?? "") &&
+    invocation.commandPath.length === 1 &&
     !hasFlag(argv, "--non-interactive") &&
     !isConfigReadFailure(snapshot) &&
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")

@@ -26,6 +26,7 @@ const database = {
 };
 
 const recoveryOwnerCommands = [
+  [],
   ["agent", "--agent", "main", "--message", "hello"],
   ["gateway", "restart"],
   ["daemon", "restart"],
@@ -65,7 +66,7 @@ const recoveryOwnerCommands = [
 ];
 
 describe("one-shot CLI engine selection", () => {
-  it.each([["models", "list"], ["onboard"], ["setup", "--wizard"], ["crestodian"], []])(
+  it.each([["models", "list"], ["onboard"], ["setup", "--wizard"], ["crestodian"]])(
     "selects the config-directed target for %j without opening a database",
     async (...args) => {
       await withOpenClawTestState(
@@ -102,6 +103,12 @@ describe("one-shot CLI engine selection", () => {
 
   it.each([
     { source: "root", code: "INVALID_CONFIG", heading: "Invalid config at" },
+    {
+      source: "recommendation",
+      code: "INVALID_CONFIG",
+      heading: "Invalid config at",
+      args: ["onboard", "--json", "recommendations"],
+    },
     { source: "include", code: "INVALID_CONFIG", heading: "Invalid config at" },
     {
       source: "missing include",
@@ -110,16 +117,18 @@ describe("one-shot CLI engine selection", () => {
     },
   ])(
     "preserves $source failure diagnostics before selecting storage",
-    async ({ source, code, heading }) => {
+    async ({ source, code, heading, args }) => {
       await withOpenClawTestState({ label: "cli-engine-invalid-source" }, async (state) => {
-        const raw = source === "root" ? "{ invalid config" : '{"$include":"included.json"}';
+        const raw = source.includes("include")
+          ? '{"$include":"included.json"}'
+          : "{ invalid config";
         await fs.writeFile(state.configPath, raw);
         if (source === "include") {
           await fs.writeFile(state.statePath("included.json"), "{ invalid config");
         }
 
         await expect(
-          prepareCliDatabaseEngine(["node", "openclaw", "models", "list"]),
+          prepareCliDatabaseEngine(["node", "openclaw", ...(args ?? ["models", "list"])]),
         ).rejects.toMatchObject({
           code,
           message: expect.stringContaining(`${heading} ${state.configPath}:\n`),
