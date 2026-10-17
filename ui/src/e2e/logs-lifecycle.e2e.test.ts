@@ -1,5 +1,4 @@
 import { appendFile, mkdir, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { text } from "node:stream/consumers";
 import type { Page, WebSocket } from "playwright";
 import { expect, it } from "vitest";
@@ -11,7 +10,6 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -21,7 +19,6 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewport = { height: 900, width: 1_440 };
 
 function logLine(message: string, level: "error" | "info" | "warn", second: number) {
@@ -34,21 +31,26 @@ function logLine(message: string, level: "error" | "info" | "warn", second: numb
   });
 }
 
-async function capture(page: Page, name: string) {
-  if (!captureUiProof) {
-    return;
-  }
-  await writeFile(
-    path.join(suite.artifactDir, name),
-    await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
-      page.locator(".log-message").first(),
-    ]),
-  );
-}
-
 async function visibleMessages(page: Page) {
   return page.locator(".log-message").allTextContents();
 }
+
+const expectMessages = (page: Page, messages: string[]) =>
+  expect.poll(() => visibleMessages(page)).toEqual(messages);
+
+async function downloadLog(page: Page, name: string) {
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name }).click();
+  const download = await pending;
+  const stream = await download.createReadStream();
+  if (!stream) {
+    throw new Error("log export did not provide a readable download");
+  }
+  return { filename: download.suggestedFilename(), contents: await text(stream) };
+}
+
+const useLog = (file: string) =>
+  setLoggerOverride({ consoleLevel: "silent", file, level: "silent" });
 
 suite.define(() => {
   it("replaces a changed log source and preserves visible recovery through reconnect", async (context) => {
@@ -100,12 +102,14 @@ suite.define(() => {
         const lineBRestartPrefix = logLine(messageBRestartPrefix, "info", 5);
         const lineBRestartTail = logLine("source B restart tail", "error", 6);
         const lineBAfterReconnect = logLine("source B after reconnect", "warn", 7);
+        const writeLog = async (file: string, ...lines: string[]) => {
+          await writeFile(file, `${lines.join("\n")}\n`, "utf8");
+          signal.throwIfAborted();
+        };
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
         signal.throwIfAborted();
-        await writeFile(sourceA, `${lineA}\n`, "utf8");
-        signal.throwIfAborted();
-        await writeFile(sourceB, `${lineBPrefix}\n${lineBTail}\n`, "utf8");
-        signal.throwIfAborted();
+        await writeLog(sourceA, lineA);
+        await writeLog(sourceB, lineBPrefix, lineBTail);
         await mkdir(readFailure);
         signal.throwIfAborted();
         await state.writeConfig({
@@ -120,13 +124,15 @@ suite.define(() => {
         });
         signal.throwIfAborted();
         loggerConfigured = true;
-        setLoggerOverride({ consoleLevel: "silent", file: sourceA, level: "silent" });
-        gateway = startGatewayServer(port, {
-          auth: { mode: "none" },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
+        useLog(sourceA);
+        const start = () =>
+          startGatewayServer(port, {
+            auth: { mode: "none" },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          });
+        gateway = start();
         const server = await gateway;
         signal.throwIfAborted();
 
@@ -135,7 +141,6 @@ suite.define(() => {
             locale: "en-US",
             serviceWorkers: "block",
             viewport,
-            ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
           },
           async ({ page }) => {
             const pageErrors: string[] = [];
@@ -151,50 +156,37 @@ suite.define(() => {
               .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
               .click();
             await waitForControlUiGatewayReady(page);
-            await expect.poll(() => visibleMessages(page)).toEqual(["source A only"]);
+            await expectMessages(page, ["source A only"]);
 
-            setLoggerOverride({ consoleLevel: "silent", file: sourceB, level: "silent" });
+            useLog(sourceB);
             await expect
               .poll(() => page.locator(".logs-card .settings-row").first().textContent())
               .toContain(sourceB);
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBPrefix, "source B tail"]);
-            await capture(page, "01-source-b-complete.png");
+            await expectMessages(page, [messageBPrefix, "source B tail"]);
 
             const filter = page.getByRole("textbox", { name: "Filter" });
             await filter.fill("source B tail");
-            await expect.poll(() => visibleMessages(page)).toEqual(["source B tail"]);
-            const downloadPromise = page.waitForEvent("download");
-            await page.getByRole("button", { name: "Export filtered" }).click();
-            const download = await downloadPromise;
-            expect(download.suggestedFilename()).toMatch(/^openclaw-logs-filtered-.*\.log$/);
-            const downloadStream = await download.createReadStream();
-            if (!downloadStream) {
-              throw new Error("filtered log export did not provide a readable download");
-            }
-            expect(await text(downloadStream)).toBe(`${lineBTail}\n`);
+            await expectMessages(page, ["source B tail"]);
+            const download = await downloadLog(page, "Export filtered");
+            expect(download.filename).toMatch(/^openclaw-logs-filtered-.*\.log$/);
+            expect(download.contents).toBe(`${lineBTail}\n`);
 
             await filter.fill("");
             await page.locator("label.log-chip.info input").uncheck();
-            await expect.poll(() => visibleMessages(page)).toEqual(["source B tail"]);
+            await expectMessages(page, ["source B tail"]);
             await page.locator("label.log-chip.info input").check();
             await appendFile(sourceB, `${lineBAppended}\n`, "utf8");
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBPrefix, "source B tail", "source B appended"]);
+            const appended = [messageBPrefix, "source B tail", "source B appended"];
+            await expectMessages(page, appended);
 
-            setLoggerOverride({ consoleLevel: "silent", file: readFailure, level: "silent" });
+            useLog(readFailure);
             const error = page.locator(".logs-refresh-status[role=alert]");
             await expect.poll(() => error.isVisible()).toBe(true);
             await expect.poll(() => error.textContent()).toContain("log read failed");
             await expect.poll(() => error.textContent()).toContain("Showing stale data");
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBPrefix, "source B tail", "source B appended"]);
-            await capture(page, "02-read-error-stale-lines-visible.png");
+            await expectMessages(page, appended);
 
-            setLoggerOverride({ consoleLevel: "silent", file: sourceB, level: "silent" });
+            useLog(sourceB);
             await expect.poll(() => error.count()).toBe(0);
             await expect.poll(() => visibleMessages(page)).toHaveLength(3);
 
@@ -209,32 +201,21 @@ suite.define(() => {
               .toContain("Reconnecting…");
             await expect.poll(() => visibleMessages(page)).toHaveLength(3);
             signal.throwIfAborted();
-            await writeFile(sourceB, `${lineBRestartPrefix}\n${lineBRestartTail}\n`, "utf8");
-            signal.throwIfAborted();
-            gateway = startGatewayServer(port, {
-              auth: { mode: "none" },
-              bind: "loopback",
-              controlUiEnabled: false,
-              sidecarStartup: "defer",
-            });
+            await writeLog(sourceB, lineBRestartPrefix, lineBRestartTail);
+            gateway = start();
             await gateway;
             signal.throwIfAborted();
             await waitForControlUiGatewayReady(page);
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([messageBRestartPrefix, "source B restart tail"]);
+            await expectMessages(page, [messageBRestartPrefix, "source B restart tail"]);
             // The preview build differs from this cross-origin source Gateway; reloading
             // the preview cannot change that, so the status must settle as connected.
             await expect.poll(() => page.locator(".gateway-status__label").count()).toBe(0);
             await appendFile(sourceB, `${lineBAfterReconnect}\n`, "utf8");
-            await expect
-              .poll(() => visibleMessages(page))
-              .toEqual([
-                messageBRestartPrefix,
-                "source B restart tail",
-                "source B after reconnect",
-              ]);
-            await capture(page, "03-reconnected-tail-complete.png");
+            await expectMessages(page, [
+              messageBRestartPrefix,
+              "source B restart tail",
+              "source B after reconnect",
+            ]);
 
             if (!latestSocket) {
               throw new Error("Logs did not open a Gateway connection");
@@ -256,31 +237,12 @@ suite.define(() => {
               },
             });
             await unlink(sourceB);
-            const missingResponse = await missingTail;
-            if (captureUiProof) {
-              await writeFile(
-                path.join(suite.artifactDir, "04-missing-tail.json"),
-                missingResponse.payload.toString(),
-              );
-            }
+            await missingTail;
             const replacement = logLine("source B replacement", "info", 8);
-            await writeFile(sourceB, `${replacement}\n`, "utf8");
+            await writeLog(sourceB, replacement);
             await page.getByText("source B replacement", { exact: true }).waitFor();
-            await capture(page, "04-recreated-tail.png");
             expect.soft(await visibleMessages(page)).toEqual(["source B replacement"]);
-            const replacementDownload = page.waitForEvent("download");
-            await page.getByRole("button", { name: "Export visible" }).click();
-            const replacementStream = await (await replacementDownload).createReadStream();
-            if (!replacementStream) {
-              throw new Error("replacement log export did not provide a readable download");
-            }
-            const replacementExport = await text(replacementStream);
-            if (captureUiProof) {
-              await writeFile(
-                path.join(suite.artifactDir, "04-recreated-export.log"),
-                replacementExport,
-              );
-            }
+            const { contents: replacementExport } = await downloadLog(page, "Export visible");
             expect.soft(replacementExport).toBe(`${replacement}\n`);
             expect(pageErrors).toEqual([]);
           },

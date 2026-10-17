@@ -245,6 +245,25 @@ it.each(
   },
 );
 
+it("restores the previous definition when registration fails after changing its action", async () => {
+  const f = await fixture();
+  const execute = native.exec.getMockImplementation()!;
+  let rejected = false;
+  native.exec.mockImplementation(async (command) => {
+    if (command[0] === "/Change" && command.includes("/TR")) {
+      f.registration.xml = f.registration.xml.replace("original", "replacement");
+    }
+    if (command[0] === "/Create" && !rejected) {
+      rejected = true;
+      throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    }
+    return execute(command);
+  });
+  await expect(installScheduledTask(f.args)).rejects.toThrow("spawn EINVAL");
+  await f.assertRestored();
+  expect(f.args.warn).not.toHaveBeenCalled();
+});
+
 it.each(["process", "definition"])(
   "preserves a replacement %s observed during stop",
   async (kind) => {

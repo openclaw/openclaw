@@ -99,9 +99,8 @@ async function observeScenario(scenario: Scenario, json: boolean) {
         await metadata.run(async () => {
           const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
           let changedArtifact = false;
-          const originalFingerprint = expectDefined(
-            fixture.deps.fingerprintPluginRuntimeArtifact,
-            "fixture artifact fingerprint",
+          fixture.fingerprintPluginRuntimeArtifact.mockImplementation(
+            (input) => `${input.pluginId}-test-runtime-v1${changedArtifact ? "-changed" : ""}`,
           );
           runtimeLoader.mockReset().mockImplementation(() => {
             enter("revalidate");
@@ -130,9 +129,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
             };
           });
           const deps: ActivateSetupInferenceDeps = {
-            ...fixture.deps,
-            fingerprintPluginRuntimeArtifact: (input) =>
-              `${originalFingerprint(input)}${changedArtifact ? "-changed" : ""}`,
             captureSystemAgentOwnerPluginArtifacts: (input) => {
               enter("capture");
               return captureSystemAgentOwnerPluginArtifacts(input);

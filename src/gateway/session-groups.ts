@@ -1,4 +1,3 @@
-// Gateway-owned custom session group catalog.
 // Membership stays on each session entry's category field; this module owns
 // which groups exist, their display order, and bulk member category updates.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

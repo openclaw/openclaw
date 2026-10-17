@@ -1,3 +1,5 @@
+import { symlinkSync } from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -190,7 +192,7 @@ it.each(["native", "worker"] as const)(
   },
 );
 
-it("keeps a captured row when another physical store resets the same key and session ID", async () => {
+it("accepts alias publications while another physical store keeps its own row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const globalConfig = {
       agents: { entries: { main: {} } },
@@ -207,6 +209,15 @@ it("keeps a captured row when another physical store resets the same key and ses
       replaceSessionEntrySync({ agentId: query.agentId, sessionKey: query.key, storePath }, entry);
       registerOpenClawAgentDatabase({ agentId: query.agentId, path: storePath });
     }
+    const aliasDirectory = state.path("publication-alias");
+    symlinkSync(
+      path.dirname(query.storePath),
+      aliasDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const alias = path.join(aliasDirectory, path.basename(query.storePath));
+    openOpenClawAgentDatabase({ agentId: query.agentId, path: alias });
+    registerOpenClawAgentDatabase({ agentId: query.agentId, path: alias });
     using projection = await createTestProjection({ cfg: globalConfig, modelCatalog: [] });
 
     await projection.ensureMaterialized();
@@ -226,6 +237,18 @@ it("keeps a captured row when another physical store resets the same key and ses
     expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
       "other-store-reset",
     );
+
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath: alias },
+      { ...entry, updatedAt: 3, label: "Alias publication" },
+    );
+    // Observe the committed postimage before any asynchronous row refill.
+    expect(projection.capture(query)?.entry?.label).toBe("Alias publication");
+    expect(projection.capture(query)?.publishedSource?.canonicalPath).toBe(query.storePath);
+    expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
+      "other-store-reset",
+    );
+    await projection.ensureMaterialized();
   });
 });
 

@@ -14,9 +14,17 @@ import {
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
-import type { UpdateRequester } from "./update-requester-authority.js";
 
-export async function prepareManagedServiceRuntimeFixture(params: {
+export async function prepareManagedServiceRuntimeFixture({
+  recoveryModulePath,
+  statePath,
+  configPath,
+  validationReleasePath,
+  activationGatePath,
+  activationReleasePath,
+  ledger,
+  options,
+}: {
   recoveryModulePath: string;
   statePath: string;
   configPath: string;
@@ -24,22 +32,12 @@ export async function prepareManagedServiceRuntimeFixture(params: {
   activationGatePath: string;
   activationReleasePath: string;
   ledger: boolean;
-  options?: {
-    replaceLedgerWriter?: boolean;
-    requester?: UpdateRequester;
-    cancelAtActivation?: "requester" | "inspection";
-  };
+  options?: Pick<
+    ManagedServiceBoundaryOptions,
+    "replaceLedgerWriter" | "requester" | "cancelAtActivation"
+  >;
 }) {
-  const {
-    recoveryModulePath,
-    statePath,
-    configPath,
-    validationReleasePath,
-    activationGatePath,
-    activationReleasePath,
-    ledger,
-    options,
-  } = params;
+  const appendRuntime = (source: string) => fs.appendFile(recoveryModulePath, source);
   // Source children run from the helper's durable cwd, outside this checkout.
   const sourceRuntimeImport = `
     const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
@@ -49,25 +47,19 @@ export async function prepareManagedServiceRuntimeFixture(params: {
     const ledger = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)});
   `;
   if (ledger) {
-    await fs.appendFile(
-      recoveryModulePath,
-      `
+    await appendRuntime(`
       ${ledgerRuntimeImport}
       export const { adoptUpdateRun, getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
       ${options?.replaceLedgerWriter ? 'export function finishUpdateRun() { throw new Error("the previous runtime must not finalize the candidate"); }' : "export const { finishUpdateRun } = ledger;"}
-    `,
-    );
+    `);
   }
   if (options?.requester) {
     await fs.writeFile(statePath, "{}");
     if (options.requester.authorizationSource?.startsWith("profile:")) {
-      await fs.appendFile(
-        recoveryModulePath,
-        `
+      await appendRuntime(`
         const requesterRuntime = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.requester).href)});
         export const { prepareManagedUpdateRequesterIdentity } = requesterRuntime;
-      `,
-      );
+      `);
       return { sourceRuntimeImport, ledgerRuntimeImport };
     }
     await fs.writeFile(
@@ -77,9 +69,7 @@ export async function prepareManagedServiceRuntimeFixture(params: {
         channels: { slack: { enabled: true } },
       }),
     );
-    await fs.appendFile(
-      recoveryModulePath,
-      `
+    await appendRuntime(`
       export async function isManagedUpdateRequesterOwner(requester) {
         const state = ${managedServiceStateUpdateScript(statePath, "state.ownerChecked = true;")};
         ${
@@ -95,8 +85,7 @@ export async function prepareManagedServiceRuntimeFixture(params: {
         return runtime.isManagedUpdateRequesterOwner(requester);`
         }
       }
-    `,
-    );
+    `);
   }
   return { sourceRuntimeImport, ledgerRuntimeImport };
 }
@@ -119,26 +108,33 @@ export async function prepareManagedServiceSpawn(
   },
 ) {
   let env = childEnv;
-  if (options?.finalizationWorkMs !== undefined) {
-    const preloadPath = path.join(root, "finalization-clock-preload.cjs");
-    const statePath = path.join(root, "manager-state.json");
-    const modulePath = path.join(root, "recovery-health.mjs");
-    // Model cold finalizer startup only in the helper; its native child and lease stay real.
+  const statePath = path.join(root, "manager-state.json");
+  const installPreload = async (name: string, source: string) => {
+    const preloadPath = path.join(root, `${name}-clock-preload.cjs`);
     await fs.writeFile(
       preloadPath,
       `if (process.argv[1] === ${JSON.stringify(scriptPath)}) {
       const fs = require("node:fs");
+      const setTimeout = global.setTimeout;
+${source}
+    }`,
+    );
+    env = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
+  };
+  if (options?.finalizationWorkMs !== undefined) {
+    const terminalPath = path.join(root, "terminal-result.json");
+    // Model cold finalizer startup only in the helper; its native child and lease stay real.
+    await installPreload(
+      "finalization",
+      `
       const children = require("node:child_process");
       const spawn = children.spawn;
-      const setTimeout = global.setTimeout;
       let finalizer;
       children.spawn = (command, args, options) => {
         const child = spawn(command, args, options);
         try {
-          let input = args.at(-1);
-          if (input.startsWith("[")) input = JSON.parse(input).at(-1);
-          const payload = JSON.parse(fs.readFileSync(input, "utf8"));
-          if (Array.isArray(payload) && payload[0] === ${JSON.stringify(modulePath)}) {
+          const input = args.at(-1);
+          if (input === ${JSON.stringify(terminalPath)} || (input.startsWith("[") && JSON.parse(input).at(-1) === ${JSON.stringify(terminalPath)})) {
             finalizer = child;
             child.once("close", () => { if (finalizer === child) finalizer = undefined; });
           }
@@ -155,50 +151,44 @@ export async function prepareManagedServiceSpawn(
         }
         return setTimeout(callback, delay, ...args);
       };
-    }`,
+    `,
     );
-    env = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
   }
   const deadlinePath = path.join(root, "notice-deadline.json");
   const releasePath = path.join(root, "notice-deadline-release");
   if (options?.beforeParkNotice === "stalled") {
-    const preloadPath = path.join(root, "notice-clock-preload.cjs");
     // Keep other processes and deadlines native; release only after the parent observes the notice.
-    const source = `if (process.argv[1] === ${JSON.stringify(scriptPath)}) {
-      const fs = require("node:fs");
-      const setTimeout = global.setTimeout;
+    await installPreload(
+      "notice",
+      `
       const clearTimeout = global.clearTimeout;
-      const polls = new Map();
-      let captured = false;
+      let captured, poll;
       global.clearTimeout = (timer) => {
-        clearInterval(polls.get(timer));
-        polls.delete(timer);
+        if (timer === captured) clearInterval(poll);
         return clearTimeout(timer);
       };
       global.setTimeout = (callback, delay, ...args) => {
         const timer = setTimeout(callback, delay, ...args);
         if (delay !== 10_000) return timer;
         if (captured) throw new Error("duplicate pre-park notice deadline");
-        captured = true;
+        captured = timer;
         fs.writeFileSync(${JSON.stringify(deadlinePath)}, JSON.stringify({ requestedMs: delay }));
-        const poll = setInterval(() => {
+        poll = setInterval(() => {
           if (!fs.existsSync(${JSON.stringify(releasePath)})) return;
           global.clearTimeout(timer);
           callback.apply(timer, args);
         }, 5);
-        polls.set(timer, poll);
         return timer;
       };
-    }`;
-    await fs.writeFile(preloadPath, source);
-    env = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
+    `,
+    );
   }
   if (options?.recoveryHang) {
     env = await prepareManagedServiceRecoveryClockPreload(
       {
         root,
         scriptPath,
-        statePath: path.join(root, "manager-state.json"),
+        statePath,
         timeoutMs: commandClocks.recoveryTimeoutMs,
       },
       commandClocks.recoveryCommandArgv,
@@ -207,32 +197,22 @@ export async function prepareManagedServiceSpawn(
   }
   if (options?.triageHang) {
     env = await prepareManagedServiceTriageClockPreload(
-      { root, scriptPath, statePath: path.join(root, "manager-state.json") },
+      { root, scriptPath, statePath },
       commandClocks.triageCommandArgv,
       commandClocks.triageInputPath,
       env,
     );
   }
+  const readDeadline = async (name: string) =>
+    JSON.parse(await fs.readFile(path.join(root, `${name}-deadline.json`), "utf8"));
   return {
     env,
     async readCommandDeadlines(): Promise<
       Pick<ManagedServiceManagerBoundaryResult, "recoveryDeadline" | "triageDeadline">
     > {
       return {
-        ...(options?.recoveryHang
-          ? {
-              recoveryDeadline: JSON.parse(
-                await fs.readFile(path.join(root, "recovery-deadline.json"), "utf8"),
-              ),
-            }
-          : {}),
-        ...(options?.triageHang
-          ? {
-              triageDeadline: JSON.parse(
-                await fs.readFile(path.join(root, "triage-deadline.json"), "utf8"),
-              ),
-            }
-          : {}),
+        ...(options?.recoveryHang ? { recoveryDeadline: await readDeadline("recovery") } : {}),
+        ...(options?.triageHang ? { triageDeadline: await readDeadline("triage") } : {}),
       };
     },
     releaseNoticeDeadline: async (parentSignal: NodeJS.Signals | null) => {

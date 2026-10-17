@@ -2299,7 +2299,7 @@ src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-runtime.ts	1
-src/plugins/plugin-metadata-snapshot.runtime.ts	2
+src/plugins/plugin-metadata-snapshot.runtime.ts	1
 src/plugins/plugin-package-update.ts	1
 src/plugins/plugin-peer-link.ts	2
 src/plugins/plugin-sdk-native-resolver.ts	1
@@ -2426,7 +2426,7 @@ src/state/openclaw-state-db-legacy-backfills.ts	4
 src/state/openclaw-state-db-schema-helpers.ts	1
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
-src/system-agent/agent-turn.ts	2
+src/system-agent/agent-turn.ts	1
 src/system-agent/greeting.ts	1
 src/system-agent/hosted-setup.runtime.ts	1
 src/system-agent/operations-execute.ts	1
