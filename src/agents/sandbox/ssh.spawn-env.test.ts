@@ -23,6 +23,21 @@ const session = {
   host: "openclaw-sandbox",
 };
 
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+const commandResult = (
+  overrides: Partial<{ failed: boolean; exitCode: number; stderr: Buffer }> = {},
+) => ({
+  failed: false,
+  isCanceled: false,
+  exitCode: 0,
+  stdout: Buffer.alloc(0),
+  stderr: Buffer.alloc(0),
+  ...overrides,
+});
+
 type MockChildProcess = EventEmitter & {
   stdin: PassThrough;
   stdout: PassThrough;
@@ -107,13 +122,7 @@ describe("ssh subprocess env sanitization", () => {
   beforeEach(() => {
     envSnapshot = captureFullEnv();
     vi.clearAllMocks();
-    spawnCommandMock.mockResolvedValue({
-      failed: false,
-      isCanceled: false,
-      exitCode: 0,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-    });
+    spawnCommandMock.mockResolvedValue(commandResult());
   });
 
   afterEach(() => envSnapshot.restore());
@@ -188,13 +197,12 @@ describe("ssh subprocess env sanitization", () => {
 
   it("removes remote SSH staging after an upload failure", async () => {
     const sentinel = "synthetic-failed-upload-value";
-    spawnCommandMock.mockResolvedValueOnce({
-      failed: false,
-      isCanceled: false,
-      exitCode: 1,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.from("synthetic staging failure"),
-    });
+    spawnCommandMock.mockResolvedValueOnce(
+      commandResult({
+        exitCode: 1,
+        stderr: Buffer.from("synthetic staging failure"),
+      }),
+    );
 
     await expect(
       prepareSshSandboxExec({
@@ -216,13 +224,7 @@ describe("ssh subprocess env sanitization", () => {
 
   it("rejects transport failures even when ssh exits zero", async () => {
     spawnCommandMock.mockResolvedValueOnce(
-      Object.assign(new Error("ssh stream failed"), {
-        failed: true,
-        isCanceled: false,
-        exitCode: 0,
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-      }),
+      Object.assign(new Error("ssh stream failed"), commandResult({ failed: true })),
     );
 
     await expect(
@@ -362,15 +364,11 @@ describe("SSH sandbox stream errors", () => {
           result,
           "native spawn error did not arrive",
         );
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(completed).toBe(false);
         expect(peer.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
         failed.emit("close", -24, null);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(completed).toBe(false);
         peer.emit("close", null, "SIGKILL");
         expect(await result).toBe(nativeError);
@@ -424,17 +422,13 @@ describe("SSH sandbox stream errors", () => {
 
       emitError(expected);
       emitError("later upload failure");
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(completed).toBe(false);
       expect(tar.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
       expect(ssh.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
 
       tar.emit("close", null, "SIGKILL");
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(completed).toBe(false);
       ssh.emit("close", null, "SIGKILL");
       await rejection;

@@ -65,19 +65,9 @@ function advancePruneTime() {
 }
 
 function withImmediatePrune(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        sandbox: {
-          ...cfg.agents?.defaults?.sandbox,
-          prune: { idleHours: 1, maxAgeDays: 0 },
-        },
-      },
-    },
-  };
+  const result = structuredClone(cfg);
+  result.agents!.defaults!.sandbox!.prune = { idleHours: 1, maxAgeDays: 0 };
+  return result;
 }
 
 beforeEach(() => {
@@ -85,20 +75,15 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   workspaceDir = path.join(stateDir, "workspace");
   nextId = 0;
-  config = {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          backend: "reserved-test",
-          scope: "session",
-          workspaceAccess: "rw",
-          workspaceRoot: path.join(stateDir, "sandboxes"),
-          prune: { idleHours: 0, maxAgeDays: 0 },
-        },
-      },
-    },
-  };
+  const sandbox = {
+    mode: "all",
+    backend: "reserved-test",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: path.join(stateDir, "sandboxes"),
+    prune: { idleHours: 0, maxAgeDays: 0 },
+  } satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"];
+  config = { agents: { defaults: { sandbox } } };
   setRuntimeConfigSnapshot(config);
 });
 
@@ -212,13 +197,7 @@ describe("durable sandbox runtime generations", () => {
   });
 
   it("replays a shared reservation from its original provider workspace", async () => {
-    config.agents = {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        sandbox: { ...config.agents?.defaults?.sandbox, scope: "shared" },
-      },
-    };
+    config.agents!.defaults!.sandbox!.scope = "shared";
     const originalWorkspace = workspaceDir;
     const factory = vi.fn(async (params: CreateSandboxBackendParams) => {
       if (params.workspaceDir !== originalWorkspace) {
@@ -309,8 +288,7 @@ describe("durable sandbox runtime generations", () => {
     const manager: SandboxBackendManager = {
       describeRuntime: async () => ({ running: false, configLabelMatch: true }),
       removeRuntime: async ({ entry }) => {
-        expect(entry.runtimeState).toBe("removing-pending");
-        expect(entry.workspaceDir).toBe(workspaceDir);
+        expect(entry).toMatchObject({ runtimeState: "removing-pending", workspaceDir });
         if (!configured) {
           throw new Error("provider config invalid");
         }

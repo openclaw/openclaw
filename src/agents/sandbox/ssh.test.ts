@@ -2,7 +2,6 @@
 // validation, shell quoting, and upload symlink safety.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +15,7 @@ import {
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   type SshSandboxSession,
+  type SshSandboxSettings,
   uploadDirectoryToSshTarget,
 } from "./ssh.js";
 
@@ -24,33 +24,33 @@ const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
-  await Promise.all(
-    sessions.splice(0).map(async (session) => {
-      await disposeSshSandboxSession(session);
-    }),
-  );
-  await Promise.all(
-    tempDirs.splice(0).map(async (dir) => {
-      await fs.rm(dir, { recursive: true, force: true });
-    }),
-  );
+  await Promise.all(sessions.splice(0).map(disposeSshSandboxSession));
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
+
+async function createSession(settings: Partial<SshSandboxSettings>) {
+  const session = await createSshSandboxSessionFromSettings({
+    command: "ssh",
+    target: "peter@example.com:2222",
+    strictHostKeyChecking: true,
+    updateHostKeys: false,
+    ...settings,
+  });
+  sessions.push(session);
+  return session;
+}
+
+const validateWorkdir = (workdir: string, root: string) =>
+  execFileAsync("/bin/sh", ["-c", buildRemoteWorkdirValidationCommand({ workdir, root })]);
 
 describe("sandbox ssh helpers", () => {
   it("materializes inline SSH auth data into a temp config", async () => {
-    // Inline key/cert/known-host material is written to private temp files and
-    // referenced from the generated ssh config.
-    const session = await createSshSandboxSessionFromSettings({
-      command: "ssh",
-      target: "peter@example.com:2222",
-      strictHostKeyChecking: true,
-      updateHostKeys: false,
+    const session = await createSession({
       identityData:
         "-----BEGIN OPENSSH PRIVATE KEY-----\r\nline-1\\nline-2\\r\\n-----END OPENSSH PRIVATE KEY-----",
       certificateData: "SSH CERT",
       knownHostsData: "example.com ssh-ed25519 AAAATEST",
     });
-    sessions.push(session);
 
     const config = await fs.readFile(session.configPath, "utf8");
     expect(config).toContain("Host openclaw-sandbox");
@@ -95,11 +95,7 @@ describe("sandbox ssh helpers", () => {
 
   it("rejects paths that inject ssh config directives", async () => {
     await expect(
-      createSshSandboxSessionFromSettings({
-        command: "ssh",
-        target: "peter@example.com:2222",
-        strictHostKeyChecking: true,
-        updateHostKeys: false,
+      createSession({
         knownHostsFile: "/tmp/key\n  UserKnownHostsFile /tmp/injected",
       }),
     ).rejects.toThrow("SSH sandbox knownHostsFile must not contain line breaks or double quotes.");
@@ -108,15 +104,10 @@ describe("sandbox ssh helpers", () => {
   // Default macOS crabbox lease keys live under "Application Support"; unquoted
   // ssh_config arguments tokenize on whitespace and read as extra arguments.
   it("quotes path directives containing whitespace", async () => {
-    const session = await createSshSandboxSessionFromSettings({
-      command: "ssh",
-      target: "peter@example.com:2222",
-      strictHostKeyChecking: true,
-      updateHostKeys: false,
+    const session = await createSession({
       identityFile: "/tmp/Application Support/lease/id_ed25519",
       knownHostsFile: "/tmp/Application Support/lease/known_hosts",
     });
-    sessions.push(session);
 
     const config = await fs.readFile(session.configPath, "utf8");
     expect(config).toContain('  IdentityFile "/tmp/Application Support/lease/id_ed25519"');
@@ -238,23 +229,11 @@ describe("sandbox ssh helpers", () => {
       await fs.mkdir(project, { recursive: true });
       const canonicalProject = await fs.realpath(project);
 
-      const { stdout } = await execFileAsync("/bin/sh", [
-        "-c",
-        buildRemoteWorkdirValidationCommand({
-          workdir: canonicalProject,
-          root: "/",
-        }),
-      ]);
+      const { stdout } = await validateWorkdir(canonicalProject, "/");
 
       expect(stdout.trim()).toBe(canonicalProject);
       await expect(
-        execFileAsync("/bin/sh", [
-          "-c",
-          buildRemoteWorkdirValidationCommand({
-            workdir: path.join(root, "workspace", "missing"),
-            root: path.join(root, "workspace"),
-          }),
-        ]),
+        validateWorkdir(path.join(root, "workspace", "missing"), path.join(root, "workspace")),
       ).rejects.toThrow(/remote directory not found/);
       await expect(fs.stat(path.join(root, "workspace", "missing"))).rejects.toThrow();
     },
@@ -268,15 +247,9 @@ describe("sandbox ssh helpers", () => {
       await fs.mkdir(workspace, { recursive: true });
       await fs.symlink(root, path.join(workspace, "escape"));
 
-      await expect(
-        execFileAsync("/bin/sh", [
-          "-c",
-          buildRemoteWorkdirValidationCommand({
-            workdir: path.join(workspace, "escape"),
-            root: workspace,
-          }),
-        ]),
-      ).rejects.toThrow(/unsafe remote directory symlink/);
+      await expect(validateWorkdir(path.join(workspace, "escape"), workspace)).rejects.toThrow(
+        /unsafe remote directory symlink/,
+      );
     },
   );
 
@@ -284,8 +257,7 @@ describe("sandbox ssh helpers", () => {
     "rejects symlinked directories inside the trusted remote root",
     async () => {
       expect(ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT.split("\n")[0]).toBe("set -e");
-      const realParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-real-"));
-      tempDirs.push(realParent);
+      const realParent = makeTempDir(tempDirs, "openclaw-ssh-real-");
       const root = path.join(realParent, "runtime");
       await fs.mkdir(path.join(root, "workspace"), { recursive: true });
       await fs.symlink(realParent, path.join(root, "workspace", ".openclaw"));
@@ -305,8 +277,7 @@ describe("sandbox ssh helpers", () => {
   it.runIf(process.platform !== "win32")(
     "rejects upload trees with symlinks that escape the local workspace",
     async () => {
-      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-"));
-      tempDirs.push(localDir);
+      const localDir = makeTempDir(tempDirs, "openclaw-ssh-upload-");
       await fs.symlink("/etc", path.join(localDir, "escape"));
 
       await expect(

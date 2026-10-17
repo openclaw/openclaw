@@ -78,10 +78,8 @@ function browserEntry(
   overrides: Partial<SandboxBrowserRegistryEntry> = {},
 ): SandboxBrowserRegistryEntry {
   return {
+    ...containerEntry(),
     containerName: "browser-a",
-    sessionKey: "agent:main",
-    createdAtMs: 1,
-    lastUsedAtMs: 1,
     image: "openclaw-browser:test",
     cdpPort: 9222,
     ...overrides,
@@ -100,13 +98,7 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-    throw new Error(`expected ${targetPath} to be missing`);
-  } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-    expect(code).toBe("ENOENT");
-  }
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("registry race safety", () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { createRemoteShellSandboxBackend } from "./remote-shell-backend.js";
@@ -15,13 +16,27 @@ type RemoteShellUploadParams = Parameters<RemoteShellSandboxSession["uploadDirec
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function sandboxConfig(workspaceRoot: string, scope?: "session") {
+  const sandbox = {
+    mode: "all",
+    backend: "ssh",
+    scope,
+    workspaceAccess: "rw",
+    ssh: { target: "unused", workspaceRoot },
+  } satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"];
+  return resolveSandboxConfigForAgent({ agents: { defaults: { sandbox } } }, "test");
+}
+
+const emptyResult = () => ({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 });
+const expectText = async (file: string, text: string) =>
+  expect(await fs.readFile(file, "utf8")).toBe(text);
+
 async function createCommandCancellationFixture() {
   const workspaceDir = tempDirs.make("remote-shell-cancellation-");
   const session = {
     runCommand: vi.fn<RemoteShellSandboxSession["runCommand"]>(async () => ({
+      ...emptyResult(),
       stdout: Buffer.from("1\n"),
-      stderr: Buffer.alloc(0),
-      code: 0,
     })),
     uploadDirectory: vi.fn<RemoteShellSandboxSession["uploadDirectory"]>(async () => {}),
     prepareExec: async () => {
@@ -32,18 +47,7 @@ async function createCommandCancellationFixture() {
   const createSession = vi.fn(async () => session);
   const backend = await createRemoteShellSandboxBackend(
     {
-      cfg: resolveSandboxConfigForAgent({
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend: "ssh",
-              workspaceAccess: "rw",
-              ssh: { target: "unused", workspaceRoot: path.join(workspaceDir, "remote") },
-            },
-          },
-        },
-      }),
+      cfg: sandboxConfig(path.join(workspaceDir, "remote")),
       scopeKey: "command-cancellation",
       sessionKey: "test",
       workspaceDir,
@@ -87,7 +91,7 @@ describe("remote shell command cancellation", () => {
       if (phase === "clear") {
         session.runCommand.mockImplementationOnce(async ({ signal }) => {
           await hold(signal);
-          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+          return emptyResult();
         });
       } else {
         session.uploadDirectory.mockImplementationOnce(({ signal }) => hold(signal));
@@ -171,22 +175,7 @@ async function createFixture() {
   const partialDir = path.join(root, "partial");
   await fs.mkdir(partialDir);
   await fs.writeFile(path.join(partialDir, "partial.txt"), "incomplete transfer");
-  const cfg = resolveSandboxConfigForAgent(
-    {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "ssh",
-            scope: "session",
-            workspaceAccess: "rw",
-            ssh: { target: "unused", workspaceRoot: remoteRoot },
-          },
-        },
-      },
-    },
-    "test",
-  );
+  const cfg = sandboxConfig(remoteRoot, "session");
   const createBackend = async (
     label: string,
     upload?: (
@@ -254,7 +243,7 @@ async function createFixture() {
   };
   const assertProtectedUnchanged = async () => {
     expect((await fs.stat(protectedDir)).mode & 0o777).toBe(0o555);
-    expect(await fs.readFile(path.join(protectedDir, "untouched"), "utf8")).toBe("outside stage");
+    await expectText(path.join(protectedDir, "untouched"), "outside stage");
   };
   return {
     remoteRoot,
@@ -299,12 +288,8 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
             await fixture.assertProtectedUnchanged();
           }
           await backend.runShellCommand({ script: "true" });
-          expect(await fs.readFile(path.join(backend.workdir, "full.txt"), "utf8")).toBe(
-            "source-primary",
-          );
-          expect(await fs.readFile(path.join(root, "agent", "full.txt"), "utf8")).toBe(
-            "source-agent",
-          );
+          await expectText(path.join(backend.workdir, "full.txt"), "source-primary");
+          await expectText(path.join(root, "agent", "full.txt"), "source-agent");
           expect(await fs.readdir(backend.workdir)).toEqual(["full.txt"]);
           expect(await fs.readdir(fixture.remoteRoot)).toEqual([path.basename(root)]);
         } finally {
@@ -359,12 +344,8 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
           if (winner === "emptied") {
             expect(await fs.readdir(runtimeRoot)).toEqual([]);
           } else {
-            expect(await fs.readFile(path.join(first.workdir, "full.txt"), "utf8")).toBe(
-              "remote user edit",
-            );
-            expect(await fs.readFile(path.join(runtimeRoot, "agent", "full.txt"), "utf8")).toBe(
-              "first-agent",
-            );
+            await expectText(path.join(first.workdir, "full.txt"), "remote user edit");
+            await expectText(path.join(runtimeRoot, "agent", "full.txt"), "first-agent");
           }
           if (readOnlyLoser) {
             await fixture.assertProtectedUnchanged();
@@ -387,9 +368,7 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
       await fs.mkdir(backend.workdir, { recursive: true });
       await fs.writeFile(path.join(backend.workdir, "full.txt"), "existing remote edit");
       await backend.runShellCommand({ script: "true" });
-      expect(await fs.readFile(path.join(backend.workdir, "full.txt"), "utf8")).toBe(
-        "existing remote edit",
-      );
+      await expectText(path.join(backend.workdir, "full.txt"), "existing remote edit");
       await expect(
         fs.stat(path.join(path.dirname(backend.workdir), "agent")),
       ).rejects.toMatchObject({ code: "ENOENT" });
