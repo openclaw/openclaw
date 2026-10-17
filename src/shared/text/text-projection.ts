@@ -5,7 +5,12 @@ import {
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeOwnership, findCodeRegions } from "./code-regions.js";
+import {
+  canReuseMarkdownOwnership,
+  findCodeOwnership,
+  findCodeRegions,
+  stripBlockquotePrefixes,
+} from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -56,6 +61,7 @@ export function createConditionalTextProjector(
 function findTextCheckpoint(
   text: string,
   referenceLength: number,
+  resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
 ): {
   offset: number;
   context: string;
@@ -75,7 +81,11 @@ function findTextCheckpoint(
       state.structuralUnknown ||
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
-      const ownership = findCodeOwnership(text);
+      const ownership = resolveOwnership(text);
+      const openTableStart = findOpenGfmTableStart(text);
+      if (openTableStart !== undefined) {
+        return { offset: openTableStart, context: "", definitions: ownership.definitions };
+      }
       // Normalization can expand a label beyond CommonMark's 999-character source limit.
       // Such definitions stay in source instead of being serialized as carried context.
       const retain = ownership.definitions.reduce(
@@ -111,6 +121,58 @@ function findTextCheckpoint(
   return { offset: closedFence ? cursor : lastLineStart, context: "" };
 }
 
+function findOpenGfmTableStart(text: string) {
+  if (!text || text.endsWith("\n") || text.endsWith("\r")) {
+    return undefined;
+  }
+  const delimiterBreak = Math.max(text.lastIndexOf("\r"), text.lastIndexOf("\n"));
+  if (delimiterBreak < 0) {
+    return undefined;
+  }
+  const delimiterRow = stripBlockquotePrefixes(text.slice(delimiterBreak + 1));
+  if (!/^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/u.test(delimiterRow)) {
+    return undefined;
+  }
+
+  const headerEnd =
+    text[delimiterBreak] === "\n" && text[delimiterBreak - 1] === "\r"
+      ? delimiterBreak - 1
+      : delimiterBreak;
+  const headerBreak = Math.max(
+    text.lastIndexOf("\r", headerEnd - 1),
+    text.lastIndexOf("\n", headerEnd - 1),
+  );
+  const headerStart = headerBreak + 1;
+  if (!stripBlockquotePrefixes(text.slice(headerStart, headerEnd)).trim()) {
+    return undefined;
+  }
+
+  // Keep the whole containing paragraph: a table boundary can temporarily make
+  // an inline span across the header appear closed until the delimiter row settles.
+  let paragraphStart = headerStart;
+  let lineStart = headerStart;
+  while (lineStart > 0) {
+    let previousLineEnd = lineStart - 1;
+    if (text[previousLineEnd] === "\n" && text[previousLineEnd - 1] === "\r") {
+      previousLineEnd -= 1;
+    }
+    if (text[previousLineEnd] !== "\r" && text[previousLineEnd] !== "\n") {
+      break;
+    }
+    const previousBreak = Math.max(
+      text.lastIndexOf("\r", previousLineEnd - 1),
+      text.lastIndexOf("\n", previousLineEnd - 1),
+    );
+    const previousLineStart = previousBreak + 1;
+    if (/^[ \t]*$/u.test(text.slice(previousLineStart, previousLineEnd))) {
+      break;
+    }
+    paragraphStart = previousLineStart;
+    lineStart = previousLineStart;
+  }
+  return paragraphStart;
+}
+
 function createCheckpointTransform(
   project: CheckpointTransform,
 ): (source: string, delta: string | null, previous: string) => TextProjection {
@@ -122,6 +184,17 @@ function createCheckpointTransform(
   let references = "";
   const definitions = new Set<string>();
   let previousVisible: string | undefined;
+  let ownershipSource = "";
+  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+  const resolveOwnership = (text: string) => {
+    if (ownership && canReuseMarkdownOwnership(ownershipSource, text, ownership)) {
+      ownershipSource = text;
+      return ownership;
+    }
+    ownership = findCodeOwnership(text);
+    ownershipSource = text;
+    return ownership;
+  };
   return (source, inputDelta, previousOutput) => {
     // A validated append delta already names the appended suffix; slicing the cumulative
     // source would flatten the growing reply on every delta once checkpoints are active.
@@ -132,7 +205,7 @@ function createCheckpointTransform(
     sourceLength = source.length;
     const contextLength = references.length + context.length;
     const text = references + context + pending;
-    const boundary = findTextCheckpoint(text, references.length);
+    const boundary = findTextCheckpoint(text, references.length, resolveOwnership);
     const result = project(text, boundary.offset);
     const window = result.text.slice(contextLength);
     const visible = settled + window;
