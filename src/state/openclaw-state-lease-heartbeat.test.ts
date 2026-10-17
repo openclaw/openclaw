@@ -368,9 +368,7 @@ it("keeps deferred activation pending until renewal commits after contention", a
       throw new Error("Fixture did not acquire its lease");
     }
     const shared = new BigInt64Array(
-      new SharedArrayBuffer(
-        (leaseHeartbeatState.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT,
-      ),
+      new SharedArrayBuffer((leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
     );
     Atomics.store(shared, leaseHeartbeatState.expiresAt, BigInt(acquired.expiresAt));
     const moduleUrl = pathToFileURL(

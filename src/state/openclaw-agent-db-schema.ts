@@ -64,7 +64,10 @@ import {
 } from "./openclaw-agent-db-contract.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
 import { migrateOpenClawAgentSchema } from "./openclaw-agent-db-legacy-schema.js";
-import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
+import {
+  agentDatabaseMaintenanceAuthority,
+  assertAgentDatabaseMaintenanceAuthority,
+} from "./openclaw-agent-db-maintenance-authority.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
@@ -647,9 +650,19 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
     }
     return runOpenClawStateWriteTransaction(
       (database) => {
+        const leaseFence = agentDatabaseMaintenanceAuthority
+          .getStore()
+          ?.authority.holdWriteFence?.(database.db);
         assertAgentDeletionRecoveryAllowsMutation(database, pathname);
         assertAgentDeletionPathFence(database, deletionFence);
-        return run();
+        const result = run();
+        const warning = leaseFence?.renew();
+        if (warning) {
+          const message = `Agent ${agentId}: ${warning}`;
+          agentDbLog.warn(message);
+          options.onMigrationWarning?.(message);
+        }
+        return result;
       },
       { env: databaseOptions.env, initializationAgentPaths: [pathname] },
     );
