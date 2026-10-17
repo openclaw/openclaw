@@ -83,8 +83,16 @@ it("coalesces row updates until a list reads the latest order and metadata", () 
   const second = row("agent:main:second", 2);
   selection.add(first);
   selection.add(second);
+  for (let index = 0; index < 128; index++) {
+    selection.add(row(`agent:main:idle-${index}`, 0));
+  }
   const read = selection.read("updatedAt");
-  expect(read.entries(false).map(([key]) => key)).toEqual([second.key, first.key]);
+  expect(
+    read
+      .entries(false)
+      .slice(0, 2)
+      .map(([key]) => key),
+  ).toEqual([second.key, first.key]);
   const compare = vi.spyOn(sessionOrder, "compareSessionEntryPairs");
   try {
     for (let revision = 3; revision <= 12; revision++) {
@@ -95,22 +103,26 @@ it("coalesces row updates until a list reads the latest order and metadata", () 
     expect(read.partitions?.flatMap((partition) => [...partition.entries.values()])).toContainEqual(
       [first.key, expect.objectContaining({ label: "revision 12" })],
     );
-    expect(read.entries(false).map(([key]) => key)).toEqual([first.key, second.key]);
+    expect(
+      read
+        .entries(false)
+        .slice(0, 2)
+        .map(([key]) => key),
+    ).toEqual([first.key, second.key]);
     expect(read.get(first.key)?.entry.label).toBe("revision 12");
-    expect(compare).toHaveBeenCalledTimes(1);
+    const comparisons = compare.mock.calls.length;
+    expect(comparisons).toBeGreaterThan(0);
+    expect(comparisons).toBeLessThan(20);
     const stable = read.entries(false);
     expect(selection.read("updatedAt").entries(false)).toBe(stable);
-    expect(compare).toHaveBeenCalledTimes(1);
+    expect(compare).toHaveBeenCalledTimes(comparisons);
 
     selection.change({ kind: "row", id: identity(first), ...first, row: undefined });
     const recreated = row(first.key, 13);
     selection.change({ kind: "row", id: identity(recreated), ...recreated, row: recreated });
-    expect(
-      selection
-        .read()
-        .entries(false)
-        .map(([key]) => key),
-    ).toEqual([second.key, first.key]);
+    const residentOrder = selection.read().entries(false);
+    expect(residentOrder[0]?.[0]).toBe(second.key);
+    expect(residentOrder.at(-1)?.[0]).toBe(first.key);
   } finally {
     compare.mockRestore();
     projection.dispose();

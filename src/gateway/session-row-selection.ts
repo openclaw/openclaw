@@ -34,7 +34,14 @@ export function createSessionRowSelection(
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
   const pending = new Map<string, Exclude<SelectionChange, { kind: "reset" }>>();
-  const orders = new Map<string, SessionEntryPair[]>();
+  const orders = new Map<
+    string,
+    {
+      sortBy: NonNullable<SessionsListParams["sortBy"]>;
+      archived: SessionsListParams["archived"];
+      entries: SessionEntryPair[];
+    }
+  >();
   // Fixed partitions bound refiltering after exact publications without retaining old rosters.
   let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
   const partitionFor = (key: string) => {
@@ -239,7 +246,27 @@ export function createSessionRowSelection(
         changedInvolvements.delete(key);
       }
     }
-    orders.clear();
+    for (const { sortBy, archived, entries } of orders.values()) {
+      const locate = (pair: SessionEntryPair) => {
+        let lo = 0,
+          hi = entries.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (compareSessionEntryPairs(entries[mid]!, pair, sortBy) < 0) {
+            lo = mid + 1;
+          } else {
+            hi = mid;
+          }
+        }
+        return lo;
+      };
+      if (oldWinner && matchesSessionArchiveFilter(oldWinner.row.entry, archived)) {
+        entries.splice(locate(oldWinner.pair), 1);
+      }
+      if (winner && matchesSessionArchiveFilter(winner.row.entry, archived)) {
+        entries.splice(locate(winner.pair), 0, winner.pair);
+      }
+    }
   };
   const flush = () => {
     if (pending.size === 0) {
@@ -317,7 +344,7 @@ export function createSessionRowSelection(
         entries(this: void, archived: SessionsListParams["archived"]) {
           flush();
           const orderKey = `${sortBy}:${archived ?? false}`;
-          let entries = !candidates && sortBy && orders.get(orderKey);
+          let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
           if (!entries) {
             const targets = (
               candidates
@@ -333,7 +360,7 @@ export function createSessionRowSelection(
             if (sortBy) {
               entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
               if (!candidates) {
-                orders.set(orderKey, entries);
+                orders.set(orderKey, { sortBy, archived, entries });
               }
             }
           }
