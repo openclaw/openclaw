@@ -152,7 +152,7 @@ describe("Doctor per-store output", () => {
     const inspection = await inspectDoctorDatabaseEngines({
       config: {
         ...diagnosticConfig(),
-        agents: { list: [{ id: "main" }, { id: "missing", agentDir }] },
+        agents: { entries: { main: {}, missing: { agentDir } } },
       },
       stateDir: root,
       env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
