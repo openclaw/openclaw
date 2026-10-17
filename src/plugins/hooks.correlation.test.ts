@@ -1,17 +1,28 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createHookRunner } from "./hooks.js";
-import {
-  createHookRunnerWithRegistry,
-  createMockPluginRegistry,
-  TEST_PLUGIN_AGENT_CTX,
-} from "./hooks.test-fixtures.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
+
+function timedHook(
+  hookName: "before_compaction" | "after_compaction",
+  pluginId: string,
+  handler: () => Promise<void>,
+  timeoutMs?: number,
+) {
+  const logger = { error: vi.fn(), warn: vi.fn() };
+  const runner = createHookRunner(
+    createMockPluginRegistry([{ hookName, pluginId, handler, timeoutMs }]),
+    { logger },
+  );
+  return { runner, logger };
+}
 
 describe("hook timeouts", () => {
   let child: { status: number | null; stderr: string; stdout: string };
@@ -63,16 +74,10 @@ describe("hook timeouts", () => {
   it("bounds a hung after_compaction hook with its default timeout", async () => {
     vi.useFakeTimers();
     try {
-      const logger = { error: vi.fn(), warn: vi.fn() };
-      const { runner } = createHookRunnerWithRegistry(
-        [
-          {
-            hookName: "after_compaction",
-            pluginId: "plugin-a",
-            handler: () => new Promise<void>(() => {}),
-          },
-        ],
-        { logger },
+      const { runner, logger } = timedHook(
+        "after_compaction",
+        "plugin-a",
+        () => new Promise<void>(() => {}),
       );
       const run = runner.runAfterCompaction(
         { messageCount: 2, compactedCount: 1 },
@@ -96,20 +101,14 @@ describe("timed hook work", () => {
       const owner = new AsyncWorkScope();
       const finish = createDeferredCore();
       let settled = false;
-      const logger = { error: vi.fn(), warn: vi.fn() };
-      const runner = createHookRunner(
-        createMockPluginRegistry([
-          {
-            pluginId: "held-hook",
-            hookName: "before_compaction",
-            timeoutMs: 5,
-            handler: async () => {
-              await finish.promise;
-              settled = true;
-            },
-          },
-        ]),
-        { logger },
+      const { runner, logger } = timedHook(
+        "before_compaction",
+        "held-hook",
+        async () => {
+          await finish.promise;
+          settled = true;
+        },
+        5,
       );
       let drain: Promise<void> | undefined;
       try {
@@ -127,9 +126,7 @@ describe("timed hook work", () => {
         drain = owner.drain().then(() => {
           drained = true;
         });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(drained).toBe(false);
         finish.resolve();
         await drain;
@@ -153,27 +150,21 @@ describe("timed hook work", () => {
     const settled = createDeferredCore();
     const failure = new Error("fixture late hook failure");
     let calls = 0;
-    const logger = { error: vi.fn(), warn: vi.fn() };
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          pluginId: "held-hook",
-          hookName: "before_compaction",
-          timeoutMs: 5,
-          handler: async () => {
-            calls++;
-            try {
-              await finish.promise;
-              if (outcome === "late rejection") {
-                throw failure;
-              }
-            } finally {
-              settled.resolve();
-            }
-          },
-        },
-      ]),
-      { logger },
+    const { runner, logger } = timedHook(
+      "before_compaction",
+      "held-hook",
+      async () => {
+        calls++;
+        try {
+          await finish.promise;
+          if (outcome === "late rejection") {
+            throw failure;
+          }
+        } finally {
+          settled.resolve();
+        }
+      },
+      5,
     );
     const run = () => runner.runBeforeCompaction({ messageCount: 3 }, TEST_PLUGIN_AGENT_CTX);
     const result = phase === "closed" ? context(run) : run();

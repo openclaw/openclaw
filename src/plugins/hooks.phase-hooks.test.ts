@@ -19,10 +19,17 @@ import type {
 
 type PromptHook = Pick<
   PluginHookRegistration<"before_prompt_build">,
-  "handler" | "requiresToolAuthority" | "priority"
->;
+  "handler" | "requiresToolAuthority" | "priority" | "timeoutMs"
+> & { pluginId?: string };
 const phaseEvent = { prompt: "test", messages: [] };
-function promptRunner(hooks: PromptHook[]) {
+const emptyPrompt = {
+  systemPrompt: undefined,
+  prependContext: undefined,
+  appendContext: undefined,
+  prependSystemContext: undefined,
+  appendSystemContext: undefined,
+};
+function promptRunner(hooks: PromptHook[], options?: Parameters<typeof createHookRunner>[1]) {
   const registry = createEmptyPluginRegistry();
   registry.typedHooks.push(
     ...hooks.map((hook) => ({
@@ -32,8 +39,10 @@ function promptRunner(hooks: PromptHook[]) {
       ...hook,
     })),
   );
-  return createHookRunner(registry);
+  return createHookRunner(registry, options);
 }
+const mockRunner = (hooks: Parameters<typeof createMockPluginRegistry>[0]) =>
+  createHookRunner(createMockPluginRegistry(hooks));
 const authority = {
   toolAuthorityFingerprint: "turn-authority",
   activeToolNames: ["message"],
@@ -71,11 +80,7 @@ describe("prompt phase hooks", () => {
       { handler: () => ({ toolsAllow: ["read"] }) },
     ]);
     await expect(runner.runBeforePromptBuild(phaseEvent, {})).resolves.toStrictEqual({
-      systemPrompt: undefined,
-      prependContext: undefined,
-      appendContext: undefined,
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
+      ...emptyPrompt,
       toolsAllow: [],
     });
   });
@@ -97,12 +102,7 @@ describe("prompt phase hooks", () => {
     ]);
     expect(
       applyEmbeddedAttemptToolsAllow(
-        [
-          { name: "read" },
-          { name: "web_search" },
-          { name: "web_fetch" },
-          { name: "memory_search" },
-        ],
+        ["read", "web_search", "web_fetch", "memory_search"].map((name) => ({ name })),
         toolsAllow,
       ),
     ).toEqual([{ name: "read" }, { name: "web_search" }]);
@@ -182,20 +182,16 @@ function isActive(invocation: Invocation): boolean | undefined {
 
 function createRunner(
   phase: PromptPhase,
-  hooks: PluginHookRegistration<"before_prompt_build">[],
+  hooks: PromptHook[],
   logger: { warn: (message: string) => void; error: (message: string) => void },
 ) {
-  const registry = createEmptyPluginRegistry();
-  registry.typedHooks.push(
-    ...hooks.map((hook) => ({
+  return promptRunner(
+    hooks.map((hook) => ({
       ...hook,
       ...(phase === "authorized" ? { requiresToolAuthority: true as const } : {}),
     })),
+    { logger, modifyingHookTimeoutMsByHook: { before_prompt_build: 100 } },
   );
-  return createHookRunner(registry, {
-    logger,
-    modifyingHookTimeoutMsByHook: { before_prompt_build: 100 },
-  });
 }
 
 function dispatch(
@@ -237,8 +233,6 @@ describe("prompt hook invocation", () => {
         [
           {
             pluginId: "settling-handler",
-            hookName: "before_prompt_build",
-            source: "test",
             handler: (_event, ctx) => {
               handlerContext = ctx;
               activeOnEntry = isActive(ctx.hookInvocation);
@@ -302,8 +296,6 @@ describe("prompt hook invocation", () => {
         [
           {
             pluginId: "timed-out-handler",
-            hookName: "before_prompt_build",
-            source: "test",
             timeoutMs: 5,
             handler: (_event, ctx) => {
               contexts.push(ctx);
@@ -317,8 +309,6 @@ describe("prompt hook invocation", () => {
           },
           {
             pluginId: "live-sibling",
-            hookName: "before_prompt_build",
-            source: "test",
             handler: (_event, ctx) => {
               firstActiveAtSecondEntry = isActive(contexts[0]?.hookInvocation);
               contexts.push(ctx);
@@ -372,15 +362,7 @@ describe("before_prompt_build dispatch", () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));
     const otherPromptBuild = vi.fn(() => ({ prependContext: "other runner" }));
-    const otherRunner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: otherPromptBuild,
-          pluginId: "other",
-        },
-      ]),
-    );
+    const otherRunner = promptRunner([{ handler: otherPromptBuild, pluginId: "other" }]);
     const promptBuild = vi.fn(async () => {
       await runner.runAgentTurnPrepare(
         { prompt: "nested", messages: [], queuedInjections: [] },
@@ -393,25 +375,11 @@ describe("before_prompt_build dispatch", () => {
       await otherRunner.runBeforePromptBuild(promptEvent("nested"), TEST_PLUGIN_AGENT_CTX);
       return {};
     });
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: promptBuild,
-          pluginId: "prompt",
-        },
-        {
-          hookName: "agent_turn_prepare",
-          handler: turnPrepare,
-          pluginId: "turn",
-        },
-        {
-          hookName: "heartbeat_prompt_contribution",
-          handler: heartbeat,
-          pluginId: "heartbeat",
-        },
-      ]),
-    );
+    const runner = mockRunner([
+      { hookName: "before_prompt_build", handler: promptBuild, pluginId: "prompt" },
+      { hookName: "agent_turn_prepare", handler: turnPrepare, pluginId: "turn" },
+      { hookName: "heartbeat_prompt_contribution", handler: heartbeat, pluginId: "heartbeat" },
+    ]);
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
 
@@ -422,43 +390,29 @@ describe("before_prompt_build dispatch", () => {
   });
 
   it("allows detached descendants to dispatch after the outer call settles", async () => {
-    let releaseDetached: (() => void) | undefined;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const detachedGate = createDeferred();
     let detachedDispatch: Promise<unknown> | undefined;
     const promptBuild = vi.fn(async (event: unknown) => {
       const prompt = (event as { prompt: string }).prompt;
       if (prompt === "outer") {
         detachedDispatch = (async () => {
-          await detachedGate;
+          await detachedGate.promise;
           return await runner.runBeforePromptBuild(promptEvent("detached"), TEST_PLUGIN_AGENT_CTX);
         })();
       }
       return { prependContext: prompt };
     });
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: promptBuild,
-          pluginId: "prompt",
-        },
-      ]),
-    );
+    const runner = promptRunner([{ handler: promptBuild, pluginId: "prompt" }]);
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
-    releaseDetached?.();
+    detachedGate.resolve();
     const pendingDetachedDispatch = detachedDispatch;
     if (!pendingDetachedDispatch) {
       throw new Error("detached prompt dispatch was not created");
     }
     await expect(pendingDetachedDispatch).resolves.toEqual({
-      systemPrompt: undefined,
+      ...emptyPrompt,
       prependContext: "detached",
-      appendContext: undefined,
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
     });
     expect(promptBuild).toHaveBeenCalledTimes(2);
   });
@@ -471,51 +425,37 @@ const finalizeEvent = {
   lastAssistantMessage: "done",
 };
 function finalize(...results: PluginHookBeforeAgentFinalizeResult[]) {
-  return createHookRunner(
-    createMockPluginRegistry(
-      results.map((result) => ({
-        hookName: "before_agent_finalize",
-        handler: () => result,
-      })),
-    ),
+  return mockRunner(
+    results.map((result) => ({ hookName: "before_agent_finalize", handler: () => result })),
   ).runBeforeAgentFinalize(finalizeEvent, TEST_PLUGIN_AGENT_CTX);
 }
+const retry = (instruction: string, idempotencyKey: string, maxAttempts = 1) => ({
+  instruction,
+  idempotencyKey,
+  maxAttempts,
+});
+const revise = (reason: string, candidate: PluginHookBeforeAgentFinalizeResult["retry"]) => ({
+  action: "revise" as const,
+  reason,
+  retry: candidate,
+});
 
 describe("before_agent_finalize", () => {
   it("retains valid retry candidates in order while discarding invalid instructions", async () => {
     const result = await finalize(
       { action: "revise", reason: "empty", retry: { instruction: "   ", idempotencyKey: "empty" } },
-      {
-        action: "revise",
-        reason: "malformed",
-        retry: { instruction: 123, idempotencyKey: "bad" } as never,
-      },
-      {
-        action: "revise",
-        reason: "artifacts",
-        retry: {
-          instruction: " regenerate artifacts ",
-          idempotencyKey: "artifacts",
-          maxAttempts: 1,
-        },
-      },
-      {
-        action: "revise",
-        reason: "tests",
-        retry: { instruction: "rerun tests", idempotencyKey: "tests", maxAttempts: 1 },
-      },
+      revise("malformed", { instruction: 123, idempotencyKey: "bad" } as never),
+      revise("artifacts", retry(" regenerate artifacts ", "artifacts")),
+      revise("tests", retry("rerun tests", "tests")),
     );
     expect(result).toEqual({
       action: "revise",
       reason: "empty\n\nmalformed\n\nartifacts\n\ntests",
-      retry: { instruction: "regenerate artifacts", idempotencyKey: "artifacts", maxAttempts: 1 },
+      retry: retry("regenerate artifacts", "artifacts"),
     });
     expect(Object.getOwnPropertyDescriptor(result, "retryCandidates")).toMatchObject({
       enumerable: false,
-      value: [
-        { instruction: "regenerate artifacts", idempotencyKey: "artifacts", maxAttempts: 1 },
-        { instruction: "rerun tests", idempotencyKey: "tests", maxAttempts: 1 },
-      ],
+      value: [retry("regenerate artifacts", "artifacts"), retry("rerun tests", "tests")],
     });
   });
 
@@ -561,32 +501,17 @@ it.each([
     const broken = vi.fn(() => {
       throw new Error("plugin crashed");
     });
+    const routing = (prefix: string, fallbacksOverride: string[] | undefined) => ({
+      modelOverride: `${prefix}-model`,
+      providerOverride: `${prefix}-provider`,
+      fallbacksOverride,
+    });
     addStaticTestHooks(registry, {
       hookName: "before_model_resolve",
       hooks: [
-        {
-          pluginId: "low",
-          result: {
-            modelOverride: "low-model",
-            providerOverride: "low-provider",
-            fallbacksOverride: lower,
-          },
-        },
-        {
-          pluginId: "broken",
-          priority: 100,
-          result: {},
-          handler: broken,
-        },
-        {
-          pluginId: "high",
-          priority,
-          result: {
-            modelOverride: "high-model",
-            providerOverride: "high-provider",
-            fallbacksOverride: higher,
-          },
-        },
+        { pluginId: "low", result: routing("low", lower) },
+        { pluginId: "broken", priority: 100, result: {}, handler: broken },
+        { pluginId: "high", priority, result: routing("high", higher) },
       ],
     });
     await expect(

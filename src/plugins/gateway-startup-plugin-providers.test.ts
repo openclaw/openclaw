@@ -37,6 +37,10 @@ function createManifestRegistry(
   return { plugins: plugins.map(createManifestRecord), diagnostics: [] };
 }
 
+function writeJson(dir: string, name: string, value: object) {
+  writeFileSync(path.join(dir, name), JSON.stringify(value));
+}
+
 describe("configured Gateway model provider ownership", () => {
   it("does not inspect model catalogs when no agent model refs are configured", () => {
     const registry = createManifestRegistry([
@@ -135,10 +139,10 @@ describe("selected CLI backend Gateway startup", () => {
     const paths = ids.map((id) => {
       const dir = path.join(root, id);
       mkdirSync(dir);
-      writeFileSync(
-        path.join(dir, "openclaw.plugin.json"),
-        JSON.stringify({ id, configSchema: { type: "object", additionalProperties: false } }),
-      );
+      writeJson(dir, "openclaw.plugin.json", {
+        id,
+        configSchema: { type: "object", additionalProperties: false },
+      });
       writeFileSync(
         path.join(dir, "index.cjs"),
         `module.exports = { id: "${id}", register(api) {
@@ -215,22 +219,16 @@ describe("selected CLI backend Gateway startup", () => {
     const pluginPaths = owners.map((owner) => {
       const dir = path.join(root, owner.id);
       mkdirSync(dir);
-      writeFileSync(
-        path.join(dir, "package.json"),
-        JSON.stringify({
-          name: owner.id,
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      writeFileSync(
-        path.join(dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          ...owner,
-          activation: { onStartup: false },
-          configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
+      writeJson(dir, "package.json", {
+        name: owner.id,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeJson(dir, "openclaw.plugin.json", {
+        ...owner,
+        activation: { onStartup: false },
+        configSchema: { type: "object", additionalProperties: false },
+      });
       writeFileSync(
         path.join(dir, "index.cjs"),
         owner.id === "selected-plugin"

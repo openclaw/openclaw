@@ -1,6 +1,8 @@
-/** Verifies global hook runner sequencing, mutation, and error behavior. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import type { HookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
@@ -13,16 +15,31 @@ async function importHookRunnerGlobalModule() {
 }
 
 type HookRunnerGlobalModule = Awaited<ReturnType<typeof importHookRunnerGlobalModule>>;
-type HookRunner = NonNullable<ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>>;
 
 function expectGlobalHookRunner(
   runner: ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>,
 ): HookRunner {
-  if (runner === null) {
-    throw new Error("Expected global hook runner");
-  }
-  expect(typeof runner.hasHooks).toBe("function");
-  return runner;
+  return expectDefined(runner, "global hook runner");
+}
+
+async function initialize(
+  registry: Parameters<HookRunnerGlobalModule["initializeGlobalHookRunner"]>[0],
+) {
+  const mod = await importHookRunnerGlobalModule();
+  setActivePluginRegistry(registry);
+  mod.initializeGlobalHookRunner(registry);
+  return mod;
+}
+
+async function hangingHook(
+  hookName: "before_tool_call" | "before_install" | "gateway_stop",
+  pluginId: string,
+) {
+  const release = createDeferredCore();
+  const mod = await initialize(
+    createMockPluginRegistry([{ hookName, pluginId, handler: () => release.promise }]),
+  );
+  return { mod, release: () => release.resolve() };
 }
 
 async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?: unknown }) {
@@ -77,9 +94,7 @@ describe("hook-runner-global", () => {
       eligibleDispatchKinds: ["acp"],
       source: "test",
     });
-    const mod = await importHookRunnerGlobalModule();
-    setActivePluginRegistry(registry);
-    mod.initializeGlobalHookRunner(registry);
+    const mod = await initialize(registry);
 
     expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "agent" })).toBe(false);
     expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "acp" })).toBe(true);
@@ -99,9 +114,7 @@ describe("hook-runner-global", () => {
       { hookName: "before_tool_call", pluginId: "current-policy", handler: currentHandler },
     ]);
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    const mod = await importHookRunnerGlobalModule();
-    setActivePluginRegistry(currentRegistry);
-    mod.initializeGlobalHookRunner(currentRegistry);
+    const mod = await initialize(currentRegistry);
 
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: retiredRegistry },
@@ -151,20 +164,7 @@ describe("hook-runner-global", () => {
     },
   ])("fails closed when a default-bounded $hookName handler hangs", async ({ hookName, run }) => {
     vi.useFakeTimers();
-    let releaseHandler: (() => void) | undefined;
-    const registry = createMockPluginRegistry([
-      {
-        hookName,
-        pluginId: "hanging-policy",
-        handler: () =>
-          new Promise<void>((resolve) => {
-            releaseHandler = resolve;
-          }),
-      },
-    ]);
-    const mod = await importHookRunnerGlobalModule();
-    setActivePluginRegistry(registry);
-    mod.initializeGlobalHookRunner(registry);
+    const { mod, release } = await hangingHook(hookName, "hanging-policy");
     const pending = run(expectGlobalHookRunner(mod.getGlobalHookRunner()));
 
     try {
@@ -175,27 +175,14 @@ describe("hook-runner-global", () => {
       await vi.advanceTimersByTimeAsync(15_000);
       await rejection;
     } finally {
-      releaseHandler?.();
+      release();
       await pending.catch(() => undefined);
     }
   });
 
   it("bounds gateway_stop handlers and lets shutdown continue", async () => {
     vi.useFakeTimers();
-    let releaseHandler: (() => void) | undefined;
-    const registry = createMockPluginRegistry([
-      {
-        hookName: "gateway_stop",
-        pluginId: "hanging-shutdown",
-        handler: () =>
-          new Promise<void>((resolve) => {
-            releaseHandler = resolve;
-          }),
-      },
-    ]);
-    const mod = await importHookRunnerGlobalModule();
-    setActivePluginRegistry(registry);
-    mod.initializeGlobalHookRunner(registry);
+    const { mod, release } = await hangingHook("gateway_stop", "hanging-shutdown");
     const pending = mod.runGlobalGatewayStopSafely({
       event: { reason: "test shutdown" },
       ctx: {},
@@ -212,7 +199,7 @@ describe("hook-runner-global", () => {
       await vi.advanceTimersByTimeAsync(1);
       await expect(pending).resolves.toBeUndefined();
     } finally {
-      releaseHandler?.();
+      release();
       await pending;
     }
   });
