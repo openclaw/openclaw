@@ -38,6 +38,7 @@ import { listPluginServiceHealthFailures } from "./service-health.js";
 import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "./services.js";
 import {
   createRegistry,
+  createServiceRegistration,
   startPluginServices,
   type PluginServicesHandle,
 } from "./services.test-support.js";
@@ -77,6 +78,36 @@ function unreadableError(message: string) {
   });
 }
 
+type Service = Parameters<typeof createRegistry>[0][number];
+
+function service(
+  id: string,
+  onStart: Service["start"] = () => {},
+  stop?: Service["stop"],
+): Service {
+  return { id, start: onStart, stop };
+}
+
+function startSingleService(entry: Service, options: Parameters<typeof start>[1] = {}) {
+  return start(createRegistry([entry]), options);
+}
+
+function addExporter(registry: PluginRegistry, entry: Service) {
+  registry.services.push(
+    createServiceRegistration(entry, {
+      pluginId: entry.id,
+      origin: "bundled",
+      rootDir: "/plugins/test-plugin",
+    }),
+  );
+}
+
+function startBundledExporter(entry: Service) {
+  const registry = createEmptyPluginRegistry();
+  addExporter(registry, entry);
+  return start(registry);
+}
+
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -89,12 +120,9 @@ describe("startPluginServices", () => {
   it("fences service health reporters to their owning generation", async () => {
     const contexts: OpenClawPluginServiceContext[] = [];
     const registry = createRegistry([
-      {
-        id: "service",
-        start: (ctx) => {
-          contexts.push(ctx);
-        },
-      },
+      service("service", (ctx) => {
+        contexts.push(ctx);
+      }),
     ]);
     const generationA = await start(registry);
     await start(registry);
@@ -117,54 +145,38 @@ describe("startPluginServices", () => {
       const producerError = unreadableError("producer stop failed");
       const exporterError = new Error("exporter stop failed");
       const registry = createRegistry([
-        {
-          id: "producer",
-          start() {},
-          stop() {
-            order.push("producer");
-            emitTrustedDiagnosticEvent({
-              type: "log.record",
-              level: "INFO",
-              message: "queued during shutdown",
-            });
-            throw producerError;
-          },
-        },
-        {
-          id: "sibling",
-          start() {},
-          stop() {
-            order.push("sibling");
-          },
-        },
+        service("producer", undefined, () => {
+          order.push("producer");
+          emitTrustedDiagnosticEvent({
+            type: "log.record",
+            level: "INFO",
+            message: "queued during shutdown",
+          });
+          throw producerError;
+        }),
+        service("sibling", undefined, () => {
+          order.push("sibling");
+        }),
       ]);
       for (const id of ["diagnostics-prometheus", "diagnostics-otel"]) {
-        registry.services.push(
-          ...createRegistry(
-            [
-              {
-                id,
-                start(ctx) {
-                  if (id === "diagnostics-otel") {
-                    ctx.internalDiagnostics!.onEvent((event) => {
-                      if (event.type === "log.record") {
-                        order.push("event");
-                      }
-                    });
-                  }
-                },
-                stop() {
-                  order.push(id);
-                  if (id === "diagnostics-otel") {
-                    throw exporterError;
-                  }
-                },
-              },
-            ],
-            id,
-            "bundled",
-          ).services,
-        );
+        addExporter(registry, {
+          id,
+          start(ctx) {
+            if (id === "diagnostics-otel") {
+              ctx.internalDiagnostics!.onEvent((event) => {
+                if (event.type === "log.record") {
+                  order.push("event");
+                }
+              });
+            }
+          },
+          stop() {
+            order.push(id);
+            if (id === "diagnostics-otel") {
+              throw exporterError;
+            }
+          },
+        });
       }
       const handle = await start(registry);
       if (strict) {
@@ -212,17 +224,17 @@ describe("startPluginServices", () => {
     const broadcastPluginEvent = vi.fn();
     const handle = await start(
       createRegistry([
-        {
-          id: "failed",
-          start(ctx) {
+        service(
+          "failed",
+          (ctx) => {
             context = ctx;
             acquired.add("failed");
             ctx.gatewayEvents?.onSessionsChanged(received);
             throw unreadableError("startup failed");
           },
-          stop: rollback,
-        },
-        { id: "sibling", start: siblingStart },
+          rollback,
+        ),
+        service("sibling", siblingStart),
       ]),
       { broadcastPluginEvent },
     );
@@ -248,19 +260,14 @@ describe("startPluginServices", () => {
     const received = vi.fn();
     const rejectingHandler = (() =>
       Promise.reject(new Error("async handler failed"))) as () => void;
-    await start(
-      createRegistry([
-        {
-          id: "events",
-          start(ctx) {
-            ctx.gatewayEvents?.onSessionsChanged(() => {
-              throw new Error("handler failed");
-            });
-            ctx.gatewayEvents?.onSessionsChanged(rejectingHandler);
-            ctx.gatewayEvents?.onSessionsChanged(received);
-          },
-        },
-      ]),
+    await startSingleService(
+      service("events", (ctx) => {
+        ctx.gatewayEvents?.onSessionsChanged(() => {
+          throw new Error("handler failed");
+        });
+        ctx.gatewayEvents?.onSessionsChanged(rejectingHandler);
+        ctx.gatewayEvents?.onSessionsChanged(received);
+      }),
       { broadcastPluginEvent: vi.fn() },
     );
     queuePluginSessionsChanged({ sessionKey: "agent:main:main", phase: "message" });
@@ -278,15 +285,10 @@ describe("startPluginServices", () => {
   it("rejects unsafe event names, scopes, and payloads", async () => {
     let context: OpenClawPluginServiceContext | undefined;
     const broadcastPluginEvent = vi.fn();
-    await start(
-      createRegistry([
-        {
-          id: "events",
-          start: (ctx) => {
-            context = ctx;
-          },
-        },
-      ]),
+    await startSingleService(
+      service("events", (ctx) => {
+        context = ctx;
+      }),
       { broadcastPluginEvent },
     );
     const emit = context?.gatewayEvents?.emit as unknown as (
@@ -306,12 +308,9 @@ describe("startPluginServices", () => {
 
   it("registers dynamic HTTP routes into the service registry scope", async () => {
     const registry = createRegistry([
-      {
-        id: "route-service",
-        start() {
-          registerPluginHttpRoute({ path: "/service-route", auth: "plugin", handler: vi.fn() });
-        },
-      },
+      service("route-service", () => {
+        registerPluginHttpRoute({ path: "/service-route", auth: "plugin", handler: vi.fn() });
+      }),
     ]);
     const pinnedRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pinnedRegistry);
@@ -322,28 +321,22 @@ describe("startPluginServices", () => {
 
   it("retains trusted exporter startup health after host rollback", async () => {
     const rollback = vi.fn();
-    const handle = await start(
-      createRegistry(
-        [
-          {
-            id: "diagnostics-otel",
-            start(ctx) {
-              const diagnostics = ctx.internalDiagnostics as TrustedExporterInternalDiagnostics;
-              diagnostics.reportExporterHealth?.({
-                signal: "traces",
-                transport: "otlp-http-protobuf",
-                endpointMode: "configured",
-                status: "failure",
-                reason: "start_failed",
-                errorCategory: "TypeError",
-              });
-              throw new TypeError("SDK startup failed");
-            },
-            stop: rollback,
-          },
-        ],
+    const handle = await startBundledExporter(
+      service(
         "diagnostics-otel",
-        "bundled",
+        (ctx) => {
+          const diagnostics = ctx.internalDiagnostics as TrustedExporterInternalDiagnostics;
+          diagnostics.reportExporterHealth?.({
+            signal: "traces",
+            transport: "otlp-http-protobuf",
+            endpointMode: "configured",
+            status: "failure",
+            reason: "start_failed",
+            errorCategory: "TypeError",
+          });
+          throw new TypeError("SDK startup failed");
+        },
+        rollback,
       ),
     );
     expect(rollback).toHaveBeenCalledOnce();
@@ -366,16 +359,11 @@ describe("startPluginServices", () => {
   it("passes a scoped startup trace through service context for owned subspans", async () => {
     const measured: string[] = [];
     const detail = vi.fn();
-    await start(
-      createRegistry([
-        {
-          id: "service-a",
-          async start(ctx) {
-            ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
-            await ctx.startupTrace?.measure("config:resolve", async () => {});
-          },
-        },
-      ]),
+    await startSingleService(
+      service("service-a", async (ctx) => {
+        ctx.startupTrace?.detail?.("probe.result", [["healthyCount", 1]]);
+        await ctx.startupTrace?.measure("config:resolve", async () => {});
+      }),
       {
         startupTrace: {
           detail,
@@ -413,12 +401,9 @@ describe("startPluginServices", () => {
       let context: OpenClawPluginServiceContext | undefined;
       const registry = createRegistry(
         [
-          {
-            id: serviceId,
-            start: (ctx) => {
-              context = ctx;
-            },
-          },
+          service(serviceId, (ctx) => {
+            context = ctx;
+          }),
         ],
         pluginId,
         origin,
@@ -438,27 +423,19 @@ describe("startPluginServices", () => {
     const observed: Array<{ exporter: string; hostPluginId?: unknown }> = [];
     const registry = createEmptyPluginRegistry();
     for (const id of ["diagnostics-otel", "diagnostics-prometheus"]) {
-      registry.services.push(
-        ...createRegistry(
-          [
-            {
-              id,
-              start(ctx) {
-                ctx.internalDiagnostics?.onEvent((event, _metadata, privateData) => {
-                  if (event.type === "model.usage") {
-                    observed.push({
-                      exporter: id,
-                      hostPluginId: (privateData as { hostPluginId?: unknown }).hostPluginId,
-                    });
-                  }
-                });
-              },
-            },
-          ],
-          id,
-          "bundled",
-        ).services,
-      );
+      addExporter(registry, {
+        id,
+        start(ctx) {
+          ctx.internalDiagnostics?.onEvent((event, _metadata, privateData) => {
+            if (event.type === "model.usage") {
+              observed.push({
+                exporter: id,
+                hostPluginId: (privateData as { hostPluginId?: unknown }).hostPluginId,
+              });
+            }
+          });
+        },
+      });
     }
     await start(registry);
     emitTrustedDiagnosticEvent(
@@ -492,32 +469,25 @@ describe("startPluginServices", () => {
         }
       });
       const registry = createRegistry([
-        {
-          id: "retry-service",
-          start: startService,
-          stop: () => {
-            ready = false;
-          },
-        },
-        { id: "sibling", start: siblingStart, stop() {} },
+        service("retry-service", startService, () => {
+          ready = false;
+        }),
+        service("sibling", siblingStart, () => {}),
       ]);
       const serviceIds = new Set(["retry-service", "sibling"]);
       const handle = await start(registry);
-      try {
-        if (phase === "reload") {
-          await expect(handle.reload({}, serviceIds)).resolves.toBeUndefined();
-        }
-        expect(listPluginServiceHealthFailures(registry)).toContainEqual(
-          expect.objectContaining({ serviceId: "retry-service", error: failure.message }),
-        );
-        await handle.reload({}, serviceIds);
-        expect(order.slice(-2)).toEqual(["dependency", "dependent"]);
-        expect(startService).toHaveBeenCalledTimes(failAt + 1);
-        expect(siblingStart).toHaveBeenCalledTimes(phase === "reload" ? 3 : 2);
-        expect(listPluginServiceHealthFailures(registry)).toEqual([]);
-      } finally {
-        await handle.stop();
+      if (phase === "reload") {
+        await expect(handle.reload({}, serviceIds)).resolves.toBeUndefined();
       }
+      expect(listPluginServiceHealthFailures(registry)).toContainEqual(
+        expect.objectContaining({ serviceId: "retry-service", error: failure.message }),
+      );
+      await handle.reload({}, serviceIds);
+      expect(order.slice(-2)).toEqual(["dependency", "dependent"]);
+      expect(startService).toHaveBeenCalledTimes(failAt + 1);
+      expect(siblingStart).toHaveBeenCalledTimes(phase === "reload" ? 3 : 2);
+      expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+      await handle.stop();
     },
   );
 
@@ -538,9 +508,9 @@ describe("startPluginServices", () => {
     });
     let attempts = 0;
     const registry = createRegistry([
-      {
-        id: "late-resource",
-        async start() {
+      service(
+        "late-resource",
+        async () => {
           if (++attempts === 2) {
             entered.resolve();
             await release.promise;
@@ -548,14 +518,13 @@ describe("startPluginServices", () => {
           process.on(event, listener);
         },
         stop,
-      },
+      ),
     ]);
     registry.services.unshift(
-      ...createRegistry(
-        [{ id: "diagnostics-otel", start() {}, stop: exporterStop }],
-        "diagnostics-otel",
-        "bundled",
-      ).services,
+      createServiceRegistration(
+        { id: "diagnostics-otel", start() {}, stop: exporterStop },
+        { pluginId: "diagnostics-otel", origin: "bundled", rootDir: "/plugins/test-plugin" },
+      ),
     );
     const handle = await start(registry);
     const reloading = handle.reload({}, new Set(["late-resource"]));
@@ -597,15 +566,15 @@ describe("startPluginServices", () => {
       registerPluginHttpRoute({ path, auth: "plugin", handler: vi.fn(), throwOnFailure: true });
     let context: OpenClawPluginServiceContext | undefined;
     const registry = createRegistry([
-      { id: "sibling", start: () => {}, stop: siblingStop },
-      {
-        id: "blocked-cleanup",
-        start: (ctx) => {
+      service("sibling", undefined, siblingStop),
+      service(
+        "blocked-cleanup",
+        (ctx) => {
           context = ctx;
           ctx.gatewayEvents?.onSessionsChanged(received);
           addRoute("/owned-route");
         },
-        stop: async (ctx) => {
+        async (ctx) => {
           await cleanupDeferred.promise;
           ctx.serviceHealth?.reportFailure(new Error("late stale failure"));
           for (const run of [
@@ -626,7 +595,7 @@ describe("startPluginServices", () => {
             }
           }
         },
-      },
+      ),
     ]);
     let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
 
@@ -684,15 +653,15 @@ describe("startPluginServices", () => {
     const siblingStart = vi.fn();
     let context: OpenClawPluginServiceContext | undefined;
     const registry = createRegistry([
-      {
-        id: "failed-start-hung-stop",
-        start: (ctx) => {
+      service(
+        "failed-start-hung-stop",
+        (ctx) => {
           context = ctx;
           throw new Error("startup rejected");
         },
         stop,
-      },
-      { id: "sibling", start: siblingStart },
+      ),
+      service("sibling", siblingStart),
     ]);
     let starting: Promise<PluginServicesHandle> | undefined;
     let stopping: Promise<void> | undefined;
@@ -740,14 +709,14 @@ describe("startPluginServices", () => {
     let handle!: PluginServicesHandle;
     const starting = startPluginServices({
       registry: createRegistry([
-        {
-          id: "interrupted-startup",
-          start: () => {
+        service(
+          "interrupted-startup",
+          () => {
             order.push("start");
             return startup.promise;
           },
           stop,
-        },
+        ),
       ]),
       config: {},
       onHandle: (issued) => {
@@ -798,23 +767,12 @@ describe("startPluginServices", () => {
       spanId: "1234567890abcdef",
     };
     let diagnostics: TrustedExporterInternalDiagnostics | undefined;
-    const handle = await start(
-      createRegistry(
-        [
-          {
-            id: "diagnostics-otel",
-            start(ctx) {
-              diagnostics = ctx.internalDiagnostics as TrustedExporterInternalDiagnostics;
-              diagnostics.onEvent(listener);
-              diagnostics.registerTracePropagationBridge?.({
-                resolveTraceContext: () => undefined,
-              });
-            },
-          },
-        ],
-        "diagnostics-otel",
-        "bundled",
-      ),
+    const handle = await startBundledExporter(
+      service("diagnostics-otel", (ctx) => {
+        diagnostics = ctx.internalDiagnostics as TrustedExporterInternalDiagnostics;
+        diagnostics.onEvent(listener);
+        diagnostics.registerTracePropagationBridge?.({ resolveTraceContext: () => undefined });
+      }),
     );
     expect(formatPropagatedDiagnosticTraceparent(traceContext)).toBeUndefined();
     await handle.stop();
