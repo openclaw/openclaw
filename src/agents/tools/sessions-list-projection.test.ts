@@ -32,6 +32,7 @@ describe("sessions-list inventory projection", () => {
       archived: false,
       pinned: true,
       model: "gpt-5.6-sol",
+      modelSelectionSource: "configured",
       contextTokens: 1_000_000,
       totalTokens: 1_200,
       status: "queued",
@@ -117,6 +118,12 @@ describe("sessions-list inventory projection", () => {
     expect(Value.Check(tool.outputSchema!, { ...details, truncationReason: "unknown" })).toBe(
       false,
     );
+    expect(
+      Value.Check(tool.outputSchema!, {
+        ...details,
+        sessions: [{ ...details.sessions?.[0], modelSelectionSource: "guessed" }],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(tool.outputSchema!, {
         ...details,

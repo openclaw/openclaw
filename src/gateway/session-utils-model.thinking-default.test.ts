@@ -594,7 +594,12 @@ describe("Gateway model identity", () => {
                 allowPluginNormalization: false,
               }),
             )
-            .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+            .toEqual({
+              provider: "custom",
+              model,
+              storedOverrideSource: "session",
+              selectionSource: "override",
+            });
         }
       });
     },

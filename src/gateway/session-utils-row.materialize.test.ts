@@ -98,6 +98,7 @@ type RowFixture = {
   runs?: SubagentRunRecord[];
   omitRowContext?: boolean;
   expectedIsDock?: boolean;
+  expectedModelSelectionSource?: GatewaySessionRow["modelSelectionSource"];
   transcript?: boolean;
   decoration?: "current" | "stale";
 };
@@ -248,6 +249,7 @@ function fixtures(): RowFixture[] {
       entry: childStore[LIVE],
       store: childStore,
       runs: [liveRun],
+      expectedModelSelectionSource: "override",
     },
     {
       name: "ended run uses persisted lifecycle timestamps",
@@ -277,11 +279,13 @@ function fixtures(): RowFixture[] {
       entry: parentEntry,
       store: childStore,
       runs: [liveRun],
+      expectedModelSelectionSource: "override",
     },
     {
       name: "swarm summary retains collector completion and children",
       key: PARENT,
       entry: parentEntry,
+      expectedModelSelectionSource: "override",
       runs: ["running", "queued", "done", "failed"].map((status, index) =>
         createSubagentRunRecord({
           runId: `golden-swarm-${status}`,
@@ -532,6 +536,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
         // Assert additive fields separately while preserving the frozen wire-value coverage.
         expect(row.communication).toBeUndefined();
         expect(row.effectiveCommunication).toEqual({ send: "always", receive: "always" });
+        expect(row.modelSelectionSource).toBe(fixture.expectedModelSelectionSource ?? "configured");
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,
@@ -540,6 +545,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
           communication: _communication,
           effectiveCommunication: _effectiveCommunication,
           sidebarRoot: _sidebarRoot,
+          modelSelectionSource: _modelSelectionSource,
           ...previousWireFields
         } = row;
         const json = JSON.stringify(
