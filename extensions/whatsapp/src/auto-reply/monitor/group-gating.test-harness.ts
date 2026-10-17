@@ -26,7 +26,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
 export function createGroupGatingTestHandler(params: {
   cfg: OpenClawConfig;
   groupHistories?: Map<string, GroupHistoryEntry[]>;
-  warn?: ReturnType<typeof vi.fn>;
+  warn?: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
 }) {
   const groupHistories = params.groupHistories ?? new Map<string, GroupHistoryEntry[]>();
   const warn = params.warn ?? vi.fn();

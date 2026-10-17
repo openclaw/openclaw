@@ -44,7 +44,7 @@ function makeUnregisteredGroupMsg(
   });
 }
 
-type WarnLogger = (obj: unknown, msg: string) => void;
+type WarnLogger = (...args: unknown[]) => void;
 type GroupTestParams = { cfg: OpenClawConfig };
 
 function makeParams(
