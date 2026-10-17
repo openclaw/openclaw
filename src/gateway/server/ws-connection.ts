@@ -81,6 +81,15 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         "unsupported ws permessage-deflate extension; compressed frames use the slower ws path",
       );
     }
+    // Bun's HTTP socket disables vector writes for typed HTTP operations. After
+    // this upgrade, only raw WebSocket bytes remain and can share one write.
+    /* eslint-disable no-underscore-dangle -- Node's documented Writable extension hooks. */
+    if (!upgradeReq.socket._writev) {
+      upgradeReq.socket._writev = (chunks, callback) => {
+        upgradeReq.socket._write(Buffer.concat(chunks.map(({ chunk }) => chunk)), "utf8", callback);
+      };
+    }
+    /* eslint-enable no-underscore-dangle */
     let batched = false;
     Object.assign(socket, {
       recordEventSent: recordGatewayWsEvent,

@@ -608,7 +608,7 @@ describe("attachGatewayWsConnectionHandler", () => {
           usesSharedGatewayAuth: false,
         }),
       ).toBe(true);
-      const writes = vi.spyOn(request.socket, "_writev");
+      const writes = vi.spyOn(request.socket, process.versions.bun ? "_write" : "_writev");
       const received: unknown[] = [];
       const complete = createDeferred();
       peer.on("message", (data) => {
