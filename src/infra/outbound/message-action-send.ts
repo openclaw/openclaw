@@ -123,7 +123,9 @@ export async function buildMessagePayload(params: {
       allowEmpty: true,
       trim: false,
     }) ?? "";
-  if (message.includes("\\n")) {
+  // Expand escaped newlines only for single-line text (CLI flags, over-escaped tool
+  // input). Once real line breaks exist, a literal "\n" is content such as code.
+  if (message.includes("\\n") && !message.includes("\n")) {
     message = message.replaceAll("\\n", "\n");
   }
   if (!message.trim()) {
