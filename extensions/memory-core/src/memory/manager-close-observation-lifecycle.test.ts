@@ -14,6 +14,12 @@ import type { MemoryFileWatcher } from "./file-watcher.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexManager } from "./manager.js";
 
+// Keep owner fault injection in this process; real worker transport has separate coverage.
+vi.mock("./local-file-watcher.js", async () => {
+  const { MemoryFileWatcher } = await import("./file-watcher.js");
+  return { LocalMemoryFileWatcher: MemoryFileWatcher };
+});
+
 const observer = await vi.hoisted(async () => {
   const { createMemoryObservationHarness } = await import("./watcher-test-support.js");
   return createMemoryObservationHarness();
