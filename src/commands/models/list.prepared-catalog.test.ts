@@ -143,6 +143,16 @@ async function list(options: Parameters<typeof modelsListCommand>[0]) {
   );
 }
 
+function expectModelRows(models: Partial<ModelRow>[], details: Record<string, unknown> = {}) {
+  expect(runtime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      models: models.map((row) => expect.objectContaining(row)),
+      ...details,
+    }),
+    2,
+  );
+}
+
 describe("models list published transport", () => {
   it.each(["ready", "unavailable"] as const)(
     "reports configured ids missing from a %s listing without changing availability",
@@ -164,8 +174,9 @@ describe("models list published transport", () => {
         read(owner),
       );
       await list({ json: true });
-      expect(runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expectModelRows(
+        [{ key: "catalog-provider/Reader", available: true, tags: ["default", "alias:work"] }],
+        {
           providerOutcomes: [
             {
               provider: "catalog-provider",
@@ -173,15 +184,7 @@ describe("models list published transport", () => {
               ...(status === "ready" ? { unlistedConfiguredModelIds: ["Reader", "Absent"] } : {}),
             },
           ],
-          models: [
-            expect.objectContaining({
-              key: "catalog-provider/Reader",
-              available: true,
-              tags: ["default", "alias:work"],
-            }),
-          ],
-        }),
-        2,
+        },
       );
       const warnings = runtime.error.mock.calls
         .map(([message]) => message)
@@ -300,14 +303,11 @@ describe("models list published transport", () => {
 
     await list({ json: true });
 
-    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        count: 1,
-        models: [expect.objectContaining({ key: "catalog-provider/Reader", available: true })],
-        providerOutcomes,
-      }),
-      2,
-    );
+    expectModelRows([{ key: "catalog-provider/Reader", available: true }], {
+      count: 1,
+      providerOutcomes,
+    });
+    expect(runtime.writeJson).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledTimes(3);
     expect(runtime.error).toHaveBeenCalledWith(
       "Model discovery could not refresh all providers. Showing the available published model list.",
@@ -345,15 +345,7 @@ describe("models list published transport", () => {
       }),
       expect.any(Function),
     );
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        count: 1,
-        models: [
-          expect.objectContaining({ key: "catalog-provider/Reader", contextWindow: 128000 }),
-        ],
-      }),
-      2,
-    );
+    expectModelRows([{ key: "catalog-provider/Reader", contextWindow: 128000 }], { count: 1 });
     expect(localStateOwner.runWithLocalStateOwner).toHaveBeenCalledWith(
       expect.objectContaining({ method: "models.list", onForeignOwner: "refuse" }),
     );
@@ -372,11 +364,24 @@ describe("models list published transport", () => {
     expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
   });
 
-  // Only the standalone owner registers Claude CLI; the command process has no active registry.
-  async function listStandaloneClaudeOwner(
-    claudeCfg: OpenClawConfig,
-    entries: Array<{ provider: string; id: string; name: string }>,
-  ) {
+  it("lists a Claude CLI model once when only the standalone owner's registry has Claude CLI", async () => {
+    const claudeCfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          work: {
+            workspace: "/tmp/published-cli-work",
+            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+        defaults: { model: { primary: "anthropic/claude-opus-5" } },
+      },
+    };
+    const entries = [
+      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
+      { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
+      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+    ];
     vi.mocked(configLoader.loadModelsConfigWithSource).mockResolvedValue({
       sourceConfig: claudeCfg,
       resolvedConfig: claudeCfg,
@@ -413,52 +418,17 @@ describe("models list published transport", () => {
         ),
     );
     await list({ agent: "work", json: true });
-  }
-
-  it("lists a Claude CLI model once when only the standalone owner's registry has Claude CLI", async () => {
-    await listStandaloneClaudeOwner(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: {
-            work: {
-              workspace: "/tmp/published-cli-work",
-              models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
-            },
-          },
-          defaults: { model: { primary: "anthropic/claude-opus-5" } },
-        },
-      },
-      [
-        { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
-        { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
-        { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
-      ],
-    );
-    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        models: [
-          expect.objectContaining({ key: "anthropic/claude-opus-5" }),
-          expect.objectContaining({ key: "claude-cli/claude-haiku-4-5" }),
-        ],
-      }),
-      2,
-    );
+    expectModelRows([{ key: "anthropic/claude-opus-5" }, { key: "claude-cli/claude-haiku-4-5" }]);
+    expect(runtime.writeJson).toHaveBeenCalledOnce();
   });
 
-  it("rejects conflicting output flags before reading any catalog", async () => {
-    await expect(list({ json: true, plain: true })).rejects.toThrow(
-      "Choose either --json or --plain",
-    );
+  it.each([
+    [{ json: true, plain: true }, "Choose either --json or --plain"],
+    [{ provider: "Example Provider", json: true }, "Invalid provider filter"],
+  ] as const)("rejects invalid options %j before reading a catalog", async (options, error) => {
+    await expect(list(options)).rejects.toThrow(error);
     expect(gateway.callGateway).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-  });
-
-  it("rejects provider display labels before reading a catalog", async () => {
-    await expect(list({ provider: "Example Provider", json: true })).rejects.toThrow(
-      "Invalid provider filter",
-    );
-    expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 
   it("filters only proven local rows and renders their exact keys in plain output", async () => {
