@@ -1,4 +1,3 @@
-// Windows exec tests cover trusted command wrapping, tree termination, and output decoding.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,8 +18,6 @@ type MockResult = {
   code?: string;
   exitCode?: number;
   failed: boolean;
-  isCanceled?: boolean;
-  isMaxBuffer?: boolean;
   isTerminated: boolean;
   signal?: NodeJS.Signals;
   stderr?: Buffer;
@@ -59,12 +56,8 @@ function createMockSubprocess(params?: {
     catch: promise.catch.bind(promise),
     finally: promise.finally.bind(promise),
     finish(overrides: Partial<MockResult> = {}): void {
-      for (const chunk of params?.stdoutChunks ?? []) {
-        child.stdout.write(chunk);
-      }
-      for (const chunk of params?.stderrChunks ?? []) {
-        child.stderr.write(chunk);
-      }
+      params?.stdoutChunks?.forEach((chunk) => child.stdout.write(chunk));
+      params?.stderrChunks?.forEach((chunk) => child.stderr.write(chunk));
       const exitCode = Object.hasOwn(overrides, "exitCode")
         ? overrides.exitCode
         : (params?.exitCode ?? 0);
@@ -152,37 +145,21 @@ describe("Windows command execution", () => {
       return accessSync(filePath, mode);
     });
     vi.doMock("execa", () => ({ execa: execaMock }));
-    vi.doMock("../infra/executable-path.js", async () => {
-      const actual = await vi.importActual<typeof import("../infra/executable-path.js")>(
-        "../infra/executable-path.js",
-      );
-      return {
-        ...actual,
-        isRegularFile: isRegularFileMock,
-        resolveExecutableFromPathEnv: resolveExecutableFromPathEnvMock,
-        resolveExecutablePathCandidate: resolveExecutablePathCandidateMock,
-      };
-    });
-    vi.doMock("node:child_process", async () => {
-      const actual =
-        await vi.importActual<typeof import("node:child_process")>("node:child_process");
-      return { ...actual, spawnSync: spawnSyncMock };
-    });
+    vi.doMock("../infra/executable-path.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../infra/executable-path.js")>()),
+      isRegularFile: isRegularFileMock,
+      resolveExecutableFromPathEnv: resolveExecutableFromPathEnvMock,
+      resolveExecutablePathCandidate: resolveExecutablePathCandidateMock,
+    }));
+    vi.doMock("node:child_process", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:child_process")>()),
+      spawnSync: spawnSyncMock,
+    }));
     ({ getWindowsInstallRoots } = await import("../infra/windows-install-roots.js"));
     ({ runCommandBuffered, runCommandWithTimeout, runExec, spawnCommand } =
       await import("./exec.js"));
     ({ runCommandBuffersWithTimeout } = await import("./exec-runner.js"));
     ({ withCommandProcessScope } = await import("./exec-spawn.js"));
-  });
-
-  afterAll(() => {
-    vi.doUnmock("execa");
-    vi.doUnmock("../infra/executable-path.js");
-    vi.doUnmock("node:child_process");
-    vi.resetModules();
-  });
-
-  beforeEach(() => {
     execaMock.mockReset().mockImplementation(() => createMockSubprocess());
     isRegularFileMock.mockReset().mockReturnValue(true);
     resolveExecutableFromPathEnvMock.mockReset().mockImplementation((command: string) => {
@@ -202,6 +179,13 @@ describe("Windows command execution", () => {
     resolveExecutablePathCandidateMock.mockReset().mockImplementation((command: string) => command);
     spawnSyncMock.mockReset().mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
     mockProcessPlatform("win32");
+  });
+
+  afterAll(() => {
+    vi.doUnmock("execa");
+    vi.doUnmock("../infra/executable-path.js");
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
   });
 
   afterEach(() => {
