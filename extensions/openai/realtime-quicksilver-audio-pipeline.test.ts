@@ -9,7 +9,11 @@ import {
   OpenAIQuicksilverAudioPeer,
   type OpenAIQuicksilverAudioPeerContract,
 } from "./realtime-quicksilver-media.runtime.js";
-import { createCallResponse, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
+import {
+  createCallResponse,
+  emitSideband,
+  FakeSocket,
+} from "./realtime-quicksilver.test-helpers.js";
 
 const MAX_PENDING_RELAY_FRAMES = 250;
 const MAX_PENDING_AUDIO_BYTES = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * MAX_PENDING_RELAY_FRAMES;
@@ -48,6 +52,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
       resolvePeer = resolve;
     });
     const onError = vi.fn();
+    let sideband: FakeSocket | undefined;
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
@@ -69,7 +74,10 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
           return peerPromise;
         }),
         fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
-        webSocketFactory: () => new FakeSocket(),
+        webSocketFactory: () => {
+          sideband = new FakeSocket();
+          return sideband;
+        },
       },
       openAIRealtimeHost,
     );
@@ -120,6 +128,11 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
       try {
         resolvePeer?.(peer);
         await connection;
+        expect(testBridge.pendingAudio).toBe(bridgePendingAudio);
+        if (!sideband) {
+          throw new Error("expected the bridge to open the Live sideband");
+        }
+        emitSideband(sideband, { type: "session.started", session: {} });
 
         expect(copy).not.toHaveBeenCalled();
         expect(testPeer.pendingAudio).toBe(bridgePendingAudio);
