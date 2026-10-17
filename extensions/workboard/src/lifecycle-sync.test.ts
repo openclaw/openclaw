@@ -1,4 +1,3 @@
-import type { WorkboardExecution } from "@openclaw/workboard-contract";
 import {
   createHookRunner,
   createMockPluginRegistry,
@@ -6,6 +5,13 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginService } from "../api.js";
 import { createWorkboardAutomationNudgeService } from "./automation-nudge.js";
+import {
+  execution,
+  lifecycleSession,
+  lifecycleSnapshot,
+  serviceContext,
+  type LifecycleSnapshot,
+} from "./lifecycle-sync-fixtures.test-support.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
@@ -28,9 +34,7 @@ function nudgeContext(
     throw new Error("Unexpected scheduler mutation");
   };
   return {
-    config: {},
-    stateDir: "unused",
-    logger,
+    ...serviceContext(logger),
     getCron: () => ({
       enqueueRun,
       list: unused,
@@ -42,33 +46,57 @@ function nudgeContext(
   };
 }
 
-function execution(
-  sessionKey: string,
-  runId = "run-1",
-  status: WorkboardExecution["status"] = "running",
-): WorkboardExecution {
+type Session = LifecycleSnapshot["sessions"][number];
+async function linked(options: Parameters<typeof createLinkedCard>[1] = {}) {
+  const store = createWorkboardSqliteTestStore();
+  const card = await createLinkedCard(store, options);
+  const end = (event: Partial<Parameters<typeof syncWorkboardSubagentEnded>[0]["event"]> = {}) =>
+    syncWorkboardSubagentEnded({
+      store,
+      event: {
+        targetSessionKey: card.sessionKey ?? workboardSessionKeyForCard(card),
+        endedAt: card.updatedAt + 1,
+        outcome: "ok",
+        ...event,
+      },
+    });
   return {
-    id: `exec-${runId}`,
-    kind: "agent-session",
-    mode: "autonomous",
-    status,
-    sessionKey,
-    runId,
-    startedAt: 1000,
-    updatedAt: 1000,
+    store,
+    card,
+    end,
+    read: () => store.get(card.id),
+    sweep: (
+      sessions: Parameters<typeof runSessionSweep>[0]["sessions"],
+      sweepOptions: Omit<Parameters<typeof runSessionSweep>[0], "sessions" | "store"> = {},
+    ) => runSessionSweep({ store, sessions, ...sweepOptions }),
   };
+}
+
+async function runningCard(sessionKey: string, runId = "run-agent") {
+  return linked({ sessionKey, runId, execution: execution(sessionKey, runId) });
+}
+
+async function sweepService(
+  store: WorkboardStore,
+  service: ReturnType<typeof createWorkboardLifecycleService>,
+) {
+  const runOperation = vi.spyOn(store, "runOperation");
+  try {
+    await service.start(serviceContext());
+    service.onGatewayStart();
+    // The admitted operation spans the full sweep, including SQLite worker writes.
+    expect(runOperation).toHaveBeenCalled();
+    await runOperation.mock.results[0]?.value;
+  } finally {
+    service.onGatewayStop();
+    await service.stop?.(serviceContext());
+    runOperation.mockRestore();
+  }
 }
 
 async function runSessionSweep(params: {
   store: WorkboardStore;
-  sessions: Array<{
-    key: string;
-    title?: string;
-    updatedAt?: number;
-    status?: "running" | "done" | "failed" | "killed" | "timeout";
-    hasActiveRun?: boolean;
-    abortedLastRun?: boolean;
-  }>;
+  sessions: (Session & { title?: string })[];
   complete?: boolean;
   now?: number;
   onMatched?: Parameters<typeof createWorkboardLifecycleService>[0]["onMatched"];
@@ -77,27 +105,25 @@ async function runSessionSweep(params: {
     const snapshot = await readWorkboardLifecycleSessions(
       {
         isAvailable: async () => true,
-        request: vi
-          .fn<Parameters<typeof readWorkboardLifecycleSessions>[0]["request"]>()
-          .mockImplementation(async (method, query = {}) =>
-            method === "agents.list"
-              ? {
-                  agents: [
-                    ...new Set(params.sessions.map((session) => session.key.split(":")[1])),
-                  ].map((id) => ({ id })),
-                }
-              : method === "sessions.describe"
-                ? { session: params.sessions.find((session) => session.key === query.key) ?? null }
-                : {
-                    sessions: params.sessions
-                      .filter(
-                        (session) =>
-                          session.key.includes(String(query.search)) ||
-                          session.title?.includes(String(query.search)),
-                      )
-                      .slice(0, Number(query.limit)),
-                  },
-          ),
+        request: async (method, query = {}) => {
+          const rows = params.sessions;
+          if (method === "agents.list") {
+            return {
+              agents: Array.from(new Set(rows.map((row) => row.key.split(":")[1])), (id) => ({
+                id,
+              })),
+            };
+          }
+          if (method === "sessions.describe") {
+            return { session: rows.find((row) => row.key === query.key) ?? null };
+          }
+          const search = String(query.search);
+          return {
+            sessions: rows
+              .filter((row) => row.key.includes(search) || row.title?.includes(search))
+              .slice(0, Number(query.limit)),
+          };
+        },
       },
       options,
     );
@@ -110,18 +136,7 @@ async function runSessionSweep(params: {
     ...(params.onMatched ? { onMatched: params.onMatched } : {}),
     ...(now === undefined ? {} : { now: () => now }),
   });
-  const runOperation = vi.spyOn(params.store, "runOperation");
-  try {
-    await service.start({ logger: { warn: vi.fn() } } as never);
-    service.onGatewayStart();
-    // The admitted operation spans the full sweep, including SQLite worker writes.
-    expect(runOperation).toHaveBeenCalled();
-    await runOperation.mock.results[0]?.value;
-  } finally {
-    service.onGatewayStop();
-    await service.stop?.({ logger: { warn: vi.fn() } } as never);
-    runOperation.mockRestore();
-  }
+  await sweepService(params.store, service);
 }
 
 async function nudgeFixture(
@@ -150,33 +165,31 @@ async function nudgeFixture(
     endedAt: card.updatedAt + 1,
     outcome: "ok" as const,
   };
-  return { store, card, service, context, event, request };
+  return {
+    store,
+    card,
+    service,
+    context,
+    event,
+    request,
+    sync: (onMatched = service.nudge) => syncWorkboardSubagentEnded({ store, event, onMatched }),
+    stop: () => service.stop?.(context),
+  };
 }
 
 describe("Workboard gateway lifecycle sync", () => {
   it("uses the active service owner from a prepared plugin generation", async () => {
     const info = vi.fn();
-    const {
-      store,
-      service: activeService,
-      request,
-      context,
-      event,
-    } = await nudgeFixture(undefined, { logger: { info, warn: vi.fn(), error: vi.fn() } });
-    const generationService = createWorkboardAutomationNudgeService({ store });
-
-    await syncWorkboardSubagentEnded({
-      store,
-      event,
-      onMatched: generationService.nudge,
+    const { store, request, sync, stop } = await nudgeFixture(undefined, {
+      logger: { info, warn: vi.fn(), error: vi.fn() },
     });
-    await activeService.stop?.(context);
-
+    const generationService = createWorkboardAutomationNudgeService({ store });
+    await sync(generationService.nudge);
+    await stop();
     expect(info).toHaveBeenCalledWith(
       "workboard automation nudge requested for board planning: job job-categorize-planning",
     );
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("job-categorize-planning", "if-enabled");
+    expect(request).toHaveBeenCalledExactlyOnceWith("job-categorize-planning", "if-enabled");
   });
 
   it.each([
@@ -194,10 +207,8 @@ describe("Workboard gateway lifecycle sync", () => {
         store,
         event: { success: true },
         context: { sessionKey },
-        readSessions: async () => ({
-          sessions: [{ key: sessionKey, status: "running", hasActiveRun: true }],
-          complete: true,
-        }),
+        readSessions: async () =>
+          lifecycleSnapshot(lifecycleSession(sessionKey, "running", undefined, true)),
         onMatched: automation.nudge,
       });
       expect((await store.get(card.id))?.status).toBe("running");
@@ -205,14 +216,7 @@ describe("Workboard gateway lifecycle sync", () => {
       for (let sweep = 0; sweep < 2; sweep += 1) {
         await runSessionSweep({
           store,
-          sessions: [
-            {
-              key: sessionKey,
-              status: "done",
-              hasActiveRun: false,
-              updatedAt: card.updatedAt + 1,
-            },
-          ],
+          sessions: [lifecycleSession(sessionKey, "done", card.updatedAt + 1)],
           onMatched: automation.nudge,
         });
       }
@@ -249,17 +253,9 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it("does not nudge a matching card whose board has no automation", async () => {
-    const { store, service, context, event, request } = await nudgeFixture(vi.fn(), {
-      automationJobId: null,
-    });
-
-    await syncWorkboardSubagentEnded({
-      store,
-      event,
-      onMatched: service.nudge,
-    });
-    await service.stop?.(context);
-
+    const { request, sync, stop } = await nudgeFixture(vi.fn(), { automationJobId: null });
+    await sync();
+    await stop();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -271,147 +267,102 @@ describe("Workboard gateway lifecycle sync", () => {
       entered.resolve();
       return run.promise;
     });
-    const { store, service, context, event } = await nudgeFixture(request);
+    const { sync, stop } = await nudgeFixture(request);
 
-    const first = syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge });
+    const first = sync();
     await entered.promise;
-    await syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge });
+    await sync();
     run.resolve({ ok: true, ran: true });
     await first;
-    await syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge });
-    await service.stop?.(context);
+    await sync();
+    await stop();
 
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("swallows nudge failures without affecting lifecycle sync", async () => {
-    const warn = vi.fn();
-    const { store, card, service, context, event } = await nudgeFixture(
-      vi.fn().mockRejectedValue(new Error("gateway unavailable")),
-      { logger: { info: vi.fn(), warn, error: vi.fn() } },
-    );
-
-    await expect(
-      syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge }),
-    ).resolves.toBe(1);
-    await service.stop?.(context);
-
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("workboard automation nudge failed"));
-  });
-
-  it("logs disabled automation skips without affecting lifecycle sync", async () => {
-    const warn = vi.fn();
-    const { store, card, service, context, event } = await nudgeFixture(
-      vi.fn().mockResolvedValue({ ok: true, ran: false, reason: "disabled" }),
-      { logger: { info: vi.fn(), warn, error: vi.fn() } },
-    );
-
-    await expect(
-      syncWorkboardSubagentEnded({ store, event, onMatched: service.nudge }),
-    ).resolves.toBe(1);
-    await service.stop?.(context);
-
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
-    expect(warn).toHaveBeenCalledWith(
-      "workboard automation nudge skipped for board planning: job job-categorize-planning disabled",
-    );
-  });
+  it.each(["failure", "disabled"] as const)(
+    "handles %s automation without affecting lifecycle sync",
+    async (outcome) => {
+      const warn = vi.fn();
+      const request =
+        outcome === "failure"
+          ? vi.fn().mockRejectedValue(new Error("gateway unavailable"))
+          : vi.fn().mockResolvedValue({ ok: true, ran: false, reason: "disabled" });
+      const { store, card, sync, stop } = await nudgeFixture(request, {
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+      });
+      await expect(sync()).resolves.toBe(1);
+      await stop();
+      await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
+      expect(warn).toHaveBeenCalledWith(
+        outcome === "failure"
+          ? expect.stringContaining("workboard automation nudge failed")
+          : "workboard automation nudge skipped for board planning: job job-categorize-planning disabled",
+      );
+    },
+  );
 
   it("updates execution attempts once when duplicate failure hooks arrive", async () => {
-    const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:main:subagent:workboard-default-failure";
-    const card = await createLinkedCard(store, {
-      sessionKey,
-      runId: "run-failure",
-      execution: execution(sessionKey, "run-failure"),
-    });
-    const event = {
-      targetSessionKey: sessionKey,
-      runId: "run-failure",
-      endedAt: card.updatedAt + 1,
-      outcome: "error" as const,
-    };
+    const { end, read } = await runningCard(sessionKey, "run-failure");
+    const event = { runId: "run-failure", outcome: "error" as const };
 
-    await syncWorkboardSubagentEnded({ store, event });
-    await syncWorkboardSubagentEnded({ store, event });
+    await end(event);
+    await end(event);
 
-    await expect(store.get(card.id)).resolves.toMatchObject({
+    await expect(read()).resolves.toMatchObject({
       metadata: { failureCount: 1, attempts: [expect.objectContaining({ status: "blocked" })] },
     });
   });
 
   it("settles a running execution without reopening a manually completed card", async () => {
     const status = "done";
-    const store = createWorkboardSqliteTestStore();
     const sessionKey = `agent:main:dashboard:${status}`;
-    const card = await createLinkedCard(store, {
+    const { card, read, sweep } = await linked({
       status,
       sessionKey,
       execution: execution(sessionKey, "manually-completed"),
     });
 
-    await runSessionSweep({
-      store,
-      sessions: [
-        { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: card.updatedAt + 1 },
-      ],
-      complete: true,
-    });
+    await sweep([lifecycleSession(sessionKey, "done", card.updatedAt + 1)], { complete: true });
 
-    expect(await store.get(card.id)).toMatchObject({
-      status: "done",
-      execution: { status: "review" },
-    });
+    expect(await read()).toMatchObject({ status: "done", execution: { status: "review" } });
   });
 
   it("keeps backlog cards in place after a terminal session event", async () => {
     const status = "backlog";
-    const store = createWorkboardSqliteTestStore();
     const sessionKey = `agent:main:dashboard:terminal-${status}`;
-    const card = await createLinkedCard(store, { status, sessionKey });
+    const { end, read } = await linked({ status, sessionKey });
 
-    await syncWorkboardSubagentEnded({
-      store,
-      event: { targetSessionKey: sessionKey, endedAt: card.updatedAt + 1, outcome: "ok" },
-    });
+    await end();
 
-    expect((await store.get(card.id))?.status).toBe("backlog");
+    expect((await read())?.status).toBe("backlog");
   });
 
   it("matches cards by run id", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, { runId: "run-linked" });
+    const { end, read } = await linked({ runId: "run-linked" });
     const sessionKey = "agent:main:dashboard:other";
     const runId = "run-linked";
 
-    await syncWorkboardSubagentEnded({
-      store,
-      event: { targetSessionKey: sessionKey, runId, endedAt: card.updatedAt + 1, outcome: "ok" },
-    });
+    await end({ targetSessionKey: sessionKey, runId });
 
-    expect((await store.get(card.id))?.status).toBe("review");
+    expect((await read())?.status).toBe("review");
   });
 
   it("defers incognito failure until its session settles without exposing private content", async () => {
     const sessionKey = "agent:main:dashboard:incognito-agent-end";
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, {
-      sessionKey,
-      runId: "run-agent",
-      execution: execution(sessionKey, "run-agent"),
-    });
+    const { store, card, read } = await runningCard(sessionKey);
     let active = true;
     const request = vi.fn().mockImplementation(async (method: string) =>
       method === "sessions.list"
         ? { sessions: [] }
         : {
-            session: {
-              key: sessionKey,
-              status: active ? "running" : "failed",
-              hasActiveRun: active,
-              updatedAt: card.updatedAt + 1,
-            },
+            session: lifecycleSession(
+              sessionKey,
+              active ? "running" : "failed",
+              card.updatedAt + 1,
+              active,
+            ),
           },
     );
     const gateway = { isAvailable: async () => true, request };
@@ -434,7 +385,7 @@ describe("Workboard gateway lifecycle sync", () => {
       },
       { runId: "run-agent", sessionKey },
     );
-    const vetoed = await store.get(card.id);
+    const vetoed = await read();
     expect(vetoed).toMatchObject({ status: "running", execution: { status: "running" } });
     expect(vetoed?.metadata?.failureCount).toBeUndefined();
     expect(
@@ -447,22 +398,14 @@ describe("Workboard gateway lifecycle sync", () => {
       readSessions: (options) => readWorkboardLifecycleSessions(gateway, options),
       onMatched,
     });
-    const operation = vi.spyOn(store, "runOperation");
-    try {
-      await service.start(nudgeContext(vi.fn()));
-      service.onGatewayStart();
-      await operation.mock.results[0]?.value;
-    } finally {
-      service.onGatewayStop();
-      operation.mockRestore();
-    }
+    await sweepService(store, service);
     expect(onMatched).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith(
       "sessions.describe",
       { key: sessionKey, includeDerivedTitles: false, includeLastMessage: false },
       { scopes: ["operator.read"] },
     );
-    await expect(store.get(card.id)).resolves.toMatchObject({
+    await expect(read()).resolves.toMatchObject({
       status: "blocked",
       execution: { status: "blocked" },
     });
@@ -470,91 +413,41 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(JSON.stringify(handler.mock.calls)).not.toContain("PRIVATE_");
   });
 
-  it("blocks on the event's exact terminal session while another agent runs the same suffix", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, {
-      sessionKey: "subagent:workboard-ops-card",
-      runId: "run-agent",
-      execution: execution("subagent:workboard-ops-card", "run-agent"),
-    });
-    const alphaKey = "agent:alpha:subagent:workboard-ops-card";
-    const betaKey = "agent:beta:subagent:workboard-ops-card";
-    const readSessions = vi.fn().mockResolvedValue({
-      sessions: [
-        { key: alphaKey, status: "failed", hasActiveRun: false, updatedAt: card.updatedAt + 1 },
-        { key: betaKey, status: "running", hasActiveRun: true, updatedAt: card.updatedAt + 1 },
-      ],
-      complete: true,
-    });
-
-    await syncWorkboardAgentEnded({
-      store,
-      event: { runId: "run-agent", success: false },
-      context: { runId: "run-agent", sessionKey: alphaKey },
-      now: card.updatedAt + 2,
-      readSessions,
-    });
-
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "blocked",
-      execution: { status: "blocked" },
-      metadata: { failureCount: 1 },
-    });
-  });
-
-  it("defers an attempt without an exact session key to the session sweep", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, {
-      sessionKey: "subagent:workboard-ops-ambiguous",
-      runId: "run-agent",
-      execution: execution("subagent:workboard-ops-ambiguous", "run-agent"),
-    });
-    const readSessions = vi.fn().mockResolvedValue({
-      sessions: [
-        {
-          key: "agent:alpha:subagent:workboard-ops-ambiguous",
-          status: "failed",
-          hasActiveRun: false,
-        },
-        {
-          key: "agent:beta:subagent:workboard-ops-ambiguous",
-          status: "running",
-          hasActiveRun: true,
-        },
-      ],
-      complete: true,
-    });
-
-    await syncWorkboardAgentEnded({
-      store,
-      event: { runId: "run-agent", success: false },
-      context: { runId: "run-agent" },
-      now: card.updatedAt + 2,
-      readSessions,
-    });
-
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "running",
-      execution: { status: "running" },
-    });
-  });
+  it.each([true, false])(
+    "uses an exact event session rather than another agent's suffix (exact=%s)",
+    async (exact) => {
+      const sessionKey = "subagent:workboard-ops-card";
+      const { store, card, read } = await runningCard(sessionKey);
+      const alphaKey = `agent:alpha:${sessionKey}`;
+      const updatedAt = exact ? card.updatedAt + 1 : undefined;
+      const sessions = [
+        lifecycleSession(alphaKey, "failed", updatedAt),
+        lifecycleSession(`agent:beta:${sessionKey}`, "running", updatedAt, true),
+      ];
+      const readSessions = vi.fn().mockResolvedValue(lifecycleSnapshot(...sessions));
+      await syncWorkboardAgentEnded({
+        store,
+        event: { runId: "run-agent", success: false },
+        context: { runId: "run-agent", ...(exact ? { sessionKey: alphaKey } : {}) },
+        now: card.updatedAt + 2,
+        readSessions,
+      });
+      await expect(read()).resolves.toMatchObject(
+        exact
+          ? { status: "blocked", execution: { status: "blocked" }, metadata: { failureCount: 1 } }
+          : { status: "running", execution: { status: "running" } },
+      );
+    },
+  );
 
   it("marks an inactive running session stale and clears it after recovery", async () => {
-    const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:main:dashboard:stale";
-    const card = await createLinkedCard(store, { status: "todo", sessionKey });
+    const { card, read, sweep } = await linked({ status: "todo", sessionKey });
     const staleUpdatedAt = card.updatedAt + 1;
     const now = staleUpdatedAt + 31 * 60 * 1000;
 
-    await runSessionSweep({
-      store,
-      sessions: [
-        { key: sessionKey, status: "running", hasActiveRun: false, updatedAt: staleUpdatedAt },
-      ],
-      complete: true,
-      now,
-    });
-    await expect(store.get(card.id)).resolves.toMatchObject({
+    await sweep([lifecycleSession(sessionKey, "running", staleUpdatedAt)], { complete: true, now });
+    await expect(read()).resolves.toMatchObject({
       status: "running",
       metadata: {
         lifecycleStatusSourceUpdatedAt: staleUpdatedAt,
@@ -562,14 +455,12 @@ describe("Workboard gateway lifecycle sync", () => {
       },
     });
 
-    await runSessionSweep({
-      store,
-      sessions: [{ key: sessionKey, status: "running", hasActiveRun: true, updatedAt: now + 1 }],
+    await sweep([lifecycleSession(sessionKey, "running", now + 1, true)], {
       complete: true,
       now: now + 1,
     });
 
-    expect((await store.get(card.id))?.metadata?.stale).toBeUndefined();
+    expect((await read())?.metadata?.stale).toBeUndefined();
   });
 
   it("skips session discovery when no unarchived card needs lifecycle reconciliation", async () => {
@@ -584,51 +475,31 @@ describe("Workboard gateway lifecycle sync", () => {
       sessionKey: "agent:retired:subagent:workboard-default-archived",
     });
     await store.archive(archived.id, true);
-    const readSessions = vi.fn().mockResolvedValue({ sessions: [], complete: true });
-    const context = { logger: { warn: vi.fn() } } as never;
+    const readSessions = vi.fn().mockResolvedValue(lifecycleSnapshot());
     const service = createWorkboardLifecycleService({ store, readSessions });
-    using operation = vi.spyOn(store, "runOperation");
-
-    await service.start(context);
-    service.onGatewayStart();
-    expect(operation).toHaveBeenCalled();
-    await operation.mock.results[0]?.value;
-    service.onGatewayStop();
-    await service.stop?.(context);
+    await sweepService(store, service);
 
     expect(readSessions).not.toHaveBeenCalled();
   });
 
   it("reconciles a captured unknown session when agent ownership is unambiguous", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, { sessionKey: "unknown" });
+    const { store, card, read } = await linked({ sessionKey: "unknown" });
     const request = vi.fn().mockImplementation(async (method: string) => {
       if (method === "agents.list") {
         return { selectionRequired: false };
       }
       return {
-        sessions: [
-          {
-            key: "unknown",
-            status: "done",
-            hasActiveRun: false,
-            updatedAt: card.updatedAt + 1,
-          },
-        ],
+        sessions: [lifecycleSession("unknown", "done", card.updatedAt + 1)],
       };
     });
     const readSessions = vi.fn(
       async (options: { sessionKey: string }) =>
         await readWorkboardLifecycleSessions({ isAvailable: async () => true, request }, options),
     );
-    const context = { logger: { warn: vi.fn() } } as never;
     const service = createWorkboardLifecycleService({ store, readSessions });
 
-    await service.start(context);
-    service.onGatewayStart();
-    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
-    service.onGatewayStop();
-    await service.stop?.(context);
+    await sweepService(store, service);
+    expect((await read())?.status).toBe("review");
 
     expect(readSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: "unknown" }));
     expect(request).toHaveBeenNthCalledWith(1, "agents.list", {}, { scopes: ["operator.read"] });
@@ -641,24 +512,13 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it("does not suffix-match a uniquely wrong agent for an explicit target", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, { agentId: "worker", boardId: "ops" });
+    const { card, read, sweep } = await linked({ agentId: "worker", boardId: "ops" });
     const sessionKey = workboardSessionKeyForCard(card);
     const suffix = sessionKey.slice(sessionKey.indexOf("subagent:workboard-"));
 
-    await runSessionSweep({
-      store,
-      sessions: [
-        {
-          key: `agent:other:${suffix}`,
-          status: "done",
-          hasActiveRun: false,
-          updatedAt: card.updatedAt + 1,
-        },
-      ],
-    });
+    await sweep([lifecycleSession(`agent:other:${suffix}`, "done", card.updatedAt + 1)]);
 
-    expect((await store.get(card.id))?.status).toBe("running");
+    expect((await read())?.status).toBe("running");
   });
 
   it("does not backfill over a newer attempt after lifecycle matching", async () => {
@@ -700,26 +560,13 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it("does not apply a delayed terminal event from an older accepted run", async () => {
-    const store = createWorkboardSqliteTestStore();
     const sessionKey = "agent:worker:subagent:workboard-default-retried";
-    const card = await createLinkedCard(store, {
-      sessionKey,
-      runId: "current-run",
-      execution: execution(sessionKey, "current-run"),
-    });
+    const { end, read } = await runningCard(sessionKey, "current-run");
 
-    const updated = await syncWorkboardSubagentEnded({
-      store,
-      event: {
-        targetSessionKey: sessionKey,
-        runId: "older-run",
-        endedAt: card.updatedAt + 1,
-        outcome: "ok",
-      },
-    });
+    const updated = await end({ runId: "older-run" });
 
     expect(updated).toBe(0);
-    await expect(store.get(card.id)).resolves.toMatchObject({
+    await expect(read()).resolves.toMatchObject({
       status: "running",
       runId: "current-run",
       execution: { runId: "current-run", status: "running" },
@@ -734,23 +581,16 @@ describe("Workboard gateway lifecycle sync", () => {
       const acceptedSessionKey = workboardSessionKeyForCard(card);
       const claimed = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
 
+      const observedSession = (agent: string, status: Session["status"]) => ({
+        key: `agent:${agent}:${acceptedSessionKey}`,
+        status,
+        updatedAt: claimed.card.updatedAt + 1,
+      });
       await runSessionSweep({
         store,
         sessions: [
-          {
-            key: `agent:alpha:${acceptedSessionKey}`,
-            status: "done",
-            updatedAt: claimed.card.updatedAt + 1,
-          },
-          ...(ambiguous
-            ? [
-                {
-                  key: `agent:beta:${acceptedSessionKey}`,
-                  status: "failed" as const,
-                  updatedAt: claimed.card.updatedAt + 1,
-                },
-              ]
-            : []),
+          observedSession("alpha", "done"),
+          ...(ambiguous ? [observedSession("beta", "failed")] : []),
         ],
       });
 
@@ -759,18 +599,12 @@ describe("Workboard gateway lifecycle sync", () => {
   );
 
   it("suffix-matches an agentless linked card to an agent-prefixed Workboard session", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await createLinkedCard(store, { boardId: "ops" });
+    const { card, read, sweep } = await linked({ boardId: "ops" });
     const sessionKey = `agent:worker:${workboardSessionKeyForCard(card)}`;
 
-    await runSessionSweep({
-      store,
-      sessions: [
-        { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: card.updatedAt + 1 },
-      ],
-    });
+    await sweep([lifecycleSession(sessionKey, "done", card.updatedAt + 1)]);
 
-    expect((await store.get(card.id))?.status).toBe("review");
+    expect((await read())?.status).toBe("review");
   });
 
   it("keeps unknown excluded when explicit ownership requires agent selection", async () => {
@@ -804,24 +638,20 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it("recovers an exact legacy link from a full page with an unrelated title match", async () => {
-    const store = createWorkboardSqliteTestStore();
     const sessionKey = "legacy-card";
-    const card = await createLinkedCard(store, { sessionKey });
+    const { card, read, sweep } = await linked({ sessionKey });
 
-    await runSessionSweep({
-      store,
-      sessions: [
-        {
-          key: "agent:main:unrelated",
-          title: `Discuss ${sessionKey}`,
-          status: "running",
-          updatedAt: card.updatedAt + 2,
-        },
-        { key: sessionKey, status: "done", updatedAt: card.updatedAt + 1 },
-      ],
-    });
+    await sweep([
+      {
+        key: "agent:main:unrelated",
+        title: `Discuss ${sessionKey}`,
+        status: "running",
+        updatedAt: card.updatedAt + 2,
+      },
+      lifecycleSession(sessionKey, "done", card.updatedAt + 1),
+    ]);
 
-    expect((await store.get(card.id))?.status).toBe("review");
+    expect((await read())?.status).toBe("review");
   });
 
   it("treats a full legacy lookup page as possibly ambiguous", async () => {
@@ -846,18 +676,10 @@ describe("Workboard gateway lifecycle sync", () => {
 function createSessionReader(sessionKey: string, updatedAt: number) {
   return vi
     .fn()
-    .mockResolvedValueOnce({
-      sessions: [
-        { key: sessionKey, status: "running", hasActiveRun: true, updatedAt: updatedAt + 1 },
-      ],
-      complete: true,
-    })
-    .mockResolvedValueOnce({
-      sessions: [
-        { key: sessionKey, status: "done", hasActiveRun: false, updatedAt: updatedAt + 2 },
-      ],
-      complete: true,
-    });
+    .mockResolvedValueOnce(
+      lifecycleSnapshot(lifecycleSession(sessionKey, "running", updatedAt + 1, true)),
+    )
+    .mockResolvedValueOnce(lifecycleSnapshot(lifecycleSession(sessionKey, "done", updatedAt + 2)));
 }
 
 describe("Workboard lifecycle service", () => {
@@ -865,37 +687,25 @@ describe("Workboard lifecycle service", () => {
     const store = createWorkboardSqliteTestStore();
     const original = createWorkboardLifecycleService({
       store,
-      readSessions: async () => ({ sessions: [], complete: true }),
+      readSessions: async () => lifecycleSnapshot(),
     });
-    const readReplacement = vi.fn(async () => ({ sessions: [], complete: true }));
+    const readReplacement = vi.fn(async () => lifecycleSnapshot());
     const replacement = createWorkboardLifecycleService({ store, readSessions: readReplacement });
-    const preparedReader = vi.fn(async () => ({ sessions: [], complete: true }));
+    const preparedReader = vi.fn(async () => lifecycleSnapshot());
     const prepared = createWorkboardLifecycleService({ store, readSessions: preparedReader });
-    const context = {
-      config: {},
-      stateDir: ".",
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    };
+    const readPrepared = () => prepared.readSessions({ sessionKey: "agent:main:card" });
+    const context = serviceContext();
     try {
       await original.start(context);
-      await expect(prepared.readSessions({ sessionKey: "agent:main:card" })).resolves.toEqual({
-        sessions: [],
-        complete: true,
-      });
+      await expect(readPrepared()).resolves.toEqual(lifecycleSnapshot());
       original.stop();
       await replacement.start(context);
       original.stop();
-      await expect(prepared.readSessions({ sessionKey: "agent:main:card" })).resolves.toEqual({
-        sessions: [],
-        complete: true,
-      });
+      await expect(readPrepared()).resolves.toEqual(lifecycleSnapshot());
       expect(readReplacement).toHaveBeenCalledOnce();
       expect(preparedReader).not.toHaveBeenCalled();
       replacement.stop();
-      await expect(prepared.readSessions({ sessionKey: "agent:main:card" })).resolves.toEqual({
-        sessions: [],
-        complete: false,
-      });
+      await expect(readPrepared()).resolves.toEqual({ sessions: [], complete: false });
       expect(readReplacement).toHaveBeenCalledOnce();
     } finally {
       original.stop();
@@ -909,18 +719,11 @@ describe("Workboard lifecycle service", () => {
       const store = createWorkboardSqliteTestStore();
       const sessionKey = "agent:main:dashboard:startup-ready";
       const card = await createLinkedCard(store, { status: "todo", sessionKey });
-      const readReadySessions = createSessionReader(sessionKey, card.updatedAt);
-      let gatewayReady = false;
-      const readSessions = vi.fn(async () => {
-        if (!gatewayReady) {
-          throw new Error("sessions.list unavailable during gateway startup");
-        }
-        return readReadySessions();
-      });
+      const readSessions = createSessionReader(sessionKey, card.updatedAt);
       const warn = vi.fn();
       const original = createWorkboardLifecycleService({ store, readSessions });
       const replacement = createWorkboardLifecycleService({ store, readSessions });
-      const context = { logger: { warn } } as never;
+      const context = serviceContext({ info: vi.fn(), warn, error: vi.fn() });
       const lifetime = new AbortController();
       const runOperation = vi.spyOn(store, "runOperation");
       vi.useFakeTimers();
@@ -930,7 +733,6 @@ describe("Workboard lifecycle service", () => {
         expect(readSessions).not.toHaveBeenCalled();
         expect(warn).not.toHaveBeenCalled();
 
-        gatewayReady = true;
         original.onGatewayStart(lifetime.signal);
         expect(runOperation).toHaveBeenCalled();
         await runOperation.mock.results[0]?.value;
@@ -980,7 +782,7 @@ describe("Workboard lifecycle service", () => {
     const service = createWorkboardLifecycleService({ store, readSessions });
     vi.useFakeTimers();
     try {
-      await service.start({ logger: { warn } } as never);
+      await service.start(serviceContext({ info: vi.fn(), warn, error: vi.fn() }));
       service.onGatewayStart(lifetime.signal);
       await readEntered.promise;
       lifetime.abort();

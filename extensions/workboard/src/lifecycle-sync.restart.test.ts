@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import {
+  lifecycleSession,
+  lifecycleSnapshot,
+  serviceContext,
+  type LifecycleSnapshot,
+} from "./lifecycle-sync-fixtures.test-support.js";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { createDeferred } from "./lifecycle-sync.test-support.js";
 import { WorkboardStore } from "./store.js";
@@ -15,10 +21,7 @@ async function beginPreparedDispatch() {
   const reachedRun = createDeferred<{ sessionKey: string; provisionalRunId: string }>();
   const runResult = createDeferred<{ sessionKey?: string; runId: string }>();
   const run = vi.fn().mockImplementation(async (input) => {
-    reachedRun.resolve({
-      sessionKey: input.sessionKey,
-      provisionalRunId: input.idempotencyKey,
-    });
+    reachedRun.resolve({ sessionKey: input.sessionKey, provisionalRunId: input.idempotencyKey });
     return await runResult.promise;
   });
   const dispatch = dispatchAndStartWorkboardCards({
@@ -43,9 +46,6 @@ async function rejectInterruptedDispatch(
   await interrupted.dispatch;
 }
 
-type Snapshot = Awaited<
-  ReturnType<ReturnType<typeof createWorkboardLifecycleService>["readSessions"]>
->;
 let interrupted: Awaited<ReturnType<typeof beginPreparedDispatch>>;
 let canonicalSessionKey: string;
 let lifecycle: Awaited<ReturnType<typeof sweep>> | undefined;
@@ -71,13 +71,13 @@ afterEach(async () => {
 async function sweep({
   sessions,
   complete = true,
-}: Omit<Snapshot, "complete"> & { complete?: boolean }) {
-  const readSessions = vi.fn().mockResolvedValue({ sessions, complete });
+}: Omit<LifecycleSnapshot, "complete"> & { complete?: boolean }) {
+  const readSessions = vi.fn().mockResolvedValue({ ...lifecycleSnapshot(...sessions), complete });
   const service = createWorkboardLifecycleService({
     store: interrupted.replacementStore,
     readSessions,
   });
-  const context = { logger: { warn: vi.fn() } } as never;
+  const context = serviceContext();
   await service.start(context);
   const active = { context, readSessions, service };
   lifecycle = active;
@@ -90,34 +90,27 @@ async function stopLifecycleSweep(active: NonNullable<typeof lifecycle>) {
 }
 
 describe("Workboard prepared launch restart recovery", () => {
-  it("fails a prepared launch when its persisted session has no active run", async () => {
-    const active = await sweep({
-      sessions: [
-        {
-          key: canonicalSessionKey,
-          status: "running",
-          hasActiveRun: false,
-        },
-      ],
-    });
-
-    active.service.onGatewayStart();
-    await vi.waitFor(async () => {
-      expect((await read())?.status).toBe("blocked");
-    });
-    await stopLifecycleSweep(active);
-
-    await expect(read()).resolves.toMatchObject({
-      status: "blocked",
-      metadata: { automation: { launch: { phase: "failed" } } },
-    });
-    expect((await read())?.metadata?.claim).toBeUndefined();
-    await rejectInterruptedDispatch(interrupted);
-  });
+  it.each(["running", "done"] as const)(
+    "fails a prepared %s session without acceptance evidence",
+    async (status) => {
+      const active = await sweep({ sessions: [lifecycleSession(canonicalSessionKey, status)] });
+      active.service.onGatewayStart();
+      await vi.waitFor(async () => expect((await read())?.status).toBe("blocked"));
+      await stopLifecycleSweep(active);
+      await expect(read()).resolves.toMatchObject({
+        status: "blocked",
+        metadata: { automation: { launch: { phase: "failed" } } },
+      });
+      if (status === "running") {
+        expect((await read())?.metadata?.claim).toBeUndefined();
+      }
+      await rejectInterruptedDispatch(interrupted);
+    },
+  );
 
   it("accepts a prepared launch found under its canonical post-restart session", async () => {
     const active = await sweep({
-      sessions: [{ key: canonicalSessionKey, status: "running", hasActiveRun: true }],
+      sessions: [lifecycleSession(canonicalSessionKey, "running", undefined, true)],
     });
 
     expect(active.readSessions).not.toHaveBeenCalled();
@@ -134,11 +127,11 @@ describe("Workboard prepared launch restart recovery", () => {
       metadata: {
         claim: { ownerId: "workboard-dispatcher" },
         attempts: [
-          expect.objectContaining({
+          {
             status: "running",
             sessionKey: canonicalSessionKey,
             runId: interrupted.prepared.provisionalRunId,
-          }),
+          },
         ],
         automation: {
           launch: {
@@ -166,11 +159,11 @@ describe("Workboard prepared launch restart recovery", () => {
       metadata: {
         automation: { launch: { phase: "accepted", acceptedRunId: "accepted-run" } },
         attempts: [
-          expect.objectContaining({
+          {
             id: expect.any(String),
             status: "succeeded",
             runId: "accepted-run",
-          }),
+          },
         ],
       },
     });
@@ -188,14 +181,7 @@ describe("Workboard prepared launch restart recovery", () => {
       throw new Error("expected prepared launch");
     }
     const active = await sweep({
-      sessions: [
-        {
-          key: canonicalSessionKey,
-          status: "done",
-          hasActiveRun: false,
-          updatedAt: launch.preparedAt + 1,
-        },
-      ],
+      sessions: [lifecycleSession(canonicalSessionKey, "done", launch.preparedAt + 1)],
     });
 
     active.service.onGatewayStart();
@@ -211,32 +197,8 @@ describe("Workboard prepared launch restart recovery", () => {
         automation: {
           launch: { phase: "accepted", acceptedSessionKey: canonicalSessionKey },
         },
-        attempts: [expect.objectContaining({ status: "succeeded" })],
+        attempts: [{ status: "succeeded" }],
       },
-    });
-    await rejectInterruptedDispatch(interrupted);
-  });
-
-  it("does not accept a terminal session without durable timing evidence", async () => {
-    const active = await sweep({
-      sessions: [
-        {
-          key: canonicalSessionKey,
-          status: "done",
-          hasActiveRun: false,
-        },
-      ],
-    });
-
-    active.service.onGatewayStart();
-    await vi.waitFor(async () => {
-      expect((await read())?.status).toBe("blocked");
-    });
-    await stopLifecycleSweep(active);
-
-    await expect(read()).resolves.toMatchObject({
-      status: "blocked",
-      metadata: { automation: { launch: { phase: "failed" } } },
     });
     await rejectInterruptedDispatch(interrupted);
   });
