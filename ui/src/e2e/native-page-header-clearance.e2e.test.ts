@@ -145,14 +145,15 @@ suite.define(() => {
   });
 
   it.each([
-    { width: 1524, height: 864, native: false },
-    { width: 1366, height: 768, native: false },
-    { width: 768, height: 1024, native: false },
-    { width: 390, height: 844, native: false },
-    { width: 1524, height: 864, native: true },
+    { width: 1524, height: 864, native: false, narrowColumn: false },
+    { width: 1366, height: 768, native: false, narrowColumn: false },
+    { width: 768, height: 1024, native: false, narrowColumn: false },
+    { width: 768, height: 1024, native: false, narrowColumn: true },
+    { width: 390, height: 844, native: false, narrowColumn: false },
+    { width: 1524, height: 864, native: true, narrowColumn: false },
   ])(
-    "groups the Agents heading and keeps actions reachable at $width×$height (native: $native)",
-    async ({ width, height, native }) => {
+    "groups the Agents heading and keeps actions reachable at $width×$height (native: $native, narrow: $narrowColumn)",
+    async ({ width, height, native, narrowColumn }) => {
       const { page, toolbar } = await openPage(
         "agents",
         native ? installNativeWebChrome : undefined,
@@ -160,6 +161,12 @@ suite.define(() => {
         { featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"] },
       );
       await page.setViewportSize({ width, height });
+      if (narrowColumn) {
+        // Match the content width left during the tablet sidebar transition.
+        await page.locator(".agents-home__header").evaluate((element) => {
+          (element as HTMLElement).style.width = "430px";
+        });
+      }
       if (width <= 560) {
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
@@ -191,20 +198,30 @@ suite.define(() => {
       const create = header.getByRole("button", { name: "New agent" });
       expect(await manage.getAttribute("href")).toBe("/settings/agents");
       for (const action of [manage, create]) {
-        const box = (await action.boundingBox())!;
+        const { box, introBox } = await action.evaluate((element) => {
+          const bounds = (target: Element): Box => {
+            const rect = target.getBoundingClientRect();
+            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          };
+          const introElement = element.closest(".content-header")!.querySelector(".page-subtitle")!;
+          return { box: bounds(element), introBox: bounds(introElement) };
+        });
         expect(box.x).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width).toBeLessThanOrEqual(width);
         expect(box.y + box.height).toBeLessThanOrEqual(height);
         expect(
-          box.x + box.width <= intro.x ||
-            box.x >= intro.x + intro.width ||
-            box.y + box.height <= intro.y ||
-            box.y >= intro.y + intro.height,
-          `Agent action ${JSON.stringify(box)} overlaps intro ${JSON.stringify(intro)}`,
+          box.x + box.width <= introBox.x ||
+            box.x >= introBox.x + introBox.width ||
+            box.y + box.height <= introBox.y ||
+            box.y >= introBox.y + introBox.height,
+          `Agent action ${JSON.stringify(box)} overlaps intro ${JSON.stringify(introBox)}`,
         ).toBe(true);
         await action.click({ trial: true });
       }
-      await capture(page, `agents-header-${width}-${native ? "native" : "browser"}.png`);
+      await capture(
+        page,
+        `agents-header-${width}-${native ? "native" : "browser"}${narrowColumn ? "-narrow" : ""}.png`,
+      );
       await create.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
       expect(new URL(page.url()).searchParams.get("intent")).toBe("new-agent");

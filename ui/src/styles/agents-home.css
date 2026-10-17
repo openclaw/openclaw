@@ -7,6 +7,10 @@
   padding: 4px 24px 16px;
 }
 
+.agents-home__header .page-header-actions {
+  flex-shrink: 0;
+}
+
 .agents-home__card {
   text-decoration: none;
 }
