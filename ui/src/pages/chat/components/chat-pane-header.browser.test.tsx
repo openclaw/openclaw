@@ -152,6 +152,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           "open-split-view",
         ]);
         const surface = menu.querySelector<HTMLElement>(":scope > .oc-menu")!;
+        // Measure the settled surface, not its opening scale transition.
+        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
         const bounds = surface.getBoundingClientRect();
         expect(bounds.width).toBeCloseTo(264, 0);
         // The phone menu opens from its header trigger, not a viewport corner.
