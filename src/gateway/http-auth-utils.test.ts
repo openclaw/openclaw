@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { getEventListeners, once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { DatabaseSync, StatementSync } from "node:sqlite";
@@ -77,9 +78,7 @@ async function admitResponse(response: ReturnType<typeof makeMockHttpResponse>, 
     res: response.res,
     auth: { mode: "none", allowTailscale: false },
   });
-  if (!admitted?.operatorAccessAuthority) {
-    throw new Error("Expected admitted response access");
-  }
+  assert(admitted?.operatorAccessAuthority, "Expected admitted response access");
   return admitted.operatorAccessAuthority;
 }
 
@@ -148,6 +147,10 @@ async function registerPersonAccessFixture() {
   return { cfg, email, person, access, registry: registry.registry };
 }
 
+function inState<T extends unknown[]>(run: (...args: T) => Promise<void>) {
+  return (...args: T) => withOpenClawTestState({ label: "http-auth" }, () => run(...args));
+}
+
 describe("HTTP gateway owner profiles", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => {
@@ -155,8 +158,9 @@ describe("HTTP gateway owner profiles", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("reuses admitted state schema across 200 HTTP profile authorizations", async () => {
-    await withOpenClawTestState({ label: "http-profile-schema-admission" }, async () => {
+  it(
+    "reuses admitted state schema across 200 HTTP profile authorizations",
+    inState(async () => {
       const { cfg, email, person, access } = await registerPersonAccessFixture();
       access.grant = new AbortController();
       expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(true);
@@ -196,157 +200,142 @@ describe("HTTP gateway owner profiles", () => {
         observation.restore();
         exec.mockRestore();
       }
-    });
-  });
+    }),
+  );
 
   it.each(["missing", "disabled", "failed", "unregistered", "inapplicable", "unrelated"] as const)(
     "denies a required %s policy while preserving independent staff and owner access",
-    async (availability) => {
-      await withOpenClawTestState({ label: "http-required-access-policy" }, async () => {
-        const { cfg, email, person, access, registry } = await registerPersonAccessFixture();
-        access.grant = new AbortController();
-        const plugin = registry.plugins.find((entry) => entry.id === "person-access");
-        if (!plugin) {
-          throw new Error("Expected the registered access policy owner");
-        }
-        if (availability === "missing") {
-          registry.plugins.length = 0;
-          registry.gatewayAccessPolicies.length = 0;
-        } else if (availability === "disabled") {
-          plugin.enabled = false;
-        } else if (availability === "failed") {
-          plugin.status = "error";
-        } else if (availability === "unregistered") {
-          registry.gatewayAccessPolicies.length = 0;
-        } else if (availability === "inapplicable") {
-          access.inapplicable = true;
-        } else {
-          cfg.gateway!.roles!.definitions.reader!.accessPolicyPlugin = "another-policy";
-        }
+    inState(async (availability: string) => {
+      const { cfg, email, person, access, registry } = await registerPersonAccessFixture();
+      access.grant = new AbortController();
+      const plugin = registry.plugins.find((entry) => entry.id === "person-access");
+      assert(plugin, "Expected the registered access policy owner");
+      if (availability === "missing") {
+        registry.plugins.length = 0;
+        registry.gatewayAccessPolicies.length = 0;
+      } else if (availability === "disabled") {
+        plugin.enabled = false;
+      } else if (availability === "failed") {
+        plugin.status = "error";
+      } else if (availability === "unregistered") {
+        registry.gatewayAccessPolicies.length = 0;
+      } else if (availability === "inapplicable") {
+        access.inapplicable = true;
+      } else {
+        cfg.gateway!.roles!.definitions.reader!.accessPolicyPlugin = "another-policy";
+      }
 
-        for (const assignment of [null, "reader", "removed-role"]) {
-          await setCanonicalUserProfileRole(person.id, assignment);
-          invalidateOperatorRolePolicy(person.id);
-          expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({
-            ok: false,
-            authResult: { reason: "operator_access_denied" },
-          });
-        }
-        await setCanonicalUserProfileRole(person.id, "staff");
+      for (const assignment of [null, "reader", "removed-role"]) {
+        await setCanonicalUserProfileRole(person.id, assignment);
         invalidateOperatorRolePolicy(person.id);
-        expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({ ok: true });
-        expect(await authenticate("token", cfg)).toMatchObject({ ok: true });
-      });
-    },
-  );
-
-  it.each(["grant ended", "email moved away and back"])(
-    "enforces registered person access without retiring independent staff authority (%s)",
-    async (change) => {
-      await withOpenClawTestState({ label: "http-person-access" }, async () => {
-        const { cfg, email, person, access } = await registerPersonAccessFixture();
-        expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(false);
-        access.grant = new AbortController();
-        const admitted = await authenticate("trusted-proxy", cfg, email);
-        if (!admitted.ok || !admitted.requestAuth.operatorAccessAuthority) {
-          throw new Error("Expected admitted person access");
-        }
-        const captured = admitted.requestAuth.operatorAccessAuthority;
-        setDisplayName(person.id, "Updated display");
-        const staffEmail = "another-verified@example.test";
-        await linkCanonicalUserProfileEmail(staffEmail, person.id);
-        expect(() => captured.assertCurrent()).not.toThrow();
-        await setCanonicalUserProfileRole(person.id, "staff");
-        invalidateOperatorRolePolicy(person.id);
-        const staff = await authenticate("trusted-proxy", cfg, email);
-        expect(staff).toMatchObject({ ok: true });
-        if (!staff.ok) {
-          throw new Error("Expected independent staff admission");
-        }
-        expect(staff.requestAuth.operatorAccessAuthority).toBeNull();
-        if (change === "grant ended") {
-          access.grant.abort(new Error("Access ended"));
-        } else {
-          await linkCanonicalUserProfileEmail(
-            email,
-            (await ensureCanonicalUserProfileForEmail("replacement@example.test")).id,
-          );
-          await linkCanonicalUserProfileEmail(email, person.id);
-        }
-        expect(captured.signal.aborted).toBe(true);
-        expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
-        expect((await authenticate("trusted-proxy", cfg, staffEmail)).ok).toBe(true);
-        access.grant = new AbortController();
-        expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
-        expect((await authenticate("token", cfg)).ok).toBe(true);
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "rejects alias retirement during policy authorization (restored: %s)",
-    async (restore) => {
-      await withOpenClawTestState({ label: "http-reentrant-person-access" }, async () => {
-        const { cfg, email, person, access } = await registerPersonAccessFixture();
-        await linkCanonicalUserProfileEmail("retained@example.test", person.id);
-        const replacement = await ensureCanonicalUserProfileForEmail("replacement@example.test");
-        access.grant = new AbortController();
-        access.onAuthorize = () => {
-          linkEmail(email, replacement.id);
-          if (restore) {
-            linkEmail(email, person.id);
-          }
-        };
         expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({
           ok: false,
           authResult: { reason: "operator_access_denied" },
         });
-        expect(getUserProfileListItem(person.id).id).toBe(person.id);
-        expect(access.grant.signal.aborted).toBe(false);
+      }
+      await setCanonicalUserProfileRole(person.id, "staff");
+      invalidateOperatorRolePolicy(person.id);
+      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({ ok: true });
+      expect(await authenticate("token", cfg)).toMatchObject({ ok: true });
+    }),
+  );
+
+  it.each(["grant ended", "email moved away and back"])(
+    "enforces registered person access without retiring independent staff authority (%s)",
+    inState(async (change: string) => {
+      const { cfg, email, person, access } = await registerPersonAccessFixture();
+      expect((await authenticate("trusted-proxy", cfg, email)).ok).toBe(false);
+      access.grant = new AbortController();
+      const admitted = await authenticate("trusted-proxy", cfg, email);
+      assert(admitted.ok && admitted.requestAuth.operatorAccessAuthority);
+      const captured = admitted.requestAuth.operatorAccessAuthority;
+      setDisplayName(person.id, "Updated display");
+      const staffEmail = "another-verified@example.test";
+      await linkCanonicalUserProfileEmail(staffEmail, person.id);
+      expect(() => captured.assertCurrent()).not.toThrow();
+      await setCanonicalUserProfileRole(person.id, "staff");
+      invalidateOperatorRolePolicy(person.id);
+      const staff = await authenticate("trusted-proxy", cfg, email);
+      expect(staff).toMatchObject({ ok: true });
+      assert(staff.ok, "Expected independent staff admission");
+      expect(staff.requestAuth.operatorAccessAuthority).toBeNull();
+      if (change === "grant ended") {
+        access.grant.abort(new Error("Access ended"));
+      } else {
+        await linkCanonicalUserProfileEmail(
+          email,
+          (await ensureCanonicalUserProfileForEmail("replacement@example.test")).id,
+        );
+        await linkCanonicalUserProfileEmail(email, person.id);
+      }
+      expect(captured.signal.aborted).toBe(true);
+      expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
+      expect((await authenticate("trusted-proxy", cfg, staffEmail)).ok).toBe(true);
+      access.grant = new AbortController();
+      expect(() => captured.assertCurrent()).toThrow(GatewayOperatorAccessDeniedError);
+      expect((await authenticate("token", cfg)).ok).toBe(true);
+    }),
+  );
+
+  it.each([false, true])(
+    "rejects alias retirement during policy authorization (restored: %s)",
+    inState(async (restore: boolean) => {
+      const { cfg, email, person, access } = await registerPersonAccessFixture();
+      await linkCanonicalUserProfileEmail("retained@example.test", person.id);
+      const replacement = await ensureCanonicalUserProfileForEmail("replacement@example.test");
+      access.grant = new AbortController();
+      access.onAuthorize = () => {
+        linkEmail(email, replacement.id);
+        if (restore) {
+          linkEmail(email, person.id);
+        }
+      };
+      expect(await authenticate("trusted-proxy", cfg, email)).toMatchObject({
+        ok: false,
+        authResult: { reason: "operator_access_denied" },
       });
-    },
+      expect(getUserProfileListItem(person.id).id).toBe(person.id);
+      expect(access.grant.signal.aborted).toBe(false);
+    }),
   );
 
   it.each(["grant", "alias"])(
     "collects HTTP captures while a retained signal observes %s retirement",
-    async (source) => {
-      await withOpenClawTestState({ label: "http-access-retention" }, async () => {
-        const { cfg, email, person, access } = await registerPersonAccessFixture();
-        setRuntimeConfigSnapshot(cfg);
-        await linkCanonicalUserProfileEmail("retained@example.test", person.id);
-        const replacement = await ensureCanonicalUserProfileForEmail("replacement@example.test");
-        access.grant = new AbortController();
-        const retired = await completeResponseCapture(email);
-        const signal = await authenticate("trusted-proxy", cfg, email).then((admitted) => {
-          if (!admitted.ok || !admitted.requestAuth.operatorAccessAuthority) {
-            throw new Error("Expected retained access signal");
-          }
-          return admitted.requestAuth.operatorAccessAuthority.signal;
-        });
-        const control = new WeakRef({ unowned: true });
-        // Leave the creation job before collecting; dereferencing first would retain the capture.
-        await nextTurn();
-        queryObjects(WeakRef);
-        expect(control.deref()).toBeUndefined();
-        for (const [name, reference] of Object.entries(retired)) {
-          expect(reference.deref(), `completed HTTP ${name} should collect`).toBeUndefined();
-        }
-        expect(access.grant.signal.aborted).toBe(false);
-        setDisplayName(person.id, "Still authorized");
-        expect(signal.aborted).toBe(false);
-        if (source === "grant") {
-          access.grant.abort(new Error("Access ended"));
-        } else {
-          await linkCanonicalUserProfileEmail(email, replacement.id);
-          await linkCanonicalUserProfileEmail(email, person.id);
-        }
-        expect(signal.aborted).toBe(true);
+    inState(async (source: string) => {
+      const { cfg, email, person, access } = await registerPersonAccessFixture();
+      setRuntimeConfigSnapshot(cfg);
+      await linkCanonicalUserProfileEmail("retained@example.test", person.id);
+      const replacement = await ensureCanonicalUserProfileForEmail("replacement@example.test");
+      access.grant = new AbortController();
+      const retired = await completeResponseCapture(email);
+      const signal = await authenticate("trusted-proxy", cfg, email).then((admitted) => {
+        assert(admitted.ok && admitted.requestAuth.operatorAccessAuthority);
+        return admitted.requestAuth.operatorAccessAuthority.signal;
       });
-    },
+      const control = new WeakRef({ unowned: true });
+      // Leave the creation job before collecting; dereferencing first would retain the capture.
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      for (const [name, reference] of Object.entries(retired)) {
+        expect(reference.deref(), `completed HTTP ${name} should collect`).toBeUndefined();
+      }
+      expect(access.grant.signal.aborted).toBe(false);
+      setDisplayName(person.id, "Still authorized");
+      expect(signal.aborted).toBe(false);
+      if (source === "grant") {
+        access.grant.abort(new Error("Access ended"));
+      } else {
+        await linkCanonicalUserProfileEmail(email, replacement.id);
+        await linkCanonicalUserProfileEmail(email, person.id);
+      }
+      expect(signal.aborted).toBe(true);
+    }),
   );
 
-  it("binds revocation to an active response and releases completed keep-alive responses", async () => {
-    await withOpenClawTestState({ label: "http-response-access" }, async () => {
+  it(
+    "binds revocation to an active response and releases completed keep-alive responses",
+    inState(async () => {
       const { cfg, email, person, access } = await registerPersonAccessFixture();
       setRuntimeConfigSnapshot(cfg);
       await linkCanonicalUserProfileEmail("retained@example.test", person.id);
@@ -403,9 +392,7 @@ describe("HTTP gateway owner profiles", () => {
           sourceAuthority: nextAuthority,
         });
         releaseRun = captured?.release;
-        if (!captured?.authority.retain) {
-          throw new Error("Expected retained operator source");
-        }
+        assert(captured?.authority.retain, "Expected retained operator source");
         releaseChild = captured.authority.retain();
         captured.release();
         const disconnected = once(next.res, "close");
@@ -434,18 +421,16 @@ describe("HTTP gateway owner profiles", () => {
         next.res.destroy();
         aliasStreaming.res.destroy();
       }
-    });
-  });
+    }),
+  );
 
-  it("shares the durable owner across auth methods and preserves an edited name", async () => {
-    await withOpenClawTestState({ label: "http-owner-profile" }, async () => {
+  it(
+    "shares the durable owner across auth methods and preserves an edited name",
+    inState(async () => {
       let profileId: string | undefined;
       for (const method of ["token", "password", "device-token", "none"] as const) {
         const result = await authenticate(method);
-        expect(result.ok).toBe(true);
-        if (!result.ok) {
-          throw new Error("expected authenticated request");
-        }
+        assert(result.ok, "Expected authenticated request");
         expect(result.requestAuth.user).toBeUndefined();
         expect(result.requestAuth.authenticatedUserProfile).toMatchObject({
           displayName: profileId ? "Saved Owner" : "Gateway Person",
@@ -459,8 +444,8 @@ describe("HTTP gateway owner profiles", () => {
         }
         expect(result.requestAuth.operatorRolePolicy).toBeUndefined();
       }
-    });
-  });
+    }),
+  );
 
   it.each([
     ["token", true, false, undefined],
@@ -488,10 +473,7 @@ describe("HTTP gateway owner profiles", () => {
           expect(ensureOwner).not.toHaveBeenCalled();
           return;
         }
-        expect(result.ok).toBe(true);
-        if (!result.ok) {
-          throw new Error("expected authenticated request");
-        }
+        assert(result.ok, "Expected authenticated request");
         if (user) {
           expect(result.requestAuth.user).toBe(user);
           expect(result.requestAuth.authenticatedUserProfile?.displayName).toBe("alice");

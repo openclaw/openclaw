@@ -508,33 +508,29 @@ describe("hooks mapping", () => {
     expect(result?.ok).toBe(false);
   });
 
-  describe("prototype pollution protection", () => {
-    it("blocks constructor traversal in webhook payload", async () => {
-      const mappings = resolveHookMappings({
-        mappings: [
-          agentMapping({
-            id: "constructor-test",
-            messageTemplate: "type: {{constructor.name}}",
-          }),
-        ],
-      });
-      expectAgentMessage(
-        await applySingleHookMapping(
-          mappings,
-          mappingContext("gmail", { constructor: { name: "INJECTED" } }),
-        ),
-        "type: ",
-      );
+  it("blocks constructor traversal in webhook payload", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        agentMapping({
+          id: "constructor-test",
+          messageTemplate: "type: {{constructor.name}}",
+        }),
+      ],
     });
+    expectAgentMessage(
+      await applySingleHookMapping(
+        mappings,
+        mappingContext("gmail", { constructor: { name: "INJECTED" } }),
+      ),
+      "type: ",
+    );
   });
 });
 
 describe("hook mapping fan-out", () => {
-  const fanOutUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
-
   function applyGmailPreset(payload: Record<string, unknown>) {
     const mappings = resolveHookMappings({ presets: ["gmail"] });
-    return applyHookMappings(mappings, { payload, headers: {}, url: fanOutUrl, path: "gmail" });
+    return applyHookMappings(mappings, mappingContext("gmail", payload));
   }
 
   it("renders one action per batched gmail message with per-message session keys", async () => {

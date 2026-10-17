@@ -26,6 +26,8 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
 
 const workflow = ".github/workflows/example.yaml";
 const definition = "name: synthetic\non: workflow_dispatch\njobs: {}\n";
+const published = { status: "published" };
+const identityChanged = { status: "failed", code: "identity_changed" };
 const createFixture = async (baseFiles: Record<string, string> = {}, requestedRef?: string) => {
   const f = await createRequesterPublicationFixture(
     checkpoint,
@@ -36,11 +38,18 @@ const createFixture = async (baseFiles: Record<string, string> = {}, requestedRe
   if (!f.repository) {
     throw new Error("Expected a repository publication fixture.");
   }
+  const { git, runtime, baseCommit } = f.repository;
   return {
     ...f,
     repository: f.repository,
     publish: (key: string, requester = f.guest) =>
       f.coordinator.requestForSessionV2(f.request(key, requester)),
+    commitTree: (tree: string, parent = baseCommit) =>
+      git(["commit-tree", tree, "-p", parent], "candidate workflows\n"),
+    targetTree: (tree: string, parent = baseCommit, message = "target workflows\n") => {
+      runtime.baseHead = git(["commit-tree", tree, "-p", parent], message);
+      runtime.baseHeadTree = tree;
+    },
   };
 };
 const rejected = {
@@ -103,7 +112,7 @@ describe("repository checkpoint workflow authority", () => {
     await f.repository.capture("ordinary code\n", "ordinary", {
       ".github/workflows/README.md": "workflow documentation\n",
     });
-    expect(await f.publish("ordinary")).toMatchObject({ status: "published" });
+    expect(await f.publish("ordinary")).toMatchObject(published);
     expect(f.repository.runtime.effects).toEqual(["push", "pull_request"]);
     const trees = treeReads();
     expect(trees.length).toBeLessThanOrEqual(3);
@@ -113,12 +122,10 @@ describe("repository checkpoint workflow authority", () => {
   it("preserves a maintainer-published workflow in guest updates but rejects its removal", async () => {
     const f = await createFixture();
     await f.repository.capture("maintainer code\n", "maintainer", { [workflow]: definition });
-    expect(await f.publish("maintainer", f.maintainer)).toMatchObject({ status: "published" });
+    expect(await f.publish("maintainer", f.maintainer)).toMatchObject(published);
     expect(treeReads()).toEqual([]);
     await f.repository.capture("guest code\n", "guest", { [workflow]: definition });
-    expect(await f.publish("guest")).toMatchObject({
-      status: "published",
-    });
+    expect(await f.publish("guest")).toMatchObject(published);
     const effectCount = writes().length;
     const saved = await f.repository.capture("retained guest code\n", "restore-source");
     expect(await f.publish("restore-source")).toMatchObject(rejected);
@@ -139,11 +146,11 @@ describe("repository checkpoint workflow authority", () => {
         [renamed]: definition,
         [conflict]: definition,
       });
-      const { git, runtime, baseCommit, capture } = f.repository;
+      const { git, runtime, capture } = f.repository;
       const approved = definition + "# branch-approved\n";
       if (update) {
         await capture("initial source\n", "initial", { [conflict]: approved });
-        expect(await f.publish("initial", f.maintainer)).toMatchObject({ status: "published" });
+        expect(await f.publish("initial", f.maintainer)).toMatchObject(published);
       }
       const upstream = {
         [workflow]: definition + "# target update\n",
@@ -153,15 +160,11 @@ describe("repository checkpoint workflow authority", () => {
         [conflict]: definition + "# target conflict\n",
       };
       const target = await capture(null, "target", upstream);
-      runtime.baseHead = git(
-        ["commit-tree", target.workspaceTree, "-p", baseCommit],
-        "target workflows\n",
-      );
-      runtime.baseHeadTree = target.workspaceTree;
+      f.targetTree(target.workspaceTree);
       const accepted = { ...upstream, ...(update ? { [conflict]: approved } : {}) };
       await capture("source after target update\n", "inherited", accepted);
       const result = await f.publish("inherited");
-      expect(result, JSON.stringify(result)).toMatchObject({ status: "published" });
+      expect(result, JSON.stringify(result)).toMatchObject(published);
       expect(git(["show", runtime.head + ":" + workflow])).toBe(upstream[workflow].trim());
       if (update) {
         expect(git(["show", runtime.head + ":" + conflict])).toBe(approved.trim());
@@ -188,23 +191,16 @@ describe("repository checkpoint workflow authority", () => {
               : candidate,
       });
       const accepted = await capture("accepted source\n", "candidate", { [workflow]: candidate });
-      const candidateCommit = git(
-        ["commit-tree", accepted.workspaceTree, "-p", baseCommit],
-        "candidate workflows\n",
-      );
+      const candidateCommit = f.commitTree(accepted.workspaceTree);
       const parent =
         failure === "diverged"
           ? git(["rev-parse", baseCommit + "^"])
           : failure === "stale"
             ? candidateCommit
             : baseCommit;
-      runtime.baseHead = git(
-        ["commit-tree", target.workspaceTree, "-p", parent],
-        "authenticated target\n",
-      );
+      f.targetTree(target.workspaceTree, parent, "authenticated target\n");
       runtime.mergeBase = git(["merge-base", baseCommit, runtime.baseHead]);
       runtime.mergeBaseTree = git(["rev-parse", runtime.mergeBase + "^{tree}"]);
-      runtime.baseHeadTree = target.workspaceTree;
       const transport = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (args, options) => {
         if (failure === "foreign") {
@@ -243,9 +239,7 @@ describe("repository checkpoint workflow authority", () => {
         return result;
       });
       const result = await f.publish(failure);
-      expect(result).toMatchObject(
-        failure.endsWith("revoked") ? { status: "failed", code: "identity_changed" } : rejected,
-      );
+      expect(result).toMatchObject(failure.endsWith("revoked") ? identityChanged : rejected);
       expect(writes()).toEqual([]);
       expect(runtime.effects).toEqual([]);
     },
@@ -314,10 +308,7 @@ describe("repository checkpoint workflow authority", () => {
       }
       return result;
     });
-    expect(await f.publish("authority-change", f.maintainer)).toMatchObject({
-      status: "failed",
-      code: "identity_changed",
-    });
+    expect(await f.publish("authority-change", f.maintainer)).toMatchObject(identityChanged);
     expect(f.repository.runtime.uploaded.size).toBeGreaterThan(0);
     expect(f.repository.runtime.effects).toEqual([]);
     expect(writes().every(([args]) => args.some((arg: string) => arg.endsWith("/git/blobs")))).toBe(

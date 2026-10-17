@@ -50,19 +50,30 @@ const retire = (row: Parameters<typeof failStaleRepositoryGitHubPublicationInDat
   runOpenClawStateWriteTransaction((database) =>
     failStaleRepositoryGitHubPublicationInDatabase(database, row, () => false),
   );
+const expectRollback = (write: () => void, message = "rollback") => {
+  expect(() =>
+    runOpenClawStateWriteTransaction(() => {
+      write();
+      throw new Error(message);
+    }),
+  ).toThrow(message);
+};
+const subscribeFacts = (visit: (key: string, fact: SqliteCommittedFact<unknown>) => void) =>
+  onTestFinished(
+    githubPublicationReceipts.subscribeFacts((change) => {
+      if (change.kind === "committed") {
+        for (const [key, fact] of change.receipt.facts) {
+          visit(key, fact);
+        }
+      }
+    }),
+  );
+const postimage = (value: unknown) => ({ kind: "postimage", value });
 
 describe("shared publication committed notifications", () => {
   it("installs the entire request/lifecycle batch before observers run", () => {
     const facts = new Map<string, SqliteCommittedFact<unknown>>();
-    onTestFinished(
-      githubPublicationReceipts.subscribeFacts((change) => {
-        if (change.kind === "committed") {
-          for (const [key, value] of change.receipt.facts) {
-            facts.set(key, value);
-          }
-        }
-      }),
-    );
+    subscribeFacts((key, fact) => facts.set(key, fact));
     const observations: unknown[] = [];
     onTestFinished(
       onSessionLifecycleEvent(() => {
@@ -76,12 +87,7 @@ describe("shared publication committed notifications", () => {
     runOpenClawStateWriteTransaction(() => {
       insertSharedWorktreeReceipt("first");
       claimShared("first", "instance");
-      expect(() =>
-        runOpenClawStateWriteTransaction(() => {
-          insertSharedWorktreeReceipt("rolled-back");
-          throw new Error("savepoint");
-        }),
-      ).toThrow("savepoint");
+      expectRollback(() => insertSharedWorktreeReceipt("rolled-back"), "savepoint");
       insertSharedWorktreeReceipt("second");
       deferShared(["first", "second"]);
       expect(facts.size).toBe(0);
@@ -92,15 +98,9 @@ describe("shared publication committed notifications", () => {
     expect(observations.length).toBeGreaterThan(0);
     for (const observation of observations) {
       expect(observation).toMatchObject({
-        first: {
-          kind: "postimage",
-          value: { request_id: "first", status: "requested", gateway_instance_id: null },
-        },
-        second: { kind: "postimage", value: { request_id: "second", status: "requested" } },
-        lifecycle: {
-          kind: "postimage",
-          value: { publication_kind: "shared", request_id: "first" },
-        },
+        first: postimage({ request_id: "first", status: "requested", gateway_instance_id: null }),
+        second: postimage({ request_id: "second", status: "requested" }),
+        lifecycle: postimage({ publication_kind: "shared", request_id: "first" }),
       });
     }
   });
@@ -124,14 +124,11 @@ describe("shared publication committed notifications", () => {
   it("discards creation and claim notifications when their enclosing transaction rolls back", () => {
     insertSharedWorktreeReceipt("existing");
     using observer = observe();
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        insertSharedWorktreeReceipt("rolled-back");
-        claimShared("existing", "instance");
-        expect(observer).not.toHaveBeenCalled();
-        throw new Error("rollback");
-      }),
-    ).toThrow("rollback");
+    expectRollback(() => {
+      insertSharedWorktreeReceipt("rolled-back");
+      claimShared("existing", "instance");
+      expect(observer).not.toHaveBeenCalled();
+    });
     expect(observer).not.toHaveBeenCalled();
     const db = openOpenClawStateDatabase().db;
     expect(readGitHubPublicationRequest(db, { requestId: "rolled-back" })).toBeUndefined();
@@ -142,12 +139,7 @@ describe("shared publication committed notifications", () => {
     ensureGitHubPublicationStoreFixture();
     using observer = observe();
     runOpenClawStateWriteTransaction(() => {
-      expect(() =>
-        runOpenClawStateWriteTransaction(() => {
-          insertSharedWorktreeReceipt("discarded");
-          throw new Error("savepoint");
-        }),
-      ).toThrow("savepoint");
+      expectRollback(() => insertSharedWorktreeReceipt("discarded"), "savepoint");
       insertSharedWorktreeReceipt("kept");
       expect(observer).not.toHaveBeenCalled();
     });
@@ -196,15 +188,10 @@ describe("shared publication committed notifications", () => {
   it("publishes every repository receipt/effect transition after its committed write", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const db = openOpenClawStateDatabase().db;
-    const observations: Array<{ inTransaction: boolean; status?: string; effect?: string | null }> =
-      [];
+    const observations: Array<[boolean, string | undefined, string | null | undefined]> = [];
     using observer = observe(() => {
       const row = readRepository("repository-request");
-      observations.push({
-        inTransaction: db.isTransaction,
-        status: row?.status,
-        effect: row?.effect_state,
-      });
+      observations.push([db.isTransaction, row?.status, row?.effect_state]);
     });
     const unbound = repositoryReceipt(workspace, {
       checkpoint_ref: null,
@@ -241,7 +228,7 @@ describe("shared publication committed notifications", () => {
       url: "https://github.com/owner/repository/pull/3",
     });
     expect(observer).toHaveBeenCalledTimes(8);
-    expect(observations.map(({ status, effect }) => [status, effect])).toEqual([
+    expect(observations.map(([, status, effect]) => [status, effect])).toEqual([
       ["requested", null],
       ["requested", null],
       ["publishing", null],
@@ -251,7 +238,7 @@ describe("shared publication committed notifications", () => {
       ["publishing", "observed"],
       ["published", "observed"],
     ]);
-    expect(observations.every((observation) => !observation.inTransaction)).toBe(true);
+    expect(observations.every(([inTransaction]) => !inTransaction)).toBe(true);
     expect(observer.mock.calls).toEqual(Array.from({ length: 8 }, () => [expectedEvent]));
   });
 
@@ -259,17 +246,11 @@ describe("shared publication committed notifications", () => {
     const workspace = await sharedRepositoryWorkspace();
     using observer = observe();
     const receiptRows: unknown[] = [];
-    onTestFinished(
-      githubPublicationReceipts.subscribeFacts((change) => {
-        if (change.kind === "committed") {
-          for (const fact of change.receipt.facts.values()) {
-            if (fact.kind === "postimage") {
-              receiptRows.push(fact.value);
-            }
-          }
-        }
-      }),
-    );
+    subscribeFacts((_key, fact) => {
+      if (fact.kind === "postimage") {
+        receiptRows.push(fact.value);
+      }
+    });
     const row = insertReceipt(workspace, {
       owner_profile_id: "private-person",
       connection_generation: "private-generation",
@@ -296,14 +277,11 @@ describe("shared publication committed notifications", () => {
     const workspace = await sharedRepositoryWorkspace();
     const row = insertReceipt(workspace);
     using observer = observe();
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        const execution = claimRepository(row, "instance", currentAuthority);
-        execution.recordEffect("push");
-        expect(observer).not.toHaveBeenCalled();
-        throw new Error("rollback");
-      }),
-    ).toThrow("rollback");
+    expectRollback(() => {
+      const execution = claimRepository(row, "instance", currentAuthority);
+      execution.recordEffect("push");
+      expect(observer).not.toHaveBeenCalled();
+    });
     expect(observer).not.toHaveBeenCalled();
     expect(readRepository(row.request_id)).toMatchObject({
       status: "requested",

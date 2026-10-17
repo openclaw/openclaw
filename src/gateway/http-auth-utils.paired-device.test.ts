@@ -32,24 +32,16 @@ import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
-async function pairBrowser(
-  deviceId: string,
-  scopes: string[],
-  auth = AUTH_TOKEN,
-  controlUi = true,
-) {
+async function pairBrowser(scopes: string[], auth = AUTH_TOKEN, controlUi = true) {
+  const identity = { deviceId: "browser", role: "operator", scopes };
   const requested = await requestDevicePairing({
-    deviceId,
+    ...identity,
     publicKey: "fixture-key",
-    role: "operator",
-    scopes,
     ...(controlUi ? { clientId: "openclaw-control-ui", clientMode: "webchat" } : {}),
   });
   await approveDevicePairing(requested.request.requestId, { callerScopes: scopes });
   const token = await deviceTokens.ensureDeviceToken({
-    deviceId,
-    role: "operator",
-    scopes,
+    ...identity,
     issuer: {
       kind: "shared-gateway-auth",
       generation: resolveSharedGatewaySessionGeneration(auth, [])!,
@@ -70,7 +62,7 @@ it.each(["operator.admin", "operator.read"])(
   "createGatewayHttpServer plugin PUT/POST revalidates paired %s authority after reading the body",
   async (scope) => {
     await withOpenClawTestState({ label: "plugin-device-auth" }, async () => {
-      const token = await pairBrowser("browser", [scope]);
+      const token = await pairBrowser([scope]);
       const bodyStarted = createDeferred();
       let effects = 0;
       const handlePluginRequest = createGatewayPluginRequestHandler({
@@ -166,7 +158,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("authenticates remote HTTP reads only from the grant and refuses reusable credentials", async () => {
   await withOpenClawTestState({ label: "remote-http-device-ceiling" }, async () => {
-    const token = await pairBrowser("remote-http-browser", ["operator.admin"], AUTH_TOKEN, false);
+    const token = await pairBrowser(["operator.admin"], AUTH_TOKEN, false);
     for (const credential of [token, AUTH_TOKEN.token!, undefined]) {
       const req = createRequest({
         path: "/control-ui-config.json",
@@ -213,11 +205,11 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
       "<!doctype html><html><head></head><body><openclaw-app></openclaw-app></body></html>",
     );
     const auth = { mode: "token" as const, token: "synthetic-shared-token", allowTailscale: false };
-    const token = await pairBrowser("bootstrap-browser", ["operator.read"], auth);
+    const token = await pairBrowser(["operator.read"], auth);
     const verify = deviceTokens.verifyDeviceToken;
     vi.spyOn(deviceTokens, "verifyDeviceToken").mockImplementationOnce(async (params) => {
       const result = await verify(params);
-      await deviceTokens.revokeDeviceToken({ deviceId: "bootstrap-browser", role: "operator" });
+      await deviceTokens.revokeDeviceToken({ deviceId: "browser", role: "operator" });
       return result;
     });
 

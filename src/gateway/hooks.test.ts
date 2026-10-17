@@ -387,22 +387,14 @@ describe("gateway hooks helpers", () => {
     },
   );
 
-  test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {
-    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["hooks"]));
-    expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
-    expect(isHookAgentAllowed(resolved, "main")).toBe(false);
-  });
-
-  test("isHookAgentAllowed treats empty allowlist as deny-all routing", () => {
-    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig([]));
-    expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
-    expect(isHookAgentAllowed(resolved, "main")).toBe(false);
-  });
-
-  test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
-    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["*"]));
-    expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
-    expect(isHookAgentAllowed(resolved, "main")).toBe(true);
+  test.each<[string, string[], boolean, boolean]>([
+    ["honors effective target routing", ["hooks"], true, false],
+    ["treats an empty allowlist as deny-all", [], false, false],
+    ["treats a wildcard allowlist as allow-all", ["*"], true, true],
+  ])("isHookAgentAllowed %s", (_name, allowed, hooksAllowed, mainAllowed) => {
+    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(allowed));
+    expect(isHookAgentAllowed(resolved, "hooks")).toBe(hooksAllowed);
+    expect(isHookAgentAllowed(resolved, "main")).toBe(mainAllowed);
   });
 
   test("resolveHookSessionKey disables request sessionKey by default", () => {

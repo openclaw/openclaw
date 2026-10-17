@@ -7,7 +7,7 @@ import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gatewa
 import { deleteCronSessionViaGateway } from "../cron/isolated-agent/session-cleanup.js";
 import { resolveQuestionOverGateway } from "../infra/question-gateway-resolver.js";
 import { listSpawnedSessionKeysWithResult } from "../plugin-sdk/session-visibility-internal.js";
-import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver as withinGateway } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -55,7 +55,7 @@ afterEach(() => {
   }
 });
 
-function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext {
+function createGateway(handlers: GatewayRequestHandlers) {
   const registry = createGatewayMethodRegistry(
     Object.entries(handlers).map(([name, handler]) => {
       const scope = resolveLeastPrivilegeOperatorScopesForMethod(name)[0];
@@ -79,7 +79,19 @@ function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext 
   });
   context.recoveryRuntime = runtime.recovery;
   runtimes.push(runtime);
-  return context;
+  return () => context;
+}
+
+function cleanupChild(
+  resolveGatewayContext: () => GatewayRequestContext | undefined,
+  isCurrent?: () => boolean,
+) {
+  return deleteSubagentSessionForCleanup({
+    callGateway: (request) => bindGatewayLifecycleRequest()(request),
+    gatewayBinding: { resolveGatewayContext },
+    ...childSession,
+    isCurrent,
+  });
 }
 
 describe("hosted lifecycle Gateway dispatch", () => {
@@ -89,7 +101,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
   });
 
   it("reads cron/subagent history and session ownership without a transport", async () => {
-    const context = createContext({
+    const resolveContext = createGateway({
       "chat.history": ({ respond }) =>
         respond(true, { messages: [{ role: "assistant", content: "Child finished" }] }),
       "sessions.list": ({ params, respond }) => {
@@ -97,30 +109,27 @@ describe("hosted lifecycle Gateway dispatch", () => {
         respond(true, { sessions: [{ key: "agent:main:subagent:child" }] });
       },
     });
-    await withPluginRuntimeGatewayContextResolver(
-      () => context,
-      async () => {
-        await expect(readLatestAssistantReply({ sessionKey: "agent:main:child" })).resolves.toBe(
-          "Child finished",
-        );
-        await expect(
-          listSpawnedSessionKeysWithResult({ requesterSessionKey: "agent:main:parent" }),
-        ).resolves.toEqual({ ok: true, value: new Set(["agent:main:subagent:child"]) });
-      },
-    );
+    await withinGateway(resolveContext, async () => {
+      await expect(readLatestAssistantReply({ sessionKey: "agent:main:child" })).resolves.toBe(
+        "Child finished",
+      );
+      await expect(
+        listSpawnedSessionKeysWithResult({ requesterSessionKey: "agent:main:parent" }),
+      ).resolves.toEqual({ ok: true, value: new Set(["agent:main:subagent:child"]) });
+    });
     expect(socketCall).not.toHaveBeenCalled();
   });
 
   it("keeps cron and detached subagent cleanup on their Gateway with lifecycle preconditions", async () => {
     const deletions: unknown[] = [];
-    let current: GatewayRequestContext | undefined = createContext({
+    let current: GatewayRequestContext | undefined = createGateway({
       "sessions.delete": ({ params, respond }) => {
         deletions.push(params);
         respond(true, { deleted: true });
       },
-    });
+    })();
     const resolveGatewayContext = () => current;
-    await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+    await withinGateway(resolveGatewayContext, () =>
       expect(
         deleteCronSessionViaGateway({
           agentSessionKey: "agent:main:cron:job:run:one",
@@ -129,19 +138,13 @@ describe("hosted lifecycle Gateway dispatch", () => {
         }),
       ).resolves.toBe(true),
     );
-    const cleanup = () =>
-      deleteSubagentSessionForCleanup({
-        callGateway: (request) => bindGatewayLifecycleRequest()(request),
-        gatewayBinding: { resolveGatewayContext },
-        ...childSession,
-      });
-    await expect(cleanup()).resolves.toBe("deleted");
+    await expect(cleanupChild(resolveGatewayContext)).resolves.toBe("deleted");
     expect(deletions).toMatchObject([
       { expectedSessionId: "cron-session", expectedLifecycleRevision: "cron-revision" },
       { expectedSessionId: "child-session", expectedLifecycleRevision: "child-revision" },
     ]);
     current = undefined;
-    await expect(cleanup()).resolves.toBe("failed");
+    await expect(cleanupChild(resolveGatewayContext)).resolves.toBe("failed");
     expect(deletions).toHaveLength(2);
     expect(socketCall).not.toHaveBeenCalled();
   });
@@ -149,13 +152,13 @@ describe("hosted lifecycle Gateway dispatch", () => {
   it.each([false, true])(
     "keeps omitted and explicitly unbound cleanup owners distinct: %s",
     async (unbound) => {
-      const ambient = createContext({});
-      const resolveAmbient = () => ambient;
+      const resolveAmbient = createGateway({});
+      const ambient = resolveAmbient();
       const callGateway = vi.fn(async () => {
         expect(getInProcessGatewayRequestContext()).toBe(unbound ? undefined : ambient);
         return {};
       });
-      await withPluginRuntimeGatewayContextResolver(resolveAmbient, () =>
+      await withinGateway(resolveAmbient, () =>
         expect(
           deleteSubagentSessionForCleanup({
             callGateway,
@@ -173,7 +176,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
     const beforeCommit = createDeferredCore();
     const resumeCommit = createDeferredCore();
     const mutate = vi.fn();
-    const context = createContext({});
+    const resolveContext = createGateway({});
     deleteGatewaySession.mockImplementation(async ({ params, assertCurrent }) => {
       beforeCommit.resolve();
       await resumeCommit.promise;
@@ -182,13 +185,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
       return { ok: true, result: { ok: true, key: params.key, deleted: true, archived: [] } };
     });
     let current = true;
-    const cleanup = () =>
-      deleteSubagentSessionForCleanup({
-        callGateway: (request) => bindGatewayLifecycleRequest()(request),
-        gatewayBinding: { resolveGatewayContext: () => context },
-        ...childSession,
-        isCurrent: () => current,
-      });
+    const cleanup = () => cleanupChild(resolveContext, () => current);
     const invoke = await withOperatorToolGatewayAuthority(
       {
         authenticatedUserProfile: {
@@ -222,40 +219,37 @@ describe("hosted lifecycle Gateway dispatch", () => {
 
   it("answers on the same Gateway and rejects replacement during source authorization", async () => {
     const answer = vi.fn();
-    const context = createContext({
+    let current = createGateway({
       "question.get": ({ respond }) => respond(true, { question }),
       "question.resolve": ({ params, respond }) => {
         answer(params);
         respond(true, { status: "answered" });
       },
+    })();
+    const resolveContext = () => current;
+    await withinGateway(resolveContext, async () => {
+      await expect(
+        resolveQuestionOverGateway({
+          ...questionRequest,
+          authorize: () => true,
+        }),
+      ).resolves.toMatchObject({ status: "answered", optionValue: "Staging" });
+      await expect(
+        resolveQuestionOverGateway({
+          ...questionRequest,
+          authorize: async () => {
+            current = createGateway({})();
+            return true;
+          },
+        }),
+      ).rejects.toThrow("Gateway instance unavailable");
     });
-    let current = context;
-    await withPluginRuntimeGatewayContextResolver(
-      () => current,
-      async () => {
-        await expect(
-          resolveQuestionOverGateway({
-            ...questionRequest,
-            authorize: () => true,
-          }),
-        ).resolves.toMatchObject({ status: "answered", optionValue: "Staging" });
-        await expect(
-          resolveQuestionOverGateway({
-            ...questionRequest,
-            authorize: async () => {
-              current = createContext({});
-              return true;
-            },
-          }),
-        ).rejects.toThrow("Gateway instance unavailable");
-      },
-    );
     expect(answer).toHaveBeenCalledOnce();
     expect(socketCall).not.toHaveBeenCalled();
   });
 
   it("resolves hosted command SecretRefs from the active Gateway snapshot", async () => {
-    const context = createContext({
+    const resolveContext = createGateway({
       "secrets.resolve": ({ params, respond }) => {
         expect(params.targetIds).toEqual(["talk.providers.*.apiKey"]);
         respond(true, {
@@ -270,36 +264,31 @@ describe("hosted lifecycle Gateway dispatch", () => {
         });
       },
     });
-    await withPluginRuntimeGatewayContextResolver(
-      () => context,
-      async () => {
-        const result = await resolveCommandSecretRefsViaGateway({
-          config: buildTalkTestProviderConfig({
-            source: "env",
-            provider: "default",
-            id: "SYNTHETIC_HOSTED_KEY",
-          }),
-          commandName: "message",
-          targetIds: new Set(["talk.providers.*.apiKey"]),
-        });
-        expect(readTalkTestProviderApiKey(result.resolvedConfig)).toBe("synthetic-hosted-value");
-        expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_gateway");
-      },
-    );
+    await withinGateway(resolveContext, async () => {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: "SYNTHETIC_HOSTED_KEY",
+        }),
+        commandName: "message",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+      expect(readTalkTestProviderApiKey(result.resolvedConfig)).toBe("synthetic-hosted-value");
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_gateway");
+    });
     expect(socketCall).not.toHaveBeenCalled();
   });
 
   it("preserves an explicit remote question destination inside a hosted scope", async () => {
     socketCall.mockResolvedValueOnce({ question }).mockResolvedValueOnce({ status: "answered" });
-    await withPluginRuntimeGatewayContextResolver(
-      () => createContext({}),
-      () =>
-        expect(
-          resolveQuestionOverGateway({
-            ...questionRequest,
-            gatewayUrl: "wss://gateway.example.test",
-          }),
-        ).resolves.toMatchObject({ status: "answered" }),
+    await withinGateway(createGateway({}), () =>
+      expect(
+        resolveQuestionOverGateway({
+          ...questionRequest,
+          gatewayUrl: "wss://gateway.example.test",
+        }),
+      ).resolves.toMatchObject({ status: "answered" }),
     );
     expect(socketCall).toHaveBeenCalledTimes(2);
     expect(socketCall).toHaveBeenLastCalledWith(
