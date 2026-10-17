@@ -18,6 +18,7 @@ const earlierModifiedSince = new Date("2023-12-31T00:00:00.000Z").toUTCString();
 type Headers = Record<string, string | string[]>;
 const since = (value: string | string[]): Headers => ({ "If-Modified-Since": value });
 const conditionalCases: [string, Headers, number][] = [
+  ["HTTP-date rejects ISO timestamp", since("2024-01-02T00:00:00.000Z"), 200],
   ["rejects duplicate dates", since([laterModifiedSince, earlierModifiedSince]), 200],
   ["equal date", since(lastModified), 304],
   ["older date", since(earlierModifiedSince), 200],

@@ -1223,31 +1223,26 @@ describe("chrome MCP page parsing", () => {
     const navigateCall = vi
       .spyOn(session.client, "callTool")
       .mock.calls.find(([call]) => call.name === "navigate_page");
-    expect(navigateCall).toMatchObject([
-      { arguments: { timeout: 120_000 } },
-      { timeout: 125_000 },
-    ]);
+    expect(navigateCall).toMatchObject([{ arguments: { timeout: 120_000 } }, { timeout: 125_000 }]);
   });
 
   it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {
     vi.useFakeTimers();
     const { factory } = installFakeSessions((session, invocation) => {
       if (invocation === 1) {
-        session.client.callTool = vi.fn(
-          async (call: ToolCall, options?: { timeout?: number }) => {
-            if (call.name === "list_pages") {
-              return fakeListPagesResult();
-            }
-            expect(call.arguments?.timeout).toBe(20_000);
-            expect(options?.timeout).toBe(25_000);
-            return await new Promise<never>((_resolve, reject) => {
-              setTimeout(
-                () => reject(new SdkError(SdkErrorCode.RequestTimeout, "Request timed out")),
-                options?.timeout,
-              );
-            });
-          },
-        );
+        session.client.callTool = vi.fn(async (call: ToolCall, options?: { timeout?: number }) => {
+          if (call.name === "list_pages") {
+            return fakeListPagesResult();
+          }
+          expect(call.arguments?.timeout).toBe(20_000);
+          expect(options?.timeout).toBe(25_000);
+          return await new Promise<never>((_resolve, reject) => {
+            setTimeout(
+              () => reject(new SdkError(SdkErrorCode.RequestTimeout, "Request timed out")),
+              options?.timeout,
+            );
+          });
+        });
       }
     });
 
