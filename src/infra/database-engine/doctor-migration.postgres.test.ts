@@ -152,7 +152,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     reads.retire.mockImplementation(worker.retireIdleOpenClawStateReadWorkers);
     reads.capture.mockImplementation(() => ({
       own: () => () => {},
-      service() {},
       createTransport: (command) =>
         createMockStateReadSource({
           read: async (source) => reads.decode(await readInProcess(command, source)),

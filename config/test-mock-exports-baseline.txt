@@ -8627,7 +8627,6 @@
 ["src/state/openclaw-state-db-readonly.signal-custody.test.ts","./openclaw-state-read-worker.js","d1c8f679210ca2cfee3fe7c5d7340aea66f560c2ed22821cf26544052425e782",1]
 ["src/state/openclaw-state-db-readonly.snapshot-admission.test.ts","./openclaw-state-db-read-connection.js","99a6d8da844e412c510d8faddaf8f3ef50164cc27c2c4d0b25d05e565f687510",1]
 ["src/state/openclaw-state-db-readonly.snapshot-admission.test.ts","./openclaw-state-read-worker.js","4700c129a195f8857aed641c8941f10c30dbbc878236b8fcc2a37b590ff6d5f9",1]
-["src/state/openclaw-state-db-readonly.worker-lifecycle.test.ts","./openclaw-state-read-worker.js","e4e342721f4b7f71141465a3d7dfc7bf2ead1f91b91161c1231990e16eee7652",1]
 ["src/state/openclaw-state-lease-async.cancel.test.ts","./openclaw-state-db-cache.js","4e0ba9337aeeb72a46ee2802e1c9aa17d0b4a59b4f2028cc91ba406b97e91131",1]
 ["src/state/openclaw-state-lease-async.cancel.test.ts","./openclaw-state-worker-store.js","eaa37223ff1f0c0bb2431f14426749b598fff1e1d5bd24e325015caf45b7a266",1]
 ["src/state/openclaw-state-lease-async.maintenance.test.ts","./openclaw-state-db-cache.js","ed431af333da0a47706cd785e6fc3ae46f470255957ba3f0cf53707abacebbbe",1]

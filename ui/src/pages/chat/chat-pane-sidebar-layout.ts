@@ -39,6 +39,7 @@ type LazyElementKey = "region" | "detail-panel" | SidebarSlotId;
 type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>];
 
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
+  dashboard: ["openclaw-board-view", () => import("../../components/board/board-view.ts")],
   region: [
     "openclaw-chat-sidebar-region",
     () => import("./components/chat-sidebar-region.runtime.tsx"),
@@ -176,6 +177,10 @@ export function renderSidebarRegion(params: SidebarRegionParams) {
   const hasPanels = params.layout.columns.length > 0;
   const regionError = hasPanels ? ensureLazySidebarElement("region") : undefined;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
+    // A saved dashboard stays cold until its pane actually presents it.
+    if (panel.slot === "dashboard" && !isSidebarSlotVisible(params.layout, "dashboard")) {
+      continue;
+    }
     const lazyState = ensureLazySidebarElement(panel.slot);
     if (lazyState !== undefined) {
       panelDefinitions = panelDefinitions.map((definition) =>

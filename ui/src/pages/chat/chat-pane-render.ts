@@ -582,6 +582,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onRequestUpdate: state.requestUpdate,
+      mediaOwner: state,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
       onSlashCommand: nativeConversation
