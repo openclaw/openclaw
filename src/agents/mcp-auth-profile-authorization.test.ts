@@ -31,18 +31,43 @@ import { captureMcpAuthProfileAuthorization } from "./mcp-auth-profile-authoriza
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
 type AuthRoot = Awaited<ReturnType<typeof seedRoot>>;
-async function withRoot(token: string, run: (root: AuthRoot) => Promise<void>) {
-  const root = await seedRoot(token);
-  await withEnvAsync(root.env, () => run(root));
-}
-function captureForRoot(
-  root: AuthRoot,
-  assertCurrent = source().assertCurrent,
-  profileId = "shared",
-) {
-  return captureMcpAuthProfileAuthorization({ profileId, agentDir: root.agentDir, assertCurrent });
+type Authority = Awaited<ReturnType<typeof captureAuthProfileAuthorization>>;
+type AuthFixture = AuthRoot & {
+  caller: ReturnType<typeof source>;
+  capture: (profileId?: string, agentDir?: string, generic?: boolean) => Promise<Authority>;
+};
+async function withRoot(run: (root: AuthFixture) => Promise<void>) {
+  const root = await seedRoot("original");
+  const caller = source();
+  const handles: Authority[] = [];
+  const capture: AuthFixture["capture"] = async (
+    profileId = "shared",
+    agentDir = root.agentDir,
+    generic = false,
+  ) => {
+    const authority = await (
+      generic ? captureAuthProfileAuthorization : captureMcpAuthProfileAuthorization
+    )({
+      profileId,
+      agentDir,
+      assertCurrent: caller.assertCurrent,
+    });
+    handles.push(authority);
+    return authority;
+  };
+  await withEnvAsync(root.env, async () => {
+    try {
+      await run({ ...root, caller, capture });
+    } finally {
+      for (const handle of handles.toReversed()) {
+        handle.dispose();
+      }
+    }
+  });
 }
 const retired = expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" });
+const retiredCode = { code: "MCP_AUTHORIZATION_RETIRED" };
+const unavailableCode = { code: "MCP_AUTHORIZATION_UNAVAILABLE" };
 function source() {
   let active = true;
   return {
@@ -57,7 +82,7 @@ function source() {
   };
 }
 
-async function foreign(root: Awaited<ReturnType<typeof seedRoot>>, script: string) {
+async function foreign(root: AuthRoot, script: string) {
   const result = await runNodeScript(
     ["--import", "tsx", "--input-type=module", "-e", script],
     root.env,
@@ -73,7 +98,7 @@ describe("auth-profile authorization", () => {
   it.each(["personal", "env-only", "bounded-store"] as const)(
     "rejects missing or unavailable %s authorization without substituting ambient credentials",
     async (scope) => {
-      await withRoot("ambient-credential", async (root) => {
+      await withRoot(async (root) => {
         const capture = () =>
           captureAuthProfileAuthorization({
             profileId:
@@ -98,97 +123,72 @@ describe("auth-profile authorization", () => {
   );
 
   it("enrolls inherited owners through the generic API and preserves MCP capture across processes", async () => {
-    await withRoot("original", async (root) => {
-      const caller = source();
-      const authority = await captureAuthProfileAuthorization({
-        profileId: "shared",
-        agentDir: root.agentDir,
-        assertCurrent: caller.assertCurrent,
+    await withRoot(async (root) => {
+      const authority = await root.capture("shared", root.agentDir, true);
+      const id = authority.authorizationId;
+      expect(id).not.toContain("original");
+      await updateAuthProfileStoreWithLock({
+        updater(store) {
+          store.usageStats = { shared: { lastUsed: Date.now(), errorCount: 0 } };
+          return true;
+        },
       });
-      try {
-        const id = authority.authorizationId;
-        expect(id).not.toContain("original");
-        await updateAuthProfileStoreWithLock({
-          updater(store) {
-            store.usageStats = { shared: { lastUsed: Date.now(), errorCount: 0 } };
-            return true;
-          },
-        });
-        await authority.revalidate();
-        expect(authority.assertCurrent).not.toThrow();
-        clearRuntimeAuthProfileStoreSnapshots();
-        const output = await foreign(
-          root,
-          "import { captureMcpAuthProfileAuthorization as capture } from " +
-            JSON.stringify(captureUrl) +
-            ";" +
-            "let active = true; const authority = await capture({ profileId: 'shared', agentDir: " +
-            JSON.stringify(root.agentDir) +
-            ", assertCurrent() { if (!active) throw new Error('source retired'); } });" +
-            "console.log(authority.authorizationId); active = false; authority.dispose();",
-        );
-        expect(output).toContain(id);
-        caller.retire();
-        expect(authority.assertCurrent).toThrow(retired);
-      } finally {
-        authority.dispose();
-      }
-      await expect(authority.revalidate()).rejects.toMatchObject({
-        code: "MCP_AUTHORIZATION_RETIRED",
-      });
+      await authority.revalidate();
+      expect(authority.assertCurrent).not.toThrow();
+      clearRuntimeAuthProfileStoreSnapshots();
+      const output = await foreign(
+        root,
+        "import { captureMcpAuthProfileAuthorization as capture } from " +
+          JSON.stringify(captureUrl) +
+          ";" +
+          "let active = true; const authority = await capture({ profileId: 'shared', agentDir: " +
+          JSON.stringify(root.agentDir) +
+          ", assertCurrent() { if (!active) throw new Error('source retired'); } });" +
+          "console.log(authority.authorizationId); active = false; authority.dispose();",
+      );
+      expect(output).toContain(id);
+      root.caller.retire();
+      expect(authority.assertCurrent).toThrow(retired);
+      authority.dispose();
+      await expect(authority.revalidate()).rejects.toMatchObject(retiredCode);
     });
   });
 
-  it("does not revive an old handle after remove and same-byte reconnect", async () => {
-    await withRoot("original", async (root) => {
-      const caller = source();
-      const old = await captureForRoot(root, caller.assertCurrent);
+  it.each(["reconnect", "replace"] as const)("retires identical-byte %s", async (mode) => {
+    await withRoot(async (root) => {
+      const profileId = mode === "reconnect" ? "shared" : "local";
+      const authority = await root.capture(profileId);
+      const observation =
+        mode === "replace"
+          ? retainAuthProfileAuthorizationObservation(root.agentPath, profileId)
+          : undefined;
       try {
-        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["shared"] })).toBe(true);
+        const raw = observation && readPersistedAuthProfileStoreRaw(root.agentDir);
+        const publish = observation?.prepareRead();
+        if (mode === "reconnect") {
+          expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: [profileId] })).toBe(true);
+        }
         await upsertAuthProfileWithLockOrThrow({
-          profileId: "shared",
-          credential: apiKey("original"),
+          profileId,
+          agentDir: observation ? root.agentDir : undefined,
+          credential: apiKey(observation ? "original-local" : "original"),
         });
-        expect(old.assertCurrent).toThrow(retired);
-        await expect(old.revalidate()).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
-        const replacement = await captureForRoot(root, caller.assertCurrent);
-        try {
-          expect(replacement.authorizationId).not.toBe(old.authorizationId);
-        } finally {
-          replacement.dispose();
+        if (publish) {
+          expect(() => publish(raw)).toThrow(expect.objectContaining(unavailableCode));
+        }
+        expect(authority.assertCurrent).toThrow(retired);
+        if (mode === "reconnect") {
+          await expect(authority.revalidate()).rejects.toMatchObject(retiredCode);
+          expect((await root.capture()).authorizationId).not.toBe(authority.authorizationId);
         }
       } finally {
-        old.dispose();
-      }
-    });
-  });
-
-  it("retires identical-byte replacement and rejects its stale observation without removal", async () => {
-    await withRoot("same-key", async (root) => {
-      const caller = source();
-      const authority = await captureForRoot(root, caller.assertCurrent, "local");
-      const observation = retainAuthProfileAuthorizationObservation(root.agentPath, "local");
-      try {
-        const raw = readPersistedAuthProfileStoreRaw(root.agentDir);
-        const publish = observation.prepareRead();
-        await upsertAuthProfileWithLockOrThrow({
-          profileId: "local",
-          agentDir: root.agentDir,
-          credential: apiKey("same-key-local"),
-        });
-        expect(() => publish(raw)).toThrow(
-          expect.objectContaining({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }),
-        );
-        expect(authority.assertCurrent).toThrow(retired);
-      } finally {
-        observation.dispose();
-        authority.dispose();
+        observation?.dispose();
       }
     });
   });
 
   it("keeps the same lifetime through the real refresh owner's claim and settlement", async () => {
-    await withRoot("unrelated", async (root) => {
+    await withRoot(async (root) => {
       const credential: OAuthCredential = {
         type: "oauth",
         provider: "fixture",
@@ -198,12 +198,7 @@ describe("auth-profile authorization", () => {
         accountId: "fixture-account",
       };
       await persistAuthProfileBatch({ profiles: [{ profileId: "fixture:oauth", credential }] });
-      const caller = source();
-      const authority = await captureAuthProfileAuthorization({
-        profileId: "fixture:oauth",
-        agentDir: root.agentDir,
-        assertCurrent: caller.assertCurrent,
-      });
+      const authority = await root.capture("fixture:oauth", root.agentDir, true);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const manager = createOAuthManager({
@@ -229,23 +224,16 @@ describe("auth-profile authorization", () => {
       });
       try {
         await entered.promise;
-        await expect(authority.revalidate()).rejects.toMatchObject({
-          code: "MCP_AUTHORIZATION_UNAVAILABLE",
-        });
+        await expect(authority.revalidate()).rejects.toMatchObject(unavailableCode);
         release.resolve();
         await expect(refresh).resolves.toMatchObject({ apiKey: "new-access" });
         await authority.revalidate();
         expect(authority.assertCurrent).not.toThrow();
-        const recaptured = await captureForRoot(root, caller.assertCurrent, "fixture:oauth");
-        try {
-          expect(recaptured.authorizationId).toBe(authority.authorizationId);
-        } finally {
-          recaptured.dispose();
-        }
+        const recaptured = await root.capture("fixture:oauth");
+        expect(recaptured.authorizationId).toBe(authority.authorizationId);
       } finally {
         release.resolve();
         await refresh;
-        authority.dispose();
       }
     });
   });
@@ -253,8 +241,8 @@ describe("auth-profile authorization", () => {
   it.each(["local", "shared"])(
     "fences %s worker commit admission and restores authorization on rollback",
     async (profileId) => {
-      await withRoot("rollback", async (root) => {
-        const authority = await captureForRoot(root, undefined, profileId);
+      await withRoot(async (root) => {
+        const authority = await root.capture(profileId);
         const createAdmission = admission.createSqliteWorkerOperationAdmission;
         let refused = false;
         const spy = vi
@@ -265,9 +253,7 @@ describe("auth-profile authorization", () => {
               updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
               if (updating && request.stage === "commit") {
                 admit(request, () => {
-                  expect(authority.assertCurrent).toThrow(
-                    expect.objectContaining({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }),
-                  );
+                  expect(authority.assertCurrent).toThrow(expect.objectContaining(unavailableCode));
                   refused = true;
                   throw new Error("fixture auth commit refused");
                 });
@@ -289,15 +275,13 @@ describe("auth-profile authorization", () => {
           await authority.revalidate();
         } finally {
           spy.mockRestore();
-          authority.dispose();
         }
       });
     },
   );
 
   it("enrolls an absent agent's inheritance tombstone through its native first-use owner", async () => {
-    await withRoot("inherited", async (root) => {
-      const caller = source();
+    await withRoot(async (root) => {
       const agentDir = path.join(root.stateDir, "agents", "new-agent", "agent");
       const observe = directoryObservation.observeOwnedDirectory;
       const watcher = vi
@@ -307,30 +291,20 @@ describe("auth-profile authorization", () => {
           directory === agentDir ? { close() {} } : observe(directory, onChange, options),
         );
       try {
-        const authority = await captureMcpAuthProfileAuthorization({
+        const authority = await root.capture("shared", agentDir);
+        expect(
+          readAuthProfileAuthorizationLifetime(
+            readPersistedAuthProfileStoreRaw(agentDir),
+            "shared",
+          ),
+        ).toEqual(expect.any(String));
+        expect(authority.assertCurrent).not.toThrow();
+        await upsertAuthProfileWithLockOrThrow({
           profileId: "shared",
           agentDir,
-          assertCurrent: caller.assertCurrent,
+          credential: apiKey("override"),
         });
-        try {
-          expect(
-            readAuthProfileAuthorizationLifetime(
-              readPersistedAuthProfileStoreRaw(agentDir),
-              "shared",
-            ),
-          ).toEqual(expect.any(String));
-          expect(authority.assertCurrent).not.toThrow();
-          await upsertAuthProfileWithLockOrThrow({
-            profileId: "shared",
-            agentDir,
-            credential: apiKey("override"),
-          });
-          await expect(authority.revalidate()).rejects.toMatchObject({
-            code: "MCP_AUTHORIZATION_RETIRED",
-          });
-        } finally {
-          authority.dispose();
-        }
+        await expect(authority.revalidate()).rejects.toMatchObject(retiredCode);
       } finally {
         watcher.mockRestore();
       }

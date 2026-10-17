@@ -1,4 +1,3 @@
-/** Unit tests for requester-scoped MCP connection resolver helpers. */
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -8,6 +7,10 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
+import {
+  createDefaultGatewayReloadState,
+  createTestCronState,
+} from "../gateway/server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { isGatewayRestartExternallyAllowed, setGatewayRestartPolicy } from "../infra/restart.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
@@ -44,6 +47,35 @@ function withResolvers<T>(run: (register: RegisterResolver) => T): T {
     }),
   );
 }
+function resolverRegistry(
+  pluginId: string,
+  serverName: string,
+  resolve: Parameters<RegisterResolver>[2],
+) {
+  const proof = createMcpProofPluginRegistry();
+  proof.apiFor(pluginId).registerMcpServerConnectionResolver({ serverName, resolve });
+  return proof;
+}
+function remoteConfig(name: string): OpenClawConfig {
+  return {
+    mcp: {
+      servers: {
+        [name]: { transport: "streamable-http", url: `https://placeholder.invalid/${name}` },
+      },
+    },
+  };
+}
+function requesterScope(sessionId: string, requesterSenderId: string) {
+  return { sessionId, requesterSenderId, agentAccountId: "proof-bot", messageChannel: "telegram" };
+}
+function sessionRuntime(scope: ReturnType<typeof requesterScope>, cfg: OpenClawConfig) {
+  return getOrCreateSessionMcpRuntime({
+    ...scope,
+    cfg,
+    sessionKey: `agent:test:${scope.sessionId}`,
+    workspaceDir: process.cwd(),
+  });
+}
 
 type AuthenticatedMcpProofEndpoint = {
   owner: string;
@@ -52,7 +84,6 @@ type AuthenticatedMcpProofEndpoint = {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
   requests: number;
-  unauthorizedRequests: number;
   streamedResponses: number;
   toolCalls: number;
   url: string;
@@ -73,7 +104,6 @@ async function startAuthenticatedMcpProofServer() {
       server,
       transport,
       requests: 0,
-      unauthorizedRequests: 0,
       streamedResponses: 0,
       toolCalls: 0,
       url: "",
@@ -103,7 +133,6 @@ async function startAuthenticatedMcpProofServer() {
     }
     endpoint.requests += 1;
     if (request.headers.authorization !== endpoint.authorization) {
-      endpoint.unauthorizedRequests += 1;
       response.writeHead(401).end();
       return;
     }
@@ -199,16 +228,12 @@ describe("mcp connection resolver helpers", () => {
   });
 
   it("resolves registrations from the authoritative request registry", async () => {
-    const root = createMcpProofPluginRegistry();
-    root.apiFor("root-mail").registerMcpServerConnectionResolver({
-      serverName: "root-mail",
-      resolve: async () => ({ url: "https://root.example.test" }),
-    });
-    const scoped = createMcpProofPluginRegistry();
-    scoped.apiFor("scoped-mail").registerMcpServerConnectionResolver({
-      serverName: "scoped-mail",
-      resolve: async () => ({ url: "https://scoped.example.test" }),
-    });
+    const root = resolverRegistry("root-mail", "root-mail", async () => ({
+      url: "https://root.example.test",
+    }));
+    const scoped = resolverRegistry("scoped-mail", "scoped-mail", async () => ({
+      url: "https://scoped.example.test",
+    }));
     setActivePluginRegistry(root.registry);
 
     await withPluginRuntimeRegistryScope(scoped.registry, async () => {
@@ -244,14 +269,10 @@ describe("mcp connection resolver helpers", () => {
       vi.spyOn(await import("./context.js"), "refreshContextWindowCache").mockResolvedValue(
         undefined,
       );
-      const previous = createMcpProofPluginRegistry();
-      previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async () => ({
-          url: proof.mail.url,
-          headers: { Authorization: proof.mail.authorization },
-        }),
-      });
+      const previous = resolverRegistry("startup-mail", "user-mail", async () => ({
+        url: proof.mail.url,
+        headers: { Authorization: proof.mail.authorization },
+      }));
       setActivePluginRegistry(previous.registry);
 
       const beforeDisable = await resolveRequesterScopedMcpConnections({
@@ -264,28 +285,9 @@ describe("mcp connection resolver helpers", () => {
         throw new Error("Expected an authorized MCP connection before plugin disable");
       }
       const sessionId = "gateway-plugin-disable-mcp-proof";
-      const previousScope = {
-        sessionId,
-        requesterSenderId: "existing-before-disable",
-        agentAccountId: "proof-bot",
-        messageChannel: "telegram",
-      };
+      const previousScope = requesterScope(sessionId, "existing-before-disable");
       const previousRuntimeKey = buildMcpRequesterRuntimeCacheKey(previousScope);
-      const previousRuntime = await getOrCreateSessionMcpRuntime({
-        ...previousScope,
-        sessionKey: "agent:test:gateway-plugin-disable-mcp-proof",
-        workspaceDir: process.cwd(),
-        cfg: {
-          mcp: {
-            servers: {
-              "user-mail": {
-                transport: "streamable-http",
-                url: "https://placeholder.invalid/mail",
-              },
-            },
-          },
-        },
-      });
+      const previousRuntime = await sessionRuntime(previousScope, remoteConfig("user-mail"));
       expect(peekSessionMcpRuntime({ sessionId: previousRuntimeKey })).toBeDefined();
       await expect(previousRuntime.callTool("user-mail", "owner_probe", {})).resolves.toMatchObject(
         { content: [{ type: "text", text: "mail" }] },
@@ -298,51 +300,30 @@ describe("mcp connection resolver helpers", () => {
         disposeMcpRuntimes: true,
       });
 
-      const replacement = createMcpProofPluginRegistry();
-      replacement.apiFor("active-drive").registerMcpServerConnectionResolver({
-        serverName: "user-drive",
-        resolve: async () => ({
-          url: proof.activeDrive.url,
-          headers: { Authorization: proof.activeDrive.authorization },
-        }),
-      });
+      const replacement = resolverRegistry("active-drive", "user-drive", async () => ({
+        url: proof.activeDrive.url,
+        headers: { Authorization: proof.activeDrive.authorization },
+      }));
       expect(isPluginRegistryRetired(previous.registry)).toBe(false);
 
       type GatewayReloadProofState = ReturnType<
         Parameters<typeof createGatewayReloadHandlers>[0]["getState"]
       >;
-      let gatewayState: GatewayReloadProofState = {
+      let gatewayState: GatewayReloadProofState = createDefaultGatewayReloadState({
         hooksConfig: null,
         hookClientIpConfig: { trustedProxies: undefined, allowRealIpFallback: false },
-        heartbeatRunner: { stop() {}, updateConfig() {} },
-        cronState: {
-          cron: {
-            async start() {},
-            stop() {},
-          } as GatewayReloadProofState["cronState"]["cron"],
+        cronState: createTestCronState({
           storePath: "/tmp/openclaw-mcp-gateway-reload-proof-cron",
-          cronEnabled: false,
-          reconcileExitWatchers: async () => {},
-          reconcileStreamWatchers: async () => {},
-          stopStreamWatchers: async () => {},
-          reconcileSystemJobs: async () => "converged" as const,
-        },
-      };
+        }),
+      });
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
       const nextConfig: OpenClawConfig = {
+        ...remoteConfig("user-drive"),
         plugins: {
           entries: {
             "startup-mail": { enabled: false },
             "active-drive": { enabled: true },
-          },
-        },
-        mcp: {
-          servers: {
-            "user-drive": {
-              transport: "streamable-http",
-              url: "https://placeholder.invalid/drive",
-            },
           },
         },
       };
@@ -422,19 +403,11 @@ describe("mcp connection resolver helpers", () => {
         ]),
       );
 
-      const nextSessionId = "gateway-plugin-disable-brand-new-mcp-proof";
-      const nextScope = {
-        sessionId: nextSessionId,
-        requesterSenderId: "brand-new-after-disable",
-        agentAccountId: "proof-bot",
-        messageChannel: "telegram",
-      };
-      const nextRuntime = await getOrCreateSessionMcpRuntime({
-        ...nextScope,
-        sessionKey: "agent:test:gateway-plugin-disable-brand-new-mcp-proof",
-        workspaceDir: process.cwd(),
-        cfg: nextConfig,
-      });
+      const nextScope = requesterScope(
+        "gateway-plugin-disable-brand-new-mcp-proof",
+        "brand-new-after-disable",
+      );
+      const nextRuntime = await sessionRuntime(nextScope, nextConfig);
       expect(
         peekSessionMcpRuntime({ sessionId: buildMcpRequesterRuntimeCacheKey(nextScope) }),
       ).toBeDefined();
@@ -619,29 +592,24 @@ describe("mcp connection resolver helpers", () => {
     });
     expect(servers["user-mail"].headers).toEqual({ Authorization: "test-auth-token" });
 
-    const sseKept = applyMcpConnectionOverride(
-      { transport: "sse", toolFilter: { include: ["x"] } },
-      { url: "https://live.example/sse" },
-    );
-    expect(sseKept.transport).toBe("sse");
-    expect(sseKept.url).toBe("https://live.example/sse");
+    const override = (raw: unknown, url: string) => applyMcpConnectionOverride(raw, { url });
+    expect(
+      override({ transport: "sse", toolFilter: { include: ["x"] } }, "https://live.example/sse"),
+    ).toMatchObject({ transport: "sse", url: "https://live.example/sse" });
 
-    const canonicalDefault = applyMcpConnectionOverride(
+    const canonicalDefault = override(
       { type: "sse", toolFilter: { include: ["x"] } },
-      { url: "https://live.example/sse-type" },
+      "https://live.example/sse-type",
     );
     expect(canonicalDefault.transport).toBe("streamable-http");
     expect(canonicalDefault).not.toHaveProperty("type");
 
-    const sseCase = applyMcpConnectionOverride(
-      { transport: "SSE" },
-      { url: "https://live.example/sse-case" },
-    );
+    const sseCase = override({ transport: "SSE" }, "https://live.example/sse-case");
     expect(sseCase.transport).toBe("sse");
 
-    const unsupported = applyMcpConnectionOverride(
+    const unsupported = override(
       { transport: "custom", type: " CuStOm " },
-      { url: "https://live.example/unsupported" },
+      "https://live.example/unsupported",
     );
     expect(unsupported.transport).toBe("custom");
     expect(

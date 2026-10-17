@@ -33,7 +33,9 @@ const PER_REQUESTER_SERVER = {
 };
 const STDIO_SERVER = { command: "uvx", args: ["operator-mcp"] };
 
-async function install(server = PER_REQUESTER_SERVER) {
+async function install(
+  server: Parameters<typeof setConfiguredMcpServer>[0]["server"] = PER_REQUESTER_SERVER,
+) {
   const result = await setConfiguredMcpServer({ name: "fixture", server });
   expect(result.ok).toBe(true);
   return result;
@@ -44,18 +46,16 @@ async function closeState() {
   closeOpenClawStateDatabaseForTest();
 }
 
-function seedOAuthState(name: string) {
-  const operator = operatorMcpOAuthIdentity(name, SERVER_URL);
-  const requester = requesterMcpOAuthIdentity(name, SERVER_URL, {
+function seedOAuthState() {
+  const operator = operatorMcpOAuthIdentity("fixture", SERVER_URL);
+  const requester = requesterMcpOAuthIdentity("fixture", SERVER_URL, {
     requesterSenderId: "alice",
     messageChannel: "telegram",
   });
   for (const identity of [operator, requester]) {
     seedMcpOAuthStoreForTest(
       identity.storeKey,
-      {
-        tokens: { access_token: identity.principal, token_type: "Bearer" },
-      },
+      { tokens: { access_token: identity.principal, token_type: "Bearer" } },
       `${identity.principal}-state`,
     );
   }
@@ -90,192 +90,163 @@ async function withMcpConfigHome(run: () => Promise<void>): Promise<void> {
 }
 
 describe("configured MCP OAuth cleanup", () => {
+  it.aroundEach((runTest) => withMcpConfigHome(runTest));
   it("preserves config and OAuth credentials when deletion authority expires during preflight", async () => {
-    await withMcpConfigHome(async () => {
-      const initial = await install();
-      const { operator, requester } = seedOAuthState("fixture");
-      const raw = await fs.readFile(initial.path, "utf8");
-      let active = true;
-      setRuntimeConfigSnapshotRefreshHandler({
-        preflight: () => {
-          active = false;
-        },
-        refresh: () => true,
-      });
-      try {
-        await expect(
-          unsetConfiguredMcpServer({
-            name: "fixture",
-            assertCurrentAsync: async () => {
-              if (!active) {
-                throw new Error("deletion authority expired");
-              }
-            },
-          }),
-        ).rejects.toThrow("deletion authority expired");
-        expect(await fs.readFile(initial.path, "utf8")).toBe(raw);
-        expect((await readMcpOAuthStore(operator.storeKey)).tokens?.access_token).toBe("operator");
-        expect((await readMcpOAuthStore(requester.storeKey)).tokens?.access_token).toBe(
-          "requester",
-        );
-      } finally {
-        setRuntimeConfigSnapshotRefreshHandler(null);
-      }
+    const initial = await install();
+    const { operator, requester } = seedOAuthState();
+    const raw = await fs.readFile(initial.path, "utf8");
+    let active = true;
+    setRuntimeConfigSnapshotRefreshHandler({
+      preflight: () => {
+        active = false;
+      },
+      refresh: () => true,
     });
+    try {
+      await expect(
+        unsetConfiguredMcpServer({
+          name: "fixture",
+          assertCurrentAsync: async () => {
+            if (!active) {
+              throw new Error("deletion authority expired");
+            }
+          },
+        }),
+      ).rejects.toThrow("deletion authority expired");
+      expect(await fs.readFile(initial.path, "utf8")).toBe(raw);
+      expect((await readMcpOAuthStore(operator.storeKey)).tokens?.access_token).toBe("operator");
+      expect((await readMcpOAuthStore(requester.storeKey)).tokens?.access_token).toBe("requester");
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+    }
   });
 
   it.each([
-    {
-      name: "set replacement",
-      mutate: (serverName: string) =>
-        setConfiguredMcpServer({
-          name: serverName,
-          server: { command: "uvx", args: ["replacement-mcp"] },
-        }),
-      expected: { operator: undefined, requester: undefined },
-    },
-    {
-      name: "unset",
-      mutate: (serverName: string) => unsetConfiguredMcpServer({ name: serverName }),
-      expected: { operator: undefined, requester: undefined },
-    },
-    {
-      name: "identity flip",
-      mutate: (serverName: string) =>
+    ["replacement", () => install({ command: "uvx", args: ["replacement-mcp"] }), []],
+    ["unset", () => unsetConfiguredMcpServer({ name: "fixture" }), []],
+    [
+      "identity flip",
+      () =>
         updateConfiguredMcpServer({
-          name: serverName,
+          name: "fixture",
           update: (server) => ({ ...server, oauth: {} }),
         }),
-      expected: { operator: "operator", requester: undefined },
-    },
-    {
-      name: "tool update",
-      mutate: (serverName: string) =>
+      ["operator"],
+    ],
+    [
+      "tool update",
+      () =>
         updateConfiguredMcpServerTools({
-          name: serverName,
+          name: "fixture",
           tools: { include: ["search"] },
         }),
-      expected: { operator: "operator", requester: "requester" },
-    },
-  ])("applies cleanup and preserves env references after $name", async ({ mutate, expected }) => {
-    await withMcpConfigHome(async () => {
+      ["operator", "requester"],
+    ],
+  ] as const)(
+    "applies cleanup and preserves env references after %s",
+    async (_name, mutate, retained) => {
       const initial = await install();
-      const identities = seedOAuthState("fixture");
+      const identities = seedOAuthState();
+      const kept = new Set<string>(retained);
       const configPath = initial.path;
       const config = JSON.parse(await fs.readFile(configPath, "utf8"));
       config.messages = { responsePrefix: "${OPENCLAW_TEST_MCP_PREFIX}" };
       vi.stubEnv("OPENCLAW_TEST_MCP_PREFIX", "before-lock");
       const raw = JSON.stringify(config);
       await fs.writeFile(configPath, raw);
-      const result = await withContendedConfigMutation(
-        configPath,
-        () => mutate("fixture"),
-        async () => {
-          expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-          vi.stubEnv("OPENCLAW_TEST_MCP_PREFIX", "after-lock");
-        },
-      );
+      const result = await withContendedConfigMutation(configPath, mutate, async () => {
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+        vi.stubEnv("OPENCLAW_TEST_MCP_PREFIX", "after-lock");
+      });
 
       expect(result.ok).toBe(true);
       expect(JSON.parse(await fs.readFile(configPath, "utf8")).messages.responsePrefix).toBe(
         "${OPENCLAW_TEST_MCP_PREFIX}",
       );
       const fresh = await readConfigFileSnapshot();
-      expect(fresh.valid).toBe(true);
-      expect(fresh.sourceConfig.messages?.responsePrefix).toBe("after-lock");
+      expect(fresh).toMatchObject({
+        valid: true,
+        sourceConfig: { messages: { responsePrefix: "after-lock" } },
+      });
       for (const principal of ["operator", "requester"] as const) {
         const { storeKey } = identities[principal];
-        expect((await readMcpOAuthStore(storeKey)).tokens?.access_token).toBe(expected[principal]);
+        expect((await readMcpOAuthStore(storeKey)).tokens?.access_token).toBe(
+          kept.has(principal) ? principal : undefined,
+        );
         expect(await readMcpOAuthPendingAuthorization(`${principal}-state`)).toBe(
-          expected[principal] ? storeKey : undefined,
+          kept.has(principal) ? storeKey : undefined,
         );
       }
-    });
-  });
-});
-
-describe("configured MCP ownership coordination", () => {
+    },
+  );
   it("waits for active Claw ownership reconciliation before an ordinary mutation", async () => {
-    await withMcpConfigHome(async () => {
-      const leaseEntered = createDeferred();
-      const releaseLease = createDeferred();
-      const order: string[] = [];
-      const set = vi.spyOn(mcpConfigInternal, "set").mockImplementation(async () => ({
-        ok: true,
-        path: "config",
-        config: {},
-        mcpServers: {},
-      }));
-      const lifecycle = withMcpLifecycleLease("fixture", {}, async () => {
-        order.push("lifecycle");
-        leaseEntered.resolve();
-        await releaseLease.promise;
-      });
-      await leaseEntered.promise;
-
-      const mutation = setConfiguredMcpServer({
-        name: " fixture ",
-        server: STDIO_SERVER,
-      }).then((result) => {
-        order.push("operator");
-        return result;
-      });
-      await Promise.resolve();
-      expect(set).not.toHaveBeenCalled();
-      expect(order).toEqual(["lifecycle"]);
-
-      releaseLease.resolve();
-      await lifecycle;
-      const result = await mutation;
-
-      expect(result.ok).toBe(true);
-      expect(set).toHaveBeenCalledOnce();
-      expect(order).toEqual(["lifecycle", "operator"]);
+    const leaseEntered = createDeferred();
+    const releaseLease = createDeferred();
+    const order: string[] = [];
+    const set = vi.spyOn(mcpConfigInternal, "set").mockImplementation(async () => ({
+      ok: true,
+      path: "config",
+      config: {},
+      mcpServers: {},
+    }));
+    const lifecycle = withMcpLifecycleLease("fixture", {}, async () => {
+      order.push("lifecycle");
+      leaseEntered.resolve();
+      await releaseLease.promise;
     });
+    await leaseEntered.promise;
+
+    const mutation = setConfiguredMcpServer({
+      name: " fixture ",
+      server: STDIO_SERVER,
+    }).then((result) => {
+      order.push("operator");
+      return result;
+    });
+    await Promise.resolve();
+    expect(set).not.toHaveBeenCalled();
+    expect(order).toEqual(["lifecycle"]);
+
+    releaseLease.resolve();
+    await lifecycle;
+    const result = await mutation;
+
+    expect(result.ok).toBe(true);
+    expect(set).toHaveBeenCalledOnce();
+    expect(order).toEqual(["lifecycle", "operator"]);
   });
 
   it("preserves the canonical validation result for an empty server name", async () => {
-    await withMcpConfigHome(async () => {
-      const result = await setConfiguredMcpServer({
-        name: " ",
-        server: STDIO_SERVER,
-      });
+    const result = await setConfiguredMcpServer({
+      name: " ",
+      server: STDIO_SERVER,
+    });
 
-      expect(result).toEqual({
-        ok: false,
-        path: "",
-        error: "MCP server name is required.",
-      });
+    expect(result).toEqual({
+      ok: false,
+      path: "",
+      error: "MCP server name is required.",
     });
   });
-});
-
-describe("configured MCP read-only results", () => {
   it("keeps write metadata private and leaves no-change config bytes untouched", async () => {
-    await withMcpConfigHome(async () => {
-      const initial = await setConfiguredMcpServer({
-        name: "fixture",
-        server: { command: "node" },
-      });
-      expect(initial.ok).toBe(true);
-      const raw = await fs.readFile(initial.path, "utf8");
-      const listed = await listConfiguredMcpServers();
-      expect(listed.ok).toBe(true);
-      expect(Object.keys(listed).toSorted()).toEqual([
-        "authoredConfig",
-        "baseHash",
-        "config",
-        "mcpServers",
-        "ok",
-        "path",
-        "runtimeConfig",
-        "sourceConfigBeforeMigrations",
-      ]);
-      const missing = await unsetConfiguredMcpServer({ name: "missing" });
-      expect(missing).toMatchObject({ ok: true, removed: false });
-      expect(Object.keys(missing)).not.toContain("writeOptions");
-      expect(Object.keys(missing)).not.toContain("snapshot");
-      expect(await fs.readFile(initial.path, "utf8")).toBe(raw);
-    });
+    const initial = await install({ command: "node" });
+    const raw = await fs.readFile(initial.path, "utf8");
+    const listed = await listConfiguredMcpServers();
+    expect(listed.ok).toBe(true);
+    expect(Object.keys(listed).toSorted()).toEqual([
+      "authoredConfig",
+      "baseHash",
+      "config",
+      "mcpServers",
+      "ok",
+      "path",
+      "runtimeConfig",
+      "sourceConfigBeforeMigrations",
+    ]);
+    const missing = await unsetConfiguredMcpServer({ name: "missing" });
+    expect(missing).toMatchObject({ ok: true, removed: false });
+    expect(Object.keys(missing)).not.toContain("writeOptions");
+    expect(Object.keys(missing)).not.toContain("snapshot");
+    expect(await fs.readFile(initial.path, "utf8")).toBe(raw);
   });
 });

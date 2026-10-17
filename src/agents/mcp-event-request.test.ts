@@ -37,19 +37,6 @@ function request(overrides: Partial<Parameters<typeof requestMcpEvent>[0]> = {})
     ...overrides,
   });
 }
-function authority(message: string) {
-  let current = true;
-  return {
-    revoke() {
-      current = false;
-    },
-    assertCurrent() {
-      if (!current) {
-        throw new Error(message);
-      }
-    },
-  };
-}
 function readRequest(init: RequestInit | undefined) {
   if (typeof init?.body !== "string") {
     throw new Error("Expected a JSON string request body");
@@ -61,26 +48,21 @@ function readRequest(init: RequestInit | undefined) {
   return { id: value.id, method: value.method, params: value.params };
 }
 
-function reply(init: RequestInit | undefined, mode: "json" | "sse", result: unknown) {
-  const rpc = readRequest(init);
-  const message = JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result });
+function reply(
+  init: RequestInit | undefined,
+  payload: { result?: unknown; error?: unknown },
+  mode = "json",
+) {
+  const message = JSON.stringify({ jsonrpc: "2.0", id: readRequest(init).id, ...payload });
   return new Response(mode === "json" ? message : "event: message\ndata: " + message + "\n\n", {
     headers: { "content-type": mode === "json" ? "application/json" : "text/event-stream" },
   });
 }
 beforeEach(() => {
   // Select direct DNS; ambient proxy coverage belongs to mcp-http-fetch.test.ts.
-  for (const key of [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "NO_PROXY",
-    "no_proxy",
-  ]) {
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
     vi.stubEnv(key, "");
+    vi.stubEnv(key.toLowerCase(), "");
   }
   mocks.lookup.mockReset();
   mocks.lookup.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
@@ -97,7 +79,9 @@ describe("MCP Events direct protocol transport", () => {
     "sends one MCP 2 request without initialize and accepts %s",
     async (mode) => {
       const resolution = vi.spyOn(mcpTransport, "resolveMcpTransport");
-      mocks.fetch.mockImplementation(async (_url, init) => reply(init, mode, { events: [] }));
+      mocks.fetch.mockImplementation(async (_url, init) =>
+        reply(init, { result: { events: [] } }, mode),
+      );
       const result = await request({
         params: { _meta: { malicious: true } },
       });
@@ -129,44 +113,66 @@ describe("MCP Events direct protocol transport", () => {
       });
     },
   );
-  it("rechecks authority after guarded DNS resolution and before HTTP", async () => {
-    const owner = authority("source revoked");
-    mocks.lookup.mockImplementation(async () => {
-      owner.revoke();
-      return [{ address: "93.184.216.34", family: 4 }];
-    });
-    await expect(
-      request({ method: "events/subscribe", assertCurrent: owner.assertCurrent }),
-    ).rejects.toThrow("source revoked");
-    expect(mocks.fetch).not.toHaveBeenCalled();
-  });
-  it("does not return a successful remote effect after owner revocation", async () => {
-    const owner = authority("source revoked after effect");
-    mocks.fetch.mockImplementation(async (_url, init) => {
-      owner.revoke();
-      return reply(init, "json", { id: "remote" });
-    });
-    await expect(
-      request({ method: "events/subscribe", assertCurrent: owner.assertCurrent }),
-    ).rejects.toThrow("source revoked after effect");
-    expect(mocks.fetch).toHaveBeenCalledOnce();
-  });
-  it("preserves protocol dispositions without exposing remote diagnostic text", async () => {
-    mocks.fetch.mockImplementation(async (_url, init) => {
-      const rpc = readRequest(init);
-      return new Response(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: rpc.id,
-          error: {
-            code: -32602,
-            message: "private-account-secret",
-            data: { reason: "cursor_expired", debug: "private-account-secret" },
+  it.each(["DNS", "response", "OAuth"] as const)(
+    "rejects authority revoked during %s",
+    async (stage) => {
+      let current = true;
+      if (stage === "DNS") {
+        mocks.lookup.mockImplementation(async () => {
+          current = false;
+          return [{ address: "93.184.216.34", family: 4 }];
+        });
+      } else if (stage === "response") {
+        mocks.fetch.mockImplementation(async (_url, init) => {
+          current = false;
+          return reply(init, { result: { id: "remote" } });
+        });
+      } else {
+        mocks.token.mockImplementation(async () => {
+          current = false;
+          return "oauth-fixture-token";
+        });
+      }
+      await expect(
+        request({
+          method: "events/subscribe",
+          ...(stage === "OAuth"
+            ? {
+                server: requesterServer,
+                requesterScope: {
+                  requesterSenderId: "alice",
+                  messageChannel: "discord",
+                  agentAccountId: "default",
+                },
+              }
+            : {}),
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("owner revoked");
+            }
           },
         }),
-        { headers: { "content-type": "application/json" } },
-      );
-    });
+      ).rejects.toThrow("owner revoked");
+      expect(mocks.fetch).toHaveBeenCalledTimes(stage === "response" ? 1 : 0);
+      if (stage === "OAuth") {
+        expect(mocks.token).toHaveBeenCalledWith(
+          expect.objectContaining({
+            identity: expect.objectContaining({ principal: "requester" }),
+          }),
+        );
+      }
+    },
+  );
+  it("preserves protocol dispositions without exposing remote diagnostic text", async () => {
+    mocks.fetch.mockImplementation(async (_url, init) =>
+      reply(init, {
+        error: {
+          code: -32602,
+          message: "private-account-secret",
+          data: { reason: "cursor_expired", debug: "private-account-secret" },
+        },
+      }),
+    );
     const error = await request({ method: "events/subscribe" }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
@@ -195,29 +201,6 @@ describe("MCP Events direct protocol transport", () => {
   it("fails closed for missing requester OAuth rather than using shared OAuth", async () => {
     await expect(request({ server: requesterServer })).rejects.toThrow("subscription owner");
     expect(mocks.token).not.toHaveBeenCalled();
-    expect(mocks.fetch).not.toHaveBeenCalled();
-  });
-  it("rechecks native requester authority after OAuth token resolution before resource HTTP", async () => {
-    const owner = authority("OAuth owner revoked");
-    mocks.token.mockImplementation(async () => {
-      owner.revoke();
-      return "oauth-fixture-token";
-    });
-    await expect(
-      request({
-        server: requesterServer,
-        requesterScope: {
-          requesterSenderId: "alice",
-          messageChannel: "discord",
-          agentAccountId: "default",
-        },
-        method: "events/subscribe",
-        assertCurrent: owner.assertCurrent,
-      }),
-    ).rejects.toThrow("OAuth owner revoked");
-    expect(mocks.token).toHaveBeenCalledWith(
-      expect.objectContaining({ identity: expect.objectContaining({ principal: "requester" }) }),
-    );
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
