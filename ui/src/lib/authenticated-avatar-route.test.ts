@@ -16,7 +16,9 @@ afterEach(async () => {
       await vi.runOnlyPendingTimersAsync();
     } else {
       // Join the zero-delay releases queued by disconnect on the real clock.
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
     }
   } finally {
     vi.useRealTimers();
@@ -299,8 +301,8 @@ it("releases resolved and pending routes that leave the active render", async ()
 it.each([401, 403])(
   "recovers from %s without waiting for rejected body cleanup",
   async (status) => {
-    const revokeObjectURL = mockBlobUrl("blob:recovered-avatar");
-    const createObjectURL = vi.mocked(URL.createObjectURL);
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-avatar");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     // A saved token can go stale while the session password stays valid; without
     // ordered recovery the view keeps its fallback for the rest of the session.
     const cancellation = createDeferred();

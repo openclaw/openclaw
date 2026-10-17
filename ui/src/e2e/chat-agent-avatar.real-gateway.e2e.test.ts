@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { copyFile, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -50,12 +50,7 @@ type BrowserResponseProof = {
   blobBytes: number;
 };
 type ProofWindow = typeof window & { avatarResponseProof: BrowserResponseProof[] };
-type WorkspaceIconElement = HTMLElement & {
-  routeUrl: string;
-  authTokens: string[];
-  authReady: boolean;
-  updateComplete: Promise<unknown>;
-};
+type WorkspaceIconElement = HTMLElementTagNameMap["openclaw-workspace-icon"];
 
 function resolveGatewayRuntime() {
   const bun = process.env.BUN_BIN;
@@ -273,7 +268,16 @@ const suite = createControlUiE2eSuite({
       }
       await owner.startGateway();
       if (runtime.gatewayCommandPrefix) {
-        expect(owner.child?.spawnfile).toBe(runtime.gatewayCommandPrefix[0]);
+        const pid = owner.child?.pid;
+        if (!pid) {
+          throw new Error("missing Gateway process for runtime proof");
+        }
+        // The custody view no longer exposes spawn metadata; inspect the live executable.
+        const executable =
+          process.platform === "linux"
+            ? await realpath(`/proc/${pid}/exe`)
+            : (await import("@openclaw/proc-safe/inspect")).readProcessCommand(pid)?.executable;
+        expect(executable).toBe(await realpath(runtime.gatewayCommandPrefix[0]));
       }
       const created = await owner.cli([
         "gateway",
@@ -368,7 +372,7 @@ async function mountWorkspaceIcon(
   await page.waitForFunction(() => Boolean(customElements.get("openclaw-workspace-icon")));
   await page.evaluate(
     async ({ routeUrl, authTokens: tokens }) => {
-      const element = document.createElement("openclaw-workspace-icon") as WorkspaceIconElement;
+      const element = document.createElement("openclaw-workspace-icon");
       element.id = "avatar-stream-consumer";
       element.routeUrl = routeUrl;
       element.authTokens = tokens;

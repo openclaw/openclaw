@@ -2,7 +2,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "./identity-avatar-loader.ts";
 import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
@@ -384,9 +384,9 @@ describe("authenticated profile avatar cache", () => {
     }
   });
 
-  it.each(["fulfilled", "rejected"])(
+  it.for(["fulfilled", "rejected"])(
     "does not delay a cached miss for stalled body cleanup that is later %s",
-    async (outcome) => {
+    async (outcome, { signal }) => {
       setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
       const cancellation = createDeferred();
       const response = new Response(new ReadableStream({ cancel: () => cancellation.promise }), {
@@ -396,9 +396,7 @@ describe("authenticated profile avatar cache", () => {
       const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
       const missing = resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7");
       try {
-        await expect(
-          withTestTimeout(Promise.resolve(missing), 1_000, "avatar fallback waited for cleanup"),
-        ).resolves.toBeNull();
+        await expect(withinTest(Promise.resolve(missing), signal)).resolves.toBeNull();
         expect(cancel).toHaveBeenCalledOnce();
         expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).toBeNull();
         expect(fetchAvatar).toHaveBeenCalledOnce();
