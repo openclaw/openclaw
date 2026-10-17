@@ -121,7 +121,7 @@ describe("claws inspect extensions", () => {
       join(root, "openclaw.claw.json"),
       JSON.stringify({
         schemaVersion: 1,
-        agent: { id: "demo-agent", name: "Agent\u001b]0;pwned\u0007CLAW_MARKER_9F3E2D" },
+        agent: { id: "demo-agent", name: "Agent\u001b]0;INJECTED_TITLE\u0007CLAW_MARKER_9F3E2D" },
       }),
       "utf8",
     );
