@@ -43,6 +43,7 @@ export const cliProcessTestFiles = [
   "src/cli/update-cli/update-command-handoff.test.ts",
   "src/cli/update-cli/update-command-lease.test.ts",
   "src/cli/update-cli/update-command-resume-completion.test.ts",
+  "src/cli/update-cli/update-command-migrated-schema.test.ts",
   "src/cli/update-cli/update-command-migrated.test.ts",
   "src/cli/update-cli/update-command-rollback.test.ts",
   "src/cli/update-cli/update-command-doctor-writer-order.test.ts",

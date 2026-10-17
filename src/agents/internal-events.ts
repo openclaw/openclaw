@@ -237,24 +237,6 @@ export function buildAgentInternalEventContext(
   ];
 }
 
-export function buildGeneratedMediaDeliveryContext(
-  mediaUrls: string[],
-  retry: boolean,
-): RuntimeContextFragment[] {
-  return [
-    {
-      kind: "runtime-instruction",
-      text: retry
-        ? "Deliver only the generated media listed below. Do not resend any other attachment."
-        : "Deliver the generated media listed below to the user.",
-    },
-    {
-      kind: "conversation-data",
-      text: formatGeneratedMediaDirectiveLines({ mediaUrls, attachments: [] }, true).join("\n"),
-    },
-  ];
-}
-
 /** Format internal runtime events for the protected runtime-context prompt block. */
 export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]): string {
   const blocks = (events ?? [])
@@ -272,27 +254,20 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   );
 }
 
-/** Build a protected follow-up that can retry only media proven missing from a partial send. */
-export function formatGeneratedMediaDeliveryRetryForPrompt(mediaUrls: string[]): string {
-  const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(
-    { mediaUrls },
-    false,
-    "Generated media still missing:",
-  );
-  if (mediaDirectiveLines.length === 0) {
-    return "";
-  }
+/** Tell a completion turn which generated media the host already delivered. */
+export function formatGeneratedMediaDeliveredForPrompt(mediaUrls: string[]): string {
   return labelRuntimeContextText(
     [
       "This context is runtime-generated, not user-authored. Keep internal details private.",
       "",
-      "[Generated media delivery retry]",
-      "A previous agent turn delivered only part of this generated-media result.",
+      "[Generated media delivered]",
+      "The host already sent this generated media to the original chat:",
+      ...mediaUrls.flatMap((mediaUrl) => {
+        const reference = sanitizeMediaDirectiveValue(mediaUrl);
+        return reference ? [`- ${reference}`] : [];
+      }),
       "",
-      ...mediaDirectiveLines,
-      "",
-      "Action:",
-      "Deliver only the generated media listed above. Do not resend any other attachment.",
+      "Do not send these files again. Your reply goes to the same chat after them.",
     ].join("\n"),
   );
 }

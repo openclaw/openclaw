@@ -71,6 +71,7 @@ const enGitHub = {
       openPublishedPr: "Open PR",
       cloudPublicationGuidance:
         "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
+      actions: "Actions for pull request {reference}",
       dismiss: "Dismiss pull request {reference}",
       dismissBranch: "Hide {branch} for this session",
       open: en.chat.pullRequests.open,

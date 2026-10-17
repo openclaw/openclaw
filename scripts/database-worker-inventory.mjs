@@ -1936,14 +1936,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: [
-          "readUserProfileEmailBindings",
-          "readUserProfileSnapshotSync",
-          "readUserProfileAuthorityCommand",
-          "readCurrentUserProfileAliasesInDatabase",
-        ],
+        operations: ["readUserProfileEmailBindings", "readUserProfileSnapshotSync"],
         evidence:
-          "Registered profile writers and openclaw-state-read.worker.ts execute these readers; projects.list prepares exact aliases through user-profile-reads.ts. Released SDK identity/display fallbacks retain native reads.",
+          "Registered profile writers and openclaw-state-read.worker.ts execute these readers. Full-profile and project-alias reads use the committed catalog. Released SDK identity/display fallbacks retain native reads.",
       },
     ],
   ],
@@ -3091,7 +3086,7 @@ const reviewedOperations = new Map([
           "readAgentProvenanceBatchInDatabase",
         ],
         evidence:
-          "agentProvenance.list/readBatch/record execute through agentProvenanceOperations in agent-provenance.worker.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
+          "agentProvenance.list/readBatch execute through agentProvenanceReadOperations in the read-only registry; record executes through agentProvenanceOperations in agent-provenance.worker.ts; native synchronous lifecycle guards use the joined projection in agent-lifecycle-read.kernel.ts",
       },
     ],
   ],

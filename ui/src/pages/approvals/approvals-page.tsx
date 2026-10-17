@@ -164,13 +164,13 @@ export function ApprovalsPage() {
     revision();
     return state;
   };
-  // Gateway replacement retires approval-history reads and rebinds resolution events.
   createEffect(
     () => context.gateway,
     (gateway) => {
       resetHistory(true);
       state.gatewaySource = gateway;
       applyGatewaySnapshot(gateway.snapshot);
+      // Gateway receipts retire history and grant reads before reconnect or access changes settle them.
       const stopSnapshots = gateway.subscribe((snapshot) => {
         if (state.gatewaySource === gateway && context.gateway === gateway) {
           applyGatewaySnapshot(snapshot);

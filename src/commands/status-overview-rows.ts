@@ -14,6 +14,7 @@ import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
@@ -159,14 +160,19 @@ export function buildStatusCommandOverviewRows(params: {
     agentsValue,
     suffixRows: [
       ...(params.updateRows ?? []),
-      ...(params.surface.cfg.database
+      ...((params.surface.cfg.database || params.surface.databaseEngines?.stores.length) &&
+      params.surface.databaseEngines?.source !== "unavailable"
         ? [
             {
               Item: "Database engines (configured)",
-              Value: formatDatabaseEngineSelection(params.surface.cfg),
+              Value: formatDatabaseEngineSelection(
+                params.surface.cfg,
+                params.surface.databaseEngines?.stores,
+              ),
             },
           ]
         : []),
+      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       {
@@ -250,10 +256,18 @@ export function buildStatusAllOverviewRows(params: {
       agentStatus: params.agentStatus,
     }),
     suffixRows: [
-      {
-        Item: "Database engines (configured)",
-        Value: formatDatabaseEngineSelection(params.surface.cfg),
-      },
+      ...(params.surface.databaseEngines?.source !== "unavailable"
+        ? [
+            {
+              Item: "Database engines (configured)",
+              Value: formatDatabaseEngineSelection(
+                params.surface.cfg,
+                params.surface.databaseEngines?.stores,
+              ),
+            },
+          ]
+        : []),
+      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
       {
         Item: "Secrets",
         Value: buildStatusSecretsValue(params.secretDiagnosticsCount),

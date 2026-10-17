@@ -44,12 +44,14 @@ afterEach(() => {
 });
 
 describe("method scope resolution and authorization", () => {
-  it("admits workspace refresh while retaining full-write admission for PR actions", () => {
-    expect(
-      authorizeOperatorScopesForMethod("sessions.github.action", ["operator.sessions.write"], {
-        action: "refresh_base",
-      }),
-    ).toEqual({ allowed: true });
+  it("admits workspace refresh and metadata edits while retaining full-write admission for lifecycle actions", () => {
+    for (const action of ["refresh_base", "edit"]) {
+      expect(
+        authorizeOperatorScopesForMethod("sessions.github.action", ["operator.sessions.write"], {
+          action,
+        }),
+      ).toEqual({ allowed: true });
+    }
     for (const action of ["inspect", "ready", "merge", "close", "unknown"]) {
       expect(
         authorizeOperatorScopesForMethod("sessions.github.action", ["operator.sessions.write"], {

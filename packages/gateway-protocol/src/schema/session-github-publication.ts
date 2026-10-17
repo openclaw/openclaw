@@ -69,7 +69,21 @@ export const GitHubBaseRefreshSchema = closedObject({
   // Equality check against the pending integration, never a ref selector.
   baseCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" })),
 });
+export const GitHubPublicationEditSchema = closedObject({
+  action: Type.Literal("edit"),
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
+  expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
+  title: Type.Optional(GitHubPublicationTitleSchema),
+  body: Type.Optional(Type.String({ maxLength: 64 * 1024 })),
+  expectedTitle: Type.Optional(GitHubPublicationTitleSchema),
+  expectedBody: Type.Optional(Type.String({ maxLength: 64 * 1024 })),
+});
 export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPublicationEditSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
   closedObject({
     ...GitHubPublicationActionSchema.properties,
     sessionKey: NonEmptyString,
@@ -136,6 +150,8 @@ export const SessionGitHubActionResultSchema = closedObject({
   mergeCommit: Type.Union([Type.String(), Type.Null()]),
   mergeable: Type.Union([Type.Boolean(), Type.Null()]),
   mergeState: Type.String(),
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
 });
 export const SessionGitHubPublicationFailedSchema = closedObject({
   ...SessionGitHubPublicationBaseSchema,
@@ -227,6 +243,7 @@ export const SessionGitHubOptionsResultSchema = closedObject({
 export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
+export type GitHubPublicationEdit = Static<typeof GitHubPublicationEditSchema>;
 export type SessionGitHubActionParams = Static<typeof SessionGitHubActionParamsSchema>;
 export type SessionGitHubActionResult = Static<typeof SessionGitHubActionResultSchema>;
 export type GitHubPublicationSelection = Static<typeof GitHubPublicationSelectionSchema>;

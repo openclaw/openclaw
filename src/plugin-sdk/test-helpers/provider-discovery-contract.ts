@@ -146,10 +146,9 @@ function installDiscoveryHooks(options: DiscoveryContractOptions) {
         validateApiKeyInput: () => undefined,
       };
     });
-    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
-      const actual = await vi.importActual<typeof import("../provider-setup.js")>(
-        "openclaw/plugin-sdk/provider-setup",
-      );
+    vi.doMock("../../plugins/provider-self-hosted-discovery.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/provider-self-hosted-discovery.js")>();
       return {
         ...actual,
         discoverOpenAICompatibleLocalModels: discoverLocalModelsMock,

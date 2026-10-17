@@ -2,8 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { SidebarSessionNarrationController } from "../../components/app-sidebar-session-narration.ts";
-import type { SidebarToolActivity } from "../../components/app-sidebar-session-types.ts";
+import { createSidebarNarration } from "../../components/app-sidebar-session-narration.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
 import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -100,14 +99,13 @@ export class SubagentsPanelData {
   private sessions: GatewaySessionRow[] = [];
   private metrics = new Map<string, Metrics>();
   private historyReads = 0;
-  private tools: ReadonlyMap<string, SidebarToolActivity> = new Map();
   private stopping = new Set<string>();
   private readonly messageSubscriptions = new Map<string, Set<SessionMessageSubscription>>();
   private readonly narrationSource: Pick<
     SessionCapability,
     "subscribeMessages" | "unsubscribeMessages"
   >;
-  private readonly narration: SidebarSessionNarrationController;
+  private readonly narration = createSidebarNarration();
   private readonly unsubscribe: Array<() => void>;
   private readonly visibilityDocument = globalThis.document;
   private readonly visibilityChanged = () => this.reconcile();
@@ -138,15 +136,8 @@ export class SubagentsPanelData {
         }
       },
     };
-    this.narration = new SidebarSessionNarrationController(
-      () => undefined,
-      () => undefined,
-      (tools) => {
-        this.tools = tools;
-        this.publish();
-      },
-    );
     this.unsubscribe = [
+      this.narration.subscribe(() => this.publish()),
       context.gateway.subscribe(() => {
         this.reconcile();
         this.publish();
@@ -463,7 +454,8 @@ export class SubagentsPanelData {
     if (!metrics) {
       return;
     }
-    const fallback = !metrics.liveToolObserved && metrics.tool && !this.tools.has(row.key);
+    const fallback =
+      !metrics.liveToolObserved && metrics.tool && !this.narration.read().tools.has(row.key);
     const activity = readSidebarToolActivity(stream, payload.data, metrics.tool);
     if (activity !== undefined) {
       metrics.liveToolObserved = true;
@@ -479,7 +471,7 @@ export class SubagentsPanelData {
       callIdentity ? metrics.calls.get(callIdentity) : undefined,
     );
     if (!item) {
-      if (fallback && activity !== undefined && !this.tools.has(row.key)) {
+      if (fallback && activity !== undefined && !this.narration.read().tools.has(row.key)) {
         this.publish();
       }
       return;
@@ -509,10 +501,11 @@ export class SubagentsPanelData {
     if (this.disposed) {
       return;
     }
+    const tools = this.narration.read().tools;
     this.rows = this.sessions.map((session) => {
       const metrics = this.metrics.get(session.key);
       const tool = isSessionRunActive(session)
-        ? (this.tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
+        ? (tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
         : undefined;
       const headline =
         isSessionRunActive(session) && metrics
@@ -620,7 +613,6 @@ export class SubagentsPanelData {
     this.scope = null;
     this.sessions = [];
     this.metrics.clear();
-    this.tools = new Map();
     this.stopping.clear();
     this.messageSubscriptions.clear();
     this.loading = false;
@@ -632,7 +624,7 @@ export class SubagentsPanelData {
   dispose(): void {
     this.disposed = true;
     this.retire();
-    this.narration.dispose();
+    this.narration.disconnect();
     for (const unsubscribe of this.unsubscribe) {
       unsubscribe();
     }

@@ -71,7 +71,11 @@ async function fixture(backend: "local" | "repository" = "local") {
           agentId: "main",
         })
       : f.maintainerSource;
+  const creation = mocks.runCommand.mock.calls.findLast(
+    ([argv]) => argv.includes("POST") && argv.some((arg: string) => arg.endsWith("/pulls")),
+  )!;
   const state = {
+    body: JSON.parse(creation[1]!.input as string).body as string,
     node_id: "PR_fixture",
     title: "Preserve the guest's work",
     html_url: publication.url,
@@ -88,6 +92,7 @@ async function fixture(backend: "local" | "repository" = "local") {
   let beforeRead: (() => Promise<void>) | undefined;
   let rejectMerge = false;
   let rejectClose = false;
+  let rejectEdit = false;
   let loseResponse = false;
   const previous = mocks.runCommand.getMockImplementation()!;
   mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -110,11 +115,25 @@ async function fixture(backend: "local" | "repository" = "local") {
       state.state = "closed";
       state.merge_commit_sha = "e".repeat(40);
     } else if (argv.includes("PATCH") && argv.some((arg) => /\/pulls\/\d+$/u.test(arg))) {
-      writes.push({ action: "close", input: JSON.parse(options!.input!) });
-      if (rejectClose) {
-        return commandResult('{"message":"Resource not accessible"}', 1);
+      const input: Record<string, unknown> = JSON.parse(options!.input!);
+      if (input.state === undefined) {
+        writes.push({ action: "edit", input });
+        if (rejectEdit) {
+          return commandResult('{"message":"Resource not accessible"}', 1);
+        }
+        if (typeof input.title === "string") {
+          state.title = input.title;
+        }
+        if (typeof input.body === "string") {
+          state.body = input.body;
+        }
+      } else {
+        writes.push({ action: "close", input });
+        if (rejectClose) {
+          return commandResult('{"message":"Resource not accessible"}', 1);
+        }
+        state.state = "closed";
       }
-      state.state = "closed";
     } else {
       return await previous(argv, options);
     }
@@ -153,7 +172,7 @@ async function fixture(backend: "local" | "repository" = "local") {
       return result as T;
     };
     return await withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, () =>
-      createGitHubPublishTool({ callGateway, actionsAvailable: true }).execute(
+      createGitHubPublishTool({ callGateway, actionsAvailable: actor !== "guest" }).execute(
         "publication-action",
         args,
       ),
@@ -173,6 +192,9 @@ async function fixture(backend: "local" | "repository" = "local") {
     rejectMerge() {
       rejectMerge = true;
     },
+    rejectEdit() {
+      rejectEdit = true;
+    },
     rejectClose() {
       rejectClose = true;
     },
@@ -187,6 +209,201 @@ describe("session PR actions through the agent tool and registered Gateway metho
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("edits only a guest PR body without publishing dirty workspace files", async () => {
+    const f = await fixture();
+    const local = f.local!;
+    await fs.writeFile(path.join(local.cwd, "artifact.txt"), "unfinished work\n");
+    await fs.writeFile(path.join(local.cwd, "untracked.sqlite-wal"), "fixture data\n");
+    const before = {
+      head: await local.git("rev-parse", "HEAD"),
+      index: await local.git("write-tree"),
+      diff: await local.git("diff", "--binary"),
+      status: await local.git("status", "--porcelain=v1"),
+      body: f.state.body,
+      title: f.state.title,
+    };
+    const originalSession = loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY });
+    const commandsBefore = mocks.runCommand.mock.calls.length;
+    const checkpointsBefore = checkpoint.mock.calls.length;
+    await expect(f.invoke("guest", { body: "" })).rejects.toThrow(/invalid.*params/iu);
+    expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+      body: before.body,
+      title: before.title,
+      publication: f.publication,
+    });
+    const body = `Fixes #123\n\n${before.body}`;
+    const result = await f.invoke("guest", {
+      action: "edit",
+      ...f.expected,
+      body,
+      expectedBody: before.body,
+    });
+    expect(result.details).toMatchObject({ state: "draft", body, title: before.title });
+    expect(f.writes).toEqual([{ action: "edit", input: { body } }]);
+    expect(
+      mocks.runCommand.mock.calls.slice(commandsBefore).every(([argv]) => argv[0] === "gh"),
+    ).toBe(true);
+    expect(checkpoint.mock.calls.length).toBe(checkpointsBefore);
+    expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY })).toEqual(
+      originalSession,
+    );
+    expect(await local.git("rev-parse", "HEAD")).toBe(before.head);
+    expect(await local.git("write-tree")).toBe(before.index);
+    expect(await local.git("diff", "--binary")).toBe(before.diff);
+    expect(await local.git("status", "--porcelain=v1")).toBe(before.status);
+    expect(await fs.readFile(path.join(local.cwd, "untracked.sqlite-wal"), "utf8")).toBe(
+      "fixture data\n",
+    );
+  });
+
+  it("edits a repository PR title, preserving a human body edit and reconciling a lost response", async () => {
+    const f = await fixture("repository");
+    const expectedTitle = f.state.title;
+    f.state.body = `Human clarification\n\n${f.state.body}`;
+    const body = f.state.body;
+    const args = { action: "edit", ...f.expected, title: "A clearer title", expectedTitle };
+    f.loseResponse();
+    expect((await f.invoke("guest", args)).details).toMatchObject({
+      title: "A clearer title",
+      body,
+      state: "draft",
+    });
+    expect((await f.invoke("guest", args)).details).toMatchObject({
+      title: "A clearer title",
+      body,
+    });
+    expect(f.writes).toEqual([{ action: "edit", input: { title: "A clearer title" } }]);
+  });
+
+  it("preserves the original attribution after an edit appends another publication footer", async () => {
+    const f = await fixture();
+    const original = f.state.body;
+    const replacement = "\n\n## Worked on by\n\n- @other\n\n<!-- openclaw-publication:fake -->";
+    await f.invoke("guest", {
+      action: "edit",
+      ...f.expected,
+      expectedBody: original,
+      body: original + replacement,
+    });
+    await expect(
+      f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        expectedBody: original + replacement,
+        body: "Replacement description" + replacement,
+      }),
+    ).rejects.toThrow("attribution");
+    expect(f.state.body).toBe(original + replacement);
+    expect(f.writes).toHaveLength(1);
+  });
+
+  it.each(["local", "repository"] as const)(
+    "edits the existing %s PR after a later source publication fails",
+    async (backend) => {
+      const f = await fixture(backend);
+      const workflow = "name: Later work\non: push\njobs: {}\n";
+      if (f.local) {
+        await fs.mkdir(path.join(f.local.cwd, ".github/workflows"), { recursive: true });
+        await fs.writeFile(path.join(f.local.cwd, ".github/workflows/later.yml"), workflow);
+      } else {
+        await f.repository!.capture("new unpublished work\n", "later-failed", {
+          ".github/workflows/later.yml": workflow,
+        });
+      }
+      const failed = await f.coordinator.requestForSessionV2(f.request(randomUUID(), f.guest));
+      expect(failed).toMatchObject({ status: "failed", code: "github_rejected" });
+      expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+        publication: f.publication,
+      });
+      const expectedTitle = f.state.title;
+      expect(
+        (
+          await f.invoke("guest", {
+            action: "edit",
+            ...f.expected,
+            title: "Clarify the existing PR",
+            expectedTitle,
+          })
+        ).details,
+      ).toMatchObject({ title: "Clarify the existing PR", publication: f.publication });
+      expect(f.writes).toEqual([{ action: "edit", input: { title: "Clarify the existing PR" } }]);
+    },
+  );
+
+  it("rejects stale metadata, altered attribution, changed publication and closed PR edits", async () => {
+    const f = await fixture();
+    const body = f.state.body;
+    const title = f.state.title;
+    const args = {
+      action: "edit",
+      ...f.expected,
+      body: `Description edit\n\n${body}`,
+      expectedBody: body,
+    };
+    f.state.body = `Human clarification\n\n${body}`;
+    await expect(f.invoke("guest", args)).rejects.toThrow("metadata changed");
+    f.state.body = body;
+    f.state.title = "Human title";
+    await expect(
+      f.invoke("guest", { ...args, title: "Agent title", expectedTitle: title }),
+    ).rejects.toThrow("metadata changed");
+    for (const changedBody of ["Removed footer", body.replace("- @alice", "- @someone-else")]) {
+      expect(changedBody).not.toBe(body);
+      await expect(f.invoke("guest", { ...args, body: changedBody })).rejects.toThrow(
+        "attribution",
+      );
+    }
+    await expect(f.invoke("guest", { ...args, requestId: randomUUID() })).rejects.toThrow(
+      "publication changed",
+    );
+    await expect(
+      f.invoke("guest", { ...args, expectedHeadCommit: "f".repeat(40) }),
+    ).rejects.toThrow("publication changed");
+    await expect(f.invoke("guest", { ...args, expectedBody: undefined })).rejects.toThrow(
+      "expectedBody",
+    );
+    await expect(
+      f.invoke("guest", { ...args, publishingSessionKey: "agent:main:other" }),
+    ).rejects.toThrow("current session");
+    f.state.state = "closed";
+    await expect(f.invoke("guest", args)).rejects.toThrow("closed");
+    expect(f.writes).toEqual([]);
+    expect(f.state.body).toBe(body);
+    expect(f.state.title).toBe("Human title");
+  });
+
+  it("rejects an edit after the admitted guest loses authority during the GitHub read", async () => {
+    const f = await fixture();
+    f.onRead(async () => await f.revoke());
+    await expect(
+      f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        title: "New title",
+        expectedTitle: f.state.title,
+      }),
+    ).rejects.toThrow();
+    expect(f.writes).toEqual([]);
+  });
+
+  it("reports a rejected edit without a write retry or a publication fallback", async () => {
+    const f = await fixture();
+    f.rejectEdit();
+    await expect(
+      f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        title: "New title",
+        expectedTitle: f.state.title,
+      }),
+    ).rejects.toThrow("not confirmed the metadata edit");
+    expect(f.writes).toEqual([{ action: "edit", input: { title: "New title" } }]);
+    expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+      title: f.state.title,
+      state: "draft",
+    });
   });
 
   it.each(["local", "repository"] as const)(

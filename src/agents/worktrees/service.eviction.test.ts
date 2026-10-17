@@ -4,6 +4,7 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -22,7 +23,9 @@ import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.t
 import { withWorktreeAllocationLease } from "./allocation.js";
 import * as checkout from "./checkout-materialize.js";
 import * as eviction from "./eviction.js";
+import * as cleanupLimits from "./gc-limits.js";
 import { requireGit } from "./git.js";
+import * as registryReads from "./registry-read.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
@@ -36,6 +39,7 @@ import {
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import * as snapshotHost from "./snapshot-host.js";
+import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -404,13 +408,68 @@ describe("managed worktree cap eviction", () => {
     expect(getRegistryWorktree(env, outer.id)).toEqual(original);
   });
 
-  it("holds one global cap across concurrent creates from different repositories and service instances", async () => {
+  it("holds one global cap when a pending create publishes during eviction planning", async ({
+    signal,
+  }) => {
     const otherRepo = await initializeRepository(path.join(root, "other"));
     const otherService = new ManagedWorktreeService({ env, getConfig: () => config });
-    const created = await Promise.all([
-      service.create({ repoRoot, name: "first", baseRef: "HEAD" }),
-      otherService.create({ repoRoot: otherRepo, name: "second", baseRef: "HEAD" }),
-    ]);
+    const publishing = createDeferred();
+    const published = createDeferred();
+    const release = createDeferred();
+    let held = false;
+    const transport = interceptWorktreeWorkerOperation((execute) => async (command, options) => {
+      if (command.type === "worktrees.insert" && !held) {
+        held = true;
+        publishing.resolve();
+        await release.promise;
+        const result = await execute(command, options);
+        published.resolve();
+        return result;
+      }
+      return execute(command, options);
+    });
+    const first = service.create({ repoRoot, name: "first", baseRef: "HEAD", signal });
+    const creations = [first];
+    let planning = false;
+    const enforce = cleanupLimits.enforceWorktreeCleanupLimits;
+    const limits = vi
+      .spyOn(cleanupLimits, "enforceWorktreeCleanupLimits")
+      .mockImplementation(async (params) => {
+        planning = true;
+        try {
+          return await enforce(params);
+        } finally {
+          planning = false;
+        }
+      });
+    const read = registryReads.readRegistryWorktrees;
+    let publishedDuringPlanning = false;
+    const inventory = vi
+      .spyOn(registryReads, "readRegistryWorktrees")
+      .mockImplementation(async (...args) => {
+        const records = await read(...args);
+        if (planning && args[1]?.liveOnly && records.length === 0 && !publishedDuringPlanning) {
+          publishedDuringPlanning = true;
+          release.resolve();
+          await published.promise;
+        }
+        return records;
+      });
+    let created: Awaited<typeof first>[];
+    try {
+      await withinTest(publishing.promise, signal);
+      creations.push(
+        otherService.create({ repoRoot: otherRepo, name: "second", baseRef: "HEAD", signal }),
+      );
+      created = await Promise.all(creations);
+      expect(publishedDuringPlanning).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(creations);
+      inventory.mockRestore();
+      limits.mockRestore();
+      transport.mockRestore();
+    }
     const records = await service.listRegistryRecords();
     const active = records.filter((record) => record.removedAt === undefined);
     expect(active).toHaveLength(1);

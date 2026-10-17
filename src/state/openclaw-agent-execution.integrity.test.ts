@@ -28,6 +28,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import {
   closeCachedOpenClawAgentDatabase,
+  recordOpenClawAgentDatabaseOpenFailure,
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
 import {
@@ -40,7 +41,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";

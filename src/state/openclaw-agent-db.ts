@@ -702,6 +702,5 @@ export {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   inspectOpenClawAgentDatabaseOwner,
-  recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
 } from "./openclaw-agent-db-lifecycle.js";

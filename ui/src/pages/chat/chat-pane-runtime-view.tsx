@@ -12,10 +12,11 @@ import {
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
@@ -115,6 +116,20 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
+    const boardProvider = createMemo(() => {
+      revision();
+      return runtime.subscribedBoardProvider;
+    });
+    const board = createMemo(() => {
+      const provider = boardProvider();
+      return provider
+        ? [
+            projectOwner(provider.snapshot$, (source) => source.value),
+            projectOwner(provider.loadError$, (source) => source.value),
+          ]
+        : [];
+    });
     const presented = () => {
       revision();
       return runtime.presented;
@@ -155,13 +170,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.context.plugins,
       runtime.context.navigation,
       nativeGatewaysCapability(),
-    ].map((source) =>
-      projectSource(source, {
-        read: (capability) => capability,
-        subscribe: (capability, notify) => capability?.subscribe(notify) ?? (() => {}),
-        equality: "revision",
-      }),
-    );
+    ].map((source) => source && projectOwner(source, (capability) => capability));
     onSettled(() => installChatComposerPickerDismissal(runtime.element.ownerDocument));
     // Relative labels tick only while this retained pane is presented.
     const minutePoll = useVisiblePoll(60_000, () => runtime.invalidate());
@@ -171,8 +180,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       read: () => {
         revision();
         progress.read();
+        projects.read();
+        board().forEach((source) => source.read());
         i18nRevision();
-        sources.forEach((source) => source.read());
+        sources.forEach((source) => source?.read());
         prepareRender();
         return runtime.render(() => providerReview);
       },
