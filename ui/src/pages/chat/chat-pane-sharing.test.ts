@@ -90,6 +90,52 @@ function createSharingTestChatPane(params: Parameters<typeof createTestChatPane>
   return { ...result, pane };
 }
 
+function sharingFixture(
+  request: NonNullable<Parameters<typeof createGatewayBrowserClientFixture>[0]>["request"],
+  sessions = createSessionCapabilityFixture(),
+) {
+  return createSharingTestChatPane({
+    client: createGatewayBrowserClientFixture({ request }),
+    sessions,
+  });
+}
+
+function reconciledSessions() {
+  return createSessionCapabilityFixture({
+    reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
+  });
+}
+
+function sharingState(pane: SharingPane, row: GatewaySessionRow) {
+  return pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key));
+}
+
+function expectReplacementUntouched(
+  pane: SharingPane,
+  replacement: ReturnType<typeof installReplacementConnection>,
+) {
+  expect(replacement.request).not.toHaveBeenCalled();
+  expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
+  expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(replacement.sharingState);
+}
+
+function deferredMutation(method: string) {
+  const response = createDeferred<unknown>();
+  const request = vi.fn((requested: string) => {
+    if (requested !== method) {
+      throw new Error(`unexpected request: ${requested}`);
+    }
+    return response.promise;
+  });
+  return { response, request };
+}
+
+function mutationFixture(method: string) {
+  const { response, request } = deferredMutation(method);
+  const sessions = reconciledSessions();
+  return { response, request, sessions, ...sharingFixture(request, sessions) };
+}
+
 function sessionRow(): GatewaySessionRow {
   return {
     key: "agent:main:current",
@@ -147,17 +193,15 @@ function installReplacementConnection(
   row: GatewaySessionRow,
 ) {
   const request = vi.fn();
-  const sessions = createSessionCapabilityFixture({
-    reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-  });
+  const sessions = reconciledSessions();
   replaceConnection(pane, state, createGatewayBrowserClientFixture({ request }), sessions);
   const cacheKey = pane.sessionSharingCacheKey(row.key);
-  const sharingState: ChatSessionSharingState = {
+  const replacementState: ChatSessionSharingState = {
     loading: false,
     result: sharingResult(row),
   };
-  pane.collaboration.sharingStates = new Map([[cacheKey, sharingState]]);
-  return { cacheKey, request, sessions, sharingState };
+  pane.collaboration.sharingStates = new Map([[cacheKey, replacementState]]);
+  return { cacheKey, request, sessions, sharingState: replacementState };
 }
 
 const mutations = [
@@ -179,10 +223,7 @@ describe("public session sharing", () => {
     "does not publish sharing hydration while rendering a header with %s",
     (scope) => {
       const request = vi.fn();
-      const { pane, state } = createSharingTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture(),
-      });
+      const { pane, state } = sharingFixture(request);
       const row = sessionRow();
       setSharingAuthorization(pane, { scopes: [scope] });
       const states = pane.collaboration.sharingStates;
@@ -253,136 +294,74 @@ describe("public session sharing", () => {
       expect(request.mock.calls.every(([method]) => method !== "session.visibility.set")).toBe(
         true,
       );
-      expect(
-        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result
-          ?.publicShare,
-      ).toBeUndefined();
+      expect(sharingState(pane, row)?.result?.publicShare).toBeUndefined();
     },
   );
 
-  it("rehydrates public state after an off-screen publication succeeds", async () => {
-    const row = sessionRow();
-    const other = {
-      ...sessionRow(),
-      key: "agent:main:other",
-      sessionId: "session-other",
-    };
-    const publicShare = { token: `v1.${"a".repeat(96)}`, createdAt: 1 };
-    const mutation = createDeferred<{
-      ok: true;
-      sessionKey: string;
-      publicShare: typeof publicShare;
-    }>();
-    let listCount = 0;
-    const request = vi.fn((method: string) => {
-      if (method === "session.members.listEvidence") {
-        listCount += 1;
-        return Promise.resolve({
-          ...sharingResult(row),
-          ...(listCount > 1 ? { publicShare } : {}),
-        });
-      }
-      if (method === "session.publicShare.set") {
-        return mutation.promise;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const { pane, state } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    state.sessionKey = row.key;
-    pane.syncSelectedSessionSharing(row);
-    await vi.waitFor(() => {
-      expect(listCount).toBe(1);
-      expect(
-        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading,
-      ).toBe(false);
-    });
-
-    confirmPublicShare.mockResolvedValue(true);
-    const pending = pane.setSessionPublicShare(row, true);
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "session.publicShare.set",
-        expect.objectContaining({ sessionKey: row.key }),
-      ),
-    );
-    state.sessionKey = other.key;
-    state.sessionsResult = sharingSessionsResult(other);
-    mutation.resolve({ ok: true, sessionKey: row.key, publicShare });
-    await pending;
-
-    state.sessionKey = row.key;
-    state.sessionsResult = sharingSessionsResult(row);
-    pane.syncSelectedSessionSharing(row);
-    await vi.waitFor(() => {
-      expect(listCount).toBe(2);
-      expect(
-        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result
-          ?.publicShare,
-      ).toEqual(publicShare);
-    });
-  });
-
-  it("rehydrates after the post-publication refresh becomes stale off-screen", async () => {
-    const row = sessionRow();
-    const other = {
-      ...sessionRow(),
-      key: "agent:main:other",
-      sessionId: "session-other",
-    };
-    const publicShare = { token: `v1.${"a".repeat(96)}`, createdAt: 1 };
-    const refresh = createDeferred<SessionMembersListEvidenceResult>();
-    let listCount = 0;
-    const request = vi.fn((method: string) => {
-      if (method === "session.publicShare.set") {
-        return Promise.resolve({ ok: true, sessionKey: row.key, publicShare });
-      }
-      if (method === "session.members.listEvidence") {
-        listCount += 1;
-        if (listCount === 2) {
-          return refresh.promise;
+  it.each(["publication", "refresh"] as const)(
+    "rehydrates public state after an off-screen %s",
+    async (phase) => {
+      const row = sessionRow();
+      const other = { ...row, key: "agent:main:other", sessionId: "session-other" };
+      const publicShare = { token: `v1.${"a".repeat(96)}`, createdAt: 1 };
+      const mutation = createDeferred<unknown>();
+      const refresh = createDeferred<SessionMembersListEvidenceResult>();
+      let listCount = 0;
+      const request = vi.fn((method: string) => {
+        if (method === "session.publicShare.set") {
+          return phase === "publication"
+            ? mutation.promise
+            : Promise.resolve({ ok: true, sessionKey: row.key, publicShare });
         }
-        return Promise.resolve({
-          ...sharingResult(row),
-          ...(listCount > 2 ? { publicShare } : {}),
-        });
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const { pane, state } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    state.sessionKey = row.key;
-    pane.syncSelectedSessionSharing(row);
-    await vi.waitFor(() => {
-      expect(listCount).toBe(1);
-      expect(
-        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading,
-      ).toBe(false);
-    });
+        if (method === "session.members.listEvidence") {
+          listCount += 1;
+          if (phase === "refresh" && listCount === 2) {
+            return refresh.promise;
+          }
+          return Promise.resolve({
+            ...sharingResult(row),
+            ...(listCount > (phase === "publication" ? 1 : 2) ? { publicShare } : {}),
+          });
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { pane, state } = sharingFixture(request);
+      const select = (selected: GatewaySessionRow) => {
+        state.sessionKey = selected.key;
+        state.sessionsResult = sharingSessionsResult(selected);
+      };
+      state.sessionKey = row.key;
+      pane.syncSelectedSessionSharing(row);
+      await vi.waitFor(() => {
+        expect(listCount).toBe(1);
+        expect(sharingState(pane, row)?.loading).toBe(false);
+      });
 
-    confirmPublicShare.mockResolvedValue(true);
-    const pending = pane.setSessionPublicShare(row, true);
-    await vi.waitFor(() => expect(listCount).toBe(2));
-    state.sessionKey = other.key;
-    state.sessionsResult = sharingSessionsResult(other);
-    refresh.resolve({ ...sharingResult(row), publicShare });
-    await pending;
+      confirmPublicShare.mockResolvedValue(true);
+      const pending = pane.setSessionPublicShare(row, true);
+      await vi.waitFor(() => {
+        if (phase === "publication") {
+          expect(request).toHaveBeenCalledWith(
+            "session.publicShare.set",
+            expect.objectContaining({ sessionKey: row.key }),
+          );
+        } else {
+          expect(listCount).toBe(2);
+        }
+      });
+      select(other);
+      mutation.resolve({ ok: true, sessionKey: row.key, publicShare });
+      refresh.resolve({ ...sharingResult(row), publicShare });
+      await pending;
 
-    state.sessionKey = row.key;
-    state.sessionsResult = sharingSessionsResult(row);
-    pane.syncSelectedSessionSharing(row);
-    await vi.waitFor(() => {
-      expect(listCount).toBe(3);
-      expect(
-        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result
-          ?.publicShare,
-      ).toEqual(publicShare);
-    });
-  });
+      select(row);
+      pane.syncSelectedSessionSharing(row);
+      await vi.waitFor(() => {
+        expect(listCount).toBe(phase === "publication" ? 2 : 3);
+        expect(sharingState(pane, row)?.result?.publicShare).toEqual(publicShare);
+      });
+    },
+  );
 
   it.each(["cancel", "session", "connection", "scope"] as const)(
     "does not publish after %s invalidates confirmation",
@@ -390,10 +369,7 @@ describe("public session sharing", () => {
       const confirmation = createDeferred<boolean>();
       confirmPublicShare.mockReturnValue(confirmation.promise);
       const request = vi.fn();
-      const { pane, state } = createSharingTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture(),
-      });
+      const { pane, state } = sharingFixture(request);
       const row = sessionRow();
       const pending = pane.setSessionPublicShare(row, true);
       await vi.waitFor(() => expect(confirmPublicShare).toHaveBeenCalledOnce());
@@ -415,10 +391,7 @@ describe("chat pane sharing authorization", () => {
   it("does not invalidate each render when sharing cannot load, then hydrates when access arrives", async () => {
     const row = sessionRow();
     const request = vi.fn(async () => sharingResult(row));
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
+    const { pane } = sharingFixture(request);
     const invalidate = vi.spyOn(pane.chatState, "requestBackgroundUpdate");
     const hydration = vi.spyOn(pane, "loadSessionSharing");
     setSharingAuthorization(pane, { scopes: ["operator.sessions.write"] });
@@ -438,7 +411,7 @@ describe("chat pane sharing authorization", () => {
       sessionKey: row.key,
       agentId: "main",
     });
-    expect(pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))).toEqual({
+    expect(sharingState(pane, row)).toEqual({
       loading: false,
       result: sharingResult(row),
     });
@@ -495,13 +468,8 @@ describe("chat pane sharing authorization", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-    });
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
+    const sessions = reconciledSessions();
+    const { pane } = sharingFixture(request, sessions);
     setSharingAuthorization(pane, { scopes: ["operator.read"] });
 
     await pane.loadSessionSharing(row);
@@ -522,13 +490,8 @@ describe("chat pane sharing authorization", () => {
       { row: sessionRow(), phase: "reconnecting" as const },
     ]) {
       const request = vi.fn();
-      const sessions = createSessionCapabilityFixture({
-        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-      });
-      const { pane } = createSharingTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions,
-      });
+      const sessions = reconciledSessions();
+      const { pane } = sharingFixture(request, sessions);
       setSharingAuthorization(pane, {
         phase: authorization.phase,
         scopes: ["operator.admin"],
@@ -546,13 +509,8 @@ describe("chat pane sharing authorization", () => {
   it("refuses explicitly unadvertised sharing methods", async () => {
     const row = sessionRow();
     const request = vi.fn(async () => sharingResult(row));
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-    });
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
+    const sessions = reconciledSessions();
+    const { pane } = sharingFixture(request, sessions);
     setSharingAuthorization(pane, {
       methods: ["session.members.listEvidence"],
       scopes: ["operator.admin"],
@@ -580,13 +538,8 @@ describe("chat pane sharing authorization", () => {
     },
   ])("refuses callbacks retained from $name", async ({ current }) => {
     const request = vi.fn();
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-    });
-    const { pane, state } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
+    const sessions = reconciledSessions();
+    const { pane, state } = sharingFixture(request, sessions);
     const stale = sessionRow();
     state.sessionsResult = sharingSessionsResult(current);
 
@@ -610,13 +563,8 @@ describe("chat pane sharing authorization", () => {
         ? listed.promise
         : Promise.resolve(sharingResult(replacement));
     });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-    });
-    const { pane, state } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
+    const sessions = reconciledSessions();
+    const { pane, state } = sharingFixture(request, sessions);
     const pending = pane.loadSessionSharing(stale);
     state.sessionsResult = sharingSessionsResult(replacement);
     listed.resolve(sharingResult(stale));
@@ -629,9 +577,7 @@ describe("chat pane sharing authorization", () => {
     await pane.loadSessionSharing(replacement);
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(replacement.key)),
-    ).toEqual({
+    expect(sharingState(pane, replacement)).toEqual({
       loading: false,
       result: sharingResult(replacement),
     });
@@ -641,10 +587,7 @@ describe("chat pane sharing authorization", () => {
     const row = sessionRow();
     const listed = createDeferred<SessionMembersListEvidenceResult>();
     const request = vi.fn(() => listed.promise);
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
+    const { pane } = sharingFixture(request);
     const pending = pane.loadSessionSharing(row);
     pane.presented = false;
     pane.presented = true;
@@ -652,9 +595,7 @@ describe("chat pane sharing authorization", () => {
     listed.reject(new Error("stale sharing load failed"));
     await pending;
 
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key)),
-    ).toBeUndefined();
+    expect(sharingState(pane, row)).toBeUndefined();
   });
 });
 
@@ -662,20 +603,9 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
   it.each(["resolve", "reject"] as const)(
     "drops a stale mutation when the previous connection later %s",
     async (completion) => {
-      const response = createDeferred<unknown>();
-      const oldRequest = vi.fn((method: string) => {
-        if (method !== mutation.method) {
-          throw new Error(`unexpected old-connection request: ${method}`);
-        }
-        return response.promise;
-      });
-      const oldSessions = createSessionCapabilityFixture({
-        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-      });
-      const { pane, state } = createSharingTestChatPane({
-        client: createGatewayBrowserClientFixture({ request: oldRequest }),
-        sessions: oldSessions,
-      });
+      const { response, request: oldRequest } = deferredMutation(mutation.method);
+      const oldSessions = reconciledSessions();
+      const { pane, state } = sharingFixture(oldRequest, oldSessions);
       const row = sessionRow();
       const pending = mutation.invoke(pane, row);
       expect(oldRequest).toHaveBeenCalledWith(
@@ -692,11 +622,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
       }
       await pending;
 
-      expect(replacement.request).not.toHaveBeenCalled();
-      expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-      expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
-        replacement.sharingState,
-      );
+      expectReplacementUntouched(pane, replacement);
       expect(state.lastError).toBeNull();
       expect(state.chatError).toBeNull();
     },
@@ -705,20 +631,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
   it.each(["resolve", "reject"] as const)(
     "drops a stale same-key mutation when the replaced session later %s",
     async (completion) => {
-      const response = createDeferred<unknown>();
-      const request = vi.fn((method: string) => {
-        if (method !== mutation.method) {
-          throw new Error(`unexpected request: ${method}`);
-        }
-        return response.promise;
-      });
-      const sessions = createSessionCapabilityFixture({
-        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-      });
-      const { pane, state } = createSharingTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions,
-      });
+      const { response, request, sessions, pane, state } = mutationFixture(mutation.method);
       const stale = sessionRow();
       const pending = mutation.invoke(pane, stale);
       expect(request).toHaveBeenCalledWith(
@@ -751,20 +664,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
   );
 
   it("keeps a previous-session failure out of the newly selected session", async () => {
-    const response = createDeferred<unknown>();
-    const request = vi.fn((method: string) => {
-      if (method !== mutation.method) {
-        throw new Error(`unexpected request: ${method}`);
-      }
-      return response.promise;
-    });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-    });
-    const { pane, state } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
+    const { response, sessions, pane, state } = mutationFixture(mutation.method);
     const previous = sessionRow();
     const selected = {
       ...sessionRow(),
@@ -782,9 +682,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
     response.reject(new Error(`${mutation.name} failed after session switch`));
     await pending;
 
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(previous.key)),
-    ).toMatchObject({
+    expect(sharingState(pane, previous)).toMatchObject({
       loading: false,
       error: `${mutation.name} failed after session switch`,
     });
@@ -794,20 +692,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
   });
 
   it("drops a failure after leaving and returning to the retained pane", async () => {
-    const response = createDeferred<unknown>();
-    const request = vi.fn((method: string) => {
-      if (method !== mutation.method) {
-        throw new Error(`unexpected request: ${method}`);
-      }
-      return response.promise;
-    });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-    });
-    const { pane, state } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
+    const { response, sessions, pane, state } = mutationFixture(mutation.method);
     const row = sessionRow();
     const pending = mutation.invoke(pane, row);
     pane.presented = false;
@@ -816,9 +701,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
     response.reject(new Error(`stale ${mutation.name} failed`));
     await pending;
 
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key)),
-    ).toBeUndefined();
+    expect(sharingState(pane, row)).toBeUndefined();
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
     expect(sessions.reconcileMutation).not.toHaveBeenCalled();
@@ -840,14 +723,11 @@ it("preserves a member sharing refresh failure in the current connection", async
   const sessions = createSessionCapabilityFixture({
     reconcileMutation: vi.fn(async () => ({ status: "failed" as const, error: failure })),
   });
-  const { pane, state } = createSharingTestChatPane({
-    client: createGatewayBrowserClientFixture({ request }),
-    sessions,
-  });
+  const { pane, state } = sharingFixture(request, sessions);
 
   await pane.setSessionMember(row, "identity-alice", true);
 
-  expect(pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))).toMatchObject({
+  expect(sharingState(pane, row)).toMatchObject({
     loading: false,
     error: failure,
   });
@@ -870,10 +750,7 @@ describe("chat pane sharing mutation phase ownership", () => {
       const oldSessions = createSessionCapabilityFixture({
         reconcileMutation: vi.fn(() => refreshed.promise),
       });
-      const { pane, state } = createSharingTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions: oldSessions,
-      });
+      const { pane, state } = sharingFixture(request, oldSessions);
       const row = sessionRow();
       const pending = pane.setSessionVisibility(row, "shared");
       await vi.waitFor(() => {
@@ -888,11 +765,7 @@ describe("chat pane sharing mutation phase ownership", () => {
       }
       await pending;
 
-      expect(replacement.request).not.toHaveBeenCalled();
-      expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-      expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
-        replacement.sharingState,
-      );
+      expectReplacementUntouched(pane, replacement);
     },
   );
 
@@ -910,13 +783,8 @@ describe("chat pane sharing mutation phase ownership", () => {
           }
           throw new Error(`unexpected old-connection request: ${requestMethod}`);
         });
-        const oldSessions = createSessionCapabilityFixture({
-          reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
-        });
-        const { pane, state } = createSharingTestChatPane({
-          client: createGatewayBrowserClientFixture({ request }),
-          sessions: oldSessions,
-        });
+        const oldSessions = reconciledSessions();
+        const { pane, state } = sharingFixture(request, oldSessions);
         const row = sessionRow();
         const pending = invoke(pane, row);
         await vi.waitFor(() => {
@@ -935,11 +803,7 @@ describe("chat pane sharing mutation phase ownership", () => {
         await pending;
 
         expect(oldSessions.reconcileMutation).toHaveBeenCalledTimes(name === "visibility" ? 1 : 0);
-        expect(replacement.request).not.toHaveBeenCalled();
-        expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-        expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
-          replacement.sharingState,
-        );
+        expectReplacementUntouched(pane, replacement);
       },
     );
   });
@@ -959,10 +823,7 @@ describe("chat pane sharing mutation phase ownership", () => {
     const oldSessions = createSessionCapabilityFixture({
       reconcileMutation: vi.fn(() => refreshed.promise),
     });
-    const { pane, state } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: oldSessions,
-    });
+    const { pane, state } = sharingFixture(request, oldSessions);
     const pending = pane.setSessionMember(row, "identity-alice", true);
     await vi.waitFor(() => {
       expect(oldSessions.reconcileMutation).toHaveBeenCalledWith("main");
@@ -972,78 +833,32 @@ describe("chat pane sharing mutation phase ownership", () => {
     refreshed.resolve({ status: "failed", error: "old member session refresh failed" });
     await pending;
 
-    expect(replacement.request).not.toHaveBeenCalled();
-    expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-    expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
-      replacement.sharingState,
+    expectReplacementUntouched(pane, replacement);
+  });
+});
+
+it.each([mutations[0], mutations[1]])(
+  "refreshes $name sharing in its owner-defined order",
+  async ({ name, invoke }) => {
+    const row = sessionRow();
+    const calls: string[] = [];
+    const request = vi.fn(async (method: string) => {
+      calls.push(method);
+      return method === "session.members.listEvidence" ? sharingResult(row) : {};
+    });
+    const sessions = createSessionCapabilityFixture({
+      reconcileMutation: vi.fn(async () => {
+        calls.push("sessions.reconcileMutation");
+        return { status: "refreshed" as const };
+      }),
+    });
+    const { pane } = sharingFixture(request, sessions);
+    await invoke(pane, row);
+    expect(calls).toEqual(
+      name === "visibility"
+        ? ["session.visibility.set", "sessions.reconcileMutation", "session.members.listEvidence"]
+        : ["session.members.add", "session.members.listEvidence", "sessions.reconcileMutation"],
     );
-  });
-});
-
-describe("chat pane current sharing mutation refresh order", () => {
-  it("refreshes sessions before sharing after a visibility change", async () => {
-    const row = sessionRow();
-    const calls: string[] = [];
-    const request = vi.fn(async (method: string) => {
-      calls.push(method);
-      if (method === "session.members.listEvidence") {
-        return sharingResult(row);
-      }
-      return {};
-    });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => {
-        calls.push("sessions.reconcileMutation");
-        return { status: "refreshed" as const };
-      }),
-    });
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
-
-    await pane.setSessionVisibility(row, "shared");
-
-    expect(calls).toEqual([
-      "session.visibility.set",
-      "sessions.reconcileMutation",
-      "session.members.listEvidence",
-    ]);
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result,
-    ).toEqual(sharingResult(row));
-  });
-
-  it("refreshes sharing before sessions after a member change", async () => {
-    const row = sessionRow();
-    const calls: string[] = [];
-    const request = vi.fn(async (method: string) => {
-      calls.push(method);
-      if (method === "session.members.listEvidence") {
-        return sharingResult(row);
-      }
-      return {};
-    });
-    const sessions = createSessionCapabilityFixture({
-      reconcileMutation: vi.fn(async () => {
-        calls.push("sessions.reconcileMutation");
-        return { status: "refreshed" as const };
-      }),
-    });
-    const { pane } = createSharingTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions,
-    });
-
-    await pane.setSessionMember(row, "identity-alice", true);
-
-    expect(calls).toEqual([
-      "session.members.add",
-      "session.members.listEvidence",
-      "sessions.reconcileMutation",
-    ]);
-    expect(
-      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result,
-    ).toEqual(sharingResult(row));
-  });
-});
+    expect(sharingState(pane, row)?.result).toEqual(sharingResult(row));
+  },
+);
