@@ -12,7 +12,7 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import { sessionFixture, sessionResult, sessionQuery } from "./session-suite.test-support.ts";
+import { sessionFixture, sessionResult } from "./session-suite.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 const statusFilter = "archived";
@@ -395,7 +395,7 @@ describe("AppSidebar gateway session pagination", () => {
       harness.list.mockImplementation(async (options) =>
         options?.offset === 60 ? nextPage : firstPage,
       );
-      const { sidebar } = await harness.mount();
+      const { sidebar, query } = await harness.mount();
       sidebar.sessionsStatusFilter = filter;
       sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
@@ -417,7 +417,7 @@ describe("AppSidebar gateway session pagination", () => {
       await sidebar.updateComplete;
 
       await waitForFast(() => {
-        expect(sessionQuery(sidebar, "agent:main:session-60")).not.toBeNull();
+        expect(query("agent:main:session-60")).not.toBeNull();
       });
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining({

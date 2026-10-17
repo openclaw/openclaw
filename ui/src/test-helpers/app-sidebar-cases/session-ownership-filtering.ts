@@ -4,18 +4,17 @@ import type {
   SessionCatalogSession,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
-import { createGatewayHarness, type SidebarLifecycleState } from "../app-sidebar.ts";
+import { selectSessionMenuValue } from "../app-sidebar-menu.ts";
+import {
+  createGateway,
+  createGatewayHarness,
+  createSessionsHarness,
+  mountSidebar,
+} from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import { sessionFixture, human, sessionQuery, sessionList } from "./session-suite.test-support.ts";
+import { sessionFixture, human, sessionList, describedText } from "./session-suite.test-support.ts";
 import "../../components/app-sidebar.tsx";
-
-async function selectOwner(sidebar: SidebarLifecycleState, ownerId: string, involvingMe = false) {
-  await activateSessionMenuValue(sidebar, involvingMe ? "involving-me" : `owner:${ownerId}`);
-  await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
-  await sidebar.updateComplete;
-}
 
 function catalogSession(
   threadId: string,
@@ -132,45 +131,35 @@ describe("AppSidebar session ownership filtering", () => {
     const ada = harness.row("agent:main:ada");
     const bob = harness.row("agent:main:bob");
     ada.createdActor = human("Bob");
-    ada.owner = {
-      actor: human("Ada"),
-      assignedBy: human("Bob"),
-      assignedAt: 10,
-    };
+    ada.owner = { actor: human("Ada") };
     ada.category = "Research";
     bob.createdActor = human("Ada");
-    bob.owner = {
-      actor: human("Bob"),
-      assignedBy: human("Ada"),
-      assignedAt: 11,
-    };
+    bob.owner = { actor: human("Bob") };
     bob.category = "Operations";
     result.owners = [human("Ada"), human("Bob")];
     harness.publish({ groups: ["Research", "Operations"] });
-    const { sidebar } = await harness.mount();
+    const { sidebar, query } = await harness.mount();
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
     expect(sidebar.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(2);
-    await selectOwner(sidebar, "profile-ada");
+    await selectSessionMenuValue(sidebar, "owner:profile-ada");
 
-    expect(sessionQuery(sidebar, "agent:main:ada")).not.toBeNull();
-    expect(sessionQuery(sidebar, "agent:main:bob")).toBeNull();
+    expect(query("agent:main:ada")).not.toBeNull();
+    expect(query("agent:main:bob")).toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Research"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-session-toolbar .sidebar-session-sort--filtered"),
     ).toBeNull();
 
-    await activateSessionMenuValue(sidebar, "empty-groups:never");
-    await sidebar.updateComplete;
-    // The explicit display choice restores the heading, never filtered-out sessions.
+    await selectSessionMenuValue(sidebar, "empty-groups:never");
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();
-    expect(sessionQuery(sidebar, "agent:main:bob")).toBeNull();
-    await selectOwner(sidebar, "");
-    await selectOwner(sidebar, "profile-ada");
+    expect(query("agent:main:bob")).toBeNull();
+    await selectSessionMenuValue(sidebar, "owner:");
+    await selectSessionMenuValue(sidebar, "owner:profile-ada");
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();
-    expect(sessionQuery(sidebar, "agent:main:bob")).toBeNull();
+    expect(query("agent:main:bob")).toBeNull();
   });
 
   it.each([
@@ -205,10 +194,9 @@ describe("AppSidebar session ownership filtering", () => {
       other.spawnedWorkspaceDir = "/repos/operations";
       result.owners = [ada, bob];
       harness.publish({ groups: ["Empty", "Research", "Operations"] });
-      // The Gateway owns personal membership, including participation outside
-      // the bounded avatar preview. Its filtered response is the UI boundary.
+      // Personal membership comes from the Gateway's filtered response.
       harness.list.mockImplementation(async () => ({ ...result, count: 1, sessions: [match] }));
-      const { sidebar } = await harness.mount(gateway.gateway);
+      const { sidebar, query } = await harness.mount(gateway.gateway);
       Object.assign(sidebar, { sessionsGrouping: grouping });
       await sidebar.updateComplete;
       const sectionIds = () =>
@@ -220,8 +208,10 @@ describe("AppSidebar session ownership filtering", () => {
         expect(everyoneSections).toContain("category:Empty");
         expect(everyoneSections).toContain("groups");
       }
-
-      await selectOwner(sidebar, "profile-ada", filter === "involving-me");
+      await selectSessionMenuValue(
+        sidebar,
+        filter === "involving-me" ? "involving-me" : "owner:profile-ada",
+      );
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining(
           filter === "mine" ? { ownerId: "profile-ada" } : { involvingMe: true },
@@ -236,14 +226,14 @@ describe("AppSidebar session ownership filtering", () => {
               ? "project:/repos/research"
               : "ungrouped";
       expect(sectionIds()).toEqual([matchingSection]);
-      expect(sessionQuery(sidebar, "agent:main:match")).not.toBeNull();
-      expect(sessionQuery(sidebar, "agent:main:other")).toBeNull();
+      expect(query("agent:main:match")).not.toBeNull();
+      expect(query("agent:main:other")).toBeNull();
       if (grouping !== "none") {
         sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set([matchingSection]));
         await sidebar.updateComplete;
         expect(sectionIds()).toEqual([matchingSection]);
         expect(sidebar.querySelector(".sidebar-session-group-count")?.textContent).toBe("1");
-        expect(sessionQuery(sidebar, "agent:main:match")).toBeNull();
+        expect(query("agent:main:match")).toBeNull();
       }
 
       harness.list.mockResolvedValue({ ...result, count: 0, sessions: [] });
@@ -252,7 +242,7 @@ describe("AppSidebar session ownership filtering", () => {
       expect(sectionIds()).toEqual([]);
       expect(sidebar.querySelector(".sidebar-session-toolbar")).not.toBeNull();
 
-      await selectOwner(sidebar, "");
+      await selectSessionMenuValue(sidebar, "owner:");
       expect(sectionIds()).toEqual(everyoneSections);
       expect(harness.sessions.state.groups).toEqual(["Empty", "Research", "Operations"]);
     },
@@ -266,14 +256,10 @@ describe("AppSidebar session ownership filtering", () => {
     const adopted = harness.row(backingSessionKey);
     ada.createdActor = human("Ada");
     adopted.createdActor = human("Ada");
-    adopted.owner = {
-      actor: human("Bob"),
-      assignedBy: human("Ada"),
-      assignedAt: 10,
-    };
+    adopted.owner = { actor: human("Bob") };
     result.owners = [human("Ada"), human("Bob")];
 
-    const { sidebar } = await harness.mount();
+    const { sidebar, query } = await harness.mount();
     sidebar.sessionData.sessionCatalogs = catalog([
       catalogSession("claude-thread", "Claude session", {
         sessionKey: backingSessionKey,
@@ -285,11 +271,11 @@ describe("AppSidebar session ownership filtering", () => {
     harness.publishList({ result, agentId: "main" });
     await settleLitElement(sidebar);
 
-    expect(sessionQuery(sidebar, backingSessionKey)).not.toBeNull();
+    expect(query(backingSessionKey)).not.toBeNull();
     expect(sidebar.textContent).toContain("External unowned session");
-    await selectOwner(sidebar, "profile-bob");
+    await selectSessionMenuValue(sidebar, "owner:profile-bob");
 
-    expect(sessionQuery(sidebar, backingSessionKey)).not.toBeNull();
+    expect(query(backingSessionKey)).not.toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");
 
     harness.publishList({
@@ -298,7 +284,7 @@ describe("AppSidebar session ownership filtering", () => {
     });
     await sidebar.sessionData.refreshSidebarSessions();
     await settleLitElement(sidebar);
-    expect(sessionQuery(sidebar, backingSessionKey)).toBeNull();
+    expect(query(backingSessionKey)).toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");
   });
 
@@ -312,7 +298,7 @@ describe("AppSidebar session ownership filtering", () => {
     result.owners = [human("Ada"), human("Bob")];
 
     const unloadedSessionKey = "agent:main:beyond-loaded-page";
-    const { sidebar } = await harness.mount();
+    const { sidebar, query } = await harness.mount();
     sidebar.sessionData.sessionCatalogs = catalog([
       catalogSession("unloaded-thread", "Unloaded backing session", {
         sessionKey: unloadedSessionKey,
@@ -323,8 +309,8 @@ describe("AppSidebar session ownership filtering", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    await selectOwner(sidebar, "profile-ada");
-    expect(sessionQuery(sidebar, unloadedSessionKey)).not.toBeNull();
+    await selectSessionMenuValue(sidebar, "owner:profile-ada");
+    expect(query(unloadedSessionKey)).not.toBeNull();
   });
 
   it("badges the owner avatar and announces unread once", async () => {
@@ -340,21 +326,18 @@ describe("AppSidebar session ownership filtering", () => {
     other.owner = { actor: other.createdActor };
     result.owners = [human("Ada"), human("Bob")];
 
-    const { sidebar } = await harness.mount();
+    const { sidebar, query } = await harness.mount();
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    const row = sessionQuery(sidebar, key);
+    const row = query(key);
     expect(row?.querySelector(".session-glyph openclaw-session-owner-chip")).not.toBeNull();
     const badge = row?.querySelector(".sidebar-session-indicator .session-glyph__badge--unread");
     expect(badge).not.toBeNull();
     expect(badge?.getAttribute("role")).toBe("img");
     expect(row?.querySelector(".session-row-state")).toBeNull();
     const link = row!.querySelector("a")!;
-    const description = (link.getAttribute("aria-describedby") ?? "")
-      .split(/\s+/u)
-      .map((id) => document.getElementById(id)?.textContent ?? "")
-      .join(" ");
+    const description = describedText(link);
     const name = [...link.querySelectorAll('[role="img"]')]
       .filter((image) => !image.closest('[aria-hidden="true"]'))
       .map((image) => image.getAttribute("aria-label") ?? "")
@@ -428,29 +411,26 @@ describe("AppSidebar session ownership filtering", () => {
 
   it("renders a controlled child once under its explicit dashboard parent", async () => {
     const navigationParentKey = "agent:main:dashboard:navigation-parent";
-    const controlParentKey = "agent:main:main";
     const childKey = "agent:main:dashboard:controlled-child";
     const child = {
       key: childKey,
       kind: "direct" as const,
-      label: "Controlled child",
       updatedAt: 3,
       parentSessionKey: navigationParentKey,
-      spawnedBy: controlParentKey,
+      spawnedBy: "agent:main:main",
     };
     const harness = sessionFixture([navigationParentKey]);
     harness.list.mockImplementation(async (options) => {
       const sessions = options?.spawnedBy === navigationParentKey ? [child] : [];
       return sessionList(sessions, { ts: 3 });
     });
-    const { sidebar } = await harness.mount();
+    const { sidebar, query } = await harness.mount();
     harness.publishList({
       result: sessionList(
         [
           {
             key: navigationParentKey,
             kind: "direct",
-            label: "Dashboard parent",
             updatedAt: 2,
             childSessions: [childKey],
           },
@@ -472,8 +452,6 @@ describe("AppSidebar session ownership filtering", () => {
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(`[data-session-key="${childKey}"]`)).toHaveLength(1),
     );
-    expect(
-      sessionQuery(sidebar, childKey)?.classList.contains("sidebar-recent-session--child"),
-    ).toBe(true);
+    expect(query(childKey)?.classList.contains("sidebar-recent-session--child")).toBe(true);
   });
 });

@@ -186,7 +186,7 @@ describe("AppSidebar session section visibility", () => {
   it("keeps a selected child reachable when its parent is outside the loaded window", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = sessionFixture(["agent:main:child"]);
-    const { sidebar } = await harness.mount(gateway);
+    const { sidebar, query } = await harness.mount(gateway);
     harness.publishList({
       result: sessionList([
         {
@@ -203,7 +203,7 @@ describe("AppSidebar session section visibility", () => {
     sidebar.sessionKey = "agent:main:child";
     await sidebar.updateComplete;
 
-    const row = sessionQuery(sidebar, "agent:main:child");
+    const row = query("agent:main:child");
     expect(row?.textContent).toContain("Reachable orphan");
     expect(row?.classList.contains("sidebar-recent-session--child")).toBe(false);
   });

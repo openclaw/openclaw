@@ -9,7 +9,7 @@ import {
   registerSessionOwnershipAvatarTests,
   setEffectiveOwner,
 } from "./session-ownership-avatars.ts";
-import { sessionFixture, human, sessionQuery } from "./session-suite.test-support.ts";
+import { sessionFixture, human } from "./session-suite.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 async function expectSelected(menu: Awaited<ReturnType<typeof openSessionMenu>>, value: string) {
@@ -74,18 +74,18 @@ describe("AppSidebar session ownership", () => {
     collab.participantCount = 1;
     result.owners = [human("Ada"), human("Bob")];
 
-    const { sidebar } = await harness.mount(gateway.gateway);
+    const { sidebar, query } = await harness.mount(gateway.gateway);
     await publishOwnership(harness, sidebar);
-    expect(sessionQuery(sidebar, "agent:main:collab", ".session-owner-stack")).not.toBeNull();
+    expect(query("agent:main:collab", ".session-owner-stack")).not.toBeNull();
 
     await selectSessionMenuValue(sidebar, "involving-me");
     expect(harness.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
-    const soloRow = () => sessionQuery(sidebar, solo.key)!;
-    const sharedRow = () => sessionQuery(sidebar, shared.key)!;
+    const soloRow = () => query(solo.key)!;
+    const sharedRow = () => query(shared.key)!;
     expect(soloRow().querySelector("openclaw-session-owner-chip")).toBeNull();
     expect(soloRow().querySelector('[aria-label="Active run"]')).not.toBeNull();
     expect(sharedRow().querySelector(".session-owner-stack")).not.toBeNull();
-    expect(sessionQuery(sidebar, collab.key, ".session-owner-stack")).not.toBeNull();
+    expect(query(collab.key, ".session-owner-stack")).not.toBeNull();
 
     await selectSessionMenuValue(sidebar, "owner:profile-ada");
     expect(soloRow().querySelector("openclaw-session-owner-chip")).toBeNull();
@@ -118,10 +118,10 @@ describe("AppSidebar session ownership", () => {
       row.status = "running";
     }
     result.owners = [human("Ada"), human("Bob")];
-    const { sidebar } = await harness.mount(gateway.gateway);
+    const { sidebar, query } = await harness.mount(gateway.gateway);
     await publishOwnership(harness, sidebar);
-    const soloRow = sessionQuery(sidebar, "agent:main:solo")!;
-    const collabRow = sessionQuery(sidebar, "agent:main:collab")!;
+    const soloRow = query("agent:main:solo")!;
+    const collabRow = query("agent:main:collab")!;
     expect(soloRow.querySelector(".session-glyph__ring")).not.toBeNull();
     expect(soloRow.querySelector(".session-glyph__trace")).toBeNull();
     expect(collabRow.querySelector(".session-glyph__ring")).toBeNull();
@@ -141,7 +141,7 @@ describe("AppSidebar session ownership", () => {
     collab.participants = [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }];
     collab.participantCount = 1;
     result.owners = [human("Ada"), human("Bob")];
-    const { sidebar } = await harness.mount(gateway.gateway);
+    const { sidebar, query } = await harness.mount(gateway.gateway);
     harness.publishList({ result, agentId: "main" });
     gateway.publishEvent("presence", {
       presence: ["ada", "bob", "carol"].map((name) => {
@@ -157,14 +157,14 @@ describe("AppSidebar session ownership", () => {
       }),
     });
     await sidebar.updateComplete;
-    const row = sessionQuery(sidebar, "agent:main:collab")!;
-    await waitForFast(() => {
+    const row = query("agent:main:collab")!;
+    await waitForFast(() =>
       expect(
         [...row.querySelectorAll("[data-viewer-id]")].map((avatar) =>
           avatar.getAttribute("data-viewer-id"),
         ),
-      ).toEqual(["profile-carol", "profile-bob"]);
-    });
+      ).toEqual(["profile-carol", "profile-bob"]),
+    );
     expect(row.querySelector(".session-owner-stack")).not.toBeNull();
   });
 
@@ -187,7 +187,7 @@ describe("AppSidebar session ownership", () => {
     result.owners = [human("Ada")];
     result.sessions[1]!.participants = [{ identity: { type: "agent", id: "research" } }];
     result.sessions[1]!.participantCount = 5;
-    const { sidebar } = await harness.mount(gateway.gateway);
+    const { sidebar, query } = await harness.mount(gateway.gateway);
     await publishOwnership(harness, sidebar);
 
     expect(sidebar.querySelector(".sidebar-recent-session openclaw-session-owner-chip")).toBeNull();
@@ -196,7 +196,7 @@ describe("AppSidebar session ownership", () => {
     result.sessions[1]!.participants = [{ identity: { type: "profile", id: "profile-bob" } }];
     result.sessions[1]!.participantCount = 1;
     await publishOwnership(harness, sidebar);
-    expect(sessionQuery(sidebar, "agent:main:a", "openclaw-session-owner-chip")).not.toBeNull();
+    expect(query("agent:main:a", "openclaw-session-owner-chip")).not.toBeNull();
   });
 
   it("owns People availability and fallback at the live session-owner roster", async () => {
@@ -354,7 +354,7 @@ describe("AppSidebar session ownership", () => {
     setEffectiveOwner(collaborator, human("Bob"));
     result.owners = [human("Ada"), human("Bob")];
 
-    const { sidebar } = await harness.mount();
+    const { sidebar, query } = await harness.mount();
     Object.assign(sidebar, { sessionsStatusFilter: "archived" });
     await publishOwnership(harness, sidebar);
 
@@ -364,8 +364,7 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.querySelector('span[title="Created by Ada"]')).toBeNull();
     // Facepile dedup follows the rendered lead: the archivist chip is shown,
     // so Bob is excluded while owner Ada must stay visible as a viewer.
-    const archivedFacepile = sessionQuery<HTMLElementTagNameMap["openclaw-viewer-facepile"]>(
-      sidebar,
+    const archivedFacepile = query<HTMLElementTagNameMap["openclaw-viewer-facepile"]>(
       archived.key,
       "openclaw-viewer-facepile",
     );
@@ -376,8 +375,7 @@ describe("AppSidebar session ownership", () => {
     await publishOwnership(harness, sidebar);
 
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
-    const soloFacepile = sessionQuery<HTMLElementTagNameMap["openclaw-viewer-facepile"]>(
-      sidebar,
+    const soloFacepile = query<HTMLElementTagNameMap["openclaw-viewer-facepile"]>(
       archived.key,
       "openclaw-viewer-facepile",
     );

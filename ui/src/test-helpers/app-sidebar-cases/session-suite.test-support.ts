@@ -14,11 +14,22 @@ export function sessionFixture(keys: string[]) {
   return {
     ...harness,
     result,
-    row: (key: string) => result.sessions.find((row) => row.key === key)!,
-    mount: (
+    row: (key: string, fields: Partial<GatewaySessionRow> = {}) =>
+      Object.assign(
+        result.sessions.find((row) => row.key === key)!,
+        fields,
+      ),
+    mount: async (
       gateway = createGatewayHarness({} as GatewayBrowserClient).gateway,
       agents?: Parameters<typeof mountSidebar>[3],
-    ) => mountSidebar(gateway, harness.sessions, "panel", agents),
+    ) => {
+      const mounted = await mountSidebar(gateway, harness.sessions, "panel", agents);
+      return {
+        ...mounted,
+        query: <T extends Element = Element>(key: string, selector = "") =>
+          sessionQuery<T>(mounted.sidebar, key, selector),
+      };
+    },
   };
 }
 
@@ -56,4 +67,11 @@ export function expectAbsent(root: ParentNode | null | undefined, ...selectors: 
   for (const selector of selectors) {
     expect(root?.querySelector(selector)).toBeNull();
   }
+}
+
+export function describedText(element: Element) {
+  return (element.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/u)
+    .map((id) => element.ownerDocument.getElementById(id)?.textContent ?? "")
+    .join(" ");
 }
