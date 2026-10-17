@@ -19,15 +19,13 @@ const native = vi.hoisted(() => ({
 
 // mock-isolation: Supply discovery descriptors without loading installed plugins or CLI processes.
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
-  resolvePluginDiscoveryProvidersRuntime: () => [
-    { id: native.id, label: "Fixture CLI", auth: [], prepareSyntheticAuth: native.probe },
-    {
-      id: "unrelated-cli",
-      label: "Unrelated CLI",
+  resolvePluginDiscoveryProvidersRuntime: () =>
+    [native.id, "unrelated-cli"].map((id) => ({
+      id,
+      label: id,
       auth: [],
-      prepareSyntheticAuth: native.unrelatedProbe,
-    },
-  ],
+      prepareSyntheticAuth: id === native.id ? native.probe : native.unrelatedProbe,
+    })),
 }));
 
 const nativeLogin = {
@@ -36,6 +34,12 @@ const nativeLogin = {
   mode: "oauth",
   nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
 } as const;
+const sharedCredential = { type: "api_key", key: "synthetic-shared-key" } as const;
+const savedCredential = { type: "api_key", key: "synthetic-saved-key" } as const;
+const sharedProfiles = { "shared:account": { ...sharedCredential, provider: "shared" } };
+const refreshAuth = vi.fn(async () => {
+  throw new Error("Native login checks must not load durable auth in the catalog worker");
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -43,27 +47,25 @@ beforeEach(() => {
   vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
   native.probe.mockReset().mockResolvedValue(undefined);
   native.unrelatedProbe.mockReset();
+  refreshAuth.mockClear();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  expect(refreshAuth).not.toHaveBeenCalled();
+  expect(native.unrelatedProbe).not.toHaveBeenCalled();
 });
 
 function fixture(resources: AsyncDisposableStack, savedNativeProfile = false) {
   const cache = resources.use(createPluginCache());
   const retirement = new AbortController();
   const metadata = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: native.id,
-        providers: [native.id],
-        cliBackends: [native.id],
-        syntheticAuthRefs: [native.id],
-      },
-      { id: "unrelated-cli", providers: ["unrelated-cli"], syntheticAuthRefs: ["unrelated-cli"] },
-      { id: "shared", providers: ["shared"] },
-    ],
+    plugins: [native.id, "unrelated-cli", "shared"].map((id) => ({
+      id,
+      providers: [id],
+      cliBackends: id === native.id ? [id] : [],
+    })),
   });
   metadata.index.plugins[0]!.syntheticAuthRefs = [native.id];
   metadata.index.plugins[1]!.syntheticAuthRefs = ["unrelated-cli"];
@@ -76,28 +78,24 @@ function fixture(resources: AsyncDisposableStack, savedNativeProfile = false) {
   };
   resources.defer(retainPreparedPluginGeneration(pluginGeneration));
   resources.defer(() => retirement.abort());
-  const profiles: Record<string, { type: "api_key"; provider: string; key: string }> = {
-    "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
+  const credentials: Record<string, { type: "api_key"; key: string }> = {
+    shared: sharedCredential,
   };
   if (savedNativeProfile) {
-    profiles["fixture-cli:saved"] = {
-      type: "api_key",
-      provider: native.id,
-      key: "synthetic-saved-key",
-    };
+    credentials[native.id] = savedCredential;
   }
-  const keys = Object.values(profiles).map(
-    ({ provider, key }) => [provider, { type: "api_key" as const, key }] as const,
+  const profiles = Object.fromEntries(
+    Object.entries(credentials).map(([provider, credential]) => [
+      `${provider}:${provider === "shared" ? "account" : "saved"}`,
+      { ...credential, provider },
+    ]),
   );
   let auth: PreparedModelCatalogAuth = {
     authStore: { version: 1, profiles },
-    credentials: Object.fromEntries(keys),
-    authModes: Object.fromEntries(keys.map(([provider]) => [provider, "api_key" as const])),
+    credentials,
+    authModes: Object.fromEntries(Object.keys(credentials).map((id) => [id, "api_key" as const])),
     providerAuthLabels: new Map(),
   };
-  const refreshAuth = vi.fn(async () => {
-    throw new Error("Native login checks must not load durable auth in the catalog worker");
-  });
   const publish = vi.fn((next: PreparedModelCatalogAuth) => {
     auth = next;
   });
@@ -118,7 +116,7 @@ function fixture(resources: AsyncDisposableStack, savedNativeProfile = false) {
     [native.id, "unrelated-cli", "shared"],
     publish,
   );
-  return { recheck, readAuth, publish, refreshAuth, retirement };
+  return { recheck, readAuth, publish, retirement };
 }
 
 async function tick(recheck: () => void | Promise<void>) {
@@ -129,11 +127,10 @@ async function tick(recheck: () => void | Promise<void>) {
 
 it("publishes native login recovery on forced admission recheck without waiting for the TTL", async () => {
   await using resources = new AsyncDisposableStack();
-  const { recheck, readAuth, publish, refreshAuth } = fixture(resources);
+  const { recheck, readAuth, publish } = fixture(resources);
   void recheck();
   expect(native.probe).not.toHaveBeenCalled();
   await tick(recheck);
-  expect(refreshAuth).not.toHaveBeenCalled();
   expect(native.probe).toHaveBeenCalledOnce();
   expect(publish).not.toHaveBeenCalled();
 
@@ -146,8 +143,8 @@ it("publishes native login recovery on forced admission recheck without waiting 
   });
   expect(readAuth().credentials?.[native.id]).toEqual({
     type: "api_key",
-    key: "synthetic-native-presence",
-    nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
+    key: nativeLogin.apiKey,
+    nativeAuth: nativeLogin.nativeAuth,
   });
   await tick(recheck);
   expect(publish).toHaveBeenCalledOnce();
@@ -156,35 +153,25 @@ it("publishes native login recovery on forced admission recheck without waiting 
   await tick(recheck);
   expect(publish).toHaveBeenCalledTimes(2);
   expect(readAuth().authModes).toEqual({ shared: "api_key" });
-  expect(readAuth().credentials).toEqual({
-    shared: { type: "api_key", key: "synthetic-shared-key" },
-  });
-  expect(readAuth().authStore.profiles).toEqual({
-    "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
-  });
-  expect(native.unrelatedProbe).not.toHaveBeenCalled();
-  expect(refreshAuth).not.toHaveBeenCalled();
+  expect(readAuth().credentials).toEqual({ shared: sharedCredential });
+  expect(readAuth().authStore.profiles).toEqual(sharedProfiles);
 });
 
 it("keeps saved profile credentials authoritative across native login and logout", async () => {
   await using resources = new AsyncDisposableStack();
-  const { recheck, readAuth, publish, refreshAuth } = fixture(resources, true);
+  const { recheck, readAuth, publish } = fixture(resources, true);
   native.probe.mockResolvedValue(nativeLogin);
   await tick(recheck);
   native.probe.mockResolvedValue(undefined);
   await tick(recheck);
-  expect(readAuth().credentials?.[native.id]).toEqual({
-    type: "api_key",
-    key: "synthetic-saved-key",
-  });
+  expect(readAuth().credentials?.[native.id]).toEqual(savedCredential);
   expect(readAuth().authModes[native.id]).toBe("api_key");
   expect(publish).not.toHaveBeenCalled();
-  expect(refreshAuth).not.toHaveBeenCalled();
 });
 
 it("coalesces pending login checks and fences their result when the owner retires", async () => {
   await using resources = new AsyncDisposableStack();
-  const { recheck, readAuth, publish, refreshAuth, retirement } = fixture(resources);
+  const { recheck, readAuth, publish, retirement } = fixture(resources);
   const started = createDeferredCore<AbortSignal>();
   const completed = createDeferredCore();
   native.probe.mockImplementation(async ({ signal }) => {
@@ -195,21 +182,19 @@ it("coalesces pending login checks and fences their result when the owner retire
     await completed.promise;
     return nativeLogin;
   });
-  try {
-    await tick(recheck);
-    expect(native.probe).toHaveBeenCalledOnce();
-    const signal = await started.promise;
-    await tick(recheck);
-    expect(native.probe).toHaveBeenCalledOnce();
-    retirement.abort();
-    expect(signal.aborted).toBe(true);
+  resources.defer(async () => {
     completed.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    expect(publish).not.toHaveBeenCalled();
-    expect(readAuth().authModes).toEqual({ shared: "api_key" });
-    expect(refreshAuth).not.toHaveBeenCalled();
-  } finally {
-    completed.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-  }
+  });
+  await tick(recheck);
+  expect(native.probe).toHaveBeenCalledOnce();
+  const signal = await started.promise;
+  await tick(recheck);
+  expect(native.probe).toHaveBeenCalledOnce();
+  retirement.abort();
+  expect(signal.aborted).toBe(true);
+  completed.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(publish).not.toHaveBeenCalled();
+  expect(readAuth().authModes).toEqual({ shared: "api_key" });
 });

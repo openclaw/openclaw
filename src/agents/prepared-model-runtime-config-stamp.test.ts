@@ -27,6 +27,7 @@ const { mocks } = fixture;
 const prepare = (config: OpenClawConfig) =>
   prepareModelRuntimeSnapshot(fixture.agentInput("default", config));
 const dispatch = () => loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+const hotConfig = (): OpenClawConfig => ({ gateway: { reload: { mode: "hot" } } });
 const publish = (
   config: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[0],
   options: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[1] = {},
@@ -34,6 +35,13 @@ const publish = (
 async function expectPublished(config: OpenClawConfig) {
   await expect(prepare(config)).resolves.toMatchObject({ config });
   await expect(dispatch()).resolves.toMatchObject({ agentId: "default", config });
+}
+function expectOwner(reader: Awaited<ReturnType<typeof prepare>>, config: OpenClawConfig) {
+  expect(resolvePublishedModelCatalogOwner(reader)).toMatchObject({
+    agentId: "default",
+    workspaceDir: "/tmp/unused-workspace",
+    config,
+  });
 }
 
 function holdPublication(
@@ -62,7 +70,7 @@ describe("prepared model runtime config stamps", () => {
 
   it("advances without rebuilding or mutating existing readers", async () => {
     const initialConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+    const nextConfig = hotConfig();
     await publish(initialConfig);
     const input = fixture.agentInput("default", initialConfig);
     const existingReader = await prepareModelRuntimeSnapshot(input);
@@ -88,11 +96,7 @@ describe("prepared model runtime config stamps", () => {
     expect(advanced).not.toBe(existingReader);
     expect(advanced.config).toBe(nextConfig);
     expect(existingReader.config).toBe(initialConfig);
-    expect(resolvePublishedModelCatalogOwner(advanced)).toMatchObject({
-      agentId: "default",
-      workspaceDir: "/tmp/unused-workspace",
-      config: nextConfig,
-    });
+    expectOwner(advanced, nextConfig);
     expect(getPreparedModelRuntimeAuthStore(advanced)).toBe(authStore);
     expect(getPreparedModelRuntimeAuthMaterializations(advanced)).toBe(materializations);
     await expect(loadPreparedModelRuntimeAuth(advanced, { providerIds: [] })).resolves.toEqual(
@@ -194,7 +198,7 @@ describe("prepared model runtime config stamps", () => {
 
   it("resolves startup config inside the serialized publication", async () => {
     const initialConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+    const nextConfig = hotConfig();
     let currentConfig = initialConfig;
 
     const publication = publish(() => currentConfig);
@@ -209,7 +213,7 @@ describe("prepared model runtime config stamps", () => {
     "keeps reply admission active when startup is superseded %s",
     async (timing) => {
       const staleConfig = {};
-      const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+      const nextConfig = hotConfig();
       await using resources = new AsyncDisposableStack();
       const stale = holdPublication(resources, staleConfig, {
         startup: true,
@@ -257,7 +261,7 @@ describe("prepared model runtime config stamps", () => {
   it("drops a publication whose lifecycle claim is lost during async config resolution", async () => {
     const initialConfig = {};
     const staleConfig = { gateway: { reload: { mode: "off" as const } } };
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+    const nextConfig = hotConfig();
     await publish(initialConfig);
     await using resources = new AsyncDisposableStack();
     let claimCurrent = true;
@@ -287,7 +291,7 @@ describe("prepared model runtime config stamps", () => {
 
   it("keeps an in-flight auth publication on the advanced stamp", async () => {
     const initialConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+    const nextConfig = hotConfig();
     await publish(initialConfig);
     const finishAuthRefreshGate = createDeferred();
     const authRefreshStarted = createDeferred();
@@ -305,11 +309,7 @@ describe("prepared model runtime config stamps", () => {
       finishAuthRefreshGate.resolve();
 
       const snapshot = await prepare(nextConfig);
-      expect(resolvePublishedModelCatalogOwner(snapshot)).toMatchObject({
-        agentId: "default",
-        workspaceDir: "/tmp/unused-workspace",
-        config: nextConfig,
-      });
+      expectOwner(snapshot, nextConfig);
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
     } finally {
       finishAuthRefreshGate.resolve();

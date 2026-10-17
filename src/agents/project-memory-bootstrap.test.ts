@@ -45,7 +45,7 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 }));
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => logMocks }));
 
-const entry: MemorySearchResult = {
+const entry = {
   path: "MEMORY.md",
   startLine: 2,
   endLine: 2,
@@ -56,7 +56,7 @@ const entry: MemorySearchResult = {
   projectKey: projectKeys[0],
   importance: 8,
   provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
-};
+} satisfies MemorySearchResult;
 const entries = [
   entry,
   {
@@ -73,21 +73,21 @@ const entries = [
 const hit = (
   id: string,
   excerpt: string,
-  projectKey: string,
-  importance: number,
+  keys = projectKeys,
+  importance?: number,
 ): MemorySearchHit => ({
   reference: { providerId: "records", id },
   excerpt,
-  automaticRecall: { eligible: true, projectKeys: [projectKey], importance },
+  automaticRecall: { eligible: true, projectKeys: keys, importance },
 });
 const nativeEntries = [
-  hit("release", "Use the release helper.", projectKeys[0]!, 8),
-  hit("foreign", "Foreign fact.", "github.com/example/other", 10),
+  hit("release", "Use the release helper.", projectKeys, 8),
+  hit("foreign", "Foreign fact.", ["github.com/example/other"], 10),
 ];
 
 async function prepareLegacy(
-  candidates: typeof entries,
-  activeProjectKeys: string[] = ["github.com/OpenClaw/OpenClaw"],
+  candidates: MemorySearchResult[],
+  activeProjectKeys: string[] = projectKeys,
 ): Promise<string[]> {
   runtimeMocks.listCurated.mockResolvedValue(candidates);
   runtimeMocks.getManager.mockResolvedValue({
@@ -112,25 +112,14 @@ function setProvider(
   return provider;
 }
 
-async function prepareNative(
-  candidates: MemorySearchHit[],
-  activeProjectKeys = ["github.com/OpenClaw/OpenClaw"],
-): Promise<string[]> {
+async function prepareNative(candidates: MemorySearchHit[]): Promise<string[]> {
   runtimeMocks.listCurated.mockResolvedValue({ hits: candidates });
   setProvider();
-  return bootstrap({ activeProjectKeys });
+  return bootstrap();
 }
 
 function resetRuntime(native: boolean) {
-  for (const mock of [
-    runtimeMocks.getManager,
-    runtimeMocks.getProvider,
-    runtimeMocks.listCurated,
-    runtimeMocks.search,
-    logMocks.debug,
-  ]) {
-    mock.mockReset();
-  }
+  vi.resetAllMocks();
   runtimeMocks.legacyRuntime = native
     ? undefined
     : { getMemorySearchManager: runtimeMocks.getManager };
@@ -149,13 +138,7 @@ it.each(["legacy", "native"])("filters project recall and its budget via %s", as
             startLine: index + 4,
             snippet,
             provenance:
-              index === 0
-                ? {
-                    originClass: "untrusted" as const,
-                    sessionKind: "interactive" as const,
-                    observedAt: 1,
-                  }
-                : undefined,
+              index === 0 ? { ...entry.provenance, originClass: "untrusted" as const } : undefined,
           })),
         ])
       : await prepareNative([
@@ -195,9 +178,7 @@ describe("project memory bootstrap", () => {
   });
 
   it("truncates long entries before admission while preserving the hard cap", async () => {
-    const rendered = (await prepareLegacy([{ ...entries[0]!, snippet: "🧠".repeat(1_000) }])).join(
-      "\n",
-    );
+    const rendered = (await prepareLegacy([{ ...entry, snippet: "🧠".repeat(1_000) }])).join("\n");
     expect(rendered).toContain("…");
     expect(rendered.length).toBeLessThanOrEqual(2_000);
   });
@@ -229,32 +210,21 @@ describe("project memory bootstrap", () => {
   });
 
   it("filters tagged raw entries fail-closed with the all-keys rule", () => {
-    const contextFiles = [
-      {
-        path: "MEMORY.md",
-        content: [
-          "- Global fact.",
-          "- Alpha fact. <!-- project: github.com/acme/Alpha -->",
-          "- Shared fact. <!-- project: github.com/acme/Alpha; github.com/acme/Beta -->",
-          "- Invalid fact. <!-- project: github.com/acme/Beta< -->",
-          "- Mixed invalid fact. <!-- project: github.com/acme/Alpha; bad< -->",
-          "- Unterminated fact. <!-- project: github.com/acme/Alpha",
-        ].join("\n"),
-      },
+    const facts = [
+      "- Global fact.",
+      "- Alpha fact. <!-- project: github.com/acme/Alpha -->",
+      "- Shared fact. <!-- project: github.com/acme/Alpha; github.com/acme/Beta -->",
+      "- Invalid fact. <!-- project: github.com/acme/Beta< -->",
+      "- Mixed invalid fact. <!-- project: github.com/acme/Alpha; bad< -->",
+      "- Unterminated fact. <!-- project: github.com/acme/Alpha",
     ];
-    for (const [activeProjectKeys, content] of [
-      [undefined, "- Global fact."],
-      [
-        ["github.com/acme/Alpha"],
-        "- Global fact.\n- Alpha fact. <!-- project: github.com/acme/Alpha -->",
-      ],
-      [
-        ["github.com/acme/Alpha", "github.com/acme/Beta"],
-        "- Global fact.\n- Alpha fact. <!-- project: github.com/acme/Alpha -->\n- Shared fact. <!-- project: github.com/acme/Alpha; github.com/acme/Beta -->",
-      ],
-    ] as const) {
+    const contextFiles = [{ path: "MEMORY.md", content: facts.join("\n") }];
+    for (const count of [0, 1, 2]) {
+      const activeProjectKeys = count
+        ? ["github.com/acme/Alpha", "github.com/acme/Beta"].slice(0, count)
+        : undefined;
       expect(filterProjectScopedCuratedContextFiles({ contextFiles, activeProjectKeys })).toEqual([
-        { path: "MEMORY.md", content },
+        { path: "MEMORY.md", content: facts.slice(0, count + 1).join("\n") },
       ]);
     }
   });
@@ -336,14 +306,8 @@ describe("native project memory bootstrap", () => {
     setProvider({ capabilities: { candidates: ["trigger", "project"], projectFilter: false } });
     runtimeMocks.listCurated.mockResolvedValue({
       hits: [
-        {
-          ...nativeEntries[0]!,
-          automaticRecall: { eligible: true, projectKeys: ["alpha", "beta"] },
-        },
-        {
-          ...nativeEntries[1]!,
-          automaticRecall: { eligible: true, projectKeys: ["alpha", "inactive"] },
-        },
+        hit("release", "Use the release helper.", ["alpha", "beta"]),
+        hit("foreign", "Foreign fact.", ["alpha", "inactive"]),
       ],
     });
 
@@ -376,16 +340,16 @@ describe("native project memory bootstrap", () => {
   });
 
   it("skips undeclared project capability and releases its lease", async () => {
-    const close = vi.fn();
-    setProvider({ capabilities: { candidates: ["trigger"] }, close });
+    const { close } = setProvider({ capabilities: { candidates: ["trigger"] } });
     expect(await bootstrap({ activeProjectKeys: ["alpha"] })).toEqual([]);
     expect(runtimeMocks.listCurated).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
   });
 
   it("omits optional project recall when provider cleanup rejects", async () => {
-    const close = vi.fn().mockRejectedValue(new Error("provider cleanup failed"));
-    setProvider({ close });
+    const { close } = setProvider({
+      close: vi.fn().mockRejectedValue(new Error("provider cleanup failed")),
+    });
     runtimeMocks.listCurated.mockResolvedValue({ hits: nativeEntries });
 
     await expect(bootstrap()).resolves.toEqual([]);

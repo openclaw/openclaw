@@ -2,42 +2,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot as createBaseSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 
-const pluginRegistryMocks = vi.hoisted(() => {
-  const loadManifestRegistry = vi.fn((..._params: unknown[]) => ({ plugins: [], diagnostics: [] }));
-  return {
-    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
-    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshotWithMetadata: vi.fn(() => ({ snapshot: { plugins: [] } })),
-    resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-index"),
-    loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
-      const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
-      return createPluginMetadataSnapshot({
-        plugins: registry.plugins.map(
-          (plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">) =>
-            createPluginManifestRecord({ ...plugin, origin: plugin.origin ?? "global" }),
-        ),
-      });
-    }),
-  };
-});
+const pluginRegistryMocks = vi.hoisted(() => ({
+  emptyRegistry: () => ({ plugins: [], diagnostics: [] }),
+  loadPluginMetadataSnapshot: vi.fn(() => createPluginMetadataSnapshot({ plugins: [] })),
+}));
 
 vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
   const { selectInstalledPluginManifestRecords } =
     await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
   return {
     selectInstalledPluginManifestRecords,
-    loadPluginManifestRegistryForInstalledIndex:
-      pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
-    resolveInstalledManifestRegistryIndexFingerprint:
-      pluginRegistryMocks.resolveInstalledManifestRegistryIndexFingerprint,
+    loadPluginManifestRegistryForInstalledIndex: pluginRegistryMocks.emptyRegistry,
+    resolveInstalledManifestRegistryIndexFingerprint: () => "test-index",
   };
 });
 
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshotWithMetadata:
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata,
+  loadPluginManifestRegistryForPluginRegistry: pluginRegistryMocks.emptyRegistry,
+  loadPluginRegistrySnapshotWithMetadata: () => ({ snapshot: { plugins: [] } }),
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
@@ -311,37 +293,33 @@ describe("provider auth aliases", () => {
     );
   });
 
-  it("shares manifest env vars across aliased providers", () => {
-    const config = {};
-    const env = {
-      ALIAS_PROVIDER_KEY: "test-key", // pragma: allowlist secret
-    } as NodeJS.ProcessEnv;
-    const resolveAuth = installAuthFixture(config, env);
-
-    for (const provider of ["fixture-provider", "fixture-provider-plan"]) {
-      expect(resolveAuth(provider)).toMatchObject(expectedEnvAuth);
-    }
-  });
-
-  it("reuses env keyRef markers from auth profiles for aliased providers", () => {
-    const config = {};
-    const env = {} as NodeJS.ProcessEnv;
-    const resolveAuth = installAuthFixture(config, env, {
-      "fixture-provider:default": {
-        type: "api_key",
-        provider: "fixture-provider",
-        keyRef: { source: "env", provider: "default", id: "ALIAS_PROVIDER_KEY" },
-      },
-    });
-
-    for (const provider of ["fixture-provider", "fixture-provider-plan"]) {
-      expect(resolveAuth(provider)).toMatchObject({
-        ...expectedEnvAuth,
-        source: "profile",
-        profileId: "fixture-provider:default",
-      });
-    }
-  });
+  it.each(["env", "profile"] as const)(
+    "resolves %s credentials for canonical and aliased providers",
+    (source) => {
+      const profiles: AuthProfileStore["profiles"] =
+        source === "profile"
+          ? {
+              "fixture-provider:default": {
+                type: "api_key",
+                provider: "fixture-provider",
+                keyRef: { source: "env", provider: "default", id: "ALIAS_PROVIDER_KEY" },
+              },
+            }
+          : {};
+      const resolveAuth = installAuthFixture(
+        {},
+        source === "env" ? { ALIAS_PROVIDER_KEY: "test-key" } : {},
+        profiles,
+      );
+      for (const provider of ["fixture-provider", "fixture-provider-plan"]) {
+        expect(resolveAuth(provider)).toMatchObject({
+          ...expectedEnvAuth,
+          source,
+          ...(source === "profile" ? { profileId: "fixture-provider:default" } : {}),
+        });
+      }
+    },
+  );
 
   it("ignores provider auth aliases from untrusted workspace plugins during runtime auth lookup", () => {
     const config = {};
