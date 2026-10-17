@@ -9,6 +9,7 @@ import {
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
+import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
 import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -186,6 +187,7 @@ export function buildCliMcpGrantContext(params: {
   const messageProvider = resolveGatewayMessageChannel(
     params.run.messageChannel ?? params.run.messageProvider,
   );
+  const requester = buildHarnessHostRequester(params.run);
   const currentChannelId = normalizeOptionalString(params.run.currentChannelId);
   const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
@@ -199,6 +201,7 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    ...(Object.keys(requester).length ? { requester } : {}),
     ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
     ...(params.run.conversationToolPolicy
       ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }

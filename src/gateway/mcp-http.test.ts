@@ -67,7 +67,7 @@ type ScopedToolsCall = Parameters<typeof resolveGatewayScopedTools>[0] & {
 type BeforeToolCallHookInput = Parameters<typeof runBeforeToolCallHook>[0];
 
 const runBeforeToolCallHookMock = vi.hoisted(() =>
-  vi.fn(async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+  vi.fn(async (args: BeforeToolCallHookInput): Promise<MockBeforeToolCallHookResult> => ({
     blocked: false,
     params: args.params,
   })),
@@ -167,10 +167,14 @@ import {
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import {
   jsonHeaders,
+  makeCronTool,
+  makeMessageTool,
+  makeMockTool,
   mcpToolCallBody,
   mcpToolCallMessage,
   readMcpPayload,
   readOkMcpPayload,
+  registerMcpRequesterPolicyTests,
   sendLoopbackToolCall,
   sendRaw,
   startLoopbackServerForTest,
@@ -400,35 +404,6 @@ function getBeforeToolCallHookInput(index: number): BeforeToolCallHookInput {
     throw new Error(`Expected before-tool-call hook ${index} to receive an input object`);
   }
   return call as BeforeToolCallHookInput;
-}
-
-function makeMockTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
-  return {
-    name: "mockplugin_tool",
-    label: "Mock tool",
-    description: "mock tool",
-    parameters: { type: "object", properties: {} },
-    execute: async () => ({
-      content: [{ type: "text", text: "ok" }],
-    }),
-    ...overrides,
-  };
-}
-
-function makeMessageTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
-  return makeMockTool({
-    name: "message",
-    description: "send a message",
-    ...overrides,
-  });
-}
-
-function makeCronTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
-  return makeMockTool({
-    name: "cron",
-    description: "manage schedules",
-    ...overrides,
-  });
 }
 
 function mockScopedTools(tools: MockGatewayTool[]) {
@@ -869,6 +844,13 @@ describe("mcp loopback server", () => {
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.includeNodeExecTool).toBe(false);
     expect(Array.from(call.excludeToolNames ?? [])).toContain("exec");
+  });
+
+  registerMcpRequesterPolicyTests({
+    createCliGrant,
+    mockScopedTools,
+    runBeforeToolCallHookMock,
+    getBeforeToolCallHookInput,
   });
 
   it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {

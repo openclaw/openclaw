@@ -389,6 +389,7 @@ async function startMcpLoopbackServer(
                     sessionKey: requestContext.sessionKey,
                     sessionId: requestContext.sessionId,
                     runId: requestContext.runId,
+                    ...(requestContext.requester ? { requester: requestContext.requester } : {}),
                     approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
                     channelId: requestContext.currentChannelId,
                     turnSourceChannel: requestContext.messageProvider,
