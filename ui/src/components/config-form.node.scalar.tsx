@@ -242,7 +242,7 @@ function ScalarInput(props: {
       constraints,
       numericStep,
       textInputState,
-      revalidate(target: HTMLInputElement | HTMLTextAreaElement) {
+      revalidate(this: void, target: HTMLInputElement | HTMLTextAreaElement) {
         setControlValidity(
           target,
           effectiveRedacted
