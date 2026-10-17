@@ -18,6 +18,20 @@ OpenClaw and other runtime adapters. `openclaw mcp list`, `show`, `set`, and
 `unset` manage this block without connecting to the servers. The Fetch example
 requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
 
+> **Note:** The legacy `npx -y @modelcontextprotocol/server-fetch` package was
+> removed from npm and no longer resolves. If your `mcp.servers.<name>` config
+> still references it — under any saved name such as `fetch`, `docs`,
+> `DocsServer`, or `web-fetch` — switch the entry to
+> `uvx mcp-server-fetch` (shown below) to keep the Fetch tool available.
+> OpenClaw hot-reloads MCP config changes on the next turn, so the updated
+> command and Fetch tools are picked up without restarting the gateway; you
+> can confirm with `openclaw mcp show <name>` (which should report
+> `command: uvx` and `args: [mcp-server-fetch]`) or `openclaw mcp probe <name>`
+> (which connects and lists the Fetch tools). Restart the gateway only if a
+> config reload does not pick up the change.
+> See [openclaw/openclaw#141180](https://github.com/openclaw/openclaw/issues/141180)
+> for the original report.
+
 ```json5
 {
   mcp: {
