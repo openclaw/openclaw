@@ -36,6 +36,27 @@ function ownedQueue(gatewayUrl: string, queue: ChatQueueItem[]): ChatQueueItem[]
   }));
 }
 
+const queued = (id: string, overrides: Partial<ChatQueueItem> = {}): ChatQueueItem => ({
+  id,
+  text: id,
+  createdAt: 1,
+  ...overrides,
+});
+const storedSession = (overrides: Partial<StoredComposerState["sessions"][string]> = {}) => ({
+  updatedAt: 1,
+  ...overrides,
+});
+const privateInput = () => ({
+  draft: "@Alex private legacy input",
+  draftMentions: [{ profileId: "alex", start: 0, end: 5 }],
+  goalMode: { action: "start", sessionId: "private-goal" },
+});
+const readStore = (target: ReturnType<typeof storageTargetForGateway>) =>
+  readStoredOutboxStore(sessionStorage, target);
+const queueItems = (store: StoredComposerState) =>
+  Object.values(store.sessions).flatMap((entry) => entry.queue ?? []);
+const storedJson = (key: string) => JSON.parse(sessionStorage.getItem(key)!);
+
 function seedStore(
   target: ReturnType<typeof storageTargetForGateway>,
   sessions: StoredComposerState["sessions"],
@@ -60,14 +81,22 @@ function seedSource(
         : version === 3
           ? target.blobKey
           : target.key;
-  const source = JSON.stringify({
+  const source = sourceJson(target, version, sessions);
+  sessionStorage.setItem(key, source);
+  return { key, source };
+}
+
+function sourceJson(
+  target: ReturnType<typeof storageTargetForGateway>,
+  version: number,
+  sessions: Record<string, unknown>,
+) {
+  return JSON.stringify({
     version,
     ...(version !== 1 ? { gatewayOwner: target.gatewayOwner } : {}),
     ...(version === 4 ? { recovery: {} } : {}),
     sessions,
   });
-  sessionStorage.setItem(key, source);
-  return { key, source };
 }
 
 const recoveryRow = (
@@ -89,7 +118,6 @@ const badge = (
 ) => ({ agentId, sessionKey, hasComposerDraft, outboxAttentionCount });
 const globalAgents = { defaultId: "main", mainKey: "workspace", scope: "global" };
 const selectedWork = { assistantAgentId: "work", agentsList: globalAgents };
-
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
@@ -100,113 +128,94 @@ afterEach(() => {
 });
 
 describe("stored outbox summaries", () => {
-  it.each(["raw", "cleared"])(
-    "keeps newer legacy bytes published during %s source retirement",
-    (input) => {
-      const target = storageTargetForGateway("ws://reentrant-retirement.test");
-      const scopeKey = storedChatOutboxScopeKey({
-        sessionKey: "agent:main:dashboard:incognito-reentrant",
+  it.each(["raw", "cleared"])("preserves newer legacy bytes during %s retirement", (input) => {
+    const target = storageTargetForGateway("ws://reentrant-retirement.test");
+    const scopeKey = storedChatOutboxScopeKey({
+      sessionKey: "agent:main:dashboard:incognito-reentrant",
+    });
+    const source = (id: string) =>
+      sourceJson(target, 3, {
+        [scopeKey]: storedSession({ draft: "Private legacy input", queue: [queued(id)] }),
       });
-      const source = (id: string) =>
-        JSON.stringify({
-          version: 3,
-          gatewayOwner: target.gatewayOwner,
-          sessions: {
-            [scopeKey]: {
-              draft: "Private legacy input",
-              queue: [{ id, text: id, createdAt: 1 }],
-              updatedAt: 1,
-            },
-          },
-        });
-      sessionStorage.setItem(target.blobKey, source("submitted"));
-      if (input === "cleared") {
-        const removal = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {});
-        readStoredOutboxStore(sessionStorage, target);
-        expect(sessionStorage.getItem(target.blobKey)).toBe("");
-        removal.mockRestore();
+    sessionStorage.setItem(target.blobKey, source("submitted"));
+    if (input === "cleared") {
+      const removal = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {});
+      readStoredOutboxStore(sessionStorage, target);
+      expect(sessionStorage.getItem(target.blobKey)).toBe("");
+      removal.mockRestore();
+    }
+    const replacement = source("newer-submission");
+    const remove = sessionStorage.removeItem.bind(sessionStorage);
+    vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
+      if (key === target.blobKey) {
+        sessionStorage.setItem(key, replacement);
+        throw new Error("Source changed during removal");
       }
-      const replacement = source("newer-submission");
-      const remove = sessionStorage.removeItem.bind(sessionStorage);
-      vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
-        if (key === target.blobKey) {
-          sessionStorage.setItem(key, replacement);
-          throw new Error("Source changed during removal");
-        }
-        remove(key);
-      });
-      const migrated = readStoredOutboxStore(sessionStorage, target);
-      expect(sessionStorage.getItem(target.blobKey)).toBe(replacement);
-      expect(migrated.sessions[scopeKey]?.queue).toMatchObject([{ id: "submitted" }]);
-    },
-  );
+      remove(key);
+    });
+    const migrated = readStoredOutboxStore(sessionStorage, target);
+    expect(sessionStorage.getItem(target.blobKey)).toBe(replacement);
+    expect(migrated.sessions[scopeKey]?.queue).toMatchObject([{ id: "submitted" }]);
+  });
+
+  it.each([1, 3])("retires v%i private input after failed deletion without replay", (version) => {
+    const target = storageTargetForGateway("ws://acknowledged-private.test");
+    const scopeKey = storedChatOutboxScopeKey({
+      sessionKey: "agent:main:dashboard:incognito-acknowledged",
+    });
+    const { key: sourceKey, source } = seedSource(target, version, {
+      [scopeKey]: {
+        ...privateInput(),
+        queue: [queued("submitted", { text: "Submitted message" })],
+        updatedAt: 1,
+      },
+      "main\u0000agent:main": { draft: "Ambiguous input", updatedAt: 1 },
+    });
+    const blocked = { removal: true, writes: true };
+    const remove = sessionStorage.removeItem.bind(sessionStorage);
+    const write = sessionStorage.setItem.bind(sessionStorage);
+    vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
+      if (key === sourceKey && blocked.removal) {
+        throw new Error("Source deletion unavailable");
+      }
+      remove(key);
+    });
+    vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
+      if (key === sourceKey && blocked.writes) {
+        throw new Error("Source writes unavailable");
+      }
+      write(key, value);
+    });
+    const migrated = readStore(target);
+    expect(sessionStorage.getItem(sourceKey)).toBe(source);
+    expect(migrated.sessions[scopeKey]?.queue).toMatchObject([
+      { id: "submitted", text: "Submitted message" },
+    ]);
+    expect(Object.values(migrated.recovery)[0]?.session.draft).toBe("Ambiguous input");
+    blocked.writes = false;
+    expect(readStore(target)).toEqual(migrated);
+    const retained = sessionStorage.getItem(sourceKey) ?? "";
+    for (const privateValue of ["private legacy input", "profileId", "private-goal"]) {
+      expect(retained).not.toContain(privateValue);
+    }
+    expect(readStore(target)).toEqual(migrated);
+    blocked.removal = false;
+    expect(readStore(target)).toEqual(migrated);
+    expect(sessionStorage.getItem(sourceKey)).toBeNull();
+  });
 
   it.each([1, 3])(
-    "retires acknowledged v%i private input after source deletion fails without reimporting queues",
-    (version) => {
-      const target = storageTargetForGateway("ws://acknowledged-private.test");
-      const scopeKey = storedChatOutboxScopeKey({
-        sessionKey: "agent:main:dashboard:incognito-acknowledged",
-      });
-      const { key: sourceKey, source } = seedSource(target, version, {
-        [scopeKey]: {
-          draft: "@Alex private legacy input",
-          draftMentions: [{ profileId: "alex", start: 0, end: 5 }],
-          goalMode: { action: "start", sessionId: "private-goal" },
-          queue: [{ id: "submitted", text: "Submitted message", createdAt: 1 }],
-          updatedAt: 1,
-        },
-        "main\u0000agent:main": { draft: "Ambiguous input", updatedAt: 1 },
-      });
-      const remove = sessionStorage.removeItem.bind(sessionStorage);
-      let sourceRemovalBlocked = true;
-      vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
-        if (key === sourceKey && sourceRemovalBlocked) {
-          throw new Error("Source deletion unavailable");
-        }
-        remove(key);
-      });
-      const write = sessionStorage.setItem.bind(sessionStorage);
-      let sourceWritesBlocked = true;
-      vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
-        if (key === sourceKey && sourceWritesBlocked) {
-          throw new Error("Source writes unavailable");
-        }
-        write(key, value);
-      });
-      const migrated = readStoredOutboxStore(sessionStorage, target);
-      expect(sessionStorage.getItem(sourceKey)).toBe(source);
-      expect(migrated.sessions[scopeKey]?.queue).toMatchObject([
-        { id: "submitted", text: "Submitted message" },
-      ]);
-      expect(Object.values(migrated.recovery)[0]?.session.draft).toBe("Ambiguous input");
-      sourceWritesBlocked = false;
-      expect(readStoredOutboxStore(sessionStorage, target)).toEqual(migrated);
-      const retained = sessionStorage.getItem(sourceKey) ?? "";
-      expect(retained).not.toContain("private legacy input");
-      expect(retained).not.toContain("profileId");
-      expect(retained).not.toContain("private-goal");
-      expect(readStoredOutboxStore(sessionStorage, target)).toEqual(migrated);
-      sourceRemovalBlocked = false;
-      expect(readStoredOutboxStore(sessionStorage, target)).toEqual(migrated);
-      expect(sessionStorage.getItem(sourceKey)).toBeNull();
-    },
-  );
-
-  it.each([1, 3])(
-    "retires private input in a deferred v%i source without changing queued or ambiguous data",
+    "retires v%i deferred private input, preserving queues and ambiguity",
     (version) => {
       const target = storageTargetForGateway("ws://deferred-private.test");
       const scopeKey = storedChatOutboxScopeKey({
         sessionKey: "agent:main:dashboard:incognito-deferred",
       });
-      const queued = { id: "submitted", text: "Submitted private message", createdAt: 1 };
+      const item = queued("submitted", { text: "Submitted private message" });
       const privateRow = {
-        draft: "@Alex private legacy input",
-        draftMentions: [{ profileId: "alex", start: 0, end: 5 }],
-        goalMode: { action: "start", sessionId: "private-session" },
+        ...privateInput(),
         draftRevision: 7,
-        queue: [queued],
+        queue: [item],
         updatedAt: 1,
         unknownMetadata: "preserve",
       };
@@ -235,9 +244,9 @@ describe("stored outbox summaries", () => {
         ),
       };
       sessionStorage.setItem(target.key, JSON.stringify(store));
-      expect(readStoredOutboxStore(sessionStorage, target).recoveryBlocked).toBe(true);
-      expect(() => readStoredOutboxStore(sessionStorage, target)).not.toThrow();
-      const retained = JSON.parse(sessionStorage.getItem(sourceKey)!);
+      expect(readStore(target).recoveryBlocked).toBe(true);
+      expect(() => readStore(target)).not.toThrow();
+      const retained = storedJson(sourceKey);
       const { draft: _draft, draftMentions: _mentions, goalMode: _goal, ...preserved } = privateRow;
       expect(retained).toEqual({
         ...JSON.parse(source),
@@ -246,9 +255,9 @@ describe("stored outbox summaries", () => {
           "main\u0000agent:main": sessions["main\u0000agent:main"],
         },
       });
-      expect(JSON.parse(sessionStorage.getItem(target.key)!)).toEqual(store);
-      expect(readStoredOutboxStore(sessionStorage, target).recoveryBlocked).toBe(true);
-      expect(JSON.parse(sessionStorage.getItem(sourceKey)!)).toEqual(retained);
+      expect(storedJson(target.key)).toEqual(store);
+      expect(readStore(target).recoveryBlocked).toBe(true);
+      expect(storedJson(sourceKey)).toEqual(retained);
       sessionStorage.setItem(target.key, JSON.stringify({ ...store, recovery: {} }));
       const remove = sessionStorage.removeItem.bind(sessionStorage);
       vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
@@ -256,17 +265,17 @@ describe("stored outbox summaries", () => {
           remove(key);
         }
       });
-      const migrated = readStoredOutboxStore(sessionStorage, target);
+      const migrated = readStore(target);
       expect(
         Object.values(migrated.recovery).flatMap((entry) => entry.session.queue ?? []),
-      ).toEqual([queued]);
+      ).toEqual([item]);
       expect(Object.values(migrated.recovery)).toHaveLength(2);
       expect(sessionStorage.getItem(sourceKey)).not.toBeNull();
-      expect(readStoredOutboxStore(sessionStorage, target)).toEqual(migrated);
+      expect(readStore(target)).toEqual(migrated);
     },
   );
 
-  it("admits real legacy input when recovery is full of clear fences without replaying its source", () => {
+  it("admits legacy input through full clear fences without replay", () => {
     const target = storageTargetForGateway("ws://recovery-fence-capacity.test");
     const state = ownedState(target.gatewayOwner);
     const scopeKey = "global\u0000agent:main";
@@ -285,28 +294,24 @@ describe("stored outbox summaries", () => {
         ]),
       ),
     );
-    const source = JSON.stringify({
-      version: 3,
-      gatewayOwner: target.gatewayOwner,
-      sessions: {
-        [scopeKey]: { draft: "real saved input", draftRevision: 101, updatedAt: 101 },
-        "main\u0000agent:main": { draftRevision: 99, updatedAt: 99 },
-      },
+    const source = sourceJson(target, 3, {
+      [scopeKey]: { draft: "real saved input", draftRevision: 101, updatedAt: 101 },
+      "main\u0000agent:main": { draftRevision: 99, updatedAt: 99 },
     });
     sessionStorage.setItem(target.blobKey, source);
     const recovery = readChatOutboxRecovery(state);
     expect(recovery.blocked).toBe(false);
     expect(recovery.entries.map((entry) => entry.session.draft)).toEqual(["real saved input"]);
-    expect(Object.keys(readStoredOutboxStore(sessionStorage, target).recovery)).toHaveLength(1);
-    expect(readStoredOutboxStore(sessionStorage, target).sessions[scopeKey]).toEqual(fence);
+    expect(Object.keys(readStore(target).recovery)).toHaveLength(1);
+    expect(readStore(target).sessions[scopeKey]).toEqual(fence);
     expect(discardChatOutboxRecovery(state, recovery.entries[0]!)).toBe("discarded");
     // A failed old-source deletion or downgraded writer cannot replay acknowledged bytes.
     sessionStorage.setItem(target.blobKey, source);
     expect(readChatOutboxRecovery(state)).toEqual({ entries: [], blocked: false });
-    expect(readStoredOutboxStore(sessionStorage, target).sessions[scopeKey]).toEqual(fence);
+    expect(readStore(target).sessions[scopeKey]).toEqual(fence);
   });
 
-  it("retires private recovery input and rejects private destinations before roster metadata", () => {
+  it("retires private recovery and rejects pre-roster private destinations", () => {
     const target = storageTargetForGateway("ws://private-recovery.test");
     const sessionKey = "agent:main:dashboard:incognito-recovery";
     const scopeKey = storedChatOutboxScopeKey({ sessionKey });
@@ -354,14 +359,12 @@ describe("stored outbox summaries", () => {
         draft: "@Alex draft",
         draftMentions: mentions,
         queue: [
-          {
-            id: "mention-send",
+          queued("mention-send", {
             text: "@Alex queued",
             mentions,
-            createdAt: 1,
             sendRunId: "mention-run",
             sendState: "waiting-reconnect",
-          },
+          }),
         ],
         updatedAt: 1,
       };
@@ -372,11 +375,11 @@ describe("stored outbox summaries", () => {
         [scopeKey]: {
           queue: [
             {
-              id: "corrupt-mention",
-              text: "@Alex review",
+              ...queued("corrupt-mention", {
+                text: "@Alex review",
+                sendState: "waiting-reconnect",
+              }),
               mentions: invalid,
-              createdAt: 1,
-              sendState: "waiting-reconnect",
             },
           ],
           updatedAt: 1,
@@ -413,16 +416,11 @@ describe("stored outbox summaries", () => {
     const target = storageTargetForGateway(gatewayUrl);
     const storageKey = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}`;
     const stored = (ids: string[]) =>
-      JSON.stringify({
-        version,
-        ...(version !== 1 ? { gatewayOwner: gatewayUrl } : {}),
-        ...(version === 4 ? { recovery: {} } : {}),
-        sessions: {
-          "agent:main:summary\u0000agent:main": {
-            ...(ids.length > 1 ? { draft: "new" } : {}),
-            queue: ids.map((id, createdAt) => ({ id, text: id, createdAt })),
-            updatedAt: ids.length,
-          },
+      sourceJson(target, version, {
+        "agent:main:summary\u0000agent:main": {
+          ...(ids.length > 1 ? { draft: "new" } : {}),
+          queue: ids.map((id, createdAt) => queued(id, { createdAt })),
+          updatedAt: ids.length,
         },
       });
     sessionStorage.setItem(storageKey, stored(["first"]));
@@ -438,9 +436,7 @@ describe("stored outbox summaries", () => {
     try {
       const first = readProjectedOutboxStore(sessionStorage, target);
       expect(readProjectedOutboxStore(sessionStorage, target)).toBe(first);
-      expect(Object.values(first.sessions).flatMap((session) => session.queue ?? [])).toHaveLength(
-        1,
-      );
+      expect(queueItems(first)).toHaveLength(1);
       expect(createStoredChatOutboxReader().read(ownedState(gatewayUrl)).total).toBe(0);
       const summary = reader.read(state);
       expect(reader.read({ ...state })).toBe(summary);
@@ -450,9 +446,7 @@ describe("stored outbox summaries", () => {
       storageEvent(storageKey);
       const refreshed = readProjectedOutboxStore(sessionStorage, target);
       expect(refreshed).not.toBe(first);
-      expect(
-        Object.values(refreshed.sessions).flatMap((session) => session.queue ?? []),
-      ).toHaveLength(2);
+      expect(queueItems(refreshed)).toHaveLength(2);
       expect(changed).toHaveBeenCalledOnce();
       expect(reader.read(state)).not.toBe(summary);
       expect(reader.read(state).hasSessionDraft("agent:main:summary")).toBe(true);
@@ -476,10 +470,7 @@ describe("stored outbox summaries", () => {
       const target = storageTargetForGateway("ws://gateway.test/control");
       const scopeKey = storedChatOutboxScopeKey({ sessionKey: "thread", agentId: "main" });
       const { key: sourceKey } = seedSource(target, version, {
-        [scopeKey]: {
-          queue: [{ id: "queued", text: "retire me", createdAt: 1 }],
-          updatedAt: 1,
-        },
+        [scopeKey]: storedSession({ queue: [queued("queued", { text: "retire me" })] }),
       });
       vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
         throw new DOMException("quota exceeded", "QuotaExceededError");
@@ -501,10 +492,9 @@ describe("stored outbox summaries", () => {
     const gatewayUrls = ["ws://first.test/control", "ws://second.test/control"];
     for (const gatewayUrl of gatewayUrls) {
       seedStore(storageTargetForGateway(gatewayUrl, "summary-owner"), {
-        "thread\u0000agent:main": {
-          queue: ownedQueue(gatewayUrl, [{ id: gatewayUrl, text: gatewayUrl, createdAt: 1 }]),
-          updatedAt: 1,
-        },
+        "thread\u0000agent:main": storedSession({
+          queue: ownedQueue(gatewayUrl, [queued(gatewayUrl)]),
+        }),
       });
       expect(createStoredChatOutboxReader().read(ownedState(gatewayUrl)).total).toBe(1);
     }
@@ -540,7 +530,7 @@ describe("stored outbox summaries", () => {
         [scope]: {
           draft: "retire me",
           draftRevision: 10,
-          ...(captured ? {} : { queue: [{ id: "queued", text: "queued", createdAt: 1 }] }),
+          ...(captured ? {} : { queue: [queued("queued")] }),
           updatedAt: 10,
         },
         ...(failed ? {} : { [other]: replacement }),
@@ -736,20 +726,12 @@ describe("stored outbox summaries", () => {
 
   it("rejects a store owned by another gateway", () => {
     const gatewayUrl = "ws://gateway.test/control";
-    const storageKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`;
-    sessionStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        version: 4,
-        recovery: {},
-        gatewayOwner: "ws://other.test/control",
-        sessions: {
-          "global\u0000agent:work": {
-            queue: [{ id: "queued", text: "queued", createdAt: 1 }],
-            updatedAt: 1,
-          },
-        },
-      }),
+    const target = storageTargetForGateway(gatewayUrl);
+    seedStore(
+      { ...target, gatewayOwner: "ws://other.test/control" },
+      {
+        "global\u0000agent:work": storedSession({ queue: [queued("queued")] }),
+      },
     );
 
     expect(
@@ -760,9 +742,7 @@ describe("stored outbox summaries", () => {
         agentsList: { defaultId: "work", mainKey: "workspace" },
       }).total,
     ).toBe(0);
-    expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "{}").gatewayOwner).toBe(
-      "ws://other.test/control",
-    );
+    expect(storedJson(target.key).gatewayOwner).toBe("ws://other.test/control");
   });
 
   it("projects metadata-only badges and counts distinct operator-review rows", () => {
@@ -778,35 +758,25 @@ describe("stored outbox summaries", () => {
       "agent:main:a\u0000agent:main": { draft: "private draft", updatedAt: 1 },
       "agent:work:b\u0000agent:work": {
         queue: ownedQueue(gatewayUrl, [
-          ...restoredSendStates.map((sendState, index) => ({
-            id: `healthy-${index}`,
-            text: `healthy ${index}`,
-            createdAt: index,
-            sendState,
-          })),
-          { id: "held", text: "private queue", createdAt: 9, sendState: "held" },
-          { id: "failed", text: "failed", createdAt: 10, sendState: "failed" },
-          { id: "failed", text: "duplicate", createdAt: 11, sendState: "failed" },
-          { id: "unconfirmed", text: "unconfirmed", createdAt: 12, sendState: "unconfirmed" },
-          {
-            id: "unconfirmed",
-            text: "duplicate uncertainty",
-            createdAt: 13,
-            sendState: "unconfirmed",
-          },
-          {
-            id: "other-owner",
-            text: "another credential's attachment",
+          ...restoredSendStates.map((sendState, createdAt) =>
+            queued(`healthy-${createdAt}`, { createdAt, sendState }),
+          ),
+          queued("held", { createdAt: 9, sendState: "held" }),
+          queued("failed", { createdAt: 10, sendState: "failed" }),
+          queued("failed", { text: "duplicate", createdAt: 11, sendState: "failed" }),
+          queued("unconfirmed", { createdAt: 12, sendState: "unconfirmed" }),
+          queued("unconfirmed", { text: "duplicate", createdAt: 13, sendState: "unconfirmed" }),
+          queued("other-owner", {
             createdAt: 14,
             sendState: "failed",
             attachmentPayload: { key: "bundle", recoveryScope: "other-owner", tabId: "tab" },
-          },
+          }),
         ]),
         updatedAt: 13,
       },
       "thread-b\u0000agent:main": {
         queue: ownedQueue(gatewayUrl, [
-          { id: "unconfirmed", text: "other scope", createdAt: 14, sendState: "unconfirmed" },
+          queued("unconfirmed", { createdAt: 14, sendState: "unconfirmed" }),
         ]),
         updatedAt: 14,
       },
@@ -829,15 +799,12 @@ describe("stored outbox summaries", () => {
     const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
     seedSource(storageTargetForGateway(gatewayUrl), 1, {
       "main\u0000agent:previous": {
-        queue: [
-          { id: "removed", text: "removed", createdAt: 1 },
-          { id: "shared", text: "older", createdAt: 2 },
-        ],
+        queue: [queued("removed"), queued("shared", { text: "older", createdAt: 2 })],
         removedQueueItemIds: ["removed"],
         updatedAt: 2,
       },
       "global\u0000agent:work": {
-        queue: [{ id: "shared", text: "newer", createdAt: 3 }],
+        queue: [queued("shared", { text: "newer", createdAt: 3 })],
         updatedAt: 3,
       },
     });
@@ -867,8 +834,7 @@ describe("stored outbox summaries", () => {
 
     expect(summary.total).toBe(1);
     expect(outboxes[0]?.queue).toEqual([
-      {
-        id: "shared",
+      queued("shared", {
         text: "newer",
         createdAt: 3,
         sessionKey: "global",
@@ -877,7 +843,7 @@ describe("stored outbox summaries", () => {
         sendState: "failed",
         sendError:
           "Recovered message. Review this destination and retry only if it did not arrive.",
-      },
+      }),
     ]);
     expect(sessionStorage.getItem(legacyKey)).toBeNull();
   });

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import type { ChatQueueItem } from "./chat-types.ts";
 import * as payloadStore from "./outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
@@ -9,7 +10,7 @@ import {
   retireDeliveredChatOutboxRecovery,
   restoreChatOutboxRecovery,
 } from "./outbox-recovery.ts";
-import type { StoredComposerSession } from "./outbox-store-codec.ts";
+import type { StoredComposerRecovery, StoredComposerSession } from "./outbox-store-codec.ts";
 import {
   readStoredOutboxStore,
   storageTargetForComposer,
@@ -22,6 +23,21 @@ const gatewayUrl = "wss://transfer.test";
 const sourceScope = "agent:main:legacy\u0000agent:main";
 const firstScope = { sessionKey: "agent:main:first", agentId: "main" };
 const secondScope = { sessionKey: "agent:main:second", agentId: "main" };
+const attachment = { id: "file", mimeType: "text/plain", fileName: "saved.txt" };
+const queueItem = (overrides: Partial<ChatQueueItem> = {}): ChatQueueItem => ({
+  id: "original-input",
+  text: "Retained queue 雪",
+  createdAt: 1,
+  ...overrides,
+});
+const recovery = (
+  session: StoredComposerSession,
+  sourceVersion: StoredComposerRecovery["sourceVersion"] = 4,
+): StoredComposerRecovery => ({
+  sourceVersion,
+  sourceScopeKey: sourceScope,
+  session,
+});
 function fixture(kind: "queue" | "draft", sibling = false) {
   const state = {
     settings: { gatewayUrl },
@@ -39,14 +55,11 @@ function fixture(kind: "queue" | "draft", sibling = false) {
       ? { draft: "Retained draft 雪" }
       : {
           queue: [
-            {
-              id: "original-input",
-              text: "Retained queue 雪",
-              createdAt: 1,
+            queueItem({
               sendRunId: "original-attempt",
               sendAttempts: 1,
-              sendState: "unconfirmed" as const,
-            },
+              sendState: "unconfirmed",
+            }),
           ],
         }),
   };
@@ -70,7 +83,24 @@ function fixture(kind: "queue" | "draft", sibling = false) {
   const destination = (scope = firstScope) => captureChatOutboxRecoveryDestination(state, scope)!;
   const stored = () => readStoredOutboxStore(sessionStorage, storageTargetForComposer(state));
   const entries = () => readChatOutboxRecovery(state).entries;
-  return { state, session, source, entry, destination, stored, entries };
+  return {
+    state,
+    session,
+    source,
+    entry,
+    stored,
+    entries,
+    legacy: () => readStoredOutboxStore(sessionStorage, source),
+    saveLegacy: (store: ReturnType<typeof stored>) =>
+      writeStoredOutboxStore(sessionStorage, source, store),
+    save: (store: ReturnType<typeof stored>) =>
+      writeStoredOutboxStore(sessionStorage, storageTargetForComposer(state), store),
+    restore: (row = entry(), scope = firstScope) =>
+      restoreChatOutboxRecovery(state, row, destination(scope)),
+    discard: (row = entry(), isCurrent?: () => boolean) =>
+      discardChatOutboxRecovery(state, row, isCurrent),
+    retire: (rows = entries()) => retireDeliveredChatOutboxRecovery(state, rows),
+  };
 }
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {
@@ -87,6 +117,46 @@ function reopenStorage() {
   vi.stubGlobal("sessionStorage", reopened);
 }
 
+function interceptTransfer(
+  f: ReturnType<typeof fixture>,
+  intercept: (stage: string, commit: () => void) => void,
+) {
+  const set = sessionStorage.setItem.bind(sessionStorage);
+  const remove = sessionStorage.removeItem.bind(sessionStorage);
+  const ownedKey = storageTargetForComposer(f.state).key;
+  const stage = (key: string, value?: string) => {
+    const source = key === f.source.key;
+    if (value === undefined) {
+      return source ? "retire-remove" : "discard";
+    }
+    const record = JSON.parse(value) as { recovery: Record<string, { sourceScopeKey: string }> };
+    const staging = Object.values(record.recovery).some(
+      (row) => row.sourceScopeKey === sourceScope,
+    );
+    return source ? (staging ? "claim" : "retire-write") : staging ? "stage" : "publish";
+  };
+  const writes = vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
+    const commit = () => set(key, value);
+    if (key === f.source.key || key === ownedKey) {
+      intercept(stage(key, value), commit);
+    } else {
+      commit();
+    }
+  });
+  const removals = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
+    const commit = () => remove(key);
+    if (key === f.source.key || key === ownedKey) {
+      intercept(stage(key), commit);
+    } else {
+      commit();
+    }
+  });
+  return () => {
+    writes.mockRestore();
+    removals.mockRestore();
+  };
+}
+
 function deliveryFixture() {
   const f = fixture("queue");
   const state = Object.assign(f.state, {
@@ -94,14 +164,14 @@ function deliveryFixture() {
     currentSessionId: "original-session",
     chatMessages: [] as unknown[],
   });
-  const legacy = readStoredOutboxStore(sessionStorage, f.source);
-  legacy.sessions[sourceScope]!.queue![0]!.sessionId = state.currentSessionId;
-  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  const store = f.legacy();
+  store.sessions[sourceScope]!.queue![0]!.sessionId = state.currentSessionId;
+  f.saveLegacy(store);
   return { ...f, state };
 }
 
 it.each(["original-attempt", "original-attempt:user"])(
-  "retires saved queue input proven by durable submission %s without sending",
+  "retires delivered %s without resending",
   (idempotencyKey) => {
     const f = deliveryFixture();
     f.state.chatMessages = [
@@ -111,12 +181,10 @@ it.each(["original-attempt", "original-attempt:user"])(
         __openclaw: { id: "delivered", idempotencyKey },
       },
     ];
-    expect(retireDeliveredChatOutboxRecovery(f.state, f.entries())).toBe("retired");
+    expect(f.retire()).toBe("retired");
     expect(f.entries()).toEqual([]);
-    expect(f.stored().recovery).toEqual({});
-    expect(f.stored().sessions).toEqual({});
-    expect(f.state.chatQueue).toEqual([]);
-    expect(f.state.chatMessage).toBe("");
+    expect([f.stored().recovery, f.stored().sessions]).toEqual([{}, {}]);
+    expect(f.state).toMatchObject({ chatQueue: [], chatMessage: "" });
   },
 );
 
@@ -146,7 +214,7 @@ it.each([
   } else if (mismatch === "scope") {
     f.state.sessionKey = firstScope.sessionKey;
   } else if (mismatch === "no-run-id" || mismatch === "unowned-draft") {
-    const legacy = readStoredOutboxStore(sessionStorage, f.source);
+    const legacy = f.legacy();
     if (mismatch === "no-run-id") {
       delete legacy.sessions[sourceScope]!.queue![0]!.sendRunId;
     } else {
@@ -155,11 +223,11 @@ it.each([
         { role: "user", __openclaw: { seq: 7, idempotencyKey: "original-attempt:user" } },
       ];
     }
-    writeStoredOutboxStore(sessionStorage, f.source, legacy);
+    f.saveLegacy(legacy);
   }
   const before = sessionStorage.getItem(f.source.key);
   const entries = f.entries();
-  expect(retireDeliveredChatOutboxRecovery(f.state, entries)).toBe("unchanged");
+  expect(f.retire(entries)).toBe("unchanged");
   expect(f.entries()).toEqual(entries);
   expect(sessionStorage.getItem(f.source.key)).toBe(before);
   expect(f.stored().recovery).toEqual({});
@@ -167,71 +235,64 @@ it.each([
 
 it("retains the draft and unproven inputs when only one owned submission was delivered", () => {
   const f = deliveryFixture();
-  const legacy = readStoredOutboxStore(sessionStorage, f.source);
+  const legacy = f.legacy();
   const delivered = legacy.sessions[sourceScope]!.queue![0]!;
   legacy.sessions = {};
-  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  f.saveLegacy(legacy);
   const owned = f.stored();
-  owned.recovery.owned = {
-    sourceVersion: 4,
-    sourceScopeKey: sourceScope,
-    session: {
-      draft: "Keep this draft",
-      updatedAt: 1,
-      queue: [delivered, { id: "unsent", text: "Still unsent", createdAt: 2 }],
-    },
-  };
-  writeStoredOutboxStore(sessionStorage, storageTargetForComposer(f.state), owned);
+  owned.recovery.owned = recovery({
+    draft: "Keep this draft",
+    updatedAt: 1,
+    queue: [delivered, queueItem({ id: "unsent", text: "Still unsent", createdAt: 2 })],
+  });
+  f.save(owned);
   f.state.chatMessages = [
     { role: "user", __openclaw: { seq: 7, idempotencyKey: "original-attempt:user" } },
   ];
-  expect(retireDeliveredChatOutboxRecovery(f.state, f.entries())).toBe("retired");
+  expect(f.retire()).toBe("retired");
   expect(f.entries()).toMatchObject([
     { id: "owned", session: { draft: "Keep this draft", queue: [{ id: "unsent" }] } },
   ]);
   expect(f.entries()[0]!.session.queue).toHaveLength(1);
 });
 
-it.each(["recovery", "history"] as const)(
-  "fences delivery retirement when authoritative %s changes",
-  (change) => {
-    const f = deliveryFixture();
-    f.state.chatMessages = [
-      { role: "user", __openclaw: { id: "delivered", idempotencyKey: "original-attempt" } },
-    ];
-    const entries = f.entries();
-    if (change === "recovery") {
-      const legacy = readStoredOutboxStore(sessionStorage, f.source);
-      legacy.sessions[sourceScope]!.draft = "Newer intent";
-      writeStoredOutboxStore(sessionStorage, f.source, legacy);
-    } else {
-      const set = sessionStorage.setItem.bind(sessionStorage);
-      vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
-        set(key, value);
-        if (key === f.source.key) {
-          f.state.chatMessages = [];
-        }
-      });
-    }
-    const before = sessionStorage.getItem(f.source.key);
-    expect(retireDeliveredChatOutboxRecovery(f.state, entries)).toBe("conflict");
-    if (change === "recovery") {
-      expect(sessionStorage.getItem(f.source.key)).toBe(before);
-    }
-    expect(f.entries()[0]?.session.queue).toHaveLength(1);
-  },
-);
+it.each(["recovery", "history"] as const)("fences retirement after %s changes", (change) => {
+  const f = deliveryFixture();
+  f.state.chatMessages = [
+    { role: "user", __openclaw: { id: "delivered", idempotencyKey: "original-attempt" } },
+  ];
+  const entries = f.entries();
+  if (change === "recovery") {
+    const legacy = f.legacy();
+    legacy.sessions[sourceScope]!.draft = "Newer intent";
+    f.saveLegacy(legacy);
+  } else {
+    const set = sessionStorage.setItem.bind(sessionStorage);
+    vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
+      set(key, value);
+      if (key === f.source.key) {
+        f.state.chatMessages = [];
+      }
+    });
+  }
+  const before = sessionStorage.getItem(f.source.key);
+  expect(f.retire(entries)).toBe("conflict");
+  if (change === "recovery") {
+    expect(sessionStorage.getItem(f.source.key)).toBe(before);
+  }
+  expect(f.entries()[0]?.session.queue).toHaveLength(1);
+});
 
 it("does not offer clear fences as saved messages or erase canonical clear fences", () => {
   const f = fixture("draft");
-  const legacy = readStoredOutboxStore(sessionStorage, f.source);
   const fence = { updatedAt: 12, draftRevision: 12 };
+  const legacy = f.legacy();
   legacy.sessions["global\u0000agent:main"] = fence;
-  legacy.recovery.cleared = { sourceVersion: 3, sourceScopeKey: sourceScope, session: fence };
-  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  legacy.recovery.cleared = recovery(fence, 3);
+  f.saveLegacy(legacy);
   const owned = f.stored();
-  owned.recovery.cleared = { sourceVersion: 4, sourceScopeKey: sourceScope, session: fence };
-  writeStoredOutboxStore(sessionStorage, storageTargetForComposer(f.state), owned);
+  owned.recovery.cleared = recovery(fence);
+  f.save(owned);
   const before = sessionStorage.getItem(f.source.key);
   expect(f.entries().map((entry) => entry.session.draft)).toEqual(["Retained draft 雪"]);
   expect(sessionStorage.getItem(f.source.key)).toBe(before);
@@ -243,36 +304,17 @@ it("does not offer clear fences as saved messages or erase canonical clear fence
 
 it("keeps textless attachment, goal, and reply recovery actionable", () => {
   const f = fixture("draft");
-  const legacy = readStoredOutboxStore(sessionStorage, f.source);
+  const legacy = f.legacy();
   legacy.sessions = {};
   legacy.recovery = {
-    attachment: {
-      sourceVersion: 4,
-      sourceScopeKey: sourceScope,
-      session: {
-        updatedAt: 1,
-        queue: [
-          {
-            id: "attachment",
-            text: "",
-            createdAt: 1,
-            attachments: [{ id: "file", mimeType: "text/plain", fileName: "saved.txt" }],
-          },
-        ],
-      },
-    },
-    goal: {
-      sourceVersion: 4,
-      sourceScopeKey: sourceScope,
-      session: { updatedAt: 2, goalMode: { action: "start" } },
-    },
-    reply: {
-      sourceVersion: 4,
-      sourceScopeKey: sourceScope,
-      session: { updatedAt: 3, replyTarget: { messageId: "message", text: "quoted" } },
-    },
+    attachment: recovery({
+      updatedAt: 1,
+      queue: [queueItem({ id: "attachment", text: "", attachments: [attachment] })],
+    }),
+    goal: recovery({ updatedAt: 2, goalMode: { action: "start" } }),
+    reply: recovery({ updatedAt: 3, replyTarget: { messageId: "message", text: "quoted" } }),
   };
-  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  f.saveLegacy(legacy);
   expect(f.entries().map((entry) => entry.id)).toEqual([
     "legacy-recovery:attachment",
     "legacy-recovery:goal",
@@ -281,7 +323,7 @@ it("keeps textless attachment, goal, and reply recovery actionable", () => {
 });
 
 it.each(["queue", "draft"] as const)(
-  "discards only the confirmed %s without filling the current composer",
+  "discards confirmed %s without changing the composer",
   (kind) => {
     const f = fixture(kind, true);
     const entry = f.entry();
@@ -291,25 +333,25 @@ it.each(["queue", "draft"] as const)(
       updatedAt: 10,
       draftRevision: 10,
     };
-    writeStoredOutboxStore(sessionStorage, storageTargetForComposer(f.state), owned);
+    f.save(owned);
     f.state.chatMessage = "current input";
-    expect(discardChatOutboxRecovery(f.state, entry)).toBe("discarded");
+    expect(f.discard(entry)).toBe("discarded");
     expect(f.state.chatMessage).toBe("current input");
     expect(f.stored().sessions).toEqual(owned.sessions);
     expect(f.entries().map((row) => row.session.draft)).toEqual(["untouched"]);
-    expect(discardChatOutboxRecovery(f.state, entry)).toBe("conflict");
+    expect(f.discard(entry)).toBe("conflict");
   },
 );
 
 it.each(["account", "gateway", "revision", "incognito", "confirmation"] as const)(
-  "does not discard across a changed %s",
+  "fences discard after %s changes",
   (change) => {
     const f = fixture("draft");
     const entry = f.entry();
     if (change === "revision") {
-      const legacy = readStoredOutboxStore(sessionStorage, f.source);
+      const legacy = f.legacy();
       legacy.sessions[sourceScope] = { draft: "newer", draftRevision: 2, updatedAt: 2 };
-      writeStoredOutboxStore(sessionStorage, f.source, legacy);
+      f.saveLegacy(legacy);
     } else if (change === "account") {
       f.state.client.recoveryScope = "account-b";
     } else if (change === "gateway") {
@@ -318,46 +360,28 @@ it.each(["account", "gateway", "revision", "incognito", "confirmation"] as const
       Object.assign(f.state, { selectedChatSessionIncognito: true });
     }
     const before = sessionStorage.getItem(f.source.key);
-    expect(discardChatOutboxRecovery(f.state, entry, () => change !== "confirmation")).toBe(
-      "conflict",
-    );
+    expect(f.discard(entry, () => change !== "confirmation")).toBe("conflict");
     expect(sessionStorage.getItem(f.source.key)).toBe(before);
     expect(f.stored().sessions).toEqual({});
   },
 );
 
 it.each(["claim", "stage", "retire", "discard"] as const)(
-  "retains an inert recovery through failed %s during discard",
+  "retains recovery after discard %s fails",
   (boundary) => {
     const f = fixture("queue");
     const entry = f.entry();
-    const target = storageTargetForComposer(f.state);
-    const set = sessionStorage.setItem.bind(sessionStorage);
-    const remove = sessionStorage.removeItem.bind(sessionStorage);
-    const writes = vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
-      if (
-        (boundary === "claim" && key === f.source.key) ||
-        (boundary === "stage" && key === target.key)
-      ) {
-        throw new Error("blocked write");
+    const reset = interceptTransfer(f, (stage, commit) => {
+      if (stage === (boundary === "retire" ? "retire-remove" : boundary)) {
+        throw new Error("blocked storage");
       }
-      set(key, value);
+      commit();
     });
-    const removals = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
-      if (
-        (boundary === "retire" && key === f.source.key) ||
-        (boundary === "discard" && key === target.key)
-      ) {
-        throw new Error("blocked removal");
-      }
-      remove(key);
-    });
-    expect(discardChatOutboxRecovery(f.state, entry)).toBe("storage-failed");
-    writes.mockRestore();
-    removals.mockRestore();
+    expect(f.discard(entry)).toBe("storage-failed");
+    reset();
     expect(f.stored().sessions).toEqual({});
     expect(f.entry().session).toEqual(f.session);
-    expect(discardChatOutboxRecovery(f.state, f.entry())).toBe("discarded");
+    expect(f.discard()).toBe("discarded");
     expect(f.entries()).toEqual([]);
   },
 );
@@ -365,16 +389,16 @@ it.each(["claim", "stage", "retire", "discard"] as const)(
 it("retires attachment payloads only after the last recovery copy is discarded", () => {
   const f = fixture("queue");
   const reference = { key: "blob", tabId: "this-tab", recoveryScope: "account-a" };
-  const legacy = readStoredOutboxStore(sessionStorage, f.source);
-  legacy.sessions[sourceScope]!.queue![0]!.attachmentPayload = reference;
-  legacy.sessions[sourceScope]!.queue![0]!.attachments = [
-    { id: "file", mimeType: "text/plain", fileName: "saved.txt" },
-  ];
-  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  const legacy = f.legacy();
+  Object.assign(legacy.sessions[sourceScope]!.queue![0]!, {
+    attachmentPayload: reference,
+    attachments: [attachment],
+  });
+  f.saveLegacy(legacy);
   const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads").mockImplementation(async () => {
     expect(f.entries()).toEqual([]);
   });
-  expect(discardChatOutboxRecovery(f.state, f.entry())).toBe("discarded");
+  expect(f.discard()).toBe("discarded");
   expect(cleanup).toHaveBeenCalledExactlyOnceWith([reference]);
 });
 
@@ -390,88 +414,58 @@ it.each(
       })),
     ),
   ),
-)(
-  "retains one $kind through $failure at $stage and a different-destination retry",
-  ({ stage, failure, kind }) => {
-    const f = fixture(kind, stage === "retire-write");
-    const original = f.entry();
-    const ownedKey = storageTargetForComposer(f.state).key;
-    const set = sessionStorage.setItem.bind(sessionStorage);
-    const remove = sessionStorage.removeItem.bind(sessionStorage);
-    let failuresSeen = 0;
-    const fail = (commit: () => void) => {
-      failuresSeen++;
-      if (failure === "after-write") {
-        commit();
-      }
-      throw new Error("Injected " + stage);
-    };
-    const write = vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
-      const record = JSON.parse(value) as {
-        sessions: Record<string, StoredComposerSession>;
-        recovery: Record<string, { sourceScopeKey: string }>;
-      };
-      const staging = Object.values(record.recovery).some(
-        (row) => row.sourceScopeKey === sourceScope,
-      );
-      const matches =
-        key === f.source.key
-          ? (stage === "claim" && staging) || (stage === "retire-write" && !staging)
-          : key === ownedKey &&
-            ((stage === "stage" && staging) || (stage === "publish" && !staging));
-      if (matches) {
-        fail(() => set(key, value));
-      }
-      set(key, value);
-    });
-    const removal = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
-      if (key === f.source.key && stage === "retire-remove") {
-        fail(() => remove(key));
-      }
-      remove(key);
-    });
-    expect(restoreChatOutboxRecovery(f.state, original, f.destination())).toBe("storage-failed");
-    expect(failuresSeen).toBe(1);
-    write.mockRestore();
-    removal.mockRestore();
-    reopenStorage();
-    const committed = stage === "publish" && failure === "after-write";
-    if (committed) {
-      expect(f.entry()).toBeUndefined();
-      expect(restoreChatOutboxRecovery(f.state, original, f.destination(secondScope))).toBe(
-        "conflict",
-      );
-    } else {
-      expect(Object.keys(f.stored().sessions)).toEqual([]);
-      expect(f.entry().session).toEqual(f.session);
-      expect(f.entries().filter((row) => row.sourceScopeKey === sourceScope)).toHaveLength(1);
-      expect(restoreChatOutboxRecovery(f.state, f.entry(), f.destination(secondScope))).toBe(
-        "restored",
-      );
+)("retains one $kind after $stage $failure, then retries elsewhere", ({ stage, failure, kind }) => {
+  const f = fixture(kind, stage === "retire-write");
+  const original = f.entry();
+  let failuresSeen = 0;
+  const fail = (commit: () => void) => {
+    failuresSeen++;
+    if (failure === "after-write") {
+      commit();
     }
-    const sessions = f.stored().sessions;
-    const scope = committed ? firstScope : secondScope;
-    expect(Object.keys(sessions)).toEqual([storedChatOutboxScopeKey(scope)]);
-    expect(sessions[storedChatOutboxScopeKey(scope)]).toMatchObject(
-      kind === "draft"
-        ? { draft: f.session.draft }
-        : {
-            queue: [
-              {
-                ...f.session.queue![0],
-                sessionKey: scope.sessionKey,
-                agentId: scope.agentId,
-                storageScope: JSON.stringify([gatewayUrl, "account-a"]),
-              },
-            ],
-          },
-    );
-    expect(f.entries().filter((row) => row.sourceScopeKey === sourceScope)).toEqual([]);
-    if (stage === "retire-write") {
-      expect(f.entries()[0]?.session.draft).toBe("untouched");
+    throw new Error("Injected " + stage);
+  };
+  const reset = interceptTransfer(f, (currentStage, commit) => {
+    if (currentStage === stage) {
+      fail(commit);
     }
-  },
-);
+    commit();
+  });
+  expect(f.restore(original)).toBe("storage-failed");
+  expect(failuresSeen).toBe(1);
+  reset();
+  reopenStorage();
+  const committed = stage === "publish" && failure === "after-write";
+  if (committed) {
+    expect(f.entry()).toBeUndefined();
+    expect(f.restore(original, secondScope)).toBe("conflict");
+  } else {
+    expect(Object.keys(f.stored().sessions)).toEqual([]);
+    expect(f.entry().session).toEqual(f.session);
+    expect(f.entries().filter((row) => row.sourceScopeKey === sourceScope)).toHaveLength(1);
+    expect(f.restore(f.entry(), secondScope)).toBe("restored");
+  }
+  const sessions = f.stored().sessions;
+  const scope = committed ? firstScope : secondScope;
+  expect(Object.keys(sessions)).toEqual([storedChatOutboxScopeKey(scope)]);
+  expect(sessions[storedChatOutboxScopeKey(scope)]).toMatchObject(
+    kind === "draft"
+      ? { draft: f.session.draft }
+      : {
+          queue: [
+            {
+              ...f.session.queue![0],
+              ...scope,
+              storageScope: JSON.stringify([gatewayUrl, "account-a"]),
+            },
+          ],
+        },
+  );
+  expect(f.entries().filter((row) => row.sourceScopeKey === sourceScope)).toEqual([]);
+  if (stage === "retire-write") {
+    expect(f.entries()[0]?.session.draft).toBe("untouched");
+  }
+});
 
 it.each([
   ...(["account", "client"] as const).map((change) => ({
@@ -482,9 +476,6 @@ it.each([
 ])("retains recovery across reentrant $change replacement at $boundary", ({ boundary, change }) => {
   const f = fixture("draft");
   const original = f.entry();
-  const ownedKey = storageTargetForComposer(f.state).key;
-  const set = sessionStorage.setItem.bind(sessionStorage);
-  const remove = sessionStorage.removeItem.bind(sessionStorage);
   let changed = false;
   const replace = () => {
     changed = true;
@@ -494,25 +485,14 @@ it.each([
       f.state.client = { ...f.state.client };
     }
   };
-  const write = vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
-    set(key, value);
-    if (
-      !changed &&
-      key === (boundary === "claim" ? f.source.key : ownedKey) &&
-      boundary !== "retire"
-    ) {
+  const reset = interceptTransfer(f, (stage, commit) => {
+    commit();
+    if (!changed && stage === (boundary === "retire" ? "retire-remove" : boundary)) {
       replace();
     }
   });
-  const removal = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
-    remove(key);
-    if (!changed && boundary === "retire" && key === f.source.key) {
-      replace();
-    }
-  });
-  expect(restoreChatOutboxRecovery(f.state, original, f.destination())).toBe("conflict");
-  write.mockRestore();
-  removal.mockRestore();
+  expect(f.restore(original)).toBe("conflict");
+  reset();
   expect(changed).toBe(true);
   if (change === "account") {
     expect(f.entries()).toEqual([]);
@@ -520,9 +500,7 @@ it.each([
   }
   expect(f.entry().session).toEqual(f.session);
   expect(f.stored().sessions).toEqual({});
-  expect(restoreChatOutboxRecovery(f.state, f.entry(), f.destination(secondScope))).toBe(
-    "restored",
-  );
+  expect(f.restore(f.entry(), secondScope)).toBe("restored");
   expect(f.stored().sessions[storedChatOutboxScopeKey(secondScope)]?.draft).toBe(f.session.draft);
   if (boundary !== "claim") {
     expect(Object.keys(f.stored().sessions)).toEqual([storedChatOutboxScopeKey(secondScope)]);
@@ -534,68 +512,61 @@ it.each([
   { kind: "draft", occupied: "queue" },
   { kind: "draft", occupied: "pending" },
   { kind: "queue", occupied: "draft" },
-] as const)(
-  "retains $kind recovery when $occupied entries fill the destination",
-  ({ kind, occupied }) => {
-    const f = fixture(kind);
-    const target = storageTargetForComposer(f.state);
-    const store = f.stored();
-    const prefix =
-      occupied === "pending"
-        ? "opaque-"
-        : "agent:main:" + (occupied === "queue" ? "occupied-" : "draft-");
-    const key = (index: number) => prefix + index + "\u0000agent:main";
-    for (let index = 0; index < 20; index++) {
-      store.sessions[key(index)] =
-        occupied === "queue"
-          ? {
-              updatedAt: Date.now() + 1000 + index,
-              queue: [
-                {
-                  id: "occupied-" + index,
-                  text: "keep",
-                  createdAt: index,
-                  storageScope: JSON.stringify([gatewayUrl, "account-a"]),
-                },
-              ],
-            }
-          : {
-              draft: (occupied === "pending" ? "pending " : "existing input ") + index,
-              ...(occupied === "pending" ? { awaitingDefaults: true } : {}),
-              updatedAt: index + 1,
-            };
-    }
-    writeStoredOutboxStore(sessionStorage, target, store);
-    const before = f.stored().sessions;
-    expect(restoreChatOutboxRecovery(f.state, f.entry(), f.destination())).toBe("storage-failed");
-    expect(f.stored().sessions).toEqual(before);
-    expect(Object.keys(f.stored().sessions)).toHaveLength(20);
-    reopenStorage();
-    expect(f.entry().session).toEqual(f.session);
-    const freed = f.stored();
-    delete freed.sessions[key(0)];
-    writeStoredOutboxStore(sessionStorage, target, freed);
-    expect(restoreChatOutboxRecovery(f.state, f.entry(), f.destination(secondScope))).toBe(
-      "restored",
-    );
-    const after = f.stored().sessions;
-    expect(Object.keys(after)).toHaveLength(20);
-    for (let index = 1; index < 20; index++) {
-      expect(after[key(index)]).toEqual(before[key(index)]);
-    }
-    expect(after[storedChatOutboxScopeKey(secondScope)]).toMatchObject(
-      kind === "draft" ? { draft: f.session.draft } : { queue: [{ id: "original-input" }] },
-    );
-    expect(after[storedChatOutboxScopeKey(firstScope)]).toBeUndefined();
-    expect(f.entries()).toEqual([]);
-  },
-);
+] as const)("retains $kind when destination is full of $occupied", ({ kind, occupied }) => {
+  const f = fixture(kind);
+  const target = storageTargetForComposer(f.state);
+  const store = f.stored();
+  const prefix =
+    occupied === "pending"
+      ? "opaque-"
+      : "agent:main:" + (occupied === "queue" ? "occupied-" : "draft-");
+  const key = (index: number) => prefix + index + "\u0000agent:main";
+  for (let index = 0; index < 20; index++) {
+    store.sessions[key(index)] =
+      occupied === "queue"
+        ? {
+            updatedAt: Date.now() + 1000 + index,
+            queue: [
+              {
+                ...queueItem({ id: "occupied-" + index, text: "keep", createdAt: index }),
+                storageScope: JSON.stringify([gatewayUrl, "account-a"]),
+              },
+            ],
+          }
+        : {
+            draft: (occupied === "pending" ? "pending " : "existing input ") + index,
+            ...(occupied === "pending" ? { awaitingDefaults: true } : {}),
+            updatedAt: index + 1,
+          };
+  }
+  writeStoredOutboxStore(sessionStorage, target, store);
+  const before = f.stored().sessions;
+  expect(f.restore()).toBe("storage-failed");
+  expect(f.stored().sessions).toEqual(before);
+  expect(Object.keys(f.stored().sessions)).toHaveLength(20);
+  reopenStorage();
+  expect(f.entry().session).toEqual(f.session);
+  const freed = f.stored();
+  delete freed.sessions[key(0)];
+  writeStoredOutboxStore(sessionStorage, target, freed);
+  expect(f.restore(f.entry(), secondScope)).toBe("restored");
+  const after = f.stored().sessions;
+  expect(Object.keys(after)).toHaveLength(20);
+  for (let index = 1; index < 20; index++) {
+    expect(after[key(index)]).toEqual(before[key(index)]);
+  }
+  expect(after[storedChatOutboxScopeKey(secondScope)]).toMatchObject(
+    kind === "draft" ? { draft: f.session.draft } : { queue: [{ id: "original-input" }] },
+  );
+  expect(after[storedChatOutboxScopeKey(firstScope)]).toBeUndefined();
+  expect(f.entries()).toEqual([]);
+});
 
 it("rejects an omitted required destination before changing storage without overriding retention", () => {
   const f = fixture("draft");
   const target = storageTargetForComposer(f.state);
   const owned = f.stored();
-  owned.recovery.retained = { sourceVersion: 4, sourceScopeKey: sourceScope, session: f.session };
+  owned.recovery.retained = recovery(f.session);
   for (let index = 0; index < 20; index++) {
     owned.sessions["opaque-" + index + "\u0000agent:main"] = {
       draft: "pending " + index,
