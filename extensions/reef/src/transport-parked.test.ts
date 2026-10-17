@@ -10,19 +10,21 @@ import {
 
 afterEach(() => vi.useRealTimers());
 
-async function startInbox() {
+async function startInbox(...sequences: number[]) {
   vi.useFakeTimers();
-  const sockets: ControlledSocket[] = [];
-  const retained = new Map<number, ReturnType<typeof receiptEntry>>();
-  const parked = new Set<number>();
-  const attempts: number[] = [];
-  const completed: number[] = [];
-  const persisted: number[] = [];
-  const requestedAfter: number[] = [];
+  const state = {
+    sockets: new Array<ControlledSocket>(),
+    retained: new Map<number, ReturnType<typeof receiptEntry>>(),
+    parked: new Set<number>(),
+    attempts: new Array<number>(),
+    completed: new Array<number>(),
+    persisted: new Array<number>(),
+    requestedAfter: new Array<number>(),
+  };
   const respond = (input: URL | RequestInfo) => {
     const after = Number(parseRequestUrl(input).searchParams.get("after"));
-    requestedAfter.push(after);
-    const entries = [...retained.values()]
+    state.requestedAfter.push(after);
+    const entries = [...state.retained.values()]
       .filter((entry) => entry.seq > after)
       .toSorted((left, right) => left.seq - right.seq)
       .slice(0, 200);
@@ -34,193 +36,151 @@ async function startInbox() {
     createClient(fetcher),
     async ([entry]) => {
       const seq = entry!.seq;
-      attempts.push(seq);
-      if (parked.has(seq)) {
+      state.attempts.push(seq);
+      if (state.parked.has(seq)) {
         throw new ReefInboxEntryParkedError("review approval pending");
       }
-      completed.push(seq);
+      state.completed.push(seq);
     },
     () => {
       const socket = new ControlledSocket();
-      sockets.push(socket);
+      state.sockets.push(socket);
       return socket as unknown as WebSocketLike;
     },
-    { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
+    { initialCursor: 7, persistCursor: (cursor) => state.persisted.push(cursor) },
   );
   const running = inbox.start(abort.signal);
   onTestFinished(async () => {
     abort.abort();
     await running;
   });
-  sockets[0]!.emit("open");
+  state.sockets[0]!.emit("open");
   await vi.advanceTimersByTimeAsync(0);
-  const notify = async (...sequences: number[]) => {
-    for (const seq of sequences) {
+  for (const seq of sequences) {
+    state.retained.set(seq, receiptEntry(seq));
+  }
+  const notify = async (...liveSequences: number[]) => {
+    for (const seq of liveSequences) {
       const entry = receiptEntry(seq);
-      retained.set(seq, entry);
-      sockets.at(-1)!.emit("message", { data: JSON.stringify({ type: "entry", entry }) });
+      state.retained.set(seq, entry);
+      state.sockets.at(-1)!.emit("message", { data: JSON.stringify({ type: "entry", entry }) });
     }
     await vi.advanceTimersByTimeAsync(0);
   };
-  return {
-    inbox,
-    sockets,
-    retained,
-    parked,
-    attempts,
-    completed,
-    persisted,
-    requestedAfter,
-    fetcher,
-    respond,
-    notify,
-  };
+  return { ...state, inbox, fetcher, respond, notify };
 }
 
 describe("Reef parked cursor ownership", () => {
   it("holds multiple parks across reconnect and folds sparse completions without redelivery", async () => {
-    const {
-      inbox,
-      sockets,
-      retained,
-      parked,
-      persisted,
-      completed,
-      attempts,
-      requestedAfter,
-      notify,
-    } = await startInbox();
-    parked.add(8).add(12);
-    for (const seq of [8, 10, 12, 15]) {
-      retained.set(seq, receiptEntry(seq));
-    }
-    await inbox.poll();
-    expect(requestedAfter).toEqual([7, 7]);
-    expect(persisted).toEqual([]);
-    expect(completed).toEqual([10, 15]);
+    const f = await startInbox(8, 10, 12, 15);
+    f.parked.add(8).add(12);
+    await f.inbox.poll();
+    expect(f).toMatchObject({ requestedAfter: [7, 7], persisted: [], completed: [10, 15] });
 
-    parked.delete(8);
-    await inbox.poll();
-    expect(persisted).toEqual([8, 10]);
-    sockets[0]!.close();
+    f.parked.delete(8);
+    await f.inbox.poll();
+    expect(f.persisted).toEqual([8, 10]);
+    f.sockets[0]!.close();
     await vi.advanceTimersByTimeAsync(250);
-    expect(sockets).toHaveLength(2);
-    sockets[1]!.emit("open");
+    expect(f.sockets).toHaveLength(2);
+    f.sockets[1]!.emit("open");
     await vi.advanceTimersByTimeAsync(0);
-    const previousAttempts = [...attempts];
-    await notify(20);
-    expect(attempts).toEqual([...previousAttempts, 20]);
-    expect(persisted).toEqual([8, 10]);
+    const previousAttempts = [...f.attempts];
+    await f.notify(20);
+    expect(f).toMatchObject({ attempts: [...previousAttempts, 20], persisted: [8, 10] });
 
-    parked.clear();
-    await inbox.poll();
-    expect(completed).toEqual([10, 15, 8, 20, 12]);
-    expect(persisted).toEqual([8, 10, 12, 15, 20]);
-    const pulls = requestedAfter.length;
-    await notify(25);
-    expect(persisted.at(-1)).toBe(25);
-    expect(requestedAfter).toHaveLength(pulls);
+    f.parked.clear();
+    await f.inbox.poll();
+    expect(f).toMatchObject({ completed: [10, 15, 8, 20, 12], persisted: [8, 10, 12, 15, 20] });
+    const pulls = f.requestedAfter.length;
+    await f.notify(25);
+    expect(f.persisted.at(-1)).toBe(25);
+    expect(f.requestedAfter).toHaveLength(pulls);
   });
 
   it("publishes a REST park before queued live frames and retries only the parked entry", async () => {
-    const { inbox, retained, parked, fetcher, respond, notify, persisted, completed, attempts } =
-      await startInbox();
-    parked.add(8);
-    retained.set(8, receiptEntry(8));
+    const f = await startInbox(8);
+    f.parked.add(8);
     const pulling = createDeferred<void>();
     const release = createDeferred<void>();
-    fetcher.mockImplementationOnce(async (input) => {
-      const response = respond(input);
+    f.fetcher.mockImplementationOnce(async (input) => {
+      const response = f.respond(input);
       pulling.resolve();
       await release.promise;
       return response;
     });
-    const polling = inbox.poll();
+    const polling = f.inbox.poll();
     try {
       await pulling.promise;
-      await notify(10);
-      expect(attempts).toEqual([]);
+      await f.notify(10);
+      expect(f.attempts).toEqual([]);
     } finally {
       release.resolve();
       await polling;
     }
     await vi.advanceTimersByTimeAsync(0);
-    expect(attempts).toEqual([8, 10]);
-    expect(persisted).toEqual([]);
-    parked.clear();
-    await inbox.poll();
-    expect(completed).toEqual([10, 8]);
-    expect(persisted).toEqual([8, 10]);
+    expect(f).toMatchObject({ attempts: [8, 10], persisted: [] });
+    f.parked.clear();
+    await f.inbox.poll();
+    expect(f).toMatchObject({ completed: [10, 8], persisted: [8, 10] });
   });
 
   it("retains an older barrier when a partial REST drain ends in abort", async () => {
-    const { inbox, retained, parked, fetcher, respond, notify, persisted, completed } =
-      await startInbox();
-    parked.add(8);
-    retained.set(8, receiptEntry(8));
-    retained.set(9, receiptEntry(9));
-    await inbox.poll();
-    expect(persisted).toEqual([]);
-    parked.clear();
+    const f = await startInbox(8, 9);
+    f.parked.add(8);
+    await f.inbox.poll();
+    expect(f.persisted).toEqual([]);
+    f.parked.clear();
     const pollAbort = new AbortController();
     const pulling = createDeferred<void>();
     const release = createDeferred<void>();
-    fetcher.mockImplementationOnce(async (input) => respond(input));
-    fetcher.mockImplementationOnce(async () => {
+    f.fetcher.mockImplementationOnce(async (input) => f.respond(input));
+    f.fetcher.mockImplementationOnce(async () => {
       pulling.resolve();
       await release.promise;
       throw new Error("partial pull failed");
     });
-    const polling = inbox.poll(pollAbort.signal);
+    const polling = f.inbox.poll(pollAbort.signal);
     const rejected = expect(polling).rejects.toThrow(/abort/i);
     try {
       await pulling.promise;
-      expect(persisted.at(-1)).toBe(9);
+      expect(f.persisted.at(-1)).toBe(9);
       pollAbort.abort();
     } finally {
       release.resolve();
       await rejected;
     }
-    await notify(12);
-    expect(persisted.at(-1)).toBe(9);
-    expect(completed).toEqual([9, 8, 12]);
-    await inbox.poll();
-    expect(completed).toEqual([9, 8, 12]);
-    expect(persisted.at(-1)).toBe(12);
+    await f.notify(12);
+    expect(f.persisted.at(-1)).toBe(9);
+    expect(f.completed).toEqual([9, 8, 12]);
+    await f.inbox.poll();
+    expect(f.completed).toEqual([9, 8, 12]);
+    expect(f.persisted.at(-1)).toBe(12);
   });
 
   it("keeps a newly observed park when a later REST handler fails", async () => {
-    const { inbox, retained, notify, persisted, completed } = await startInbox();
-    retained.set(8, receiptEntry(8));
-    retained.set(10, receiptEntry(10));
-    const handler = vi.spyOn(inbox, "onEntries");
+    const f = await startInbox(8, 10);
+    const handler = vi.spyOn(f.inbox, "onEntries");
     handler.mockRejectedValueOnce(new ReefInboxEntryParkedError("pending review"));
     handler.mockRejectedValueOnce(new Error("handler failed"));
-    await expect(inbox.poll()).rejects.toThrow("handler failed");
-    await notify(12);
-    expect(persisted).toEqual([]);
-    expect(completed).toEqual([12]);
-    await inbox.poll();
-    expect(completed).toEqual([12, 8, 10]);
-    expect(persisted).toEqual([8, 10, 12]);
+    await expect(f.inbox.poll()).rejects.toThrow("handler failed");
+    await f.notify(12);
+    expect(f).toMatchObject({ persisted: [], completed: [12] });
+    await f.inbox.poll();
+    expect(f).toMatchObject({ completed: [12, 8, 10], persisted: [8, 10, 12] });
   });
 
   it("clears an expired park after REST proves an empty mailbox without replaying completed callbacks", async () => {
-    const { inbox, retained, parked, notify, persisted, completed, requestedAfter } =
-      await startInbox();
-    parked.add(8);
-    retained.set(8, receiptEntry(8));
-    retained.set(12, receiptEntry(12));
-    await inbox.poll();
-    expect(persisted).toEqual([]);
-    retained.clear();
-    await inbox.poll();
-    expect(completed).toEqual([12]);
-    expect(persisted).toEqual([12]);
-    const pulls = requestedAfter.length;
-    await notify(15);
-    expect(completed).toEqual([12, 15]);
-    expect(persisted).toEqual([12, 15]);
-    expect(requestedAfter).toHaveLength(pulls);
+    const f = await startInbox(8, 12);
+    f.parked.add(8);
+    await f.inbox.poll();
+    expect(f.persisted).toEqual([]);
+    f.retained.clear();
+    await f.inbox.poll();
+    expect(f).toMatchObject({ completed: [12], persisted: [12] });
+    const pulls = f.requestedAfter.length;
+    await f.notify(15);
+    expect(f).toMatchObject({ completed: [12, 15], persisted: [12, 15] });
+    expect(f.requestedAfter).toHaveLength(pulls);
   });
 });

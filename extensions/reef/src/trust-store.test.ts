@@ -12,7 +12,7 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { reefPeerIdentity } from "./friend-types.js";
@@ -24,8 +24,6 @@ import {
 import {
   isReefPairingApprovalToken,
   openReefTrustStore,
-  REEF_TRUST_STORE_MAX_ENTRIES,
-  REEF_TRUST_STORE_NAMESPACE,
   resolveReefTrustStoreKey,
 } from "./trust-store.js";
 import type { RelayFriend } from "./types.js";
@@ -38,6 +36,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const stateDir = tempDirs.make("reef-trust-");
+const env = { OPENCLAW_STATE_DIR: stateDir };
+const noticeState = { lastRejectionAt: 10_000, lastResendAt: 10_100 };
+const overdueMs = 600_000;
+const id = "01JZ0000000000000000000120";
+const peerKey = () => resolveReefTrustStoreKey(config(), "clawd");
+type TrustStore = ReturnType<typeof openReefTrustStore>;
 let nextOperationWrite: (() => Promise<void> | void) | undefined;
 let nextOperationRead: (() => void) | undefined;
 let workerCommands: string[] = [];
@@ -46,20 +50,34 @@ function config(handle = "molty", relayUrl = "https://reefwire.ai") {
   return ReefChannelConfigSchema.parse({ handle, relayUrl });
 }
 
+function newStore(handle = "molty", relayUrl = "https://reefwire.ai", authority?: () => void) {
+  return openReefTrustStore(runtime(), config(handle, relayUrl), authority);
+}
+
+function revocableAuthority() {
+  let current = true;
+  const revoked = new Error("trust authority revoked");
+  return {
+    revoked,
+    setCurrent(value: boolean) {
+      current = value;
+    },
+    assertCurrent() {
+      if (!current) {
+        throw revoked;
+      }
+    },
+  };
+}
+
 function runtime() {
   const mockRuntime = createPluginRuntimeMock();
   mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
+    createPluginStateSyncKeyedStoreForTests<T>("reef", { ...options, env });
   mockRuntime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) => {
     const store = createPluginStateKeyedStoreV2ForTests<T>(
       "reef",
-      {
-        ...options,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      },
+      { ...options, env },
       { assertCurrent() {} },
     );
     const createOperation = store.createOperation;
@@ -99,56 +117,55 @@ function beforeNextOperationWrite(work: () => Promise<void> | void) {
 }
 
 function nativePeerWriter() {
-  return runtime().state.openSyncKeyedStore({
-    namespace: REEF_TRUST_STORE_NAMESPACE,
-    maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
+  return runtime().state.openSyncKeyedStore(REEF_TRUST_STORE_OPTIONS);
 }
 
 async function seedDelivery(
-  store: ReturnType<typeof openReefTrustStore>,
+  store: TrustStore,
   peer: string,
-  id: string,
+  deliveryId: string,
   binding: ReefOutboundDeliveryBinding,
   options: { resendDisabled?: true } = {},
 ) {
   await store.operationState.deliveries.register(
-    `${store.operationState.identityScope}:${peer}:${id}`,
+    `${store.operationState.identityScope}:${peer}:${deliveryId}`,
     { ...binding, ...options, sentAt: Date.now() },
   );
 }
 
 async function rejectDelivery(
-  store: ReturnType<typeof openReefTrustStore>,
+  store: TrustStore,
   peer: string,
-  id: string,
+  deliveryId: string,
   category = "guard_deny",
 ) {
-  const settlement = await store.readOutboundDelivery(peer, id);
+  const settlement = await store.readOutboundDelivery(peer, deliveryId);
   if (!settlement) {
-    throw new Error(`Missing delivery ${id}`);
+    throw new Error(`Missing delivery ${deliveryId}`);
   }
   return settlement.reject(category);
 }
 
-function deliveryWriter(mockRuntime = runtime()) {
-  return mockRuntime.state.openSyncKeyedStore(REEF_DELIVERY_STORE_OPTIONS);
+function deliveryWriter() {
+  return runtime().state.openSyncKeyedStore(REEF_DELIVERY_STORE_OPTIONS);
 }
 
 async function trustedStore() {
-  const mockRuntime = runtime();
-  const store = openReefTrustStore(mockRuntime, config());
+  const store = newStore();
   const trustedPeer = peerTrust();
   const recipient = reefPeerIdentity(trustedPeer);
   await store.set("clawd", trustedPeer);
-  return { mockRuntime, store, trustedPeer, recipient };
+  return { store, trustedPeer, recipient };
 }
 
-async function deliveryFixture(id: string, options: { resendDisabled?: true } = {}) {
+async function deliveryFixture(
+  deliveryId: string,
+  options: { resendDisabled?: true } = {},
+  overrides: Partial<ReefOutboundDeliveryBinding> = {},
+) {
   const fixture = await trustedStore();
-  const binding = { bodyHash: "a".repeat(64), recipient: fixture.recipient };
-  await seedDelivery(fixture.store, "clawd", id, binding, options);
+  const binding = { bodyHash: "a".repeat(64), recipient: fixture.recipient, ...overrides };
+  await seedDelivery(fixture.store, "clawd", deliveryId, binding, options);
   return { ...fixture, binding };
 }
 
@@ -183,10 +200,7 @@ beforeEach(async () => {
   for (const options of [REEF_TRUST_STORE_OPTIONS, REEF_DELIVERY_STORE_OPTIONS]) {
     await createPluginStateKeyedStoreV2ForTests(
       "reef",
-      {
-        ...options,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      },
+      { ...options, env },
       { assertCurrent() {} },
     ).clear();
   }
@@ -199,530 +213,428 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ReefTrustStore", () => {
-  it("renews a rejection reservation while preserving duplicate receipt expiry", async () => {
-    const id = "01JZ0000000000000000000128";
-    const { mockRuntime, store } = await deliveryFixture(id);
-    const notice = { lastRejectionAt: 10_000, lastResendAt: 10_100 };
-    await rejectDelivery(store, "clawd", id);
-    const recovery = (await store.readOutboundDelivery("clawd", id))!.recovery;
-    await recovery.reserve(notice);
+it("renews a rejection reservation while preserving duplicate receipt expiry", async () => {
+  const { store } = await deliveryFixture(id);
+  await rejectDelivery(store, "clawd", id);
+  const recovery = (await store.readOutboundDelivery("clawd", id))!.recovery;
+  await recovery.reserve(noticeState);
 
-    const raw = deliveryWriter(mockRuntime);
-    const duplicate = (await store.readOutboundDelivery("clawd", id))!;
-    const saved = raw.entries()[0]!;
-    raw.register(saved.key, saved.value, { ttlMs: 12 * 60 * 60 * 1_000 });
-    const shortened = raw.entries()[0]!;
-    expect(shortened.expiresAt).toBeGreaterThan(Date.now());
+  const raw = deliveryWriter();
+  const duplicate = (await store.readOutboundDelivery("clawd", id))!;
+  const saved = raw.entries()[0]!;
+  raw.register(saved.key, saved.value, { ttlMs: 12 * 60 * 60 * 1_000 });
+  const shortened = raw.entries()[0]!;
+  expect(shortened.expiresAt).toBeGreaterThan(Date.now());
 
-    expect(await duplicate.reject("guard_deny")).toMatchObject({ category: "guard_deny" });
-    expect(raw.entries()[0]?.expiresAt).toBe(shortened.expiresAt);
+  expect(await duplicate.reject("guard_deny")).toMatchObject({ category: "guard_deny" });
+  expect(raw.entries()[0]?.expiresAt).toBe(shortened.expiresAt);
 
-    expect(
-      await recovery.reserve({
-        lastRejectionAt: 20_000,
-      }),
-    ).toEqual({ kind: "existing", state: notice });
-    const renewed = raw.entries()[0]!;
-    expect(renewed.value).toEqual(shortened.value);
-    const dayMs = 24 * 60 * 60 * 1_000;
-    expect(renewed.expiresAt).toBeGreaterThan(shortened.expiresAt! + 60 * dayMs);
-    expect(renewed.expiresAt).toBeLessThan(shortened.expiresAt! + 61 * dayMs);
+  expect(await recovery.reserve({ lastRejectionAt: 20_000 })).toEqual({
+    kind: "existing",
+    state: noticeState,
   });
+  const renewed = raw.entries()[0]!;
+  expect(renewed.value).toEqual(shortened.value);
+  const dayMs = 24 * 60 * 60 * 1_000;
+  expect(renewed.expiresAt).toBeGreaterThan(shortened.expiresAt! + 60 * dayMs);
+  expect(renewed.expiresAt).toBeLessThan(shortened.expiresAt! + 61 * dayMs);
+});
 
-  it("isolates trust by relay identity instead of machine-specific key paths", async () => {
-    const molty = openReefTrustStore(runtime(), config("molty"));
-    await molty.set("clawd", peerTrust());
+it("isolates trust by relay identity instead of machine-specific key paths", async () => {
+  const molty = newStore();
+  await molty.set("clawd", peerTrust());
 
-    expect(await openReefTrustStore(runtime(), config("molty")).get("clawd")).toBeDefined();
-    expect(await openReefTrustStore(runtime(), config("other")).get("clawd")).toBeUndefined();
-    expect(
-      await openReefTrustStore(runtime(), config("molty", "https://relay.example")).get("clawd"),
-    ).toBeUndefined();
-  });
+  expect(await newStore().get("clawd")).toBeDefined();
+  expect(await newStore("other").get("clawd")).toBeUndefined();
+  expect(await newStore("molty", "https://relay.example").get("clawd")).toBeUndefined();
+});
 
-  it("persists and consumes concurrent outbound request intents separately from active trust", async () => {
-    const store = openReefTrustStore(runtime(), config());
+it("persists and consumes concurrent outbound request intents separately from active trust", async () => {
+  const store = newStore();
 
-    const first = await store.beginRequest("clawd", 123);
-    const second = await store.beginRequest("clawd", 456);
-    expect(first.requestId).not.toBe(second.requestId);
-    expect(await openReefTrustStore(runtime(), config()).hasOutboundRequest("clawd")).toBe(true);
-    expect(await store.get("clawd")).toBeUndefined();
-    expect(await store.removeOutboundRequest("clawd", first.requestId)).toBe(true);
-    expect(await first.status()).toBe("superseded");
-    expect(await second.status()).toBe("current");
-    expect(await store.removeOutboundRequest("clawd", second.requestId)).toBe(true);
-    expect(await store.hasOutboundRequest("clawd")).toBe(false);
-    await expect(second.status()).rejects.toThrow("already consumed");
-    const closed = await store.beginRequest("clawd");
-    closed.close();
-    await expect(closed.remove()).rejects.toThrow("already consumed");
-    expect(await store.hasOutboundRequest("clawd")).toBe(true);
-  });
+  const first = await store.beginRequest("clawd", 123);
+  const second = await store.beginRequest("clawd", 456);
+  expect(first.requestId).not.toBe(second.requestId);
+  expect(await newStore().hasOutboundRequest("clawd")).toBe(true);
+  expect(await store.get("clawd")).toBeUndefined();
+  expect(await store.removeOutboundRequest("clawd", first.requestId)).toBe(true);
+  expect([await first.status(), await second.status()]).toEqual(["superseded", "current"]);
+  expect(await store.removeOutboundRequest("clawd", second.requestId)).toBe(true);
+  expect(await store.hasOutboundRequest("clawd")).toBe(false);
+  await expect(second.status()).rejects.toThrow("already consumed");
+  const closed = await store.beginRequest("clawd");
+  closed.close();
+  await expect(closed.remove()).rejects.toThrow("already consumed");
+  expect(await store.hasOutboundRequest("clawd")).toBe(true);
+});
 
-  it.each(["bodyHash", "textHash", "recipient"] as const)(
-    "refuses to consume a delivery whose %s changed after reading",
-    async (field) => {
-      const id = "01JZ0000000000000000000120";
-      const { store, recipient } = await trustedStore();
-      const binding = { bodyHash: "a".repeat(64), textHash: "b".repeat(64), recipient };
-      await seedDelivery(store, "clawd", id, binding);
-      const settlement = (await store.readOutboundDelivery("clawd", id))!;
-      const raw = deliveryWriter();
-      const changed = {
-        ...settlement.delivery,
-        [field]: field === "recipient" ? reefPeerIdentity(peerTrust()) : "c".repeat(64),
-      };
-      raw.register(`${resolveReefTrustStoreKey(config(), "clawd")}:${id}`, changed);
-
-      expect(await settlement.consume()).toBe("unavailable");
-      const reopened = (await store.readOutboundDelivery("clawd", id))!;
-      expect(reopened.delivery).toEqual(changed);
-      expect(await reopened.consume()).toBe("consumed");
-      expect(await store.readOutboundDelivery("clawd", id)).toBeUndefined();
-    },
-  );
-
-  it("revokes captured peer authority on sanctioned writes without another worker request", async () => {
-    const { store } = await trustedStore();
-    const observed = (await store.observePeer("clawd"))!;
-    workerCommands = [];
-    observed.assertCurrent();
-    expect(workerCommands).toHaveLength(0);
-
-    nativePeerWriter().register(resolveReefTrustStoreKey(config(), "clawd"), { revision: 2 });
-    expect(() => observed.assertCurrent()).toThrow();
-    expect(workerCommands).toHaveLength(0);
-    expect(await store.get("clawd")).toBeUndefined();
-  });
-
-  it("rejects a borrowed delivery read after channel closure", async () => {
-    const authority = new AbortController();
-    const revoked = new Error("delivery authority closed");
-    const store = openReefTrustStore(runtime(), config(), () => authority.signal.throwIfAborted());
-    await store.set("clawd", peerTrust());
-    nextOperationRead = () => authority.abort(revoked);
-    await expect(store.readOutboundDelivery("clawd", "01JZ0000000000000000000136")).rejects.toBe(
-      revoked,
-    );
-  });
-
-  it("preserves a rejection written after the accepted receipt read", async () => {
-    const id = "01JZ0000000000000000000137";
-    const { store } = await deliveryFixture(id);
-    const accepted = (await store.readOutboundDelivery("clawd", id))!;
+it.each(["bodyHash", "textHash", "recipient"] as const)(
+  "refuses to consume a delivery whose %s changed after reading",
+  async (field) => {
+    const { store } = await deliveryFixture(id, {}, { textHash: "b".repeat(64) });
+    const settlement = (await store.readOutboundDelivery("clawd", id))!;
     const raw = deliveryWriter();
-    raw.register(`${resolveReefTrustStoreKey(config(), "clawd")}:${id}`, {
-      ...accepted.delivery,
-      rejection: { category: "guard_deny" },
-    });
-
-    expect(await accepted.consume()).toBe("rejected");
-    expect((await store.readOutboundDelivery("clawd", id))?.delivery.rejection).toEqual({
-      category: "guard_deny",
-    });
-  });
-
-  it.each(["snapshot", "list"] as const)(
-    "rejects a borrowed %s result after channel closure",
-    async (read) => {
-      const authority = new AbortController();
-      const revoked = new Error("read authority closed");
-      const store = openReefTrustStore(runtime(), config(), () =>
-        authority.signal.throwIfAborted(),
-      );
-      nextOperationRead = () => authority.abort(revoked);
-      await expect(read === "list" ? store.list() : store.snapshot("clawd")).rejects.toBe(revoked);
-    },
-  );
-
-  it("refuses an unaccepted removal and consumes accepted cleanup once", async () => {
-    const persisted = openReefTrustStore(runtime(), config());
-    await persisted.set("clawd", peerTrust());
-    const before = await persisted.snapshot("clawd");
-    let active = true;
-    const revoked = new Error("removal authority closed");
-    const store = openReefTrustStore(runtime(), config(), () => {
-      if (!active) {
-        throw revoked;
-      }
-    });
-    await expect(
-      store.beginRemoval("clawd", () => {
-        throw revoked;
-      }),
-    ).rejects.toBe(revoked);
-    active = false;
-    await expect(store.beginRemoval("clawd")).rejects.toBe(revoked);
-    expect(await persisted.snapshot("clawd")).toEqual(before);
-
-    active = true;
-    const settle = await store.beginRemoval("clawd");
-    active = false;
-    (await persisted.beginRequest("clawd")).close();
-    await settle();
-    expect(await persisted.hasOutboundRequest("clawd")).toBe(false);
-    (await persisted.beginRequest("clawd")).close();
-    await expect(settle()).rejects.toThrow("already consumed");
-    expect(await persisted.hasOutboundRequest("clawd")).toBe(true);
-  });
-
-  it("keeps rejection notices durable until the sender agent consumes them", async () => {
-    const id = "01JZ0000000000000000000121";
-    const bodyHash = "a".repeat(64);
-    const { store, recipient } = await trustedStore();
-    const textHash = "c".repeat(64);
-    const binding = { bodyHash, textHash, recipient };
-    await seedDelivery(store, "clawd", id, binding);
-
-    expect(await rejectDelivery(store, "clawd", id)).toMatchObject({ category: "guard_deny" });
-
-    const reopened = openReefTrustStore(runtime(), config());
-    expect(await reopened.pendingOutboundRejections()).toMatchObject([
-      { id, peer: "clawd", recipient, textHash, category: "guard_deny" },
-    ]);
-    expect(await (await reopened.readOutboundDelivery("clawd", id))!.consume()).toBe("rejected");
-    const noticeState = { lastRejectionAt: 10_000, lastResendAt: 10_100 };
-    const recovery = (await reopened.readOutboundDelivery("clawd", id))!.recovery;
-    workerCommands = [];
-    expect(await recovery.reserve(noticeState)).toEqual({
-      kind: "reserved",
-    });
-    expect(workerCommands).toHaveLength(1);
-    recovery.assertCurrent();
-    expect(workerCommands).toHaveLength(1);
-    expect(await reopened.pendingOutboundRejections()).toMatchObject([
-      {
-        id,
-        peer: "clawd",
-        recipient,
-        textHash,
-        category: "guard_deny",
-        reservedNotice: noticeState,
-      },
-    ]);
-    workerCommands = [];
-    expect(await recovery.complete(noticeState)).toBe(true);
-    expect(workerCommands).toHaveLength(1);
-    expect(await reopened.pendingOutboundRejections()).toMatchObject([]);
-    expect(await reopened.readOutboundDelivery("clawd", id)).toBeUndefined();
-    expect(await reopened.rejectionNoticeState("clawd")).toEqual(noticeState);
-    expect(await recovery.complete(noticeState)).toBe(true);
-  });
-
-  it("marks imported delivery rejections stop-only in the atomic receipt update", async () => {
-    const id = "01JZ0000000000000000000129";
-    const { store, recipient } = await deliveryFixture(id, { resendDisabled: true });
-
-    expect(await rejectDelivery(store, "clawd", id)).toMatchObject({ category: "guard_deny" });
-    expect(await store.pendingOutboundRejections()).toMatchObject([
-      {
-        id,
-        peer: "clawd",
-        recipient,
-        category: "guard_deny",
-        reservedNotice: { lastRejectionAt: expect.any(Number) },
-      },
-    ]);
-  });
-
-  it("rejects recovery if peer keys change before rejection reservation", async () => {
-    const id = "01JZ0000000000000000000124";
-    const { store } = await deliveryFixture(id);
-    await rejectDelivery(store, "clawd", id);
-
-    const selected = (await store.pendingOutboundRejections())[0];
-    if (!selected) {
-      throw new Error("Expected a pending rejection before peer keys change");
-    }
-    const previous = await store.snapshot("clawd");
-    const writer = nativePeerWriter();
-    beforeNextOperationWrite(() =>
-      writer.register(resolveReefTrustStoreKey(config(), "clawd"), {
-        ...previous,
-        revision: previous.revision + 1,
-        trust: peerTrust(),
-      }),
-    );
-    await expect(
-      selected.recovery.reserve({
-        lastRejectionAt: 10_000,
-      }),
-    ).rejects.toThrow("changed keys before rejection recovery");
-    expect(await store.pendingOutboundRejections()).toMatchObject([]);
-    expect(
-      (await store.readOutboundDelivery("clawd", id))?.delivery.rejection?.notice,
-    ).toBeUndefined();
-  });
-
-  it.each(["overdue", "rejections"] as const)(
-    "observes sanctioned sibling writes between %s scans",
-    async (kind) => {
-      const now = Date.now();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      onTestFinished(() => clock.mockRestore());
-      const mockRuntime = runtime();
-      const store = openReefTrustStore(mockRuntime, config());
-      const trust = peerTrust();
-      const recipient = reefPeerIdentity(trust);
-      const binding = { bodyHash: "a".repeat(64), recipient };
-      await store.set("clawd", trust);
-      await store.set("other", trust);
-      await store.set("stranger", trust);
-      const peers = ["clawd", "clawd", "other", "stranger", "clawd", "other", "stranger"];
-      const ids = peers.map((_, index) => String(index + 1).padStart(26, "0"));
-      for (const [index, peer] of peers.entries()) {
-        clock.mockReturnValue(now + index);
-        const id = ids[index];
-        if (!id) {
-          throw new Error("Missing fixture delivery id");
-        }
-        await seedDelivery(store, peer, id, binding);
-        if (kind === "rejections") {
-          await rejectDelivery(store, peer, id);
-        }
-      }
-      await store.remove("stranger");
-      const scan = async () =>
-        kind === "overdue"
-          ? await store.overdueOutboundDeliveries(600_000, Date.now() + 601_000)
-          : await store.pendingOutboundRejections();
-      expect((await scan()).map((entry) => entry.id)).toEqual([
-        ids[0],
-        ids[1],
-        ids[2],
-        ids[4],
-        ids[5],
-      ]);
-      const writer = nativePeerWriter();
-      writer.register(resolveReefTrustStoreKey(config(), "clawd"), { revision: 2 });
-      expect((await scan()).map((entry) => entry.id)).toEqual([ids[2], ids[5]]);
-      writer.register(resolveReefTrustStoreKey(config(), "stranger"), { revision: 1, trust });
-      expect((await scan()).map((entry) => entry.id)).toEqual([ids[2], ids[3], ids[5], ids[6]]);
-      writer.register(resolveReefTrustStoreKey(config(), "other"), {
-        revision: 2,
-        trust: { ...trust, safetyNumberChanged: true },
-      });
-      expect((await scan()).map((entry) => entry.id)).toEqual([ids[3], ids[6]]);
-    },
-  );
-
-  it("preserves concurrent completion, peer updates and restart-stable notice cooldowns", async () => {
-    const latestId = "01JZ0000000000000000000122";
-    const { store, recipient } = await deliveryFixture(latestId);
-    await rejectDelivery(store, "clawd", latestId);
-    const latestState = {
-      lastRejectionAt: 10_000,
-      lastResendAt: 10_100,
+    const changed = {
+      ...settlement.delivery,
+      [field]: field === "recipient" ? reefPeerIdentity(peerTrust()) : "c".repeat(64),
     };
-    const latestRecovery = (await store.readOutboundDelivery("clawd", latestId))!.recovery;
-    await latestRecovery.reserve(latestState);
-    const reopened = openReefTrustStore(runtime(), config());
+    raw.register(`${peerKey()}:${id}`, changed);
 
-    const olderId = "01JZ0000000000000000000123";
-    const olderBinding = { bodyHash: "b".repeat(64), recipient };
-    await seedDelivery(reopened, "clawd", olderId, olderBinding);
-    await rejectDelivery(reopened, "clawd", olderId);
-    const olderState = {
-      lastRejectionAt: 9_000,
-      lastResendAt: 9_100,
-    };
-    const olderRecovery = (await reopened.readOutboundDelivery("clawd", olderId))!.recovery;
-    await olderRecovery.reserve(olderState);
-    beforeNextOperationWrite(async () => {
-      await latestRecovery.complete(latestState);
-      await store.setAutonomy("clawd", "extended");
-    });
-    expect(await olderRecovery.complete(olderState)).toBe(true);
-    expect(await reopened.get("clawd")).toMatchObject({ autonomy: "extended" });
-    expect(await reopened.readOutboundDelivery("clawd", latestId)).toBeUndefined();
-    expect(await reopened.readOutboundDelivery("clawd", olderId)).toBeUndefined();
-    expect(await reopened.rejectionNoticeState("clawd")).toEqual({
-      lastRejectionAt: 10_000,
-      lastResendAt: 10_100,
-    });
+    expect(await settlement.consume()).toBe("unavailable");
+    const reopened = (await store.readOutboundDelivery("clawd", id))!;
+    expect(reopened.delivery).toEqual(changed);
+    expect(await reopened.consume()).toBe("consumed");
+    expect(await store.readOutboundDelivery("clawd", id)).toBeUndefined();
+  },
+);
+
+it("revokes captured peer authority on sanctioned writes without another worker request", async () => {
+  const { store } = await trustedStore();
+  const observed = (await store.observePeer("clawd"))!;
+  workerCommands = [];
+  observed.assertCurrent();
+  expect(workerCommands).toHaveLength(0);
+
+  nativePeerWriter().register(peerKey(), { revision: 2 });
+  expect(() => observed.assertCurrent()).toThrow();
+  expect(workerCommands).toHaveLength(0);
+  expect(await store.get("clawd")).toBeUndefined();
+});
+
+it("preserves a rejection written after the accepted receipt read", async () => {
+  const { store } = await deliveryFixture(id);
+  const accepted = (await store.readOutboundDelivery("clawd", id))!;
+  const raw = deliveryWriter();
+  raw.register(`${peerKey()}:${id}`, {
+    ...accepted.delivery,
+    rejection: { category: "guard_deny" },
   });
 
-  it("rejects autonomy updates for untrusted or invalid peers", async () => {
-    const store = openReefTrustStore(runtime(), config());
+  expect(await accepted.consume()).toBe("rejected");
+  const current = await store.readOutboundDelivery("clawd", id);
+  expect(current?.delivery.rejection).toEqual({ category: "guard_deny" });
+});
 
-    await expect(store.setAutonomy("clawd", "notify-only")).rejects.toThrow("not locally trusted");
-    await expect(store.get("not a handle")).rejects.toThrow("Invalid Reef peer handle");
-  });
-
-  it.each([
-    ["channel", "autonomy"],
-    ["owner", "autonomy"],
-    ["channel", "removal"],
-    ["owner", "removal"],
-    ["channel", "request"],
-    ["owner", "request"],
-  ] as const)(
-    "rejects %s-authorized %s after revocation during worker preparation",
-    async (authority, action) => {
-      let current = true;
-      const revoked = new Error("trust authority revoked");
-      const assertCurrent = () => {
-        if (!current) {
-          throw revoked;
-        }
-      };
-      const store = openReefTrustStore(
-        runtime(),
-        config(),
-        authority === "channel" ? assertCurrent : undefined,
-      );
+it.each(["snapshot", "list", "delivery"] as const)(
+  "rejects a borrowed %s result after channel closure",
+  async (read) => {
+    const authority = revocableAuthority();
+    const store = newStore("molty", undefined, authority.assertCurrent);
+    if (read === "delivery") {
       await store.set("clawd", peerTrust());
-      beforeNextOperationWrite(() => {
-        current = false;
-      });
+    }
+    nextOperationRead = () => authority.setCurrent(false);
+    const result =
+      read === "delivery"
+        ? store.readOutboundDelivery("clawd", id)
+        : read === "list"
+          ? store.list()
+          : store.snapshot("clawd");
+    await expect(result).rejects.toBe(authority.revoked);
+  },
+);
 
-      await expect(
-        action === "autonomy"
-          ? store.setAutonomy(
-              "clawd",
-              "extended",
-              authority === "owner" ? assertCurrent : undefined,
-            )
-          : action === "removal"
-            ? store.beginRemoval("clawd", authority === "owner" ? assertCurrent : undefined)
-            : store.beginRequest("clawd", 123, authority === "owner" ? assertCurrent : undefined),
-      ).rejects.toBe(revoked);
-      expect(await openReefTrustStore(runtime(), config()).get("clawd")).toMatchObject({
-        autonomy: "bounded",
-      });
-    },
-  );
+it("refuses an unaccepted removal and consumes accepted cleanup once", async () => {
+  const { store: persisted } = await trustedStore();
+  const before = await persisted.snapshot("clawd");
+  const { revoked, assertCurrent, setCurrent } = revocableAuthority();
+  const store = newStore("molty", undefined, assertCurrent);
+  await expect(
+    store.beginRemoval("clawd", () => {
+      throw revoked;
+    }),
+  ).rejects.toBe(revoked);
+  setCurrent(false);
+  await expect(store.beginRemoval("clawd")).rejects.toBe(revoked);
+  expect(await persisted.snapshot("clawd")).toEqual(before);
 
-  it("updates autonomy atomically without overwriting concurrent safety state", async () => {
-    const { store } = await trustedStore();
-    const beforeSafetyChange = await store.snapshot("clawd");
+  setCurrent(true);
+  const settle = await store.beginRemoval("clawd");
+  setCurrent(false);
+  (await persisted.beginRequest("clawd")).close();
+  await settle();
+  expect(await persisted.hasOutboundRequest("clawd")).toBe(false);
+  (await persisted.beginRequest("clawd")).close();
+  await expect(settle()).rejects.toThrow("already consumed");
+  expect(await persisted.hasOutboundRequest("clawd")).toBe(true);
+});
 
-    await store.setAutonomy("clawd", "extended");
-    expect(await store.markSafetyNumberChanged("clawd", beforeSafetyChange.revision)).toBe(true);
+it("keeps rejection notices durable until the sender agent consumes them", async () => {
+  const textHash = "c".repeat(64);
+  const { store, recipient } = await deliveryFixture(id, {}, { textHash });
 
-    expect(await store.get("clawd")).toMatchObject({
-      autonomy: "extended",
-      safetyNumberChanged: true,
-    });
-  });
+  expect(await rejectDelivery(store, "clawd", id)).toMatchObject({ category: "guard_deny" });
 
-  it("preserves a concurrent autonomy update when repinning peer keys", async () => {
-    const { store } = await trustedStore();
-    const beforeRepin = await store.snapshot("clawd");
-    const friend = relayFriend();
+  const reopened = newStore();
+  const expected = { id, peer: "clawd", recipient, textHash, category: "guard_deny" };
+  expect(await reopened.pendingOutboundRejections()).toMatchObject([expected]);
+  expect(await (await reopened.readOutboundDelivery("clawd", id))!.consume()).toBe("rejected");
+  const recovery = (await reopened.readOutboundDelivery("clawd", id))!.recovery;
+  workerCommands = [];
+  expect(await recovery.reserve(noticeState)).toEqual({ kind: "reserved" });
+  expect(workerCommands).toHaveLength(1);
+  recovery.assertCurrent();
+  expect(workerCommands).toHaveLength(1);
+  expect(await reopened.pendingOutboundRejections()).toMatchObject([
+    { ...expected, reservedNotice: noticeState },
+  ]);
+  workerCommands = [];
+  expect(await recovery.complete(noticeState)).toBe(true);
+  expect(workerCommands).toHaveLength(1);
+  expect(await reopened.pendingOutboundRejections()).toMatchObject([]);
+  expect(await reopened.readOutboundDelivery("clawd", id)).toBeUndefined();
+  expect(await reopened.rejectionNoticeState("clawd")).toEqual(noticeState);
+  expect(await recovery.complete(noticeState)).toBe(true);
+});
 
-    await store.setAutonomy("clawd", "notify-only");
-    expect(
-      await store.commitPeerTrust(friend, { expectedRevision: beforeRepin.revision }, 123),
-    ).toBe(true);
+it("marks imported delivery rejections stop-only in the atomic receipt update", async () => {
+  const { store, recipient } = await deliveryFixture(id, { resendDisabled: true });
 
-    expect(await store.get("clawd")).toMatchObject({
-      autonomy: "notify-only",
-      ed25519PublicKey: friend.ed25519_pub,
-      approvedAt: 123,
-    });
-  });
-
-  it("rejects a stale trust commit after local revocation", async () => {
-    const store = openReefTrustStore(runtime(), config());
-    const request = await store.beginRequest("clawd", 123);
-    request.close();
-    const requestId = request.requestId;
-    const beforeRemoval = await store.snapshot("clawd");
-
-    workerCommands = [];
-    await store.remove("clawd");
-    expect(workerCommands).toHaveLength(1);
-
-    workerCommands = [];
-    expect(
-      await store.commitPeerTrust(relayFriend(), {
-        expectedRevision: beforeRemoval.revision,
-        expectedOutboundRequestId: requestId,
-      }),
-    ).toBe(false);
-    expect(workerCommands).toHaveLength(1);
-    expect(await store.get("clawd")).toBeUndefined();
-    expect(await store.hasOutboundRequest("clawd")).toBe(false);
-  });
-
-  it("binds pairing approvals to the relay identity and exact peer keys", async () => {
-    const friend: RelayFriend = {
-      ...relayFriend("clawd", 2),
-      status: "pending",
-      initiated_by: "clawd",
-    };
-    const molty = openReefTrustStore(runtime(), config("molty"));
-    const token = molty.createPairingApproval(friend, (await molty.snapshot(friend.peer)).revision);
-
-    expect(isReefPairingApprovalToken(token)).toBe(true);
-    expect(molty.parsePairingApproval(token)).toEqual({
+  expect(await rejectDelivery(store, "clawd", id)).toMatchObject({ category: "guard_deny" });
+  expect(await store.pendingOutboundRejections()).toMatchObject([
+    {
+      id,
       peer: "clawd",
-      keyEpoch: 2,
-      trustRevision: 0,
-    });
-    expect(await molty.matchesPairingApproval(token, friend)).toBe(true);
-    expect(openReefTrustStore(runtime(), config("other")).parsePairingApproval(token)).toBe(
-      undefined,
-    );
-    expect(
-      await molty.matchesPairingApproval(token, { ...friend, ed25519_pub: "C".repeat(43) }),
-    ).toBe(false);
+      recipient,
+      category: "guard_deny",
+      reservedNotice: { lastRejectionAt: expect.any(Number) },
+    },
+  ]);
+});
 
-    await molty.remove("clawd");
-    expect(await molty.matchesPairingApproval(token, friend)).toBe(false);
+it("rejects recovery if peer keys change before rejection reservation", async () => {
+  const { store } = await deliveryFixture(id);
+  await rejectDelivery(store, "clawd", id);
+
+  const selected = (await store.pendingOutboundRejections())[0]!;
+  const previous = await store.snapshot("clawd");
+  const writer = nativePeerWriter();
+  beforeNextOperationWrite(() =>
+    writer.register(peerKey(), {
+      ...previous,
+      revision: previous.revision + 1,
+      trust: peerTrust(),
+    }),
+  );
+  await expect(selected.recovery.reserve({ lastRejectionAt: 10_000 })).rejects.toThrow(
+    "changed keys before rejection recovery",
+  );
+  expect(await store.pendingOutboundRejections()).toMatchObject([]);
+  expect(
+    (await store.readOutboundDelivery("clawd", id))?.delivery.rejection?.notice,
+  ).toBeUndefined();
+});
+
+it.each(["overdue", "rejections"] as const)(
+  "observes sanctioned sibling writes between %s scans",
+  async (kind) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const { store, trustedPeer: trust, recipient } = await trustedStore();
+    const binding = { bodyHash: "a".repeat(64), recipient };
+    await store.set("other", trust);
+    await store.set("stranger", trust);
+    const peers = ["clawd", "clawd", "other", "stranger", "clawd", "other", "stranger"];
+    const ids = peers.map((_, index) => String(index + 1).padStart(26, "0"));
+    for (const [index, peer] of peers.entries()) {
+      clock.mockReturnValue(now + index);
+      const deliveryId = ids[index]!;
+      await seedDelivery(store, peer, deliveryId, binding);
+      if (kind === "rejections") {
+        await rejectDelivery(store, peer, deliveryId);
+      }
+    }
+    await store.remove("stranger");
+    const scan = async () =>
+      kind === "overdue"
+        ? await store.overdueOutboundDeliveries(600_000, Date.now() + 601_000)
+        : await store.pendingOutboundRejections();
+    expect((await scan()).map((entry) => entry.id)).toEqual(
+      ids.filter((_, i) => i !== 3 && i !== 6),
+    );
+    const writer = nativePeerWriter();
+    writer.register(peerKey(), { revision: 2 });
+    expect((await scan()).map((entry) => entry.id)).toEqual([ids[2], ids[5]]);
+    writer.register(resolveReefTrustStoreKey(config(), "stranger"), { revision: 1, trust });
+    expect((await scan()).map((entry) => entry.id)).toEqual([ids[2], ids[3], ids[5], ids[6]]);
+    writer.register(resolveReefTrustStoreKey(config(), "other"), {
+      revision: 2,
+      trust: { ...trust, safetyNumberChanged: true },
+    });
+    expect((await scan()).map((entry) => entry.id)).toEqual([ids[3], ids[6]]);
+  },
+);
+
+it("preserves concurrent completion, peer updates and restart-stable notice cooldowns", async () => {
+  const latestId = "01JZ0000000000000000000122";
+  const { store, recipient } = await deliveryFixture(latestId);
+  await rejectDelivery(store, "clawd", latestId);
+  const latestState = noticeState;
+  const latestRecovery = (await store.readOutboundDelivery("clawd", latestId))!.recovery;
+  await latestRecovery.reserve(latestState);
+  const reopened = newStore();
+
+  const olderId = "01JZ0000000000000000000123";
+  const olderBinding = { bodyHash: "b".repeat(64), recipient };
+  await seedDelivery(reopened, "clawd", olderId, olderBinding);
+  await rejectDelivery(reopened, "clawd", olderId);
+  const olderState = { lastRejectionAt: 9_000, lastResendAt: 9_100 };
+  const olderRecovery = (await reopened.readOutboundDelivery("clawd", olderId))!.recovery;
+  await olderRecovery.reserve(olderState);
+  beforeNextOperationWrite(async () => {
+    await latestRecovery.complete(latestState);
+    await store.setAutonomy("clawd", "extended");
+  });
+  expect(await olderRecovery.complete(olderState)).toBe(true);
+  expect(await reopened.get("clawd")).toMatchObject({ autonomy: "extended" });
+  expect(await reopened.readOutboundDelivery("clawd", latestId)).toBeUndefined();
+  expect(await reopened.readOutboundDelivery("clawd", olderId)).toBeUndefined();
+  expect(await reopened.rejectionNoticeState("clawd")).toEqual(latestState);
+});
+
+it("rejects autonomy updates for untrusted or invalid peers", async () => {
+  const store = newStore();
+
+  await expect(store.setAutonomy("clawd", "notify-only")).rejects.toThrow("not locally trusted");
+  await expect(store.get("not a handle")).rejects.toThrow("Invalid Reef peer handle");
+});
+
+it.each([
+  ["channel", "autonomy"],
+  ["owner", "autonomy"],
+  ["channel", "removal"],
+  ["owner", "removal"],
+  ["channel", "request"],
+  ["owner", "request"],
+] as const)(
+  "rejects %s-authorized %s after revocation during worker preparation",
+  async (authority, action) => {
+    const { revoked, assertCurrent, setCurrent } = revocableAuthority();
+    const owner = authority === "owner" ? assertCurrent : undefined;
+    const store = newStore("molty", undefined, authority === "channel" ? assertCurrent : undefined);
+    await store.set("clawd", peerTrust());
+    beforeNextOperationWrite(() => setCurrent(false));
+
+    await expect(
+      action === "autonomy"
+        ? store.setAutonomy("clawd", "extended", owner)
+        : action === "removal"
+          ? store.beginRemoval("clawd", owner)
+          : store.beginRequest("clawd", 123, owner),
+    ).rejects.toBe(revoked);
+    expect(await newStore().get("clawd")).toMatchObject({ autonomy: "bounded" });
+  },
+);
+
+it("updates autonomy atomically without overwriting concurrent safety state", async () => {
+  const { store } = await trustedStore();
+  const beforeSafetyChange = await store.snapshot("clawd");
+
+  await store.setAutonomy("clawd", "extended");
+  expect(await store.markSafetyNumberChanged("clawd", beforeSafetyChange.revision)).toBe(true);
+
+  expect(await store.get("clawd")).toMatchObject({
+    autonomy: "extended",
+    safetyNumberChanged: true,
   });
 });
 
-describe("ReefTrustStore overdue outbound deliveries", () => {
-  const OVERDUE_MS = 10 * 60 * 1_000;
+it("preserves a concurrent autonomy update when repinning peer keys", async () => {
+  const { store } = await trustedStore();
+  const beforeRepin = await store.snapshot("clawd");
+  const friend = relayFriend();
 
-  it("reports an unacknowledged delivery overdue exactly once", async () => {
-    const id = "01JZ0000000000000000000140";
-    const { store, recipient } = await trustedStore();
-    const binding = {
-      bodyHash: "a".repeat(64),
-      textHash: "b".repeat(64),
-      recipient,
-    };
-    await seedDelivery(store, "clawd", id, binding);
+  await store.setAutonomy("clawd", "notify-only");
+  expect(await store.commitPeerTrust(friend, { expectedRevision: beforeRepin.revision }, 123)).toBe(
+    true,
+  );
 
-    expect(await store.overdueOutboundDeliveries(OVERDUE_MS)).toEqual([]);
-    const later = Date.now() + OVERDUE_MS + 1_000;
-    expect(await store.overdueOutboundDeliveries(OVERDUE_MS, later)).toMatchObject([
-      { peer: "clawd", id },
-    ]);
+  expect(await store.get("clawd")).toMatchObject({
+    autonomy: "notify-only",
+    ed25519PublicKey: friend.ed25519_pub,
+    approvedAt: 123,
+  });
+});
 
-    expect(await store.markOutboundDeliveryOverdueNotified("clawd", id)).toBe(true);
-    expect(await store.markOutboundDeliveryOverdueNotified("clawd", id)).toBe(false);
-    expect(await store.overdueOutboundDeliveries(OVERDUE_MS, later)).toEqual([]);
+it("rejects a stale trust commit after local revocation", async () => {
+  const store = newStore();
+  const request = await store.beginRequest("clawd", 123);
+  request.close();
+  const requestId = request.requestId;
+  const beforeRemoval = await store.snapshot("clawd");
+
+  workerCommands = [];
+  await store.remove("clawd");
+  expect(workerCommands).toHaveLength(1);
+
+  workerCommands = [];
+  expect(
+    await store.commitPeerTrust(relayFriend(), {
+      expectedRevision: beforeRemoval.revision,
+      expectedOutboundRequestId: requestId,
+    }),
+  ).toBe(false);
+  expect(workerCommands).toHaveLength(1);
+  expect(await store.get("clawd")).toBeUndefined();
+  expect(await store.hasOutboundRequest("clawd")).toBe(false);
+});
+
+it("binds pairing approvals to the relay identity and exact peer keys", async () => {
+  const friend: RelayFriend = {
+    ...relayFriend("clawd", 2),
+    status: "pending",
+    initiated_by: "clawd",
+  };
+  const molty = newStore();
+  const token = molty.createPairingApproval(friend, (await molty.snapshot(friend.peer)).revision);
+
+  expect(isReefPairingApprovalToken(token)).toBe(true);
+  expect(molty.parsePairingApproval(token)).toEqual({
+    peer: "clawd",
+    keyEpoch: 2,
+    trustRevision: 0,
+  });
+  expect(await molty.matchesPairingApproval(token, friend)).toBe(true);
+  expect(newStore("other").parsePairingApproval(token)).toBeUndefined();
+  expect(
+    await molty.matchesPairingApproval(token, { ...friend, ed25519_pub: "C".repeat(43) }),
+  ).toBe(false);
+
+  await molty.remove("clawd");
+  expect(await molty.matchesPairingApproval(token, friend)).toBe(false);
+});
+
+it("reports an unacknowledged delivery overdue exactly once", async () => {
+  const { store } = await deliveryFixture(id, {}, { textHash: "b".repeat(64) });
+
+  expect(await store.overdueOutboundDeliveries(overdueMs)).toEqual([]);
+  const later = Date.now() + overdueMs + 1_000;
+  expect(await store.overdueOutboundDeliveries(overdueMs, later)).toMatchObject([
+    { peer: "clawd", id },
+  ]);
+
+  expect(await store.markOutboundDeliveryOverdueNotified("clawd", id)).toBe(true);
+  expect(await store.markOutboundDeliveryOverdueNotified("clawd", id)).toBe(false);
+  expect(await store.overdueOutboundDeliveries(overdueMs, later)).toEqual([]);
+});
+
+it("excludes rejected and unpinned deliveries from the overdue sweep", async () => {
+  const rejectedId = "01JZ0000000000000000000141";
+  const { store, trustedPeer, recipient } = await deliveryFixture(
+    rejectedId,
+    {},
+    { bodyHash: "c".repeat(64) },
+  );
+  const later = Date.now() + overdueMs + 1_000;
+  expect(await rejectDelivery(store, "clawd", rejectedId)).toMatchObject({
+    category: "guard_deny",
   });
 
-  it("excludes rejected and unpinned deliveries from the overdue sweep", async () => {
-    const { store, trustedPeer, recipient } = await trustedStore();
-    const later = Date.now() + OVERDUE_MS + 1_000;
+  const unpinnedId = "01JZ0000000000000000000142";
+  await store.set("stranger", trustedPeer);
+  await seedDelivery(store, "stranger", unpinnedId, { bodyHash: "d".repeat(64), recipient });
+  await store.remove("stranger");
 
-    const rejectedId = "01JZ0000000000000000000141";
-    const rejectedBinding = {
-      bodyHash: "c".repeat(64),
-      recipient,
-    };
-    await seedDelivery(store, "clawd", rejectedId, rejectedBinding);
-    expect(await rejectDelivery(store, "clawd", rejectedId)).toMatchObject({
-      category: "guard_deny",
-    });
-
-    const unpinnedId = "01JZ0000000000000000000142";
-    await store.set("stranger", trustedPeer);
-    await seedDelivery(store, "stranger", unpinnedId, {
-      bodyHash: "d".repeat(64),
-      recipient,
-    });
-    await store.remove("stranger");
-
-    expect(await store.overdueOutboundDeliveries(OVERDUE_MS, later)).toEqual([]);
-    expect(await store.markOutboundDeliveryOverdueNotified("clawd", rejectedId)).toBe(false);
-  });
+  expect(await store.overdueOutboundDeliveries(overdueMs, later)).toEqual([]);
+  expect(await store.markOutboundDeliveryOverdueNotified("clawd", rejectedId)).toBe(false);
 });
