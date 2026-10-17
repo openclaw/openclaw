@@ -17,6 +17,10 @@ import {
 } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  expectNoCalls,
+  expectPartialCall,
+} from "../daemon-cli/lifecycle-assertions.test-support.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
   completePostCorePluginUpdate,
@@ -67,6 +71,7 @@ export function createRetainedCleanupFixture() {
 }
 
 export function registerAbandonedRepairHistoryTests(): void {
+  const notes = vi.mocked(note);
   it.each([false, true])(
     "acknowledges aged abandoned history only after successful repair (failed=%s)",
     async (failed) => {
@@ -89,7 +94,7 @@ export function registerAbandonedRepairHistoryTests(): void {
           "Update history",
         );
       }
-      vi.mocked(note).mockClear();
+      notes.mockClear();
       if (failed) {
         vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
           new Error("Doctor failed"),
@@ -122,9 +127,7 @@ export function registerAbandonedRepairHistoryTests(): void {
       }
       await noteStaleUpdateRuns({ migrateState: false });
       expect(
-        vi
-          .mocked(note)
-          .mock.calls.filter(([message]) => String(message).includes("remains abandoned:")),
+        notes.mock.calls.filter(([message]) => String(message).includes("remains abandoned:")),
       ).toHaveLength(failed ? 2 : 0);
     },
   );
@@ -143,32 +146,26 @@ export function registerRepairCustodyTests(mocks: {
     async ({ phase, cleanup }) => {
       const custody = createRetainedCleanupFixture();
       const originalError = new Error("Repair Doctor failed");
-      type Maintenance = ReturnType<typeof createDoctorMaintenanceFixture>;
-      const finish = vi.fn<Maintenance["finish"]>().mockImplementation(async () => {
+      const maintenance = createDoctorMaintenanceFixture();
+      const { finish, release, releaseState } = maintenance;
+      vi.mocked(finish).mockImplementation(async () => {
         if (phase === "restoration") {
           custody.retain();
         }
       });
-      const release = vi.fn<Maintenance["release"]>().mockResolvedValue(undefined);
-      const releaseState = vi.fn<Maintenance["releaseState"]>().mockResolvedValue(undefined);
-      mocks.maintenance.mockResolvedValue(
-        createDoctorMaintenanceFixture({ finish, release, releaseState }),
-      );
+      mocks.maintenance.mockResolvedValue(maintenance);
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
       // Reconciliation is observed; the invocation still uses its real ledger.
       const ledger = await import("../../infra/update-run-ledger.js");
       const reconcile = vi.spyOn(ledger, "reconcileAbandonedUpdateRunsAsync").mockResolvedValue([]);
       const acknowledge = vi.spyOn(ledger, "acknowledgeAbandonedUpdateRun").mockReturnValue(true);
       const expectUnpublished = () => {
-        expect(reconcile).not.toHaveBeenCalled();
-        expect(acknowledge).not.toHaveBeenCalled();
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+        expectNoCalls(reconcile, acknowledge, defaultRuntime.writeJson);
       };
       const expectCustodyHeld = () => {
         expect(finish).toHaveBeenCalledTimes(phase === "restoration" ? 1 : 0);
-        expect(release).not.toHaveBeenCalled();
         expectUnpublished();
-        expect(mocks.triage).not.toHaveBeenCalled();
+        expectNoCalls(release, mocks.triage);
       };
       if (phase === "convergence") {
         vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async () => {
@@ -202,8 +199,7 @@ export function registerRepairCustodyTests(mocks: {
         expectCustodyHeld();
         expect(listUpdateRuns()[0]?.status).not.toBe("succeeded");
       } else {
-        expect(finish).toHaveBeenCalledOnce();
-        expect(finish).toHaveBeenCalledWith(validConfigSnapshot.config);
+        expect(vi.mocked(finish).mock.calls).toEqual([[validConfigSnapshot.config]]);
         const converged = phase === "convergence";
         expect(error).toBe(converged ? undefined : originalError);
         expect(release).toHaveBeenCalledTimes(converged ? 0 : 1);
@@ -215,9 +211,7 @@ export function registerRepairCustodyTests(mocks: {
             runIds: ["synthetic-retained-run"],
           });
           expect(acknowledge).toHaveBeenCalledWith("synthetic-retained-run");
-          expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-            expect.objectContaining({ status: "ok", mode: "finalize" }),
-          );
+          expectPartialCall(defaultRuntime.writeJson, { status: "ok", mode: "finalize" });
         } else {
           expectUnpublished();
         }

@@ -12,9 +12,13 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime as runtime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { VERSION } from "../../version.js";
+import {
+  expectNoCalls,
+  expectPartialCall,
+} from "../daemon-cli/lifecycle-assertions.test-support.js";
 import {
   registerAbandonedRepairHistoryTests,
   registerRepairCustodyTests,
@@ -187,14 +191,14 @@ import { registerConvergenceCompletionTests } from "./update-command-convergence
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
-  completePostCorePluginUpdate,
-  runUpdateFinalizationDoctorInFreshProcess,
+  completePostCorePluginUpdate as completePlugins,
+  runUpdateFinalizationDoctorInFreshProcess as runDoctor,
 } from "./update-command-fresh-doctor.js";
-import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import { updatePluginsAfterCoreUpdate as updatePlugins } from "./update-command-plugins.js";
 import {
-  continuePostCoreUpdateInFreshProcess,
-  writePostCorePluginUpdateResultFile,
-  writePostCoreUpdateFailureFile,
+  continuePostCoreUpdateInFreshProcess as continuePostCore,
+  writePostCorePluginUpdateResultFile as writePluginResult,
+  writePostCoreUpdateFailureFile as writeFailure,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
@@ -251,9 +255,9 @@ describe("update plugin lifecycle lease boundaries", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    vi.mocked(updatePluginsAfterCoreUpdate).mockReset();
-    vi.mocked(completePostCorePluginUpdate).mockReset();
-    vi.mocked(continuePostCoreUpdateInFreshProcess).mockReset();
+    vi.mocked(updatePlugins).mockReset();
+    vi.mocked(completePlugins).mockReset();
+    vi.mocked(continuePostCore).mockReset();
     mocks.verifyGateway
       .mockReset()
       .mockResolvedValue({ ok: false, score: 0, summary: "stopped-free" });
@@ -268,23 +272,23 @@ describe("update plugin lifecycle lease boundaries", () => {
     mocks.interactive = false;
     mocks.triage.mockReset().mockResolvedValue({ status: "completed", hint: "fixture" });
     mocks.maintenance.mockReset().mockResolvedValue(undefined);
-    vi.mocked(writePostCorePluginUpdateResultFile).mockReset().mockResolvedValue(undefined);
-    vi.mocked(writePostCoreUpdateFailureFile).mockReset().mockResolvedValue(undefined);
+    vi.mocked(writePluginResult).mockReset().mockResolvedValue(undefined);
+    vi.mocked(writeFailure).mockReset().mockResolvedValue(undefined);
     const root = dirs.make("update-lease-package-");
     await writePackage(root);
     vi.mocked(resolveUpdateRoot).mockResolvedValue(root);
     vi.mocked(readPackageVersion).mockResolvedValue(VERSION);
-    vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(() =>
+    vi.mocked(continuePostCore).mockImplementation(() =>
       recordResult("target-convergence", {
         resumed: true,
         pluginUpdate: { ...successfulPluginUpdate, changed: false },
       }),
     );
     mocks.readConfig.mockImplementation(() => recordResult("read-config", validConfigSnapshot));
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    vi.spyOn(runtime, "error").mockImplementation(() => undefined);
+    vi.spyOn(runtime, "exit").mockImplementation(() => undefined as never);
+    vi.spyOn(runtime, "log").mockImplementation(() => undefined);
+    vi.spyOn(runtime, "writeJson").mockImplementation(() => undefined);
   });
 
   registerPrivateHandoffBindingTests();
@@ -299,14 +303,14 @@ describe("update plugin lifecycle lease boundaries", () => {
       const failure = new Error(`finalize:${phase} failed`);
       const cleanup = new CommandProcessCleanupError();
       if (returned) {
-        vi.mocked(completePostCorePluginUpdate).mockResolvedValueOnce({
+        vi.mocked(completePlugins).mockResolvedValueOnce({
           configSnapshot: validConfigSnapshot,
           pluginUpdate: { ...successfulPluginUpdate, status: "error" },
         });
       } else if (phase === "plugins") {
-        vi.mocked(updatePluginsAfterCoreUpdate).mockRejectedValueOnce(failure);
+        vi.mocked(updatePlugins).mockRejectedValueOnce(failure);
       } else {
-        vi.mocked(completePostCorePluginUpdate).mockRejectedValueOnce(failure);
+        vi.mocked(completePlugins).mockRejectedValueOnce(failure);
       }
       if (phase === "uncertain") {
         mocks.verifyGateway.mockRejectedValueOnce(cleanup);
@@ -317,31 +321,26 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(hasCommandProcessCleanupError(error)).toBe(true);
         expect(collectNestedErrorCandidates(error)).toContain(cleanup);
         expect(listUpdateRuns()[0]?.status).toBe("running");
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
+        expectNoCalls(runtime.writeJson, mocks.triage);
         return;
       }
       const recovery = { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" };
       if (returned) {
         await expect(command).rejects.toMatchObject({ code: 1 });
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "error", recovery }),
-        );
+        expectPartialCall(runtime.writeJson, { status: "error", recovery });
       } else {
         await expect(command).rejects.toBe(failure);
       }
       expect(mocks.verifyGateway).toHaveBeenCalledOnce();
       expect(listUpdateRuns()[0]).toMatchObject({ status: "failed", verification: { recovery } });
-      expect(mocks.triage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          failure: expect.objectContaining({
-            result: expect.objectContaining({
-              recovery: expect.objectContaining({ service: "healthy" }),
-              ...(returned ? { verification: {} } : {}),
-            }),
+      expectPartialCall(mocks.triage, {
+        failure: expect.objectContaining({
+          result: expect.objectContaining({
+            recovery: expect.objectContaining({ service: "healthy" }),
+            ...(returned ? { verification: {} } : {}),
           }),
         }),
-      );
+      });
     },
   );
 
@@ -362,7 +361,7 @@ describe("update plugin lifecycle lease boundaries", () => {
             })
           : new Error("plugin finalization failed");
       let failedPhase = false;
-      vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
+      vi.mocked(updatePlugins).mockImplementationOnce(async () => {
         failedPhase = true;
         if (operation !== "read") {
           updateLedger.recordUpdateRunVerification(listUpdateRuns()[0]!.runId, {
@@ -408,9 +407,7 @@ describe("update plugin lifecycle lease boundaries", () => {
           },
         });
       }
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining(unavailable.message),
-      );
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unavailable.message));
     },
   );
 
@@ -448,7 +445,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         });
       const message =
         "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
-      vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+      vi.mocked(runDoctor).mockRejectedValueOnce(
         new UpdateDoctorError(message, [{ check: "doctor", code: "doctor-failed", message }], {
           exitCode: 23,
         }),
@@ -465,7 +462,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       await expect(finalize({ json: !interactive, yes: !interactive })).rejects.toThrow(message);
       if (interactive) {
         const body = vi
-          .mocked(defaultRuntime.log)
+          .mocked(runtime.log)
           .mock.calls.map(([value]) => String(value))
           .find((value) => value.startsWith("# OpenClaw update failure report"));
         expect(body).toBeDefined();
@@ -509,9 +506,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       if (inherited) {
         vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", createUpdateRun({ trigger: "cli" }).runId);
       }
-      vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
-        new Error("Doctor failed"),
-      );
+      vi.mocked(runDoctor).mockRejectedValueOnce(new Error("Doctor failed"));
       await expect(finalize()).rejects.toThrow("Doctor failed");
       const run = listUpdateRuns()[0]!;
       expect(run).toMatchObject({
@@ -536,7 +531,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         installedVersion !== VERSION || previousInstallRoot !== "/tmp/openclaw";
       vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
       if (!needsTargetRuntime) {
-        vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(() =>
+        vi.mocked(updatePlugins).mockImplementationOnce(() =>
           recordResult("plugin-update", {
             ...successfulPluginUpdate,
             assessment: { kind: "no-payload-repair" as const },
@@ -555,16 +550,16 @@ describe("update plugin lifecycle lease boundaries", () => {
 
       if (needsTargetRuntime) {
         expect(mocks.events).toEqual(["target-convergence:false"]);
-        expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+        expectNoCalls(updatePlugins);
       } else {
-        expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
+        expectNoCalls(continuePostCore);
         expect(completeSourceUpdateRuntime).toHaveBeenCalledOnce();
         expect(
           mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
         ).toBeLessThan(mocks.events.indexOf("plugin-update:true"));
         expect(mocks.events).toContain("plugin-update:true");
       }
-      expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+      expectNoCalls(completePlugins);
       expect(result.resultWithPostUpdate).toMatchObject({
         status: "skipped",
         reason: "already-current",
@@ -580,7 +575,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       code: "incompatible_plugin_api",
       message: "Plugin requires a newer host API.",
     };
-    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
+    vi.mocked(updatePlugins).mockResolvedValueOnce({
       ...successfulPluginUpdate,
       status: "error",
       assessment: { kind: "unsafe", reason: "convergence-failed" },
@@ -648,15 +643,13 @@ describe("update plugin lifecycle lease boundaries", () => {
         JSON.stringify({ completionOwner: owner, sourceRuntimePrepared }),
       );
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoff, "plugins.json"));
-      vi.mocked(writePostCorePluginUpdateResultFile).mockImplementationOnce(async () => {
+      vi.mocked(writePluginResult).mockImplementationOnce(async () => {
         record("publish-result");
       });
       await resume();
 
       expectLifecycleBoundary(mocks.events, "handoff-records");
-      expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
-        expect.objectContaining({ sourceRuntimePrepared }),
-      );
+      expectPartialCall(completeSourceUpdateRuntime, { sourceRuntimePrepared });
       expect(
         mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
       ).toBeLessThan(mocks.events.indexOf("prepare-config:true"));
@@ -701,12 +694,12 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(finish).toHaveBeenCalledOnce();
         record("publish");
       };
-      vi.mocked(writePostCorePluginUpdateResultFile).mockImplementationOnce(publish);
-      vi.mocked(writePostCoreUpdateFailureFile).mockImplementationOnce(publish);
+      vi.mocked(writePluginResult).mockImplementationOnce(publish);
+      vi.mocked(writeFailure).mockImplementationOnce(publish);
       if (phase === "doctor") {
-        vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(failure);
+        vi.mocked(runDoctor).mockRejectedValueOnce(failure);
       } else if (phase === "plugins") {
-        vi.mocked(updatePluginsAfterCoreUpdate).mockRejectedValueOnce(failure);
+        vi.mocked(updatePlugins).mockRejectedValueOnce(failure);
       }
       const run = resume();
       if (phase === "success") {
@@ -780,11 +773,10 @@ describe("update plugin lifecycle lease boundaries", () => {
           return "completed";
         });
       const error = await custody.settle(finalize({ timeout: "5" }), cleanup, () => {
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+        expectNoCalls(runtime.writeJson, mocks.triage);
         expect(listUpdateRuns()[0]?.status).toBe("running");
-        expect(mocks.triage).not.toHaveBeenCalled();
         if (phase === "preflight") {
-          expect(runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+          expect(runDoctor).not.toHaveBeenCalled();
         }
       });
       if (cleanup === "uncertain") {
@@ -792,8 +784,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         if (failed) {
           expect(collectNestedErrorCandidates(error)).toContain(originalError);
         }
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
+        expectNoCalls(runtime.writeJson, mocks.triage);
         expect(listUpdateRuns()[0]?.status).not.toBe("succeeded");
         if (phase === "recovery") {
           expect(listUpdateRuns()[0]?.status).toBe("running");
@@ -804,9 +795,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(mocks.triage).toHaveBeenCalledOnce();
       } else {
         expect(error).toBeUndefined();
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "ok", mode: "finalize" }),
-        );
+        expectPartialCall(runtime.writeJson, { status: "ok", mode: "finalize" });
         expect(listUpdateRuns()[0]?.status).toBe("succeeded");
       }
     },
@@ -843,16 +832,14 @@ describe("update plugin lifecycle lease boundaries", () => {
         source === "restoration" ? [] : undefined,
       );
 
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "warning",
-          restart: false,
-          postUpdate: expect.objectContaining({
-            doctor: { status: "warning", warnings: [warning] },
-          }),
+      expectPartialCall(runtime.writeJson, {
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: { status: "warning", warnings: [warning] },
         }),
-      );
-      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      });
+      expect(runtime.exit).not.toHaveBeenCalledWith(1);
     },
   );
 });

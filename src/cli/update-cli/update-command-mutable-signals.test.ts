@@ -16,15 +16,13 @@ import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-su
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { updateExecutorNativeEntrypoints as native } from "./update-command-executor-native-runtime.test-support.js";
 import {
   createMutableInterruptionService,
   mutableCompensationFixtureSource,
 } from "./update-command-mutable-signals-compensation.test-support.js";
 
-const sourceImportArgs = resolveRuntimeWorkerUrl(
-  updateExecutorNativeEntrypoints.executor,
-).pathname.endsWith(".ts")
+const sourceImportArgs = resolveRuntimeWorkerUrl(native.executor).pathname.endsWith(".ts")
   ? ["--import", path.resolve("scripts/tsx.mjs")]
   : [];
 
@@ -71,6 +69,16 @@ it.skipIf(process.platform === "win32").for([
         }
         const stateDir = mode.endsWith("-compensation") ? path.join(root, ".openclaw") : root;
         const configPath = path.join(stateDir, "openclaw.json");
+        const displaced = path.join(
+          root,
+          "state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced",
+        );
+        const readRun = (runId: string) =>
+          getUpdateRun(
+            runId,
+            mode === "missing" ? { path: displaced } : { env: { OPENCLAW_STATE_DIR: stateDir } },
+          );
+        const readyz = () => fetch(`http://127.0.0.1:${service?.port}/readyz`);
         const control = path.join(root, "control");
         fs.mkdirSync(control, { mode: 0o700 });
         const binding = createManagedHandoffTestBinding(control);
@@ -92,6 +100,7 @@ it.skipIf(process.platform === "win32").for([
     const gatewayPort = ${JSON.stringify(service?.port)};
     const controlUrl = ${JSON.stringify(service?.controlUrl)};
     const installRoot = ${JSON.stringify(installRoot)};
+    const displaced = ${JSON.stringify(displaced)};
     const sqlite = createRequire(import.meta.url)('node:sqlite');
     const NativeDatabase = sqlite.DatabaseSync;
     const GuardedDatabase = new Proxy(NativeDatabase, { construct(target, args, newTarget) {
@@ -107,19 +116,19 @@ it.skipIf(process.platform === "win32").for([
     sqlite.DatabaseSync = GuardedDatabase;
     syncBuiltinESMExports();
     ${mutableCompensationFixtureSource()}
-    const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease).href)});
+    const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.handoffLease).href)});
     const databasePath = resolveManagedUpdateLeaseDatabasePath();
     assert.equal(databasePath, ${JSON.stringify(binding.databasePath)}, 'private handoff binding missing before admission');
     const { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)});
-    const { createRetainedUpdateRecovery } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)});
+    const { createRetainedUpdateRecovery } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.retainedRecovery).href)});
     const { closeOpenClawStateDatabaseForTest } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)});
-    const { admitUpdateCommandRun, withUpdatePreviewSignals } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)});
-    const { withUpdateCommandExecutor, captureUpdateCommandExecutorAuthority } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)});
-    const { recordUpdateRunStepAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.candidateStepWriter).href)});
-    const { createUpdateCommandExecutionGuards } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executionGuards).href)});
-    const { registerSignalExitBarrier } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)});
-    const { withCliProcessScope, withCliCommandCleanup } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.cliCleanupScope).href)});
-    const { runCliWithExitFinalization } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.oneShotExit).href)});
+    const { admitUpdateCommandRun, withUpdatePreviewSignals } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.commandRun).href)});
+    const { withUpdateCommandExecutor, captureUpdateCommandExecutorAuthority } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.executor).href)});
+    const { recordUpdateRunStepAsync } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.candidateStepWriter).href)});
+    const { createUpdateCommandExecutionGuards } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.executionGuards).href)});
+    const { registerSignalExitBarrier } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.signalExitBarrier).href)});
+    const { withCliProcessScope, withCliCommandCleanup } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.cliCleanupScope).href)});
+    const { runCliWithExitFinalization } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.oneShotExit).href)});
     const opts = {};
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
     const run = await admitUpdateCommandRun({opts, root:installRoot});
@@ -147,8 +156,8 @@ it.skipIf(process.platform === "win32").for([
         const expected = getUpdateRun(run.runId);
         if (mode === 'missing') {
           closeOpenClawStateDatabaseForTest();
-          fs.mkdirSync(root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0');
-          fs.renameSync(root + '/state/openclaw.sqlite',root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced');
+          fs.mkdirSync(path.dirname(displaced));
+          fs.renameSync(root + '/state/openclaw.sqlite', displaced);
         }
         process.channel.ref();
         if (compensationFixture) {
@@ -234,7 +243,7 @@ it.skipIf(process.platform === "win32").for([
           await withUpdatePreviewSignals(currentOptions, hold);
         });
         if(mode==='publishing-compensation'||mode==='rollback-compensation') {
-          const {withUpdateCommandTerminalResult}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.terminal).href)});
+          const {withUpdateCommandTerminalResult}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.terminal).href)});
           try {await withUpdateCommandTerminalResult(register=>{register(run);return execute();},{json:true});}
           catch(error) {process.stderr.write(String(error)+'\\n'+JSON.stringify(error.result)+'\\n');}
         } else {await execute();}
@@ -355,16 +364,14 @@ it.skipIf(process.platform === "win32").for([
           assertManagedHandoffTestConsumer(
             binding,
             child.pid,
-            fileURLToPath(
-              new URL("../", resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease)),
-            ),
+            fileURLToPath(new URL("../", resolveRuntimeWorkerUrl(native.handoffLease))),
           );
           if (mode !== "no-owner") {
             expect(message.executorDatabasePath).toBe(binding.databasePath);
           }
           if (publicationMode) {
             expect(service?.transitions).toEqual(["stopped"]);
-            await expect(fetch(`http://127.0.0.1:${service?.port}/readyz`)).rejects.toThrow();
+            await expect(readyz()).rejects.toThrow();
             if (mode === "publishing-compensation") {
               expect(fs.existsSync(installRoot)).toBe(false);
             } else {
@@ -415,10 +422,8 @@ it.skipIf(process.platform === "win32").for([
               "stopped",
               "restarted 1.0.0",
             ]);
-            const response = await fetch(`http://127.0.0.1:${service?.port}/readyz`);
-            expect(await response.json()).toEqual({ ok: true, version: "1.0.0" });
-            const recorded = getUpdateRun(message.runId, { env: { OPENCLAW_STATE_DIR: stateDir } });
-            expect(recorded).toMatchObject({
+            expect(await (await readyz()).json()).toEqual({ ok: true, version: "1.0.0" });
+            expect(readRun(message.runId)).toMatchObject({
               status: "rolled-back",
               steps: expect.arrayContaining([
                 expect.objectContaining({ step: "activating", termination: "signal", signal }),
@@ -430,16 +435,6 @@ it.skipIf(process.platform === "win32").for([
             expect(stderr).toContain("openclaw update repair");
             return;
           }
-          const options =
-            mode === "missing"
-              ? {
-                  path: path.join(
-                    root,
-                    "state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced",
-                  ),
-                }
-              : { env: { OPENCLAW_STATE_DIR: stateDir } };
-          const readRun = (runId: string) => getUpdateRun(runId, options);
           const actual = readRun(message.runId);
           const expectPendingHistory = (phase: "activating" | "validating") => {
             expect(actual).toMatchObject({

@@ -65,14 +65,12 @@ beforeEach(() => {
   mocks.enabled = true;
   const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   // The service is Windows-shaped; SQLite still opens files on the real host.
-  const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
-  const immutableUri = nodeSqlite.resolveImmutableSqliteFileUri;
-  vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
-    existingUri(pathname, nativePlatform),
-  );
-  vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((pathname) =>
-    immutableUri(pathname, nativePlatform),
-  );
+  for (const name of ["resolveExistingSqliteFileUri", "resolveImmutableSqliteFileUri"] as const) {
+    const resolveUri = nodeSqlite[name];
+    vi.spyOn(nodeSqlite, name).mockImplementation((pathname) =>
+      resolveUri(pathname, nativePlatform),
+    );
+  }
   const readRun = updateLedger.getUpdateRun;
   vi.spyOn(updateLedger, "getUpdateRun").mockImplementation((...args) => {
     const previousPlatform = process.platform;
@@ -158,8 +156,7 @@ it.each([
         stopped.serviceUpdateVerdict.refreshDefinition = false;
       }
       recovery?.beginMutation();
-      expect(running).toBe(false);
-      expect(mocks.enabled).toBe(false);
+      expect({ running, enabled: mocks.enabled }).toEqual({ running: false, enabled: false });
       // Candidate Doctor publishes a schema the retained updater cannot open.
       await closeStateDatabaseForTest();
       const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
