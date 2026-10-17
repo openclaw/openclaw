@@ -17,9 +17,7 @@ import {
 } from "./native-command-reply.js";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
-  loadWebMedia: loadWebMediaMock,
-}));
+vi.mock("openclaw/plugin-sdk/web-media", () => ({ loadWebMedia: loadWebMediaMock }));
 
 function createInteraction() {
   return {
@@ -28,6 +26,36 @@ function createInteraction() {
       .fn<(payload: MessagePayload) => Promise<unknown>>()
       .mockResolvedValue({ ok: true }),
   };
+}
+
+const componentRoute = {
+  accountId: "work",
+  agentId: "assistant",
+  sessionKey: "agent:assistant:discord:direct:owner",
+};
+
+function deliver(
+  params: Omit<
+    Parameters<typeof deliverDiscordInteractionReply>[0],
+    "textLimit" | "preferFollowUp" | "chunkMode"
+  > & { preferFollowUp?: boolean },
+) {
+  return deliverDiscordInteractionReply({
+    textLimit: 2000,
+    preferFollowUp: false,
+    chunkMode: "length",
+    ...params,
+  });
+}
+
+function commandButton(label: string, command: string) {
+  return { label, action: { type: "command" as const, command } };
+}
+
+async function expectUnregistered(ids: string[]) {
+  for (const id of ids) {
+    expect(await resolveDiscordComponentEntryWithPersistence({ id, consume: false })).toBeNull();
+  }
 }
 
 describe("deliverDiscordInteractionReply", () => {
@@ -62,31 +90,19 @@ describe("deliverDiscordInteractionReply", () => {
             {
               type: "buttons",
               buttons: [
-                {
-                  label: "Show all Example models",
-                  action: { type: "command", command: "/login choice token 0" },
-                },
-                {
-                  label: "Keep current restrictions",
-                  action: { type: "command", command: "/login choice token 1" },
-                },
+                commandButton("Show all Example models", "/login choice token 0"),
+                commandButton("Keep current restrictions", "/login choice token 1"),
               ],
             },
           ],
         },
       };
-      const delivery = deliverDiscordInteractionReply({
+      const delivery = deliver({
         interaction: interaction as never,
         payload,
-        componentRoute: {
-          accountId: "work",
-          agentId: "assistant",
-          sessionKey: "agent:assistant:discord:direct:owner",
-        },
-        textLimit: 2000,
+        componentRoute,
         preferFollowUp,
         responseEphemeral: true,
-        chunkMode: "length",
       });
       const outcome = delivery.then(
         (value) => ({ value }),
@@ -117,11 +133,7 @@ describe("deliverDiscordInteractionReply", () => {
         }
         return parsed.componentId;
       });
-      for (const id of ids) {
-        expect(
-          await resolveDiscordComponentEntryWithPersistence({ id, consume: false }),
-        ).toBeNull();
-      }
+      await expectUnregistered(ids);
       if (expires) {
         accepted.reject({ discordCode: 10062 });
       } else {
@@ -130,11 +142,7 @@ describe("deliverDiscordInteractionReply", () => {
       const result = await outcome;
       if (expires) {
         expect(result).toEqual({ error: expect.any(PlatformMessageNotDispatchedError) });
-        for (const id of ids) {
-          expect(
-            await resolveDiscordComponentEntryWithPersistence({ id, consume: false }),
-          ).toBeNull();
-        }
+        await expectUnregistered(ids);
         return;
       }
       expect(result).toEqual({ value: true });
@@ -154,11 +162,7 @@ describe("deliverDiscordInteractionReply", () => {
         },
       ]);
       for (const entry of entries) {
-        expect(entry).toMatchObject({
-          accountId: "work",
-          agentId: "assistant",
-          sessionKey: "agent:assistant:discord:direct:owner",
-        });
+        expect(entry).toMatchObject(componentRoute);
         expect(entry?.messageId).toBe(preferFollowUp ? "native-message" : undefined);
       }
     },
@@ -180,16 +184,11 @@ describe("deliverDiscordInteractionReply", () => {
       };
       const interaction = createInteraction();
       let completed = false;
-      const delivery = deliverDiscordInteractionReply({
+      const delivery = deliver({
         interaction: interaction as never,
         payload: {
           presentation: {
-            blocks: [
-              {
-                type: "buttons",
-                buttons: [{ label: "Choose", action: { type: "command", command: "/help" } }],
-              },
-            ],
+            blocks: [{ type: "buttons", buttons: [commandButton("Choose", "/help")] }],
           },
         },
         componentRoute: {
@@ -197,9 +196,6 @@ describe("deliverDiscordInteractionReply", () => {
           agentId: "assistant",
           sessionKey: "agent:assistant:discord:direct:fixture",
         },
-        textLimit: 2000,
-        preferFollowUp: false,
-        chunkMode: "length",
       }).then((value) => {
         completed = true;
         return value;
@@ -223,59 +219,43 @@ describe("deliverDiscordInteractionReply", () => {
     },
   );
 
-  it.each([{ includeMedia: true, includeEmbeds: true }])(
-    "preserves native attachments and embeds with shared presentation: %j",
-    async ({ includeMedia, includeEmbeds }) => {
-      const interaction = createInteraction();
-      const onDelivered = vi.fn(async () => {});
-      const embeds = [{ title: "Status" }];
-      if (includeMedia) {
-        loadWebMediaMock.mockResolvedValue({
-          buffer: Buffer.from("image"),
-          fileName: "status.png",
-          contentType: "image/png",
-        });
-      }
+  it("preserves native attachments and embeds with shared presentation", async () => {
+    const interaction = createInteraction();
+    const onDelivered = vi.fn(async () => {});
+    const embeds = [{ title: "Status" }];
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      fileName: "status.png",
+      contentType: "image/png",
+    });
 
-      await deliverDiscordInteractionReply({
-        interaction: interaction as never,
-        payload: {
-          text: "x".repeat(2_100),
-          presentationTextMode: "fallback",
-          presentation: {
-            blocks: [
-              { type: "text", text: "Status details" },
-              {
-                type: "buttons",
-                buttons: [{ label: "Continue", action: { type: "command", command: "/status" } }],
-              },
-            ],
-          },
-          ...(includeMedia ? { mediaUrls: ["file:///tmp/status.png"] } : {}),
-          ...(includeEmbeds ? { channelData: { discord: { embeds } } } : {}),
+    await deliver({
+      interaction: interaction as never,
+      payload: {
+        text: "x".repeat(2_100),
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            { type: "text", text: "Status details" },
+            { type: "buttons", buttons: [commandButton("Continue", "/status")] },
+          ],
         },
-        textLimit: 2000,
-        preferFollowUp: false,
-        chunkMode: "length",
-        onDelivered,
-      });
+        mediaUrls: ["file:///tmp/status.png"],
+        channelData: { discord: { embeds } },
+      },
+      onDelivered,
+    });
 
-      expect(interaction.reply).toHaveBeenCalledWith({
-        content: "x".repeat(2_000),
-        ...(includeEmbeds ? { embeds } : {}),
-        ...(includeMedia
-          ? {
-              files: [{ name: "status.png", data: Buffer.from("image"), contentType: "image/png" }],
-            }
-          : {}),
-      });
-      expect(interaction.followUp).toHaveBeenCalledWith({ content: "x".repeat(100) });
-      expect(onDelivered).toHaveBeenCalledOnce();
-      expect(onDelivered).toHaveBeenCalledWith(
-        ["x".repeat(2_000), ...(includeEmbeds ? ["Status"] : []), "x".repeat(100)].join("\n"),
-      );
-    },
-  );
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: "x".repeat(2_000),
+      embeds,
+      files: [{ name: "status.png", data: Buffer.from("image"), contentType: "image/png" }],
+    });
+    expect(interaction.followUp).toHaveBeenCalledWith({ content: "x".repeat(100) });
+    expect(onDelivered).toHaveBeenCalledExactlyOnceWith(
+      ["x".repeat(2_000), "Status", "x".repeat(100)].join("\n"),
+    );
+  });
 
   it("omits legacy content and embeds from native Components V2 replies", async () => {
     const interaction = createInteraction();
@@ -294,17 +274,12 @@ describe("deliverDiscordInteractionReply", () => {
       },
     ];
 
-    await deliverDiscordInteractionReply({
+    await deliver({
       interaction: interaction as never,
       payload: {
         text: "legacy fallback",
-        channelData: {
-          discord: { components, embeds: [{ title: "legacy embed" }] },
-        },
+        channelData: { discord: { components, embeds: [{ title: "legacy embed" }] } },
       },
-      textLimit: 2000,
-      preferFollowUp: false,
-      chunkMode: "length",
       onDelivered,
     });
 
@@ -313,55 +288,39 @@ describe("deliverDiscordInteractionReply", () => {
     expect(onDelivered).toHaveBeenCalledExactlyOnceWith("Choose\nActions\nRead");
   });
 
-  it.each([
-    {
-      name: "singular media URL after blank plural URLs",
-      media: { mediaUrls: ["   "], mediaUrl: "file:///tmp/sticker.webp" },
-    },
-  ])(
-    "sends detected WebP media across a real interaction multipart request ($name)",
-    async ({ media }) => {
-      const loopback = await createDiscordLoopbackRest();
-      loadWebMediaMock.mockResolvedValue({
-        buffer: Buffer.from("webp"),
-        fileName: "sticker.webp",
-        contentType: "image/webp",
-        kind: "image",
+  it("sends singular WebP media after blank plural URLs across a real multipart request", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("webp"),
+      fileName: "sticker.webp",
+      contentType: "image/webp",
+      kind: "image",
+    });
+    const interaction = {
+      reply: vi.fn(async (data: unknown) =>
+        loopback.rest.post("/interactions/123/token/callback", { body: { type: 4, data } }),
+      ),
+      followUp: vi.fn(),
+    };
+
+    try {
+      const payload = { text: "sticker", mediaUrls: ["   "], mediaUrl: "file:///tmp/sticker.webp" };
+      expect(hasRenderableReplyPayload(payload)).toBe(true);
+
+      await deliver({ interaction: interaction as never, payload });
+
+      expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
+        localRoots: undefined,
       });
-      const interaction = {
-        reply: vi.fn(async (data: unknown) =>
-          loopback.rest.post("/interactions/123/token/callback", {
-            body: { type: 4, data },
-          }),
-        ),
-        followUp: vi.fn(),
-      };
-
-      try {
-        const payload = { text: "sticker", ...media };
-        expect(hasRenderableReplyPayload(payload)).toBe(true);
-
-        await deliverDiscordInteractionReply({
-          interaction: interaction as never,
-          payload,
-          textLimit: 2000,
-          preferFollowUp: false,
-          chunkMode: "length",
-        });
-
-        expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
-          localRoots: undefined,
-        });
-        const upload = loopback.requests.find((request) => request.method === "POST");
-        expect(upload?.path).toContain("/interactions/123/token/callback");
-        expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
-        expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
-        expect(upload?.body).toContain("Content-Type: image/webp");
-      } finally {
-        await loopback.close();
-      }
-    },
-  );
+      const upload = loopback.requests.find((request) => request.method === "POST");
+      expect(upload?.path).toContain("/interactions/123/token/callback");
+      expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
+      expect(upload?.body).toContain("Content-Type: image/webp");
+    } finally {
+      await loopback.close();
+    }
+  });
 });
 
 describe("settleDiscordInteractionWithoutVisibleReply", () => {
