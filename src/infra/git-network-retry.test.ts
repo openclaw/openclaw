@@ -1,9 +1,12 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as execRunner from "../process/exec-runner.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import * as processExec from "../process/exec.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { executeGitCommand, executeGitCommandBytes } from "./git-exec.js";
+import * as updateGlobal from "./update-global.js";
+import { buildUpdateCommandRunner, runStep } from "./update-runner-command.js";
 
 const networkLog = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -165,6 +168,11 @@ describe("Git network recovery", () => {
       stderr: "fatal: Could not resolve host: example.invalid",
     },
     {
+      args: ["ls-remote", "origin", "refs/heads/main"],
+      stderr:
+        "fatal: unable to access 'https://example.invalid/repo.git/': transfer closed with 210 bytes remaining to read",
+    },
+    {
       args: ["fetch", "origin"],
       stderr:
         "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/repo/.git/refs/remotes/origin/main.lock': File exists.",
@@ -195,5 +203,89 @@ describe("Git network recovery", () => {
     await executeGitCommand("/repo", ["fetch", "origin"], { timeoutMs: 1_000 });
     expect(calls).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  describe("installed updater", () => {
+    beforeEach(() => {
+      vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({
+        OPENCLAW_UPDATE_TEST_ENV: "1",
+      });
+    });
+
+    it.each([
+      "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)",
+      "error: RPC failed; curl 18 transfer closed with outstanding read data remaining",
+    ])("completes the fetch step after a transient download failure: %s", async (stderr) => {
+      results({ ...failure, stderr }, success);
+      const { runCommand } = await buildUpdateCommandRunner();
+      const onStepComplete = vi.fn();
+      const pending = runStep({
+        name: "git-target-inspection-fetch",
+        argv: ["git", "-C", "/repo", "--git-dir=/inspection.git", "fetch", "origin"],
+        cwd: "/repo",
+        timeoutMs: 10_000,
+        stepIndex: 0,
+        totalSteps: 1,
+        runCommand,
+        progress: { onStepComplete },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await pending).toMatchObject({ exitCode: 0, stdoutTail: "complete output" });
+      expect(calls.map((call) => call.timeoutMs)).toEqual([10_000, 9_000]);
+      expect(calls[1]!.argv).toEqual(calls[0]!.argv);
+      expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ name: "git-target-inspection-fetch", exitCode: 0 }),
+      );
+    });
+
+    it("preserves an update work step without an explicit deadline", async () => {
+      results(failure, success);
+      const { runCommand } = await buildUpdateCommandRunner();
+      const pending = runCommand(["git", "fetch", "origin"], { cwd: "/repo" });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect((await pending).code).toBe(0);
+      expect(calls.map((call) => call.timeoutMs)).toEqual([undefined, undefined]);
+    });
+
+    it.each(["caller", "scope"] as const)(
+      "honors %s cancellation during updater backoff",
+      async (source) => {
+        results(failure);
+        const { runCommand } = await buildUpdateCommandRunner();
+        const controller = new AbortController();
+        const run = () =>
+          runCommand(["git", "fetch", "origin"], {
+            timeoutMs: 10_000,
+            ...(source === "caller" ? { signal: controller.signal } : {}),
+          });
+        const pending =
+          source === "scope" ? withCommandProcessScope(run, controller.signal) : run();
+
+        await vi.advanceTimersByTimeAsync(100);
+        controller.abort();
+
+        expect(await pending).toMatchObject({ code: null, termination: "signal" });
+        expect(calls).toHaveLength(1);
+      },
+    );
+
+    it.each([
+      { argv: ["git", "fetch", "origin"], stderr: "fatal: Authentication failed" },
+      { argv: ["git", "push", "origin", "main"], stderr: failure.stderr },
+      { argv: ["pnpm", "install"], stderr: failure.stderr },
+    ])(
+      "does not replay permanent failures or other update commands: $argv",
+      async ({ argv, stderr }) => {
+        results({ ...failure, stderr });
+        const { runCommand } = await buildUpdateCommandRunner();
+
+        expect((await runCommand(argv, { timeoutMs: 10_000 })).code).toBe(1);
+        expect(calls).toHaveLength(1);
+      },
+    );
   });
 });

@@ -1,6 +1,8 @@
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
+import { retryableGitNetworkOperation, withGitNetworkRetry } from "./git-network-retry.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
@@ -204,12 +206,29 @@ export async function buildUpdateCommandRunner(
     defaultCommandEnv,
     runCommand:
       runCommand ??
-      (async (argv, options) =>
-        await runCommandWithTimeout(argv, {
-          ...options,
-          env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
-          // Package-manager trees must not outlive a timed-out updater.
-          killProcessTree: true,
-        })),
+      (async (argv, options) => {
+        const run = (timeoutMs = options.timeoutMs) =>
+          runCommandWithTimeout(argv, {
+            ...options,
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+            env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
+            // Package-manager trees must not outlive a timed-out updater.
+            killProcessTree: true,
+          });
+        const operation =
+          argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined;
+        if (!operation) {
+          return run();
+        }
+        return withGitNetworkRetry(
+          operation,
+          {
+            timeoutMs: options.timeoutMs ?? Infinity,
+            signal: resolveCommandProcessSignal(options.signal),
+          },
+          // An omitted work deadline stays unbounded; never pass Infinity to a process timer.
+          (timeoutMs) => run(options.timeoutMs === undefined ? undefined : timeoutMs),
+        );
+      }),
   };
 }

@@ -1,12 +1,17 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import * as processExec from "../../process/exec.js";
 import { inspectGitDryRunTargetSchemaVersions } from "./update-command-git.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
@@ -75,6 +80,54 @@ it("distinguishes a stale cached ref from an unreachable remote during a dry-run
   expect(unreachable.message).toContain("Check Git remote access");
   expect(unreachable.message).toContain("could not inspect current remote target origin/main");
   expect(unreachable.message).not.toContain("cached origin/main");
+});
+
+it("retries a transient remote probe during a Git dry-run without changing local refs", async () => {
+  const { checkout } = createGitFixture(tempDirs.make("update-git-dry-run-retry-"));
+  const cachedBefore = git(checkout, "rev-parse", "origin/main");
+  const actualRun = processExec.runCommandWithTimeout;
+  let probeAttempts = 0;
+  let firstProbeFailed: () => void = () => {};
+  const firstProbeFailure = new Promise<void>((resolve) => {
+    firstProbeFailed = resolve;
+  });
+  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
+    if (argv.includes("ls-remote")) {
+      probeAttempts += 1;
+      if (typeof options === "number") {
+        throw new Error("dry-run Git probes must use command options");
+      }
+      expect(options.env).toMatchObject({ GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" });
+      if (probeAttempts === 1) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        firstProbeFailed();
+        return Promise.resolve({
+          stdout: "",
+          stderr:
+            "fatal: unable to access 'https://example.invalid/repo.git/': transfer closed with 210 bytes remaining to read",
+          termination: "exit",
+          code: 128,
+          signal: null,
+          killed: false,
+        });
+      }
+      vi.useRealTimers();
+    }
+    return actualRun(argv, options);
+  });
+
+  const pending = inspectGitDryRunTargetSchemaVersions({
+    root: checkout,
+    timeoutMs: 5_000,
+    channel: "dev",
+  });
+  await firstProbeFailure;
+  await vi.advanceTimersByTimeAsync(1_000);
+  const result = await pending;
+
+  expect(result.metadataUnreadable).toBeUndefined();
+  expect(probeAttempts).toBe(2);
+  expect(git(checkout, "rev-parse", "origin/main")).toBe(cachedBefore);
 });
 
 it("explains when a dry-run cannot hydrate a promised target manifest", async () => {

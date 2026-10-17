@@ -5,6 +5,10 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import {
+  retryableGitNetworkOperation,
+  withGitNetworkRetry,
+} from "../../infra/git-network-retry.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -46,6 +50,7 @@ import type {
   UpdateStepProgress,
 } from "../../infra/update-runner-types.js";
 import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -301,11 +306,22 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   metadataUnreadable?: string;
   failureCode?: "target-git-cache-stale";
 }> {
-  const runCommand: GlobalCommandRunner = (argv, options) =>
-    runCommandWithTimeout(argv, {
-      ...options,
-      env: { ...options.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
-    });
+  const runCommand: GlobalCommandRunner = (argv, options) => {
+    const run = (timeoutMs: number) =>
+      runCommandWithTimeout(argv, {
+        ...options,
+        timeoutMs,
+        env: { ...options.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
+      });
+    const operation = argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined;
+    return operation
+      ? withGitNetworkRetry(
+          operation,
+          { timeoutMs: options.timeoutMs, signal: resolveCommandProcessSignal() },
+          run,
+        )
+      : run(options.timeoutMs);
+  };
   const runTargetCommand: UpdateRunnerCommandRunner = (argv, options) =>
     runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? params.timeoutMs });
   let revision: string | null = null;
