@@ -188,8 +188,8 @@ async function withReports(
           getGatewayRequestContext: () => context,
           log: createSubsystemLogger("test/reports-http"),
         });
-        const server = createServer(async (req, res) => {
-          try {
+        const server = createServer((req, res) => {
+          void (async () => {
             // The fixture issues synthetic identity cookies through the real signer.
             if (req.url === "/fixture-cookie") {
               setControlUiPluginAuthCookie(res, [{ ...reportRoute, scopes: ["operator.read"] }], {
@@ -218,9 +218,9 @@ async function withReports(
                 gatewayRequestOperatorScopes: authorized.operatorScopes,
               });
             }
-          } catch (error) {
-            res.destroy(error instanceof Error ? error : new Error(String(error)));
-          }
+          })().catch((error: unknown) =>
+            res.destroy(error instanceof Error ? error : new Error(String(error))),
+          );
         });
         try {
           await projection.ensureMaterialized();

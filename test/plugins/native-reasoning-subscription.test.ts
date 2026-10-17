@@ -105,19 +105,19 @@ it.for(["incremental", "buffered"] as const)(
       }
     });
     let requestCount = 0;
-    const server = createServer(async (request, response) => {
+    const server = createServer((request, response) => {
       requestCount++;
       request.resume();
       response.writeHead(200, { "content-type": "application/vnd.amazon.eventstream" });
-      try {
+      void (async () => {
         for await (const event of responses()) {
           const [type, payload] = Object.entries(event)[0]!;
           response.write(bedrockEvent(type, payload));
         }
         response.end();
-      } catch (error) {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      }
+      })().catch((error: unknown) =>
+        response.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
     });
     try {
       const fixtureModel = { ...model, baseUrl: await listenLoopback(server) };

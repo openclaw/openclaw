@@ -27,6 +27,7 @@ const {
   clientFetchUserMock,
   clientGetPluginMock,
   createDiscordMessageHandlerMock,
+  createDiscordNativeCommandMock,
   createdBindingManagers,
   createThreadBindingManagerMock,
   getAcpSessionStatusMock,
@@ -471,9 +472,9 @@ describe("monitorDiscordProvider", () => {
     await runProvider();
 
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    expect(drained).toEqual([
-      { type: "disallowed-intents", message: expect.stringContaining("4014") },
-    ]);
+    expect(drained).toHaveLength(1);
+    expect(drained[0]?.type).toBe("disallowed-intents");
+    expect(drained[0]?.message).toContain("4014");
   });
 
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {

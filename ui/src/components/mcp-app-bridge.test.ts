@@ -27,18 +27,6 @@ const recordSchema = z.record(z.string(), z.unknown());
 const hostInfo = { name: "OpenClaw", version: "test" };
 const requestRecord = (app: App, method: string, params: Record<string, unknown>) =>
   app.request({ method, params }, recordSchema);
-function acceptEvent<T extends { respond: (accepted: boolean) => void }>(
-  element: HTMLElement,
-  type: string,
-  received: (detail: T) => void,
-) {
-  element.addEventListener(type, (event) => {
-    event.preventDefault();
-    const detail = (event as CustomEvent<T>).detail;
-    received(detail);
-    detail.respond(true);
-  });
-}
 
 function createBridgePair(
   capabilities: ReturnType<typeof buildMcpAppHostCapabilities>,
@@ -94,7 +82,12 @@ it("confirms file paths in the pane before requesting or opening a file", async 
   });
   const request = vi.fn(async () => ({ path: "/workspace/parts.txt", name: "parts.txt" }));
   const opened = vi.fn();
-  acceptEvent<McpAppFileOpenEventDetail>(root, MCP_APP_FILE_OPEN_EVENT, opened);
+  root.addEventListener(MCP_APP_FILE_OPEN_EVENT, (event) => {
+    event.preventDefault();
+    const detail = (event as CustomEvent<McpAppFileOpenEventDetail>).detail;
+    opened(detail);
+    detail.respond(true);
+  });
   bindMcpAppResourceHandlers({
     bridge,
     request,
@@ -178,7 +171,12 @@ it("negotiates extension capabilities and preserves rich request metadata over t
   frame.checkVisibility = () => true;
   Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
   const received = vi.fn();
-  acceptEvent<McpAppMessageEventDetail>(frame, MCP_APP_MESSAGE_EVENT, received);
+  frame.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
+    event.preventDefault();
+    const detail = (event as CustomEvent<McpAppMessageEventDetail>).detail;
+    received(detail);
+    detail.respond(true);
+  });
   bridge.setMessageHandler(async (params) =>
     (await dispatchMcpAppMessage(frame, { sessionKey: "one", viewId: "app" }, params, () => true))
       ? {}

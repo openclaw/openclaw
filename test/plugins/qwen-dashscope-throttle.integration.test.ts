@@ -102,13 +102,16 @@ async function runThroughFailureRecovery(
         );
       });
       const baseUrl = `${await listenLoopback(server)}/compatible-mode/v1`;
-      const assistant = await streamOpenAICompletions(
-        { ...model, provider, baseUrl },
-        { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-        { apiKey: "synthetic-test-key" },
-      )
-        .result()
-        .finally(() => closeHttpServer(server));
+      let assistant;
+      try {
+        assistant = await streamOpenAICompletions(
+          { ...model, provider, baseUrl },
+          { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+          { apiKey: "synthetic-test-key" },
+        ).result();
+      } finally {
+        await closeHttpServer(server);
+      }
       expect(assistant).toMatchObject({
         stopReason: "error",
         provider,

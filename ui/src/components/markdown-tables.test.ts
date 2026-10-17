@@ -45,7 +45,7 @@ function deliverTableResize(target: HTMLElement): void {
 
 const renderOptions = { progressBars: true, sessionLinks: true };
 const interactiveOptions = { ...renderOptions, tableInteractions: "enabled" as const };
-function query<T extends HTMLElement = HTMLElement>(owner: ParentNode, selector: string) {
+function query<T extends HTMLElement = HTMLElement>(owner: ParentNode, selector: string): T {
   return owner.querySelector<T>(selector)!;
 }
 

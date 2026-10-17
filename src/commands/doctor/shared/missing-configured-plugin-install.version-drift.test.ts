@@ -8,6 +8,7 @@ import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync as readIndexRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
+import { invokePluginArtifactInstallMock } from "../../../plugins/test-helpers/install-fixtures.js";
 import { writePluginJson } from "./missing-configured-plugin-install.fixtures.test-support.js";
 import { repairMissingConfiguredPluginInstalls as repairInstalls } from "./missing-configured-plugin-install.js";
 import {
@@ -26,10 +27,18 @@ vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),
   resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
 }));
-vi.mock("../../../plugins/install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../plugins/install.js")>()),
-  installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
-}));
+vi.mock("../../../plugins/install.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/install.js")>();
+  return {
+    ...actual,
+    installPluginFromNpmSpec: (params: Parameters<typeof actual.installPluginFromNpmSpec>[0]) =>
+      invokePluginArtifactInstallMock<Awaited<ReturnType<typeof actual.installPluginFromNpmSpec>>>(
+        mocks.installPluginFromNpmSpec,
+        params,
+        { manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] } },
+      ),
+  };
+});
 vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
   loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,

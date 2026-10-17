@@ -164,7 +164,17 @@ suite.define(() => {
         methodResponses: {
           "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
           "plugins.catalog.browse": { items: [alpha.plugin, beta.plugin] },
-          "plugins.catalog.categories": { categories: [] },
+          "plugins.catalog.categories": {
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Tasks and work organization.",
+                icon: "list-todo",
+                order: 0,
+              },
+            ],
+          },
           "plugins.catalog.get": beta,
         },
       });

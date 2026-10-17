@@ -279,7 +279,9 @@ it.each(["before-delete", "after-commit"] as const)(
     });
     const orphanKey = "zz-orphan";
     if (phase === "after-commit") {
-      const binding = manager.getByThreadId("prepared");
+      const binding = (await persisted.entries()).find(
+        ({ value }) => value.threadId === "prepared",
+      )?.value;
       assert(binding);
       await persisted.register(orphanKey, {
         ...binding,

@@ -55,16 +55,20 @@ async function runAgainstOpenRouter(params: {
 }) {
   let requestBody = "";
   let requestCount = 0;
-  const server = createServer(async (request, response) => {
+  const server = createServer((request, response) => {
     requestCount += 1;
-    requestBody += await readRequestText(request);
-    if (params.event) {
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(`data: ${JSON.stringify(params.event)}\n\ndata: [DONE]\n\n`);
-    } else {
-      const status = params.status ?? 404;
-      respondJson(response, { error: { code: status, message: params.message } }, status);
-    }
+    void (async () => {
+      requestBody += await readRequestText(request);
+      if (params.event) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(`data: ${JSON.stringify(params.event)}\n\ndata: [DONE]\n\n`);
+      } else {
+        const status = params.status ?? 404;
+        respondJson(response, { error: { code: status, message: params.message } }, status);
+      }
+    })().catch((error: unknown) =>
+      response.destroy(error instanceof Error ? error : new Error(String(error))),
+    );
   });
   const baseUrl = `${await listenLoopback(server)}/api/v1`;
   try {

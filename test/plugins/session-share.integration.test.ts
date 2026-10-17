@@ -253,11 +253,11 @@ function catalogFixture(stateDir: string) {
       await vi.advanceTimersByTimeAsync(0);
       await Promise.all(publications);
     },
-    start: () => Promise.all(services.map((service) => service.start(serviceContext))),
+    start: () => Promise.all(services.map(async (service) => await service.start(serviceContext))),
     stop: async () => {
       scheduler.beginClose();
       try {
-        await Promise.all(services.map((service) => service.stop?.(serviceContext)));
+        await Promise.all(services.map(async (service) => await service.stop?.(serviceContext)));
       } finally {
         await scheduler.stop();
       }
