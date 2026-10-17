@@ -889,7 +889,14 @@ describe("Gateway steer FIFO", () => {
       };
 
       try {
-        expect(await directChat(fixture, "INITIAL_HELD_TURN", firstRunId)).toMatchObject({
+        expect(
+          await client.request("chat.send", {
+            sessionKey,
+            message: "INITIAL_HELD_TURN",
+            deliver: false,
+            idempotencyKey: firstRunId,
+          }),
+        ).toMatchObject({
           runId: firstRunId,
           status: "started",
         });

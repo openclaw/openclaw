@@ -20,35 +20,26 @@ import {
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { handleGatewayRequest } from "../server-methods.js";
-import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleChatSend } from "./chat-send-handler.js";
+import type { GatewayClient } from "./types.js";
 
 type ChatDispatchParams = Parameters<typeof chatDispatch.startChatDispatch>[0];
 
-async function runningReply(params: Parameters<typeof admitReplyTurn>[0]) {
-  const admitted = await admitReplyTurn(params);
-  if (admitted.status !== "owned" || !admitted.databaseClaim) {
-    throw new Error("fixture requires a real physical database admission");
-  }
-  admitted.operation.setPhase("running");
-  return admitted.operation;
-}
-
 it.each([
-  ["compaction", true],
-  ["active-compaction", true],
-  ["successive-compactions", true],
-  ["replacement", false],
-  ["foreign-store", false],
-  ["restart", false],
-  ["cancelled", false],
+  "compaction",
+  "active-compaction",
+  "successive-compactions",
+  "replacement",
+  "foreign-store",
+  "restart",
+  "cancelled",
 ] as const)(
   "retains the accepted chat target while preparation outlives its predecessor: %s",
-  async (scenario, continues) => {
+  async (scenario) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await loadOrCreateProcessDeviceIdentityAsync();
       const agentId = "main";
@@ -82,17 +73,34 @@ it.each([
       if (scenario === "foreign-store") {
         await replaceSessionEntry(predecessorScope, entry);
       }
-      const predecessor = await runningReply({
+      const previousAdmission = await admitReplyTurn({
         ...predecessorScope,
         sessionId: initialSessionId,
         kind: "visible",
         resetTriggered: false,
       });
-      const client = createOperatorClient({
-        profileId: profile.id,
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-      });
-      client.connect.client = { id: "cli", version: "test", platform: "test", mode: "cli" };
+      if (previousAdmission.status !== "owned" || !previousAdmission.databaseClaim) {
+        throw new Error("fixture requires the predecessor's real physical database admission");
+      }
+      const predecessor = previousAdmission.operation;
+      predecessor.setPhase("running");
+
+      const client: GatewayClient = {
+        connId: "compaction-handoff-client",
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          role: "operator",
+          scopes: ["operator.read", "operator.write", "operator.admin"],
+          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+        },
+      };
       const context = createGatewayRequestContext(makeContextParams());
       const prepared = createDeferred();
       const releasePreparation = createDeferred();
@@ -108,7 +116,7 @@ it.each([
               return await originalLoadRuntimePlugins();
             })
           : undefined;
-      using observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
+      const observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
       let owned: ChatDispatchParams | undefined;
       let successor: ReplyOperation | undefined;
       let originalRegistration: ChatDispatchParams["admission"]["sessionBinding"] | undefined;
@@ -117,6 +125,7 @@ it.each([
           throw new Error("fixture requires the original accepted chat dispatch");
         }
         expect(ctx.BodyForAgent).toBe(message);
+        expect(options).toMatchObject({ runId, expectedExistingSessionId: finalSessionId });
         const initialized = await initSessionState({
           ctx: finalizeInboundContext(ctx),
           cfg: replyConfig,
@@ -143,15 +152,25 @@ it.each([
           await releasePreparation.promise;
           return await originalDispatch({ ...options, replyResolver: resolver });
         });
+      let releaseAuthorization: (() => void) | undefined;
       try {
         const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
+        const authorization = await resolveSessionMutationAuthorizationAsync({
+          client,
+          context,
+          method: "chat.send",
+          requestParams: params,
+        });
+        releaseAuthorization = authorization.authorization?.release;
+        expect(authorization.error).toBeNull();
         const respond = vi.fn();
-        await handleGatewayRequest({
-          req: { type: "req", id: runId, method: "chat.send", params },
+        await handleChatSend({
+          params,
+          req: { type: "req", id: runId, method: "chat.send" },
           respond,
           context,
           client,
-          extraHandlers: { "chat.send": handleChatSend },
+          sessionMutationAuthorization: authorization.authorization,
           isWebchatConnect: () => false,
         });
         expect(respond).toHaveBeenCalledWith(
@@ -189,13 +208,18 @@ it.each([
           owned.admission.activeRunAbort.controller.abort();
         }
         if (scenario === "successive-compactions") {
-          successor = await runningReply({
+          const successorAdmission = await admitReplyTurn({
             ...scope,
             sessionId: nextSessionId,
             expectedSessionId: nextSessionId,
             kind: "visible",
             resetTriggered: false,
           });
+          if (successorAdmission.status !== "owned" || !successorAdmission.databaseClaim) {
+            throw new Error("fixture requires the successor's real physical database admission");
+          }
+          successor = successorAdmission.operation;
+          successor.setPhase("running");
         }
         releasePreparation.resolve();
         if (successor) {
@@ -212,26 +236,32 @@ it.each([
         await owned.admission.gatewayWorkAdmission.released;
         expect(context.chatAbortControllers.has(runId)).toBe(false);
 
-        if (continues) {
+        if (
+          scenario === "compaction" ||
+          scenario === "active-compaction" ||
+          scenario === "successive-compactions"
+        ) {
           expect(context.broadcast).not.toHaveBeenCalledWith(
             "chat",
             expect.objectContaining({ runId, state: "error" }),
             expect.anything(),
           );
           expect(resolver).toHaveBeenCalledOnce();
+          expect(originalRegistration.sessionId).toBe(finalSessionId);
           expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
             ok: true,
             payload: { runId, status: "ok" },
           });
           const transcript = await loadTranscriptEvents({ ...scope, sessionId: finalSessionId });
-          const users = transcript.filter(
-            (event) =>
-              isRecord(event) &&
-              event.type === "message" &&
-              isRecord(event.message) &&
-              event.message.role === "user",
-          );
-          expect(users).toHaveLength(1);
+          expect(
+            transcript.filter(
+              (event) =>
+                isRecord(event) &&
+                event.type === "message" &&
+                isRecord(event.message) &&
+                event.message.role === "user",
+            ),
+          ).toHaveLength(1);
         } else {
           expect(resolver).not.toHaveBeenCalled();
           expect(originalRegistration.sessionId).toBe(initialSessionId);
@@ -244,8 +274,10 @@ it.each([
         if (owned) {
           await owned.admission.gatewayWorkAdmission.released;
         }
+        releaseAuthorization?.();
         holdPreparation.mockRestore();
         holdRuntimePlugins?.mockRestore();
+        observeChatDispatch.mockRestore();
       }
     });
   },

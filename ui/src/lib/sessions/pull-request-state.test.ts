@@ -22,7 +22,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
   const harness = baseGateway(client);
   return {
     ...harness,
-    update(next: Partial<SessionGateway["snapshot"]>) {
+    update(this: void, next: Partial<SessionGateway["snapshot"]>) {
       Object.assign(harness.gateway.snapshot, next);
       harness.publish(harness.gateway.snapshot.phase === "connected");
     },

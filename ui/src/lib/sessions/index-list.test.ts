@@ -351,6 +351,9 @@ describe("session list requests", () => {
       let writerFinished = false;
       const request = listRequest((params) => {
         const agentId = params?.agentId ?? "main";
+        if (typeof agentId !== "string") {
+          throw new Error("Expected a string agentId in the session-list fixture");
+        }
         const done = agentId === "writer" && writerFinished;
         if (done && refreshFails) {
           throw new Error("List refresh failed");
@@ -420,7 +423,9 @@ describe("session list requests", () => {
       expect(sessions.state.result).toEqual(primary);
       expect(writer.snapshot().error).toBe(refreshFails ? "List refresh failed" : null);
       research.expectRow({ key: "agent:research:main", hasActiveRun: true, status: "running" });
-      expect(request.mock.calls.map(([, params]) => params?.agentId)).not.toContain("research");
+      expect(
+        request.mock.calls.map(([, params]) => asOptionalRecord(params)?.agentId),
+      ).not.toContain("research");
     },
   );
 
