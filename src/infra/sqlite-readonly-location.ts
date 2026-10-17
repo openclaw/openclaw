@@ -396,7 +396,14 @@ function* createStableReadOnlyCopyInTempDirectory(
       ? sqliteSnapshotStagingError(tempDir, error, false, pathname)
       : error;
     if (tempDir && existingTempDir === undefined) {
-      removeTempDirectory(tempDir);
+      const errors: unknown[] = [stagingError];
+      if (!removeTempDirectory(tempDir, (cleanupError) => errors.push(cleanupError))) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          `SQLite artifact-preserving copy and cleanup failed: ${coerceErrorMessage(stagingError)}. Check directory permissions and available storage before retrying: ${tempDir}`,
+          stagingError,
+        );
+      }
     }
     throw stagingError;
   }

@@ -96,6 +96,9 @@ describe.each([
     await fs.writeFile(`${assetPath}.gz`, gzipSync(assetBody));
     await fs.writeFile(`${assetPath}.br`, brotliCompressSync(assetBody));
     await fs.writeFile(path.join(root, "assets", "cold.js"), assetBody);
+    const brotliOnlyPath = path.join(root, "assets", "brotli-only.js");
+    await fs.writeFile(brotliOnlyPath, assetBody);
+    await fs.writeFile(`${brotliOnlyPath}.br`, brotliCompressSync(assetBody));
     await fs.utimes(assetPath, modifiedAt, modifiedAt);
     for (const asset of [beforeLeapSecondAsset, afterLeapSecondAsset]) {
       const target = path.join(root, "assets", asset.filename);
@@ -202,6 +205,47 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it("falls back to identity when compressed sidecars are absent", async () => {
+      const { response, body } = await requestAsset(`${baseUrl}/assets/cold.js`, method, {
+        "Accept-Encoding": "br, gzip",
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-encoding"]).toBeUndefined();
+      expect(response.headers["content-length"]).toBe(String(assetBody.length));
+      expect(response.headers["content-type"]).toBe("application/javascript; charset=utf-8");
+      expect(response.headers["cache-control"]).toBe(cacheControl);
+      expect(response.headers.vary).toBe("Accept-Encoding");
+      expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+    });
+
+    it("rejects an absent encoding when identity is explicitly forbidden", async () => {
+      const { response, body } = await requestAsset(`${baseUrl}/assets/cold.js`, method, {
+        "Accept-Encoding": "gzip, identity;q=0",
+      });
+      expect(response.statusCode).toBe(406);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers.vary).toBe("Accept-Encoding");
+      expect(body.toString()).toBe(method === "GET" ? "Not Acceptable" : "");
+    });
+
+    if (kind === "bundled") {
+      it("uses an accepted sibling encoding when the preferred sidecar is absent", async () => {
+        const { response, body } = await requestAsset(`${baseUrl}/assets/brotli-only.js`, method, {
+          "Accept-Encoding": "gzip, br;q=0.5, identity;q=0",
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["content-encoding"]).toBe("br");
+        expect(response.headers["content-length"]).toBe(
+          String(brotliCompressSync(assetBody).length),
+        );
+        expect(response.headers["cache-control"]).toBe(cacheControl);
+        expect(response.headers.vary).toBe("Accept-Encoding");
+        expect(method === "GET" ? brotliDecompressSync(body) : body).toEqual(
+          method === "GET" ? assetBody : Buffer.alloc(0),
+        );
+      });
+    }
+
     it.each(["themes/absolutely.css", "sw.js"])(
       "versions public %s only for the active bundled build",
       async (asset) => {

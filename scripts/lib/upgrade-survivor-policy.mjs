@@ -53,6 +53,8 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "update-report-recovery",
   "dreaming-cron-doctor",
   "cron-owner-doctor",
+  "snapshot-cleanup-refusal",
+  "snapshot-cleanup-diagnostic",
 ]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
@@ -80,7 +82,9 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
     scenario !== "auth-profile-v2026-7-2-beta-5" &&
-    scenario !== "recovery-cleanup",
+    scenario !== "recovery-cleanup" &&
+    scenario !== "snapshot-cleanup-refusal" &&
+    scenario !== "snapshot-cleanup-diagnostic",
 );
 const scenarioAliases = new Map([
   ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],
@@ -235,7 +239,11 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   if (isPackageRecoveryScenario(scenario)) {
     return packageRecoveryBaselines(scenario).includes(baselineSpec);
   }
-  if (scenario === "backup-schedule") {
+  if (
+    scenario === "snapshot-cleanup-refusal" ||
+    scenario === "snapshot-cleanup-diagnostic" ||
+    scenario === "backup-schedule"
+  ) {
     return baselineSpec === "openclaw@2026.9.7";
   }
   if (scenario === "missing-load-path") {

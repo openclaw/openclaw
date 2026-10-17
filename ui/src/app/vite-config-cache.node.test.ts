@@ -22,11 +22,17 @@ describe("Control UI cached output identity", () => {
       await cp(path.join(repoRoot, "ui/public"), output, { recursive: true });
       await mkdir(path.join(output, "assets"));
       const assetName = "assets/app-content-hash.js";
-      const source = "export const answer = 42;";
+      const source =
+        "export const answer = 42;\n" + "// Cached identity leaves content unchanged.\n".repeat(32);
       const assets = [
         { fileName: assetName, source: Buffer.from(source) },
         ...(await createControlUiPrecompressedAssetVariants(assetName, source)),
       ];
+      expect(assets.map((asset) => asset.fileName)).toEqual([
+        assetName,
+        `${assetName}.br`,
+        `${assetName}.gz`,
+      ]);
       for (const asset of assets) {
         await writeFile(path.join(output, asset.fileName), asset.source);
       }

@@ -99,20 +99,26 @@ export function extractControlUiStartupAssetPaths(html: string): string[] {
 function readAssetMetrics(assetsDir: string, entry: fs.Dirent) {
   const file = `assets/${entry.name}`;
   const sourcePath = path.join(assetsDir, entry.name);
-  const gzipPath = `${sourcePath}.gz`;
-  const brotliPath = `${sourcePath}.br`;
-  for (const sidecarPath of [gzipPath, brotliPath]) {
-    if (!fs.existsSync(sidecarPath)) {
-      throw new Error(`Control UI performance check missing ${path.basename(sidecarPath)}`);
+  const rawBytes = fs.statSync(sourcePath).size;
+  const representationBytes = (suffix: ".gz" | ".br") => {
+    try {
+      return fs.statSync(sourcePath + suffix).size;
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") {
+        return rawBytes;
+      }
+      throw error;
     }
-  }
+  };
   const type = entry.name.endsWith(".js") ? "js" : "css";
+  // Each encoding column models that encoding plus identity, not a preference
+  // over both encodings. The producer omits sidecars that do not save bytes.
   return {
     file,
     type,
-    rawBytes: fs.statSync(sourcePath).size,
-    gzipBytes: fs.statSync(gzipPath).size,
-    brotliBytes: fs.statSync(brotliPath).size,
+    rawBytes,
+    gzipBytes: representationBytes(".gz"),
+    brotliBytes: representationBytes(".br"),
   };
 }
 
@@ -437,7 +443,7 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  measurement: shipped gzip sidecars; Node ${process.version}`,
+    `  measurement: shipped gzip/br sidecars with per-encoding identity fallback; Node ${process.version}`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {

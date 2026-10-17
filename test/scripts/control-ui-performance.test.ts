@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { build } from "tsdown";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics,
@@ -258,6 +258,94 @@ describe("Control UI performance budgets", () => {
     expect(formatControlUiPerformanceReport(smaller, looseBudgets, null, 512, metrics)).toContain(
       "chat boot JS gzip vs base: 135 B -> 115 B (-20 B); requests 3 -> 3",
     );
+  });
+
+  it.each([
+    { name: "both", omitted: [], gzipBytes: 40, brotliBytes: 30 },
+    { name: "gzip only", omitted: [".br"], gzipBytes: 40, brotliBytes: 100 },
+    { name: "Brotli only", omitted: [".gz"], gzipBytes: 100, brotliBytes: 30 },
+    { name: "neither", omitted: [".gz", ".br"], gzipBytes: 100, brotliBytes: 100 },
+  ])("counts the served bytes with $name sidecars", ({ omitted, gzipBytes, brotliBytes }) => {
+    const { distDir } = createStartupFixture();
+    for (const suffix of omitted) {
+      fs.unlinkSync(path.join(distDir, "assets", `index-a.js${suffix}`));
+    }
+
+    const metrics = collectControlUiPerformanceMetrics(distDir);
+    expect(metrics.startup.js).toEqual({ requests: 1, rawBytes: 100, gzipBytes, brotliBytes });
+    expect(metrics.total.js).toEqual({ requests: 1, rawBytes: 100, gzipBytes, brotliBytes });
+    expect(metrics.largest.js).toEqual({
+      file: "assets/index-a.js",
+      type: "js",
+      rawBytes: 100,
+      gzipBytes,
+      brotliBytes,
+    });
+    expect(formatControlUiPerformanceReport(metrics)).toContain(
+      "measurement: shipped gzip/br sidecars with per-encoding identity fallback",
+    );
+  });
+
+  it("keeps raw fallback bytes in baseline and differential budget enforcement", () => {
+    const { distDir } = createStartupFixture();
+    const baselinePath = path.join(distDir, "baseline.json");
+    fs.writeFileSync(baselinePath, JSON.stringify(startupBaseline(40)));
+    const baseMetrics = collectControlUiPerformanceMetrics(distDir);
+    fs.unlinkSync(path.join(distDir, "assets/index-a.js.gz"));
+    const metrics = runControlUiPerformanceCheck(distDir, looseBudgets, baselinePath).metrics;
+
+    expect(
+      evaluateControlUiPerformanceBudgets(metrics, looseBudgets, startupBaseline(40), 0),
+    ).toEqual([]);
+    expect(
+      evaluateControlUiPerformanceBudgets(metrics, looseBudgets, startupBaseline(35), 0),
+    ).toEqual([{ metric: "startup JS gzip", actual: 100, limit: 99, unit: "bytes" }]);
+    expect(
+      evaluateControlUiPerformanceBudgets(metrics, { ...looseBudgets, largestJsGzipBytes: 99 }),
+    ).toEqual([{ metric: "largest JS gzip", actual: 100, limit: 99, unit: "bytes" }]);
+    fs.writeFileSync(path.join(distDir, "assets/index-c.css"), Buffer.alloc(1551));
+    fs.unlinkSync(path.join(distDir, "assets/index-c.css.gz"));
+    expect(
+      evaluateControlUiPerformanceBudgets(
+        collectControlUiPerformanceMetrics(distDir),
+        looseBudgets,
+        null,
+        512,
+        baseMetrics,
+      ),
+    ).toEqual([
+      { metric: "startup CSS gzip growth", actual: 1536, limit: 1535, unit: "bytes" },
+      { metric: "largest CSS gzip growth", actual: 1536, limit: 1535, unit: "bytes" },
+    ]);
+    expect(fs.readFileSync(baselinePath, "utf8")).toBe(JSON.stringify(startupBaseline(40)));
+  });
+
+  it("rejects a missing raw startup asset even when its sidecars remain", () => {
+    const { distDir } = createStartupFixture();
+    fs.unlinkSync(path.join(distDir, "assets/index-a.js"));
+
+    expect(() => collectControlUiPerformanceMetrics(distDir)).toThrow(
+      "Control UI performance check cannot find startup asset assets/index-a.js",
+    );
+  });
+
+  it("propagates real sidecar stat errors other than absence", () => {
+    const { distDir } = createStartupFixture();
+    const sourcePath = path.join(distDir, "assets/index-a.js");
+    const statSync = fs.statSync;
+    // A real ENOTDIR remains an I/O failure, not an absent optional encoding.
+    const stat = vi
+      .spyOn(fs, "statSync")
+      .mockImplementation((file) =>
+        statSync(file === `${sourcePath}.gz` ? path.join(sourcePath, "not-a-directory") : file),
+      );
+    try {
+      expect(() => collectControlUiPerformanceMetrics(distDir)).toThrow(
+        expect.objectContaining({ code: "ENOTDIR" }),
+      );
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it("returns actionable violations and includes them in the report", () => {
