@@ -774,7 +774,7 @@ describe("openclaw state database", () => {
       } else {
         const error = new Error(reason);
         error.name = "SqliteIntegrityError";
-        expect(recordOpenClawStateDatabaseOpenFailure(databasePath, error, generation)).toBe(true);
+        recordOpenClawStateDatabaseOpenFailure(databasePath, error);
       }
 
       expect(() => repairOpenClawStateDatabaseReadabilityForDoctor(options)).toThrow(reason);

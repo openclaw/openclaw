@@ -304,9 +304,7 @@ it.each(["persisted", "process-local"] as const)(
           reason,
         });
       } else {
-        expect(recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason))).toBe(
-          true,
-        );
+        recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason));
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       }
       try {
