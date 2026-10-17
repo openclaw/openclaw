@@ -26,6 +26,27 @@ function run(command: string, args: string[], cwd: string): string {
 function git(cwd: string, args: string[]): string {
   return run("git", args, cwd);
 }
+function cli(...args: string[]) {
+  return run(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], process.cwd());
+}
+function gitFailure(stderr: string, message = "Git push failed") {
+  return Object.assign(new Error(message), { stderr });
+}
+function recordOptions(root: string, sha = "HEAD", build = "8") {
+  return parseArgs([
+    "record",
+    "--platform",
+    "ios",
+    "--version",
+    "2026.6.10",
+    "--build",
+    build,
+    "--sha",
+    sha,
+    "--root",
+    root,
+  ]);
+}
 
 function createFixtureRepo(tempDirs = tempRoots): { remote: string; root: string; sha: string } {
   const root = tempDirs.make("openclaw-mobile-release-ref-");
@@ -61,19 +82,7 @@ describe("mobile-release-ref", () => {
     });
 
     beforeEach(() => {
-      options = parseArgs([
-        "record",
-        "--platform",
-        "ios",
-        "--version",
-        "2026.6.10",
-        "--build",
-        String(nextBuild++),
-        "--sha",
-        fixture.sha,
-        "--root",
-        fixture.root,
-      ]);
+      options = recordOptions(fixture.root, fixture.sha, String(nextBuild++));
       vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     });
     afterEach(() => vi.restoreAllMocks());
@@ -122,16 +131,12 @@ describe("mobile-release-ref", () => {
         recordMobileReleaseRef(options, {
           execFileSync(command, args, execOptions) {
             if (args[0] === "ls-remote" && pushes > 0 && ++readbacks <= failedReads) {
-              throw Object.assign(new Error("Git lookup failed"), {
-                stderr: "fatal: Operation timed out",
-              });
+              throw gitFailure("fatal: Operation timed out", "Git lookup failed");
             }
             const result = execFileSync(command, args, execOptions);
             if (args[0] === "push") {
               pushes += 1;
-              throw Object.assign(new Error("Git response lost"), {
-                stderr: "fatal: the remote end hung up unexpectedly",
-              });
+              throw gitFailure("fatal: the remote end hung up unexpectedly", "Git response lost");
             }
             return result;
           },
@@ -153,9 +158,7 @@ describe("mobile-release-ref", () => {
           execFileSync(command, args, execOptions) {
             if (args[0] === "push") {
               pushes += 1;
-              throw Object.assign(new Error("Git push failed"), {
-                stderr: "fatal: The requested URL returned error: 502",
-              });
+              throw gitFailure("fatal: The requested URL returned error: 502");
             }
             return execFileSync(command, args, execOptions);
           },
@@ -181,7 +184,7 @@ describe("mobile-release-ref", () => {
           execFileSync(command, args, execOptions) {
             if (args[0] === "push") {
               pushes += 1;
-              throw Object.assign(new Error("Git push failed"), { stderr });
+                throw gitFailure(stderr);
             }
             return execFileSync(command, args, execOptions);
           },
@@ -214,9 +217,7 @@ describe("mobile-release-ref", () => {
           recordMobileReleaseRef(options, {
             execFileSync(command, args, execOptions) {
               if (args[0] === "push" && ++pushes === 1) {
-                throw Object.assign(new Error("Git push failed"), {
-                  stderr: "fatal: Connection timed out",
-                });
+                throw gitFailure("fatal: Connection timed out");
               }
               return execFileSync(command, args, execOptions);
             },
@@ -248,26 +249,21 @@ describe("mobile-release-ref", () => {
   });
 
   it("validates platform-specific numeric identities", () => {
-    expect(() =>
-      mobileReleaseRefFor({ platform: "ios", version: "2026.6.10", build: "0" }),
-    ).toThrow("Invalid iOS build");
-    expect(() =>
-      mobileReleaseRefFor({
-        platform: "android",
-        version: "2026.6.10",
-        versionCode: "not-a-code",
-      }),
-    ).toThrow("Invalid Android versionCode");
-    expect(() =>
-      mobileReleaseRefFor({
-        platform: "android",
-        version: "2026.6.10",
-        versionCode: "2026061101",
-      }),
-    ).toThrow("Expected 2026061001 through 2026061099");
-    expect(() =>
-      mobileReleaseRefFor({ platform: "ios", version: "2026.06.10", build: "8" }),
-    ).toThrow("Invalid mobile release version");
+    const rejects = (identity: Parameters<typeof mobileReleaseRefFor>[0], error: string) =>
+      expect(() => mobileReleaseRefFor(identity)).toThrow(error);
+    rejects({ platform: "ios", version: "2026.6.10", build: "0" }, "Invalid iOS build");
+    rejects(
+      { platform: "android", version: "2026.6.10", versionCode: "not-a-code" },
+      "Invalid Android versionCode",
+    );
+    rejects(
+      { platform: "android", version: "2026.6.10", versionCode: "2026061101" },
+      "Expected 2026061001 through 2026061099",
+    );
+    rejects(
+      { platform: "ios", version: "2026.06.10", build: "8" },
+      "Invalid mobile release version",
+    );
   });
 
   it("parses CLI commands and rejects missing platform-specific fields", () => {
@@ -312,16 +308,7 @@ describe("mobile-release-ref", () => {
 
   it("records immutable platform refs and resolves the recorded SHA through the CLI", () => {
     const fixture = createFixtureRepo();
-    const iosOptions = {
-      build: "8",
-      command: "record" as const,
-      platform: "ios" as const,
-      remote: fixture.remote,
-      rootDir: fixture.root,
-      sha: "HEAD",
-      version: "2026.6.10",
-      versionCode: null,
-    };
+    const iosOptions = recordOptions(fixture.root);
 
     expect(preflightMobileReleaseRef(iosOptions).status).toBe("available");
     expect(recordMobileReleaseRef(iosOptions)).toMatchObject({
@@ -336,13 +323,9 @@ describe("mobile-release-ref", () => {
     });
 
     const androidOptions = {
+      ...iosOptions,
       build: null,
-      command: "record" as const,
       platform: "android" as const,
-      remote: fixture.remote,
-      rootDir: fixture.root,
-      sha: "HEAD",
-      version: "2026.6.10",
       versionCode: "2026061008",
     };
     recordMobileReleaseRef(androidOptions);
@@ -354,12 +337,7 @@ describe("mobile-release-ref", () => {
     expect(() => recordMobileReleaseRef(androidOptions)).toThrow("already points at");
 
     // CLI resolution must return the recorded build even after checkout HEAD advances.
-    const stdout = run(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        SCRIPT_PATH,
+    const stdout = cli(
         "resolve",
         "--platform",
         "ios",
@@ -369,8 +347,6 @@ describe("mobile-release-ref", () => {
         "8",
         "--root",
         fixture.root,
-      ],
-      process.cwd(),
     );
 
     expect(stdout).toBe(`${fixture.sha}\trefs/openclaw/mobile-releases/ios/2026.6.10-8\n`);
@@ -430,11 +406,7 @@ describe("mobile-release-ref", () => {
     );
     expect(preflightMobileReleaseRef(options).status).toBe("available");
 
-    const initializeOutput = run(
-      process.execPath,
-      ["--import", "tsx", SCRIPT_PATH, "initialize-android", ...cliArgs],
-      process.cwd(),
-    );
+    const initializeOutput = cli("initialize-android", ...cliArgs);
     expect(initializeOutput).toContain(`${marker} recorded ${fixture.sha}`);
     expect(initializeAndroidStoreRelease(options)).toEqual({
       ref: marker,
@@ -458,11 +430,7 @@ describe("mobile-release-ref", () => {
     ).toEqual({ ref, sha: fixture.sha, status: "already-recorded" });
     expect(pushes).toBe(1);
     expect(recordMobileReleaseRef(options).status).toBe("already-recorded");
-    const resolved = run(
-      process.execPath,
-      ["--import", "tsx", SCRIPT_PATH, "resolve", ...cliArgs],
-      process.cwd(),
-    );
+    const resolved = cli("resolve", ...cliArgs);
     expect(resolved).toBe(`${fixture.sha}\t${ref}\n`);
 
     writeFileSync(path.join(fixture.root, "README.md"), "next\n", "utf8");

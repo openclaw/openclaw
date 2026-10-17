@@ -2,14 +2,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixture = vi.hoisted(() => ({
-  root: "",
+const defaults = vi.hoisted(() => ({
   phase: "initializing",
   mounted: true,
   nested: false,
   wrongBacking: false,
   unmountFails: false,
-  calls: [] as string[],
   removed: false,
   outputAllocated: false,
   candidateCreated: false,
@@ -17,6 +15,7 @@ const fixture = vi.hoisted(() => ({
   readyConfigurations: false,
   networkCommand: "slirp4netns",
 }));
+const fixture = vi.hoisted(() => ({ ...defaults, root: "", calls: [] as string[] }));
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
   return {
@@ -151,21 +150,7 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!
 beforeEach(() => {
   vi.resetModules();
   process.argv = [process.execPath, cleanupPath, "cleanup"];
-  fixture.root = path.resolve("mantis-podman-fixture");
-  Object.assign(fixture, {
-    phase: "initializing",
-    mounted: true,
-    nested: false,
-    wrongBacking: false,
-    unmountFails: false,
-    calls: [],
-    removed: false,
-    outputAllocated: false,
-    candidateCreated: false,
-    helperMissing: false,
-    readyConfigurations: false,
-    networkCommand: "slirp4netns",
-  });
+  Object.assign(fixture, defaults, { root: path.resolve("mantis-podman-fixture"), calls: [] });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
   Object.defineProperty(process, "getgid", { configurable: true, value: () => 1000 });
   vi.stubEnv("MANTIS_PODMAN_ROOT", fixture.root);
@@ -185,15 +170,20 @@ afterEach(() => {
   }
   vi.unstubAllEnvs();
 });
+const loadStorage = () => import("../../scripts/mantis/telegram-proof-storage.mts");
+function setup() {
+  process.argv = [process.execPath, cleanupPath, "setup"];
+  Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+}
+function called(prefix: string) {
+  return fixture.calls.some((call) => call.startsWith(prefix));
+}
 describe("interrupted mounted storage initialization", () => {
   it("refuses setup before allocation when the networking helper is unavailable", async () => {
     fixture.helperMissing = true;
-    process.argv = [process.execPath, cleanupPath, "setup"];
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    await expect(import("../../scripts/mantis/telegram-proof-storage.mts")).rejects.toThrow(
-      "Required networking helper unavailable",
-    );
-    expect(fixture.calls.some((call) => call.startsWith("fallocate "))).toBe(false);
+    setup();
+    await expect(loadStorage()).rejects.toThrow("Required networking helper unavailable");
+    expect(called("fallocate ")).toBe(false);
     expect(fixture.candidateCreated).toBe(false);
   });
   it.each(["slirp4netns", "pasta"])(
@@ -203,7 +193,7 @@ describe("interrupted mounted storage initialization", () => {
       fixture.readyConfigurations = true;
       fixture.networkCommand = networkCommand;
       process.argv = [process.execPath, "fixture"];
-      const storage = await import("../../scripts/mantis/telegram-proof-storage.mts");
+      const storage = await loadStorage();
       for (const [key, value] of Object.entries(storage.proofStorageEnvironment())) {
         vi.stubEnv(key, value);
       }
@@ -217,14 +207,11 @@ describe("interrupted mounted storage initialization", () => {
     },
   );
   it("refuses mounting when backing allocation fails", async () => {
-    process.argv = [process.execPath, cleanupPath, "setup"];
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    setup();
     vi.stubEnv("RUNNER_TEMP", fixture.root);
     vi.stubEnv("GITHUB_ENV", path.join(fixture.root, "github-env"));
-    await expect(import("../../scripts/mantis/telegram-proof-storage.mts")).rejects.toThrow(
-      "Allocation failed: no space left",
-    );
-    expect(fixture.calls.some((call) => call.startsWith("sudo mount "))).toBe(false);
+    await expect(loadStorage()).rejects.toThrow("Allocation failed: no space left");
+    expect(called("sudo mount ")).toBe(false);
     expect(fixture.candidateCreated).toBe(false);
   });
   it("refuses Web candidate creation before bounded storage is ready", async () => {
@@ -241,7 +228,7 @@ describe("interrupted mounted storage initialization", () => {
     expect(fixture.candidateCreated).toBe(false);
   });
   it("unmounts verified initialization without requiring absent configs or user bus", async () => {
-    await import("../../scripts/mantis/telegram-proof-storage.mts");
+    await loadStorage();
     expect(fixture.removed).toBe(true);
     expect(fixture.calls).toContain(`sudo umount ${path.join(fixture.root, "volume")}`);
   });
@@ -249,16 +236,14 @@ describe("interrupted mounted storage initialization", () => {
     "retains storage on %s",
     async (failure) => {
       fixture[failure] = true;
-      await expect(import("../../scripts/mantis/telegram-proof-storage.mts")).rejects.toThrow();
+      await expect(loadStorage()).rejects.toThrow();
       expect(fixture.removed).toBe(false);
     },
   );
   it("keeps ready cleanup strict when configurations disappear", async () => {
     fixture.phase = "ready";
-    await expect(import("../../scripts/mantis/telegram-proof-storage.mts")).rejects.toThrow(
-      "Configuration is not initialized",
-    );
+    await expect(loadStorage()).rejects.toThrow("Configuration is not initialized");
     expect(fixture.removed).toBe(false);
-    expect(fixture.calls.some((call) => call.startsWith("sudo umount"))).toBe(false);
+    expect(called("sudo umount")).toBe(false);
   });
 });

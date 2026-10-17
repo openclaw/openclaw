@@ -95,32 +95,46 @@ function fixture(platform: "ios" | "android" = "ios") {
 }
 
 const claim = { text: "Clearer labels when sending messages.", evidenceIds: ["e1"] };
+const completed = (output_parsed: unknown) => ({ status: "completed", output_parsed });
+const approvedReview = completed({ approved: true, problems: [] });
+const requestInput = (index: number) => JSON.parse(api.parse.mock.calls[index]![0].input);
+function savePlan(f: ReturnType<typeof fixture>) {
+  fs.writeFileSync(f.planPath, JSON.stringify(f.plan));
+}
+function commit(f: ReturnType<typeof fixture>, message: string, ...files: string[]) {
+  git(f.rootDir, "add", ...files);
+  git(f.rootDir, "commit", "-m", message);
+  f.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
+  f.plan.sourceSha = f.sourceSha;
+}
+function renderOptions(f: ReturnType<typeof fixture>) {
+  return {
+    rootDir: f.rootDir,
+    platform: f.platform,
+    version: "2026.7.40",
+    build: "2",
+    audience: "ios" as const,
+    artifactPath: f.outputPath,
+  };
+}
 function select(files: Array<{ file: string; focus: string[] }>) {
   api.parse.mockImplementationOnce((request: { input: string }) => {
     const inventory: { files: Array<{ id: string; file: string }> } = JSON.parse(request.input);
-    return {
-      status: "completed",
-      output_parsed: {
-        files: files.map(({ file, focus }) => {
-          const entry = inventory.files.find((candidate) => candidate.file === file);
-          if (!entry) {
-            throw new Error(`Missing fixture selection: ${file}`);
-          }
-          return { id: entry.id, focus };
-        }),
-      },
-    };
+    return completed({
+      files: files.map(({ file, focus }) => {
+        const entry = inventory.files.find((candidate) => candidate.file === file);
+        if (!entry) {
+          throw new Error(`Missing fixture selection: ${file}`);
+        }
+        return { id: entry.id, focus };
+      }),
+    });
   });
 }
 
 function accept(files: Array<{ file: string; focus: string[] }>, changes = [claim]) {
   select(files);
-  api.parse
-    .mockResolvedValueOnce({ status: "completed", output_parsed: { changes } })
-    .mockResolvedValueOnce({
-      status: "completed",
-      output_parsed: { approved: true, problems: [] },
-    });
+  api.parse.mockResolvedValueOnce(completed({ changes })).mockResolvedValueOnce(approvedReview);
 }
 
 describe("generated mobile store notes", () => {
@@ -130,8 +144,7 @@ describe("generated mobile store notes", () => {
       "apps/shared/OpenClawWatchRTC/src/lib.rs",
       "pub fn reconnect_enabled() -> bool { true }\n",
     );
-    git(f.rootDir, "add", "apps/shared/OpenClawWatchRTC/src/lib.rs");
-    git(f.rootDir, "commit", "-m", "Enable watch reconnect");
+    commit(f, "Enable watch reconnect", "apps/shared/OpenClawWatchRTC/src/lib.rs");
     const generatedFile = "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
     const uiTestFile = "apps/ios/UITests/ReleaseTests.swift";
     const localizationFile = "apps/ios/Resources/Localizable.xcstrings";
@@ -159,49 +172,42 @@ describe("generated mobile store notes", () => {
         ),
       }),
     );
-    git(f.rootDir, "add", generatedFile, uiTestFile, localizationFile);
-    git(f.rootDir, "commit", "-m", "Refresh generated declarations, translations, and UI checks");
-    f.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
-    f.plan.sourceSha = f.sourceSha;
-    fs.writeFileSync(f.planPath, JSON.stringify(f.plan));
+    commit(
+      f,
+      "Refresh generated declarations, translations, and UI checks",
+      generatedFile,
+      uiTestFile,
+      localizationFile,
+    );
+    savePlan(f);
     api.parse.mockImplementationOnce((request: { input: string }) => {
       // The original generator exceeds this budget before it can select the useful change.
       expect(request.input.length).toBeLessThan(60_000);
       const inventory: { files: Array<{ id: string; file: string; summary?: unknown }> } =
         JSON.parse(request.input);
-      expect(inventory.files).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ file: generatedFile })]),
-      );
-      expect(inventory.files).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ file: uiTestFile })]),
-      );
+      expect(inventory.files).not.toContainEqual(expect.objectContaining({ file: generatedFile }));
+      expect(inventory.files).not.toContainEqual(expect.objectContaining({ file: uiTestFile }));
       const localization = inventory.files.find((entry) => entry.file === localizationFile);
       expect(localization?.summary).toBeDefined();
       expect(JSON.stringify(localization)).toContain("es");
       expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
       const selected = inventory.files.find((entry) => entry.file === f.file);
       expect(selected).toBeDefined();
-      return {
-        status: "completed",
-        output_parsed: {
-          files: [
-            { id: selected?.id, focus: ["label"] },
-            {
-              id: inventory.files.find(
-                (entry) => entry.file === "apps/shared/OpenClawWatchRTC/src/lib.rs",
-              )?.id,
-              focus: ["reconnect_enabled"],
-            },
-          ],
-        },
-      };
+      return completed({
+        files: [
+          { id: selected?.id, focus: ["label"] },
+          {
+            id: inventory.files.find(
+              (entry) => entry.file === "apps/shared/OpenClawWatchRTC/src/lib.rs",
+            )?.id,
+            focus: ["reconnect_enabled"],
+          },
+        ],
+      });
     });
     api.parse
-      .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [claim] } })
-      .mockResolvedValueOnce({
-        status: "completed",
-        output_parsed: { approved: true, problems: [] },
-      });
+      .mockResolvedValueOnce(completed({ changes: [claim] }))
+      .mockResolvedValueOnce(approvedReview);
 
     const saved = await generateMobileReleaseNotes(f);
     expect(api.parse).toHaveBeenCalledTimes(3);
@@ -209,19 +215,17 @@ describe("generated mobile store notes", () => {
       const request = api.parse.mock.calls[index]![0];
       expect(request.input.length).toBeLessThan(60_000);
       const input = JSON.parse(request.input);
-      expect(input.evidence).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            file: f.file,
-            patch: expect.stringContaining('+let label = "Send message"'),
-          }),
-        ]),
+      expect(input.evidence).toContainEqual(
+        expect.objectContaining({
+          file: f.file,
+          patch: expect.stringContaining('+let label = "Send message"'),
+        }),
       );
       expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
       expect(request.input).not.toContain("testUnsupportedFeature");
       expect(request.input).not.toContain("struct GeneratedModel");
     }
-    const draft = JSON.parse(api.parse.mock.calls[1]![0].input);
+    const draft = requestInput(1);
     const evidence = draft.evidence.filter((entry: { kind?: string }) => entry.kind !== "context");
     expect(evidence).toHaveLength(2);
     expect(evidence[1].file).toBe("apps/shared/OpenClawWatchRTC/src/lib.rs");
@@ -237,14 +241,7 @@ describe("generated mobile store notes", () => {
     expect(await generateMobileReleaseNotes(f)).toEqual(historical);
     expect(fs.readFileSync(f.outputPath, "utf8")).toBe(historicalBytes);
     expect(api.parse).toHaveBeenCalledTimes(3);
-    const render = {
-      rootDir: f.rootDir,
-      platform: f.platform,
-      version: "2026.7.40",
-      build: "2",
-      audience: "ios" as const,
-      artifactPath: f.outputPath,
-    };
+    const render = renderOptions(f);
     expect(renderMobileReleaseNotes(render)).toBe(saved.entries[0]?.text);
     expect(() => renderMobileReleaseNotes({ ...render, build: "3" })).toThrow("build must match");
     git(f.rootDir, "checkout", "--detach", f.base);
@@ -256,7 +253,7 @@ describe("generated mobile store notes", () => {
     expect(() => renderMobileReleaseNotes(render)).toThrow("content digest");
     fs.writeFileSync(f.outputPath, JSON.stringify(saved));
     f.plan.releaseNotesBaselines[0]!.build = "2";
-    fs.writeFileSync(f.planPath, JSON.stringify(f.plan));
+    savePlan(f);
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow("different production baseline");
   });
 
@@ -277,10 +274,7 @@ describe("generated mobile store notes", () => {
     };
     const wearFile = "apps/android/wear/src/main/java/Watch.kt";
     f.write(wearFile, 'val label = "Start talking"\n');
-    git(f.rootDir, "add", wearFile);
-    git(f.rootDir, "commit", "-m", "Clarify watch voice action");
-    f.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
-    f.plan.sourceSha = f.sourceSha;
+    commit(f, "Clarify watch voice action", wearFile);
     git(f.rootDir, "update-ref", sourceRef, f.base);
     f.plan.releaseNotesBaselines[0] = {
       audience: "phone",
@@ -303,23 +297,17 @@ describe("generated mobile store notes", () => {
       [{ text: "Clearer watch voice controls.", evidenceIds: ["e1"] }],
     );
     const saved = await generateMobileReleaseNotes(f);
-    const wearInventory = JSON.parse(api.parse.mock.calls[3]![0].input);
-    expect(wearInventory.files).toEqual(
-      expect.arrayContaining([expect.objectContaining({ file: wearFile })]),
-    );
-    expect(wearInventory.files).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ file: f.file })]),
-    );
+    const wearInventory = requestInput(3);
+    expect(wearInventory.files).toContainEqual(expect.objectContaining({ file: wearFile }));
+    expect(wearInventory.files).not.toContainEqual(expect.objectContaining({ file: f.file }));
     for (const index of [2, 5]) {
-      const review = JSON.parse(api.parse.mock.calls[index]![0].input);
-      expect(review.evidence).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            file: "apps/android/app/src/play/java/ai/openclaw/app/SensitiveFeatureConfig.kt",
-            kind: "context",
-            patch: expect.stringContaining("smsEnabled = false"),
-          }),
-        ]),
+      const review = requestInput(index);
+      expect(review.evidence).toContainEqual(
+        expect.objectContaining({
+          file: "apps/android/app/src/play/java/ai/openclaw/app/SensitiveFeatureConfig.kt",
+          kind: "context",
+          patch: expect.stringContaining("smsEnabled = false"),
+        }),
       );
     }
     expect(
@@ -348,10 +336,8 @@ describe("generated mobile store notes", () => {
   it("does not invent notes for a fully reverted app change", async () => {
     const f = fixture();
     f.write(f.file, 'let label = "Send"\n');
-    git(f.rootDir, "add", f.file);
-    git(f.rootDir, "commit", "-m", "Revert candidate UI change");
-    f.plan.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
-    fs.writeFileSync(f.planPath, JSON.stringify(f.plan));
+    commit(f, "Revert candidate UI change", f.file);
+    savePlan(f);
     const saved = await generateMobileReleaseNotes({ ...f, sourceSha: f.plan.sourceSha });
     expect(saved.entries[0]?.text).toBe("Bug fixes and improvements.");
     expect(api.parse).not.toHaveBeenCalled();
@@ -388,13 +374,11 @@ describe("generated mobile store notes", () => {
       vi.spyOn(Date, "now").mockImplementation(() => now);
       api.parse.mockImplementationOnce(() => {
         now = started + 300_001;
-        return { status: "completed", output_parsed: { files } };
+        return completed({ files });
       });
     } else {
       api.parse.mockResolvedValueOnce(
-        files
-          ? { status: "completed", output_parsed: { files } }
-          : { status: "incomplete", output_parsed: { changes: [] } },
+        files ? completed({ files }) : { status: "incomplete", output_parsed: { changes: [] } },
       );
     }
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow(error);
@@ -417,7 +401,7 @@ describe("generated mobile store notes", () => {
       [{ text: "Send messages in chat.", evidenceIds: ["e1"] }],
     );
     const saved = await generateMobileReleaseNotes(f);
-    const draft = JSON.parse(api.parse.mock.calls[1]![0].input);
+    const draft = requestInput(1);
     expect(draft.evidence[0].patch).toBe('let label = "Send message"\n');
     expect(saved.entries[0]?.baseline.sourceSha).toBeNull();
     expect(saved.entries[0]?.text).toBe("- Send messages in chat.");
@@ -428,8 +412,7 @@ describe("generated mobile store notes", () => {
     const original = "apps/android/app/src/main/res/values/strings.xml";
     const moved = "apps/android/app/src/main/res/values-en/strings.xml";
     f.write(original, '<resources><string name="send">Send message</string></resources>\n');
-    git(f.rootDir, "add", original);
-    git(f.rootDir, "commit", "-m", "Published resource");
+    commit(f, "Published resource", original);
     git(
       f.rootDir,
       "update-ref",
@@ -438,18 +421,15 @@ describe("generated mobile store notes", () => {
     );
     fs.mkdirSync(path.dirname(path.join(f.rootDir, moved)), { recursive: true });
     fs.renameSync(path.join(f.rootDir, original), path.join(f.rootDir, moved));
-    git(f.rootDir, "add", "-A");
-    git(f.rootDir, "commit", "-m", "Restrict resource to English");
-    f.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
-    f.plan.sourceSha = f.sourceSha;
-    fs.writeFileSync(f.planPath, JSON.stringify(f.plan));
+    commit(f, "Restrict resource to English", "-A");
+    savePlan(f);
     accept(
       [{ file: moved, focus: ["send"] }],
       [{ text: "Updated English labels.", evidenceIds: ["e1"] }],
     );
     accept([{ file: moved, focus: ["send"] }], []);
     const saved = await generateMobileReleaseNotes(f);
-    const draft = JSON.parse(api.parse.mock.calls[1]![0].input);
+    const draft = requestInput(1);
     expect(draft.evidence[0].patch).toContain("similarity index 100%");
     expect(draft.evidence[0].patch).toContain(`rename from ${original}`);
     expect(draft.evidence[0].patch).toContain(`rename to ${moved}`);
@@ -466,46 +446,31 @@ describe("generated mobile store notes", () => {
         : "Unsupported behavior claim.";
       select([{ file: f.file, focus: ["label"] }]);
       api.parse
-        .mockResolvedValueOnce({ status: "completed", output_parsed: { changes } })
+        .mockResolvedValueOnce(completed({ changes }))
         .mockImplementationOnce((request: { input: string }) => {
           const review = JSON.parse(request.input);
           expect(review.draft.changes).toEqual(changes);
-          expect(review.evidence).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                id: "e1",
-                file: f.file,
-                patch: expect.stringContaining('+let label = "Send message"'),
-              }),
-            ]),
+          expect(review.evidence).toContainEqual(
+            expect.objectContaining({
+              id: "e1",
+              file: f.file,
+              patch: expect.stringContaining('+let label = "Send message"'),
+            }),
           );
-          return {
-            status: "completed",
-            output_parsed: { approved: false, problems: [correction] },
-          };
+          return completed({ approved: false, problems: [correction] });
         })
         .mockImplementationOnce((request: { input: string }) => {
           expect(JSON.parse(request.input).corrections).toEqual([correction]);
-          return { status: "completed", output_parsed: { changes: [claim] } };
+          return completed({ changes: [claim] });
         })
-        .mockResolvedValueOnce({
-          status: "completed",
-          output_parsed: { approved, problems: approved ? [] : [correction] },
-        });
+        .mockResolvedValueOnce(completed({ approved, problems: approved ? [] : [correction] }));
 
       if (approved) {
         const saved = await generateMobileReleaseNotes(f);
         expect(saved.entries[0]?.claims).toEqual([claim]);
-        expect(
-          renderMobileReleaseNotes({
-            rootDir: f.rootDir,
-            platform: f.platform,
-            version: "2026.7.40",
-            build: "2",
-            audience: "ios",
-            artifactPath: f.outputPath,
-          }),
-        ).toBe("- Clearer labels when sending messages.");
+        expect(renderMobileReleaseNotes(renderOptions(f))).toBe(
+          "- Clearer labels when sending messages.",
+        );
       } else {
         await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
           "Could not validate ios release notes",

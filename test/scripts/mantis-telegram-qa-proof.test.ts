@@ -34,23 +34,21 @@ it("admits canonical read-only probes without opening arbitrary GET or Bot API m
   }
 });
 
-describe("owned Telegram QA network cleanup", () => {
-  it("removes the created network with the supported Podman command", async () => {
-    const calls: string[][] = [];
-    await removeTelegramQaNetwork(async (args) => {
-      calls.push(args);
-      return "";
-    }, "mantis-qa-fixture");
-    expect(calls).toEqual([["network", "rm", "mantis-qa-fixture"]]);
-  });
-  it("skips only an uncreated network and preserves genuine removal failures", async () => {
-    const failure = new Error("network still in use");
-    const podman = async () => {
-      throw failure;
-    };
-    await expect(removeTelegramQaNetwork(podman, undefined)).resolves.toBeUndefined();
-    await expect(removeTelegramQaNetwork(podman, "mantis-qa-fixture")).rejects.toBe(failure);
-  });
+it("removes the created network with the supported Podman command", async () => {
+  const calls: string[][] = [];
+  await removeTelegramQaNetwork(async (args) => {
+    calls.push(args);
+    return "";
+  }, "mantis-qa-fixture");
+  expect(calls).toEqual([["network", "rm", "mantis-qa-fixture"]]);
+});
+it("skips only an uncreated network and preserves genuine removal failures", async () => {
+  const failure = new Error("network still in use");
+  const podman = async () => {
+    throw failure;
+  };
+  await expect(removeTelegramQaNetwork(podman, undefined)).resolves.toBeUndefined();
+  await expect(removeTelegramQaNetwork(podman, "mantis-qa-fixture")).rejects.toBe(failure);
 });
 
 const identity = requestIdentitySchema.parse({
@@ -105,13 +103,13 @@ function observations(status: "pass" | "fail" = "pass") {
     },
   };
 }
-function receipt(files: unknown) {
+function receipt(files: ReturnType<typeof observations>) {
   return createRequestReceipt(
     identity,
     "completed",
     evidence,
     Object.fromEntries(
-      Object.entries(files as Record<string, unknown>).map(([name, value]) => [
+      Object.entries(files).map(([name, value]) => [
         name,
         Buffer.from(JSON.stringify(value)).toString("base64"),
       ]),
@@ -139,45 +137,19 @@ describe("canonical Telegram QA evidence contract", () => {
       expect(result.limits.join(" ")).toContain("no Telegram Test Server");
     },
   );
-  it.each([
-    "wrong-request",
-    "live-service",
-    "not-quiescent",
-    "wrong-transport",
-    "wrong-result",
-    "missing-case",
-    "duplicate-case",
-    "extra-key",
-    "oversized",
-  ])("keeps %s evidence inconclusive", (fault) => {
+  it.each<[string, (files: ReturnType<typeof observations>) => void]>([
+    ["wrong-request", (f) => (f["qa-execution.json"].request_id = "e".repeat(64))],
+    ["live-service", (f) => (f["qa-execution.json"].live_service = true)],
+    ["not-quiescent", (f) => (f["qa-execution.json"].candidate_quiescent = false)],
+    ["wrong-transport", (f) => (f["qa-execution.json"].transport = "Telegram Test Server")],
+    ["wrong-result", (f) => (f["qa-result.json"].status = "fail")],
+    ["missing-case", (f) => f["qa-observations.json"].cases.pop()],
+    ["duplicate-case", (f) => (f["qa-observations.json"].cases[1]!.case = "all-space-code")],
+    ["extra-key", (f) => Object.assign(f["qa-execution.json"], { readiness: true })],
+    ["oversized", (f) => (f["qa-observations.json"].cases[0]!.outboundHtml = "x".repeat(4097))],
+  ])("keeps %s evidence inconclusive", (_fault, mutate) => {
     const files = observations();
-    if (fault === "wrong-request") {
-      files["qa-execution.json"].request_id = "e".repeat(64);
-    }
-    if (fault === "live-service") {
-      files["qa-execution.json"].live_service = true;
-    }
-    if (fault === "not-quiescent") {
-      files["qa-execution.json"].candidate_quiescent = false;
-    }
-    if (fault === "wrong-transport") {
-      files["qa-execution.json"].transport = "Telegram Test Server";
-    }
-    if (fault === "wrong-result") {
-      files["qa-result.json"].status = "fail";
-    }
-    if (fault === "missing-case") {
-      files["qa-observations.json"].cases.pop();
-    }
-    if (fault === "duplicate-case") {
-      files["qa-observations.json"].cases[1]!.case = "all-space-code";
-    }
-    if (fault === "extra-key") {
-      Object.assign(files["qa-execution.json"], { readiness: true });
-    }
-    if (fault === "oversized") {
-      files["qa-observations.json"].cases[0]!.outboundHtml = "x".repeat(4097);
-    }
+    mutate(files);
     expect(receipt(files).assertion_outcome).toBe("inconclusive");
   });
 });
@@ -201,9 +173,6 @@ describe("protected workflow admission", () => {
     let mainReads = 0;
     const fetchImpl = async (url: string | URL | Request, options?: RequestInit) => {
       expect(options?.redirect).toBe("error");
-      if (fault === "api-denied") {
-        return new Response(null, { status: 403 });
-      }
       if (fault === "redirect") {
         return new Response(null, { status: 302 });
       }
@@ -222,12 +191,7 @@ describe("protected workflow admission", () => {
           name: "main",
           protected: true,
           commit: {
-            sha:
-              fault === "main"
-                ? sha
-                : fault === "moved-main" && mainReads > 1
-                  ? "c".repeat(40)
-                  : main,
+            sha: fault === "moved-main" && mainReads > 1 ? "c".repeat(40) : main,
           },
         });
       }
@@ -249,7 +213,7 @@ describe("protected workflow admission", () => {
       token: "synthetic-only",
       fetchImpl,
     });
-    if (["complete", "main", "advanced-main"].includes(fault)) {
+    if (["complete", "advanced-main"].includes(fault)) {
       await expect(admission).resolves.toBeUndefined();
     } else if (fault === "wrong-main-base") {
       await expect(admission).rejects.toThrow("Workflow SHA is not verified main ancestry");

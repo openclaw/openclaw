@@ -315,6 +315,15 @@ function advanceMain(f: ReturnType<typeof fixture>): string {
   git(f.root, "checkout", "main");
   return sha;
 }
+function workflowEnv(sha: string, event = "schedule") {
+  return {
+    GITHUB_ACTIONS: "true",
+    GITHUB_EVENT_NAME: event,
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_SHA: sha,
+  };
+}
 
 describe("mobile release CLI", () => {
   it.each([
@@ -331,13 +340,7 @@ describe("mobile release CLI", () => {
         "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
       ];
       const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
-      const ci = {
-        GITHUB_ACTIONS: "true",
-        GITHUB_EVENT_NAME: "schedule",
-        GITHUB_RUN_ATTEMPT: "1",
-        GITHUB_REF: "refs/heads/main",
-        GITHUB_SHA: f.base,
-      };
+      const ci = workflowEnv(f.base);
       if (destination === "internal") {
         const rejected = f.invoke("run", ["--destination", destination], {
           ...ci,
@@ -437,13 +440,7 @@ describe("mobile release CLI", () => {
       expect(stale.stderr).toContain("Local main differs from origin/main");
       expect(fs.existsSync(f.uploadAudit)).toBe(false);
       git(f.root, "checkout", "--detach", f.base);
-      const ci = {
-        GITHUB_ACTIONS: "true",
-        GITHUB_EVENT_NAME: event,
-        GITHUB_RUN_ATTEMPT: "1",
-        GITHUB_REF: "refs/heads/main",
-        GITHUB_SHA: f.base,
-      };
+      const ci = workflowEnv(f.base, event);
       const result = f.invoke("run", [], ci);
       expect(result.status, result.stderr).toBe(0);
       const invalidDispatches: Record<string, string>[] = [
@@ -590,13 +587,7 @@ describe("mobile release CLI", () => {
 
   it("admits scheduled TestFlight on the exact main source", () => {
     const f = fixture("ios", { groupId: "external-fixture", builds: [], pendingBuild: null });
-    const ci = {
-      GITHUB_ACTIONS: "true",
-      GITHUB_EVENT_NAME: "schedule",
-      GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_SHA: f.base,
-    };
+    const ci = workflowEnv(f.base);
     const result = f.invoke("run", ["--destination", "testflight"], ci);
     expect(result.status, result.stderr).toBe(0);
     expect(f.audit()).toEqual([
