@@ -94,7 +94,7 @@ describe("synthetic auth runtime refs", () => {
   it("loads manifest synthetic auth refs with the current runtime scope", () => {
     const config = { plugins: { allow: ["external-local"] } };
     const env = { OPENCLAW_HOME: "/tmp/openclaw-home" };
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+    loadSnapshot.mockReturnValue({
       source: "persisted",
       snapshot: {
         plugins: [{ syntheticAuthRefs: ["external-local"] }],
@@ -112,7 +112,7 @@ describe("synthetic auth runtime refs", () => {
       refs: ["external-local"],
       complete: true,
     });
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
+    expect(loadSnapshot).toHaveBeenCalledWith({
       config,
       workspaceDir: "/tmp/workspace",
       env,
