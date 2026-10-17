@@ -221,11 +221,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         })
       : null;
     const renameDisabledReason =
-      this.state?.connected !== true || !renameAccess
+      this.state?.connected !== true
         ? t("sessionsView.actionRequiresConnection")
-        : renameAccess.allowed
-          ? undefined
-          : renameAccess.reason;
+        : renameAccess && !renameAccess.allowed
+          ? renameAccess.reason
+          : undefined;
     const configuredMainKey = resolveUiConfiguredMainKey({
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
