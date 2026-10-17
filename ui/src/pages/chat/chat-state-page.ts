@@ -32,7 +32,7 @@ import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
 } from "./chat-history-events.ts";
-import { setChatError } from "./chat-history-state.ts";
+import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -675,6 +675,7 @@ export function createPageState(
     invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
   return projectChatFields(projectChatErrors(projectChatRun(projectChatOutboxQueue(state))), [
     "chatSending",
     "chatLoading",

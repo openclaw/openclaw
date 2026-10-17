@@ -506,8 +506,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         isUiSelectedGlobalSessionKey(state, state.sessionKey))
     ) {
       retireChatModelSelectionOwnership(state);
-      this.swarmHydrator?.dispose();
-      this.swarmHydrator = null;
+      this.swarm.hydrator?.dispose();
+      this.swarm.hydrator = null;
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";

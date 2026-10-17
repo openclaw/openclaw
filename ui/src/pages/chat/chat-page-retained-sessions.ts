@@ -20,7 +20,6 @@ const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 
 type RetentionBindings = {
-  invalidate: () => void;
   context: () => ApplicationContext | undefined;
   presented: () => boolean;
   routeHref: () => string;
@@ -31,6 +30,7 @@ type RetentionBindings = {
 };
 
 export class ChatPageRetainedSessions {
+  private readonly listeners = new Set<() => void>();
   private readonly sessionsByPane = new Map<string, Map<string, number>>();
   private readonly unbound = new Set<string>();
   private pendingAtFocus = new WeakSet<AbortController>();
@@ -43,6 +43,13 @@ export class ChatPageRetainedSessions {
     private readonly host: HTMLElement,
     private readonly bindings: RetentionBindings,
   ) {}
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
 
   get unboundPaneIds(): ReadonlySet<string> {
     return this.unbound;
@@ -105,9 +112,13 @@ export class ChatPageRetainedSessions {
     this.cancelPreview();
   }
 
-  private readonly refreshRetention = () => {
-    this.bindings.invalidate();
-  };
+  private publish(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  private readonly refreshRetention = () => this.publish();
 
   suspend(): void {
     this.cancelPreview();
@@ -219,7 +230,7 @@ export class ChatPageRetainedSessions {
   ): void => {
     const context = this.bindings.context();
     if (context && readDeletedSessionStartup(context, sessionKey)) {
-      this.bindings.invalidate();
+      this.publish();
       return;
     }
     const deletedPane = this.findPane(paneId, sessionKey);
@@ -245,7 +256,7 @@ export class ChatPageRetainedSessions {
     if (selectedSessionKey && areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
       this.bindings.selectReplacement(paneId, sessionKey, replacementSessionKey);
     } else {
-      this.bindings.invalidate();
+      this.publish();
     }
   };
 

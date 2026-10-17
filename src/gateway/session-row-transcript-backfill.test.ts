@@ -217,7 +217,9 @@ describe("session row transcript backfill", () => {
                             lastMessagePreview: preview,
                             lastAssistantMessage: { text: preview, timestamp: expect.any(Number) },
                           }
-                        : {},
+                        : storage === "unavailable" || storage === "absent"
+                          ? undefined
+                          : {},
                 );
                 for (const statement of hostSql.calls) {
                   expect(statement).not.toHaveBeenCalled();

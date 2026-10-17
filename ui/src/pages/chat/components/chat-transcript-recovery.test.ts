@@ -37,8 +37,7 @@ class RecoveryTranscriptElement extends TranscriptTestHost {
   );
 
   override renderTranscript = () => {
-    const requestUpdate = () => this.requestRender();
-    return renderChatThread({ ...this.props, onRequestUpdate: requestUpdate }, this.transcript, {
+    return renderChatThread(this.props, this.transcript, {
       search: true,
     });
   };

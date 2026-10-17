@@ -178,7 +178,6 @@ describe("stored chat snapshot hydration", () => {
           assistantAttachmentAuthToken: "test-auth-token",
           connectionEpoch: 1,
           mediaOwner: renderPane,
-          onRequestUpdate: renderPane,
         };
         if (view) {
           view.update(props);

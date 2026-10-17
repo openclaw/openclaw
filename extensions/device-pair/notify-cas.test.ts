@@ -4,11 +4,7 @@ import {
   createTestPluginApi,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
-  notifySubscriberStoreKey,
-  type NotifySubscription,
-} from "./notify-state.js";
+import { notifySubscriberStoreKey, type NotifySubscription } from "./notify-state.js";
 
 vi.mock("openclaw/plugin-sdk/device-bootstrap", () => ({
   listDevicePairing: async () => ({
@@ -71,11 +67,8 @@ describe("device-pair notify CAS", () => {
       logger: { info() {}, warn, error() {} },
       runtime: {
         state: {
-          openKeyedStore: ({ namespace }: { namespace: string }) => {
-            return namespace === DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE
-              ? subscriberStore
-              : { entries: async () => [], register: recordSeen };
-          },
+          openKeyedStore: () => ({ entries: async () => [], register: recordSeen }),
+          openKeyedStoreV2: () => subscriberStore,
         },
         channel: { outbound: { loadAdapter } },
       } as never,
@@ -108,20 +101,6 @@ describe("device-pair notify CAS", () => {
     addedAtMs: 1_000,
     armId: "arm-1",
   };
-
-  it.each(["observe", "compareAndApply"] as const)(
-    "rejects missing %s before delivery",
-    async (capability) => {
-      const harness = createHarness(delivered);
-      delete harness.subscriberStore[capability];
-
-      await harness.poll();
-
-      expect(harness.sendText).not.toHaveBeenCalled();
-      expect(harness.snapshot().value).toEqual(delivered);
-      expect(harness.warn).toHaveBeenCalledWith(expect.stringContaining("compare-and-apply"));
-    },
-  );
 
   it.each([
     { label: "changed storage metadata", current: delivered },

@@ -91,7 +91,11 @@ export async function executeCliProcess(params: {
     sessionId: runParams.sessionId,
     lane: runParams.lane,
   };
-  const outputErrorContext = { ...failoverContext, runId: runParams.runId };
+  const outputErrorContext = {
+    ...failoverContext,
+    runId: runParams.runId,
+    classifyErrorCode: context.backendResolved.classifyErrorCode,
+  };
   // buildCliArgs emits this option only for an actual checkpointed resume.
   const resumeAtArg =
     params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
@@ -560,6 +564,7 @@ export async function executeCliProcess(params: {
     const stderr = Buffer.concat(stderrCapture.chunks, stderrCapture.bytes).toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
+      classifyErrorCode: context.backendResolved.classifyErrorCode,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
       fallbackMessage: "CLI failed.",
       retryEmptyFailure,

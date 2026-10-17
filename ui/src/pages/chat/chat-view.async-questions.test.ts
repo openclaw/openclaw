@@ -72,7 +72,6 @@ it.each([false, true])(
       sessionKey: "agent:main:main",
       messages: [question],
       onAsyncQuestionSubmit: submit,
-      onRequestUpdate: vi.fn(),
     });
     renderChatPropsInto(container, props);
     await vi.waitFor(() =>
@@ -121,7 +120,6 @@ it.each([false, true])(
     expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
       "New contributors",
     );
-    expect(props.onRequestUpdate).not.toHaveBeenCalled();
   },
 );
 
@@ -140,7 +138,6 @@ it("selects a reopened historical question ahead of another pending request", as
     sessionKey: "agent:main:main",
     messages: [old],
     onAsyncQuestionSubmit: vi.fn(async () => true),
-    onRequestUpdate: vi.fn(),
   });
   const draw = () => renderChatPropsInto(container, props);
   draw();
@@ -273,7 +270,6 @@ it.each(["discard", "consumed"] as const)(
         onQueueRemove: (id) => {
           removeQueuedMessage(host, id, { discard: true });
         },
-        onRequestUpdate: () => refresh(),
       });
       const refresh = () => {
         props.queue = host.chatQueue;

@@ -5724,7 +5724,10 @@ the agent writer, with foreground priority and a session identity check before
 publication. Ordinary active-message appends carry preview and terminal-model facts
 in the existing committed transcript receipt and persist them in the same mutation
 statement. Resident rows publish them immediately; newer receipt facts supersede
-an older pending backfill. Actor commands carry this publication through native
+an older pending backfill. Ordinary user appends preserve the resident owner's
+known assistant preview, including a known empty result, without another tail
+read. Unknown cold or legacy facts and invalidated transcript projections still
+use bounded backfill. Actor commands carry this publication through native
 settlement before installing their full replica. Complete participant receipts
 retain unaffected transcript, Board, and runtime facts. Preview reads retain the
 64 KiB bound; terminal-model reads retain the 256 KiB bound. An oversized newest

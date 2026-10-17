@@ -67,6 +67,41 @@ function listResult() {
 }
 
 describe("V2 decision admission", () => {
+  it("preserves normalized image boxes and rejects missing, inverted or out-of-range edges", () => {
+    const imageBatch: DecisionBatchV2 = {
+      state: { type: "image", dataUri: "data:image/png;base64,AA==" },
+      questions: { target: { type: "box", instructions: "the red square" } },
+    };
+    const box = { top: 0.25, bottom: 0.75, left: 0.25, right: 0.76 };
+    const answer = (value: unknown) => ({
+      model: "fixture",
+      answers: { target: { type: "box", box: value, confidence: 0.91 } },
+    });
+    expect(validateDecisionBatchV2(imageBatch)).toBe(true);
+    expect(validateDecisionResultV2(imageBatch, answer(box))).toBe(true);
+    for (const invalid of [
+      { ...box, left: -0.1 },
+      { ...box, right: 1.1 },
+      { ...box, top: Number.NaN },
+      { ...box, top: box.bottom },
+      { ...box, left: 0.9 },
+      { top: 0, bottom: 1, left: 0 },
+      { ...box, width: 0.51 },
+    ]) {
+      expect(validateDecisionResultV2(imageBatch, answer(invalid))).toBe(false);
+    }
+    for (const invalid of [
+      { ...imageBatch, state: { type: "text", text: "no image" } },
+      { ...imageBatch, questions: { target: { type: "box" } } },
+      {
+        ...imageBatch,
+        questions: { target: { type: "box", instructions: "target", criteria: {} } },
+      },
+    ]) {
+      expect(() => validateDecisionBatchV2(invalid)).toThrow(DecisionContractError);
+    }
+  });
+
   it.each(["categorical", "independent", "provider-defined"] as const)(
     "checks declared %s estimates after canonical normalization without renormalizing them",
     (semantics) => {

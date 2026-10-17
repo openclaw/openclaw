@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -9,7 +10,9 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createInitializationContext,
@@ -34,6 +37,7 @@ import {
 import * as chatMessage from "./chat-message-group-frame.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { resetTranscriptSession, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
+import { ChatThread } from "./chat-thread-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
@@ -136,13 +140,7 @@ describe("chat transcript invalidation", () => {
       const searchContainer = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderTranscriptSearch(paneId), searchContainer);
-        render(
-          renderChatThread(
-            { ...props, mediaOwner: rerender, onRequestUpdate: rerender },
-            transcript,
-          ),
-          container,
-        );
+        render(renderChatThread({ ...props, mediaOwner: rerender }, transcript), container);
         transcript.update();
       };
       const ownName = () =>
@@ -660,7 +658,6 @@ describe("chat transcript invalidation", () => {
       render(renderChatThread(props, transcript), container);
       transcript.update();
     };
-    props.onRequestUpdate = rerender;
     props.mediaOwner = rerender;
     rerender();
     transcript.start();
@@ -724,9 +721,12 @@ describe("chat transcript invalidation", () => {
     } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
     const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
-    state.hello = {
-      auth: { deviceToken: "test-auth-token" },
-    } as typeof state.hello;
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "connected",
+      hello: { auth: { deviceToken: "test-auth-token" } } as typeof state.hello,
+    });
     const messages = [
       {
         role: "assistant",
@@ -734,25 +734,28 @@ describe("chat transcript invalidation", () => {
         timestamp: 1_000,
       },
     ];
-    const renderPane = () => {
-      render(
-        renderChatThread(
-          {
-            ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
-            assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
-            mediaOwner: renderPane,
-            onRequestUpdate: renderPane,
+    const mediaOwner = {};
+    const view = mountSolid(
+      () => {
+        const gateway = projectOwner(
+          pane.context.gateway,
+          (owner) => owner.snapshot.hello,
+          Object.is,
+        );
+        return createComponent(ChatThread, {
+          get props() {
+            return {
+              ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
+              assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
+              mediaOwner,
+            };
           },
           transcript,
-        ),
-        container,
-      );
-      transcript.update();
-    };
-    state.requestUpdate = renderPane;
-    vi.spyOn(pane.chatState, "requestBackgroundUpdate").mockImplementation(renderPane);
-
-    renderPane();
+        });
+      },
+      { container },
+    );
+    onTestFinished(view.unmount);
     transcript.start();
     transcript.update();
     await flushDeferredRowPrune();
@@ -773,6 +776,7 @@ describe("chat transcript invalidation", () => {
         auth: { deviceToken: "test-token" },
       } as typeof pane.context.gateway.snapshot.hello,
     });
+    flush();
     expect(previousSignal?.aborted).toBe(true);
     await flushDeferredRowPrune();
 
@@ -782,7 +786,7 @@ describe("chat transcript invalidation", () => {
     );
     expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
 
-    releaseChatMediaResourceOwner(renderPane);
+    releaseChatMediaResourceOwner(mediaOwner);
     transcript.dispose();
   });
 
