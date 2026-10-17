@@ -72,24 +72,18 @@ export function reportDoctorUnresolvedEngine(
   const nextStep = unparseable
     ? "Run `openclaw config validate` to inspect the parse error."
     : "Fix database settings or supply the referenced credentials, then rerun `openclaw doctor`.";
-  if (hasFlag(argv, "--lint")) {
+  const lint = hasFlag(argv, "--lint");
+  const machineOutput = isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY });
+  if (lint || machineOutput) {
     const failure = new Error([message, details, nextStep].filter(Boolean).join("\n"));
-    if (isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY })) {
+    if (machineOutput) {
       writeRuntimeJson(defaultRuntime, formatDoctorLintFailure(failure));
     } else {
       defaultRuntime.error(failure.message);
     }
-    process.exitCode = 2;
-    return;
-  }
-  if (isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY })) {
-    writeRuntimeJson(defaultRuntime, {
-      status: "unknown",
-      configPath: snapshot.path,
-      details,
-      databases: sections.map((section) => ({ section, status: "unknown", message })),
-      nextStep,
-    });
+    if (lint) {
+      process.exitCode = 2;
+    }
     return;
   }
   showDoctorIntro("OpenClaw doctor");

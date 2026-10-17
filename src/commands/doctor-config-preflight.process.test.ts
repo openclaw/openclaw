@@ -363,9 +363,14 @@ describe("doctor invalid config process exit", () => {
     getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
   );
 
-  it.each(["sqlite", "postgres"] as const)(
-    "preserves the lint failure envelope without opening storage for malformed %s config",
-    async (engine) => {
+  it.each([
+    { engine: "sqlite", lint: true },
+    { engine: "postgres", lint: true },
+    { engine: "sqlite", lint: false },
+    { engine: "postgres", lint: false },
+  ])(
+    "preserves the JSON failure envelope without opening storage for malformed $engine config (lint: $lint)",
+    async ({ engine, lint }) => {
       const { stateDir, configPath, run } = createDoctorFixture(
         `doctor-invalid-lint-${engine}`,
         true,
@@ -374,8 +379,11 @@ describe("doctor invalid config process exit", () => {
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, raw);
 
-      const result = await run(["doctor", "--lint", "--json"], DOCTOR_CHILD_TIMEOUT_MS);
-      expect(result, result.stderr).toMatchObject({ code: 2, signal: null });
+      const result = await run(
+        ["doctor", ...(lint ? ["--lint"] : []), "--json"],
+        DOCTOR_CHILD_TIMEOUT_MS,
+      );
+      expect(result, result.stderr).toMatchObject({ code: lint ? 2 : 0, signal: null });
       const report = JSON.parse(result.stdout);
       expect(report).toMatchObject({ schemaVersion: 1, ok: false, checksRun: 0 });
       expect(report.findings).toContainEqual(

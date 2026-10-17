@@ -4,6 +4,7 @@ import { databaseEngineAdapters } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCliDatabaseEngine } from "./database-engine-selection.js";
 
@@ -210,13 +211,10 @@ describe("one-shot CLI engine selection", () => {
       const sqliteOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       const postgresOpen = vi.spyOn(databaseEngineAdapters.postgres, "openConnection");
       expect(
-        await prepareCliDatabaseEngine([
-          "node",
-          "openclaw",
-          "doctor",
-          "--fix",
-          "--non-interactive",
-        ]),
+        // Handoff lock journals are temp-scoped; do not borrow another test's ledger.
+        await withEnvAsync({ TMPDIR: state.root, TMP: state.root, TEMP: state.root }, () =>
+          prepareCliDatabaseEngine(["node", "openclaw", "doctor", "--fix", "--non-interactive"]),
+        ),
       ).toBe(true);
       expect(getDatabaseEngineSelection()).toBeUndefined();
       expect(sqliteOpen).not.toHaveBeenCalled();
