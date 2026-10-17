@@ -176,6 +176,29 @@ describe("Doctor host-owned runtime diagnostics", () => {
     ]);
   });
 
+  it("routes upstream EOL advice to the app that owns the runtime", async () => {
+    mocks.root.mockResolvedValue(await hostRoot());
+    mocks.detectRuntime.mockResolvedValue({
+      kind: "node",
+      version: "25.9.0",
+      execPath: "/fixture/node",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+    try {
+      const findings = await collectNodeRuntimeFindings({}, "doctor");
+      expect(findings.filter((finding) => finding.severity === "warning")).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining("upstream end-of-life"),
+          fixHint: ownerHint,
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["Node diagnostics", "daemon diagnostics"])(
     "preserves unsupported service health in %s without recommending runtime replacement",
     async (surface) => {

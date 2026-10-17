@@ -7,6 +7,7 @@ import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-comm
 import { transformConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
+import * as runtimeGuard from "../infra/runtime-guard.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
@@ -15,6 +16,7 @@ import {
   createUpdatePostInstallDoctorResultPath,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "../infra/update-doctor-result.js";
+import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -22,6 +24,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
+import { resolveDoctorHealthContributions } from "./doctor-health-contributions.test-support.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
 const mocks = vi.hoisted(() => ({
@@ -78,6 +81,16 @@ vi.mock("../commands/doctor-update.js", () => ({
 }));
 // mock-isolation: Recovery dispatch is observed without launching external triage agents.
 vi.mock("../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
+
+vi.mock("../commands/doctor-ui.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-ui.js")>()),
+  maybeRepairUiProtocolFreshness: async () => undefined,
+}));
+
+vi.mock("../commands/doctor-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-install.js")>()),
+  noteSourceInstallIssues: () => undefined,
+}));
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
   noteStalePluginRuntimeSymlinks: async () => undefined,
@@ -169,6 +182,52 @@ beforeEach(async () => {
   mocks.runContributions.mockReset().mockResolvedValue(undefined);
   mocks.pendingPluginMigrations.mockReset().mockResolvedValue([]);
   mocks.stateMigrationReceipts = [];
+});
+
+it("keeps standalone Node lifecycle warnings out of post-install Doctor result IPC", async () => {
+  await withResult(async (_state, resultPath) => {
+    for (const [key, value] of Object.entries(
+      buildUpdateDoctorEnv({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+        serviceRepairPolicy: "external",
+      }),
+    )) {
+      vi.stubEnv(key, value);
+    }
+    vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
+      kind: "node",
+      version: "24.19.0",
+      execPath: "/fixture/node",
+      pathEnv: "/fixture",
+      hasNodeSqlite: true,
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+    });
+    // Keep config/maintenance clocks real; only the Node contribution sees the EOL date.
+    mocks.runContributions.mockImplementation(async (ctx) => {
+      await vi.importActual("./doctor-health-contributions.js");
+      const contribution = resolveDoctorHealthContributions().find(
+        (entry) => entry.id === "doctor:node-runtime",
+      );
+      expect(contribution).toBeDefined();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2028-04-30T00:00:00Z"));
+      try {
+        await contribution!.run(ctx);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+    await runDoctorHealthFlow(
+      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      { repair: true, nonInteractive: true },
+    );
+    expect(mocks.runContributions).toHaveBeenCalledOnce();
+    const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result?.warnings ?? []).toEqual([]);
+  });
 });
 
 it("publishes include input and final write hashes", async () => {

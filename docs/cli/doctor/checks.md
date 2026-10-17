@@ -19,6 +19,15 @@ postures and maintenance modes documented on the other pages.
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
 
+## Node lifecycle advice
+
+Normal `openclaw doctor` reports upstream maintenance or end-of-life advice for
+a usable Node runtime when applicable. Maintenance is informational; an EOL
+warning points to a maintained release. These notes omit executable paths.
+`doctor --lint`, `status`, and `update status` use compatibility findings without
+the additional lifecycle advice. Doctor passes invoked by the updater also keep
+compatibility checks without adding these standalone advisories to update results.
+
 ## Config writes and backups
 
 Update-history inspection and reconciliation are best-effort maintenance. A failure
