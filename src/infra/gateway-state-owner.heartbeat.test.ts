@@ -18,12 +18,17 @@ import {
   acquireStateDatabaseSchemaLease,
   captureGatewayStateOwner,
 } from "./gateway-state-owner.js";
+import { scheduleGatewayRestart } from "./restart.js";
 import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import * as workerCpu from "./worker-cpu.js";
 
 vi.mock("./gateway-lock-payload.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-lock-payload.js")>()),
   GATEWAY_OWNER_HEARTBEAT_MS: 1_000,
+}));
+vi.mock("./restart.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./restart.js")>()),
+  scheduleGatewayRestart: vi.fn(),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -282,6 +287,81 @@ it.each([65_000, -5_000, "replacement"] as const)(
     }
   },
 );
+
+it("resumes custody and respawns the renewal worker after a silent worker exit", async () => {
+  const { workers, ready, beats } = observeHeartbeatWorkers();
+  const gateway = await acquireGatewayLock({
+    allowInTests: true,
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-heartbeat-respawn-") },
+    timeoutMs: 0,
+  });
+  if (!gateway) {
+    throw new Error("Expected Gateway custody");
+  }
+  try {
+    await Promise.all(ready);
+    const lastBeat = beats[0];
+    if (!lastBeat) {
+      throw new Error("Expected one heartbeat worker and its shared observation");
+    }
+    await workers[0]!.terminate();
+    // Backdate the beat so the synchronous respawn proof runs on the next state
+    // call, and backdate the lock mtime so that verified touch stays observable.
+    const stale = new Date(Date.now() - 5_000);
+    fs.utimesSync(gateway.lockPath, stale, stale);
+    const stamp = fs.statSync(gateway.lockPath).mtimeMs;
+    Atomics.store(lastBeat, 0, BigInt(Date.now() - 60_001));
+    expect(() => gateway.assertCurrent()).not.toThrow();
+    expect(fs.statSync(gateway.lockPath).mtimeMs).toBeGreaterThan(stamp);
+    expect(workers).toHaveLength(2);
+    const respawnedBeat = beats[1];
+    if (!respawnedBeat) {
+      throw new Error("Expected the respawned worker's shared observation");
+    }
+    await Promise.all(ready);
+    expect(Number(Atomics.load(respawnedBeat, 0))).toBeGreaterThan(Date.now() - 60_000);
+    expect(() => gateway.assertCurrent()).not.toThrow();
+  } finally {
+    await gateway.release();
+    await Promise.all(workers.map((worker) => worker.terminate()));
+  }
+});
+
+it("schedules a supervisor restart when a run-loop process loses custody", async () => {
+  const { workers, ready, beats } = observeHeartbeatWorkers();
+  const gateway = await acquireGatewayLock({
+    allowInTests: true,
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-heartbeat-selfrestart-") },
+    timeoutMs: 0,
+  });
+  if (!gateway) {
+    throw new Error("Expected Gateway custody");
+  }
+  const listener = () => {};
+  process.on("SIGUSR2", listener);
+  try {
+    await Promise.all(ready);
+    const lastBeat = beats[0];
+    if (!lastBeat) {
+      throw new Error("Expected one heartbeat worker and its shared observation");
+    }
+    await workers[0]!.terminate();
+    // A successor took the lock, so the synchronous proof fences for real.
+    fs.writeFileSync(gateway.lockPath, "successor-owner");
+    Atomics.store(lastBeat, 0, BigInt(Date.now() - 60_001));
+    expect(() => gateway.assertCurrent()).toThrow("owner lock was removed or replaced");
+    await vi.waitFor(() =>
+      expect(scheduleGatewayRestart).toHaveBeenCalledWith({
+        reason: "state-owner custody lost",
+        skipDeferral: true,
+      }),
+    );
+  } finally {
+    process.off("SIGUSR2", listener);
+    await gateway.release();
+    await Promise.all(workers.map((worker) => worker.terminate()));
+  }
+});
 
 it.each([
   { clock: "monotonic", age: 0, renew: true },
