@@ -6,6 +6,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import {
+  clearOpenClawStateDatabaseOpenFailure,
+  recordOpenClawStateDatabaseOpenFailure,
+} from "../state/openclaw-state-db-cache.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -627,5 +631,69 @@ it("contains recovered scheduled launch failures without an unhandled rejection"
     await stopCronRunQueue(state);
     await waitForCronRunQueue(state);
     await scheduler.stop();
+  }
+});
+
+it("logs a failed resume drain instead of raising an unhandled rejection", async () => {
+  const { storePath } = await makeStorePath();
+  const job = commandJob("resume-drain-failure", NOW);
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  const context = captureOpenClawStateWorkerContext();
+  await executeOpenClawStateWorker(context, { type: "cron.initializeRunReceipts", input: {} });
+  // Scheduled requests stay queued while scheduling is paused; resume drains them.
+  await executeOpenClawStateWorker(context, {
+    type: "cron.requestRuns",
+    input: {
+      storeKey: storePath,
+      nowMs: NOW,
+      defaultAgentId: "main",
+      requests: [
+        {
+          jobId: job.id,
+          receiptId: createCronScheduledRunId(storePath, job.id, NOW),
+          configRevision: resolveCronJobConfigRevision(job),
+          mode: "scheduled",
+          scheduledSlotMs: NOW,
+          scheduleOwnershipAtMs: NOW,
+        },
+      ],
+    },
+  });
+  const { cron, state } = createCronServiceWithStateForTest({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => NOW,
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: logger,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    runIsolatedAgentJob: async () => ({ status: "ok" }),
+    runCommandJob: async () => ({ status: "ok" }),
+  });
+  const failure = new Error("synthetic damaged state database");
+  const unhandled: unknown[] = [];
+  const observe = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", observe);
+  try {
+    cron.pauseScheduling();
+    await cron.start();
+    // A damaged state database refuses every later worker operation.
+    recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
+    cron.resumeScheduling();
+    // Join the background drain that resume started, then let Node report leaks.
+    await expect(waitForCronRunQueue(state)).rejects.toThrow(failure.message);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(unhandled).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith({ err: String(failure) }, "cron: queue drain delayed");
+  } finally {
+    process.off("unhandledRejection", observe);
+    clearOpenClawStateDatabaseOpenFailure(context.admission.databasePath);
+    cron.stop();
+    await cron.waitForIdle();
   }
 });
