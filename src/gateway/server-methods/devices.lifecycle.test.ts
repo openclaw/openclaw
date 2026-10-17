@@ -142,6 +142,7 @@ it.each(["remove", "revoke"] as const)("clears node runtime state after %s", asy
     { deviceId: nodeId, ...(revoking ? { role: "node" } : {}) },
     revoking ? createDeviceClient(["operator.admin"], "admin-device") : null,
   );
+  const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
   const reconciled: string[] = [];
   if (revoking) {
     const workerEnvironmentService = {};
@@ -155,7 +156,7 @@ it.each(["remove", "revoke"] as const)("clears node runtime state after %s", asy
   expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
   expect(wake.aborted).toBe(true);
   expect(drainNodePendingWork(nodeId).items.map(({ id }) => id)).toEqual(["baseline-status"]);
-  expect(vi.mocked(opts.context.nodeRegistry.updateSurface)).toHaveBeenCalledWith(nodeId, {
+  expect(updateSurface).toHaveBeenCalledWith(nodeId, {
     caps: [],
     commands: [],
     permissions: undefined,

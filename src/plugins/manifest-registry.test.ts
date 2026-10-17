@@ -621,7 +621,7 @@ describe("loadPluginManifestRegistry", () => {
     ],
   ] satisfies [string, "npm" | "clawhub", Partial<PluginInstallRecord>, boolean?][])(
     "checks official install trust for %s",
-    (_name, source, overrides, expected: boolean | undefined = undefined) => {
+    (_name, source, overrides, expected?: boolean) => {
       expect(resolveOfficialTrust(source, overrides)).toBe(expected);
     },
   );

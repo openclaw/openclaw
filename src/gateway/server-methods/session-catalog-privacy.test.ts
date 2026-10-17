@@ -155,7 +155,7 @@ async function createCatalog() {
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let observed: SessionCatalogHost | undefined;
-    let completion: Promise<SessionCatalogHost[] | void> | undefined;
+    let completion: Promise<void> | undefined;
     list.mockImplementation(({ sessionEntries, onHost, waitUntil }) => {
       observed = prepare || late ? enumerate(sessionEntries) : undefined;
       const deliver = () => {

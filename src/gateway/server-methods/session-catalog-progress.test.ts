@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -16,34 +15,6 @@ import {
   type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
 
-const localHost = (overrides: Partial<SessionCatalogHost> = {}): SessionCatalogHost => ({
-  hostId: "gateway:local",
-  label: "Local",
-  kind: "gateway",
-  connected: true,
-  sessions: [],
-  ...overrides,
-});
-const install = (...providers: SessionCatalogProvider[]) => {
-  hoisted.activeRegistry.sessionCatalogs = providers.map((catalogProvider) => ({
-    provider: catalogProvider,
-  }));
-};
-function caller(
-  config: Parameters<typeof call>[2] = {},
-  client: Parameters<typeof call>[3] = { connId: "requester" },
-) {
-  return {
-    list: (params: unknown, context = {}) =>
-      call("sessions.catalog.list", params, config, client, context),
-    start: (params: unknown, context = {}) =>
-      startCall("sessions.catalog.list", params, config, client, context),
-  };
-}
-const catalog = (id: string, hosts: SessionCatalogHost[]) => expect.objectContaining({ id, hosts });
-const expectCatalogs = (respond: ReturnType<typeof startCall>["respond"], ...catalogs: unknown[]) =>
-  expect(respond).toHaveBeenCalledWith(true, { catalogs });
-
 describe("session catalog progress ownership", () => {
   beforeEach(resetSessionCatalogTestState);
 
@@ -51,23 +22,30 @@ describe("session catalog progress ownership", () => {
     "streams hosts only to the requester and honors final withdrawal (withdrawn=%s)",
     async (withdrawn) => {
       const broadcastToConnIds = vi.fn();
-      const host = localHost({
+      const host = {
         hostId: "node:fast",
         label: "Fast node",
-        kind: "node",
+        kind: "node" as const,
+        connected: true,
         nodeId: "fast",
-      });
-      install(
-        provider("codex", {
-          list: vi.fn(async ({ onHost }) => {
-            onHost?.(host);
-            return withdrawn ? [] : [host];
+        sessions: [],
+      };
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider("codex", {
+            list: vi.fn(async ({ onHost }) => {
+              onHost?.(host);
+              return withdrawn ? [] : [host];
+            }),
           }),
-        }),
-      );
+        },
+      ];
 
-      const respond = await caller({}, { connId: "requester", connect: {} }).list(
+      const respond = await call(
+        "sessions.catalog.list",
         { progressId: "progress-1", ...(withdrawn ? { allowPartialResults: true } : {}) },
+        {},
+        { connId: "requester", connect: {} },
         { broadcastToConnIds },
       );
 
@@ -76,14 +54,16 @@ describe("session catalog progress ownership", () => {
         {
           progressId: "progress-1",
           agentId: "main",
-          catalog: catalog("codex", [host]),
+          catalog: expect.objectContaining({ id: "codex", hosts: [host] }),
         },
         new Set(["requester"]),
         { dropIfSlow: true },
       );
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
       expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.error).toBeUndefined();
-      expectCatalogs(respond, catalog("codex", withdrawn ? [] : [host]));
+      expect(respond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "codex", hosts: withdrawn ? [] : [host] })],
+      });
     },
   );
 
@@ -96,7 +76,13 @@ describe("session catalog progress ownership", () => {
     const warn = catalogLog.warn.mockReset().mockImplementation(() => {});
     const { promise: gate, resolve: release } = createDeferredCore();
     const started = createDeferredCore();
-    const host = localHost();
+    const host = {
+      hostId: "gateway:local",
+      label: "Local",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [],
+    };
     const late = createDeferredCore();
     const publications: Promise<void>[] = [];
     const list = vi.fn<SessionCatalogProvider["list"]>(async ({ onHost, waitUntil }) => {
@@ -108,17 +94,23 @@ describe("session catalog progress ownership", () => {
       onHost?.(host);
       return [host];
     });
-    install(provider("codex", { list }));
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
     const config = { agents: { entries: { main: {}, research: {} } } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
-    const rpc = caller(config);
-    const leader = rpc.start(
+    const sharedClient = { connId: "requester" };
+    const leader = startCall(
+      "sessions.catalog.list",
       { progressId: "leader-progress", agentId: "main" },
+      config,
+      sharedClient,
       { broadcastToConnIds: leaderBroadcast },
     );
-    const follower = rpc.start(
+    const follower = startCall(
+      "sessions.catalog.list",
       { progressId: "follower-progress", agentId: "main" },
+      config,
+      sharedClient,
       { broadcastToConnIds: followerBroadcast },
     );
     const otherAgent = startCall("sessions.catalog.list", { agentId: "research" }, config);
@@ -127,28 +119,39 @@ describe("session catalog progress ownership", () => {
       { search: "other", agentId: "main" },
       config,
     );
-    const pending = [leader, follower, otherAgent, otherParams];
 
     try {
       await started.promise;
       expect(list).toHaveBeenCalledTimes(3);
       clock = 1_500;
       release();
-      await Promise.all(pending.map(({ completion }) => completion));
+      await Promise.all([
+        leader.completion,
+        follower.completion,
+        otherAgent.completion,
+        otherParams.completion,
+      ]);
 
       expect(list).toHaveBeenCalledTimes(3);
       expect(leaderBroadcast).toHaveBeenCalledOnce();
       expect(followerBroadcast).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledTimes(3);
-      for (const { respond } of pending) {
-        expectCatalogs(respond, catalog("codex", [host]));
+      for (const [message, fields] of warn.mock.calls) {
+        expect(message).toBe("slow session catalog provider list");
+        expect(fields).toMatchObject({ elapsedMs: 1_500, returnedGatewayHostCount: 1 });
+      }
+      for (const pending of [leader, follower, otherAgent, otherParams]) {
+        expect(pending.respond).toHaveBeenCalledWith(true, {
+          catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+        });
       }
       const settledBroadcast = vi.fn();
-      await rpc.list(
+      await call(
+        "sessions.catalog.list",
         { progressId: "settled-progress", agentId: "main" },
-        {
-          broadcastToConnIds: settledBroadcast,
-        },
+        config,
+        sharedClient,
+        { broadcastToConnIds: settledBroadcast },
       );
       clock = 5_000;
       late.resolve();
@@ -161,7 +164,13 @@ describe("session catalog progress ownership", () => {
     } finally {
       release();
       late.resolve();
-      await Promise.allSettled([...pending.map(({ completion }) => completion), ...publications]);
+      await Promise.allSettled([
+        leader.completion,
+        follower.completion,
+        otherAgent.completion,
+        otherParams.completion,
+        ...publications,
+      ]);
       now.mockRestore();
       enabled.mockReset();
       warn.mockReset();
@@ -170,30 +179,48 @@ describe("session catalog progress ownership", () => {
   });
 
   it.each([
-    [{}, true, false],
-    [{ progressId: "legacy" }, true, false],
-    [{ allowPartialResults: true, progressId: "live" }, true, true],
-    [{ allowPartialResults: true, progressId: "live" }, false, false],
-    [{ allowPartialResults: true, progressId: "live", hostIds: ["node:fast"] }, true, false],
-    [
-      { allowPartialResults: true, progressId: "live", cursors: { "node:fast": "page" } },
-      true,
-      false,
-    ],
-  ] as const)(
-    "negotiates partial results for %j (connected=%s, partial=%s)",
-    async (request, connected, partial) => {
+    { request: {}, connected: true, partial: false },
+    { request: { progressId: "legacy" }, connected: true, partial: false },
+    { request: { allowPartialResults: true, progressId: "live" }, connected: true, partial: true },
+    {
+      request: { allowPartialResults: true, progressId: "live" },
+      connected: false,
+      partial: false,
+    },
+    {
+      request: { allowPartialResults: true, progressId: "live", hostIds: ["node:fast"] },
+      connected: true,
+      partial: false,
+    },
+    {
+      request: { allowPartialResults: true, progressId: "live", cursors: { "node:fast": "page" } },
+      connected: true,
+      partial: false,
+    },
+  ])(
+    "negotiates partial catalog results for $request (connected=$connected)",
+    async ({ request, connected, partial }) => {
       const release = createDeferredCore();
       const list = vi.fn<SessionCatalogProvider["list"]>(async () => {
         await release.promise;
         return [];
       });
-      install(provider("fixture", { list }));
-      const rpc = caller();
+      hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
+      const config = {};
+      const client = { connId: "requester" };
       const context = { isConnectionActive: () => connected };
-      const progressive = rpc.start({ catalogId: "fixture", ...request }, context);
-      const complete = rpc.start(
+      const progressive = startCall(
+        "sessions.catalog.list",
+        { catalogId: "fixture", ...request },
+        config,
+        client,
+        context,
+      );
+      const complete = startCall(
+        "sessions.catalog.list",
         { catalogId: "fixture", ...request, allowPartialResults: false },
+        config,
+        client,
         context,
       );
       try {
@@ -215,32 +242,47 @@ describe("session catalog progress ownership", () => {
     async (cold) => {
       const sibling = createDeferredCore();
       const publish = createDeferredCore();
-      const local = localHost();
-      const cached = localHost({
+      const local = {
+        hostId: "gateway:local",
+        label: "Local",
+        kind: "gateway" as const,
+        connected: true,
+        sessions: [],
+      };
+      const cached = {
         hostId: "node:slow",
         label: "Cached",
-        kind: "node",
-      });
+        kind: "node" as const,
+        connected: true,
+        sessions: [],
+      };
       const fresh = { ...cached, label: "Fresh" };
       let publication: Promise<void> | undefined;
-      install(
-        provider("fixture", {
-          list: async ({ onHost, waitUntil }) => {
-            publication = publish.promise.then(() => onHost?.(fresh));
-            waitUntil?.(publication);
-            return cold ? [local, { ...cached, pending: true }] : [local, cached];
-          },
-        }),
-        provider("sibling", {
-          list: async () => {
-            await sibling.promise;
-            return [];
-          },
-        }),
-      );
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider("fixture", {
+            list: async ({ onHost, waitUntil }) => {
+              publication = publish.promise.then(() => onHost?.(fresh));
+              waitUntil?.(publication);
+              return cold ? [local, { ...cached, pending: true }] : [local, cached];
+            },
+          }),
+        },
+        {
+          provider: provider("sibling", {
+            list: async () => {
+              await sibling.promise;
+              return [];
+            },
+          }),
+        },
+      ];
       const broadcastToConnIds = vi.fn();
-      const pending = caller().start(
+      const pending = startCall(
+        "sessions.catalog.list",
         { allowPartialResults: true, progressId: "live" },
+        {},
+        { connId: "requester" },
         { broadcastToConnIds },
       );
       try {
@@ -251,7 +293,12 @@ describe("session catalog progress ownership", () => {
         expect(pending.respond).not.toHaveBeenCalled();
         sibling.resolve();
         await pending.completion;
-        expectCatalogs(pending.respond, catalog("fixture", [local, fresh]), catalog("sibling", []));
+        expect(pending.respond).toHaveBeenCalledWith(true, {
+          catalogs: [
+            expect.objectContaining({ id: "fixture", hosts: [local, fresh] }),
+            expect.objectContaining({ id: "sibling", hosts: [] }),
+          ],
+        });
       } finally {
         publish.resolve();
         sibling.resolve();
@@ -270,25 +317,38 @@ describe("session catalog progress ownership", () => {
       }
       return [];
     });
-    install(provider("fixture", { list }), provider("completed"));
-    const rpc = caller();
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider("fixture", { list }) },
+      { provider: provider("completed") },
+    ];
+    const config = {};
+    const client = { connId: "requester" };
     const request = { catalogId: "fixture", search: "held" };
-    const leader = rpc.start(request);
+    const leader = startCall("sessions.catalog.list", request, config, client);
     const pending = [leader];
     try {
       await started.promise;
       for (let index = 0; index < 128; index += 1) {
-        const respond = await rpc.list({ catalogId: "completed", search: `completed-${index}` });
-        expectCatalogs(respond, catalog("completed", []));
+        const respond = await call(
+          "sessions.catalog.list",
+          { catalogId: "completed", search: `completed-${index}` },
+          config,
+          client,
+        );
+        expect(respond).toHaveBeenCalledWith(true, {
+          catalogs: [expect.objectContaining({ id: "completed", hosts: [] })],
+        });
       }
-      pending.push(rpc.start(request));
+      pending.push(startCall("sessions.catalog.list", request, config, client));
       release.resolve();
       await Promise.all(pending.map(({ completion }) => completion));
       for (const { respond } of pending) {
-        expectCatalogs(respond, catalog("fixture", []));
+        expect(respond).toHaveBeenCalledWith(true, {
+          catalogs: [expect.objectContaining({ id: "fixture", hosts: [] })],
+        });
       }
       expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(1);
-      await rpc.list(request);
+      await call("sessions.catalog.list", request, config, client);
       expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(2);
     } finally {
       release.resolve();
@@ -312,7 +372,13 @@ describe("session catalog progress ownership", () => {
         canContinue: false,
         canArchive: true,
       };
-      const host = localHost({ sessions: [session] });
+      const host = {
+        hostId: "gateway:local",
+        label: "Local",
+        kind: "gateway" as const,
+        connected: true,
+        sessions: [session],
+      };
       let archived = false;
       const list = vi.fn<SessionCatalogProvider["list"]>(async ({ onHost, waitUntil }) => {
         const resultHost = { ...host, sessions: archived ? [] : [session] };
@@ -323,23 +389,25 @@ describe("session catalog progress ownership", () => {
         await gate.promise;
         return [resultHost];
       });
-      install(
-        provider("fixture", {
-          list,
-          archive: async () => {
-            archived = true;
-            return { ok: true };
-          },
-        }),
-      );
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider("fixture", {
+            list,
+            archive: async () => {
+              archived = true;
+              return { ok: true };
+            },
+          }),
+        },
+      ];
       const config = {};
       const client = { connId: "requester" };
-      const rpc = caller(config, client);
-      const original = rpc.start(
+      const original = startCall(
+        "sessions.catalog.list",
         { progressId: "before-delete" },
-        {
-          broadcastToConnIds,
-        },
+        config,
+        client,
+        { broadcastToConnIds },
       );
       try {
         await started.promise;
@@ -363,15 +431,20 @@ describe("session catalog progress ownership", () => {
         await publications[0];
         gate.resolve();
         await original.completion;
-        expectCatalogs(original.respond, expect.objectContaining({ hosts: [host] }));
+        expect(original.respond).toHaveBeenCalledWith(true, {
+          catalogs: [expect.objectContaining({ hosts: [host] })],
+        });
 
-        const refreshed = await rpc.list(
+        const refreshed = await call(
+          "sessions.catalog.list",
           { progressId: "after-delete" },
-          {
-            broadcastToConnIds: vi.fn(),
-          },
+          config,
+          client,
+          { broadcastToConnIds: vi.fn() },
         );
-        expectCatalogs(refreshed, expect.objectContaining({ hosts: [{ ...host, sessions: [] }] }));
+        expect(refreshed).toHaveBeenCalledWith(true, {
+          catalogs: [expect.objectContaining({ hosts: [{ ...host, sessions: [] }] })],
+        });
         expect(list).toHaveBeenCalledTimes(2);
         expect(broadcastToConnIds).not.toHaveBeenCalled();
       } finally {
@@ -397,13 +470,19 @@ describe("session catalog progress ownership", () => {
       const list = vi.fn<SessionCatalogProvider["list"]>(async (params) => {
         producerSignal = params.signal;
         const publication = releases[publications.length]!.promise.then(() =>
-          params.onHost?.(localHost({ hostId: "node:late", label: "Late", kind: "node" })),
+          params.onHost?.({
+            hostId: "node:late",
+            label: "Late",
+            kind: "node",
+            connected: true,
+            sessions: [],
+          }),
         );
         publications.push(publication);
         params.waitUntil?.(publication);
         return [];
       });
-      install(provider("fixture", { list }));
+      hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
       const config = {};
       try {
         const getRuntimeConfig = vi
@@ -412,11 +491,11 @@ describe("session catalog progress ownership", () => {
           .mockImplementation(() => {
             throw new Error("current config unavailable");
           });
-        const original = caller(config, {
-          connId: "old",
-          connectionSignal: connection.signal,
-        }).list(
+        const original = call(
+          "sessions.catalog.list",
           { progressId: "original" },
+          config,
+          { connId: "old", connectionSignal: connection.signal },
           {
             broadcastToConnIds,
             requestEntryLifetime: { signal: gateway.signal },
@@ -434,8 +513,11 @@ describe("session catalog progress ownership", () => {
           connection.abort();
         }
         expect(producerSignal?.aborted).toBe(retirement !== "disconnect");
-        await caller(config, { connId: "new" }).list(
+        await call(
+          "sessions.catalog.list",
           { progressId: "replacement" },
+          config,
+          { connId: "new" },
           { broadcastToConnIds: replacementBroadcast },
         );
         releases[0]!.resolve();
