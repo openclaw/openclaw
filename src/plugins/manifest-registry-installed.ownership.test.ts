@@ -8,14 +8,14 @@ import {
   resolveInstalledPluginIndexInstallOwner as installOwner,
 } from "./installed-plugin-index-install-owner.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { readPersistedInstalledPluginIndex as readIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasMissingInstalledPluginOwnerMetadata,
   createInstalledPluginOwnershipResolver as ownershipOf,
 } from "./installed-plugin-package-ownership.js";
-import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import { resolvePluginManifestInstallOwner as manifestOwner } from "./manifest-install-owner.js";
+import { loadPluginManifestRegistryForInstalledIndex as loadRegistry } from "./manifest-registry-installed.js";
 import { createIndex } from "./manifest-registry-installed.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -75,14 +75,9 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     ]);
     await writePersistedInstalledPluginIndex(index, { stateDir });
     clearPluginMetadataLifecycleCaches();
-    const persisted = expectDefined(
-      await readPersistedInstalledPluginIndex({ stateDir }),
-      "persisted package index",
-    );
-    const expectedOwnership = {
-      ok: true,
-      value: { installOwner: "pack", pluginIds: ["pack/one", "pack/two"] },
-    };
+    const persisted = expectDefined(await readIndex({ stateDir }), "persisted package index");
+    const pluginIds = ["pack/one", "pack/two"];
+    const expectedOwnership = { ok: true, value: { installOwner: "pack", pluginIds } };
     const persistedOwnership = ownershipOf(persisted);
     const firstOwnership = persistedOwnership.resolvePackage("pack/one");
     expect(firstOwnership).toMatchObject(expectedOwnership);
@@ -93,19 +88,15 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(persistedOwnership.resolvePackage("pack/two")).toMatchObject(expectedOwnership);
 
     const registryParams = { index: persisted, config, env };
-    const allEntries = loadPluginManifestRegistryForInstalledIndex({
-      ...registryParams,
-      includeDisabled: true,
-    });
+    const allEntries = loadRegistry({ ...registryParams, includeDisabled: true });
     expect(
-      allEntries.plugins.map(({ id, source }) => ({ id, source: path.basename(source) })),
+      allEntries.plugins.map((p) => [p.id, path.basename(p.source), manifestOwner(p)]),
     ).toEqual([
-      { id: "pack/one", source: "one.cjs" },
-      { id: "pack/two", source: "two.cjs" },
+      ["pack/one", "one.cjs", "pack"],
+      ["pack/two", "two.cjs", "pack"],
     ]);
-    expect(allEntries.plugins.map(resolvePluginManifestInstallOwner)).toEqual(["pack", "pack"]);
 
-    const enabledEntries = loadPluginManifestRegistryForInstalledIndex(registryParams);
+    const enabledEntries = loadRegistry(registryParams);
     expect(enabledEntries.plugins.map(({ id }) => id)).toEqual(["pack/one"]);
 
     const ownerless = {
@@ -134,13 +125,11 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
     expect(hasMissingInstalledPluginOwnerMetadata(orphanedOwner, env)).toBe(false);
 
-    const legacyAmbiguous = {
+    const withAlias = (second = installRecords.pack) => ({
       ...ownerless,
-      installRecords: {
-        "pack/one": installRecords.pack,
-        "pack/two": installRecords.pack,
-      },
-    };
+      installRecords: { "pack/one": installRecords.pack, "pack/two": second },
+    });
+    const legacyAmbiguous = withAlias();
     const legacyOwnership = ownershipOf(legacyAmbiguous);
     expect(legacyOwnership.resolvePackage("pack/one").ok).toBe(false);
     expect(legacyOwnership.resolveLifecycle("pack/one").ok).toBe(false);
@@ -148,13 +137,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
 
     const packageAlias = path.join(stateDir, "pack-alias");
     fs.symlinkSync(packageDir, packageAlias, process.platform === "win32" ? "junction" : "dir");
-    const aliasedAmbiguous = {
-      ...ownerless,
-      installRecords: {
-        "pack/one": installRecords.pack,
-        "pack/two": pathInstall(packageAlias),
-      },
-    };
+    const aliasedAmbiguous = withAlias(pathInstall(packageAlias));
     const aliasedOwnership = ownershipOf(aliasedAmbiguous);
     expect(aliasedOwnership.resolvePackage("pack/one").ok).toBe(false);
     expect(aliasedOwnership.resolveLifecycle("pack/one").ok).toBe(false);
@@ -192,10 +175,9 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
 
   it("rechecks replaced package paths in the next ownership phase", () => {
     const rootDir = makeTempDir();
-    const otherDir = makeTempDir();
     const alias = path.join(makeTempDir(), "package");
     const linkType = process.platform === "win32" ? "junction" : "dir";
-    fs.symlinkSync(otherDir, alias, linkType);
+    fs.symlinkSync(makeTempDir(), alias, linkType);
     const index = createIndex(rootDir);
     withOwner(index.plugins[0]!, "installed");
     index.installRecords = {

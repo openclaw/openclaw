@@ -48,6 +48,9 @@ function xaiConfig(config: Record<string, unknown>): OpenClawConfig {
 function configSignal(config: OpenClawConfig, env: NodeJS.ProcessEnv = {}) {
   return manifestConfigSignalPasses({ config, env, signal: webSearchSignal });
 }
+function secretRef(source: SecretRef["source"], provider = "shared"): SecretRef {
+  return { source, provider, id: source === "file" ? "/tool/apiKey" : "TOOL_API_KEY" };
+}
 function available(
   plugin: PluginManifestRecord,
   overrides: Partial<Omit<Parameters<typeof hasManifestToolAvailability>[0], "plugin">> = {},
@@ -58,38 +61,21 @@ function available(
 describe("manifestConfigSignalPasses", () => {
   it.each<
     [
-      string,
       Record<string, unknown>,
       Omit<Parameters<typeof manifestConfigSignalPasses>[0]["signal"], "rootPath">,
       boolean,
     ]
   >([
+    [{ tokenFile: "/tmp/token" }, { requiredAny: ["token", "tokenFile"] }, true],
+    [{ mode: "off" }, { mode: { allowed: ["poll", "webhook"] } }, false],
+    [{ mode: "webhook" }, { mode: { disallowed: ["webhook"] } }, false],
+    [{}, { mode: {} }, false],
     [
-      "requiredAny accepts one configured path",
-      { tokenFile: "/tmp/token" },
-      { requiredAny: ["token", "tokenFile"] },
-      true,
-    ],
-    [
-      "mode rejects a value outside the allowlist",
-      { mode: "off" },
-      { mode: { allowed: ["poll", "webhook"] } },
-      false,
-    ],
-    [
-      "mode rejects a disallowed value",
-      { mode: "webhook" },
-      { mode: { disallowed: ["webhook"] } },
-      false,
-    ],
-    ["mode rejects a missing value without a default", {}, { mode: {} }, false],
-    [
-      "overlay map accepts one configured account",
       { accounts: { first: {}, second: { token: "abc" } } },
       { overlayMapPath: "accounts", required: ["token"] },
       true,
     ],
-  ])("handles %s", (_name, demo, signal, expected) => {
+  ])("handles channel config %j using %j", (demo, signal, expected) => {
     expect(
       manifestConfigSignalPasses({
         config: makeConfig({ channels: { demo } }),
@@ -145,22 +131,20 @@ describe("manifestConfigSignalPasses", () => {
 });
 
 describe("manifestProviderBaseUrlGuardPasses", () => {
-  it("normalizes allowed URLs and rejects missing or foreign URLs", () => {
-    const passes = (config = makeConfig({}), selectedGuard: typeof guard | undefined = guard) =>
-      manifestProviderBaseUrlGuardPasses({ config, guard: selectedGuard });
-    expect(manifestProviderBaseUrlGuardPasses({ config: makeConfig({}), guard: undefined })).toBe(
-      true,
+  it.each([
+    [undefined, undefined, true],
+    [guard, undefined, true],
+    [guard, "https://api.x.ai/v1//", true],
+    [{ provider: "xai", allowedBaseUrls: guard.allowedBaseUrls }, undefined, false],
+  ] as const)("checks guard %j with base URL %s", (selectedGuard, baseUrl, expected) => {
+    const config = makeConfig(
+      baseUrl === undefined
+        ? {}
+        : {
+            models: { providers: { xai: { baseUrl } } },
+          },
     );
-    expect(passes()).toBe(true);
-    expect(
-      passes(makeConfig({ models: { providers: { xai: { baseUrl: "https://api.x.ai/v1//" } } } })),
-    ).toBe(true);
-    expect(
-      manifestProviderBaseUrlGuardPasses({
-        config: makeConfig({}),
-        guard: { provider: "xai", allowedBaseUrls: ["https://api.x.ai/v1"] },
-      }),
-    ).toBe(false);
+    expect(manifestProviderBaseUrlGuardPasses({ config, guard: selectedGuard })).toBe(expected);
   });
 });
 
@@ -175,12 +159,9 @@ describe("manifest auth environment helpers", () => {
     expect(manifestPluginSetupProviderEnvVars(makePlugin({}), "xai")).toEqual([]);
   });
 
-  it.each([[{ SECOND: "token" }, ["FIRST", "SECOND"], true]] as const)(
-    "resolves env candidates",
-    (env, envVars, expected) => {
-      expect(hasNonEmptyManifestEnvCandidate(env, envVars)).toBe(expected);
-    },
-  );
+  it("resolves env candidates", () => {
+    expect(hasNonEmptyManifestEnvCandidate({ SECOND: "token" }, ["FIRST", "SECOND"])).toBe(true);
+  });
 });
 
 describe("hasManifestToolAvailability", () => {
@@ -204,7 +185,7 @@ describe("hasManifestToolAvailability", () => {
   }>([
     {
       name: "selected store default shadowing exec",
-      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      ref: secretRef("store"),
       secrets: {
         defaults: { store: "shared" },
         providers: { shared: { source: "exec", command: "/tmp/unused-store-alias-command" } },
@@ -219,34 +200,30 @@ describe("hasManifestToolAvailability", () => {
       ] as const
     ).map((provider) => ({
       name: `explicit matching non-default ${provider.source} provider`,
-      ref: {
-        source: provider.source,
-        provider: "shared",
-        id: provider.source === "file" ? "/tool/apiKey" : "TOOL_API_KEY",
-      },
+      ref: secretRef(provider.source),
       secrets: { providers: { shared: provider } },
       expected: true,
     })),
     {
       name: "missing non-default store provider",
-      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      ref: secretRef("store"),
       expected: false,
     },
     {
       name: "mismatched non-default store provider",
-      ref: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      ref: secretRef("store"),
       secrets: { providers: { shared: { source: "file", path: "/tmp/unused.json" } } },
       expected: false,
     },
     {
       name: "old store default after selecting another alias",
-      ref: { source: "store", provider: "default", id: "TOOL_API_KEY" },
+      ref: secretRef("store", "default"),
       secrets: { defaults: { store: "shared" } },
       expected: false,
     },
     ...(["file", "exec"] as const).map((source) => ({
       name: `undeclared ${source} default`,
-      ref: { source, provider: "default", id: source === "file" ? "/tool/apiKey" : "TOOL_API_KEY" },
+      ref: secretRef(source, "default"),
       expected: false,
     })),
   ])("checks $name through config-only metadata", ({ ref, secrets, expected }) => {

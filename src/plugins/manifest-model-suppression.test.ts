@@ -96,10 +96,7 @@ function nativePlugin(providerConfigApiIn?: string[], endpointUrl = false) {
 describe("manifest model suppression", () => {
   beforeEach(() => {
     mocks.loadPluginMetadataSnapshot.mockReset();
-    mocks.resolvePluginMetadataSnapshot.mockImplementation(
-      (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
-        mocks.loadPluginMetadataSnapshot(params),
-    );
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(mocks.loadPluginMetadataSnapshot);
   });
 
   it("retains each exact snapshot's compiled rules across operation A/B/A interleaving", () => {
@@ -234,6 +231,7 @@ describe("manifest model suppression", () => {
   it.each([undefined, "current-model"])(
     "preserves explicit retirement and successor %s only on the selected endpoint",
     (replacedBy) => {
+      const retirement = replacedBy ? { replacedBy } : {};
       const modelCatalog = normalizeModelCatalog(
         {
           suppressions: [
@@ -241,7 +239,7 @@ describe("manifest model suppression", () => {
               provider: "fixture",
               model: "old-model",
               reason: "This subscription model has retired.",
-              retirement: replacedBy ? { replacedBy } : {},
+              retirement,
               when: { baseUrlHosts: ["subscription.example"] },
             },
           ],
@@ -253,10 +251,7 @@ describe("manifest model suppression", () => {
       const input = { provider: "fixture", id: "old-model" };
       const baseUrl = "https://subscription.example/v1";
       const retired = resolver({ ...input, baseUrl });
-      expect(retired).toMatchObject({
-        suppress: true,
-        retirement: replacedBy ? { replacedBy } : {},
-      });
+      expect(retired).toMatchObject({ suppress: true, retirement });
       expect(retired?.errorMessage).toContain("openclaw doctor --fix");
       expect(resolver(input)).toBeUndefined();
       expect(resolver({ ...input, baseUrl: "https://api.example/v1" })).toBeUndefined();
@@ -376,19 +371,11 @@ describe("manifest model suppression", () => {
     setPlugins(qwenPlugin("qwen"));
     const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
     const input = { provider: "qwen", id: "qwen3.6-plus" };
-    expect(
-      resolver({ ...input, baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1" })?.suppress,
-    ).toBe(true);
-    expect(
-      resolver({ ...input, baseUrl: " https://coding-intl.dashscope.aliyuncs.com./v1 " })?.suppress,
-    ).toBe(true);
+    const atUrl = (baseUrl: string) => resolver({ ...input, baseUrl });
+    expect(atUrl("https://coding-intl.dashscope.aliyuncs.com/v1")?.suppress).toBe(true);
+    expect(atUrl(" https://coding-intl.dashscope.aliyuncs.com./v1 ")?.suppress).toBe(true);
     expect(resolver(input)?.suppress).toBe(true);
-    expect(
-      resolver({
-        ...input,
-        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      }),
-    ).toBeUndefined();
+    expect(atUrl("https://dashscope-intl.aliyuncs.com/compatible-mode/v1")).toBeUndefined();
   });
 
   it("does not apply conditional suppressions to custom providers with a foreign api owner", () => {
