@@ -64,17 +64,13 @@ const {
   prepareMediaGenerationTask,
 } = await import("./media-generate-background.js");
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
+beforeEach(() => {
+  resetMediaBackgroundMocks({ taskExecutorMocks, taskDeliveryRuntimeMocks, announceDeliveryMocks });
 });
+afterEach(clearRuntimeConfigSnapshot);
 
 describe("media requester provenance", () => {
   beforeEach(() => {
-    resetMediaBackgroundMocks({
-      taskExecutorMocks,
-      taskDeliveryRuntimeMocks,
-      announceDeliveryMocks,
-    });
     taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-provenance" });
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({ delivered: true });
     sessionMocks.entry = {
@@ -168,14 +164,6 @@ describe("media requester provenance", () => {
 });
 
 describe("image generate background helpers", () => {
-  beforeEach(() => {
-    resetMediaBackgroundMocks({
-      taskExecutorMocks,
-      taskDeliveryRuntimeMocks,
-      announceDeliveryMocks,
-    });
-  });
-
   it("records task progress updates", () => {
     imageGenerationTaskLifecycle.recordTaskProgress({
       handle: admitMediaHandle({
@@ -202,14 +190,14 @@ describe("image generate background helpers", () => {
       path: "direct",
     });
 
-    await imageGenerationTaskLifecycle.wakeTaskCompletion({
-      ...createMediaCompletionFixture({
+    await imageGenerationTaskLifecycle.wakeTaskCompletion(
+      createMediaCompletionFixture({
         runId: "tool:image_generate:abc",
         taskLabel: "small watercolor robot",
         result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
         mediaUrls: ["/tmp/generated-robot.png"],
       }),
-    });
+    );
     expectFallbackMediaAnnouncement({
       deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
       requesterSessionKey: "agent:main:discord:direct:123",
@@ -261,14 +249,6 @@ function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
 // Music background tests cover task-run creation, progress recording, and
 // completion delivery through the durable requester-agent handoff.
 describe("music generate background helpers", () => {
-  beforeEach(() => {
-    resetMediaBackgroundMocks({
-      taskExecutorMocks,
-      taskDeliveryRuntimeMocks,
-      announceDeliveryMocks,
-    });
-  });
-
   it("creates a running task with queued progress text", async () => {
     taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
@@ -285,12 +265,11 @@ describe("music generate background helpers", () => {
       providerId: "google",
     });
 
-    if (!handle) {
-      throw new Error("Expected music generation task handle");
-    }
-    expect(handle.taskId).toBe("task-123");
-    expect(handle.requesterSessionKey).toBe("agent:main:discord:direct:123");
-    expect(handle.taskLabel).toBe("night-drive synthwave");
+    expect(handle).toMatchObject({
+      taskId: "task-123",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      taskLabel: "night-drive synthwave",
+    });
     expectQueuedTaskRun({
       taskExecutorMocks,
       taskKind: MUSIC_GENERATION_TASK_KIND,
@@ -359,11 +338,6 @@ describe("music generate background helpers", () => {
 describe("video generate background helpers", () => {
   beforeEach(() => {
     resetAgentEventsForTest();
-    resetMediaBackgroundMocks({
-      taskExecutorMocks,
-      taskDeliveryRuntimeMocks,
-      announceDeliveryMocks,
-    });
   });
 
   afterEach(() => {

@@ -28,6 +28,15 @@ function admittedTools(skills: InstalledSkill[]) {
   return { search: expectDefined(tools[0], "search"), read: expectDefined(tools[1], "read") };
 }
 
+function instructionContent(location: string, body: string) {
+  return [
+    {
+      type: "text",
+      text: `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${body}`,
+    },
+  ];
+}
+
 it.each([
   "/skills/guide/SKILL.md",
   "workspace-skill://workspace/guide/SKILL.md",
@@ -42,15 +51,7 @@ it.each([
     }),
   ]);
   const result = await read.execute("known-name", { name: "guide" });
-  expect(result.content).toEqual([
-    {
-      type: "text",
-      text:
-        `Skill location: ${location}\n` +
-        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-        body,
-    },
-  ]);
+  expect(result.content).toEqual(instructionContent(location, body));
   expect(result.details).toMatchObject({ name: "guide", location, content: body });
   expect(JSON.stringify(result)).not.toContain("/private/gateway");
 });
@@ -131,12 +132,14 @@ it.each(["inline", "reader", "partial"] as const)(
           ? "# Release\n\nUse a canary deployment.\nPreserve the complete rollback procedure."
           : "# Release\n\nCheck everything.\n";
     const reader = vi.fn(async () => content);
+    const name = mode === "partial" ? "large" : "release-guide";
+    const location = mode === "partial" ? "/skills/large/SKILL.md" : "/skills/release/SKILL.md";
     const entry = skill({
-      name: mode === "partial" ? "large" : "release-guide",
+      name,
       description: mode === "partial" ? "Deployment guide" : "Publish a software release",
-      location: mode === "partial" ? "/skills/large/SKILL.md" : "/skills/release/SKILL.md",
+      location,
       source: {
-        filePath: mode === "partial" ? "/skills/large/SKILL.md" : "/skills/release/SKILL.md",
+        filePath: location,
         ...(mode === "reader" ? {} : { readContent: content }),
       },
       ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
@@ -181,15 +184,9 @@ it.each(["inline", "reader", "partial"] as const)(
         expect(createInstalledSkillTools([])).toEqual([]);
       }
     }
-    expect((await read.execute("load", { name: entry.name })).content).toEqual([
-      {
-        type: "text",
-        text:
-          `Skill location: ${entry.location}\n` +
-          "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-          content,
-      },
-    ]);
+    expect((await read.execute("load", { name })).content).toEqual(
+      instructionContent(location, content),
+    );
   },
 );
 
