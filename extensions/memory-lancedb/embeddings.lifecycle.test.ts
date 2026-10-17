@@ -43,15 +43,15 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
 
 import { createEmbeddings, type Embeddings } from "./embeddings.js";
 
-function createApi(): OpenClawPluginApi {
-  const config = {};
+function createApi(
+  config: unknown = {},
+  resolveAgentDir = (_config: unknown, _agentId: string) => "/tmp/openclaw-agent",
+  current = () => config,
+): OpenClawPluginApi {
   return {
     config,
     logger: { warn: vi.fn() },
-    runtime: {
-      config: { current: () => config },
-      agent: { resolveAgentDir: () => "/tmp/openclaw-agent" },
-    },
+    runtime: { config: { current }, agent: { resolveAgentDir } },
   } as unknown as OpenClawPluginApi;
 }
 
@@ -67,6 +67,37 @@ function embed(
   embedding: MemoryConfig["embedding"] = embeddingConfig,
 ) {
   return embeddings.embed(agentId, text, embedding);
+}
+
+function useProvider(create: ReturnType<typeof vi.fn>, id = "openai") {
+  providerMocks.getMemoryEmbeddingProvider.mockReturnValue({ id, create });
+}
+
+function publishPrivateCredential(agentDir: string, profileId: string, credential?: string) {
+  replaceRuntimeAuthProfileStoreSnapshots([
+    { store: { version: 1, profiles: {} } },
+    {
+      agentDir,
+      store: {
+        version: 1,
+        profiles: credential
+          ? { [profileId]: { type: "api_key", provider: "openai", key: credential } }
+          : {},
+      },
+    },
+  ]);
+}
+
+function readCredential(agentDir: string | undefined, profileId: string, error: string) {
+  const profile = ensureAuthProfileStore(agentDir, {
+    externalCli: { mode: "none" },
+    readOnly: true,
+    syncExternalCli: false,
+  }).profiles[profileId];
+  if (profile?.type !== "api_key" || !profile.key) {
+    throw new Error(error);
+  }
+  return profile.key;
 }
 
 function providerResult(
@@ -110,17 +141,8 @@ describe("memory-lancedb provider lifecycle", () => {
         }),
       });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
-      },
-    } as unknown as OpenClawPluginApi;
+    useProvider(createProvider, "openai");
+    const api = createApi(config, (_config: unknown, agentId: string) => `/tmp/agent-${agentId}`);
     const embeddings = createEmbeddings(api);
 
     await Promise.all([
@@ -155,17 +177,8 @@ describe("memory-lancedb provider lifecycle", () => {
         }),
       });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
-      },
-    } as unknown as OpenClawPluginApi;
+    useProvider(createProvider, "openai");
+    const api = createApi(config, (_config: unknown, agentId: string) => `/tmp/agent-${agentId}`);
     const embeddings = createEmbeddings(api);
 
     await Promise.all([
@@ -203,33 +216,15 @@ describe("memory-lancedb provider lifecycle", () => {
     const agentDir = "/tmp/openclaw-lancedb-private-auth-rotation";
     const profileId = "openai:private";
     const requests: Array<{ text: string; credential: string }> = [];
-    const publishCredential = (credential: string | undefined) => {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { store: { version: 1, profiles: {} } },
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: credential
-              ? {
-                  [profileId]: { type: "api_key", provider: "openai", key: credential },
-                }
-              : {},
-          },
-        },
-      ]);
-    };
+    const publishCredential = (credential?: string) =>
+      publishPrivateCredential(agentDir, profileId, credential);
     const closeProvider = vi.fn(async () => {});
     const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      const profile = ensureAuthProfileStore(options.agentDir, {
-        externalCli: { mode: "none" },
-        readOnly: true,
-        syncExternalCli: false,
-      }).profiles[profileId];
-      if (profile?.type !== "api_key" || !profile.key) {
-        throw new Error("Private agent credentials were revoked");
-      }
-      const credential = profile.key;
+      const credential = readCredential(
+        options.agentDir,
+        profileId,
+        "Private agent credentials were revoked",
+      );
       return providerResult({
         embedQuery: vi.fn(async (text: string) => {
           requests.push({ text, credential });
@@ -238,17 +233,8 @@ describe("memory-lancedb provider lifecycle", () => {
         close: closeProvider,
       });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: () => agentDir },
-      },
-    } as unknown as OpenClawPluginApi;
+    useProvider(createProvider, "openai");
+    const api = createApi(config, () => agentDir);
     const embeddings = createEmbeddings(api);
 
     try {
@@ -290,9 +276,7 @@ describe("memory-lancedb provider lifecycle", () => {
         {
           store: {
             version: 1,
-            profiles: {
-              [profileId]: { type: "api_key", provider: "openai", key: credential },
-            },
+            profiles: { [profileId]: { type: "api_key", provider: "openai", key: credential } },
           },
         },
         ...Object.values(agentDirs).map((agentDir) => ({
@@ -304,15 +288,11 @@ describe("memory-lancedb provider lifecycle", () => {
     const closeProvider = vi.fn(async (_agentDir: string, _credential: string) => {});
     const createProvider = vi.fn(async (options: { agentDir?: string }) => {
       const agentDir = expectDefined(options.agentDir, "inherited agent owner");
-      const profile = ensureAuthProfileStore(agentDir, {
-        externalCli: { mode: "none" },
-        readOnly: true,
-        syncExternalCli: false,
-      }).profiles[profileId];
-      if (profile?.type !== "api_key" || !profile.key) {
-        throw new Error("Inherited main credential is unavailable");
-      }
-      const credential = profile.key;
+      const credential = readCredential(
+        agentDir,
+        profileId,
+        "Inherited main credential is unavailable",
+      );
       return providerResult({
         embedQuery: vi.fn(async (text: string) => {
           requests.push({ agentDir, credential, text });
@@ -321,20 +301,11 @@ describe("memory-lancedb provider lifecycle", () => {
         close: async () => closeProvider(agentDir, credential),
       });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
+    useProvider(createProvider, "openai");
+    const api = createApi(
       config,
-      runtime: {
-        config: { current: () => config },
-        agent: {
-          resolveAgentDir: (_config: unknown, agentId: string) =>
-            agentDirs[agentId as keyof typeof agentDirs],
-        },
-      },
-    } as unknown as OpenClawPluginApi;
+      (_config, agentId) => agentDirs[agentId as keyof typeof agentDirs],
+    );
     const embeddings = createEmbeddings(api);
 
     try {
@@ -357,28 +328,14 @@ describe("memory-lancedb provider lifecycle", () => {
         ]),
       );
       expect(requests).toEqual(
-        expect.arrayContaining([
-          {
-            agentDir: agentDirs.private,
-            credential: "fixture-inherited-old",
-            text: "private old inherited credential",
-          },
-          {
-            agentDir: agentDirs.secondary,
-            credential: "fixture-inherited-old",
-            text: "secondary old inherited credential",
-          },
-          {
-            agentDir: agentDirs.private,
-            credential: "fixture-inherited-new",
-            text: "private new inherited credential",
-          },
-          {
-            agentDir: agentDirs.secondary,
-            credential: "fixture-inherited-new",
-            text: "secondary new inherited credential",
-          },
-        ]),
+        expect.arrayContaining(
+          [
+            [agentDirs.private, "fixture-inherited-old", "private old inherited credential"],
+            [agentDirs.secondary, "fixture-inherited-old", "secondary old inherited credential"],
+            [agentDirs.private, "fixture-inherited-new", "private new inherited credential"],
+            [agentDirs.secondary, "fixture-inherited-new", "secondary new inherited credential"],
+          ].map(([agentDir, credential, text]) => ({ agentDir, credential, text })),
+        ),
       );
     } finally {
       await embeddings.close?.();
@@ -408,17 +365,12 @@ describe("memory-lancedb provider lifecycle", () => {
       }
       return providerResult({ embedQuery: oldEmbedQuery, close: closeOldProvider });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config: initialConfig,
-      runtime: {
-        config: { current: () => currentConfig },
-        agent: { resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}` },
-      },
-    } as unknown as OpenClawPluginApi;
+    useProvider(createProvider, "openai");
+    const api = createApi(
+      initialConfig,
+      (_config: unknown, agentId: string) => `/tmp/agent-${agentId}`,
+      () => currentConfig,
+    );
     const embeddings = createEmbeddings(api);
 
     await embed(embeddings, "private", "before revocation");
@@ -457,10 +409,7 @@ describe("memory-lancedb provider lifecycle", () => {
         });
       },
     );
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "fixture-provider",
-      create: createProvider,
-    });
+    useProvider(createProvider, "fixture-provider");
     const embeddingIdentity = {
       provider: "fixture-provider",
       model: "fixture-model",
@@ -521,34 +470,16 @@ describe("memory-lancedb provider lifecycle", () => {
     const config = {};
     const agentDir = "/tmp/openclaw-lancedb-inflight-auth-rotation";
     const profileId = "openai:inflight";
-    const publishCredential = (credential: string) => {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { store: { version: 1, profiles: {} } },
-        {
-          agentDir,
-          store: {
-            version: 1,
-            profiles: {
-              [profileId]: { type: "api_key", provider: "openai", key: credential },
-            },
-          },
-        },
-      ]);
-    };
+    const publishCredential = (credential?: string) =>
+      publishPrivateCredential(agentDir, profileId, credential);
     const oldEmbeddingGate = createDeferred<void>();
     const oldEmbeddingStart = createDeferred<void>();
     const closeOldProvider = vi.fn(async () => {});
     const closeReplacementProvider = vi.fn(async () => {});
     const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-      const profile = ensureAuthProfileStore(options.agentDir, {
-        externalCli: { mode: "none" },
-        readOnly: true,
-        syncExternalCli: false,
-      }).profiles[profileId];
-      if (profile?.type !== "api_key" || !profile.key) {
-        throw new Error("in-flight agent credential unavailable");
-      }
-      const oldAccount = profile.key === "fixture-inflight-old";
+      const oldAccount =
+        readCredential(options.agentDir, profileId, "in-flight agent credential unavailable") ===
+        "fixture-inflight-old";
       return providerResult({
         embedQuery: vi.fn(async () => {
           if (oldAccount) {
@@ -560,17 +491,8 @@ describe("memory-lancedb provider lifecycle", () => {
         close: oldAccount ? closeOldProvider : closeReplacementProvider,
       });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
-    const api = {
-      config,
-      runtime: {
-        config: { current: () => config },
-        agent: { resolveAgentDir: () => agentDir },
-      },
-    } as unknown as OpenClawPluginApi;
+    useProvider(createProvider, "openai");
+    const api = createApi(config, () => agentDir);
     const embeddings = createEmbeddings(api);
 
     try {
@@ -611,10 +533,7 @@ describe("memory-lancedb provider lifecycle", () => {
       }
       return providerResult({ close: closeProvider });
     });
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
+    useProvider(createProvider, "openai");
 
     const first = createEmbeddings(createApi());
     const firstEmbed = embed(first, "main", "first");
@@ -641,10 +560,7 @@ describe("memory-lancedb provider lifecycle", () => {
       .mockResolvedValueOnce(
         providerResult({ model: "current", vector: [0.2], close: closeCurrent }),
       );
-    providerMocks.getMemoryEmbeddingProvider.mockReturnValue({
-      id: "openai",
-      create: createProvider,
-    });
+    useProvider(createProvider, "openai");
 
     const older = createEmbeddings(createApi());
     const current = createEmbeddings(createApi());
