@@ -1,4 +1,3 @@
-// Models auth provider-resolution tests cover provider auth status grouping and selection.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -15,19 +14,34 @@ import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import * as migrationRuntime from "../plugins/migration-provider-runtime.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import type { MigrationItem, MigrationPlan, ProviderPlugin } from "../plugins/types.js";
+import type {
+  MigrationItem,
+  MigrationPlan,
+  MigrationProviderPlugin,
+  ProviderPlugin,
+} from "../plugins/types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { tryImportProviderCredential } from "./models/auth-credential-import.js";
 import { resolveRequestedLoginProviderOrThrow, runModelsAuthLoginFlowCore } from "./models/auth.js";
 
 function makeProvider(params: { id: string; label?: string; aliases?: string[] }): ProviderPlugin {
+  return { ...params, label: params.label ?? params.id, auth: [] };
+}
+
+function credentialPlan(items: MigrationItem[]): MigrationPlan {
   return {
-    id: params.id,
-    label: params.label ?? params.id,
-    aliases: params.aliases,
-    auth: [],
+    providerId: "fixture",
+    source: "/fixture",
+    items,
+    summary: summarizeMigrationItems(items),
   };
+}
+
+function mockCredentialProvider(provider: MigrationProviderPlugin) {
+  return vi
+    .spyOn(migrationRuntime, "withPluginMigrationProviders")
+    .mockImplementation(async (_params, run) => run([provider]));
 }
 
 describe("selected credential import", () => {
@@ -51,54 +65,37 @@ describe("selected credential import", () => {
   };
 
   it("imports only the declared credential and preserves model configuration", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "other/model" },
-          models: { "other/model": {} },
-        },
-      },
-    };
+    const defaults = { model: { primary: "other/model" }, models: { "other/model": {} } };
+    const config: OpenClawConfig = { agents: { defaults } };
     const items: MigrationItem[] = [
       keyItem,
       { id: "auth:oauth", kind: "auth", action: "create", status: "planned" },
     ];
-    const plan: MigrationPlan = {
-      providerId: "fixture",
-      source: "/fixture",
-      items,
-      summary: summarizeMigrationItems(items),
-    };
+    const plan = credentialPlan(items);
     const persisted: string[] = [];
-    const resolve = vi
-      .spyOn(migrationRuntime, "withPluginMigrationProviders")
-      .mockImplementation(async (_params, run) =>
-        run([
-          {
-            id: "fixture",
-            label: "Fixture",
-            plan: () => plan,
-            apply(ctx, selected) {
-              if (!selected) {
-                throw new Error("Expected selected import plan");
-              }
-              expect(ctx.providerOptions?.configPatchMode).toBe("none");
-              const resultItems = selected.items.map((item) => {
-                if (item.status !== "planned") {
-                  return item;
-                }
-                persisted.push(item.id);
-                return { ...item, status: "migrated" as const };
-              });
-              return {
-                ...selected,
-                items: resultItems,
-                summary: summarizeMigrationItems(resultItems),
-              };
-            },
-          },
-        ]),
-      );
+    const resolve = mockCredentialProvider({
+      id: "fixture",
+      label: "Fixture",
+      plan: () => plan,
+      apply(ctx, selected) {
+        if (!selected) {
+          throw new Error("Expected selected import plan");
+        }
+        expect(ctx.providerOptions?.configPatchMode).toBe("none");
+        const resultItems = selected.items.map((item) => {
+          if (item.status !== "planned") {
+            return item;
+          }
+          persisted.push(item.id);
+          return { ...item, status: "migrated" as const };
+        });
+        return {
+          ...selected,
+          items: resultItems,
+          summary: summarizeMigrationItems(resultItems),
+        };
+      },
+    });
     try {
       const result = await tryImportProviderCredential({
         method,
@@ -130,30 +127,19 @@ describe("selected credential import", () => {
           : failure === "wrong-provider"
             ? [{ ...keyItem, details: { ...keyItem.details, provider: "other" } }]
             : [keyItem];
-      const plan: MigrationPlan = {
-        providerId: "fixture",
-        source: "/fixture",
-        items,
-        summary: summarizeMigrationItems(items),
-      };
+      const plan = credentialPlan(items);
       const apply = vi.fn(() => ({ ...plan, items: [{ ...keyItem, status: "skipped" as const }] }));
-      const resolve = vi
-        .spyOn(migrationRuntime, "withPluginMigrationProviders")
-        .mockImplementation(async (_params, run) =>
-          run([
-            {
-              id: "fixture",
-              label: "Fixture",
-              plan: () => {
-                if (failure === "cancelled") {
-                  controller.abort(new Error("Sign-in cancelled"));
-                }
-                return plan;
-              },
-              apply,
-            },
-          ]),
-        );
+      const resolve = mockCredentialProvider({
+        id: "fixture",
+        label: "Fixture",
+        plan: () => {
+          if (failure === "cancelled") {
+            controller.abort(new Error("Sign-in cancelled"));
+          }
+          return plan;
+        },
+        apply,
+      });
       try {
         await expect(
           tryImportProviderCredential({
