@@ -10,7 +10,10 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
+import type {
+  CatalogBackingSessionDisplay,
+  CatalogRowControls,
+} from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { visibleSessionChildren } from "./app-sidebar-session-types.ts";
@@ -94,21 +97,18 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     pullRequest = createMemo(() => indicators.pullRequest),
     persistentIndicator = createMemo(() => indicators.persistentIndicator),
     childrenExpanded = createMemo(() => indicators.childrenExpanded);
+  const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
-    handleContextMenuEvent(
-      event,
-      event.currentTarget.querySelector<HTMLElement>(".sidebar-recent-session__link"),
-      (trigger, x, y) => {
-        const catalogMenu = display()?.catalogMenu;
-        if (catalogMenu) {
-          host().sidebarMenus.catalogMenu.open(catalogMenu, x, y, trigger ?? undefined);
-          return;
-        }
-        if (!host().sidebarSnapshot) {
-          host().sidebarMenus.openSessionMenu(session(), x, y, trigger);
-        }
-      },
-    );
+    handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
+      const catalogMenu = display()?.catalogMenu;
+      if (catalogMenu) {
+        host().sidebarMenus.catalogMenu.open(catalogMenu, x, y, trigger ?? undefined);
+        return;
+      }
+      if (!host().sidebarSnapshot) {
+        host().sidebarMenus.openSessionMenu(session(), x, y, trigger);
+      }
+    });
   const pinLabel = createMemo(() => {
     return t(personallyPinned() ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   });
@@ -165,9 +165,10 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   );
   // Always reserve the lead so every title shares the section-label text line.
   let rowElement: HTMLDivElement | undefined;
+  // Ref retargeting deliberately samples the current host without render dependencies.
   createEffect(
     () => display()?.rowRef,
-    (callback) => untrack(() => callback?.(rowElement)),
+    (callback) => untrack(() => callback?.(rowElement, controls)),
   );
   const row = (
     <div
@@ -220,6 +221,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       onKeyDown={openMenuFromEvent}
     >
       <a
+        ref={(element) => (controls.link = element)}
         href={host().sidebarSessionHref(session())}
         class="sidebar-recent-session__link"
         draggable="false"
@@ -269,6 +271,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             },
           ]}
           type="button"
+          ref={(element) => (controls.children = element)}
           data-child-session-toggle={session().key}
           aria-expanded={childrenExpanded() ? "true" : "false"}
           aria-label={t(
@@ -302,6 +305,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <Show when={pinnable()}>
             <button
               class="session-action session-action--pin"
+              ref={(element) => (controls.pin = element)}
               data-sidebar-session-pin="true"
               type="button"
               title={pinLabel()}
@@ -313,6 +317,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           </Show>
           <button
             class="session-action"
+            ref={(element) => (controls.archive = element)}
             data-sidebar-session-archive="true"
             type="button"
             title={(() => {
@@ -342,6 +347,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           </button>
           <button
             class="session-action session-action--touch-menu"
+            ref={(element) => (controls.menu = element)}
             data-sidebar-session-menu="true"
             disabled={Boolean(host().sidebarSnapshot)}
             type="button"
@@ -493,6 +499,5 @@ export function renderSessionTree(params: {
     </div>
   );
 }
-export { renderSidebarSessionIndicators };
 const RecentSession = renderRecentSession;
 const SessionTree = renderSessionTree;

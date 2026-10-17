@@ -120,6 +120,14 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+The transcript navigation CHECK keeps its JSON validation for present metadata.
+Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
+calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing
+the helper's CTE during unsuccessful SQL-function inlining attempts.
+Agent schema 29 applies these attributes to existing PostgreSQL stores through
+the migration owner without rewriting rows. Historical admission and rollback
+preserve the predecessor function attributes.
+
 For a manual state-schema check, run `psql` from the generated directory and
 supply the transaction and chosen schema explicitly:
 
@@ -260,7 +268,7 @@ host reader retry and repair; SQLite workers never schedule that maintenance.
 Transcript bytes, session recovery rows, schemas, and update behavior are unchanged.
 
 Global projection preflight and search readiness use the projection maintenance
-owner's connection-local facts. Transactional TEMP triggers queue affected sessions
+owner's published readiness. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
 local SQL. A sibling-writer receipt or schema change restarts bounded admission;
 local changes consume only the queued sessions. A bounded recursive key query
@@ -287,9 +295,12 @@ the workers serving committed history, reactions, and progress-card reads.
 A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
-Clean status reads reuse these facts without entering a write transaction or
-requesting write grants until a mutation invalidates them; connection close
-discards them. No durable tables or migration are added. Shipped synchronous
+After clean traversal commits, the owner publishes readiness with the physical
+database's committed write token. Search consumes that fact before borrowing a
+writer, without a TEMP-status query or write grants. Committed writes invalidate
+readiness; idle writer retirement preserves it while another native reader retains
+the database admission. Physical admission retirement discards it. No durable tables
+or migration are added. Shipped synchronous
 durable SDK callbacks and operator maintenance retain their native reconciliation
 adapter; moving those callbacks to another thread requires a separate SDK cutover.
 Their one-shot orphan cleanup retains ordered, indexed owner-set differences
@@ -2772,7 +2783,7 @@ consults after call closure, independently of the open-state check.
 
 Session usage retains its derived cache in the existing `cache_entries` owner.
 The `session-cost-usage-rollup-v3` scope holds the versioned transcript checkpoint
-and untimestamped contribution. The adjacent `session-cost-usage-projection-v1`
+and untimestamped contribution. The adjacent `session-cost-usage-projection-v2`
 scope stores UTC-month partitions containing quarter-hour session and model
 aggregates. The checkpoint and affected partitions commit atomically. This
 replaces the previous whole-history per-event cache body; no tables, indexes,
@@ -2781,6 +2792,12 @@ process-local, nonpersistent cache and create no month partitions. Projection
 version 2 packs sparse quarters into monthly compressed bodies; version 1 daily
 rows are ignored and replaced by the normal resumable refresh, without a schema
 migration. Checkpoint and partition replacement remain atomic.
+
+Projection envelope version 3 encodes the source as a JSON string before the
+month separator, so PostgreSQL text never receives the former NUL separator. Older `v1` cache
+rows remain inactive and rebuild from transcripts. Database port removes only
+those retired partitions from its private source copy before verification;
+other cache scopes, including durable voice sessions, remain unchanged.
 
 Usage-bearing transcript publications schedule advancement through the existing
 usage worker queue. Each dirty session waits for 30 seconds without another

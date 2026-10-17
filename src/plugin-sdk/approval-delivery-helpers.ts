@@ -4,7 +4,6 @@ import {
   type ChannelApprovalKind,
   type ApprovalRequestInput as NativeApprovalRequest,
 } from "../infra/approval-types.js";
-// Approval delivery helpers format approval prompts and results for channel plugins.
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
   NativeApprovalDeliveryMode,

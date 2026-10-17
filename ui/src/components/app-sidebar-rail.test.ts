@@ -111,7 +111,7 @@ async function update(sidebar: Sidebar, properties: Partial<Sidebar>) {
 }
 async function seed(sidebar: Sidebar, rows: Parameters<Sidebar["pinnedSessions"]["seed"]>[0]) {
   sidebar.pinnedSessions.seed(rows);
-  sidebar.requestUpdate();
+  sidebar.invalidate();
   await sidebar.updateComplete;
 }
 function cachedPin(key: string, label = "Saved title") {
@@ -533,7 +533,7 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["person:other"]);
     sidebar.sessionData.presencePayload = { presence: [] };
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const person = link(sidebar, "person:other");
     expect(person).not.toBeNull();
@@ -550,7 +550,7 @@ describe("personal navigation rail", () => {
     const { sidebar, result } = await fixture();
     result.sessions.find((row) => row.key === "agent:main:mine")!.boardFace = "dashboard";
     sidebar.sidebarEntries = ["session:agent:main:mine"];
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;

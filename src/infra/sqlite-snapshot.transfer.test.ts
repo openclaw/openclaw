@@ -177,8 +177,8 @@ it.each(["native", "isolated", "copy", "zero", "ctime"] as const)(
       userVersion: 0,
       ...snapshotContent(published),
     });
-    // Bound digest IO to capture, staged admission, and final publication.
-    expect(durabilityTestState.hashedBytes).toBeLessThanOrEqual(3 * receipt.sizeBytes);
+    // Only a distinct staged copy adds a digest pass to capture and final publication.
+    expect(durabilityTestState.hashedBytes).toBe((copy ? 3 : 2) * receipt.sizeBytes);
     if (copy) {
       expect(copy).toHaveBeenCalledOnce();
     }

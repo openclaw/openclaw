@@ -1,6 +1,19 @@
 import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 
+export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
+
+export type DiagnosticSessionsListBaselineRetiredFields = {
+  type: "sessions.list.baseline.retired";
+  cause:
+    | "projection-revision"
+    | "config"
+    | "identity"
+    | "selection-reset"
+    | "view-evicted"
+    | "history-evicted";
+};
+
 type SessionsListAttribution = {
   clientKind: GatewayClientId;
   source: "wire" | "internal";
@@ -43,6 +56,7 @@ export type DiagnosticGatewayRpcFields = {
       responseBytes?: number;
       sessionsList?: SessionsListAttribution & {
         rowsOutcome: "unchanged" | "delta" | "full-no-base" | "full-with-base" | "not-sidebar";
+        baseMissReason?: SessionsListBaseMissReason;
       };
       chatHistory?: {
         clientKind: GatewayClientId;
@@ -69,7 +83,18 @@ export type DiagnosticGatewayRpcFields = {
     }
 );
 
+export type GatewayWsSessionEventAttribution = {
+  reason: string;
+  delivery: "subscribed" | "roster";
+};
+
 /** Payload-free observations from the physical WebSocket transport. */
 export type DiagnosticGatewayWsFields =
-  | { type: "gateway.ws.event"; event: string; count: number; bytes: number }
+  | {
+      type: "gateway.ws.event";
+      event: string;
+      count: number;
+      bytes: number;
+      sessionEvent?: GatewayWsSessionEventAttribution;
+    }
   | { type: "gateway.ws.connections"; operators: number };

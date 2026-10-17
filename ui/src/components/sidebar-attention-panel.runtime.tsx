@@ -1,4 +1,4 @@
-import { createMemo, For, Match, Show, Switch, untrack } from "solid-js";
+import { createMemo, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -55,6 +55,7 @@ export type SidebarAttentionPanelParams = {
   onNavigate: ApplicationContext["navigate"];
   onOpen: (item: SidebarAttentionItem) => void;
   onScroll: () => void;
+  listRef?: (element: HTMLDivElement | null) => void;
   onSelectTab: (tab: IssueTab) => void;
   overflowAbove: boolean;
   overflowBelow: boolean;
@@ -112,9 +113,7 @@ function SidebarInboxItem(props: {
             approval={entry().approval}
             context={props.readContext()}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
-            onDecision={(event, id, decision) =>
-              props.panel.onApprovalDecision(event, id, decision)
-            }
+            onDecision={props.panel.onApprovalDecision}
           />
         )}
       </Match>
@@ -198,6 +197,7 @@ function inboxEntryIdentity(
 }
 
 export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
+  onCleanup(() => props.listRef?.(null));
   const context = untrack(() => props.context);
   const mentions = projectMentions(untrack(() => props.mentions));
   const gateway = projectGateway(context.gateway);
@@ -345,6 +345,7 @@ export function SidebarAttentionPanel(props: SidebarAttentionPanelParams) {
           />
           <div class="sidebar-issues-panel__list-wrap">
             <div
+              ref={(element) => props.listRef?.(element)}
               id="sidebar-issues-tabpanel"
               class="sidebar-issues-panel__list"
               role="tabpanel"

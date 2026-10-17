@@ -237,6 +237,7 @@ function renderCatalogGroup(
   const activity = createMemo(() =>
     catalogSessionActivity(rows(), readLiveRowsByKey(), params.isRunVisuallyActive),
   );
+  let viewMenuTrigger: HTMLButtonElement | undefined;
   const hasActiveRun = createMemo(() => activity().running);
   const hasUnread = createMemo(() => activity().unread);
   const hasBrandIcon = createMemo(() => hasProviderBrandIcon(readCatalog().id));
@@ -313,10 +314,7 @@ function renderCatalogGroup(
         }}
         onContextMenu={(event) => {
           event.preventDefault();
-          const header = event.currentTarget;
-          const trigger =
-            header.querySelector<HTMLElement>("[data-session-catalog-view-menu]") ?? header;
-          params.onOpenViewMenu(readCatalog().id, trigger, {
+          params.onOpenViewMenu(readCatalog().id, viewMenuTrigger ?? event.currentTarget, {
             x: event.clientX,
             y: event.clientY,
           });
@@ -363,6 +361,7 @@ function renderCatalogGroup(
               ) : undefined}
             </button>
             <button
+              ref={(element) => (viewMenuTrigger = element)}
               type="button"
               class={[
                 "sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping",

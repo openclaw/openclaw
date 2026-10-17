@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createAbortError } from "../infra/abort-signal.js";
+import { hasLifecycleErrorCode as hasAgentRunAbortCode } from "../infra/agent-lifecycle-error.js";
 import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
@@ -47,14 +48,6 @@ export function createAgentRunDirectAbortError(): Error {
   return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
     code: AGENT_RUN_DIRECT_ABORT_ERROR_CODE,
   });
-}
-
-function hasAgentRunAbortCode(value: unknown, code: string): boolean {
-  try {
-    return value instanceof Error && "code" in value && value.code === code;
-  } catch {
-    return false;
-  }
 }
 
 export function isAgentRunDirectAbortReason(value: unknown): boolean {

@@ -1,7 +1,7 @@
 // Core Canvas document storage and URL contract coverage.
-import { link, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import fs, { link, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createCanvasDocument,
@@ -131,6 +131,22 @@ describe("canvas documents", () => {
     );
     expect(indexHtml).toContain("second");
     expect(indexHtml).not.toContain("first");
+  });
+
+  it("does not overwrite an existing document when removing it fails", async () => {
+    const stateDir = tempDirs.make("openclaw-canvas-documents-");
+    const id = "status-card";
+    await createHtmlDocument(stateDir, "<div>first</div>", { id });
+    const failure = Object.assign(new Error("document directory busy"), { code: "EBUSY" });
+    const remove = vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
+    try {
+      await expect(createHtmlDocument(stateDir, "<div>second</div>", { id })).rejects.toBe(failure);
+      await expect(readCanvasDocumentHtmlSource(id, { stateDir })).resolves.toEqual({
+        html: "<div>first</div>",
+      });
+    } finally {
+      remove.mockRestore();
+    }
   });
 
   it("rejects traversal and malformed encoded hosted paths", async () => {

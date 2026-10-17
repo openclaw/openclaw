@@ -99,7 +99,7 @@ export function createSessionOwnerFilterQuery(
       scheduleSidebarSessions(): Promise<void>;
     };
   },
-  getFacet: () => SessionListSnapshot | undefined,
+  getFacet: () => Omit<SessionListSnapshot, "agentId"> | undefined,
 ) {
   let previous: string | undefined;
   let pending: Promise<void> | null = null;

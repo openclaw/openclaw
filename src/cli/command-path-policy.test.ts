@@ -301,6 +301,11 @@ describe("command-path-policy", () => {
     expectResolvedPolicy(["skills", "search"], {
       configGuard: "skip",
     });
+    expectResolvedPolicy(["memory", "index"], {
+      configGuard: "validate",
+      loadPlugins: "always",
+      pluginRegistry: { scope: "memory" },
+    });
     expectResolvedPolicy(["memory", "search"], {
       configGuard: "skip",
       loadPlugins: "always",
@@ -322,7 +327,7 @@ describe("command-path-policy", () => {
           argv: ["node", "openclaw", "memory", "status", flag],
           commandPath: ["memory", "status"],
         }),
-      ).toBe("run");
+      ).toBe("validate");
     }
   });
 

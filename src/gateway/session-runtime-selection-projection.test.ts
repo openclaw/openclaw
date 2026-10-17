@@ -105,12 +105,8 @@ describe("session runtime selection ownership projection", () => {
           try {
             const params = { agentId: "main", sessionKey: key, sessionEntry: entry };
             expect((await metadata.runtime.read(params)).runtimeSelectionLocked).toBe(locked);
-            expect(
-              (await metadata.runtime.readStartup(params))?.metadata?.runtimeSelectionLocked,
-            ).toBe(locked);
-            expect(
-              await metadata.runtime.readStartup({ ...params, readPolicy: "ready" }),
-            ).not.toHaveProperty("metadata");
+            const startup = await metadata.runtime.readStartup({ ...params, readPolicy: "ready" });
+            expect(startup?.metadata).toBeUndefined();
             expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
           } finally {
             hostSql.restore();

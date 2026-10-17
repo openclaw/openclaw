@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
@@ -13,7 +14,7 @@ import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
-import type { HealthSummary } from "../health/types.js";
+import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayClient } from "../server-methods/types.js";
@@ -23,6 +24,7 @@ import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
+let healthDigest: string | undefined;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 type HealthAudience = "public" | "admin";
@@ -113,6 +115,46 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+function healthEventDigest(snap: HealthSummary): string {
+  const channel = ({
+    authAgeMs: _authAgeMs,
+    lastProbeAt: _lastProbeAt,
+    lastInboundAt: _lastInboundAt,
+    lastOutboundAt: _lastOutboundAt,
+    lastTransportActivityAt: _lastTransportActivityAt,
+    lastMessageAt: _lastMessageAt,
+    lastEventAt: _lastEventAt,
+    lastRunActivityAt: _lastRunActivityAt,
+    accounts,
+    ...status
+  }: ChannelHealthSummary): unknown => ({
+    ...status,
+    ...(accounts
+      ? {
+          accounts: Object.fromEntries(
+            Object.entries(accounts).map(([id, value]) => [id, channel(value)]),
+          ),
+        }
+      : {}),
+  });
+  // Keep lifecycle timestamps/errors and plugin-owned status. Sampling noise and
+  // routine activity are diagnostics, not health transitions; tick owns liveness
+  // and session events own session activity. Full diagnostics remain in the cache.
+  return stableStringify({
+    ...snap,
+    ts: undefined,
+    durationMs: undefined,
+    eventLoop: snap.eventLoop
+      ? { degraded: snap.eventLoop.degraded, reasons: snap.eventLoop.reasons }
+      : undefined,
+    channels: Object.fromEntries(
+      Object.entries(snap.channels).map(([id, value]) => [id, channel(value)]),
+    ),
+    agents: snap.agents.map(({ sessions: _sessions, ...agent }) => agent),
+    sessions: undefined,
+  });
+}
+
 export async function refreshGatewayHealthSnapshot(opts?: {
   probe?: boolean;
   includeSensitive?: boolean;
@@ -158,10 +200,12 @@ export async function refreshGatewayHealthSnapshot(opts?: {
     }
     // Diagnostic snapshots publish in completion order; the next refresh replaces them.
     if (!includeSensitive) {
+      const digest = healthEventDigest(snap);
       healthCache = snap;
-      healthVersion += 1;
-      if (broadcastHealthUpdate) {
-        broadcastHealthUpdate(snap);
+      if (digest !== healthDigest) {
+        healthDigest = digest;
+        healthVersion += 1;
+        broadcastHealthUpdate?.(snap);
       }
     }
     return snap;

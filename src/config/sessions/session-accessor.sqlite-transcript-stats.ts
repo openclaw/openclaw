@@ -56,7 +56,7 @@ const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection)
               eb.fn.count<number>("seq").as("event_count"),
               eb.fn.max<number>("seq").as("max_seq"),
               // kysely-allow-raw: JSONL byte size includes newline separators without decoding payloads.
-              sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()}), 0) + COUNT(*) - 1`.as(
+              sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql()}), 0) + COUNT(*) - 1 AS BIGINT)`.as(
                 "size_bytes",
               ),
             ])

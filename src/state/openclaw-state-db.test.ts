@@ -955,6 +955,7 @@ describe("openclaw state database", () => {
           `Removed duplicate agent database registry path ${dualForeignPath}`,
           "Qualified historical cron creator attribution as unknown (v14)",
           "Replaced retained task indexes with ordered cron history indexes (v24)",
+          "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
         ],
         warnings: [],
       });
@@ -1170,6 +1171,7 @@ describe("openclaw state database", () => {
         "Folded singleton state tables into config_machine_state (v12)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Replaced retained task indexes with ordered cron history indexes (v24)",
+        "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
       ],
       warnings: [],
     });
@@ -1436,6 +1438,7 @@ describe("openclaw state database", () => {
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Replaced retained task indexes with ordered cron history indexes (v24)",
+        "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
       ],
       warnings: [],
     });
@@ -1823,6 +1826,7 @@ describe("openclaw state database", () => {
       { kind: "portable-identity-columns-v22", path: fixture.databasePath },
       { kind: "task-run-indexes-v24", path: fixture.databasePath },
       { kind: "subagent-operator-recovery-v25", path: fixture.databasePath },
+      { kind: "state-write-indexes-v27", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1844,6 +1848,7 @@ describe("openclaw state database", () => {
         "Qualified historical cron creator attribution as unknown (v14)",
         "Removed redundant conversation binding target projections (v15)",
         "Replaced retained task indexes with ordered cron history indexes (v24)",
+        "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
@@ -2145,6 +2150,7 @@ describe("openclaw state database", () => {
       { kind: "task-run-indexes-v24", path: seeded.databasePath },
       { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
       { kind: "session-state-head-layout-v26", path: seeded.databasePath },
+      { kind: "state-write-indexes-v27", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
@@ -2153,6 +2159,7 @@ describe("openclaw state database", () => {
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Replaced retained task indexes with ordered cron history indexes (v24)",
+        "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
       ],
       warnings: [],
     });
@@ -2488,6 +2495,7 @@ describe("openclaw state database", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "subagent-operator-recovery-v25", path: databasePath },
+      { kind: "state-write-indexes-v27", path: databasePath },
     ]);
 
     openOpenClawStateDatabase(options);

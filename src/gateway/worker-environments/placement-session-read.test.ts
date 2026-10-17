@@ -132,3 +132,18 @@ it("installs the committed placement when acquisition overlaps its writer receip
     }
   });
 });
+
+it("retains a cold async placement read for SQL-free synchronous compatibility access", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const store = createWorkerSessionPlacementStore();
+    const sessionIds = ["cold-placement-absence"];
+    expect(await store.getManyAsync(sessionIds)).toEqual(new Map());
+    const sql = observeHostDataSql();
+    try {
+      expect(store.getMany(sessionIds)).toEqual(new Map());
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
+});

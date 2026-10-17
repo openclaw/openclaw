@@ -140,6 +140,17 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
   return merged.length > 0 ? merged : undefined;
 }
 
+function operatorPresenceIdentity(presence: SystemPresence): string | undefined {
+  if (!presence.roles?.includes("operator") || presence.roles.includes("node")) {
+    return undefined;
+  }
+  return (
+    normalizeOptionalLowercaseString(presence.deviceId) ??
+    normalizeOptionalLowercaseString(presence.instanceId) ??
+    normalizeOptionalLowercaseString(presence.connectionId)
+  );
+}
+
 export function updateSystemPresence(payload: SystemPresencePayload) {
   const parsed = parsePresence(payload.text);
   const key =
@@ -205,6 +216,27 @@ export function upsertPresence(
         presence.mode ?? existing.mode ?? "unknown"
       }`,
   };
+  if (presence.reason === "connect" || presence.reason === "disconnect") {
+    const identity = operatorPresenceIdentity(merged);
+    if (identity) {
+      let hasLivePeer = false;
+      // Keep each live tab's facts, but only the last disconnect's offline metadata.
+      for (const [peerKey, { presence: peer }] of entries) {
+        if (peerKey === normalizedKey || operatorPresenceIdentity(peer) !== identity) {
+          continue;
+        }
+        if (peer.reason === "disconnect") {
+          entries.delete(peerKey);
+        } else {
+          hasLivePeer = true;
+        }
+      }
+      if (presence.reason === "disconnect" && hasLivePeer) {
+        entries.delete(normalizedKey);
+        return;
+      }
+    }
+  }
   setPresence(normalizedKey, merged, options?.pending);
 }
 

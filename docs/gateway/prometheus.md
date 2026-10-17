@@ -105,12 +105,16 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
 | `openclaw_sessions_list_response_bytes_total`             | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`, `rows_outcome`            |
+| `openclaw_sessions_list_baseline_retirements_total`       | counter   | `cause`                                                                                   |
+| `openclaw_sessions_list_base_misses_total`                | counter   | `reason`                                                                                  |
 | `openclaw_chat_history_requests_total`                    | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
 | `openclaw_chat_history_response_bytes_total`              | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
 | `openclaw_cron_list_requests_total`                       | counter   | `client_kind`, `source`, `scope`, `compact`, `page`                                       |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
 | `openclaw_gateway_ws_events_total`                        | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_session_event_frames_total`          | counter   | `event`, `reason`, `delivery`                                                             |
+| `openclaw_gateway_ws_session_event_bytes_total`           | counter   | `event`, `reason`, `delivery`                                                             |
 | `openclaw_gateway_ws_event_bytes_total`                   | counter   | `event`                                                                                   |
 | `openclaw_gateway_ws_operator_connections`                | gauge     | none                                                                                      |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
@@ -258,6 +262,34 @@ byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or
 dropped snapshot can recover.
 
+`openclaw_gateway_ws_session_event_frames_total` and
+`openclaw_gateway_ws_session_event_bytes_total` attribute session event traffic
+using the same per-socket frames and bytes as the aggregate counters.
+
+The session counters use `event`, `reason`, and `delivery`. `event` is only
+`sessions.changed` or `session.message`. For `sessions.changed`, `reason` is the
+producer's reason (or lifecycle phase when no reason is present):
+`abort`, `activity-summary`, `agent.input.settled`, `agent.run.started`,
+`archive`, `board`, `branch-switch`, `chat.dispatch-error`, `chat.title`,
+`cleanup`, `compact`, `create`, `cron-continuation`, `delete`, `dispatch`,
+`fork`, `github-publication`, `goal`, `groups`, `involvement`, `move`, `new`,
+`owner`, `participants`, `patch`, `placement`, `plugin-patch`, `progress-card-reset`,
+`project`, `reclaim`, `recovery`, `reset`, `rewind`, `run-capacity`, `send`,
+`sharing`, `steer`, `subagent-status`, `swarm-note`, `title`, `unarchive`,
+`update`, `updated`, `worker-disk-space`, and `worker-runtime-install`.
+Lifecycle phases are `start`, `model`, `end`, `error`, and `message`.
+For `session.message`, `reason` is the message role: `user`, `assistant`, `system`,
+`developer`, `tool`, or `toolResult`; an absent role uses `message`.
+Unknown reasons, phases, and roles use `other`.
+`delivery="subscribed"` means the recipient holds an exact
+`sessions.messages.subscribe` subscription for that session, including its
+producer-resolved alias; all other recipients use `delivery="roster"`.
+This describes subscription membership, not whether a tab is visible or a peer
+acknowledged receipt. Keyless roster invalidations use `roster`.
+The counters reuse the existing encoded byte length without serializing again,
+and batch by label set within the same event-loop turn. No message content,
+IDs, or session keys enter the labels. Existing event counter labels stay unchanged.
+
 Receipt begins after the connected client's request frame passes validation.
 These timings exclude CLI startup, local diagnostics, connection/authentication
 setup, and event-loop delay before request dispatch. Histograms record completed
@@ -304,6 +336,30 @@ or `full-with-base` when it supplies a revision. `full-with-base` includes
 stale or evicted bases and the rare case where every row changed.
 Non-sidebar row modes use `not-sidebar`. Diagnostics derives these labels from
 the request and existing response fields without changing the protocol payload.
+
+`openclaw_sessions_list_baseline_retirements_total{cause}` counts retirement
+events, not rows or the number of views cleared. Causes are `projection-revision`,
+`config`, `identity`, `selection-reset`, `view-evicted` (the 32-view limit), and
+`history-evicted` (the 32-generation limit). Only clears or evictions retaining
+sidebar rows or history count, including empty sidebar row lists. Selection-only
+and non-sidebar views do not count. When a read observes multiple invalidations,
+`config` takes precedence
+over `identity`, then `projection-revision`; an earlier selection reset already
+clears the cache and is counted separately at that point.
+
+`openclaw_sessions_list_base_misses_total{reason}` counts successful full sidebar
+replies with a supplied `ifRowsRevision`. `unknown-base` means no eligible history
+base was found, including after restart, eviction, or a non-delta revision token.
+`all-rows-changed` means the base was found but the delta was not smaller than the
+full row list (also possible for an empty list). The existing `full-with-base`
+byte attribution stays unchanged. These reasons follow shared serialized replies
+out-of-band; no response fields, revision tokens, or identifiers are exported.
+Both counters use the bounded asynchronous diagnostics path and exporter cap.
+Compare unknown-base misses with retirement events and process identity changes
+to distinguish cache churn from first reads after restart; misses alone cannot
+prove a restart. OpenTelemetry exports the same observations as
+`openclaw.sessions.list.baseline_retirements` and `openclaw.sessions.list.base_misses`,
+with the same `cause` and `reason` labels.
 
 `openclaw_chat_history_requests_total` counts successful `chat.history` replies;
 `openclaw_chat_history_response_bytes_total` sums their encoded response bytes.

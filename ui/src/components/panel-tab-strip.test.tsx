@@ -294,6 +294,28 @@ describe("PanelTabStrip", () => {
     unmountStrip(container);
   });
 
+  it("measures the visible label when its tooltip wrapper changes", async () => {
+    const clock = tabMeasurementClock();
+    const container = document.body.appendChild(document.createElement("div"));
+    for (const labelTooltip of [undefined, "Full label", undefined]) {
+      await renderStrip({
+        container,
+        tabs: [{ ...TAB, label: "A long label", labelTooltip }],
+      });
+      const label = container.querySelector<HTMLElement>(".tabstrip-tab__label")!;
+      Object.defineProperties(label, {
+        clientWidth: { configurable: true, value: 100 },
+        scrollWidth: { configurable: true, value: 200 },
+      });
+      await settleTabStrip(container);
+      clock.flush();
+      expect(label.closest("openclaw-tooltip") !== null).toBe(Boolean(labelTooltip));
+      expect(label.hasAttribute("data-tooltip-overflow")).toBe(true);
+      expect(label.parentElement?.classList.contains("has-label-overflow")).toBe(true);
+    }
+    unmountStrip(container);
+  });
+
   it.each(["ltr", "rtl"])(
     "refreshes physical scroll edges and releases measurements across connection changes (%s)",
     async (dir) => {
@@ -363,24 +385,9 @@ describe("PanelTabStrip", () => {
 
   // Repeated prop updates retain one native measurement owner.
   it("keeps one live scroll-edge listener no matter how many renders race", async () => {
+    const clock = tabMeasurementClock();
     const added = vi.spyOn(HTMLElement.prototype, "addEventListener");
     const removed = vi.spyOn(HTMLElement.prototype, "removeEventListener");
-
-    const observers: { target: Element | null; live: boolean }[] = [];
-    class CountingResizeObserver {
-      private readonly record = { target: null as Element | null, live: true };
-      constructor(_callback: ResizeObserverCallback) {
-        observers.push(this.record);
-      }
-      observe(target: Element) {
-        this.record.target = target;
-      }
-      unobserve() {}
-      disconnect() {
-        this.record.live = false;
-      }
-    }
-    vi.stubGlobal("ResizeObserver", CountingResizeObserver);
 
     const container = document.createElement("div");
     document.body.append(container);
@@ -392,13 +399,14 @@ describe("PanelTabStrip", () => {
 
     const scroller = tabViewport(container);
     await settleTabStrip(container);
+    clock.flush();
 
     const scrollListeners = (spy: typeof added) =>
       spy.mock.calls.filter(
         ([type], index) => type === "scroll" && spy.mock.contexts[index] === scroller,
       ).length;
     expect(scrollListeners(added) - scrollListeners(removed)).toBe(1);
-    expect(observers.filter((entry) => entry.live && entry.target === scroller)).toHaveLength(1);
+    expect(clock.observed(scroller)).toBe(true);
   });
 
   it.each([{ dir: "ltr", placement: "before", reorderIds: ["files", "browser"] }])(

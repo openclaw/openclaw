@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, vi } from "vitest";
@@ -26,6 +27,13 @@ import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
 const turnsUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.turnStore);
 const journalUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.journalWorker);
+
+function spawnOwner(url: URL, script: string, args: string[], env?: NodeJS.ProcessEnv) {
+  return spawn(process.execPath, [...resolveRuntimeWorkerArgv(url).slice(0, -1), script, ...args], {
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
 
 function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean): string {
   const scriptPath = path.join(root, "supervisor-owner.mjs");
@@ -96,28 +104,15 @@ export function spawnPendingSupervisorOwner({
         const store = new NodeWorkerLaunchStore(journal);
         const claim = JSON.parse(fs.readFileSync(claimPath, "utf8"));
         const supervisor = requireNodeWorkerProcessIdentity(process.pid);
-        const result = (await store.claim(
-          claim,
-          supervisor,
-          2,
-        ));
-        const turn = (await new NodeWorkerTurnStore(journal).claim({
+        const result = await store.claim(claim, supervisor, 2);
+        const turn = await new NodeWorkerTurnStore(journal).claim({
           claim, ownerLaunchId: result.receipt.launchId, supervisor,
-        }));
+        });
         process.stdout.write(JSON.stringify(turn.receipt) + "\\n");
         setInterval(() => {}, 1000);
       `,
   );
-  return spawn(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(storeUrl).slice(0, -1),
-      scriptPath,
-      env.OPENCLAW_STATE_DIR!,
-      claimPath,
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
+  return spawnOwner(storeUrl, scriptPath, [env.OPENCLAW_STATE_DIR!, claimPath]);
 }
 
 export function spawnSupervisorOwner(params: {
@@ -129,18 +124,12 @@ export function spawnSupervisorOwner(params: {
 }): ChildProcess {
   const inputPath = path.join(params.root, `${params.input.launchId}.json`);
   fs.writeFileSync(inputPath, JSON.stringify(params.input));
-  const child = spawn(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(supervisorUrl).slice(0, -1),
-      writeSupervisorOwnerScript(params.root, params.waitForCompletedTurn ?? false),
-      params.bundleRoot,
-      params.env.OPENCLAW_STATE_DIR!,
-      inputPath,
-    ],
-    { env: { ...process.env, ...params.env }, stdio: ["ignore", "pipe", "pipe"] },
+  return spawnOwner(
+    supervisorUrl,
+    writeSupervisorOwnerScript(params.root, params.waitForCompletedTurn ?? false),
+    [params.bundleRoot, params.env.OPENCLAW_STATE_DIR!, inputPath],
+    params.env,
   );
-  return child;
 }
 
 export async function waitForIdentityDeath(identity: NodeWorkerProcessIdentity) {
@@ -154,14 +143,13 @@ export function waitForChildLine(child: ChildProcess): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
-    const onData = (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
       const newline = stdout.indexOf("\n");
       if (newline >= 0) {
         resolve(stdout.slice(0, newline));
       }
-    };
-    child.stdout?.on("data", onData);
+    });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
@@ -172,14 +160,10 @@ export function waitForChildLine(child: ChildProcess): Promise<string> {
   });
 }
 
-export function waitForChildExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
+export async function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode === null && child.signalCode === null) {
+    await once(child, "close");
   }
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", () => resolve());
-  });
 }
 
 export function holdNodeWorkerReadiness(launchId: string) {
@@ -295,6 +279,7 @@ export async function insertNodeWorkerRecoveryLaunch(params: {
   turn?: true;
 }) {
   const database = openOpenClawStateDatabase({ env: params.env }).db;
+  const identity = testNodeWorkerLaunchIdentity(params.input);
   const state = params.turn ? "pending" : params.state;
   database
     .prepare(
@@ -307,7 +292,7 @@ export async function insertNodeWorkerRecoveryLaunch(params: {
     )
     .run(
       params.input.launchId,
-      testNodeWorkerLaunchIdentity(params.input).planHash,
+      identity.planHash,
       params.input.gatewayNamespace,
       params.input.descriptor.admission.environmentId,
       params.input.descriptor.admission.sessionId,
@@ -324,7 +309,7 @@ export async function insertNodeWorkerRecoveryLaunch(params: {
     const journal = new NodeWorkerJournalWorker({ env: params.env });
     await new NodeWorkerTurnStore(journal).claim({
       claim: {
-        ...testNodeWorkerLaunchIdentity(params.input),
+        ...identity,
         gatewayNamespace: params.input.gatewayNamespace,
       },
       ownerLaunchId: params.input.launchId,
@@ -333,7 +318,7 @@ export async function insertNodeWorkerRecoveryLaunch(params: {
     if (params.state === "running") {
       await new NodeWorkerLaunchStore(journal).markRunning({
         launchId: params.input.launchId,
-        planHash: testNodeWorkerLaunchIdentity(params.input).planHash,
+        planHash: identity.planHash,
         supervisor: params.supervisor,
         worker: params.worker!,
         cleanupMode: "process-group",

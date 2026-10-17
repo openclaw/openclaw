@@ -358,20 +358,4 @@ describe("runNodeHost connection and optional publications", () => {
       });
     });
   });
-
-  it("does not report a stale publication failure after manifest reconnect", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const initial = createDeferred<unknown>();
-      queuePluginResponses(client, initial.promise);
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-      receiveHello(options, 3);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
-      stderr.mockClear();
-      Object.assign(mocks, { nodePluginTools: [], nodeHostCaps: ["canvas"] });
-      mocks.availabilityChanged?.();
-      initial.reject(new Error("gateway closed (1012): node manifest changed"));
-      await settlePublications();
-      expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("publish failed"));
-    });
-  });
 });

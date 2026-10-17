@@ -431,6 +431,54 @@ describe("CommandPalette search", () => {
     }
   });
 
+  it("scrolls the current session result across search groups and stops after closing", async () => {
+    const listed = createSessionResult("agent:main:scroll-target", "Needle topic");
+    const transcript: SessionsSearchResult = {
+      sessions: listed.sessions,
+      results: [
+        {
+          sessionKey: listed.sessions[0]!.key,
+          sessionId: "scroll-target",
+          messageId: "scroll-message",
+          role: "assistant",
+          timestamp: 42,
+          snippet: "The payload appears in this conversation.",
+          score: 10,
+        },
+      ],
+    };
+    const { palette, query, queryAll } = await mountSearch(
+      {
+        methods: ["sessions.search"],
+        request: async (method) => (method === "sessions.search" ? transcript : { models: [] }),
+      },
+      vi.fn(async () => listed),
+    );
+    for (const search of ["needle", "payload", "needle"]) {
+      await searchPalette(palette, search);
+      expect(queryAll('[role="option"]')).toHaveLength(1);
+      expect(query(".cmd-palette__group-label")?.textContent?.includes("In messages")).toBe(
+        search === "payload",
+      );
+      const row = query<HTMLElement>('[role="option"]')!;
+      const scroll = vi.fn();
+      Object.defineProperty(row, "scrollIntoView", { configurable: true, value: scroll });
+      pressKey(paletteInput(palette), "ArrowDown");
+      await palette.updateComplete;
+      await vi.advanceTimersByTimeAsync(20);
+      expect(scroll).toHaveBeenCalledExactlyOnceWith({ block: "nearest" });
+    }
+    const row = query<HTMLElement>('[role="option"]')!;
+    const scroll = vi.fn();
+    Object.defineProperty(row, "scrollIntoView", { configurable: true, value: scroll });
+    pressKey(paletteInput(palette), "ArrowDown");
+    pressKey(paletteInput(palette), "Escape");
+    await palette.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(palette.isOpen).toBe(false);
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
   it.each(["retain", "navigate"])(
     "keeps selection actionable when a chosen session disappears and returns (%s)",
     async (interaction) => {

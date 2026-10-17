@@ -262,7 +262,7 @@ export type AgentCommandOpts = {
 };
 
 /** Public ingress clears the same host-owned fields its option type excludes. */
-export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
+export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   clientCaps: undefined,
   gatewayUiCommandTarget: undefined,
   toolBindings: undefined,
@@ -287,7 +287,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
-} satisfies Partial<AgentCommandOpts>);
+} as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<
   keyof typeof AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,

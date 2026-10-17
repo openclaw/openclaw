@@ -5,7 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { cronStoreKey } from "./key.js";
@@ -27,7 +27,7 @@ export { CronRunReceiptRevisionError } from "./run-receipt.types.js";
 const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
 const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
 // Redundant DDL revokes profile authority retained by an active manual run.
-export const ensureCronRunReceiptSchema = createSqliteSchemaEnsurer(
+const ensureNativeCronRunReceiptSchema = createSqliteSchemaEnsurer(
   () =>
     getOpenClawStateFeatureSchemaSql("cron_run_receipts", {
       endMarker: "ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);",
@@ -38,6 +38,13 @@ export const ensureCronRunReceiptSchema = createSqliteSchemaEnsurer(
     indexes: ["idx_cron_run_receipts_active_job", "idx_cron_run_receipts_job_history"],
   },
 );
+
+export function ensureCronRunReceiptSchema(database: EngineConnection): void {
+  // PostgreSQL's physical schema owner admits these tables before worker operations.
+  if (!isPostgresSqlConnection(database)) {
+    ensureNativeCronRunReceiptSchema(database);
+  }
+}
 
 function query(database: EngineConnection) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(database);

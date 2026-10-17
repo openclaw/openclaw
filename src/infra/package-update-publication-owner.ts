@@ -26,6 +26,7 @@ import {
   matchesPackageActivationLauncher as matchesLauncher,
   verifyPackageActivationSelectedLaunchers as verifySelectedLaunchers,
 } from "./package-update-activation-launcher.js";
+import { privatePackageActivationIdentity } from "./package-update-activation-paths.js";
 import {
   assertPackageActivationActionAllowed,
   readPackageActivationRecordStatus as packageActivationStatus,
@@ -129,7 +130,15 @@ export function createPublicationOwner(
   const assertCurrent = () => {
     assertion();
     journal.assertCurrent(record);
-    const currentAnchor = entryIdentity(custodyPath("anchor"), true);
+    let currentAnchor: string | null;
+    try {
+      currentAnchor = privatePackageActivationIdentity(custodyPath("anchor"), "anchor");
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      currentAnchor = null;
+    }
     if (
       currentAnchor !== descriptor.anchorIdentity &&
       !(
@@ -226,9 +235,10 @@ export function createPublicationOwner(
     return { selected, previous, candidate, launcherStates };
   };
   const verifyClosure = async () => {
+    assertion();
     assertInventory();
     assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
-    if (packageActivationIdentity(helper(), false) !== descriptor.helperIdentity) {
+    if (privatePackageActivationIdentity(helper(), "helper") !== descriptor.helperIdentity) {
       throw new Error("Sealed package recovery helper identity changed.");
     }
     const bytes = await fsp.readFile(helper());
@@ -592,7 +602,7 @@ export function createPublicationOwner(
     assertCurrent();
     if (
       entryIdentity(anchor, true) !== null ||
-      packageActivationIdentity(helper(), false) !== descriptor.helperIdentity
+      privatePackageActivationIdentity(helper(), "helper") !== descriptor.helperIdentity
     ) {
       throw new Error("Final package recovery cleanup identity changed.");
     }
@@ -602,7 +612,7 @@ export function createPublicationOwner(
       selected,
     });
     assertCurrent();
-    if (packageActivationIdentity(helper(), false) !== descriptor.helperIdentity) {
+    if (privatePackageActivationIdentity(helper(), "helper") !== descriptor.helperIdentity) {
       throw new Error("Final helper identity changed.");
     }
     await fsp.unlink(helper());

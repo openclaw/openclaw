@@ -1,13 +1,20 @@
-import { createComponent } from "solid-js";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
+
+const views = new WeakMap<
+  NewSessionModelControl,
+  {
+    container: HTMLElement;
+    update: (props: Parameters<typeof NewSessionModelControlView>[0]) => void;
+  }
+>();
 
 export function contextWith(
   models: ModelCatalogEntry[],
@@ -93,19 +100,30 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
-  const { container } = mountSolid(() =>
-    createComponent(NewSessionModelControlView, {
-      control,
-      options: {
-        ...(agent ? { agent } : {}),
-        agentId,
-        context,
-        sending: false,
-      },
-    }),
-  );
-  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
-  if (picker) {
+  const props: Parameters<typeof NewSessionModelControlView>[0] = {
+    control,
+    options: {
+      ...(agent ? { agent } : {}),
+      agentId,
+      context,
+      sending: false,
+    },
+  };
+  let view = views.get(control);
+  if (view) {
+    view.update(props);
+    return view.container;
+  }
+  const container = document.body.appendChild(document.createElement("div"));
+  view = mountSolid(NewSessionModelControlView, props, container);
+  views.set(control, view);
+  onTestFinished(() => {
+    views.delete(control);
+    container.remove();
+  });
+  for (const picker of container.querySelectorAll<HTMLDetailsElement>(
+    ".chat-controls__model-picker, .chat-controls__effort-picker",
+  )) {
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
     flush();

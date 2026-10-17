@@ -1,4 +1,3 @@
-// Covers interactive plugin registry entries and lifecycle behavior.
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as conversationBinding from "./conversation-binding.js";
 import type {
@@ -51,119 +50,50 @@ type InteractiveDispatchParams =
   | (Parameters<typeof discordInteractiveDispatcher>[0] & { channel: "discord" })
   | (Parameters<typeof slackInteractiveDispatcher>[0] & { channel: "slack" });
 
-function createTelegramDispatchParams(params: {
-  data: string;
-  callbackId: string;
-}): Extract<InteractiveDispatchParams, { channel: "telegram" }> {
+const conversations = {
+  telegram: { conversationId: "-10099:topic:77", parentConversationId: "-10099", threadId: 77 },
+  discord: { conversationId: "channel-1", parentConversationId: "parent-1" },
+  slack: { conversationId: "C123", parentConversationId: "C123", threadId: "1710000000.000100" },
+};
+
+function baseDispatchParams<TChannel extends keyof typeof conversations>(
+  channel: TChannel,
+  data: string,
+  id: string,
+) {
   return {
-    channel: "telegram",
-    data: params.data,
-    dedupeId: params.callbackId,
+    channel,
+    data,
+    dedupeId: id,
+    respond: {},
     ctx: {
+      ...conversations[channel],
       accountId: "default",
-      callbackId: params.callbackId,
-      conversationId: "-10099:topic:77",
-      parentConversationId: "-10099",
       senderId: "user-1",
-      senderUsername: "ada",
-      threadId: 77,
-      isGroup: true,
-      isForum: true,
       auth: { isAuthorizedSender: true },
-      callbackMessage: {
-        messageId: 55,
-        chatId: "-10099",
-        messageText: "Pick a thread",
-      },
-    },
-    respond: {
-      reply: vi.fn(async () => {}),
-      editMessage: vi.fn(async () => {}),
-      editButtons: vi.fn(async () => {}),
-      clearButtons: vi.fn(async () => {}),
-      deleteMessage: vi.fn(async () => {}),
     },
   };
 }
 
-function createDiscordDispatchParams(params: {
-  data: string;
-  interactionId: string;
-  interaction?: Partial<
-    Extract<InteractiveDispatchParams, { channel: "discord" }>["ctx"]["interaction"]
-  >;
-}): Extract<InteractiveDispatchParams, { channel: "discord" }> {
+function telegramParams(
+  data: string,
+  callbackId: string,
+): Extract<InteractiveDispatchParams, { channel: "telegram" }> {
+  const base = baseDispatchParams("telegram", data, callbackId);
   return {
-    channel: "discord",
-    data: params.data,
-    dedupeId: params.interactionId,
-    ctx: {
-      accountId: "default",
-      interactionId: params.interactionId,
-      conversationId: "channel-1",
-      parentConversationId: "parent-1",
-      guildId: "guild-1",
-      senderId: "user-1",
-      senderUsername: "ada",
-      auth: { isAuthorizedSender: true },
-      interaction: {
-        kind: "button",
-        messageId: "message-1",
-        values: ["allow"],
-        ...params.interaction,
-      },
-    },
-    respond: {
-      acknowledge: vi.fn(async () => {}),
-      reply: vi.fn(async () => {}),
-      followUp: vi.fn(async () => {}),
-      editMessage: vi.fn(async () => {}),
-      clearComponents: vi.fn(async () => {}),
-    },
+    ...base,
+    ctx: { ...base.ctx, callbackId, callbackMessage: { messageId: 55, chatId: "-10099" } },
   };
 }
 
-function createSlackDispatchParams(params: {
-  data: string;
-  interactionId: string;
-  interaction?: Partial<
-    Extract<InteractiveDispatchParams, { channel: "slack" }>["ctx"]["interaction"]
-  >;
-}): Extract<InteractiveDispatchParams, { channel: "slack" }> {
-  return {
-    channel: "slack",
-    data: params.data,
-    dedupeId: params.interactionId,
-    ctx: {
-      accountId: "default",
-      interactionId: params.interactionId,
-      conversationId: "C123",
-      parentConversationId: "C123",
-      threadId: "1710000000.000100",
-      senderId: "user-1",
-      senderUsername: "ada",
-      auth: { isAuthorizedSender: true },
-      interaction: {
-        kind: "button",
-        actionId: "codex",
-        blockId: "codex_actions",
-        messageTs: "1710000000.000200",
-        threadTs: "1710000000.000100",
-        value: "approve:thread-1",
-        selectedValues: ["approve:thread-1"],
-        selectedLabels: ["Approve"],
-        triggerId: "trigger-1",
-        responseUrl: "https://hooks.slack.test/response",
-        ...params.interaction,
-      },
-    },
-    respond: {
-      acknowledge: vi.fn(async () => {}),
-      reply: vi.fn(async () => {}),
-      followUp: vi.fn(async () => {}),
-      editMessage: vi.fn(async () => {}),
-    },
-  };
+function interactionParams<TChannel extends "discord" | "slack">(
+  channel: TChannel,
+  data: string,
+  interactionId: string,
+  interaction: Record<string, unknown>,
+) {
+  const base = baseDispatchParams(channel, data, interactionId);
+  return { ...base, ctx: { ...base.ctx, interactionId, interaction } };
 }
 
 async function dispatchInteractive(params: InteractiveDispatchParams) {
@@ -197,6 +127,26 @@ const binding = {
   boundAt: 1,
 };
 const boundFixtureResult = { status: "bound" as const, binding };
+const handled = { matched: true, handled: true, duplicate: false };
+const duplicate = { ...handled, duplicate: true };
+
+function register(
+  handler: Parameters<typeof registerPluginInteractiveHandler>[1]["handler"],
+  channel = "telegram",
+  namespace = "codex",
+  metadata?: Parameters<typeof registerPluginInteractiveHandler>[2],
+) {
+  const result = registerPluginInteractiveHandler(
+    "codex-plugin",
+    { channel, namespace, handler },
+    metadata,
+  );
+  expect(result).toEqual({ ok: true });
+}
+
+function dispatchTelegram(data: string, callbackId: string) {
+  return dispatchInteractive(telegramParams(data, callbackId));
+}
 
 describe("plugin interactive handlers", () => {
   beforeEach(() => {
@@ -260,30 +210,11 @@ describe("plugin interactive handlers", () => {
       expect(hydrated.inflightCallbackDedupe).toBeInstanceOf(Set);
 
       const handler = vi.fn(async () => ({ handled: true }));
-      expect(
-        registerPluginInteractiveHandler("codex-plugin", {
-          channel: "telegram",
-          namespace: "legacy",
-          handler,
-        }),
-      ).toEqual({ ok: true });
-
-      await expect(
-        dispatchInteractive(
-          createTelegramDispatchParams({
-            data: "legacy:resume",
-            callbackId: "legacy-state-cb",
-          }),
-        ),
-      ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
-      await expect(
-        dispatchInteractive(
-          createTelegramDispatchParams({
-            data: "legacy:resume",
-            callbackId: "legacy-state-cb",
-          }),
-        ),
-      ).resolves.toEqual({ matched: true, handled: true, duplicate: true });
+      register(handler, "telegram", "legacy");
+      await expect(dispatchTelegram("legacy:resume", "legacy-state-cb")).resolves.toEqual(handled);
+      await expect(dispatchTelegram("legacy:resume", "legacy-state-cb")).resolves.toEqual(
+        duplicate,
+      );
     } finally {
       if (originalState === undefined) {
         delete globalStore[stateKey];
@@ -329,27 +260,19 @@ describe("plugin interactive handlers", () => {
     setActivePluginRegistry(registry);
 
     await expect(
-      dispatchInteractive(
-        createTelegramDispatchParams({
-          data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
-          callbackId: "cb-code-agent-restored",
-        }),
-      ),
-    ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
+      dispatchTelegram("code-agent:7506a349-84c8-4c56-8558-ce315bed2588", "cb-code-agent-restored"),
+    ).resolves.toEqual(handled);
 
     expect(handler).toHaveBeenCalledTimes(1);
     const ctx = requireHandlerCall(handler) as TelegramInteractiveHandlerContext;
-    expect(ctx.callback.namespace).toBe("code-agent");
-    expect(ctx.callback.payload).toBe("7506a349-84c8-4c56-8558-ce315bed2588");
+    expect(ctx.callback).toMatchObject({
+      namespace: "code-agent",
+      payload: "7506a349-84c8-4c56-8558-ce315bed2588",
+    });
 
     setActivePluginRegistry(createEmptyPluginRegistry());
     await expect(
-      dispatchInteractive(
-        createTelegramDispatchParams({
-          data: "code-agent:7506a349-84c8-4c56-8558-ce315bed2588",
-          callbackId: "cb-code-agent-retired",
-        }),
-      ),
+      dispatchTelegram("code-agent:7506a349-84c8-4c56-8558-ce315bed2588", "cb-code-agent-retired"),
     ).resolves.toEqual({ matched: false, handled: false, duplicate: false });
     expect(handler).toHaveBeenCalledTimes(1);
   });
@@ -380,36 +303,25 @@ describe("plugin interactive handlers", () => {
       expect(callOrder).toEqual(["ack", "handler"]);
       return { handled: true };
     });
-    expect(
-      registerPluginInteractiveHandler("codex-plugin", {
-        channel: "discord",
-        namespace: "codex",
-        handler,
-      }),
-    ).toEqual({ ok: true });
+    register(handler, "discord");
 
     await expect(
       dispatchInteractive({
-        ...createDiscordDispatchParams({
-          data: "codex:approve:thread-1",
-          interactionId: "ix-ack-1",
-          interaction: { kind: "button", values: undefined },
+        ...interactionParams("discord", "codex:approve:thread-1", "ix-ack-1", {
+          kind: "button",
+          values: undefined,
         }),
         onMatched: async () => {
           callOrder.push("ack");
         },
       }),
-    ).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: false,
-    });
+    ).resolves.toEqual(handled);
   });
 
   it.each([
     {
       channel: "telegram" as const,
-      dispatchParams: createTelegramDispatchParams({ data: "codex:bind", callbackId: "cb-bind" }),
+      dispatchParams: telegramParams("codex:bind", "cb-bind"),
       conversation: {
         channel: "telegram",
         accountId: "default",
@@ -420,10 +332,9 @@ describe("plugin interactive handlers", () => {
     },
     {
       channel: "discord" as const,
-      dispatchParams: createDiscordDispatchParams({
-        data: "codex:bind",
-        interactionId: "ix-bind",
-        interaction: { kind: "button", values: ["allow"] },
+      dispatchParams: interactionParams("discord", "codex:bind", "ix-bind", {
+        kind: "button",
+        values: ["allow"],
       }),
       conversation: {
         channel: "discord",
@@ -434,15 +345,11 @@ describe("plugin interactive handlers", () => {
     },
     {
       channel: "slack" as const,
-      dispatchParams: createSlackDispatchParams({
-        data: "codex:bind",
-        interactionId: "slack-bind",
-        interaction: {
-          kind: "button",
-          value: "bind",
-          selectedValues: ["bind"],
-          selectedLabels: ["Bind"],
-        },
+      dispatchParams: interactionParams("slack", "codex:bind", "slack-bind", {
+        kind: "button",
+        value: "bind",
+        selectedValues: ["bind"],
+        selectedLabels: ["Bind"],
       }),
       conversation: {
         channel: "slack",
@@ -484,19 +391,11 @@ describe("plugin interactive handlers", () => {
           return { handled: true };
         },
       );
-      expect(
-        registerPluginInteractiveHandler(
-          "codex-plugin",
-          { channel, namespace: "codex", handler: handler as never },
-          { pluginName: "Codex", pluginRoot: "/plugins/codex" },
-        ),
-      ).toEqual({ ok: true });
-
-      await expect(dispatchInteractive(dispatchParams)).resolves.toEqual({
-        matched: true,
-        handled: true,
-        duplicate: false,
+      register(handler as never, channel, "codex", {
+        pluginName: "Codex",
+        pluginRoot: "/plugins/codex",
       });
+      await expect(dispatchInteractive(dispatchParams)).resolves.toEqual(handled);
       expect(requestPluginConversationBindingMock).toHaveBeenCalledWith({
         pluginId: "codex-plugin",
         pluginName: "Codex",
@@ -517,77 +416,46 @@ describe("plugin interactive handlers", () => {
   );
 
   it.each([
-    {
-      name: "authorized and bound",
-      auth: true,
-      senderId: "user-1",
-      accountId: "default",
-      conversationId: "conversation-1",
-      conversation: undefined,
-      expectedStatus: "bound",
-    },
-    {
-      name: "unauthorized",
-      auth: false,
-      senderId: "user-1",
-      accountId: "default",
-      conversationId: "conversation-1",
-      conversation: undefined,
-      expectedStatus: "error",
-    },
-    {
-      name: "missing sender",
-      auth: true,
-      senderId: " ",
-      accountId: "default",
-      conversationId: "conversation-1",
-      conversation: undefined,
-      expectedStatus: "error",
-    },
-    {
-      name: "missing account",
-      auth: true,
-      senderId: "user-1",
-      accountId: " ",
-      conversationId: "conversation-1",
-      conversation: undefined,
-      expectedStatus: "error",
-    },
-    {
-      name: "missing base conversation despite an override",
-      auth: true,
-      senderId: "user-1",
-      accountId: "default",
-      conversationId: " ",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "override-conversation",
+    ["authorized and bound", { expectedStatus: "bound" }],
+    ["unauthorized", { auth: false }],
+    ["missing sender", { senderId: " " }],
+    ["missing account", { accountId: " " }],
+    [
+      "missing base conversation despite an override",
+      {
+        conversationId: " ",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "override-conversation",
+        },
       },
+    ],
+  ] as const)("exposes binding authority only when %s", async (name, overrides) => {
+    const testCase = {
+      auth: true,
+      senderId: "user-1",
+      accountId: "default",
+      conversationId: "conversation-1",
+      conversation: undefined,
       expectedStatus: "error",
-    },
-  ] as const)("exposes binding authority only when $name", async (testCase) => {
+      ...overrides,
+    };
     let bindingResult: unknown;
     const handler = vi.fn(async (ctx: TelegramInteractiveHandlerContext) => {
       bindingResult = await ctx.requestConversationBinding();
     });
-    expect(
-      registerPluginInteractiveHandler(
-        "codex-plugin",
-        { channel: "telegram", namespace: "codex", handler: handler as never },
-        { pluginName: "Codex", pluginRoot: "/plugins/codex" },
-      ),
-    ).toEqual({ ok: true });
-    const dispatchParams = createTelegramDispatchParams({
-      data: "codex:bind",
-      callbackId: `auth-${testCase.name}`,
+    register(handler as never, "telegram", "codex", {
+      pluginName: "Codex",
+      pluginRoot: "/plugins/codex",
     });
+    const params = telegramParams("codex:bind", `auth-${name}`);
 
     await dispatchInteractive({
-      ...dispatchParams,
+      ...params,
       conversation: testCase.conversation,
       ctx: {
-        ...dispatchParams.ctx,
+        ...params.ctx,
         auth: { isAuthorizedSender: testCase.auth },
         senderId: testCase.senderId,
         accountId: testCase.accountId,
@@ -607,57 +475,29 @@ describe("plugin interactive handlers", () => {
       .fn(async () => {})
       .mockRejectedValueOnce(new Error("post-handler failure"))
       .mockResolvedValueOnce(undefined);
-    expect(
-      registerPluginInteractiveHandler("codex-plugin", {
-        channel: "telegram",
-        namespace: "codex",
-        handler,
-      }),
-    ).toEqual({ ok: true });
+    register(handler);
 
     const baseParams = {
-      ...createTelegramDispatchParams({
-        data: "codex:resume:thread-1",
-        callbackId: "cb-post-handler-failure",
-      }),
+      ...telegramParams("codex:resume:thread-1", "cb-post-handler-failure"),
       afterInvoke,
     };
 
     await expect(dispatchInteractive(baseParams)).rejects.toThrow("post-handler failure");
-    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: false,
-    });
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual(handled);
     expect(handler).toHaveBeenCalledTimes(2);
     expect(afterInvoke).toHaveBeenCalledTimes(2);
     expect(afterInvoke).toHaveBeenLastCalledWith({ handled: true });
   });
 
   it("dedupes concurrent interactive dispatches while a handler is still running", async () => {
-    let releaseHandler: (() => void) | undefined;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    if (!releaseHandler) {
-      throw new Error("Expected handler release callback to be initialized");
-    }
+    const { promise: handlerGate, resolve: releaseHandler } = Promise.withResolvers<void>();
     const handler = vi.fn(async () => {
       await handlerGate;
       return { handled: true };
     });
-    expect(
-      registerPluginInteractiveHandler("codex-plugin", {
-        channel: "telegram",
-        namespace: "codex",
-        handler,
-      }),
-    ).toEqual({ ok: true });
+    register(handler);
 
-    const baseParams = createTelegramDispatchParams({
-      data: "codex:resume:thread-1",
-      callbackId: "cb-concurrent",
-    });
+    const baseParams = telegramParams("codex:resume:thread-1", "cb-concurrent");
 
     const firstDispatch = dispatchInteractive(baseParams);
     await vi.waitFor(() => {
@@ -665,66 +505,35 @@ describe("plugin interactive handlers", () => {
     });
     const duplicateDispatch = await dispatchInteractive(baseParams);
 
-    expect(duplicateDispatch).toEqual({
-      matched: true,
-      handled: true,
-      duplicate: true,
-    });
+    expect(duplicateDispatch).toEqual(duplicate);
 
     releaseHandler();
 
-    await expect(firstDispatch).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: false,
-    });
+    await expect(firstDispatch).resolves.toEqual(handled);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it("releases inflight interactive dedupe keys after a handler failure", async () => {
-    let rejectHandler: ((error: Error) => void) | undefined;
-    const handlerGate = new Promise<never>((_, reject) => {
-      rejectHandler = reject;
-    });
-    if (!rejectHandler) {
-      throw new Error("Expected handler reject callback to be initialized");
-    }
+    const { promise: handlerGate, reject: rejectHandler } = Promise.withResolvers<never>();
     const handler = vi
       .fn(async () => ({ handled: true }))
       .mockImplementationOnce(async () => await handlerGate)
       .mockResolvedValueOnce({ handled: true });
-    expect(
-      registerPluginInteractiveHandler("codex-plugin", {
-        channel: "telegram",
-        namespace: "codex",
-        handler,
-      }),
-    ).toEqual({ ok: true });
+    register(handler);
 
-    const baseParams = createTelegramDispatchParams({
-      data: "codex:resume:thread-1",
-      callbackId: "cb-retry-after-failure",
-    });
+    const baseParams = telegramParams("codex:resume:thread-1", "cb-retry-after-failure");
 
     const firstDispatch = dispatchInteractive(baseParams);
     await vi.waitFor(() => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: true,
-    });
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual(duplicate);
 
     rejectHandler(new Error("boom"));
     await expect(firstDispatch).rejects.toThrow("boom");
 
-    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
-      matched: true,
-      handled: true,
-      duplicate: false,
-    });
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual(handled);
     expect(handler).toHaveBeenCalledTimes(2);
   });
 });

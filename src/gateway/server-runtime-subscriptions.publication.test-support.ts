@@ -604,7 +604,7 @@ export function registerSessionPublicationTests(fixture: {
           message: expect.objectContaining({ content: storedMessage.content }),
         }),
         new Set(["conn-transcript"]),
-        undefined,
+        { sessionEventSubscriptionKeys: ["agent:main:main"] },
       );
       expect(warn).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -693,7 +693,7 @@ export function registerSessionPublicationTests(fixture: {
           }),
         }),
         new Set(["conn-transcript"]),
-        undefined,
+        { sessionEventSubscriptionKeys: ["agent:main:main"] },
       );
       expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledOnce();

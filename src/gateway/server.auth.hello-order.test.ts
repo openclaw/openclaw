@@ -1,8 +1,10 @@
 import { once } from "node:events";
+import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
@@ -20,6 +22,7 @@ import {
 import { connectWatchNode } from "./watch-node-http.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const origin = "https://control.example.com";
 
@@ -54,6 +57,7 @@ async function configureAuth() {
 }
 
 async function openBrowser(port: number, instanceId: string) {
+  const identityPath = path.join(tempDirs.make("hello-browser-"), "device.sqlite");
   const socket = await openWs(port, {
     origin,
     "x-forwarded-for": "203.0.113.50",
@@ -69,6 +73,7 @@ async function openBrowser(port: number, instanceId: string) {
       connectReq(socket, {
         skipDefaultAuth: true,
         prePairDevice: true,
+        deviceIdentityPath: identityPath,
         client: { ...CONTROL_UI_CLIENT, instanceId },
         scopes: ["operator.read"],
         browserOrigin: origin,

@@ -8,7 +8,6 @@ import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 
 export type NativeCatalogBoundary = "ordinary" | "catalog";
-const PAGE_SIZE = 64;
 const CREATED_AT = "2025-01-01T00:00:00.000Z";
 const rolloutRecord = (type: string, payload: unknown) =>
   JSON.stringify({ timestamp: CREATED_AT, type, payload });
@@ -42,20 +41,17 @@ export async function createNativeCatalogPerformanceFixture(
             model_provider: "openai",
           }),
           rolloutRecord("event_msg", { type: "user_message", message, kind: "plain" }),
-          ...(options.assistantBytes
-            ? [
-                rolloutRecord("event_msg", {
-                  type: "agent_message",
-                  message: "x".repeat(options.assistantBytes),
-                }),
-              ]
-            : []),
-          "",
-        ].join("\n");
-        await fs.writeFile(
-          path.join(directory, `rollout-2025-01-01T00-00-00-${id}.jsonl`),
-          contents,
-        );
+        ];
+        if (options.assistantBytes) {
+          contents.push(
+            rolloutRecord("event_msg", {
+              type: "agent_message",
+              message: "x".repeat(options.assistantBytes),
+            }),
+          );
+        }
+        const file = path.join(directory, `rollout-2025-01-01T00-00-00-${id}.jsonl`);
+        await fs.writeFile(file, `${contents.join("\n")}\n`);
       }),
     );
   }
@@ -80,17 +76,21 @@ export async function startNativeCatalogPerformanceClient(
   }
 }
 
+type WalkOptions = {
+  useStateDbOnly: boolean;
+  observePage?: (page: CodexThreadListResponse) => void;
+  previewCache?: CodexCatalogPreviewCache;
+};
 function readPage(
   client: CodexAppServerClient,
   boundary: NativeCatalogBoundary,
-  useStateDbOnly: boolean,
+  { useStateDbOnly, previewCache }: WalkOptions,
   cursor?: string,
-  previewCache?: CodexCatalogPreviewCache,
 ) {
   return client.request<CodexThreadListResponse>(
     "thread/list",
     {
-      limit: PAGE_SIZE,
+      limit: 64,
       archived: false,
       modelProviders: [],
       sortKey: "recency_at",
@@ -111,24 +111,14 @@ function readPage(
 export async function walkNativeCatalog(
   client: CodexAppServerClient,
   boundary: NativeCatalogBoundary,
-  options: {
-    useStateDbOnly: boolean;
-    observePage?: (page: CodexThreadListResponse) => void;
-    previewCache?: CodexCatalogPreviewCache;
-  },
+  options: WalkOptions,
 ) {
   let rows = 0;
   let pages = 0;
   let cursor: string | undefined;
   const cursors = new Set<string>();
   do {
-    const page = await readPage(
-      client,
-      boundary,
-      options.useStateDbOnly,
-      cursor,
-      options.previewCache,
-    );
+    const page = await readPage(client, boundary, options, cursor);
     rows += page.data.length;
     pages++;
     options.observePage?.(page);
@@ -148,9 +138,10 @@ export async function measureNativeCatalogBoundary(
   boundary: NativeCatalogBoundary,
   previewCache: CodexCatalogPreviewCache,
 ) {
-  const page = await readPage(client, boundary, true, undefined, previewCache);
+  const options = { useStateDbOnly: true, previewCache };
+  const page = await readPage(client, boundary, options);
   return {
-    ...(await walkNativeCatalog(client, boundary, { useStateDbOnly: true, previewCache })),
+    ...(await walkNativeCatalog(client, boundary, options)),
     retainedPageBytes: Buffer.byteLength(JSON.stringify(page)),
     pageRows: page.data.length,
     maxPreviewCharacters: Math.max(0, ...page.data.map((row) => row.preview?.length ?? 0)),

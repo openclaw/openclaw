@@ -18,9 +18,16 @@ afterEach(() => {
   container.remove();
 });
 
-function mountPicker() {
+function mountPicker(optionsReady = true) {
   document.body.append(container);
   dispose = installChatComposerPickerDismissal(document);
+  const modelOptions = ["Alpha", "Beta", "Gamma"].map((label) => ({
+    label,
+    value: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
+    commitValue: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
+    provider: label === "Gamma" ? "other" : "example",
+    isDefault: false,
+  }));
   const params = {
     disabled: false,
     modelSelectionLocked: false,
@@ -28,13 +35,7 @@ function mountPicker() {
     sessionModelPinned: true,
     sessionKey: "main",
     triggerModelLabel: "Alpha",
-    modelOptions: ["Alpha", "Beta", "Gamma"].map((label) => ({
-      label,
-      value: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
-      commitValue: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
-      provider: label === "Gamma" ? "other" : "example",
-      isDefault: false,
-    })),
+    modelOptions: optionsReady ? modelOptions : [],
     onModelSelect: vi.fn(async () => {}),
     onOpenChange: vi.fn(),
   };
@@ -76,7 +77,7 @@ function mountPicker() {
     flush();
     await new Promise(requestAnimationFrame);
   };
-  return { params, update, picker, trigger, search, composer, toggle };
+  return { params, update, picker, trigger, search, composer, toggle, modelOptions };
 }
 
 it("opens during activation and preserves filter focus and query across catalog rerenders", async () => {
@@ -211,17 +212,42 @@ it.each(["closed", "removed", "focus moved"])(
   },
 );
 
+it.each(["open", "closed", "removed", "focus moved"])(
+  "honors opening focus when a late catalog arrives and the picker is %s",
+  async (state) => {
+    const { picker, trigger, composer, toggle, params, modelOptions, update } = mountPicker(false);
+    trigger.focus();
+    await toggle(() => userEvent.keyboard("{Enter}"));
+    expect(picker.querySelector("[data-chat-model-search]")).toBeNull();
+    if (state === "closed") {
+      await toggle(() => userEvent.keyboard("{Escape}"));
+    } else if (state === "removed") {
+      picker.remove();
+      composer.focus();
+    } else if (state === "focus moved") {
+      composer.focus();
+    }
+    const previousFocus = document.activeElement;
+    params.modelOptions = modelOptions;
+    update();
+    await new Promise(requestAnimationFrame);
+    const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+    expect(search).not.toBeNull();
+    expect(document.activeElement).toBe(state === "open" ? search : previousFocus);
+  },
+);
+
 it.each(["trigger", "Escape", "selection"])(
   "retains provider toggles after closing through %s",
   async (close) => {
     const { picker, trigger, search, toggle, update, params } = mountPicker();
+    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
     const selectedToggle = picker.querySelector<HTMLButtonElement>(
       '[data-chat-model-provider-group="example"] [data-chat-model-provider-toggle]',
     )!;
     const otherToggle = picker.querySelector<HTMLButtonElement>(
       '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
     )!;
-    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
     await userEvent.click(selectedToggle);
     await userEvent.click(otherToggle);
     expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
