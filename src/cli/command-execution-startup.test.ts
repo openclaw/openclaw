@@ -1,9 +1,20 @@
-// Command execution startup tests cover startup behavior before CLI command execution.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { resolveCliStartupPolicy } from "./command-startup-policy.js";
+
+function startupPolicy(overrides: Partial<ReturnType<typeof resolveCliStartupPolicy>> = {}) {
+  return {
+    suppressDoctorStdout: true,
+    hideBanner: false,
+    skipConfigGuard: false,
+    loadPlugins: false,
+    pluginRegistry: { scope: "channels" as const },
+    ...overrides,
+  };
+}
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
@@ -53,13 +64,7 @@ describe("command-execution-startup", () => {
 
   it("routes logs to stderr and emits banner only when allowed", async () => {
     await mod.applyCliExecutionStartupPresentation({
-      startupPolicy: {
-        suppressDoctorStdout: true,
-        hideBanner: false,
-        skipConfigGuard: false,
-        loadPlugins: true,
-        pluginRegistry: { scope: "all" },
-      },
+      startupPolicy: startupPolicy({ loadPlugins: true, pluginRegistry: { scope: "all" } }),
       version: "1.2.3",
       argv: ["node", "openclaw", "status"],
     });
@@ -70,13 +75,12 @@ describe("command-execution-startup", () => {
     });
 
     await mod.applyCliExecutionStartupPresentation({
-      startupPolicy: {
+      startupPolicy: startupPolicy({
         suppressDoctorStdout: false,
         hideBanner: true,
-        skipConfigGuard: false,
         loadPlugins: true,
         pluginRegistry: { scope: "all" },
-      },
+      }),
       version: "1.2.3",
       showBanner: true,
     });
@@ -86,13 +90,7 @@ describe("command-execution-startup", () => {
 
   it("does not emit the banner for JSON output", async () => {
     await mod.applyCliExecutionStartupPresentation({
-      startupPolicy: {
-        suppressDoctorStdout: true,
-        hideBanner: false,
-        skipConfigGuard: false,
-        loadPlugins: false,
-        pluginRegistry: { scope: "channels" },
-      },
+      startupPolicy: startupPolicy(),
       version: "1.2.3",
       argv: ["node", "openclaw", "status", "--json"],
     });
@@ -106,13 +104,7 @@ describe("command-execution-startup", () => {
     await mod.ensureCliExecutionBootstrap({
       runtime: statusRuntime,
       commandPath: ["status"],
-      startupPolicy: {
-        suppressDoctorStdout: true,
-        hideBanner: false,
-        skipConfigGuard: false,
-        loadPlugins: false,
-        pluginRegistry: { scope: "channels" },
-      },
+      startupPolicy: startupPolicy(),
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
@@ -127,13 +119,10 @@ describe("command-execution-startup", () => {
     await mod.ensureCliExecutionBootstrap({
       runtime: messageRuntime,
       commandPath: ["message", "send"],
-      startupPolicy: {
+      startupPolicy: startupPolicy({
         suppressDoctorStdout: false,
-        hideBanner: false,
-        skipConfigGuard: false,
-        loadPlugins: false,
         pluginRegistry: { scope: "all" },
-      },
+      }),
       allowInvalid: true,
       loadPlugins: true,
     });
@@ -214,13 +203,7 @@ describe("command-execution-startup", () => {
         await mod.ensureCliExecutionBootstrap({
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
           commandPath,
-          startupPolicy: {
-            suppressDoctorStdout: true,
-            hideBanner: true,
-            skipConfigGuard: false,
-            loadPlugins: false,
-            pluginRegistry: { scope: "all" },
-          },
+          startupPolicy: startupPolicy({ hideBanner: true, pluginRegistry: { scope: "all" } }),
         });
         expect(prepare).toHaveBeenCalledTimes(2);
       } finally {

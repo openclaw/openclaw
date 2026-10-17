@@ -1,6 +1,5 @@
-// CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
@@ -28,10 +27,7 @@ describe("waitForever", () => {
       const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
       expect(typeof callback).toBe("function");
       expect(delay).toBe(1_000_000);
-      // Regression guard for the previous `.unref()` bug: an unref'd interval
-      // does NOT keep the event loop alive, so `await waitForever()` would
-      // exit immediately with code 13 ("unsettled top-level await"). The
-      // function must NOT unref the interval.
+      // An unref'd interval exited with code 13 (unsettled top-level await).
       expect(unref).not.toHaveBeenCalled();
       expect(promise).toBeInstanceOf(Promise);
     } finally {
@@ -41,28 +37,25 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it.each([{ code: 2, customErrorHandler: true }])(
-    "preserves completed exit $code with custom error handler $customErrorHandler",
-    async ({ code, customErrorHandler }) => {
-      const runtime = { error: vi.fn(), exit: vi.fn() };
-      const onError = vi.fn();
-      const outcome = new ExitError(code);
+  it("preserves completed exit 2 with a custom error handler", async () => {
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    const onError = vi.fn();
+    const outcome = new ExitError(2);
 
-      await expect(
-        runCommandWithRuntime(
-          runtime,
-          async () => {
-            throw outcome;
-          },
-          customErrorHandler ? onError : undefined,
-        ),
-      ).rejects.toBe(outcome);
+    await expect(
+      runCommandWithRuntime(
+        runtime,
+        async () => {
+          throw outcome;
+        },
+        onError,
+      ),
+    ).rejects.toBe(outcome);
 
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(onError).not.toHaveBeenCalled();
-    },
-  );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
 
   it("keeps cause chains and error codes behind debug intent", async () => {
     const messages: string[] = [];
@@ -158,42 +151,40 @@ describe("respawn policy", () => {
 });
 
 describe("dns cli", () => {
+  const log = vi.fn();
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(log);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    log.mockClear();
+  });
+
   it("prints setup info (no apply)", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    try {
-      const program = new Command();
-      registerDnsCli(program);
-      await program.parseAsync(["dns", "setup", "--domain", "openclaw.internal"], { from: "user" });
-      const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
-      expect(output).toContain("DNS setup");
-      expect(output).toContain("openclaw.internal");
-      expect(writeJson).toHaveBeenCalledWith({
-        gateway: { bind: "auto" },
-        discovery: { wideArea: { domain: "openclaw.internal." } },
-      });
-    } finally {
-      writeJson.mockRestore();
-      log.mockRestore();
-    }
+    const program = new Command();
+    registerDnsCli(program);
+    await program.parseAsync(["dns", "setup", "--domain", "openclaw.internal"], { from: "user" });
+    const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+    expect(output).toContain("DNS setup");
+    expect(output).toContain("openclaw.internal");
+    expect(writeJson).toHaveBeenCalledWith({
+      gateway: { bind: "auto" },
+      discovery: { wideArea: { domain: "openclaw.internal." } },
+    });
   });
 
   it.each(["../../x", "evil\nrecords"])(
     "rejects invalid --domain %j with explicit DNS-name diagnostic",
     async (domain) => {
-      const log = vi.spyOn(console, "log").mockImplementation(() => {});
-      try {
-        const program = new Command();
-        registerDnsCli(program);
-        await expect(
-          program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
-        ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
-        const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
-        expect(output).not.toContain("No wide-area domain configured");
-        expect(output).not.toContain("DNS setup");
-      } finally {
-        log.mockRestore();
-      }
+      const program = new Command();
+      registerDnsCli(program);
+      await expect(
+        program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+      ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+      const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+      expect(output).not.toContain("No wide-area domain configured");
+      expect(output).not.toContain("DNS setup");
     },
   );
 });

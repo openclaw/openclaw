@@ -43,9 +43,7 @@ export function createDocumentedCompletionProgram(): Command {
 }
 
 export function createAliasedCompletionProgram(): Command {
-  const program = new Command();
-  program.name("openclaw");
-  program.option("--profile <name>", "Profile");
+  const program = new Command().name("openclaw").option("--profile <name>", "Profile");
   const infer = program.command("infer").alias("capability").description("Run inference");
   infer.command("embed").description("Embed text").option("--model <id>", "Model id");
   const cron = program.command("cron").description("Cron commands");
@@ -101,16 +99,23 @@ printf '%s\\n' "\${COMPREPLY[@]}"
   return result.stdout.split("\n").filter(Boolean);
 }
 
-function findFish(): string | null {
-  const executable = process.platform === "win32" ? "fish.exe" : "fish";
-  const candidates = (process.env.PATH ?? "")
-    .split(path.delimiter)
-    .filter(Boolean)
-    .map((directory) => path.join(directory, executable));
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+function findShell(name: string, override?: string): string | null {
+  const executable = process.platform === "win32" ? `${name}.exe` : name;
+  const candidates = [
+    override,
+    ...(process.env.PATH ?? "")
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((directory) => path.join(directory, executable)),
+  ];
+  return (
+    candidates.find((candidate): candidate is string =>
+      Boolean(candidate && existsSync(candidate)),
+    ) ?? null
+  );
 }
 
-const fishPath = findFish();
+const fishPath = findShell("fish");
 export const itWithFish: TestAPI["skip"] = fishPath ? it : it.skip;
 
 export function runGeneratedFishCompletion(program: Command, commandLine: string): string[] {
@@ -140,23 +145,7 @@ export function runFishCompletionScript(script: string, commandLine: string): st
     .map((completion) => completion.split("\t")[0] ?? completion);
 }
 
-function findPowerShell(): string | null {
-  const executable = process.platform === "win32" ? "pwsh.exe" : "pwsh";
-  const candidates = [
-    process.env.OPENCLAW_TEST_PWSH,
-    ...(process.env.PATH ?? "")
-      .split(path.delimiter)
-      .filter(Boolean)
-      .map((directory) => path.join(directory, executable)),
-  ];
-  return (
-    candidates.find((candidate): candidate is string =>
-      Boolean(candidate && existsSync(candidate)),
-    ) ?? null
-  );
-}
-
-const powerShellPath = findPowerShell();
+const powerShellPath = findShell("pwsh", process.env.OPENCLAW_TEST_PWSH);
 export const itWithPowerShell: TestAPI["skip"] = powerShellPath ? it : it.skip;
 
 type PowerShellCompletionResponse =
@@ -233,12 +222,7 @@ function decodePowerShellCompletionResponse(encoded: string): PowerShellCompleti
     ) {
       throw new Error("PowerShell completion response had invalid completions");
     }
-    return {
-      version: 1,
-      id: response.id,
-      ok: true,
-      completions: response.completions,
-    };
+    return { version: 1, id: response.id, ok: true, completions: response.completions };
   }
   if (typeof response.error !== "string") {
     throw new Error("PowerShell completion response had no error text");
