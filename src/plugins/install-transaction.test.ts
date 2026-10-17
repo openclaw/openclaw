@@ -30,7 +30,6 @@ function install(
   return withPluginInstallTransactions(params, assertOwned, run);
 }
 function refuse(reason: unknown): never {
-  // oxlint-disable-next-line typescript/only-throw-error -- Preserve falsy JavaScript callback refusals.
   throw reason;
 }
 function authority(refusal: unknown = 0) {
@@ -171,7 +170,7 @@ it.each(["commit", "operation"] as const)("keeps a falsy %s refusal sticky", asy
           },
           rollback,
         });
-        return;
+        return undefined;
       }
       try {
         revoke();

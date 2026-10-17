@@ -39,6 +39,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
     leaseMocks.forbidden();
   }),
 }));
+// mock-isolation: The timer fixture drives storage itself and rejects worker-store dispatch.
 vi.mock("./openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: leaseMocks.forbidden,
 }));

@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   startHeartbeat: vi.fn<StartHeartbeat>(),
 }));
 
+// mock-isolation: Drive the real lease owner with controlled storage and reject native acquisition.
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   createOpenClawStateLeaseWorkerStorage: mocks.createStorage,
   acquireLease: leaseMocks.forbidden,

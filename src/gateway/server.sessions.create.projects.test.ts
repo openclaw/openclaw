@@ -162,7 +162,7 @@ type CreatedSession = {
 };
 function createSession(
   params: Record<string, unknown>,
-  options: Parameters<typeof directSessionReq>[2] = controlUiClient,
+  options: Parameters<typeof directSessionReq<CreatedSession>>[2] = controlUiClient,
 ) {
   return request<CreatedSession>("sessions.create", { agentId: "main", ...params }, options);
 }

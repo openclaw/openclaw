@@ -23,7 +23,7 @@ afterEach(() => {
 
 type Fixture = ReturnType<typeof createMigrationResourceFixture>;
 async function withFixture(fixture: Fixture, run: () => Promise<void>) {
-  using _ = { [Symbol.dispose]: fixture.cleanup };
+  using _ = { [Symbol.dispose]: () => fixture.cleanup() };
   await withEnvAsync(
     {
       OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
@@ -141,7 +141,7 @@ it.each(["success", "cleanup failure", "encoding failure"] as const)(
 
 it("joins fresh planning before releasing its database when a raw active provider getter rejects", async () => {
   const active = createMigrationResourceFixture();
-  using _ = { [Symbol.dispose]: active.cleanup };
+  using _ = { [Symbol.dispose]: () => active.cleanup() };
   const fresh = createMigrationResourceFixture({ pausePlan: true });
   const plan = requests(fresh)("migrations.memory.plan", { agentId: "main" });
   await withFixture(fresh, async () => {

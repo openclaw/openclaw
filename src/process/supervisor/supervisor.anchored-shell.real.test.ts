@@ -336,7 +336,7 @@ describe("supervisor anchored shell real process ownership", () => {
     const replacementPid = replacement.pid!;
     activePids.add(replacementPid);
     await ready.promise;
-    await first.release();
+    first.release();
     await first.run.waitForExtinction!();
     expect(replacement.activity.resultSettled).toBe(false);
     await first.supervisor.shutdown();

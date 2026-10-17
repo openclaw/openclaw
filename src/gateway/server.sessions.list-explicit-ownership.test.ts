@@ -55,12 +55,11 @@ const preview = {
   derivedTitle: "Physical database title",
   lastMessagePreview: "Physical database preview",
 };
-type ListedSession = { key: string; agentId: string; sessionId: string };
-const identities = (sessions: ListedSession[] | undefined) =>
+const identities = (sessions: SessionsListResult["sessions"] | undefined) =>
   sessions?.map(({ key, agentId, sessionId }) => ({ key, agentId, sessionId }));
 async function list(
   params: Record<string, unknown>,
-  options?: Parameters<typeof directSessionReq>[2],
+  options?: Parameters<typeof directSessionReq<SessionsListResult>>[2],
 ) {
   const result = await directSessionReq<SessionsListResult>("sessions.list", params, options);
   expect(result.ok).toBe(true);

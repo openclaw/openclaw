@@ -46,7 +46,7 @@ describe("agent RPC real delegated-authority effects", () => {
   function reserve(
     f: Fixture,
     message: string,
-    runId = f.runId,
+    runId: string = f.runId,
     keys = [`agent:${runId}`],
     io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
   ) {
@@ -114,7 +114,7 @@ describe("agent RPC real delegated-authority effects", () => {
     ) => {
       release.resolve();
       await execution?.cleanup();
-      await Promise.allSettled(requests);
+      await Promise.allSettled(requests.filter((request) => request !== undefined));
       reservation?.clearUnaccepted();
       await f.cleanup();
       observers.forEach((observer) => observer.mockRestore());

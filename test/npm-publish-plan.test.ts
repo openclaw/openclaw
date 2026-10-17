@@ -384,18 +384,15 @@ describe("resolvePublishedNpmVersionRoute", () => {
       "2026.8.1-beta.1",
     ],
     ["complete stable", "2026.7.1", { latest: "2026.7.1", beta: "2026.7.1" }, "npm-readback"],
-  ] as const)(
-    "routes %s selectors",
-    (_label, version, distTags, route, currentBeta = undefined) => {
-      expect(
-        resolvePublishedNpmVersionRoute({
-          packageVersion: version,
-          publishPlan: resolveNpmPublishPlan(version, currentBeta),
-          distTags,
-        }),
-      ).toBe(route);
-    },
-  );
+  ] as const)("routes %s selectors", (_label, version, distTags, route, currentBeta) => {
+    expect(
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version, currentBeta),
+        distTags,
+      }),
+    ).toBe(route);
+  });
 
   it.each([
     ["incomparable beta", "2026.7.1-beta.3", { beta: "not-a-version" }],
@@ -428,33 +425,30 @@ describe("resolvePublishedNpmVersionRoute", () => {
     ],
     ["unpublished behind lagging selector", { latest: "2026.9.5" }, false],
     ["unpublished missing selector", {}, false],
-  ] as const)(
-    "decides publication for %s",
-    (_label, distTags, published, supersededBy = undefined, error = undefined) => {
-      const version = "2026.9.6";
-      const publishPlan = resolveNpmPublishPlan(version);
-      const decide = () =>
-        resolveNpmVersionPublicationDecision({
-          packageVersion: version,
-          publishPlan: published ? { ...publishPlan, mirrorDistTags: ["beta"] } : publishPlan,
-          distTags,
-          published,
-        });
-      if (error) {
-        expect(decide).toThrow(error);
-        return;
-      }
-      expect(decide()).toEqual({
-        route: published ? "npm-readback" : null,
-        supersededBy: supersededBy ?? null,
+  ] as const)("decides publication for %s", (_label, distTags, published, supersededBy, error) => {
+    const version = "2026.9.6";
+    const publishPlan = resolveNpmPublishPlan(version);
+    const decide = () =>
+      resolveNpmVersionPublicationDecision({
+        packageVersion: version,
+        publishPlan: published ? { ...publishPlan, mirrorDistTags: ["beta"] } : publishPlan,
+        distTags,
+        published,
       });
-      if (published) {
-        expect(
-          resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
-        ).toBe("npm-readback");
-      }
-    },
-  );
+    if (error) {
+      expect(decide).toThrow(error);
+      return;
+    }
+    expect(decide()).toEqual({
+      route: published ? "npm-readback" : null,
+      supersededBy: supersededBy ?? null,
+    });
+    if (published) {
+      expect(
+        resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
+      ).toBe("npm-readback");
+    }
+  });
 });
 
 describe("shouldRequireNpmDistTagMirrorAuth", () => {

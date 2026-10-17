@@ -99,7 +99,7 @@ function readEntry(sessionKey: string) {
 function writeEntry(sessionKey: string, entry: SessionEntry) {
   replaceSessionEntrySync({ agentId: "main", sessionKey, storePath }, entry);
 }
-type CreationOptions = Parameters<typeof directSessionReq>[2];
+type CreationOptions = Parameters<typeof directSessionReq<CreatedWorktreeSession>>[2];
 function requestCreation(params: Record<string, unknown>, options: CreationOptions = adminRequest) {
   return directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
@@ -402,16 +402,16 @@ test("visible spawn tool preserves project validation and external cwd authoriza
 test.each(["archive", "unregister", "replace"] as const)(
   "worktree spawns roll back after parent %s during preparation",
   async (change) => {
-    const selectedParent =
-      change === "replace" ? await createManagedProjectParent() : await createDirectProjectParent();
+    const directParent = change === "replace" ? undefined : await createDirectProjectParent();
+    const selectedParent = directParent ?? (await createManagedProjectParent());
     let createdPath: string | undefined;
     const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
     vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome").mockImplementation(
       async function (this: ManagedWorktreeService, params) {
         const outcome = await createWorktree(this, params);
         createdPath = outcome.record.path;
-        if (change === "unregister" && "project" in selectedParent) {
-          expect(await removeProjectRegistry(selectedParent.project)).toBe(true);
+        if (change === "unregister" && directParent) {
+          expect(await removeProjectRegistry(directParent.project)).toBe(true);
         } else {
           writeEntry(selectedParent.key, {
             ...selectedParent.entry,

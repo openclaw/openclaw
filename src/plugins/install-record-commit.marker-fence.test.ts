@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: Exercise marker ownership without loading or writing operator config.
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: async () => ({ valid: true, config: {} }),
   replaceConfigFile: mocks.replace,
@@ -59,6 +60,7 @@ vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => ({
   restorePersistedInstalledPluginIndexIfCurrent: mocks.restore,
 }));
 
+// mock-isolation: Supply the controlled lease whose revocation these marker tests exercise.
 vi.mock("./plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: mocks.withLease,
 }));

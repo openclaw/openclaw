@@ -33,8 +33,8 @@ type ScopeUpgradeAttempt = {
 };
 
 async function approveReadScopedDevice(
-  clientId = GATEWAY_CLIENT_NAMES.CLI,
-  clientMode = GATEWAY_CLIENT_MODES.CLI,
+  clientId: (typeof GATEWAY_CLIENT_NAMES)[keyof typeof GATEWAY_CLIENT_NAMES] = GATEWAY_CLIENT_NAMES.CLI,
+  clientMode: (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES] = GATEWAY_CLIENT_MODES.CLI,
 ) {
   const identity = loadOrCreateDeviceIdentity();
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);

@@ -184,6 +184,7 @@ function withoutCleanupReads(action: () => void | Promise<void>) {
     throw error;
   }
   reads.restore();
+  return undefined;
 }
 
 const handoffFailures = [
@@ -393,7 +394,7 @@ it.each(["index", "deferred obligation"] as const)(
         pluginId,
         reason: "Plugin migration pending",
         command: "openclaw doctor --fix",
-        requiresStateMigration: true,
+        requiresStateMigration: true as const,
       });
       await recordDeferredPluginMigrations({
         env,

@@ -8,12 +8,15 @@ export const leaseMocks = vi.hoisted(() => ({
     throw new Error("Controlled lease test reached native storage, identity lookup, or transport");
   }),
 }));
+// mock-isolation: Track resource ownership without opening a native database cache.
 vi.mock("./openclaw-state-db-cache.js", () => ({
   registerOpenClawStateDatabaseAsyncResource: leaseMocks.registerResource,
 }));
+// mock-isolation: Controlled lease tests must not register real process-exit handlers.
 vi.mock("./openclaw-state-lease-process-exit.js", () => ({
   registerProcessExitLeaseCleanup: () => () => {},
 }));
+// mock-isolation: Native storage is forbidden; the fixture drives lease outcomes explicitly.
 vi.mock("./openclaw-state-lease-storage.js", () => ({
   STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
   isOpenClawStateLeaseWriteContention: leaseMocks.isWriteContention,
@@ -24,6 +27,7 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   verifyOpenClawStateLeaseOwnership: leaseMocks.forbidden,
   releaseOpenClawStateLease: leaseMocks.forbidden,
 }));
+// mock-isolation: Reject unexpected native database reads from the controlled lease owner.
 vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: leaseMocks.forbidden,
 }));

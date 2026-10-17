@@ -1,4 +1,4 @@
-import { on, once } from "node:events";
+import { once } from "node:events";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -396,25 +396,48 @@ it("defers activation until contended renewal commits", async ({ state }) => {
   });
   trackSqliteDatabaseAdmissionWorker(worker);
   worker.once("exit", () => databaseAdmission.finish());
-  const messages = on(worker, "message", { close: ["exit"] });
-  const exited = once(worker, "exit");
-  void exited.catch(() => {});
-  const nextMessage = async (expected: unknown) => {
-    expect(await messages.next()).toMatchObject({ done: false, value: [expected] });
+  const prepared = createDeferredCore();
+  const processed = createDeferredCore();
+  const ready = createDeferredCore();
+  const exited = createDeferredCore();
+  let stopping = false;
+  for (const pending of [prepared, processed, ready]) {
+    void pending.promise.catch(() => {});
+  }
+  const fail = (error: unknown) => {
+    prepared.reject(error);
+    processed.reject(error);
+    ready.reject(error);
   };
-  const prepared = nextMessage({ startup: "prepared" });
+  worker.on("error", fail);
+  worker.once("exit", () => {
+    exited.resolve();
+    if (!stopping) {
+      fail(new Error("Heartbeat fixture exited before activation completed"));
+    }
+  });
+  worker.on("message", (message: unknown) => {
+    if (message === null) {
+      ready.resolve();
+    } else if (typeof message === "object" && message !== null) {
+      if ("startup" in message && message.startup === "prepared") {
+        prepared.resolve();
+      }
+      if ("fixture" in message && message.fixture === "activation-processed") {
+        processed.resolve();
+      }
+    }
+  });
   const writer = new DatabaseSync(database.path);
   try {
-    await prepared;
+    await prepared.promise;
     const beforeRenewal = readSqliteDatabaseWriteRevision(database.db);
     writer.exec("BEGIN IMMEDIATE");
-    const processed = nextMessage({ fixture: "activation-processed" });
     worker.postMessage({ startup: "activate" }, []);
-    await processed;
+    await processed.promise;
     expect(Atomics.load(shared, leaseHeartbeatState.status)).toBe(leaseHeartbeatState.starting);
-    const ready = nextMessage(null);
     writer.exec("ROLLBACK");
-    await ready;
+    await ready.promise;
     const afterRenewal = readSqliteDatabaseWriteRevision(database.db);
     expect([typeof beforeRenewal, typeof afterRenewal]).toEqual(["number", "number"]);
     expect(afterRenewal).not.toBe(beforeRenewal);
@@ -425,13 +448,13 @@ it("defers activation until contended renewal commits", async ({ state }) => {
     expect(row?.expires_at).toBe(Number(Atomics.load(shared, leaseHeartbeatState.expiresAt)));
     expect(Number(row?.expires_at)).toBeGreaterThan(acquired.expiresAt);
   } finally {
-    await messages.return?.();
     if (writer.isTransaction) {
       writer.exec("ROLLBACK");
     }
     writer.close();
+    stopping = true;
     await worker.terminate();
-    await exited;
+    await exited.promise;
   }
 });
 

@@ -49,7 +49,7 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.health,
 }));
 const fixture = useExecutorFixture("native-recovery-owner-");
-const recoverable = { serviceRestartSafe: true, version: "1.0.0" };
+const recoverable = { serviceRestartSafe: true as const, version: "1.0.0" };
 function createOwner(stateAtRoot = false) {
   const { root, control } = fixture();
   const env = { HOME: root, OPENCLAW_STATE_DIR: stateAtRoot ? root : path.join(root, "state") };

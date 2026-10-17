@@ -51,8 +51,11 @@ async function createRelay(platform: "darwin" | "win32", retainLineage = false) 
 }
 
 const mockWritableRelay = () => buildRelay((child) => mocks.spawn.mockReturnValue(child));
-const startRelay = (params: Partial<Parameters<typeof createServiceChildRelayAdapter>[0]> = {}) =>
-  createServiceChildRelayAdapter({ ...relayDefaults, ...params });
+const startRelay = (
+  params: Partial<
+    Parameters<typeof createServiceChildRelayAdapter>[0] & { ownedWorker?: false }
+  > = {},
+) => createServiceChildRelayAdapter({ ...relayDefaults, ...params });
 
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",

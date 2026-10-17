@@ -143,7 +143,7 @@ export function createHeldAnchorPreparation(
   child.once("error", exited.reject);
   child.once("disconnect", () => disconnected.resolve());
   const pipesClosed = child.stdio
-    .filter((stream) => stream !== null)
+    .filter((stream) => stream != null)
     .map(
       (stream) =>
         new Promise<void>((resolve) => {

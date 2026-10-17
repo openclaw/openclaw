@@ -158,6 +158,12 @@ async function packageFixture(
   await fs.writeFile(launcher, "previous launcher\n");
   const installedPrefixes: string[] = [];
   vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (argv) => {
+    if (argv.join(" ") === "npm --version") {
+      return createCommandResult({ stdout: "12.0.0\n" });
+    }
+    if (argv.join(" ") === "npm root -g") {
+      return createCommandResult({ stdout: `${globalRoot}\n` });
+    }
     assert(argv.includes("--prefix") && (argv.includes("install") || argv.includes("i")));
     const prefix = argv[argv.indexOf("--prefix") + 1];
     assert(prefix, "Missing actual staged prefix");
