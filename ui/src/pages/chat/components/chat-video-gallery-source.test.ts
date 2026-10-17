@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal, getOwner } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
@@ -24,6 +23,16 @@ afterEach(() => {
 function video(url: string, options: Partial<AttachmentItem["attachment"]> = {}): AttachmentItem {
   return { type: "attachment", attachment: { kind: "video", url, label: "Clip", ...options } };
 }
+function mount(attachment: AttachmentItem, options: ImageRenderOptions) {
+  const view = mountSolid(() =>
+    createComponent(AssistantAttachments, { attachments: [attachment], options }),
+  );
+  cleanups.push(() => {
+    view.unmount();
+    releaseChatMediaResourceOwner(options.mediaOwner);
+  });
+  return view;
+}
 const outgoing = () => `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
 const ticket = (source: string, value: string, ttl = 300_000) => ({
   url: `${source}?mediaTicket=${value}`,
@@ -37,32 +46,13 @@ async function open(
   pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const update = () => {
-    setRevision((value) => value + 1);
-    if (!getOwner()) {
-      flush();
-    }
-  };
-  const view = mountSolid(() =>
-    createComponent(AssistantAttachments, {
-      attachments: [attachment],
-      get options(): ImageRenderOptions {
-        revision();
-        return {
-          mediaOwner: update,
-          resolveArtifactDownload,
-          galleryVideos: () => ({ index: 0, items: gallery }),
-          onOpenImage,
-        };
-      },
-    }),
-  );
-  container = view.container;
-  cleanups.push(() => {
-    view.unmount();
-    releaseChatMediaResourceOwner(update);
+  const view = mount(attachment, {
+    mediaOwner: {},
+    resolveArtifactDownload,
+    galleryVideos: () => ({ index: 0, items: gallery }),
+    onOpenImage,
   });
+  container = view.container;
   await vi.waitFor(() =>
     expect(container?.querySelector("openclaw-chat-video-player")).not.toBeNull(),
   );
@@ -146,15 +136,7 @@ it("explicit retry clears a cached recoverable neighbor failure through its sour
   resolve.mockRejectedValueOnce(new Error("Temporary failure"));
   const first = video("https://example.com/first.mp4");
   const opened = await open(first, resolve, [first, next]);
-  const background = vi.fn();
-  const options = { resolveArtifactDownload: resolve, mediaOwner: background };
-  const backgroundView = mountSolid(() =>
-    createComponent(AssistantAttachments, { attachments: [next], options }),
-  );
-  cleanups.push(() => {
-    backgroundView.unmount();
-    releaseChatMediaResourceOwner(background);
-  });
+  const backgroundView = mount(next, { resolveArtifactDownload: resolve, mediaOwner: {} });
   const retry = () =>
     backgroundView.container.querySelector(".chat-assistant-attachment-card__retry");
   await vi.waitFor(() => expect(retry()).not.toBeNull());

@@ -16,9 +16,7 @@ const source = "/__openclaw__/assistant-media?mediaTicket=text-preview";
 const pendingSelector = '[role="status"]:not([hidden])';
 function mockFetch(...responses: (Response | Promise<Response>)[]) {
   const fetchMock = vi.fn<typeof fetch>();
-  for (const response of responses) {
-    fetchMock.mockReturnValueOnce(Promise.resolve(response));
-  }
+  responses.forEach((response) => fetchMock.mockReturnValueOnce(Promise.resolve(response)));
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -124,11 +122,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
 });
 
 it.each([
-  [
-    "notes.txt",
-    "text/plain",
-    "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
-  ],
+  ["notes.txt", "text/plain", "🦞\n  indentation\n<script>inert</script>\n"],
   ["settings.json", "application/json", '{"ready":true}\n'],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],
@@ -262,14 +256,22 @@ it.each<RejectedAttachment>([
   }
 });
 
-it.each(["same", "different"])(
-  "aborts and discards superseded %s-identity reads",
-  async (identity) => {
-    const old = createDeferred<Response>();
-    const fetchMock = mockFetch(old.promise, new Response("Current file"));
-    const { panel, query } = await mountAttachment({ sourceIdentity: "attachment:notes" });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+it.each(["same", "different", "remount"])("retires an attachment read: %s", async (identity) => {
+  const remount = identity === "remount";
+  const text = remount ? "Reloaded text" : "Current file";
+  const old = createDeferred<Response>();
+  const fetchMock = mockFetch(old.promise, new Response(text));
+  const { panel, query } = await mountAttachment(
+    remount ? {} : { sourceIdentity: "attachment:notes" },
+  );
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+  if (remount) {
+    signal?.addEventListener("abort", () => old.reject(new DOMException("Aborted", "AbortError")));
+    panel.remove();
+    await waitForSolid(() => expect(signal?.aborted).toBe(true));
+    document.body.append(panel);
+  } else {
     panel.content = {
       kind: "attachment",
       title: "next.txt",
@@ -277,34 +279,15 @@ it.each(["same", "different"])(
       mimeType: "text/plain",
       sourceIdentity: identity === "same" ? "attachment:notes" : "attachment:next",
     };
-    await expectText(panel, "pre", "Current file");
-    expect(signal?.aborted).toBe(true);
+  }
+  await expectText(panel, "pre", text);
+  expect(signal?.aborted).toBe(true);
+  if (!remount) {
     old.resolve(new Response("Old file"));
     await vi.waitFor(() => expect(fetchMock.mock.settledResults[0]?.type).toBe("fulfilled"));
     await query("openclaw-chat-text-attachment")?.updateComplete;
-    expect(query("pre")?.textContent).toBe("Current file");
-  },
-);
-
-it("aborts a closed preview and reloads it after remount", async () => {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockImplementationOnce(
-      (_input, init) =>
-        new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
-          );
-        }),
-    )
-    .mockResolvedValueOnce(new Response("Reloaded text"));
-  vi.stubGlobal("fetch", fetchMock);
-  const { panel } = await mountAttachment();
-  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-  panel.remove();
-  await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
-  document.body.append(panel);
-  await expectText(panel, "pre", "Reloaded text");
+    expect(query("pre")?.textContent).toBe(text);
+  }
 });
 
 it.each([

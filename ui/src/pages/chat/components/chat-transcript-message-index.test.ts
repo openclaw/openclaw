@@ -34,8 +34,8 @@ function makeTool(
 const partial = makeMessage("partial", 2);
 const history = [makeMessage("question", 1, { role: "user" }), partial];
 
-function chatItems(overrides: Partial<BuildChatItemsProps> = {}) {
-  return buildChatItems({
+function chatProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
+  return {
     paneId: "message-index",
     sessionKey,
     messages: history,
@@ -45,8 +45,10 @@ function chatItems(overrides: Partial<BuildChatItemsProps> = {}) {
     streamStartedAt: null,
     showToolCalls: true,
     ...overrides,
-  });
+  };
 }
+const chatItems = (overrides: Partial<BuildChatItemsProps> = {}) =>
+  buildChatItems(chatProps(overrides));
 
 const chainOptions = {
   sessionKey,
@@ -86,6 +88,14 @@ const frameShows = (frame: RenderItem | undefined, message: unknown) =>
   frame.parts.some(
     (part) => part.kind === "group" && part.messages.some((source) => source.message === message),
   );
+const completedOutcome = (message: unknown) => ({ kind: "completed", actionOwner: { message } });
+const replyFrameShape = (outcome: unknown, ...parts: unknown[]) => ({
+  kind: "agent-run-frame",
+  runId: "run-1",
+  boundaryId: "send:run-1",
+  outcome,
+  parts,
+});
 
 it.each([false, true])("merges adjacent continuation work across runs while live=%s", (live) => {
   const messages = [
@@ -128,42 +138,39 @@ it.each([
   { key: "agent:main:telegram:direct:42", working: false, projected: false, untagged: false },
   { key: "agent:main:telegram:direct:42", working: false, projected: true, untagged: false },
   { key: "agent:main:telegram:direct:42", working: false, projected: true, untagged: true },
-])(
-  "keeps the following answer's run frame in $key with projected=$projected untagged=$untagged",
-  ({ key, working, projected, untagged }) => {
-    const answer = makeMessage("answer", 4, {
-      phase: "final_answer",
-      stopReason: "stop",
-      runId: "run-b",
-    });
-    const messages = [
-      history[0],
-      ...["run-a", "run-b"].map((runId, index) =>
-        makeTool(
-          "tool-" + index,
-          2 + index,
-          untagged && index === 0 ? undefined : runId,
-          20 + index,
-          projected && index === 1,
-        ),
+])("frames continued answers: %j", ({ key, working, projected, untagged }) => {
+  const answer = makeMessage("answer", 4, {
+    phase: "final_answer",
+    stopReason: "stop",
+    runId: "run-b",
+  });
+  const messages = [
+    history[0],
+    ...["run-a", "run-b"].map((runId, index) =>
+      makeTool(
+        "tool-" + index,
+        2 + index,
+        untagged && index === 0 ? undefined : runId,
+        20 + index,
+        projected && index === 1,
       ),
-      answer,
-    ];
-    const chain = projectHistory(messages, {
-      sessionKey: key,
-      runWorking: working,
-      runId: working ? "run-b" : null,
-      streamStartedAt: working ? 40 : null,
-    });
-    const frame = framesOf(chain).find((item) => item.runId === "run-b");
-    expect(frameShows(frame, answer)).toBe(true);
-    expect(frame?.boundaryId).toBe(projected ? "send:run-b" : "send:run-1");
-    expect(frame?.outcome.kind).toBe(working && projected ? "active" : "completed");
-    if (frame?.outcome.kind === "completed") {
-      expect(frame.outcome.actionOwner?.message).toBe(answer);
-    }
-  },
-);
+    ),
+    answer,
+  ];
+  const chain = projectHistory(messages, {
+    sessionKey: key,
+    runWorking: working,
+    runId: working ? "run-b" : null,
+    streamStartedAt: working ? 40 : null,
+  });
+  const frame = framesOf(chain).find((item) => item.runId === "run-b");
+  expect(frameShows(frame, answer)).toBe(true);
+  expect(frame?.boundaryId).toBe(projected ? "send:run-b" : "send:run-1");
+  expect(frame?.outcome.kind).toBe(working && projected ? "active" : "completed");
+  if (frame?.outcome.kind === "completed") {
+    expect(frame.outcome.actionOwner?.message).toBe(answer);
+  }
+});
 
 describe("completed reply frame ownership", () => {
   function replyHistory(workRunIds: (string | undefined)[] = ["run-1"], prompt = true): unknown[] {
@@ -189,66 +196,61 @@ describe("completed reply frame ownership", () => {
     ["all untagged work without prompt", [undefined], false],
     ["channel reload", ["run-1"], false, "agent:main:telegram:direct:42"],
     ["recovered failure", ["run-u", "run-1"], true, sessionKey, true],
-  ])(
-    "keeps %s in its final reply frame with stable navigation",
-    (_name, workRunIds, prompt, key = sessionKey, failed = false) => {
-      const messages = replyHistory(workRunIds, prompt);
-      const failure = makeMessage("failed-attempt", 5, {
-        stopReason: "error",
-        timestamp: 25,
-        runId: "run-u",
-      });
+  ])("owns the final reply: %s", (_name, workRunIds, prompt, key = sessionKey, failed = false) => {
+    const messages = replyHistory(workRunIds, prompt);
+    const failure = makeMessage("failed-attempt", 5, {
+      stopReason: "error",
+      timestamp: 25,
+      runId: "run-u",
+    });
+    if (failed) {
+      messages.splice(-1, 0, failure);
+    }
+    const original = structuredClone(messages);
+    const options = { sessionKey: key };
+    const chain = projectHistory(messages, options);
+    const [frame] = frames(chain);
+    expect(chain.transcriptItems).toEqual([
+      ...(prompt ? [expect.objectContaining({ role: "user" })] : []),
+      frame,
+    ]);
+    expect(frame).toMatchObject({
+      key: 'agent-run:["run-1","send:run-1"]',
+      ...replyFrameShape(
+        completedOutcome(messages.at(-1)),
+        { kind: key === sessionKey ? "work-group" : "group" },
+        { kind: "group", role: "assistant" },
+      ),
+    });
+    const work = frame!.parts[0]!;
+    if (key === sessionKey) {
+      if (work.kind !== "work-group") {
+        throw new Error("expected work inside the reply frame");
+      }
       if (failed) {
-        messages.splice(-1, 0, failure);
+        expect(messagesIn([work])).toContain(failure);
+      } else {
+        expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
       }
-      const original = structuredClone(messages);
-      const options = { sessionKey: key };
-      const chain = projectHistory(messages, options);
-      const [frame] = frames(chain);
-      expect(chain.transcriptItems).toEqual([
-        ...(prompt ? [expect.objectContaining({ role: "user" })] : []),
-        frame,
-      ]);
-      expect(frame).toMatchObject({
-        key: 'agent-run:["run-1","send:run-1"]',
-        runId: "run-1",
-        boundaryId: "send:run-1",
-        outcome: { kind: "completed", actionOwner: { message: messages.at(-1) } },
-        parts: [
-          { kind: key === sessionKey ? "work-group" : "group" },
-          { kind: "group", role: "assistant" },
-        ],
-      });
-      const work = frame!.parts[0]!;
-      if (key === sessionKey) {
-        if (work.kind !== "work-group") {
-          throw new Error("expected work inside the reply frame");
-        }
-        if (failed) {
-          expect(messagesIn([work])).toContain(failure);
-        } else {
-          expect(work.groups.map((group) => group.runId)).toEqual(workRunIds);
+    }
+    expect(messagesIn([frame!])).toEqual(messages.slice(prompt ? 1 : 0));
+    expect(messages).toEqual(original);
+    const index = indexFor(chain);
+    expect(index.transcriptMessageKeys.get(chatItemGroups(work)[0]!.messages[0]!.key)).toBe(
+      frame?.key,
+    );
+    expect(index.messageRowKeysById.get("final")).toBe(frame?.key);
+    if (!prompt) {
+      for (const restored of [structuredClone(messages), [history[0], ...messages]]) {
+        const next = projectHistory(restored, options);
+        expect(frames(next)[0]?.key).toBe(frame?.key);
+        const nextIndex = indexFor(next);
+        for (const id of ["work-0", "final"]) {
+          expect(nextIndex.messageRowKeysById.get(id)).toBe(index.messageRowKeysById.get(id));
         }
       }
-      expect(messagesIn([frame!])).toEqual(messages.slice(prompt ? 1 : 0));
-      expect(messages).toEqual(original);
-      const index = indexFor(chain);
-      expect(index.transcriptMessageKeys.get(chatItemGroups(work)[0]!.messages[0]!.key)).toBe(
-        frame?.key,
-      );
-      expect(index.messageRowKeysById.get("final")).toBe(frame?.key);
-      if (!prompt) {
-        for (const restored of [structuredClone(messages), [history[0], ...messages]]) {
-          const next = projectHistory(restored, options);
-          expect(frames(next)[0]?.key).toBe(frame?.key);
-          const nextIndex = indexFor(next);
-          for (const id of ["work-0", "final"]) {
-            expect(nextIndex.messageRowKeysById.get(id)).toBe(index.messageRowKeysById.get(id));
-          }
-        }
-      }
-    },
-  );
+    }
+  });
 
   it.each([
     ["earlier reply in the same run", "run-1", false, "final_answer", true],
@@ -257,51 +259,43 @@ describe("completed reply frame ownership", () => {
     ["forwarded answer", "run-1", true, "final_answer", true],
     ["promptless forwarded commentary", "run-1", true, undefined, false],
     ["promptless forwarded answer", "run-1", true, "final_answer", false],
-  ] as const)(
-    "preserves the presentation boundary of %s",
-    (_name, runId, forwarded, phase, prompt) => {
-      const messages = replyHistory(prompt ? ["run-u", "run-1"] : ["run-1", "run-1"], prompt);
-      const inserted = makeMessage("earlier", 3, {
-        phase,
-        ...(forwarded
-          ? { senderSession: { sessionKey: "agent:other:main", agentId: "other" } }
-          : { stopReason: "stop" }),
-        timestamp: 20.5,
-        runId,
-      });
-      messages.splice(prompt ? 2 : 1, 0, inserted);
-      const chain = projectHistory(messages);
-      expect(frames(chain).at(-1)?.outcome).toMatchObject({
-        kind: "completed",
-        actionOwner: { message: messages.at(-1) },
-      });
-      const work = (forwarded ? chain.transcriptItems : transcriptParts(chain)).find(
-        (item) => item.kind === "work-group",
-      );
-      expect(work).toBeDefined();
-      if (forwarded) {
-        expect(messagesIn(frames(chain))).not.toContain(inserted);
-        const standalone = phase
-          ? chain.transcriptItems.filter((item) => item.kind === "group")
-          : [work!];
-        expect(messagesIn(standalone)).toContain(inserted);
-      } else {
-        expect(
-          messagesIn(
-            transcriptParts(chain).filter(
-              (item) => item.kind === "group" && item.role === "assistant",
-            ),
+  ] as const)("preserves reply boundaries: %s", (_name, runId, forwarded, phase, prompt) => {
+    const messages = replyHistory(prompt ? ["run-u", "run-1"] : ["run-1", "run-1"], prompt);
+    const inserted = makeMessage("earlier", 3, {
+      phase,
+      ...(forwarded
+        ? { senderSession: { sessionKey: "agent:other:main", agentId: "other" } }
+        : { stopReason: "stop" }),
+      timestamp: 20.5,
+      runId,
+    });
+    messages.splice(prompt ? 2 : 1, 0, inserted);
+    const chain = projectHistory(messages);
+    expect(frames(chain).at(-1)?.outcome).toMatchObject(completedOutcome(messages.at(-1)));
+    const work = (forwarded ? chain.transcriptItems : transcriptParts(chain)).find(
+      (item) => item.kind === "work-group",
+    );
+    expect(work).toBeDefined();
+    if (forwarded) {
+      expect(messagesIn(frames(chain))).not.toContain(inserted);
+      const standalone = phase
+        ? chain.transcriptItems.filter((item) => item.kind === "group")
+        : [work!];
+      expect(messagesIn(standalone)).toContain(inserted);
+    } else {
+      expect(
+        messagesIn(
+          transcriptParts(chain).filter(
+            (item) => item.kind === "group" && item.role === "assistant",
           ),
-        ).toEqual([inserted, messages.at(-1)]);
-        expect(frames(chain).map((frame) => frame.runId)).toEqual(
-          runId === "run-1" ? ["run-1"] : ["run-other", "run-1"],
-        );
-        expect(runId === "run-1" ? frames(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(
-          work,
-        );
-      }
-    },
-  );
+        ),
+      ).toEqual([inserted, messages.at(-1)]);
+      expect(frames(chain).map((frame) => frame.runId)).toEqual(
+        runId === "run-1" ? ["run-1"] : ["run-other", "run-1"],
+      );
+      expect(runId === "run-1" ? frames(chain)[0]?.parts[0] : chain.transcriptItems[1]).toBe(work);
+    }
+  });
 
   it("keeps resumed work with its final answer after the steer", () => {
     const messages = replyHistory(["run-u", "run-1"]);
@@ -323,10 +317,7 @@ describe("completed reply frame ownership", () => {
     expect(frame?.runId).toBe("run-1");
     expect(messagesIn([frame!])).toEqual(messages.slice(3));
     expect(frame?.parts[0]?.kind).toBe("work-group");
-    expect(frame?.outcome).toMatchObject({
-      kind: "completed",
-      actionOwner: { message: messages.at(-1) },
-    });
+    expect(frame?.outcome).toMatchObject(completedOutcome(messages.at(-1)));
     expect(new Set(chain.transcriptItems.map((item) => item.key)).size).toBe(
       chain.transcriptItems.length,
     );
@@ -336,38 +327,30 @@ describe("completed reply frame ownership", () => {
     { working: true, withAnswer: false },
     { working: true, withAnswer: true },
     { working: false, withAnswer: false },
-  ])(
-    "projects promptless history without duplicate frames: working=$working answer=$withAnswer",
-    ({ working, withAnswer }) => {
-      const persistedHistory = replyHistory(["run-1"], false);
-      const messages = withAnswer ? persistedHistory : persistedHistory.slice(0, -1);
-      const chain = projectHistory(messages, {
-        runId: working ? "run-1" : null,
-        runWorking: working,
-        stream: working ? "Verifying the evidence" : null,
-        streamStartedAt: working ? 50 : null,
-      });
-      expect(chain.transcriptItems).toMatchObject(
-        working
-          ? [
-              {
-                kind: "agent-run-frame",
-                runId: "run-1",
-                boundaryId: "send:run-1",
-                outcome: { kind: "active" },
-                parts: [
-                  { kind: "group", role: "tool" },
-                  ...(withAnswer ? [{ kind: "group", role: "assistant" }] : []),
-                  { kind: "stream-run" },
-                ],
-              },
-            ]
-          : [{ kind: "group", role: "tool" }],
-      );
-      expect(chain.transcriptItems).toHaveLength(1);
-      expect(messagesIn(chain.transcriptItems)).toEqual(messages);
-    },
-  );
+  ])("projects promptless history: %j", ({ working, withAnswer }) => {
+    const persistedHistory = replyHistory(["run-1"], false);
+    const messages = withAnswer ? persistedHistory : persistedHistory.slice(0, -1);
+    const chain = projectHistory(messages, {
+      runId: working ? "run-1" : null,
+      runWorking: working,
+      stream: working ? "Verifying the evidence" : null,
+      streamStartedAt: working ? 50 : null,
+    });
+    expect(chain.transcriptItems).toMatchObject(
+      working
+        ? [
+            replyFrameShape(
+              { kind: "active" },
+              { kind: "group", role: "tool" },
+              ...(withAnswer ? [{ kind: "group", role: "assistant" }] : []),
+              { kind: "stream-run" },
+            ),
+          ]
+        : [{ kind: "group", role: "tool" }],
+    );
+    expect(chain.transcriptItems).toHaveLength(1);
+    expect(messagesIn(chain.transcriptItems)).toEqual(messages);
+  });
 });
 
 it("reuses transcript structure for scroll renders and rebuilds for its inputs", () => {
@@ -425,12 +408,7 @@ function pastMessages(size: number, tagged = true): unknown[] {
     const finalPhase = phase === (tagged ? 5 : 3);
     return {
       role: phase === 0 ? "user" : toolPhase ? "toolResult" : "assistant",
-      content:
-        phase === 0
-          ? "Inspect the implementation"
-          : finalPhase
-            ? "Verified the result."
-            : "Checking the evidence.",
+      content: phase === 0 ? "Question" : finalPhase ? "Answer" : "Work",
       ...(toolPhase ? { toolName: "read", toolCallId: `call-${i}` } : {}),
       ...(phase === 1 || (tagged && phase === 3)
         ? { phase: "commentary" }
@@ -448,31 +426,21 @@ function pastMessages(size: number, tagged = true): unknown[] {
 }
 function streamInput(size: number): BuildChatItemsProps {
   const messages = pastMessages(size);
+  const liveMessage = (id: string, offset: number, fields: Record<string, unknown>) =>
+    makeMessage(id, size + offset, { timestamp: size + offset, runId: "live", ...fields });
   messages.push(
-    makeMessage("live-user", size + 1, {
-      role: "user",
-      timestamp: size + 1,
-      runId: "live",
-    }),
-    makeMessage("live-comment", size + 2, {
-      phase: "commentary",
-      timestamp: size + 2,
-      runId: "live",
-    }),
+    liveMessage("live-user", 1, { role: "user" }),
+    liveMessage("live-comment", 2, { phase: "commentary" }),
     makeTool("live-tool", size + 3, "live", size + 3),
   );
-  return {
+  return chatProps({
     paneId: "stream-projection",
-    sessionKey,
     messages,
-    toolMessages: [],
-    streamSegments: [],
     stream: "Initial",
     streamStartedAt: size + 4,
     runId: "live",
     runWorking: true,
-    showToolCalls: true,
-  };
+  });
 }
 
 it("keeps stream-only projection work bounded by the tail across history sizes", () => {
@@ -509,7 +477,7 @@ it.each([
   { name: "dashboard frame and queued tail", framed: true, searchActive: false },
   { name: "unframed stream without boundary", framed: false, searchActive: false },
   { name: "search projection", framed: true, searchActive: true },
-])("matches full stream recomputation for $name", ({ framed, searchActive }) => {
+])("recomputes streamed history: $name", ({ framed, searchActive }) => {
   const input = streamInput(6);
   input.messages = [...pastMessages(4, false), ...input.messages.slice(-3)];
   if (!framed) {
@@ -644,34 +612,30 @@ describe("subagent handoff", () => {
   });
   const waitingChain = () =>
     projectHistory(waiting, { subagentWait: { startedAt: 32, runId: "run-1" } });
+  const lifecycle = {
+    waiting: waitingChain,
+    "wait ended": () => projectHistory(waiting),
+    "resume pending": () => projectHistory(waiting, { runWorking: true, runActive: true }),
+    answered: () =>
+      projectHistory([...waiting, readRow("read-2", "announce:resume", 7), answer], {
+        session: {
+          key: sessionKey,
+          lastRunId: "announce:resume",
+          status: "done",
+          runtimeMs: 4_000,
+        },
+      }),
+  };
 
   it.each(["waiting", "wait ended", "resume pending", "answered"] as const)(
-    "preserves the handed-off block while %s",
+    "preserves handoff: %s",
     (state) => {
       const waitingKey = onlyFrame(waitingChain()).key;
       if (state === "resume pending") {
         resetWorkingProgress();
       }
       const completed = state === "answered";
-      const messages = completed
-        ? [...waiting, readRow("read-2", "announce:resume", 7), answer]
-        : waiting;
-      const options: Parameters<typeof projectHistory>[1] =
-        state === "waiting"
-          ? { subagentWait: { startedAt: 32, runId: "run-1" } }
-          : state === "resume pending"
-            ? { runWorking: true, runActive: true }
-            : completed
-              ? {
-                  session: {
-                    key: sessionKey,
-                    lastRunId: "announce:resume",
-                    status: "done",
-                    runtimeMs: 4_000,
-                  },
-                }
-              : {};
-      const chain = projectHistory(messages, options);
+      const chain = lifecycle[state]();
       const frame = onlyFrame(chain);
       expect(frame).toMatchObject({
         key: waitingKey,
@@ -683,7 +647,7 @@ describe("subagent handoff", () => {
       expect(chain.transcriptItems.some((item) => item.kind === "stream-run")).toBe(false);
       if (state !== "wait ended") {
         expect(frame.outcome).toMatchObject(
-          completed ? { kind: "completed", actionOwner: { message: answer } } : { kind: "active" },
+          completed ? completedOutcome(answer) : { kind: "active" },
         );
       }
       if (state === "waiting" || state === "resume pending") {
@@ -733,46 +697,36 @@ describe("subagent handoff", () => {
     expect(logsOf([...waiting, spoke, resumedRow, answer])).toEqual([]);
   });
 
-  it("moves work recorded after the resumed answer up to the operations before it", () => {
-    const partsOf = (trailing: unknown, key = sessionKey) => {
-      const frames = framesOf(
+  it("moves successful late work before the answer but preserves failure and channel ordering", () => {
+    const wrapper = readRow("wrapper", "announce:resume", 9);
+    const stopped = makeMessage("stopped", 9, {
+      content: [{ type: "toolCall", id: "late", name: "read", arguments: {} }],
+      stopReason: "error",
+      timestamp: 60,
+      runId: "announce:resume",
+    });
+    for (const [trailing, answerLast, logSizes, key] of [
+      [wrapper, true, [3], sessionKey],
+      [{ ...wrapper, isError: true }, false, [2], sessionKey],
+      [stopped, false, undefined, sessionKey],
+      [wrapper, false, [2], "agent:main:main"],
+    ] as const) {
+      const { parts } = onlyFrame(
         projectHistory([...waiting, readRow("read-2", "announce:resume", 7), answer, trailing], {
           sessionKey: key,
           session: { key, lastRunId: "announce:resume", status: "done" },
         }),
       );
-      // Whatever follows the answer, the request stays one block.
-      expect(frames).toHaveLength(1);
-      return frames[0]!.parts;
-    };
-    const endsWithAnswer = (parts: ReturnType<typeof partsOf>) => {
       const last = parts.at(-1);
-      return last?.kind === "group" && last.messages.some((source) => source.message === answer);
-    };
-    const logSizes = (parts: ReturnType<typeof partsOf>) =>
-      parts.flatMap((part) => (part.kind === "activity-run" ? [part.groups.length] : []));
-    // The step that sent the answer is recorded after it; nothing follows the answer.
-    const folded = partsOf(readRow("wrapper", "announce:resume", 9));
-    expect(endsWithAnswer(folded)).toBe(true);
-    expect(logSizes(folded)).toEqual([3]);
-    // A step that failed there stays where it happened.
-    const failed = partsOf({ ...readRow("wrapper", "announce:resume", 9), isError: true });
-    expect(endsWithAnswer(failed)).toBe(false);
-    expect(logSizes(failed)).toEqual([2]);
-    // So does the message of a run that stopped in error after answering.
-    const stopped = partsOf(
-      makeMessage("stopped", 9, {
-        content: [{ type: "toolCall", id: "late", name: "read", arguments: {} }],
-        stopReason: "error",
-        timestamp: 60,
-        runId: "announce:resume",
-      }),
-    );
-    expect(endsWithAnswer(stopped)).toBe(false);
-    // A session that never rolls completed work up keeps its transcript order.
-    const channel = partsOf(readRow("wrapper", "announce:resume", 9), "agent:main:main");
-    expect(endsWithAnswer(channel)).toBe(false);
-    expect(logSizes(channel)).toEqual([2]);
+      expect(
+        last?.kind === "group" && last.messages.some((source) => source.message === answer),
+      ).toBe(answerLast);
+      if (logSizes) {
+        expect(
+          parts.flatMap((part) => (part.kind === "activity-run" ? [part.groups.length] : [])),
+        ).toEqual(logSizes);
+      }
+    }
   });
 
   it("keeps a later request apart from the block that handed off", () => {
