@@ -688,61 +688,6 @@ async function prepareCliRunContextWithinReadFence(
           warn: (message) => cliBackendLog.warn(message),
         }),
       });
-  // Mirror the embedded runner's bootstrap routing for backends that transport
-  // OpenClaw's system prompt. Only a declared native-tool backend can complete
-  // the file-based ritual; other backends receive limited guidance.
-  const canonicalWorkspace = resolveUserPath(
-    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-  );
-  const selectedNativeToolsProvideFileAccess =
-    params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
-  const hasBootstrapFileAccess =
-    (backendResolved.nativeToolMode === "always-on" ||
-      backendResolved.nativeToolMode === "selectable") &&
-    selectedNativeToolsProvideFileAccess &&
-    params.disableTools !== true;
-  const bootstrapRouting =
-    skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
-      ? undefined
-      : await resolveWorkspaceBootstrapRouting({
-          isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
-          bootstrapFiles,
-          bootstrapFilesProvideAccess: false,
-          bootstrapContextRunKind: params.bootstrapContextRunKind,
-          trigger: params.trigger,
-          sessionKey: params.sessionKey,
-          isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-          isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
-          effectiveWorkspace: workspaceDir,
-          resolvedWorkspace,
-          hasBootstrapFileAccess,
-        });
-  const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
-  const includeBootstrapInSystemContext = bootstrapRouting?.includeBootstrapInSystemContext ?? true;
-  const contextFiles = includeBootstrapInSystemContext
-    ? resolvedContextFiles
-    : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
-  const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
-    ? bootstrapFiles
-    : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapInjectionStats = buildBootstrapInjectionStats({
-    bootstrapFiles: bootstrapFilesForInjectionStats,
-    injectedFiles: contextFiles,
-  });
-  const {
-    bootstrapAnalysis,
-    bootstrapMaxChars,
-    bootstrapPromptWarning,
-    bootstrapPromptWarningMode,
-    bootstrapTotalMaxChars,
-  } = buildBootstrapBudgetState({
-    config: params.config,
-    agentId: sessionAgentId,
-    files: bootstrapInjectionStats,
-    seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
-    previousSignature: params.bootstrapPromptWarningSignature,
-  });
-  const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
   // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. A selectable backend also removes
   // its native tools, leaving only this openclaw stdio server.
@@ -866,6 +811,65 @@ async function prepareCliRunContextWithinReadFence(
     hookFilteredProjectedTools,
     params.cliToolAvailability?.openClaw,
   );
+  // Mirror the embedded runner's bootstrap routing for backends that transport
+  // OpenClaw's system prompt, using the final native or mediated file access.
+  const canonicalWorkspace = resolveUserPath(
+    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+  );
+  const selectedNativeToolsProvideFileAccess =
+    params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
+  const mediatedBootstrapFileAccess =
+    backendResolved.id === "claude-cli" &&
+    projectedTools.some((tool) => tool.name === "read") &&
+    projectedTools.some((tool) => ["write", "apply_patch"].includes(tool.name));
+  const hasBootstrapFileAccess =
+    (((backendResolved.nativeToolMode === "always-on" ||
+      backendResolved.nativeToolMode === "selectable") &&
+      selectedNativeToolsProvideFileAccess) ||
+      mediatedBootstrapFileAccess) &&
+    params.disableTools !== true;
+  const bootstrapRouting =
+    skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
+      ? undefined
+      : await resolveWorkspaceBootstrapRouting({
+          isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
+          bootstrapFiles,
+          bootstrapFilesProvideAccess: false,
+          bootstrapContextRunKind: params.bootstrapContextRunKind,
+          trigger: params.trigger,
+          sessionKey: params.sessionKey,
+          isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
+          isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
+          effectiveWorkspace: workspaceDir,
+          resolvedWorkspace,
+          hasBootstrapFileAccess,
+        });
+  const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
+  const includeBootstrapInSystemContext = bootstrapRouting?.includeBootstrapInSystemContext ?? true;
+  const contextFiles = includeBootstrapInSystemContext
+    ? resolvedContextFiles
+    : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+  const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
+    ? bootstrapFiles
+    : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
+  const bootstrapInjectionStats = buildBootstrapInjectionStats({
+    bootstrapFiles: bootstrapFilesForInjectionStats,
+    injectedFiles: contextFiles,
+  });
+  const {
+    bootstrapAnalysis,
+    bootstrapMaxChars,
+    bootstrapPromptWarning,
+    bootstrapPromptWarningMode,
+    bootstrapTotalMaxChars,
+  } = buildBootstrapBudgetState({
+    config: params.config,
+    agentId: sessionAgentId,
+    files: bootstrapInjectionStats,
+    seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+    previousSignature: params.bootstrapPromptWarningSignature,
+  });
+  const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
   const nodeSkillWorkshop = nodeWorkshopEnabled
     ? projectedTools.find((tool) => tool.name === "skill_workshop")
     : undefined;
@@ -1219,7 +1223,9 @@ async function prepareCliRunContextWithinReadFence(
           }
         : undefined;
     const claudeSkillsPlugin =
-      skipsTurnPreparation || nodeClaudePlacement
+      // Exact Claude execution strips native plugins; keep selected skills in
+      // the host prompt instead of suppressing them for an unusable plugin.
+      skipsTurnPreparation || nodeClaudePlacement || params.cliToolAvailability !== undefined
         ? { args: [], cleanup: async () => {} }
         : await prepareClaudeCliSkillsPlugin({
             backendId: backendResolved.id,

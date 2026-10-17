@@ -144,6 +144,17 @@ authentication, workspace, and tool compatibility checks still apply.
 Each turn receives delivery instructions for its current mode and available tools,
 while the stored user message and reusable system prompt remain unchanged.
 
+Local bundled Claude agent turns use OpenClaw's policy-filtered MCP tools for both
+ordinary messages and verified child completions. They do not alternate between
+Claude-native file tools and OpenClaw replacements. Current tool caps still apply
+to discovery and execution. Explicit native-tool selections, node execution,
+side questions, and isolated tool-free completions retain their own tool contracts.
+
+Managed turns also exclude Claude's user settings, instruction files, auto-memory,
+user hooks, plugins, Chrome, and additional native MCP servers. OpenClaw supplies
+the instructions, selected skills, and policy-filtered tools for these turns.
+Native-only features are not substitutes for that managed tool surface.
+
 Existing sessions that stored the implicit automatic policy also retain continuity.
 OpenClaw records the current policy when the next turn completes.
 
@@ -254,7 +265,7 @@ claude update
 # Restart the OpenClaw Gateway after updating.
 ```
 
-The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir`. It then omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
+Managed local Claude turns keep selected skills in OpenClaw's system prompt and do not load a native skill plugin. For paths that retain native plugin execution, the bundled `claude-cli` backend prefers Claude Code's native skill resolver: when the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate prompt catalog. Without a materialized plugin skill, those paths keep the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
 OpenClaw disables Claude Code's built-in Git workflow instructions and startup
 Git-status snapshot with `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`. Claude Code
