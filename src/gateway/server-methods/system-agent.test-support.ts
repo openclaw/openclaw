@@ -90,7 +90,19 @@ export function useSystemAgentGatewayTestFixture() {
   const requireFixture = () =>
     expectDefined(fixture, "verified inference fixture was not initialized");
   const requireVerifiedInferenceFixture = () => requireFixture().binding;
-  const requireVerifiedInferenceDeps = () => ({ ...requireFixture().deps });
+  const requireVerifiedInferenceDeps = () => ({
+    readConfigFileSnapshot: async () =>
+      ({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        hash: "verified-config",
+        config: verifiedConfig,
+        runtimeConfig: verifiedConfig,
+        sourceConfig: verifiedConfig,
+        issues: [],
+      }) as never,
+  });
 
   function makeVerifiedEngine(): SystemAgentChatEngine {
     return new SystemAgentChatEngine({
@@ -114,17 +126,6 @@ export function useSystemAgentGatewayTestFixture() {
     fixture = await pluginMetadataSnapshot.run(() =>
       createSystemAgentVerifiedInferenceTestFixture(verifiedConfig),
     );
-    fixture.deps.readConfigFileSnapshot = async () =>
-      ({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        hash: "verified-config",
-        config: verifiedConfig,
-        runtimeConfig: verifiedConfig,
-        sourceConfig: verifiedConfig,
-        issues: [],
-      }) as never;
   });
 
   afterAll(() => {

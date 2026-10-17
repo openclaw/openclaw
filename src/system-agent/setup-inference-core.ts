@@ -5,7 +5,6 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
@@ -42,7 +41,6 @@ import type {
   captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
   SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
@@ -262,13 +260,6 @@ export type ActivateSetupInferenceDeps = {
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
-  fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
   createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
   timeoutMs?: number;
