@@ -18,13 +18,9 @@ import { captureAuthProfileCredentialAuthority } from "../../state/user-model-ac
 import { listAgentEntries, resolveAgentDir } from "../agent-scope.js";
 import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import {
-  loadPersistedAuthProfileStoreAtDatabasePath,
-  mergePersistedAuthProfileState,
-} from "./persisted.js";
+import { mergePersistedAuthProfileState } from "./persisted.js";
 import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 import { invalidateRuntimeAuthProfileStoreSnapshotsForOwner } from "./runtime-snapshots.js";
-import { closeAuthProfileReadPool } from "./sqlite-read-pool.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
@@ -146,20 +142,6 @@ export async function listCandidateAuthProfileStores(params: {
   return [...candidates.values()].toSorted((left, right) =>
     left.databasePath.localeCompare(right.databasePath),
   );
-}
-
-/** Read an already-discovered candidate without creating a missing database. */
-export function loadCandidateAuthProfileStore(
-  candidate: CandidateAuthProfileStore,
-): AuthProfileStore | null {
-  try {
-    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
-    return loadPersistedAuthProfileStoreAtDatabasePath(candidate.databasePath, "agent");
-  } finally {
-    if (!candidate.configured) {
-      closeAuthProfileReadPool({ kind: "database", databasePath: candidate.databasePath });
-    }
-  }
 }
 
 /** Read the captured physical candidate through the existing auth reader. */

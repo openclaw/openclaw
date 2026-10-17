@@ -149,8 +149,12 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     readConfigSnapshotBeforeEngineSelection(process.env, { isolateEnv: false });
   let snapshot = await readSnapshot();
   let doctorRecovery = false;
-  const { createConfigReadError, isConfigReadFailure } =
-    await import("../config/io.invalid-config.js");
+  const {
+    createConfigReadError,
+    createInvalidConfigError,
+    formatInvalidConfigDetails,
+    isConfigReadFailure,
+  } = await import("../config/io.invalid-config.js");
   if (
     invocation.primary === "doctor" &&
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
@@ -172,11 +176,12 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
       return true;
     }
   }
-  if (
-    isConfigReadFailure(snapshot) ||
-    snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
-  ) {
+  if (isConfigReadFailure(snapshot)) {
     throw createConfigReadError(snapshot);
+  }
+  // Keep malformed source classified so the root CLI prints its unreported diagnostics.
+  if (snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")) {
+    throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
   }
   const [{ resolveDatabaseEngineSelection }, { installDatabaseEngineSelection }] =
     await Promise.all([

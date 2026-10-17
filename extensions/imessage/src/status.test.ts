@@ -362,9 +362,7 @@ describe("probeIMessage", () => {
   });
 
   it("status probe uses account-scoped cliPath and dbPath", async () => {
-    const probeSpy = vi
-      .spyOn(channelRuntimeModule, "probeIMessageAccount")
-      .mockResolvedValue({ ok: true });
+    vi.spyOn(channelRuntimeModule, "probeIMessageAccount").mockResolvedValue({ ok: true });
     const work = { cliPath: "imsg-work", dbPath: "/tmp/work-db", remoteHost: "work@messages-mac" };
 
     const cfg = {
@@ -374,6 +372,9 @@ describe("probeIMessage", () => {
 
     await imessagePlugin.status!.probeAccount!({ account, cfg, timeoutMs: 2500 });
 
-    expect(probeSpy).toHaveBeenCalledWith({ timeoutMs: 2500, ...work });
+    expect(channelRuntimeModule.probeIMessageAccount).toHaveBeenCalledWith({
+      timeoutMs: 2500,
+      ...work,
+    });
   });
 });

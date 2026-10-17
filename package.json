@@ -7,7 +7,13 @@
       "sqlite",
       "postgres"
     ],
-    "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
+    "postgresFamilies": [
+      "state",
+      "agent",
+      "workboard",
+      "logbook",
+      "team-reports"
+    ],
     "schemaVersions": {
       "state": 27,
       "agent": 31
@@ -474,7 +480,8 @@
     "!dist/plugin-sdk/collection-input-runtime.d.ts",
     "!dist/plugin-sdk/http-response-runtime.d.ts",
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
-    "!dist/plugin-sdk/path-existence-runtime.d.ts"
+    "!dist/plugin-sdk/path-existence-runtime.d.ts",
+    "!dist/plugin-sdk/provider-auth-markers.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1489,6 +1496,9 @@
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-auth-markers": {
+      "default": "./dist/plugin-sdk/provider-auth-markers.js"
     },
     "./plugin-sdk/provider-auth-aliases": {
       "default": "./dist/plugin-sdk/provider-auth-aliases.js"
