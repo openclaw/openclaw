@@ -238,7 +238,7 @@ describe("sessions tools", () => {
     expect(peekSystemEventEntries(targetKey)).toEqual([]);
   });
 
-  it("sessions_send steer refuses idle work and followup bypasses an active steering route", async () => {
+  it("sessions_send steer refuses idle work and followup feeds an active recipient", async () => {
     const targetKey = "agent:main:cron:followup:run:active";
     await seedSession(targetKey, "active-target");
     const calls: GatewayCall[] = [];
@@ -282,9 +282,9 @@ describe("sessions tools", () => {
       mode: "followup",
       timeoutSeconds: 0,
     });
-    expect(followup.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
-    expect(queueMessage).not.toHaveBeenCalled();
-    expect(calls.filter((request) => request.method === "agent")).toHaveLength(1);
+    expect(followup.details).toMatchObject({ status: "accepted", targetDisposition: "steered" });
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(calls.filter((request) => request.method === "agent")).toHaveLength(0);
   });
 
   it("sessions_send does not enqueue a notification beyond an exact session grant", async () => {
@@ -932,6 +932,62 @@ describe("sessions tools", () => {
     },
   );
 
+  it.each(
+    ([undefined, "followup"] as const).flatMap((mode) =>
+      [false, true].flatMap((busy) =>
+        [undefined, 0, 1].map((timeoutSeconds) => ({ mode, busy, timeoutSeconds })),
+      ),
+    ),
+  )(
+    "sessions_send mailbox mode=$mode busy=$busy timeout=$timeoutSeconds",
+    async ({ mode, busy, timeoutSeconds }) => {
+      const key = "agent:main:dashboard:mailbox-recipient";
+      await seedSession(key, key);
+      const queueMessage = busy ? activeRun(key, { sessionId: key }) : undefined;
+      mockGatewayResponses({
+        agent: { runId: "synthetic-input-run", status: "accepted" },
+        "agent.wait": {
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "synthetic idle reply" },
+        },
+      });
+      const result = await getSessionTool("sessions_send", {
+        agentSessionKey: "agent:main:dashboard:mailbox-sender",
+      }).execute("mailbox-input", {
+        sessionKey: key,
+        message: "synthetic guidance",
+        mode,
+        timeoutSeconds,
+      });
+      expect(result.details).toMatchObject(
+        busy
+          ? { status: "accepted", targetDisposition: "steered", delivery: { status: "skipped" } }
+          : timeoutSeconds === 0
+            ? { status: "accepted", targetDisposition: "queued" }
+            : { status: "ok", reply: "synthetic idle reply" },
+      );
+      expect(
+        callGatewayMock.mock.calls.filter(
+          ([request]) =>
+            request.method === "agent" &&
+            (request.params as { sessionKey?: string } | undefined)?.sessionKey === key,
+        ),
+      ).toHaveLength(busy ? 0 : 1);
+      if (busy) {
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(
+          callGatewayMock.mock.calls.filter(([request]) => request.method === "agent.wait"),
+        ).toHaveLength(0);
+      }
+      await continuations.settle();
+      if (busy) {
+        expect(
+          callGatewayMock.mock.calls.filter(([request]) => request.method === "agent"),
+        ).toHaveLength(0);
+      }
+    },
+  );
+
   it.each([
     { target: "agent:main:main", unconfirmed: false },
     { target: "main", unconfirmed: false },
@@ -998,6 +1054,7 @@ describe("sessions tools", () => {
     { reason: "tool_authority_mismatch" as const, followup: false, mode: undefined },
     { reason: "guarded_injection_unsupported" as const, followup: false, mode: undefined },
     { reason: "runtime_rejected" as const, followup: false, mode: undefined },
+    { reason: "compacting" as const, followup: true, mode: "followup" as const },
     { reason: "compacting" as const, followup: false, mode: "steer" as const },
   ])(
     "sessions_send handles unaccepted sibling steering: $reason, mode=$mode",
@@ -1023,11 +1080,15 @@ describe("sessions tools", () => {
         }).execute("unaccepted-sibling", {
           sessionKey: key,
           message: "synthetic update",
-          timeoutSeconds: 0,
+          timeoutSeconds: mode === "followup" ? undefined : 0,
           mode,
         });
         expect(result.details).toMatchObject(
-          followup ? { status: "accepted", targetDisposition: "queued" } : { status: "error" },
+          followup
+            ? mode === "followup"
+              ? { status: "no_reply" }
+              : { status: "accepted", targetDisposition: "queued" }
+            : { status: "error" },
         );
         const admissions = callGatewayMock.mock.calls.filter(
           ([request]) => request.method === "agent",

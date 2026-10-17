@@ -163,7 +163,7 @@ export async function trySessionsSendActiveRunDelivery(
     selection.assertCurrent();
     let fallbackSessionKey: string | undefined;
     const activeRunSessionId =
-      params.mode === "steer" || (params.mode !== "followup" && params.allowActiveRunQueueDelivery)
+      params.mode === "steer" || params.allowActiveRunQueueDelivery
         ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
         : undefined;
     if (params.mode === "steer" && !activeRunSessionId) {
@@ -264,11 +264,11 @@ export async function trySessionsSendActiveRunDelivery(
           steeredRunId: queueOutcome.runId,
         };
       }
-      // Ordinary nonblocking messages can retain their original same-session
+      // Ordinary messages can retain their original same-session
       // followup path when the active runtime cannot steer. Authority refusals
       // and ambiguous backend failures remain errors, never fallback admission.
       if (
-        params.mode === undefined &&
+        params.mode !== "steer" &&
         params.allowActiveRunQueueDelivery &&
         !isCronRunSessionKey(params.sessionKey) &&
         (queueOutcome.reason === "not_streaming" ||

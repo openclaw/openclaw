@@ -82,6 +82,7 @@ export async function dispatchSessionsSendFollowup(
     message: string;
     ownChild: boolean;
     nativeChild: boolean;
+    claimRequesterTurnCompletion: boolean;
     watch: boolean;
     requesterSessionKey: string;
     requesterAgentId: string;
@@ -101,7 +102,7 @@ export async function dispatchSessionsSendFollowup(
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
   const requesterTurn =
-    params.allowActiveRunQueueDelivery &&
+    options.claimRequesterTurnCompletion &&
     !params.expectedSessionId &&
     options.nativeChild &&
     !isCronRunSessionKey(options.requesterSessionKey) &&
