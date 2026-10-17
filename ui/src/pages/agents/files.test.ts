@@ -149,7 +149,6 @@ describe("agent file requests", () => {
   it.each([false, true])(
     "adopts the refreshed base when Reset replaces a dirty draft (initially missing: %s)",
     async (missing) => {
-      const loadedHash = "a".repeat(64);
       const refreshedHash = "b".repeat(64);
       const request = vi
         .fn()
@@ -371,8 +370,6 @@ describe("agent file requests", () => {
   });
 
   it("sends the loaded hash on save and keeps that hash after a refused write", async () => {
-    const loadedHash = "a".repeat(64);
-    const currentHash = "b".repeat(64);
     const conflict = () =>
       new GatewayRequestError({
         code: "INVALID_REQUEST",
@@ -412,8 +409,6 @@ describe("agent file requests", () => {
   });
 
   it("keeps a dirty draft's precondition when an ordinary refresh rebases the base", async () => {
-    const loadedHash = "a".repeat(64);
-    const currentHash = "b".repeat(64);
     const request = vi
       .fn()
       .mockResolvedValueOnce(fileResult("original", loadedHash))
@@ -450,8 +445,6 @@ describe("agent file requests", () => {
   });
 
   it("adopts the refreshed hash when an ordinary refresh rebases a clean draft", async () => {
-    const loadedHash = "a".repeat(64);
-    const currentHash = "b".repeat(64);
     const request = vi
       .fn()
       .mockResolvedValueOnce(fileResult("original", loadedHash))
