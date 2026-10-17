@@ -12,14 +12,8 @@ import { createMemoryGetTool } from "./tools.js";
 import { asOpenClawConfig, createMemoryGetToolOrThrow } from "./tools.test-helpers.js";
 
 const lookup = "memory/entities/alpha.md";
-const memoryHit = {
-  status: "ok",
-  text: "Memory entry",
-  path: lookup,
-  from: 1,
-  lines: 1,
-} as const;
 const memoryMiss = { status: "not_found", text: "", path: lookup } as const;
+const memoryHit = { ...memoryMiss, status: "ok", text: "Memory entry", from: 1, lines: 1 } as const;
 const wikiHit = {
   corpus: "wiki",
   path: lookup,
@@ -52,65 +46,62 @@ const register = (
 const read = (corpus: "all" | "wiki", signal?: AbortSignal) =>
   createMemoryGetToolOrThrow().execute("call_get", { path: lookup, corpus }, signal);
 
+const resolve = <T>(value: T | Error): Promise<T> =>
+  value instanceof Error ? Promise.reject(value) : Promise.resolve(value);
+
 function prepareCase(memory: MemoryCase, wiki: WikiCase) {
-  setMemoryReadFileImpl(async () => {
-    if (memory instanceof Error) {
-      throw memory;
-    }
-    return memory;
-  });
-  const get = vi.fn(async () => {
-    if (wiki instanceof Error) {
-      throw wiki;
-    }
-    return wiki;
-  });
+  setMemoryReadFileImpl(() => resolve(memory));
+  const get = vi.fn(() => resolve(wiki));
   register("memory-wiki", get);
   return get;
 }
 
 describe("memory_get corpus outcomes", () => {
   it.each([
-    {
-      name: "keeps a memory hit while reporting a successful wiki lookup",
-      memory: memoryHit,
-      wiki: wikiHit,
-      expected: {
+    [
+      "keeps a memory hit while reporting a successful wiki lookup",
+      "all",
+      memoryHit,
+      wikiHit,
+      {
         ...memoryHit,
         corpora: [
           { corpus: "memory", outcome: "ok" },
           { corpus: "wiki", outcome: "ok" },
         ],
       },
-    },
-    {
-      name: "falls through from a memory miss to wiki content",
-      memory: memoryMiss,
-      wiki: wikiHit,
-      expected: {
+    ],
+    [
+      "falls through from a memory miss to wiki content",
+      "all",
+      memoryMiss,
+      wikiHit,
+      {
         ...wikiPayload,
         corpora: [
           { corpus: "memory", outcome: "ok" },
           { corpus: "wiki", outcome: "ok" },
         ],
       },
-    },
-    {
-      name: "returns not found when wiki misses and memory is unavailable",
-      memory: new Error("memory unavailable"),
-      wiki: null,
-      expected: {
+    ],
+    [
+      "memory unavailable, wiki miss",
+      "all",
+      new Error("memory unavailable"),
+      null,
+      {
         ...memoryMiss,
         corpora: [unavailable("memory"), { corpus: "wiki", outcome: "ok" }],
         warning: "Memory corpus unavailable: memory unavailable",
         error: "memory unavailable",
       },
-    },
-    {
-      name: "does not claim not found when no corpus was available",
-      memory: new Error("memory unavailable"),
-      wiki: new Error("wiki unavailable"),
-      expected: {
+    ],
+    [
+      "both corpora unavailable",
+      "all",
+      new Error("memory unavailable"),
+      new Error("wiki unavailable"),
+      {
         path: lookup,
         text: "",
         status: "error",
@@ -119,25 +110,24 @@ describe("memory_get corpus outcomes", () => {
           "Memory corpus unavailable: memory unavailable Wiki corpus unavailable: wiki unavailable",
         error: "memory unavailable; wiki unavailable",
       },
-    },
-  ])("$name", async ({ memory, wiki, expected }) => {
+    ],
+    [
+      "wiki-only unavailable",
+      "wiki",
+      memoryMiss,
+      new Error("wiki unavailable"),
+      {
+        path: lookup,
+        text: "",
+        corpora: [unavailable("wiki")],
+        warning: "Wiki corpus unavailable: wiki unavailable",
+        error: "wiki unavailable",
+      },
+    ],
+  ] as const)("%s", async (_name, corpus, memory, wiki, expected) => {
     const get = prepareCase(memory, wiki);
-
-    const result = await read("all");
-
-    expect(result.details).toEqual(expected);
+    expect((await read(corpus)).details).toEqual(expected);
     expect(get).toHaveBeenCalledOnce();
-  });
-
-  it("reports a wiki-only unavailable corpus", async () => {
-    prepareCase(memoryMiss, new Error("wiki unavailable"));
-    expect((await read("wiki")).details).toEqual({
-      path: lookup,
-      text: "",
-      corpora: [unavailable("wiki")],
-      warning: "Wiki corpus unavailable: wiki unavailable",
-      error: "wiki unavailable",
-    });
   });
 
   it("uses deterministic surviving wiki content when another supplement fails", async () => {
@@ -184,30 +174,32 @@ describe("memory_get corpus outcomes", () => {
     });
   });
 
-  it("settles a hanging supplement at the shared deadline and keeps memory", async () => {
-    vi.useFakeTimers();
-    register("memory-wiki", async () => await new Promise<never>(() => {}));
-    setMemoryReadFileImpl(async () => memoryHit);
-
-    const pending = read("all");
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    await expect(pending).resolves.toMatchObject({
-      details: {
-        ...memoryHit,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          unavailable("wiki", "memory_get timed out after 30s"),
-        ],
-      },
-    });
-  });
-
-  it("cancels a hanging exact supplement read", async () => {
-    register("memory-wiki", async () => await new Promise<never>(() => {}));
-    const controller = new AbortController();
-    const pending = read("all", controller.signal);
-    controller.abort(new Error("cancelled"));
-    await expect(pending).rejects.toThrow("cancelled");
-  });
+  it.each(["deadline", "cancellation"] as const)(
+    "settles a hanging supplement at %s",
+    async (mode) => {
+      const abort = mode === "cancellation";
+      if (!abort) {
+        vi.useFakeTimers();
+        setMemoryReadFileImpl(async () => memoryHit);
+      }
+      register("memory-wiki", async () => await new Promise<never>(() => {}));
+      const controller = new AbortController();
+      const pending = read("all", abort ? controller.signal : undefined);
+      if (abort) {
+        controller.abort(new Error("cancelled"));
+        await expect(pending).rejects.toThrow("cancelled");
+      } else {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(pending).resolves.toMatchObject({
+          details: {
+            ...memoryHit,
+            corpora: [
+              { corpus: "memory", outcome: "ok" },
+              unavailable("wiki", "memory_get timed out after 30s"),
+            ],
+          },
+        });
+      }
+    },
+  );
 });

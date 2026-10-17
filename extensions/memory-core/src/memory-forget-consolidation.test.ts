@@ -3,22 +3,17 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DREAMING_MEMORY_BACKUP_NAMESPACE,
-  readMemoryCoreWorkspaceEntries,
-} from "./dreaming-state.js";
+import { describe, expect, it, vi } from "vitest";
+import { DREAMING_MEMORY_BACKUP_NAMESPACE } from "./dreaming-state.js";
 import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
-import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
-import { forgetMemoryEntries } from "./memory-forget.js";
-import { createMemoryForgetFixture } from "./memory-forget.test-helpers.js";
+import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { memoryForgetHarness, memoryOrigin } from "./memory-forget.suite.test-support.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -27,38 +22,46 @@ import {
 } from "./short-term-promotion.js";
 
 describe("memory forget", () => {
-  const forget = (
-    selectors: Omit<Parameters<typeof forgetMemoryEntries>[0], "cfg" | "agentId">,
-    agentId = "main",
-  ) => forgetMemoryEntries({ cfg, agentId, ...selectors });
+  const h = memoryForgetHarness();
+  const { forget, readText } = h;
   const origins = (agentId: string, entryKey: string) =>
-    listMemoryEntryOrigins({ agentId, entryKeys: [entryKey] });
-  const readBackups = () =>
-    readMemoryCoreWorkspaceEntries<{ content: string }>({
-      namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-      workspaceDir,
+    h.origins({ entryKeys: [entryKey] }, agentId);
+
+  const readBackups = () => h.readEntries<{ content: string }>(DREAMING_MEMORY_BACKUP_NAMESPACE);
+
+  const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
+  async function candidatesFor(
+    sourcePath: string,
+    snippet: string,
+    nowMs: number,
+    sessionId = "target",
+    agentId = "main",
+    supersedesKey?: string,
+  ) {
+    await recordShortTermRecalls({
+      workspaceDir: h.workspaceDir,
+      query: "launch code",
+      signalType: "daily",
+      nowMs,
+      results: [
+        {
+          path: sourcePath,
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet,
+          source: "memory",
+          provenance: {
+            originClass: "owner",
+            sessionKind: "interactive",
+            observedAt: nowMs,
+            ...(supersedesKey ? { supersedesKey } : {}),
+          },
+          sessionOrigin: { agentId, sessionId, sessionKey: `agent:${agentId}:${sessionId}` },
+        },
+      ],
     });
-  const readText = (file: string) => fs.readFile(file, "utf8");
-  let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
-  let workspaceDir: string;
-  let cfg: OpenClawConfig;
-
-  beforeEach(async () => {
-    fixture = await createMemoryForgetFixture();
-    ({ workspaceDir, cfg } = fixture);
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await fixture.cleanup();
-  });
-
-  async function seedSession(sessionId: string): Promise<void> {
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey: `agent:main:${sessionId}`,
-      entry: { sessionId, updatedAt: 1_000 },
-    });
+    return rankShortTermPromotionCandidates({ workspaceDir: h.workspaceDir, nowMs, ...thresholds });
   }
 
   it.each([
@@ -72,92 +75,59 @@ describe("memory forget", () => {
   ] as const)(
     "preserves workspace deletion lineage for $action (origin failure: $failOrigins, file failure: $fileFailure)",
     async ({ action, failOrigins, fileFailure }) => {
-      cfg = {
+      h.cfg = {
         agents: {
-          defaults: { workspace: workspaceDir },
+          defaults: { workspace: h.workspaceDir },
           entries: {
-            alpha: { workspace: workspaceDir },
-            gamma: { workspace: workspaceDir },
-            vacant: { workspace: workspaceDir },
+            alpha: { workspace: h.workspaceDir },
+            gamma: { workspace: h.workspaceDir },
+            vacant: { workspace: h.workspaceDir },
           },
         },
       } as OpenClawConfig;
-      setRuntimeConfigSnapshot(cfg);
-      await upsertSessionEntry({
-        agentId: "gamma",
-        sessionKey: "agent:gamma:private-session",
-        entry: { sessionId: "private-session", updatedAt: 1_000 },
-      });
+      setRuntimeConfigSnapshot(h.cfg);
+      await h.seedSession("private-session", "gamma");
       const priorEntry = "- The launch code is violet.";
       const snippet =
         action === "merged" ? "The launch code is violet." : "The launch code is cobalt.";
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
-      const diaryPath = path.join(workspaceDir, "DREAMS.md");
+      const memoryPath = h.path("MEMORY.md");
+      const diaryPath = h.path("DREAMS.md");
       await fs.writeFile(diaryPath, "# Dream Diary\nKeep this unrelated diary entry.\n");
-      const previousMemory = [
-        "# Long-Term Memory",
-        ...(action === "superseded" ? ["<!-- openclaw-memory-lineage:launch-code -->"] : []),
-        "<!-- openclaw-memory-promotion:retired-entry -->",
-        priorEntry,
-        "",
-      ].join("\n");
+      const previousMemory =
+        "# Long-Term Memory\n" +
+        (action === "superseded" ? "<!-- openclaw-memory-lineage:launch-code -->\n" : "") +
+        `<!-- openclaw-memory-promotion:retired-entry -->\n${priorEntry}\n`;
       await fs.writeFile(memoryPath, previousMemory);
-      const notePath = path.join(workspaceDir, "memory", "2026-08-26.md");
+      const notePath = h.path("memory", "2026-08-26.md");
       await fs.mkdir(path.dirname(notePath), { recursive: true });
       await fs.writeFile(notePath, `${snippet}\n`);
-      await recordMemoryEntryOrigins({
-        agentId: "gamma",
-        origins: [
-          {
-            entryKey: "retired-entry",
+      await h.recordOrigins(
+        [
+          memoryOrigin("retired-entry", "private-session", {
             agentId: "gamma",
-            sessionId: "private-session",
             sessionKey: "agent:gamma:private-session",
-            originClass: "owner",
-            observedAt: 1_000,
-          },
+          }),
         ],
-      });
+        "gamma",
+      );
       const vacantDb = openOpenClawAgentDatabase({ agentId: "vacant" }).db;
       vacantDb.exec("DROP TABLE IF EXISTS memory_entry_origins");
       const nowMs = Date.parse("2026-08-26T12:00:00.000Z");
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "launch code",
-        signalType: "daily",
+      const candidates = await candidatesFor(
+        "memory/2026-08-26.md",
+        snippet,
         nowMs,
-        results: [
-          {
-            path: "memory/2026-08-26.md",
-            startLine: 1,
-            endLine: 1,
-            score: 0.9,
-            snippet,
-            source: "memory",
-            provenance: {
-              originClass: "owner",
-              sessionKind: "interactive",
-              observedAt: nowMs,
-              ...(action === "superseded" ? { supersedesKey: "launch-code" } : {}),
-            },
-            sessionOrigin: {
-              agentId: "alpha",
-              sessionId: "alpha-session",
-              sessionKey: "agent:alpha:alpha-session",
-            },
-          },
-        ],
-      });
-      const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
-      const candidates = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        nowMs,
-        ...thresholds,
-      });
+        "alpha-session",
+        "alpha",
+        action === "superseded" ? "launch-code" : undefined,
+      );
+
       const promoted = candidates[0];
       expect(promoted).toBeDefined();
+      const promotedKey = promoted!.key;
+      const promotedMarker = `openclaw-memory-promotion:${promotedKey}`;
       const output = JSON.stringify({
-        operations: [{ candidateKey: promoted!.key, action, priorEntries: [priorEntry] }],
+        operations: [{ candidateKey: promotedKey, action, priorEntries: [priorEntry] }],
       });
       const subagent = {
         complete: vi.fn(async () => ({ text: output })),
@@ -237,7 +207,7 @@ describe("memory forget", () => {
       const application = applyShortTermPromotions({
         agentId: "alpha",
         workspaceAgentIds: ["vacant", "gamma", "alpha", "gamma"],
-        workspaceDir,
+        workspaceDir: h.workspaceDir,
         candidates,
         consolidation: { subagent, logger: { info: vi.fn(), warn: vi.fn() } },
         maxPriorEntryLossFraction: 1,
@@ -250,10 +220,10 @@ describe("memory forget", () => {
         expect(memoryRenameCalls).toBe(2);
         const memory = await readText(memoryPath);
         expect(memory).toContain("openclaw-memory-promotion:retired-entry");
-        expect(memory).toContain(`openclaw-memory-promotion:${promoted!.key}`);
-        expect(await origins("gamma", promoted!.key)).toEqual([]);
+        expect(memory).toContain(promotedMarker);
+        expect(await origins("gamma", promotedKey)).toEqual([]);
         await forget({ sessionIds: ["private-session"] }, "gamma");
-        expect(await readText(memoryPath)).toContain(`openclaw-memory-promotion:${promoted!.key}`);
+        expect(await readText(memoryPath)).toContain(promotedMarker);
         return;
       }
       if (fileFailure !== "none") {
@@ -276,28 +246,25 @@ describe("memory forget", () => {
         const published = fileFailure.startsWith("close") || fileFailure === "rename-published";
         expect(renamed).toBe(published);
         if (published) {
-          expect(await readText(memoryPath)).toContain(
-            `openclaw-memory-promotion:${promoted!.key}`,
-          );
+          expect(await readText(memoryPath)).toContain(promotedMarker);
         } else {
           expect(await readText(memoryPath)).toBe(
             fileFailure === "rename-changed" ? externalMemory : previousMemory,
           );
         }
         expect(
-          (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
+          (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]
+            ?.promotedAt,
         ).toBeUndefined();
         expect((await readBackups()).map(({ value }) => value.content)).toEqual([previousMemory]);
         expect(await origins("gamma", "retired-entry")).toHaveLength(1);
-        expect(await origins("gamma", promoted!.key)).toMatchObject([
-          { entryKey: promoted!.key, sessionId: "private-session" },
+        expect(await origins("gamma", promotedKey)).toMatchObject([
+          { entryKey: promotedKey, sessionId: "private-session" },
         ]);
         const report = await forget({ sessionIds: ["private-session"] }, "gamma");
-        expect(report.entryKeys).toContain(promoted!.key);
-        expect(await readText(memoryPath)).not.toContain(
-          `openclaw-memory-promotion:${promoted!.key}`,
-        );
-        expect(await origins("gamma", promoted!.key)).toEqual([]);
+        expect(report.entryKeys).toContain(promotedKey);
+        expect(await readText(memoryPath)).not.toContain(promotedMarker);
+        expect(await origins("gamma", promotedKey)).toEqual([]);
         return;
       }
       if (failOrigins) {
@@ -305,7 +272,8 @@ describe("memory forget", () => {
           await expect(application).rejects.toThrow("injected origin write failure");
           await expect(readText(memoryPath)).resolves.toBe(previousMemory);
           expect(
-            (await readShortTermRecallEntries({ workspaceDir, nowMs }))[0]?.promotedAt,
+            (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]
+              ?.promotedAt,
           ).toBeUndefined();
         } finally {
           restoreOriginFailure?.();
@@ -315,8 +283,8 @@ describe("memory forget", () => {
       const applied = await application;
 
       expect(applied.applied).toBe(1);
-      expect(await origins("gamma", promoted!.key)).toMatchObject([
-        { entryKey: promoted!.key, sessionId: "private-session" },
+      expect(await origins("gamma", promotedKey)).toMatchObject([
+        { entryKey: promotedKey, sessionId: "private-session" },
       ]);
       expect((await readBackups()).map(({ value }) => value.content)).toEqual([
         expect.stringContaining(priorEntry),
@@ -334,7 +302,7 @@ describe("memory forget", () => {
       resetPluginStateStoreForTests();
       const report = await forget({ sessionIds: ["private-session"] }, "gamma");
       expect(report).toMatchObject({
-        entryKeys: expect.arrayContaining([promoted!.key]),
+        entryKeys: expect.arrayContaining([promotedKey]),
         artifacts: { memoryEntries: 3, backups: 1 },
       });
       expect(await readText(memoryPath)).not.toContain(snippet);
@@ -352,41 +320,26 @@ describe("memory forget", () => {
     },
   );
 
-  it.each(["DREAMS.md"])(
-    "warns and preserves historical untraceable highlights in %s",
-    async (diaryName) => {
-      await seedSession("target");
-      await recordMemoryEntryOrigins({
-        agentId: "main",
-        origins: [
-          {
-            entryKey: "historical",
-            agentId: "main",
-            sessionId: "target",
-            sessionKey: "agent:main:target",
-            originClass: "owner",
-            observedAt: 1_000,
-          },
-        ],
-      });
-      const diaryPath = path.join(workspaceDir, diaryName);
-      const historical =
-        "# Dream Diary\n## Memory Consolidation History\n- Highlights:\n  - `+ <!-- openclaw-memory-promotion:historical -->`\n  - `+ Untraceable historical fact.`\n";
-      await fs.writeFile(diaryPath, historical);
-      const preview = await forget({ sessionIds: ["target"], dryRun: true });
-      expect(preview.refusals).toEqual([expect.stringContaining("review them manually")]);
-      expect(preview.artifacts.memoryFiles).toBe(0);
-      const report = await forget({ sessionIds: ["target"] });
-      expect(report.refusals).toEqual(preview.refusals);
-      expect(await readText(diaryPath)).toBe(historical);
-      const repeated = await forget({ sessionIds: ["target"], dryRun: true });
-      expect(repeated.refusals).toEqual(preview.refusals);
-    },
-  );
+  it("warns and preserves historical untraceable highlights in DREAMS.md", async () => {
+    await h.seedSession("target");
+    await h.recordOrigins([memoryOrigin("historical", "target")]);
+    const diaryPath = h.path("DREAMS.md");
+    const historical =
+      "# Dream Diary\n## Memory Consolidation History\n- Highlights:\n  - `+ <!-- openclaw-memory-promotion:historical -->`\n  - `+ Untraceable historical fact.`\n";
+    await fs.writeFile(diaryPath, historical);
+    const preview = await forget({ sessionIds: ["target"], dryRun: true });
+    expect(preview.refusals).toEqual([expect.stringContaining("review them manually")]);
+    expect(preview.artifacts.memoryFiles).toBe(0);
+    const report = await forget({ sessionIds: ["target"] });
+    expect(report.refusals).toEqual(preview.refusals);
+    expect(await readText(diaryPath)).toBe(historical);
+    const repeated = await forget({ sessionIds: ["target"], dryRun: true });
+    expect(repeated.refusals).toEqual(preview.refusals);
+  });
 
   it("removes only the selected historical session highlight, not its following sibling", async () => {
-    await seedSession("target");
-    const diaryPath = path.join(workspaceDir, "DREAMS.md");
+    await h.seedSession("target");
+    const diaryPath = h.path("DREAMS.md");
     const selected =
       "  - `+ Session ID: target; Selected private fact.`\n    Selected continuation.";
     const survivor =
@@ -399,67 +352,34 @@ describe("memory forget", () => {
   });
 
   it("removes a marker-addressable plain-append promotion after budget compaction", async () => {
-    await seedSession("target");
+    await h.seedSession("target");
     const nowMs = Date.parse("2026-08-25T12:00:00.000Z");
     const snippet = "The undisclosed launch code is cobalt.";
     const sourcePath = "memory/2026-08-25.md";
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, sourcePath), `${snippet}\n`);
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
-      [
-        "# Long-Term Memory",
-        "Curated operator fact.",
-        "",
-        "## Promoted From Short-Term Memory (2026-08-24)",
-        "<!-- openclaw-memory-promotion:older-entry -->",
-        `- ${"x".repeat(500)}`,
-        "",
-      ].join("\n"),
+    await fs.mkdir(h.path("memory"), { recursive: true });
+    await h.write(sourcePath, `${snippet}\n`);
+    await h.write(
+      "MEMORY.md",
+      "# Long-Term Memory\nCurated operator fact.\n\n## Promoted From Short-Term Memory (2026-08-24)\n<!-- openclaw-memory-promotion:older-entry -->\n- " +
+        "x".repeat(500) +
+        "\n",
     );
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "launch code",
-      signalType: "daily",
-      nowMs,
-      results: [
-        {
-          path: sourcePath,
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet,
-          source: "memory",
-          provenance: { originClass: "owner", sessionKind: "interactive", observedAt: nowMs },
-          sessionOrigin: {
-            agentId: "main",
-            sessionId: "target",
-            sessionKey: "agent:main:target",
-          },
-        },
-      ],
-    });
-    const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      nowMs,
-      ...thresholds,
-    });
+    const candidates = await candidatesFor(sourcePath, snippet, nowMs);
+
     const candidateKey = candidates[0]?.key;
     expect(candidateKey).toMatch(/^memory:claim:/);
 
     const promoted = await applyShortTermPromotions({
       agentId: "main",
-      workspaceDir,
+      workspaceDir: h.workspaceDir,
       candidates,
       nowMs,
       memoryFileMaxChars: 450,
       maxPriorEntryLossFraction: 1,
       ...thresholds,
     });
-    expect(promoted.appended).toBe(1);
-    expect(promoted.compactedDates).toEqual(["2026-08-24"]);
-    const promotedMemory = await readText(path.join(workspaceDir, "MEMORY.md"));
+    expect(promoted).toMatchObject({ appended: 1, compactedDates: ["2026-08-24"] });
+    const promotedMemory = await h.read("MEMORY.md");
     expect(promotedMemory).toContain(`<!-- openclaw-memory-promotion:${candidateKey} -->`);
     expect(promotedMemory).toContain(snippet);
 
@@ -469,7 +389,7 @@ describe("memory forget", () => {
       entryKeys: [candidateKey],
       artifacts: { memoryFiles: 1, memoryEntries: 1, shortTermEntries: 1, originRows: 1 },
     });
-    const survivingMemory = await readText(path.join(workspaceDir, "MEMORY.md"));
+    const survivingMemory = await h.read("MEMORY.md");
     expect(survivingMemory).toContain("Curated operator fact.");
     expect(survivingMemory).not.toContain(snippet);
     expect(survivingMemory).not.toContain(candidateKey);

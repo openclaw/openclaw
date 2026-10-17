@@ -1,85 +1,50 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreWorkspaceStateKey,
-  readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
-  writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
-import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
-import { forgetMemoryEntries } from "./memory-forget.js";
-import {
-  createMemoryForgetFixture,
-  seedMemoryForgetSession,
-} from "./memory-forget.test-helpers.js";
+import { memoryForgetHarness, memoryOrigin } from "./memory-forget.suite.test-support.js";
+import { seedMemoryForgetSession } from "./memory-forget.test-helpers.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type {
   ShortTermPhaseSignalEntry,
   ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
-import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 const observedAt = "2026-09-11T00:00:00.000Z";
 
-function recallEntry(key: string): ShortTermRecallEntry {
+type RecallFixture = Pick<ShortTermRecallEntry, "key" | "path" | "snippet" | "recallCount">;
+function recallEntry(key: string): RecallFixture {
   return {
     key,
     path: "memory/2026-09-11.md",
-    startLine: 1,
-    endLine: 1,
-    source: "memory",
     snippet: `Synthetic memory fact for ${key}.`,
     recallCount: 1,
-    dailyCount: 0,
-    groundedCount: 0,
-    totalScore: 0.8,
-    maxScore: 0.8,
-    firstRecalledAt: observedAt,
-    lastRecalledAt: observedAt,
-    queryHashes: ["synthetic-query"],
-    recallDays: ["2026-09-11"],
-    conceptTags: [],
   };
 }
 
 describe("memory forget phase-signal failures", () => {
-  const forget = () => forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
-  const tombstones = () => readMemoryForgetTombstonesForTest({ agentId: "main" });
-  const origins = (filter: Omit<Parameters<typeof listMemoryEntryOrigins>[0], "agentId"> = {}) =>
-    listMemoryEntryOrigins({ agentId: "main", ...filter });
-  let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
-  let workspaceDir: string;
-  let cfg: OpenClawConfig;
-  const readRecalls = () =>
-    readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-    });
-  const readPhases = async () => (await readPhaseSignalStore(workspaceDir, observedAt)).entries;
+  const h = memoryForgetHarness();
+  const { origins, tombstones } = h;
+  const forget = () => h.forget({ sessionIds: ["target"] });
+
+  const readRecalls = () => h.readEntries<RecallFixture>(SHORT_TERM_RECALL_NAMESPACE);
+  const readPhases = async () => (await readPhaseSignalStore(h.workspaceDir, observedAt)).entries;
   function abortWrite(event: string, namespace: string, key: string, message: string) {
     const db = openOpenClawStateDatabase().db;
     db.exec(`CREATE TRIGGER abort_write ${event} ON plugin_state_entries
       WHEN OLD.plugin_id = 'memory-core' AND OLD.namespace = '${namespace}'
-        AND json_extract(OLD.value_json, '$.workspaceKey') = '${memoryCoreWorkspaceStateKey(workspaceDir)}'
+        AND json_extract(OLD.value_json, '$.workspaceKey') = '${memoryCoreWorkspaceStateKey(h.workspaceDir)}'
         AND json_extract(OLD.value_json, '$.key') = '${key}'
       BEGIN SELECT RAISE(ABORT, '${message}'); END;`);
     return () => db.exec("DROP TRIGGER IF EXISTS abort_write");
   }
-
-  afterEach(async () => {
-    await fixture.cleanup();
-  });
-
-  beforeEach(async () => {
-    fixture = await createMemoryForgetFixture("openclaw-memory-forget-phase-");
-    ({ workspaceDir, cfg } = fixture);
-  });
 
   async function seedEntries(survivorKeys: string[]) {
     await seedMemoryForgetSession("target");
@@ -92,23 +57,15 @@ describe("memory forget phase-signal failures", () => {
         { key, lightHits: 2, remHits: 1, lastLightAt: observedAt, lastRemAt: observedAt },
       ]),
     );
-    await recordMemoryEntryOrigins({
-      agentId: "main",
-      origins: keys.map((entryKey) => ({
-        entryKey,
-        agentId: "main",
-        sessionId: entryKey === "target-entry" ? "target" : "survivor",
-        sessionKey: entryKey === "target-entry" ? "agent:main:target" : "agent:main:survivor",
-        originClass: "owner" as const,
-        observedAt: Date.parse(observedAt),
-      })),
-    });
-    await writeMemoryCoreWorkspaceEntries({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-      entries: recalls,
-    });
-    await writePhaseSignalStore(workspaceDir, {
+    await h.recordOrigins(
+      keys.map((entryKey) =>
+        memoryOrigin(entryKey, entryKey === "target-entry" ? "target" : "survivor", {
+          observedAt: Date.parse(observedAt),
+        }),
+      ),
+    );
+    await h.writeEntries(SHORT_TERM_RECALL_NAMESPACE, recalls);
+    await writePhaseSignalStore(h.workspaceDir, {
       version: 1,
       updatedAt: observedAt,
       entries: phases,
@@ -120,12 +77,7 @@ describe("memory forget phase-signal failures", () => {
     // Eleven retained writes cross the workspace store's cooperative yield.
     const survivorKeys = Array.from({ length: 11 }, (_, index) => `survivor-${index}`);
     const before = await seedEntries(survivorKeys);
-    await writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      workspaceDir,
-      key: "later-entry",
-      value: recallEntry("later-entry"),
-    });
+    await h.writeEntry(SHORT_TERM_RECALL_NAMESPACE, "later-entry", recallEntry("later-entry"));
     const rowsSettled = createDeferred<void>();
     const restore = abortWrite(
       "BEFORE UPDATE",
@@ -158,24 +110,14 @@ describe("memory forget phase-signal failures", () => {
     };
 
     try {
-      const outcome = await forget().then(
-        (report) => ({ status: "resolved", report }),
-        (error: unknown) => ({ status: "rejected", error }),
-      );
+      await expect(forget()).rejects.toMatchObject({
+        cause: { message: "synthetic phase metadata failure" },
+      });
       restore();
-      await withMemoryWorkspaceLock(workspaceDir, () =>
-        writeMemoryCoreWorkspaceEntry({
-          namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-          workspaceDir,
-          key: "later-entry",
-          value: laterPhase,
-        }),
+      await withMemoryWorkspaceLock(h.workspaceDir, () =>
+        h.writeEntry(SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "later-entry", laterPhase),
       );
       await rowsSettled.promise;
-      expect(outcome).toMatchObject({
-        status: "rejected",
-        error: { cause: { message: "synthetic phase metadata failure" } },
-      });
       const storedPhases = await readPhases();
       expect(storedPhases["later-entry"]).toEqual(laterPhase);
       expect(storedPhases["target-entry"]).toBeUndefined();
