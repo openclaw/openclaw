@@ -211,11 +211,7 @@ describe("memory actor transcript turn binding", () => {
     expect(prepareMessage).toHaveBeenCalledOnce();
     expect(onMessageCommitted).toHaveBeenCalledTimes(2);
     expect(onCommittedSource).toHaveBeenLastCalledWith(
-      {
-        agentId: scope.agentId,
-        path: scope.storePath,
-        databaseIdentity: owner.identity.incarnation,
-      },
+      { ...database, databaseIdentity: owner.identity.incarnation },
       expect.objectContaining({ sessionId, incognito: true }),
     );
     expect((await history()).eventJson).toEqual(before.eventJson);

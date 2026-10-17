@@ -314,7 +314,6 @@ it("retains actor-bound recorder custody through a durable worker publication fa
       await expect(
         withSessionTranscriptSourcePublication(f.scope, published, () => rec.persistApproved()),
       ).rejects.toThrow(failure.message);
-      expectSource(published, f.database, { sessionId: f.scope.sessionId });
       const receipt = expectDefined(rec.getAdmissionReceipt(), "committed worker admission");
       expect(rec.isPendingInputConsumed?.()).toBe(true);
       expect(
@@ -326,7 +325,7 @@ it("retains actor-bound recorder custody through a durable worker publication fa
         message,
       });
       expect(messages(f)).toEqual([expect.objectContaining({ id: receipt.entryId, message })]);
-      expect(published).toHaveBeenCalledOnce();
+      expectSource(published, f.database, { sessionId: f.scope.sessionId });
     } finally {
       rec.finishPendingInput?.("interrupted");
       await rec.waitForPendingInputSettlement?.();

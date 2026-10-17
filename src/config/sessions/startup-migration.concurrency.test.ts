@@ -1,6 +1,5 @@
 /// <reference lib="es2024.sharedmemory" />
 
-import { writeFileSync } from "node:fs";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { MessagePort, Worker, WorkerOptions } from "node:worker_threads";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
@@ -32,9 +31,7 @@ const observer = vi.hoisted(() => ({
   workers: new Set<Worker>(),
   parents: new WeakMap<MessagePort, MessagePort>(),
   onTask: undefined as ((task: TaskObservation) => void) | undefined,
-  beforeCreate: undefined as
-    | ((filename: string | URL, options: WorkerOptions) => WorkerOptions)
-    | undefined,
+  beforeCreate: undefined as ((options: WorkerOptions) => WorkerOptions) | undefined,
 }));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
@@ -49,10 +46,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     Worker: class extends actual.Worker {
       constructor(filename: string | URL, options: WorkerOptions = {}) {
         const canonical = options.workerData?.operation === "canonical-validation-pool";
-        super(
-          filename,
-          canonical ? (observer.beforeCreate?.(filename, options) ?? options) : options,
-        );
+        super(filename, canonical ? (observer.beforeCreate?.(options) ?? options) : options);
         if (!canonical) {
           return;
         }
@@ -120,6 +114,10 @@ function seedFleet(state: OpenClawTestState, invalidFirst = false) {
     cfg,
     log,
     shared,
+    leases: (agentId: string) =>
+      shared.db
+        .prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
+        .all(agentId),
     start: (ids?: string[], handoffDatabase?: Startup["handoffDatabase"]) =>
       runSessionStartupMigration({ cfg, env, log, agentIds: ids && new Set(ids), handoffDatabase }),
     closeShared: () => closeOpenClawStateDatabaseByPathAsync(shared.path),
@@ -128,10 +126,8 @@ function seedFleet(state: OpenClawTestState, invalidFirst = false) {
   };
 }
 
-function withFleet(
-  run: (fleet: ReturnType<typeof seedFleet>) => Promise<void>,
-  invalidFirst = false,
-) {
+type Fleet = ReturnType<typeof seedFleet>;
+function withFleet(run: (fleet: Fleet) => Promise<void>, invalidFirst = false) {
   return withOpenClawTestState({ scenario: "minimal" }, (state) =>
     run(seedFleet(state, invalidFirst)),
   );
@@ -166,7 +162,15 @@ function observeOutcome(promise: Promise<unknown>) {
   return result;
 }
 
+function rejectIfSettled(startup: Promise<unknown>, message: string) {
+  return startup.then((result) => {
+    throw result instanceof Error ? result : new Error(message);
+  });
+}
+
 type HeldRequest = { agentId: string; release: () => void };
+type HeldKind = "certification" | "release";
+type ObservedTask = { agentId: string; closed: boolean; exited: Deferred };
 function releaseHeld(requests: HeldRequest[]) {
   while (requests.length > 0) {
     requests[0]!.release();
@@ -174,11 +178,7 @@ function releaseHeld(requests: HeldRequest[]) {
 }
 
 function gateFirstCertificationPerTask() {
-  const tasks: Array<{
-    agentId: string;
-    closed: boolean;
-    exited: Deferred;
-  }> = [];
+  const tasks: ObservedTask[] = [];
   const held: HeldRequest[] = [];
   const heldReleases: HeldRequest[] = [];
   let bypass = false;
@@ -199,11 +199,7 @@ function gateFirstCertificationPerTask() {
     requestHeld = createDeferredCore();
   };
   observer.onTask = ({ worker, port, agentId }) => {
-    const observed: (typeof tasks)[number] = {
-      agentId,
-      closed: false,
-      exited: createDeferredCore(),
-    };
+    const observed = { agentId, closed: false, exited: createDeferredCore() };
     tasks.push(observed);
     worker.once("exit", () => {
       observed.exited.resolve();
@@ -243,20 +239,12 @@ function gateFirstCertificationPerTask() {
     held,
     heldReleases,
     tasks,
-    waitFor: async (
-      kind: "certification" | "release",
-      count: number,
-      startup: Promise<unknown>,
-    ) => {
+    waitFor: async (kind: HeldKind, count: number, startup: Promise<unknown>) => {
       const requests = kind === "certification" ? held : heldReleases;
       while (requests.length < count) {
         await Promise.race([
           requestHeld.promise,
-          startup.then((result) => {
-            throw result instanceof Error
-              ? result
-              : new Error(`Startup settled before ${count} ${kind} requests were held`);
-          }),
+          rejectIfSettled(startup, `Startup settled before ${count} ${kind} requests were held`),
         ]);
       }
     },
@@ -288,11 +276,7 @@ it("reuses two workers while closing each database task before runtime handoff",
     const startup = start(undefined, async ({ agentId }) => {
       const task = gate.tasks.find((entry) => entry.agentId === agentId);
       expect(task?.closed).toBe(true);
-      expect(
-        state.shared.db
-          .prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
-          .all(agentId),
-      ).toEqual([]);
+      expect(state.leases(agentId)).toEqual([]);
       const proof = withOpenClawAgentDatabaseReadOnly(
         (database) => ({
           ready: hasOpenClawAgentCanonicalValidation(database),
@@ -307,10 +291,10 @@ it("reuses two workers while closing each database task before runtime handoff",
       });
       const index = consumed.push(agentId) - 1;
       const wave = handoffWaves[Math.floor(index / 2)];
+      if (index % 2 === 1) {
+        wave?.resolve();
+      }
       if (wave) {
-        if (index % 2 === 1) {
-          wave.resolve();
-        }
         await wave.promise;
       }
       await yieldToEventLoop();
@@ -353,9 +337,7 @@ it("reuses two workers while closing each database task before runtime handoff",
       expect([...observer.workers].every((worker) => worker.threadId === -1)).toBe(true);
       state.assertNoLeases();
     } finally {
-      for (const wave of handoffWaves) {
-        wave.resolve();
-      }
+      handoffWaves.forEach((wave) => wave.resolve());
       gate.releaseAll();
       await startup.catch(() => {});
     }
@@ -368,12 +350,9 @@ it("drains sibling startup work and the worker pool before closing cold database
     const startupAgents = agentIds.slice(0, 3);
     const gate = gateFirstCertificationPerTask();
     const closeDatabase = lifecycle.closeOpenClawAgentDatabaseByPathAsync;
-    const coldCloses: Array<{ path: string; workersExited: boolean }> = [];
+    const coldCloses: [string, boolean][] = [];
     vi.spyOn(lifecycle, "closeOpenClawAgentDatabaseByPathAsync").mockImplementation((...args) => {
-      coldCloses.push({
-        path: args[0],
-        workersExited: [...observer.workers].every((worker) => worker.threadId === -1),
-      });
+      coldCloses.push([args[0], [...observer.workers].every((worker) => worker.threadId === -1)]);
       return closeDatabase(...args);
     });
     const startup = start(startupAgents);
@@ -390,12 +369,10 @@ it("drains sibling startup work and the worker pool before closing cold database
 
       gate.releaseAll();
       await startup;
-      expect(coldCloses).toHaveLength(3);
-      expect(coldCloses.every(({ workersExited }) => workersExited)).toBe(true);
-      expect(coldCloses.map(({ path }) => path).toSorted()).toEqual(
+      expect(coldCloses.toSorted(([a], [b]) => a.localeCompare(b))).toEqual(
         startupAgents
-          .map((agentId) => resolveOpenClawAgentSqlitePath({ agentId, env: state.env }))
-          .toSorted(),
+          .toSorted()
+          .map((agentId) => [resolveOpenClawAgentSqlitePath({ agentId, env: state.env }), true]),
       );
       state.assertNoLeases();
     } finally {
@@ -426,8 +403,6 @@ it("stops fleet admission on refusal and drains an already-started sibling befor
       expect(gate.held).toHaveLength(2);
       const first = gate.held.find(({ agentId }) => agentId === agentIds[0]);
       const failedWorker = gate.tasks.find(({ agentId }) => agentId === agentIds[0]);
-      expect(first).toBeDefined();
-      expect(failedWorker).toBeDefined();
       first!.release();
       await failedWorker!.exited.promise;
       await yieldToEventLoop();
@@ -483,8 +458,7 @@ it("retains the idle pool's cleanup owner until shared-state retirement joins na
       expect(await state.closeShared().catch((error: unknown) => error)).toBe(retryFailures[1]);
       expect(retirement.worker?.threadId).toBeGreaterThan(0);
       await state.closeShared();
-      expect(retirement.worker?.threadId).toBe(-1);
-      expect(retirement.mock?.mock.calls.length).toBe(4);
+      expect([retirement.worker?.threadId, retirement.mock?.mock.calls.length]).toEqual([-1, 4]);
     } finally {
       await retirement.terminate?.();
     }
@@ -513,15 +487,13 @@ it("retries failed native retirement while shared-state drainage already owns th
     const { outcome } = observation;
     try {
       await vi.waitFor(() => expect(retryEntered).toBe(true));
-      expect(observation.settled).toBe(false);
-      expect(drainageOutcome?.settled).toBe(false);
+      expect([observation.settled, drainageOutcome?.settled]).toEqual([false, false]);
       expect(retirement.worker?.threadId).toBeGreaterThan(0);
       expect(state.closeShared()).toBe(drainage);
       releaseRetirement.resolve();
       expect(await outcome).toBeInstanceOf(Error);
       expect(await drainageOutcome?.outcome).toBe(true);
-      expect(retirement.worker?.threadId).toBe(-1);
-      expect(retirement.mock?.mock.calls.length).toBe(2);
+      expect([retirement.worker?.threadId, retirement.mock?.mock.calls.length]).toEqual([-1, 2]);
       await state.closeShared();
       state.assertNoLeases();
     } finally {
@@ -537,9 +509,8 @@ it("drains the database owner before terminating a worker whose lease receipt is
     const { agentIds, start } = state;
     const agentId = agentIds[0]!;
     const gate = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
-    const preload = state.path("lease-receipt-gate.cjs");
-    writeFileSync(
-      preload,
+    const preload = await state.writeText(
+      "lease-receipt-gate.cjs",
       `
       const { MessagePort, workerData } = require('node:worker_threads');
       const gate = new Int32Array(workerData.fixtureLeaseGate);
@@ -553,7 +524,7 @@ it("drains the database owner before terminating a worker whose lease receipt is
       };
     `,
     );
-    observer.beforeCreate = (_filename, options) => ({
+    observer.beforeCreate = (options) => ({
       ...options,
       execArgv: [...(options.execArgv ?? []), "--require", preload],
       workerData: { ...options.workerData, fixtureLeaseGate: gate.buffer },
@@ -581,24 +552,15 @@ it("drains the database owner before terminating a worker whose lease receipt is
     try {
       await Promise.race([
         Promise.resolve(Atomics.waitAsync(gate, 0, 0).value),
-        outcome.then((result) => {
-          throw result instanceof Error
-            ? result
-            : new Error("Startup completed before the worker reached its lease receipt");
-        }),
+        rejectIfSettled(outcome, "Startup completed before the worker reached its lease receipt"),
       ]);
       expect(Atomics.load(gate, 0)).toBe(1);
-      expect(
-        state.shared.db
-          .prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
-          .all(agentId),
-      ).toHaveLength(1);
+      expect(state.leases(agentId)).toHaveLength(1);
       drainage = observeOutcome(state.closeShared());
       await yieldToEventLoop();
       expect(retirement.mock?.mock.calls.length).toBe(0);
       expect(retirement.worker?.threadId).toBeGreaterThan(0);
-      expect(observation.settled).toBe(false);
-      expect(drainage.settled).toBe(false);
+      expect([observation.settled, drainage.settled]).toEqual([false, false]);
       releaseLeaseReceipt();
       await leaseReceived.promise;
       allowTermination.resolve();

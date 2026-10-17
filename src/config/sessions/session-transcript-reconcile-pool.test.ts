@@ -183,11 +183,7 @@ it("closes a queued admission without dispatching it after shutdown", async () =
       externallySupervised: false,
       sessionIds: [],
     });
-    try {
-      await task.completion;
-    } finally {
-      task.port.close();
-    }
+    await task.completion.finally(() => task.port.close());
   });
   const outcome = Promise.allSettled([operation]);
   let closed = false;
@@ -238,14 +234,14 @@ function observeCanonicalWriterLeases() {
     }
     admit(request, grant);
   });
-  return { leases, restore: () => spy.mockRestore() };
+  return { leases, [Symbol.dispose]: () => spy.mockRestore() };
 }
 
 it("reconciles a dirty projection while the parent retains serving Gateway ownership", async () => {
   const { stateDir, env, options } = fixture("parent-owner");
-  const canonical = observeCanonicalWriterLeases();
   let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
+    using canonical = observeCanonicalWriterLeases();
     await seed(options, "parent-owner", "synthetic ownership");
     // Seeding may retain a worker writer; this fixture starts with only its native handle.
     const { database, nativeLeases } = await openDirtyDatabase(options);
@@ -275,12 +271,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
     );
     expectFts(database, "seed", "synthetic ownership");
   } finally {
-    canonical.restore();
-    try {
-      await cleanup(stateDir);
-    } finally {
-      owner?.release();
-    }
+    await cleanup(stateDir).finally(() => owner?.release());
   }
 }, 30_000);
 
@@ -291,12 +282,12 @@ it.each(["complete", "native-exit"] as const)(
     const targets = ["active", "queued", "next"].map((agentId) => ({ agentId, env }));
     const modes: string[] = [];
     const sessionId = "lifecycle-session";
-    const canonical = observeCanonicalWriterLeases();
     const nativeLeases = new Map<string, string[]>();
     const plannerLeases = new Map<string, string>();
     let gate: ReturnType<typeof planGate> | undefined;
     let operations: Promise<PromiseSettledResult<unknown>[]> | undefined;
     try {
+      using canonical = observeCanonicalWriterLeases();
       for (const options of targets) {
         await seed(
           options,
@@ -373,7 +364,6 @@ it.each(["complete", "native-exit"] as const)(
       await drainGlobalSingletonLifecycleState("restart");
       expect(poolSnapshot().workers).toBe(0);
     } finally {
-      canonical.restore();
       gate?.resume();
       await operations;
       await cleanup(stateDir);
