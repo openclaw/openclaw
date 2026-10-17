@@ -57,7 +57,13 @@ function createCleanupDatabase() {
   );
   nativeState.database = db;
   nativeState.resets = 0;
-  return { db, nativeState };
+  const close = () => {
+    if (db.isOpen) {
+      db.close();
+    }
+    nativeState.database = undefined;
+  };
+  return { db, nativeState, close };
 }
 
 describe("setActivePluginRegistry", () => {
@@ -143,31 +149,25 @@ describe("setActivePluginRegistry", () => {
     );
     previous.runtimeLifecycles = [
       {
-        pluginId: "cleanup-refresh-race",
-        pluginName: "Cleanup Refresh Race",
-        lifecycle: {
-          id: "first-cleanup",
-          async cleanup() {
-            firstCleanupStarted.resolve();
-            await firstCleanupReleased.promise;
-          },
+        id: "first-cleanup",
+        async cleanup() {
+          firstCleanupStarted.resolve();
+          await firstCleanupReleased.promise;
         },
-        source: "/virtual/cleanup-refresh-race/index.ts",
-        rootDir: "/virtual/cleanup-refresh-race",
       },
       {
-        pluginId: "cleanup-refresh-race",
-        pluginName: "Cleanup Refresh Race",
-        lifecycle: {
-          id: "second-cleanup",
-          cleanup() {
-            secondCleanupCalled.resolve();
-          },
+        id: "second-cleanup",
+        cleanup() {
+          secondCleanupCalled.resolve();
         },
-        source: "/virtual/cleanup-refresh-race/index.ts",
-        rootDir: "/virtual/cleanup-refresh-race",
       },
-    ];
+    ].map((lifecycle) => ({
+      pluginId: "cleanup-refresh-race",
+      pluginName: "Cleanup Refresh Race",
+      lifecycle,
+      source: "/virtual/cleanup-refresh-race/index.ts",
+      rootDir: "/virtual/cleanup-refresh-race",
+    }));
     const next = createEmptyPluginRegistry();
 
     setActivePluginRegistry(previous);
@@ -360,7 +360,7 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "abort-cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const { db, nativeState } = createCleanupDatabase();
+      const { db, nativeState, close } = createCleanupDatabase();
       const cleanup = vi.fn(() => {
         expect(db.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
       });
@@ -424,10 +424,7 @@ describe("setActivePluginRegistry", () => {
         await innerClear;
         await outerClear;
         await clearActivePluginRegistry();
-        if (db.isOpen) {
-          db.close();
-        }
-        nativeState.database = undefined;
+        close();
       }
       expect(cleanup).toHaveBeenCalledOnce();
       expect(nativeState.resets).toBe(1);
@@ -454,7 +451,7 @@ describe("setActivePluginRegistry", () => {
       const record = createPluginRecord({ id: "cleanup-sqlite", status: "loaded" });
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, { config: {} });
-      const { db, nativeState } = createCleanupDatabase();
+      const { db, nativeState, close } = createCleanupDatabase();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const finished = createDeferredCore();
@@ -527,10 +524,7 @@ describe("setActivePluginRegistry", () => {
         await Promise.allSettled(cleanup.mock.results.map((result) => result.value));
         await closing;
         vi.useRealTimers();
-        if (db.isOpen) {
-          db.close();
-        }
-        nativeState.database = undefined;
+        close();
       }
       expect(cleanup).toHaveBeenCalledOnce();
       expect(failures).toEqual([]);

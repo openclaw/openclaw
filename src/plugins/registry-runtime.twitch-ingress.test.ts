@@ -87,6 +87,12 @@ const { twitchPlugin, setTwitchRuntime } = await importBundledChannelContractSou
 
 type Policy = { allowFrom?: string[]; allowedRoles?: string[] };
 type EvidenceResult = ReturnType<typeof consumeChannelAdmissionEvidence>;
+const unknownEvidence = {
+  ingressState: "unknown",
+  invoker: { state: "unknown" },
+  decisionCoverage: "unknown",
+  identifierAuthentication: "unknown",
+};
 
 async function withTwitchMonitor(
   accountId: string,
@@ -249,28 +255,13 @@ describe("Twitch registered participant provenance", () => {
   });
 
   it.each([
-    {
-      accountId: "secondary",
-      policy: { allowFrom: ["123456"] },
-      name: "allowlist",
-      coverage: "enforced",
-    },
-    {
-      accountId: "default",
-      policy: { allowedRoles: ["moderator"] },
-      name: "role",
-      coverage: "enforced",
-    },
-    { accountId: "default", policy: {}, name: "open", coverage: "attribution-only" },
-    {
-      accountId: "default",
-      policy: { allowedRoles: ["all"] },
-      name: "wildcard",
-      coverage: "attribution-only",
-    },
-  ] satisfies { accountId: string; policy: Policy; name: string; coverage: string }[])(
-    "preserves $accountId $name sender through actual ingress and reply",
-    async ({ accountId, policy, coverage, name }) => {
+    ["secondary", { allowFrom: ["123456"] }, "allowlist", "enforced"],
+    ["default", { allowedRoles: ["moderator"] }, "role", "enforced"],
+    ["default", {}, "open", "attribution-only"],
+    ["default", { allowedRoles: ["all"] }, "wildcard", "attribution-only"],
+  ] satisfies [string, Policy, string, string][])(
+    "preserves %s %j (%s) sender through actual ingress and reply",
+    async (accountId, policy, name, coverage) => {
       await withTwitchMonitor(accountId, policy, async ({ client, evidence, waitForReply }) => {
         client.receive(nativeMessage());
         await waitForReply();
@@ -300,14 +291,7 @@ describe("Twitch registered participant provenance", () => {
         message.userInfo.userId = undefined;
         client.receive(message);
         await waitForReply();
-        expect(evidence).toEqual([
-          {
-            ingressState: "unknown",
-            invoker: { state: "unknown" },
-            decisionCoverage: "unknown",
-            identifierAuthentication: "unknown",
-          },
-        ]);
+        expect(evidence).toEqual([unknownEvidence]);
       },
     );
   });
@@ -324,14 +308,7 @@ describe("Twitch registered participant provenance", () => {
           throw new Error("Missing admitted Twitch context");
         }
         expect(readChannelContextAdmissionEvidence(context)).toBeUndefined();
-        expect(evidence).toEqual([
-          {
-            ingressState: "unknown",
-            invoker: { state: "unknown" },
-            decisionCoverage: "unknown",
-            identifierAuthentication: "unknown",
-          },
-        ]);
+        expect(evidence).toEqual([unknownEvidence]);
       },
       false,
     );
