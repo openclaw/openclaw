@@ -2,6 +2,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import "../../../packages/mermaid-renderer/src/native.ts";
+import { parsePassiveSvg, theme } from "./markdown-mermaid.test-support.ts";
 
 type NativeReply = {
   id: string;
@@ -13,20 +14,16 @@ type NativeReply = {
   retryable?: boolean;
 };
 
-const theme = {
-  background: "#18181b",
-  foreground: "#fafafa",
-  muted: "#a1a1aa",
-  border: "#52525b",
-  accent: "#f97316",
-  fontFamily: "Arial, sans-serif",
-  darkMode: true,
-};
 let replies: NativeReply[];
 let diagram: HTMLElement;
 
 const render = (id: string, source: string, widthCssPx = 320) =>
   window.renderMermaid({ id, source, widthCssPx, theme });
+async function expectRecovery(source: string, index: number) {
+  await render("recovered", source);
+  expect(replies[index]).toMatchObject({ id: "recovered", success: true, widthCssPx: 320 });
+  expect(diagram.querySelector("img")?.complete).toBe(true);
+}
 
 beforeEach(() => {
   replies = [];
@@ -60,12 +57,10 @@ describe("native Mermaid document", () => {
     ]);
     for (const reply of replies) {
       expect(reply.heightCssPx).toBeGreaterThan(0);
-      const svg = new DOMParser().parseFromString(reply.svg!, "image/svg+xml");
-      expect(svg.querySelector("style,script,a,image,foreignObject,[style],[href]")).toBeNull();
+      parsePassiveSvg(reply.svg!);
     }
     const image = diagram.querySelector("img")!;
-    expect(image.complete).toBe(true);
-    expect(image.width).toBe(384);
+    expect(image).toMatchObject({ complete: true, width: 384 });
     expect(image.naturalWidth).toBeGreaterThan(0);
     const frame = document.querySelector<HTMLIFrameElement>("iframe[sandbox='allow-scripts']")!;
     expect(frame.contentDocument).toBeNull();
@@ -80,9 +75,7 @@ describe("native Mermaid document", () => {
     expect(diagram.querySelector("img")).toBeNull();
     await render("invalid", "flowchart LR\nA -->");
     expect(replies[1]).toMatchObject({ id: "invalid", success: false, retryable: false });
-    await render("recovered", source);
-    expect(replies[2]).toMatchObject({ id: "recovered", success: true, widthCssPx: 320 });
-    expect(diagram.querySelector("img")?.complete).toBe(true);
+    await expectRecovery(source, 2);
   });
 
   it.each(["engine load", "engine render", "image decode"])(
@@ -122,8 +115,8 @@ describe("native Mermaid document", () => {
 
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const schedule = vi.spyOn(window, "setTimeout");
-      let pending: Promise<void> | undefined;
       let settled = false;
+      let pending: Promise<void> | undefined;
       try {
         pending = render("timeout", source).finally(() => {
           settled = true;
@@ -155,9 +148,7 @@ describe("native Mermaid document", () => {
           vi.useRealTimers();
         }
       }
-      await render("recovered", source);
-      expect(replies[1]).toMatchObject({ id: "recovered", success: true });
-      expect(diagram.querySelector("img")?.complete).toBe(true);
+      await expectRecovery(source, 1);
     },
     30_000,
   );
@@ -170,8 +161,7 @@ describe("native Mermaid document", () => {
     await render("decode", source);
     expect(replies[0]).toMatchObject({ id: "decode", success: false, retryable: true });
     expect(diagram.querySelector("img")).toBeNull();
-    await render("recovered", source);
-    expect(replies[1]).toMatchObject({ id: "recovered", success: true });
+    await expectRecovery(source, 1);
   });
 
   it("keeps native error replies valid at a UTF-16 boundary", async () => {

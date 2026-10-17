@@ -1,19 +1,10 @@
-import { renderMermaidSvg, type MermaidTheme } from "@openclaw/mermaid-renderer";
+import { renderMermaidSvg } from "@openclaw/mermaid-renderer";
 import { afterAll, describe, expect, it } from "vitest";
+import { parsePassiveSvg, renderSvg, theme } from "./markdown-mermaid.test-support.ts";
 
-const theme: MermaidTheme = {
-  background: "#18181b",
-  foreground: "#fafafa",
-  muted: "#a1a1aa",
-  border: "#52525b",
-  accent: "#f97316",
-  fontFamily: "Arial, sans-serif",
-  darkMode: true,
-};
-
-function parseSvg(svg: string): Element {
-  return new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
-}
+const swimlane =
+  "swimlane-beta LR\n  subgraph Gateway\n    Admit[Admit]\n  end\n  subgraph Runtime\n    Execute[Execute]\n  end\n  Admit --> Execute";
+const sandbox = "iframe[sandbox='allow-scripts'][srcdoc]";
 
 function parseTranslate(element: Element): { x: number; y: number } {
   const match = /^translate\(([-\d.]+), ([-\d.]+)\)$/u.exec(
@@ -25,33 +16,28 @@ function parseTranslate(element: Element): { x: number; y: number } {
   return { x: Number(match[1]), y: Number(match[2]) };
 }
 
-// The renderer belongs to the page, so these cases share its warm engine.
-// Error cases still dispose it; the file boundary owns final page teardown.
 afterAll(() => {
   window.dispatchEvent(new PageTransitionEvent("pagehide"));
-  expect(document.querySelector("iframe[sandbox='allow-scripts'][srcdoc]")).toBeNull();
+  expect(document.querySelector(sandbox)).toBeNull();
 });
 
 describe("Mermaid rendering boundary", () => {
   it("renders multiline flowchart labels and both directions as a passive SVG image", async () => {
     const source = `flowchart LR
-G["Gateway: channels, admission,<br/>approvals and lifecycle"]
-W["Bounded warm executors:<br/>session loops and runtime processing"]
-S["Canonical state owner:<br/>ordered, fenced commits"]
+G["Gateway:<br/>lifecycle"]
+W[Work]
+S[State]
 G <-->|Commands and compact events| W
 W --> S
 G --> S`;
     const svg = await renderMermaidSvg(source, theme);
-    const root = parseSvg(svg);
+    const root = parsePassiveSvg(svg);
     expect(root.localName).toBe("svg");
     expect(root.textContent).toContain("Gateway:");
     expect(root.textContent).toContain("lifecycle");
     expect(root.textContent).toContain("Commands");
     expect(root.querySelector("[marker-start]")).not.toBeNull();
     expect(root.querySelector("[marker-end]")).not.toBeNull();
-    expect(
-      root.querySelector("style,script,a,image,foreignObject,animate,set,[style],[href]"),
-    ).toBeNull();
     document.body.append(root);
     try {
       const gateway = root.querySelector('g[id*="-flowchart-G-"]')!;
@@ -64,9 +50,7 @@ G --> S`;
     } finally {
       root.remove();
     }
-    const frame = document.querySelector<HTMLIFrameElement>(
-      "iframe[sandbox='allow-scripts'][srcdoc]",
-    );
+    const frame = document.querySelector<HTMLIFrameElement>(sandbox);
     expect(frame).not.toBeNull();
     expect(frame?.contentDocument).toBeNull();
     const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
@@ -97,7 +81,7 @@ G --> S`;
       renderMermaidSvg("flowchart LR\nA[Second] --> B[Diagram]", secondTheme),
     ]);
     for (const [index, currentTheme] of [theme, secondTheme].entries()) {
-      const root = parseSvg(results[index]!);
+      const root = parsePassiveSvg(results[index]!);
       const fills = Array.from(root.querySelectorAll("[fill]"), (element) =>
         element.getAttribute("fill"),
       );
@@ -111,11 +95,7 @@ G --> S`;
     ["class", "classDiagram\nVehicle <|-- Car\nVehicle : +move()", "Vehicle"],
     ["state", "stateDiagram-v2\n[*] --> Ready\nReady --> Running\nRunning --> [*]", "Running"],
     ["mindmap", "mindmap\n  root((OpenClaw))\n    Gateway\n    Runtime", "Gateway"],
-    [
-      "swimlane",
-      "swimlane-beta LR\n  subgraph Gateway\n    Admit[Admit]\n  end\n  subgraph Runtime\n    Execute[Execute]\n  end\n  Admit --> Execute",
-      "Execute",
-    ],
+    ["swimlane", swimlane, "Execute"],
     [
       "architecture",
       "architecture-beta\nservice gateway(server)[Gateway]\nservice runtime(server)[Runtime]\ngateway:R -- L:runtime",
@@ -123,25 +103,16 @@ G --> S`;
     ],
     ["math", 'flowchart LR\nA["$$x^2$$"] --> B[Result]', "Result"],
   ])("preserves %s diagram content in the passive image", async (_name, source, label) => {
-    const root = parseSvg(await renderMermaidSvg(source, theme));
+    const root = await renderSvg(source);
     expect(root.textContent).toContain(label);
     expect(root.querySelector("path,rect,line,polygon")).not.toBeNull();
-    expect(root.querySelector("style,script,a,image,foreignObject,[style],[href]")).toBeNull();
   });
 
   it("preserves diagram-specific mindmap and swimlane layouts", async () => {
-    const mindmap = parseSvg(
-      await renderMermaidSvg(
-        "mindmap\n  root((OpenClaw))\n    Gateway\n      Admission\n    Runtime\n      Execution",
-        theme,
-      ),
+    const mindmap = await renderSvg(
+      "mindmap\n  root((OpenClaw))\n    Gateway\n      Admission\n    Runtime\n      Execution",
     );
-    const swimlane = parseSvg(
-      await renderMermaidSvg(
-        "swimlane-beta LR\n  subgraph Gateway\n    Admit[Admit]\n  end\n  subgraph Runtime\n    Execute[Execute]\n  end\n  Admit --> Execute",
-        theme,
-      ),
-    );
+    const lanes = await renderSvg(swimlane);
     const mindmapNodes = Array.from(
       mindmap.querySelectorAll<SVGGElement>('[id*="-node_"][transform]'),
     );
@@ -154,10 +125,10 @@ G --> S`;
     expect(childY.some((y) => y < rootY)).toBe(true);
     expect(childY.some((y) => y > rootY)).toBe(true);
 
-    expect(swimlane.querySelector("#Gateway")).not.toBeNull();
-    expect(swimlane.querySelector("#Runtime")).not.toBeNull();
-    const admit = parseTranslate(swimlane.querySelector('[id*="-flowchart-Admit-"]')!);
-    const execute = parseTranslate(swimlane.querySelector('[id*="-flowchart-Execute-"]')!);
+    expect(lanes.querySelector("#Gateway")).not.toBeNull();
+    expect(lanes.querySelector("#Runtime")).not.toBeNull();
+    const admit = parseTranslate(lanes.querySelector('[id*="-flowchart-Admit-"]')!);
+    const execute = parseTranslate(lanes.querySelector('[id*="-flowchart-Execute-"]')!);
     expect(admit.x).toBe(execute.x);
     expect(admit.y).not.toBe(execute.y);
   });
@@ -167,9 +138,7 @@ G --> S`;
     const source = `%%{init: {"maxEdges": 1000}}%%\nflowchart LR\n${Array.from({ length: 201 }, (_, index) => `A${index} --> A${index + 1}`).join("\n")}`;
     await expect(renderMermaidSvg(source, theme)).rejects.toThrow(/edge/iu);
     await expect(renderMermaidSvg("flowchart LR\nA -->", theme)).rejects.toThrow();
-    const recovered = parseSvg(
-      await renderMermaidSvg("flowchart LR\nA[Recovered] --> B[Ready]", theme),
-    );
+    const recovered = await renderSvg("flowchart LR\nA[Recovered] --> B[Ready]");
     expect(recovered.textContent).toContain("Recovered");
   });
 
@@ -206,12 +175,9 @@ click A "javascript:alert(1)"
 click B "https://example.invalid/mermaid-link"`;
     const opacity = getComputedStyle(document.body).opacity;
     const svg = await renderMermaidSvg(source, theme);
-    const root = parseSvg(svg);
+    const root = parsePassiveSvg(svg);
     expect(root.textContent).toContain("Styled");
     expect(root.querySelector('[fill="#ffaa00"]')).not.toBeNull();
-    expect(
-      root.querySelector("style,script,a,image,foreignObject,[style],[href],[onload]"),
-    ).toBeNull();
     expect(svg).not.toContain("example.invalid");
     expect(svg).not.toContain("javascript:");
     expect(getComputedStyle(document.body).opacity).toBe(opacity);
@@ -221,7 +187,7 @@ click B "https://example.invalid/mermaid-link"`;
       "classDiagram\nclass Remote:::remote\nclassDef remote fill:url(https://example.invalid/mermaid-paint.svg#paint)",
       theme,
     );
-    expect(parseSvg(remote).textContent).toContain("Remote");
+    expect(parsePassiveSvg(remote).textContent).toContain("Remote");
     expect(remote).not.toContain("example.invalid");
   });
 });

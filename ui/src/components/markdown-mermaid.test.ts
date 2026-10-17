@@ -20,8 +20,7 @@ const renderSvg = vi.mocked(renderMermaidSvg);
 const copySource = vi.mocked(copyToClipboard);
 const containers = new Set<HTMLElement>();
 let sourceSequence = 0;
-let originalThemeMode: string | null;
-let originalStyle: string | null;
+let rootAttributes: [string, string | null][];
 let createObjectURL: ReturnType<typeof vi.fn<(blob: Blob | MediaSource) => string>>;
 let revokeObjectURL: ReturnType<typeof vi.fn<(url: string) => void>>;
 
@@ -38,19 +37,16 @@ async function mount(...sources: string[]) {
   const elements = [...container.querySelectorAll("openclaw-mermaid")];
   expect(elements).toHaveLength(sources.length);
   await Promise.all(elements.map((element) => element.updateComplete));
-  return { container, elements };
+  return { container, elements, element: elements[0]! };
 }
 
 function action(element: MermaidElement, label: string) {
-  const controls = element.querySelectorAll<HTMLButtonElement>("button");
-  const match = [...(controls ?? [])].find(
+  const match = [...element.querySelectorAll<HTMLButtonElement>("button")].find(
     (candidate) =>
       (candidate.getAttribute("aria-label") ?? candidate.textContent?.trim()) === label,
   );
-  if (!match) {
-    throw new Error(`Missing Mermaid action: ${label}`);
-  }
-  return match;
+  expect(match, `Missing Mermaid action: ${label}`).toBeDefined();
+  return match!;
 }
 
 async function selectAction(element: MermaidElement, label: string) {
@@ -70,23 +66,26 @@ async function waitForImage(element: MermaidElement): Promise<string> {
   return imageSource(element)!;
 }
 
+async function pendingDiagram(label: string, copies = 1) {
+  const pending = createDeferred<string>();
+  renderSvg.mockReturnValueOnce(pending.promise);
+  return { pending, ...(await mount(...Array<string>(copies).fill(source(label)))) };
+}
+
+async function disconnect(element: MermaidElement) {
+  element.remove();
+  await Promise.resolve();
+}
+
 beforeEach(() => {
   renderSvg.mockReset().mockResolvedValue(svg);
   copySource.mockReset().mockResolvedValue(true);
   let urlSequence = 0;
   createObjectURL = vi.fn(() => `blob:mermaid-${++urlSequence}`);
   revokeObjectURL = vi.fn();
-  const NativeURL = URL;
-  vi.stubGlobal(
-    "URL",
-    class extends NativeURL {
-      static override createObjectURL = createObjectURL;
-      static override revokeObjectURL = revokeObjectURL;
-    },
-  );
+  vi.stubGlobal("URL", Object.assign(class extends URL {}, { createObjectURL, revokeObjectURL }));
   const root = document.documentElement;
-  originalThemeMode = root.getAttribute("data-theme-mode");
-  originalStyle = root.getAttribute("style");
+  rootAttributes = ["data-theme-mode", "style"].map((name) => [name, root.getAttribute(name)]);
   root.dataset.themeMode = "light";
   for (const property of ["--card", "--text", "--muted", "--border", "--accent"]) {
     root.style.setProperty(property, "#123456");
@@ -99,10 +98,7 @@ afterEach(async () => {
   }
   containers.clear();
   await Promise.resolve();
-  for (const [attribute, value] of [
-    ["data-theme-mode", originalThemeMode],
-    ["style", originalStyle],
-  ] as const) {
+  for (const [attribute, value] of rootAttributes) {
     if (value === null) {
       document.documentElement.removeAttribute(attribute);
     } else {
@@ -129,13 +125,10 @@ describe("Mermaid Markdown presentation", () => {
     await diagram.updateComplete;
   });
 
-  it.each([false])("preserves source and reports copy success=%s", async (copied) => {
-    copySource.mockResolvedValueOnce(copied);
+  it("preserves source and reports copy failure", async () => {
+    copySource.mockResolvedValueOnce(false);
     const original = source("x < y & z <script>alert(1)</script>");
-    const {
-      container,
-      elements: [element],
-    } = await mount(original);
+    const { container, element } = await mount(original);
     const imageUrl = await waitForImage(element!);
 
     expect(renderSvg).toHaveBeenCalledWith(original, expect.objectContaining({ darkMode: false }));
@@ -146,9 +139,7 @@ describe("Mermaid Markdown presentation", () => {
     expect(mountMermaidBlocks(container)).toBe(false);
     expect(container.querySelector("openclaw-mermaid")).toBe(element);
     action(element!, "Copy source").click();
-    await waitForSolid(() =>
-      expect(action(element!, copied ? "Copied!" : "Copy failed")).toBeDefined(),
-    );
+    await waitForSolid(() => expect(action(element, "Copy failed")).toBeDefined());
     expect(copySource.mock.calls.map(([text]) => text)).toEqual([original]);
 
     await selectAction(element!, "Show diagram");
@@ -167,9 +158,7 @@ describe("Mermaid Markdown presentation", () => {
       renderSvg.mockRejectedValueOnce(new MermaidTransientError("Renderer could not load"));
     }
     const original = source("Invalid diagram");
-    const {
-      elements: [element],
-    } = await mount(original);
+    const { element } = await mount(original);
     if (failure === "image") {
       await waitForImage(element!);
       element!.querySelector("img")?.dispatchEvent(new Event("error"));
@@ -193,16 +182,11 @@ describe("Mermaid Markdown presentation", () => {
     }
   });
 
-  it.each([
-    { change: "source", oldOutcome: "success" },
-    { change: "theme", oldOutcome: "failure" },
-  ])("ignores a stale $oldOutcome after a $change change", async ({ change, oldOutcome }) => {
+  it.each(["source", "theme"])("ignores a stale layout after a %s change", async (change) => {
     const old = createDeferred<string>();
     const current = createDeferred<string>();
     renderSvg.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
-    const {
-      elements: [element],
-    } = await mount(source("Old diagram"));
+    const { element } = await mount(source("Old diagram"));
     expect(renderSvg).toHaveBeenCalledTimes(1);
     if (change === "source") {
       element!.source = source("Current diagram");
@@ -215,7 +199,7 @@ describe("Mermaid Markdown presentation", () => {
     }
     current.resolve(svg);
     const imageUrl = await waitForImage(element!);
-    if (oldOutcome === "success") {
+    if (change === "source") {
       old.resolve(svg);
     } else {
       old.reject(new Error("Stale failure"));
@@ -232,18 +216,12 @@ describe("Mermaid Markdown presentation", () => {
   it.each([true, false])(
     "releases URLs across reconnect with disconnect before render=%s",
     async (disconnectBeforeRender) => {
-      const pending = createDeferred<string>();
-      renderSvg.mockReturnValueOnce(pending.promise);
-      const {
-        container,
-        elements: [element],
-      } = await mount(source("Reconnected diagram"));
+      const { pending, container, element } = await pendingDiagram("Reconnected diagram");
       if (!disconnectBeforeRender) {
         pending.resolve(svg);
         await waitForImage(element!);
       }
-      element!.remove();
-      await Promise.resolve();
+      await disconnect(element);
       if (disconnectBeforeRender) {
         pending.resolve(svg);
         await pending.promise;
@@ -257,25 +235,20 @@ describe("Mermaid Markdown presentation", () => {
       await waitForSolid(() => expect(imageSource(element!)).toBe(reconnectedUrl));
       expect(renderSvg).toHaveBeenCalledTimes(1);
       expect(createObjectURL).toHaveBeenCalledTimes(disconnectBeforeRender ? 1 : 2);
-      element!.remove();
-      await Promise.resolve();
+      await disconnect(element);
       expect(revokeObjectURL).toHaveBeenCalledWith(reconnectedUrl);
       expect(revokeObjectURL).toHaveBeenCalledTimes(createObjectURL.mock.calls.length);
     },
   );
 
   it("shares concurrent layout work while each displayed diagram owns its URL", async () => {
-    const pending = createDeferred<string>();
-    renderSvg.mockReturnValueOnce(pending.promise);
-    const original = source("Shared layout");
-    const { elements } = await mount(original, original);
+    const { pending, elements } = await pendingDiagram("Shared layout", 2);
     expect(renderSvg).toHaveBeenCalledTimes(1);
     pending.resolve(svg);
     const [firstUrl, secondUrl] = await Promise.all(elements.map(waitForImage));
     expect(firstUrl).not.toBe(secondUrl);
 
-    elements[0]!.remove();
-    await Promise.resolve();
+    await disconnect(elements[0]!);
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(firstUrl);
     expect(imageSource(elements[1]!)).toBe(secondUrl);
     expect(revokeObjectURL).not.toHaveBeenCalledWith(secondUrl);
