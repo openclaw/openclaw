@@ -110,12 +110,14 @@ export class CustodianSessionStore {
       this.context = context;
       this.inputDrafts.connect(context, () => this.emit());
       const recover = this.transcript.watchAvailability(() => void this.refreshTranscriptIfIdle());
+      // Every Gateway transition retires conversation requests and reconciles reconnect recovery synchronously.
       this.gatewayCleanup = context.gateway.subscribe(() => {
         // Reconnect hydration supersedes the queued availability recovery.
         recover();
         this.synchronizeClient();
         this.emit();
       });
+      // Agent receipts reconcile configured inference and conversation admission before another turn can start.
       this.agentCleanup = context.agents.subscribe(() => {
         this.synchronizeClient();
         this.emit();

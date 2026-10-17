@@ -89,6 +89,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   const configProjection = projectRuntimeConfig(initialContext.runtimeConfig);
   const settings = projectSource(initialContext.theme, {
     read: () => loadSettings().showAdvancedSettings === true,
+    // The projection owns theme observation for the persisted advanced-settings preference.
     subscribe: (theme, notify) => theme?.subscribe(notify) ?? (() => {}),
     equality: "revision",
   });
@@ -537,13 +538,11 @@ function createChannelsPage(getContext: () => ApplicationContext) {
 
   function viewProps(): ChannelsProps {
     operationState.read();
-    gatewayProjection.read();
-    channelsProjection.read();
-    configProjection.read();
+    const { snapshot } = gatewayProjection.read();
+    const channels = channelsProjection.read();
+    const config = configProjection.read().state;
     const context = getContext();
-    const channels = context.channels.state;
-    const config = context.runtimeConfig.state;
-    const auth = context.gateway.snapshot.hello?.auth ?? null;
+    const auth = snapshot.hello?.auth ?? null;
     const canManagePairing = hasOperatorPairingAccess(auth);
     const canAdmin = hasOperatorAdminAccess(auth);
     return {
@@ -611,6 +610,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       configProjection.replaceSource(context.runtimeConfig);
       settings.replaceSource(context.theme);
       const applyGateway = () => handleGatewaySnapshot(context.gateway);
+      // Gateway receipts retire profile operations, pairing prompts, and polling before connection or access changes settle.
       const stopGateway = gatewayProjection.subscribe(applyGateway);
       applyGateway();
       if (channelsSource && channelsSource !== context.channels) {
@@ -624,6 +624,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
         reconcilePairingFilter(context.channels.state.pairingSnapshot);
         pluginPresentation.ensure(context.gateway.snapshot.client);
       };
+      // Channel receipts reconcile pairing selections and start presentation loads as channel identities arrive.
       const stopChannels = channelsProjection.subscribe(applyChannels);
       applyChannels();
       schemaLoadStarted = false;
@@ -632,6 +633,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
           ensureInitialData();
         }
       };
+      // Configuration completion receipts drive the initial channel and schema loading state machine.
       const stopConfig = configProjection.subscribe(applyConfig);
       applyConfig();
       return () => {
