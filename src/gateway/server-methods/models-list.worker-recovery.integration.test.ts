@@ -22,8 +22,13 @@ import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
   catalogReply,
+  catalogAgents,
+  catalogSessionRpc,
+  catalogModelIds,
+  catalogModelDefaults,
   closeCatalogServer,
   createCatalogState,
+  createCatalogAuthProfiles,
   expectAssistantReply,
   listenCatalogServer,
   startCatalogGateway,
@@ -55,18 +60,21 @@ it("model reads recover a failed shared-worker publication and retain the failed
   const providerWork: Promise<void>[] = [];
   let advertised = ["original"];
   const held: ServerResponse[] = [];
+  const releaseResponses = () => {
+    hold = false;
+    held.splice(0).forEach((response) => reply(response));
+  };
   const reply = (response: ServerResponse, rows = advertised) => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify(rows));
   };
   const endpoint = createServer((request, response) => {
     if (request.url === "/prepare") {
-      if (failedPreparations > 0) {
+      const failed = failedPreparations > 0;
+      if (failed) {
         failedPreparations--;
-        response.writeHead(503).end();
-      } else {
-        response.writeHead(200).end();
       }
+      response.writeHead(failed ? 503 : 200).end();
       return;
     }
     if (request.method === "POST" && request.url === "/chat/completions") {
@@ -131,8 +139,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
                 },
               });
               return { provider: { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-                models: rows.map(id => ({ id, name: id, reasoning: false, input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })) } };
+                models: rows.map(id => ({ id, name: id, ...${JSON.stringify(catalogModelDefaults())} })) } };
             } },
           });
         },
@@ -143,30 +150,22 @@ it("model reads recover a failed shared-worker publication and retain the failed
       models: {
         providers: { [provider]: { baseUrl, models: [], request: { allowPrivateNetwork: true } } },
       },
-      agents: {
-        defaults: {
-          skipBootstrap: true,
-          heartbeat: { every: "0m" },
-          model: { primary: `${provider}/original` },
-          modelPolicy: { allow: providers.map((id) => `${id}/*`) },
-        },
-        entries: { main: { workspace: state.workspaceDir } },
-      },
+      agents: catalogAgents(state, {
+        skipBootstrap: true,
+        heartbeat: { every: "0m" },
+        model: { primary: `${provider}/original` },
+        modelPolicy: { allow: providers.map((id) => `${id}/*`) },
+      }),
       tools: { profile: "minimal" },
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },
     };
     await state.writeConfig(cfg);
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: Object.fromEntries(
-        providers.map((id) => [
-          `${id}:default`,
-          { type: "api_key", provider: id, key: `synthetic-${id}` },
-        ]),
-      ),
-    });
+    await state.writeAuthProfiles(
+      createCatalogAuthProfiles(Object.fromEntries(providers.map((id) => [id, `synthetic-${id}`]))),
+    );
     const { client, server } = await startCatalogGateway(state, cfg, token);
+    const rpc = catalogSessionRpc(client);
     let releasePublication: (() => void) | undefined;
     try {
       await server.startupSettled;
@@ -186,12 +185,10 @@ it("model reads recover a failed shared-worker publication and retain the failed
           ready: (result) => !result.pendingProviders?.length,
         });
       const initial = await refresh();
-      expect(
-        initial.models
-          .filter((row) => providers.includes(row.provider))
-          .map((row) => row.id)
-          .toSorted(),
-      ).toEqual(["healthy", "original"]);
+      expect(providers.flatMap((id) => catalogModelIds(initial, id)).toSorted()).toEqual([
+        "healthy",
+        "original",
+      ]);
       const readSnapshot = () =>
         getPreparedModelRuntimeSnapshot({
           agentId: "main",
@@ -229,9 +226,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
         config: original!.config,
       });
       expect(renewing?.pendingProviders).toContain(provider);
-      const retained = await list();
-      expect(retained.models).toEqual(initial.models);
-      // Bind waits to the test signal so a stall still reaches held-response and Gateway cleanup.
+      expect((await list()).models).toEqual(initial.models);
       await withinTest(
         Promise.race([
           renewal,
@@ -241,12 +236,11 @@ it("model reads recover a failed shared-worker publication and retain the failed
         ]),
         signal,
       );
-      const acceptedCatalog = original!.readFullModelCatalog!()!;
-      const catalogAuth = getPreparedModelFullCatalogAuth(acceptedCatalog)!;
-      const acceptedAuth = {
-        ...catalogAuth,
-        authStore: { profiles: catalogAuth.authStore.profiles },
+      const readAuth = (snapshot: NonNullable<ReturnType<typeof readSnapshot>>) => {
+        const auth = getPreparedModelFullCatalogAuth(snapshot.readFullModelCatalog!()!)!;
+        return { ...auth, authStore: { profiles: auth.authStore.profiles } };
       };
+      const acceptedAuth = readAuth(original!);
       const acceptedRuntime = original!.readPublishedModels!();
       expect(acceptedAuth?.authStore.profiles[`${provider}:default`]).toMatchObject({
         type: "api_key",
@@ -259,46 +253,30 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const worker = workers.get(heldThread);
       expect(worker).toBeDefined();
       expect(heldThread).toBeGreaterThan(0);
-      // A real provider preparation failure rejects the automatic publication, after
-      // the old worker has exited. No synthetic owner or publication event is installed.
+      // Fail real preparation after worker exit, without synthesizing publication events.
       failedPreparations = 1;
       await worker!.terminate();
       expect((await withinTest(recoveryFailed.promise, signal)).message).toContain(
         "Fixture runtime preparation failed",
       );
-      // Opening the model picker and preparing a chat share one demand-driven repair.
-      // A stale cached error must not require a Gateway restart or a plugin reload.
+      // Picker and chat must repair stale errors without a Gateway restart or plugin reload.
       const [rechecked, metadata] = await Promise.all([
         list(),
         client.request<ChatMetadataResult>("chat.metadata", { agentId: "main" }),
       ]);
       expect(rechecked.models).toEqual(initial.models);
-      expect(metadata.models).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ provider, id: "original", available: true }),
-        ]),
+      expect(metadata.models).toContainEqual(
+        expect.objectContaining({ provider, id: "original", available: true }),
       );
-      const session = await client.request<{ key: string }>("sessions.create", {
-        agentId: "main",
-        key: "agent:main:recovered-runtime",
-        model: `${provider}/original`,
-      });
-      const turn = await client.request<{ runId: string; status: string }>("chat.send", {
-        sessionKey: session.key,
-        message: "Reply with the recovered runtime marker.",
-        idempotencyKey: "recovered-runtime-turn",
-      });
+      const session = await rpc.create(`${provider}/original`, "agent:main:recovered-runtime");
+      const turn = await rpc.send(
+        session.key,
+        "Reply with the recovered runtime marker.",
+        "recovered-runtime-turn",
+      );
       expect(turn.status).toBe("started");
-      const completed = await client.request<{ status: string; error?: string }>(
-        "agent.wait",
-        { runId: turn.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      );
-      expect(completed).toMatchObject({ status: "ok" });
-      const history = await client.request<{ messages: unknown[] }>("chat.history", {
-        sessionKey: session.key,
-      });
-      expectAssistantReply(history.messages, "RECOVERED_RUNTIME_REPLY");
+      expect(await rpc.wait(turn.runId)).toMatchObject({ status: "ok" });
+      expectAssistantReply((await rpc.history(session.key)).messages, "RECOVERED_RUNTIME_REPLY");
       expect(inferenceRequests).toEqual([
         { authorization: `Bearer synthetic-${provider}`, model: "original" },
       ]);
@@ -311,8 +289,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       }
       const expectRetainedSnapshot = () => {
         const snapshot = readSnapshot()!;
-        const auth = getPreparedModelFullCatalogAuth(snapshot.readFullModelCatalog!()!)!;
-        expect({ ...auth, authStore: { profiles: auth.authStore.profiles } }).toEqual(acceptedAuth);
+        expect(readAuth(snapshot)).toEqual(acceptedAuth);
         expect(snapshot.readPublishedModels!()).toEqual(acceptedRuntime);
         expect(snapshot.config.agents?.defaults?.model).toEqual({
           primary: `${provider}/original`,
@@ -335,21 +312,13 @@ it("model reads recover a failed shared-worker publication and retain the failed
       expect((await refresh(sibling)).refreshFailed).toBe(true);
       expect(requests).toBe(failedRequests);
       advertised = ["original", "recovered"];
-      hold = false;
-      for (const response of held.splice(0)) {
-        reply(response);
-      }
+      releaseResponses();
       const refreshed = await refresh(provider);
-      expect(
-        refreshed.models.filter((row) => row.provider === provider).map((row) => row.id),
-      ).toEqual(["original", "recovered"]);
+      expect(catalogModelIds(refreshed, provider)).toEqual(["original", "recovered"]);
       expect(refreshed.refreshFailed).not.toBe(true);
     } finally {
       releasePublication?.();
-      hold = false;
-      for (const response of held.splice(0)) {
-        reply(response);
-      }
+      releaseResponses();
       await disconnectGatewayClient(client);
       await server.close();
     }

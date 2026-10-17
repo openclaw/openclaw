@@ -5,6 +5,10 @@ import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
   closeCatalogServer,
+  catalogAgents,
+  catalogModelDefaults,
+  catalogModelIds,
+  createCatalogAuthProfiles,
   createCatalogModel,
   createCatalogState,
   listenCatalogServer,
@@ -84,11 +88,7 @@ it("models.list preserves provider starters and retires unavailable account rows
                   const rows = await response.json();
                   return { provider: {
                     baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-                    models: rows.map((row) => ({
-                      ...row, reasoning: false, input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 32768, maxTokens: 4096,
-                    })),
+                    models: rows.map((row) => ({ ...row, ...${JSON.stringify(catalogModelDefaults())} })),
                   }, outcomes: [{ provider, profileId: auth.profileId, status: "ready" }] };
                 },
               },
@@ -111,10 +111,7 @@ it("models.list preserves provider starters and retires unavailable account rows
           },
         },
       },
-      agents: {
-        defaults: { modelPolicy: { allow: providers.map((provider) => `${provider}/*`) } },
-        entries: { main: { workspace: state.workspaceDir } },
-      },
+      agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
       plugins: {
         allow: ["lifecycle-catalog"],
         entries: { "lifecycle-catalog": { enabled: true } },
@@ -123,17 +120,12 @@ it("models.list preserves provider starters and retires unavailable account rows
       gateway: { mode: "local", auth: { mode: "token", token } },
     };
     await state.writeConfig(cfg);
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: Object.fromEntries(
-        providers
-          .filter((provider) => provider !== "lifecycle-c")
-          .map((provider) => [
-            `${provider}:default`,
-            { type: "api_key", provider, key: `${provider}-key` },
-          ]),
-      ),
-    });
+    await state.writeAuthProfiles(
+      createCatalogAuthProfiles({
+        "lifecycle-a": "lifecycle-a-key",
+        "lifecycle-b": "lifecycle-b-key",
+      }),
+    );
     const { client, server } = await startCatalogGateway(state, cfg, token);
     try {
       await server.startupSettled;
@@ -146,10 +138,7 @@ it("models.list preserves provider starters and retires unavailable account rows
         });
       const list = (provider?: string) => read(true, provider);
       const ids = (result: ModelsListResult, provider: string) =>
-        result.models
-          .filter((model) => model.provider === provider)
-          .map((model) => model.id)
-          .toSorted();
+        catalogModelIds(result, provider).toSorted();
       const startup = await waitForCatalogPublication({
         signal,
         read,

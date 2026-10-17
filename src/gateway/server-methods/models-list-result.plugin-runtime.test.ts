@@ -79,11 +79,28 @@ function withState(run: Parameters<typeof withOpenClawTestState>[1]) {
   );
 }
 
-async function withClaudeRegistry(
-  run: (
-    list: (params: Parameters<typeof listModels>[0]) => ReturnType<typeof listModels>,
-  ) => Promise<void>,
-) {
+async function callModelsList(context: GatewayRequestContext, params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await modelsHandlers["models.list"]!({
+    req: { type: "req", id: "models-list", method: "models.list", params },
+    params,
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context,
+  });
+  return respond;
+}
+
+function expectReply(respond: ReturnType<typeof vi.fn>, success: boolean, payload: unknown) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    success,
+    success ? payload : undefined,
+    success ? undefined : payload,
+  );
+}
+
+async function listClaudeModels(params: Parameters<typeof listModels>[0]) {
   const pluginRegistry = createEmptyPluginRegistry();
   pluginRegistry.cliBackends.push({
     pluginId: "anthropic",
@@ -93,68 +110,44 @@ async function withClaudeRegistry(
   const previous = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(createEmptyPluginRegistry());
   try {
-    await run((params) =>
-      listModels({
-        staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
-        preparedAuthModes: { "claude-cli": "oauth" },
-        catalogComplete: true,
-        pluginRegistry,
-        view: "configured",
-        includeDefaultModels: false,
-        ...params,
-      }),
-    );
+    return await listModels({
+      staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
+      preparedAuthModes: { "claude-cli": "oauth" },
+      catalogComplete: true,
+      pluginRegistry,
+      view: "configured",
+      includeDefaultModels: false,
+      ...params,
+    });
   } finally {
     restoreActivePluginRegistrySnapshot(previous);
   }
 }
 
+type DecisionCase = {
+  name: string;
+  plugins: OpenClawConfig["plugins"];
+  expected: boolean;
+  provider?: string;
+  chat?: boolean;
+  expectedChat?: boolean;
+  error?: boolean;
+};
+function decisionCase(name: string, overrides: Partial<Omit<DecisionCase, "name">>): DecisionCase {
+  return { name, plugins: {}, expected: false, ...overrides };
+}
+
 describe("models.list plugin metadata handoff", () => {
-  it.each<{
-    name: string;
-    plugins: OpenClawConfig["plugins"];
-    expected: boolean;
-    provider?: string;
-    chat?: boolean;
-    expectedChat?: boolean;
-    error?: string;
-  }>([
-    { name: "globally disabled", plugins: { enabled: false }, expected: false },
-    {
-      name: "disabled decision provider filter",
+  it.each([
+    decisionCase("globally disabled", { plugins: { enabled: false } }),
+    decisionCase("disabled decision provider", {
       plugins: { entries: { decisions: { enabled: false } } },
       provider: "fixture",
-      expected: false,
-    },
-    {
-      name: "unknown provider filter",
-      plugins: {},
-      provider: "missing",
-      expected: false,
-      error: "Unknown model catalog provider",
-    },
-    {
-      name: "decision provider filter with chat entries",
-      plugins: {},
-      provider: "fixture",
-      chat: true,
-      expected: true,
-    },
-    {
-      name: "chat provider filter with decision entries",
-      plugins: {},
-      provider: "custom",
-      chat: true,
-      expectedChat: true,
-      expected: false,
-    },
-    {
-      name: "mixed catalog without a filter",
-      plugins: {},
-      chat: true,
-      expectedChat: true,
-      expected: true,
-    },
+    }),
+    decisionCase("unknown provider", { provider: "missing", error: true }),
+    decisionCase("decision filter + chat", { provider: "fixture", chat: true, expected: true }),
+    decisionCase("chat filter + decisions", { provider: "custom", chat: true, expectedChat: true }),
+    decisionCase("unfiltered", { chat: true, expectedChat: true, expected: true }),
   ])(
     "keeps decision discovery separate from chat routing: $name",
     async ({ plugins, expected, provider, chat = false, expectedChat = false, error }) => {
@@ -202,19 +195,11 @@ describe("models.list plugin metadata handoff", () => {
       context.getCommittedRuntimeConfig = () => cfg;
       context.logGateway.debug = vi.fn();
       const params = { view: "configured", ...(provider ? { provider } : {}) };
-      const respond = vi.fn();
-      await modelsHandlers["models.list"]!({
-        req: { type: "req", id: "provider-filter", method: "models.list", params },
-        params,
-        respond,
-        client: null,
-        isWebchatConnect: () => false,
-        context,
-      });
+      const respond = await callModelsList(context, params);
       if (error) {
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
+        expectReply(
+          respond,
           false,
-          undefined,
           expect.objectContaining({
             code: "INVALID_REQUEST",
             message: expect.stringContaining('Unknown model catalog provider "missing"'),
@@ -224,7 +209,7 @@ describe("models.list plugin metadata handoff", () => {
         expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
         return;
       }
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.anything(), undefined);
+      expectReply(respond, true, expect.anything());
       const result = respond.mock.calls[0]?.[1] as ModelsListResult;
       expect(result.models.map((entry) => entry.id)).toEqual(expectedChat ? ["chat"] : []);
       expect(result.decisionModels ?? []).toEqual(
@@ -285,14 +270,12 @@ describe("models.list plugin metadata handoff", () => {
     {
       name: "uses the prepared generation registry in the normal models.list handler",
       supersedeDuringDiscovery: false,
-      expectedAvailable: true,
     },
     {
       name: "reports retryable unavailability when harness discovery supersedes the prepared generation",
       supersedeDuringDiscovery: true,
-      expectedAvailable: false,
     },
-  ])("$name", async ({ supersedeDuringDiscovery, expectedAvailable }) => {
+  ])("$name", async ({ supersedeDuringDiscovery }) => {
     await withState(async (state) => {
       const runtimeId = "prepared-native";
       const cfg = {
@@ -300,9 +283,7 @@ describe("models.list plugin metadata handoff", () => {
           defaults: {
             workspace: state.workspaceDir,
             model: "custom/native-model",
-            models: {
-              "custom/native-model": { agentRuntime: { id: runtimeId } },
-            },
+            models: { "custom/native-model": { agentRuntime: { id: runtimeId } } },
             modelPolicy: { allow: ["custom/native-model"] },
           },
         },
@@ -312,10 +293,6 @@ describe("models.list plugin metadata handoff", () => {
         name: "Native Model",
         provider: "custom",
         nativeRuntime: runtimeId,
-      };
-      const snapshot: ModelCatalogSnapshot = {
-        entries: [entry],
-        routeVariants: [entry],
       };
       let generationCurrent = true;
       const loadPreparedCatalog = vi.fn(async () => {
@@ -349,12 +326,16 @@ describe("models.list plugin metadata handoff", () => {
       const previousRegistry = captureActivePluginRegistrySnapshot();
       setActivePluginRegistry(unrelatedActiveRegistry);
       try {
-        const preparedSnapshot = preparedCatalog(cfg, snapshot, {
-          agentDir: state.agentDir("main"),
-          workspaceDir: state.workspaceDir,
-          pluginRegistry: preparedRegistry,
-          isCurrent: () => generationCurrent,
-        });
+        const preparedSnapshot = preparedCatalog(
+          cfg,
+          { entries: [entry], routeVariants: [entry] },
+          {
+            agentDir: state.agentDir("main"),
+            workspaceDir: state.workspaceDir,
+            pluginRegistry: preparedRegistry,
+            isCurrent: () => generationCurrent,
+          },
+        );
         const loadGatewayModelCatalogSnapshot = vi.fn(async () => preparedSnapshot);
         registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
           loadDeferred: async () => {
@@ -363,37 +344,22 @@ describe("models.list plugin metadata handoff", () => {
           },
           readPrepared: async () => preparedSnapshot,
         });
-        const respond = vi.fn();
-        const handler = modelsHandlers["models.list"];
-        if (!handler) {
-          throw new Error("models.list handler missing");
-        }
-
         const params = { agentId: "main", view: "configured", refresh: true };
-        await handler({
-          req: {
-            type: "req",
-            id: "prepared-registry-models-list",
-            method: "models.list",
-            params,
-          },
-          params,
-          respond,
-          client: null,
-          isWebchatConnect: () => false,
-          context: {
+        const respond = await callModelsList(
+          {
             getRuntimeConfig: () => cfg,
             loadGatewayModelCatalogSnapshot,
             logGateway: { debug: vi.fn(), warn: vi.fn() },
           } as never,
-        });
+          params,
+        );
 
         expect(loadPreparedCatalog).toHaveBeenCalledOnce();
         expect(loadActiveCatalog).not.toHaveBeenCalled();
         if (supersedeDuringDiscovery) {
-          expect(respond).toHaveBeenCalledExactlyOnceWith(
+          expectReply(
+            respond,
             false,
-            undefined,
             expect.objectContaining({
               code: "UNAVAILABLE",
               message: expect.stringContaining("Model catalog changed"),
@@ -402,18 +368,18 @@ describe("models.list plugin metadata handoff", () => {
             }),
           );
         } else {
-          expect(respond).toHaveBeenCalledExactlyOnceWith(
+          expectReply(
+            respond,
             true,
             expect.objectContaining({
               models: [
                 expect.objectContaining({
                   provider: "custom",
                   id: "native-model",
-                  available: expectedAvailable,
+                  available: true,
                 }),
               ],
             }),
-            undefined,
           );
         }
       } finally {
@@ -423,19 +389,17 @@ describe("models.list plugin metadata handoff", () => {
   });
 
   it("projects a prepared owner's Claude CLI route with that owner's plugin registry", async () => {
-    await withClaudeRegistry(async (list) => {
-      const result = await list({
-        catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
-        cfg: { agents: { defaults: { model: { primary: CLAUDE_MODEL }, models: claudeModels() } } },
-      });
-      expect(
-        result.models.map((model) => [
-          `${model.provider}/${model.id}`,
-          model.agentRuntime?.id,
-          model.available,
-        ]),
-      ).toEqual([["anthropic/claude-opus-5", "claude-cli", true]]);
+    const result = await listClaudeModels({
+      catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
+      cfg: { agents: { defaults: { model: { primary: CLAUDE_MODEL }, models: claudeModels() } } },
     });
+    expect(
+      result.models.map((model) => [
+        `${model.provider}/${model.id}`,
+        model.agentRuntime?.id,
+        model.available,
+      ]),
+    ).toEqual([["anthropic/claude-opus-5", "claude-cli", true]]);
   });
 
   it.each([
@@ -447,75 +411,68 @@ describe("models.list plugin metadata handoff", () => {
   ] as const)(
     "lists a Claude CLI model once when only the prepared owner's registry has Claude CLI ($view, cliOnly=$cliOnly)",
     async ({ view, cliOnly }) => {
-      await withClaudeRegistry(async (list) => {
-        const result = await list({
-          catalog: [
-            providerCatalogEntry("claude-cli", "claude-opus-5"),
-            providerCatalogEntry("claude-cli", "claude-haiku-4-5"),
-          ],
-          cfg: {
-            agents: {
-              defaults: {
-                model: { primary: CLAUDE_MODEL },
-                ...(cliOnly === "agent" ? { modelPolicy: { allow: ["claude-cli/*"] } } : {}),
-              },
-              entries: { main: { models: claudeModels() } },
-            },
-            ...(cliOnly === "role"
-              ? {
-                  gateway: {
-                    roles: {
-                      default: "cli",
-                      definitions: {
-                        cli: {
-                          agents: ["main"],
-                          scopes: ["operator.read"],
-                          sessions: { others: "none" },
-                          modelPolicy: { allow: ["claude-cli/*"] },
-                        },
-                      },
-                    },
-                  },
-                }
-              : {}),
-          },
-          view,
-        });
-        expect(
-          result.models.map((model) => [`${model.provider}/${model.id}`, model.agentRuntime?.id]),
-        ).toEqual([
-          ["anthropic/claude-opus-5", "claude-cli"],
-          ["claude-cli/claude-haiku-4-5", "claude-cli"],
-          ...(cliOnly ? [["claude-cli/claude-opus-5", "claude-cli"]] : []),
-        ]);
-      });
-    },
-  );
-
-  it("reads a prepared owner's Claude CLI runtime choice with that owner's plugin registry", async () => {
-    await withClaudeRegistry(async (list) => {
-      const result = await list({
-        catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
+      const result = await listClaudeModels({
+        catalog: [
+          providerCatalogEntry("claude-cli", "claude-opus-5"),
+          providerCatalogEntry("claude-cli", "claude-haiku-4-5"),
+        ],
         cfg: {
           agents: {
             defaults: {
               model: { primary: CLAUDE_MODEL },
-              models: {
-                [CLAUDE_MODEL]: {
-                  agentRuntime: { id: "openclaw" },
-                  pickerRuntimes: ["openclaw", "claude-cli"],
+              ...(cliOnly === "agent" ? { modelPolicy: { allow: ["claude-cli/*"] } } : {}),
+            },
+            entries: { main: { models: claudeModels() } },
+          },
+          ...(cliOnly === "role"
+            ? {
+                gateway: {
+                  roles: {
+                    default: "cli",
+                    definitions: {
+                      cli: {
+                        agents: ["main"],
+                        scopes: ["operator.read"],
+                        sessions: { others: "none" },
+                        modelPolicy: { allow: ["claude-cli/*"] },
+                      },
+                    },
+                  },
                 },
+              }
+            : {}),
+        },
+        view,
+      });
+      expect(
+        result.models.map((model) => [`${model.provider}/${model.id}`, model.agentRuntime?.id]),
+      ).toEqual([
+        ["anthropic/claude-opus-5", "claude-cli"],
+        ["claude-cli/claude-haiku-4-5", "claude-cli"],
+        ...(cliOnly ? [["claude-cli/claude-opus-5", "claude-cli"]] : []),
+      ]);
+    },
+  );
+
+  it("reads a prepared owner's Claude CLI runtime choice with that owner's plugin registry", async () => {
+    const result = await listClaudeModels({
+      catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: CLAUDE_MODEL },
+            models: {
+              [CLAUDE_MODEL]: {
+                agentRuntime: { id: "openclaw" },
+                pickerRuntimes: ["openclaw", "claude-cli"],
               },
             },
           },
         },
-      });
-      expect(
-        result.models[0]?.runtimeChoices?.map((choice) => [
-          choice.agentRuntime.id,
-          choice.available,
-        ]),
-      ).toEqual([["claude-cli", true]]);
+      },
     });
+    expect(
+      result.models[0]?.runtimeChoices?.map((choice) => [choice.agentRuntime.id, choice.available]),
+    ).toEqual([["claude-cli", true]]);
   });
 });

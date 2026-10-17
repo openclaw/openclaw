@@ -8,6 +8,10 @@ import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
   closeCatalogServer,
+  catalogAgents,
+  catalogModelDefaults,
+  catalogModelIds,
+  createCatalogAuthProfiles,
   createCatalogState,
   listenCatalogServer,
   startCatalogGateway,
@@ -38,6 +42,12 @@ it.for([
     const reply = (response: ServerResponse) => {
       response.writeHead(fail ? 503 : 200, { "content-type": "application/json" });
       response.end(JSON.stringify(advertised));
+    };
+    const release = () => {
+      hold = false;
+      for (const response of held.splice(0)) {
+        reply(response);
+      }
     };
     const endpoint = createServer((request, response) => {
       if (request.url === `/${sibling}`) {
@@ -73,8 +83,7 @@ it.for([
               providerConfig: { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions" }, models: [],
               fetchGuard: async ({ url, init }) => ({ response: await fetch(url, init), finalUrl: url, release: async () => {} }),
               readRows: body => body,
-              projectRows: rows => rows.map(id => ({ id, name: id, reasoning: false, input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 })),
+              projectRows: rows => rows.map(id => ({ id, name: id, ...${JSON.stringify(catalogModelDefaults())} })),
             });
             const outcomes = [{ provider, profileId: auth.profileId, status: "ready" }];
             if (${getterBacked}) {
@@ -96,47 +105,29 @@ it.for([
       const cfg = {
         // A UI-only write must not also perform the fixture's first model-policy migration.
         meta: { migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true } },
-        agents: {
-          defaults: { modelPolicy: { allow: providers.map((id) => `${id}/*`) } },
-          entries: { main: { workspace: state.workspaceDir } },
-        },
+        agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
         plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
         gateway: { mode: "local", auth: { mode: "token", token } },
       };
       await state.writeConfig(cfg);
-      await state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          [`${provider}:default`]: { type: "api_key", provider, key: "freshness-account-key" },
-          ...(withSibling
-            ? {
-                [`${sibling}:default`]: {
-                  type: "api_key" as const,
-                  provider: sibling,
-                  key: "sibling-account-key",
-                },
-              }
-            : {}),
-        },
-      });
+      await state.writeAuthProfiles(
+        createCatalogAuthProfiles({
+          [provider]: "freshness-account-key",
+          ...(withSibling ? { [sibling]: "sibling-account-key" } : {}),
+        }),
+      );
       const { client, server } = await startCatalogGateway(state, cfg, token);
       let requestedRefresh: Promise<unknown> | undefined;
       try {
         await server.startupSettled;
-        const list = async (refresh = false) => {
-          const result = await client.request<ModelsListResult>("models.list", {
+        const list = (refresh = false) =>
+          client.request<ModelsListResult>("models.list", {
             agentId: "main",
             view: "all",
             refresh,
           });
-          return {
-            ...result,
-            models: result.models.filter((row) => row.provider === provider),
-            siblingModels: result.models
-              .filter((row) => row.provider === sibling)
-              .map((row) => row.id),
-          };
-        };
+        const ids = (result: ModelsListResult) => catalogModelIds(result, provider);
+        const siblingIds = (result: ModelsListResult) => catalogModelIds(result, sibling);
         const initial = await waitForCatalogPublication({
           signal,
           // Startup discovers nonempty inventory; forcing refresh would bypass TTL renewal.
@@ -145,10 +136,9 @@ it.for([
           ready: (result) =>
             (initiallyEmpty
               ? !result.pendingProviders?.includes(provider)
-              : result.models.some((row) => row.id === "original")) &&
-            (!withSibling || result.siblingModels.includes("sibling")),
+              : ids(result).includes("original")) &&
+            (!withSibling || siblingIds(result).includes("sibling")),
         });
-        const ids = (result: typeof initial) => result.models.map((row) => row.id);
         expect(ids(initial)).toEqual(original);
         const initialRequests = requests;
         if (!initiallyEmpty) {
@@ -165,7 +155,9 @@ it.for([
               expect(ack.ok).toBe(true);
               expect(ack).not.toHaveProperty("config");
               const after = await list();
-              expect(after.models).toEqual(initial.models);
+              expect(after.models.filter((row) => row.provider === provider)).toEqual(
+                initial.models.filter((row) => row.provider === provider),
+              );
               expect(requests).toBe(initialRequests);
             }
             expect(projection.mock.calls.length).toBe(0);
@@ -212,7 +204,7 @@ it.for([
         hold = true;
         advertised = [...original, "newly-published"];
         if (initiallyEmpty) {
-          expect((await list()).models).toEqual([]);
+          expect(ids(await list())).toEqual([]);
           expect(requests).toBe(initialRequests);
         }
         // Arm the response hold before making any accepted inventory due.
@@ -221,7 +213,7 @@ it.for([
         // Expiring a provider response cache does not invalidate the published Gateway view.
         const saved = await withinTest(list(), signal);
         expect(ids(saved)).toEqual(original);
-        expect(saved.siblingModels).toEqual(withSibling ? ["sibling"] : []);
+        expect(siblingIds(saved)).toEqual(withSibling ? ["sibling"] : []);
         expect(owner.readFullModelCatalog!()?.pendingProviders).toBeUndefined();
         expect(requests).toBe(initialRequests);
         requestedRefresh = list(true);
@@ -230,12 +222,7 @@ it.for([
         const concurrent = await withinTest(Promise.all([list(), list()]), signal);
         expect(concurrent.map(ids)).toEqual([original, original]);
         expect(requests).toBe(initialRequests + 1);
-        const renewed = await acceptRenewal(() => {
-          hold = false;
-          for (const response of held.splice(0)) {
-            reply(response);
-          }
-        });
+        const renewed = await acceptRenewal(release);
         await requestedRefresh;
         expect(ids(renewed)).toEqual(["newly-published", ...original]);
 
@@ -266,7 +253,7 @@ it.for([
           const failedRequests = requests;
           expect(ids(await list())).toEqual(["newly-published", ...original]);
           expect((await list()).refreshFailed).toBe(true);
-          expect((await list()).siblingModels).toEqual(withSibling ? ["sibling"] : []);
+          expect(siblingIds(await list())).toEqual(withSibling ? ["sibling"] : []);
           expect(requests).toBe(failedRequests);
           fail = false;
         }
@@ -279,10 +266,7 @@ it.for([
         });
         expect(recovered.refreshFailed).not.toBe(true);
       } finally {
-        hold = false;
-        for (const response of held.splice(0)) {
-          reply(response);
-        }
+        release();
         await requestedRefresh?.catch(() => undefined);
         await disconnectGatewayClient(client);
         await server.close();
