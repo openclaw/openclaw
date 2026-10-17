@@ -5,7 +5,7 @@ import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { createMsFormatter, formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { formatIsoDate } from "./helpers.ts";
+import type { prepareUsageDateRange } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
@@ -18,14 +18,6 @@ const HANDLE_WIDTH = 5; // Width of drag handle in SVG units
 const HANDLE_HEIGHT = 12;
 const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
 
-function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
-  const year = Number(date.slice(0, 4));
-  const month = Number(date.slice(5, 7)) - 1;
-  const day = Number(date.slice(8, 10)) + dayOffset;
-  // Build the target date directly; advancing a normalized skipped midnight can retain 01:00.
-  return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
-}
-
 type TimeSeriesProps = {
   detail: UsageProps["detail"];
   callbacks: UsageProps["callbacks"]["details"];
@@ -34,7 +26,7 @@ type TimeSeriesProps = {
 
 export function deriveTimeSeries(
   detail: UsageProps["detail"],
-  range: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
+  range: ReturnType<typeof prepareUsageDateRange>,
   usage: UsageSessionEntry["usage"],
 ) {
   const {
@@ -46,19 +38,9 @@ export function deriveTimeSeries(
     timeSeriesCursorStart: cursorStart,
     timeSeriesCursorEnd: cursorEnd,
   } = detail;
-  const { startDate, endDate, selectedDays, timeZone } = range;
-  let rangePoints = timeSeries?.points ?? [];
-  if (startDate || endDate || selectedDays.length > 0) {
-    const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
-    const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
-    const selectedDaySet = selectedDays.length ? new Set(selectedDays) : undefined;
-    rangePoints = rangePoints.filter(
-      (point) =>
-        point.timestamp >= startTs &&
-        point.timestamp < endTs &&
-        (!selectedDaySet || selectedDaySet.has(formatIsoDate(new Date(point.timestamp), timeZone))),
-    );
-  }
+  const { matches, timeZone } = range;
+  const allPoints = timeSeries?.points ?? [];
+  const rangePoints = matches ? allPoints.filter((point) => matches(point.timestamp)) : allPoints;
   const hasSelection = cursorStart !== null && cursorEnd !== null;
   const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
   const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;

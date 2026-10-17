@@ -5,32 +5,15 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { createMsFormatter } from "../../lib/format.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { parseSessionLog, type ParsedSessionLog } from "./helpers.ts";
+import { parseSessionLog, prepareUsageDateRange, type ParsedSessionLog } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
-import type {
-  SessionLogEntry,
-  SessionLogRole,
-  UsageContextDetail,
-  UsageProps,
-  UsageSessionEntry,
-} from "./types.ts";
+import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
 
 function pct(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
-}
-
-function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
-  // Keep undated entries visible; interval totals count dated entries separately.
-  if (!(log.timestamp > 0)) {
-    return true;
-  }
-  // Log timestamps can be seconds or milliseconds.
-  const timestamp = log.timestamp;
-  const ts = timestamp < 1e12 ? timestamp * 1000 : timestamp;
-  return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 
 export function SessionDetailPanel(props: {
@@ -43,7 +26,26 @@ export function SessionDetailPanel(props: {
 }) {
   const logsSource = createMemo(() => props.detail.sessionLogs);
   const entries = createMemo(() => (logsSource() ?? []).map(parseSessionLog));
-  const series = createMemo(() => deriveTimeSeries(props.detail, props.range, props.session.usage));
+  const range = createMemo(() => prepareUsageDateRange(props.range));
+  const series = createMemo(() => deriveTimeSeries(props.detail, range(), props.session.usage));
+  const intervalEntries = createMemo(() => {
+    const { timeSeriesCursorStart: start, timeSeriesCursorEnd: end } = props.detail;
+    if (start === null || end === null) {
+      return entries();
+    }
+    const low = Math.min(start, end);
+    const high = Math.max(start, end);
+    const matches = range().matches;
+    return entries().filter(({ log }) => {
+      // Keep undated entries visible; interval totals count dated entries separately.
+      if (!(log.timestamp > 0)) {
+        return true;
+      }
+      // Log timestamps can be seconds or milliseconds.
+      const timestamp = log.timestamp < 1e12 ? log.timestamp * 1000 : log.timestamp;
+      return timestamp >= low && timestamp <= high && (!matches || matches(timestamp));
+    });
+  });
   const state = createMemo(() => {
     const session = props.session;
     const detail = props.detail;
@@ -64,9 +66,7 @@ export function SessionDetailPanel(props: {
 
     const filteredLogs = hasRange
       ? detail.sessionLogsStatus.hasLoaded && detail.sessionLogs
-        ? entries().filter(({ log }) =>
-            isLogInRange(log, timeSeriesCursorStart, timeSeriesCursorEnd),
-          )
+        ? intervalEntries()
         : null
       : undefined;
     const includedSessionCount =
@@ -143,7 +143,12 @@ export function SessionDetailPanel(props: {
           <TimeSeriesCompact detail={props.detail} callbacks={props.callbacks} view={series()} />
         </div>
         <div class="session-detail-bottom">
-          <SessionLogs detail={props.detail} callbacks={props.callbacks} entries={entries()} />
+          <SessionLogs
+            detail={props.detail}
+            callbacks={props.callbacks}
+            entries={entries()}
+            intervalEntries={intervalEntries()}
+          />
           {
             <ContextPanel
               context={props.detail.context}
@@ -388,6 +393,7 @@ function SessionLogs(props: {
   detail: UsageProps["detail"];
   callbacks: UsageProps["callbacks"]["details"];
   entries: ParsedSessionLog[];
+  intervalEntries: ParsedSessionLog[];
 }) {
   const expandedState = createMemo(() => props.detail.sessionLogsExpanded);
   const state = createMemo(() => {
@@ -415,9 +421,8 @@ function SessionLogs(props: {
       new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
     ).toSorted((a, b) => a.localeCompare(b));
     const hasCursorFilter = cursorStart != null && cursorEnd != null;
-    const filteredEntries = parsedEntries.filter(
+    const filteredEntries = props.intervalEntries.filter(
       (entry) =>
-        (!hasCursorFilter || isLogInRange(entry.log, cursorStart, cursorEnd)) &&
         (filters.roles.length === 0 || filters.roles.includes(entry.log.role)) &&
         (!filters.hasTools || entry.toolInfo.tools.length > 0) &&
         (filters.tools.length === 0 ||

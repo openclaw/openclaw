@@ -297,12 +297,45 @@ describe("renderSessionDetailPanel filtered usage", () => {
         selectedDays: ["2026-05-13", "2026-05-15"],
         timeZone: "utc",
       },
+      {
+        sessionLogsHasLoaded: true,
+        sessionLogsData: [
+          { timestamp: start, role: "assistant", content: "[Tool: read]\nSelected May 13" },
+          {
+            timestamp: Date.parse("2026-05-14T12:00:00Z"),
+            role: "assistant",
+            content: "[Tool: exec]\nDeselected May 14",
+          },
+          { timestamp: end / 1000, role: "assistant", content: "[Tool: read]\nSelected May 15" },
+          { timestamp: 0, role: "user", content: "Undated entry remains visible" },
+        ],
+      },
     );
 
     expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
     expect(container.querySelector(".timeseries-summary")?.textContent).toContain("$0.30");
     expect(container.querySelector(".session-detail-stats")?.textContent).toContain("300 tokens");
     expect(container.querySelector(".session-detail-stats")?.textContent).toContain("$0.30");
+    const cards = container.querySelectorAll(".session-summary-value");
+    expect(cards[0]?.textContent).toBe("2");
+    expect(cards[1]?.textContent).toBe("2");
+    expect(container.querySelector(".session-logs-header-count")?.textContent).toContain("3 of 4");
+    expect(container.textContent).not.toContain("Deselected May 14");
+    expect(container.textContent).toContain("Selected May 13");
+    expect(container.textContent).toContain("Selected May 15");
+    expect(container.textContent).toContain("Undated entry remains visible");
+    expect(
+      Array.from(container.querySelectorAll<HTMLSelectElement>(".session-log-filters select"))[1]
+        ?.textContent,
+    ).toContain("exec");
+    const reset = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Reset",
+    );
+    reset?.click();
+    flush();
+    expect(container.querySelector(".session-summary-value")?.textContent).toBe("10");
+    expect(container.textContent).toContain("Deselected May 14");
+    expect(container.querySelector(".session-logs-header-count")?.textContent).not.toContain("of");
   });
 
   it("aggregates selected tokens while counting actual loaded message roles", () => {
