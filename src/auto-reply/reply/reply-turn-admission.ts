@@ -39,10 +39,11 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { CommandLane } from "../../process/lanes.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
+  getSessionWorkAdmissionRelease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
@@ -478,6 +479,50 @@ export async function admitReplyTurn(
               target: { agentId: params.agentId, sessionKey: params.sessionKey, storePath },
             });
             if (ownerClaim.kind === "invalidated") {
+              if (
+                ownerClaim.reason === "recovery_pending" &&
+                !params.adoptOperation &&
+                gatewayContext &&
+                recoveryRuntime
+              ) {
+                // Retained recovery is busy work, not a replaced session. Release
+                // our admission so the recovery owner can reclaim an orphan.
+                admission?.release();
+                const { reconcileOrphanedGatewaySessionRecovery } =
+                  await import("../../gateway/session-recovery-service.js");
+                const { resolveSessionWorkerPlacementContext } =
+                  await import("../../gateway/session-worker-placement-context.js");
+                const recovered = await reconcileOrphanedGatewaySessionRecovery({
+                  cfg: gatewayContext.getRuntimeConfig(),
+                  entry: ownerClaim.entry,
+                  target: {
+                    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+                    storePath,
+                    canonicalKey: params.sessionKey,
+                    storeKeys: [params.sessionKey],
+                  },
+                  authorizedPluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+                  commitGuard: () => {
+                    params.upstreamAbortSignal?.throwIfAborted();
+                    params.assertRequestCurrent?.();
+                    workspaceReadiness?.assertCurrent();
+                    assertDatabaseOwnerCurrent();
+                    if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+                      rejectSessionChange();
+                    }
+                  },
+                  workerPlacementContext: resolveSessionWorkerPlacementContext(gatewayContext),
+                });
+                if (!recovered) {
+                  await waitForRecovery(
+                    getSessionWorkAdmissionRelease({
+                      scope: storePath,
+                      identities: [params.sessionKey, sessionId],
+                    }),
+                  );
+                }
+                continue;
+              }
               rejectSessionChange();
             }
             recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;

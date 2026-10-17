@@ -13,6 +13,7 @@ import {
 } from "./main-session-recovery-lifecycle.js";
 import {
   isMainSessionRecoveryPending,
+  isMainSessionRecoveryReconciliationCandidate,
   transitionMainSessionRecovery,
   type MainSessionRecoveryCommand,
   type MainSessionRecoveryOwnerClaim,
@@ -300,6 +301,18 @@ export async function claimMainSessionRecoveryOwner(params: {
       !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey))
   ) {
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
+  }
+  if (
+    claim.entry?.sessionId === params.sessionId &&
+    claim.sessionKey &&
+    isMainSessionRecoveryReconciliationCandidate(claim.entry)
+  ) {
+    return {
+      kind: "invalidated",
+      reason: "recovery_pending",
+      entry: claim.entry,
+      sessionKey: claim.sessionKey,
+    } as const;
   }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;
