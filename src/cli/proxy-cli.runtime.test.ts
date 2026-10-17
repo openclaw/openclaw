@@ -1,3 +1,4 @@
+// Proxy CLI runtime tests cover proxy runtime process handling and lifecycle events.
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,39 +47,9 @@ vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
   };
 });
 
-import type { ProxyValidationResult } from "../infra/net/proxy/proxy-validation.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import * as proxyCliRuntime from "./proxy-cli.runtime.js";
-
-const proxyConfig = { enabled: true, proxyUrl: "http://config-proxy.example:3128" };
-async function validate(
-  config: Partial<ProxyValidationResult["config"]>,
-  {
-    checks = [],
-    ok = true,
-    json = false,
-  }: {
-    checks?: ProxyValidationResult["checks"];
-    ok?: boolean;
-    json?: boolean;
-  } = {},
-) {
-  runProxyValidationMock.mockResolvedValueOnce({
-    ok,
-    config: { ...proxyConfig, source: "config", errors: [], ...config },
-    checks,
-  });
-  await proxyCliRuntime.runProxyValidateCommand({ json });
-}
-function expectValidationText(url: string, suffix = "", ok = true, source = "config") {
-  expect(process.stdout.write).toHaveBeenCalledWith(
-    `Proxy validation ${ok ? "passed" : "failed"}\n\nProxy\n  Source: ${source}\n  URL:    ${url}\n${suffix}`,
-  );
-}
-function readOutput(): unknown {
-  return JSON.parse(String(vi.mocked(process.stdout.write).mock.calls[0]?.[0] ?? ""));
-}
 
 describe("proxy cli runtime", () => {
   const envKeys = [
@@ -104,8 +75,30 @@ describe("proxy cli runtime", () => {
     delete process.env.FORCE_COLOR;
     process.env.NO_COLOR = "1";
     getRuntimeConfigMock.mockReset();
-    getRuntimeConfigMock.mockReturnValue({ proxy: proxyConfig });
+    getRuntimeConfigMock.mockReturnValue({
+      proxy: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+    });
     runProxyValidationMock.mockReset();
+    runProxyValidationMock.mockResolvedValue({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://config-proxy.example:3128",
+        source: "config",
+        errors: [],
+      },
+      checks: [
+        {
+          kind: "allowed",
+          url: "https://example.com/",
+          ok: true,
+          status: 200,
+        },
+      ],
+    });
     process.exitCode = undefined;
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     serverStopSpy.mockClear();
@@ -165,11 +158,24 @@ describe("proxy cli runtime", () => {
   });
 
   it("redacts proxy credentials in text output", async () => {
-    await validate({
-      proxyUrl: "http://user:secret@proxy.example:3128?token=secret#fragment",
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://user:secret@proxy.example:3128?token=secret#fragment",
+        source: "config",
+        errors: [],
+      },
+      checks: [],
     });
+    await proxyCliRuntime.runProxyValidateCommand({});
 
-    expectValidationText("http://redacted:redacted@proxy.example:3128/");
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
+      "Proxy validation passed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://redacted:redacted@proxy.example:3128/\n",
+    );
   });
 
   it("redacts proxy credentials in JSON output", async () => {
@@ -204,58 +210,69 @@ describe("proxy cli runtime", () => {
   });
 
   it("prints actionable output when proxy config is disabled and missing", async () => {
-    await validate(
-      {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
         enabled: false,
-        proxyUrl: undefined,
         source: "disabled",
         errors: [
           "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
         ],
       },
-      { ok: false },
-    );
+      checks: [],
+    });
+    await proxyCliRuntime.runProxyValidateCommand({});
 
-    expectValidationText(
-      "not configured",
-      "\nProblems\n" +
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: disabled\n" +
+        "  URL:    not configured\n\n" +
+        "Problems\n" +
         "  - proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url\n\n" +
         "Next steps\n" +
         "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
-      false,
-      "disabled",
     );
     expect(process.exitCode).toBe(1);
   });
 
   it("prints CA-file guidance when proxy CA files cannot be read", async () => {
-    await validate(
-      {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
         proxyUrl: "https://proxy.example:8443",
+        source: "config",
         errors: ["proxy CA file could not be read (/missing/ca.pem): ENOENT"],
       },
-      { ok: false },
-    );
+      checks: [],
+    });
+    await proxyCliRuntime.runProxyValidateCommand({});
 
-    expectValidationText(
-      "https://proxy.example:8443/",
-      "\nProblems\n" +
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    https://proxy.example:8443/\n\n" +
+        "Problems\n" +
         "  - proxy CA file could not be read (/missing/ca.pem): ENOENT\n\n" +
         "Next steps\n" +
         "  Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.\n",
-      false,
     );
   });
 
   it("redacts malformed proxy URLs in JSON output", async () => {
-    await validate(
-      {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
         proxyUrl: "http://user:secret@",
         source: "override",
         errors: ["proxyUrl must use http://"],
       },
-      { ok: false, json: true },
-    );
+      checks: [],
+    });
+    await proxyCliRuntime.runProxyValidateCommand({ json: true });
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       `${JSON.stringify(
@@ -276,57 +293,72 @@ describe("proxy cli runtime", () => {
   });
 
   it("prints check errors on the same line", async () => {
-    await validate(
-      { proxyUrl: "http://proxy.example:3128" },
-      {
-        checks: [
-          {
-            kind: "denied",
-            url: "http://127.0.0.1:12345/",
-            ok: true,
-            error: "fetch failed",
-          },
-        ],
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: true,
+      config: {
+        enabled: true,
+        proxyUrl: "http://proxy.example:3128",
+        source: "config",
+        errors: [],
       },
-    );
+      checks: [
+        {
+          kind: "denied",
+          url: "http://127.0.0.1:12345/",
+          ok: true,
+          error: "fetch failed",
+        },
+      ],
+    });
+    await proxyCliRuntime.runProxyValidateCommand({});
 
-    expectValidationText(
-      "http://proxy.example:3128/",
-      "\nChecks\n  ✓ denied  http://127.0.0.1:12345/ — fetch failed\n",
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
+      "Proxy validation passed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://proxy.example:3128/\n\n" +
+        "Checks\n" +
+        "  ✓ denied  http://127.0.0.1:12345/ — fetch failed\n",
     );
   });
 
   it("prints actionable check failure output", async () => {
-    await validate(
-      { proxyUrl: "http://proxy.example:3128" },
-      {
-        checks: [
-          {
-            kind: "allowed",
-            url: "http://target.example/allowed",
-            ok: true,
-            status: 200,
-          },
-          {
-            kind: "denied",
-            url: "http://target.example/allowed",
-            ok: false,
-            status: 200,
-            error: "Denied destination was reachable through the proxy",
-          },
-        ],
-        ok: false,
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
+        proxyUrl: "http://proxy.example:3128",
+        source: "config",
+        errors: [],
       },
-    );
+      checks: [
+        {
+          kind: "allowed",
+          url: "http://target.example/allowed",
+          ok: true,
+          status: 200,
+        },
+        {
+          kind: "denied",
+          url: "http://target.example/allowed",
+          ok: false,
+          status: 200,
+          error: "Denied destination was reachable through the proxy",
+        },
+      ],
+    });
+    await proxyCliRuntime.runProxyValidateCommand({});
 
-    expectValidationText(
-      "http://proxy.example:3128/",
-      "\nChecks\n" +
+    expect(process.stdout["write"]).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://proxy.example:3128/\n\n" +
+        "Checks\n" +
         "  ✓ allowed http://target.example/allowed HTTP 200\n" +
         "  ✗ denied  http://target.example/allowed HTTP 200 — Denied destination was reachable through the proxy\n\n" +
         "Next steps\n" +
         "  Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.\n",
-      false,
     );
     expect(process.exitCode).toBe(1);
   });
@@ -368,7 +400,8 @@ describe("proxy cli runtime", () => {
   it.each([
     {
       name: "coverage",
-      run: () => proxyCliRuntime.runDebugProxyCoverageCommand(),
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyCoverageCommand(),
       assertShape: (value: unknown) =>
         expect(value).toEqual({
           summary: expect.objectContaining({ total: expect.any(Number) }),
@@ -377,33 +410,40 @@ describe("proxy cli runtime", () => {
     },
     {
       name: "sessions",
-      run: () => proxyCliRuntime.runDebugProxySessionsCommand({ json: true }),
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxySessionsCommand({ json: true }),
       assertShape: (value: unknown) => expect(value).toEqual({ sessions: [] }),
     },
     {
       name: "query",
-      run: () => proxyCliRuntime.runDebugProxyQueryCommand({ json: true, preset: "double-sends" }),
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyQueryCommand({ json: true, preset: "double-sends" }),
       assertShape: (value: unknown) => expect(value).toEqual({ rows: [] }),
     },
   ])("prints one undecorated JSON object for proxy $name --json", async ({ run, assertShape }) => {
-    await run();
+    await run(proxyCliRuntime);
 
     expect(process.stdout["write"]).toHaveBeenCalledOnce();
-    assertShape(readOutput());
+    const output = String(vi.mocked(process.stdout["write"]).mock.calls[0]?.[0] ?? "");
+    const parsed = JSON.parse(output) as unknown;
+    assertShape(parsed);
   });
 
   it.each([
     {
       name: "sessions",
-      run: () => proxyCliRuntime.runDebugProxySessionsCommand({}),
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxySessionsCommand({}),
     },
     {
       name: "query",
-      run: () => proxyCliRuntime.runDebugProxyQueryCommand({ preset: "double-sends" }),
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyQueryCommand({ preset: "double-sends" }),
     },
   ])("preserves the legacy bare-array proxy $name output without --json", async ({ run }) => {
-    await run();
+    await run(proxyCliRuntime);
 
-    expect(readOutput()).toEqual([]);
+    const output = String(vi.mocked(process.stdout["write"]).mock.calls[0]?.[0] ?? "");
+    expect(JSON.parse(output)).toEqual([]);
   });
 });

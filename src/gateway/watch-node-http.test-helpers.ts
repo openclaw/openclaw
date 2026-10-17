@@ -1,13 +1,16 @@
-import { createServer, request as httpRequest, type ServerResponse } from "node:http";
-import { text } from "node:stream/consumers";
-import { assert, expect, vi } from "vitest";
+import {
+  createServer,
+  request as httpRequest,
+  type ClientRequest,
+  type ServerResponse,
+} from "node:http";
+import { expect, vi } from "vitest";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -20,7 +23,6 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createWatchNodeHttpRuntime } from "./watch-node-http.js";
 
-const JSON_HEADERS = { "content-type": "application/json" };
 export async function startWatchNodeHttpRuntime(
   baseDir: string,
   cleanups: Array<() => Promise<void>>,
@@ -37,7 +39,10 @@ export async function startWatchNodeHttpRuntime(
     resolveCurrentPairingState: async (nodeId) => {
       const state = resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
       return state
-        ? { identity: state.identity.key, generation: state.generation?.key }
+        ? {
+            identity: state.identity.key,
+            ...(state.generation ? { generation: state.generation.key } : {}),
+          }
         : undefined;
     },
   });
@@ -51,11 +56,14 @@ export async function startWatchNodeHttpRuntime(
     broadcast: (event, payload) => broadcasts.push({ event, payload }),
     onNodeConnected: (session) => connectedNodes.push(session.nodeId),
     onNodeDisconnected: (nodeId, reason) => disconnectedNodes.push({ nodeId, reason }),
-    rateLimiter: options?.rateLimiter,
-    now: options?.now,
+    ...(options?.rateLimiter ? { rateLimiter: options.rateLimiter } : {}),
+    ...(options?.now ? { now: options.now } : {}),
   });
-  const connectHandled = createDeferred();
-  const requests: Promise<void>[] = [];
+  let resolveConnectHandled: () => void = () => undefined;
+  const connectHandled = new Promise<void>((resolve) => {
+    resolveConnectHandled = resolve;
+  });
+  const requests: Array<Promise<PromiseSettledResult<void>[]>> = [];
   const server = createServer((req, res) => {
     const isConnect = req.url === "/api/nodes/watch/connect";
     if (isConnect && options?.onConnectResponseStart) {
@@ -66,61 +74,79 @@ export async function startWatchNodeHttpRuntime(
       }) as typeof res.end;
     }
     if (isConnect && options?.abortConnectResponse) {
-      res.end = (() => res.destroy()) as typeof res.end;
+      res.end = (() => {
+        res.destroy();
+        return res;
+      }) as typeof res.end;
     }
-    const handling = runtime
-      .handleRequest(req, res)
-      .then((handled) => {
-        if (!handled && !res.writableEnded) {
-          res.statusCode = 404;
-          res.end();
-        }
-        if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
-          options?.onPollReady?.(res);
-        }
-      })
-      .finally(isConnect ? connectHandled.resolve : undefined);
-    requests.push(handling);
-    void handling.catch(() => {});
+    requests.push(
+      Promise.allSettled([
+        runtime
+          .handleRequest(req, res)
+          .then((handled) => {
+            if (!handled && !res.writableEnded) {
+              res.statusCode = 404;
+              res.end();
+            }
+            if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
+              options?.onPollReady?.(res);
+            }
+          })
+          .finally(() => {
+            if (isConnect) {
+              resolveConnectHandled();
+            }
+          }),
+      ]),
+    );
   });
   cleanups.push(async () => {
     runtime.close();
-    await server[Symbol.asyncDispose]();
-    const failure = (await Promise.allSettled(requests)).find(
-      (result) => result.status === "rejected",
-    );
-    if (failure) {
-      throw failure.reason;
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    const results = (await Promise.all(requests)).flat();
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
     }
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
-  assert(address && typeof address !== "string", "expected TCP server address");
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP server address");
+  }
   return {
     nodeRegistry,
     broadcasts,
     connectedNodes,
     disconnectedNodes,
     runtime,
-    connectHandled: connectHandled.promise,
+    connectHandled,
     baseUrl: `http://127.0.0.1:${address.port}/api/nodes/watch`,
   };
 }
 
-export function makeConnectParams(
-  params: Partial<
-    Pick<ConnectParams, "caps" | "commands" | "permissions" | "minProtocol" | "maxProtocol">
-  > & {
-    identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
-    nonce: string;
-    bootstrapToken?: string;
-    deviceToken?: string;
-    client?: Partial<ConnectParams["client"]>;
-    signedAt?: number;
-  },
-): ConnectParams {
+export function makeConnectParams(params: {
+  identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
+  nonce: string;
+  bootstrapToken?: string;
+  deviceToken?: string;
+  client?: Partial<ConnectParams["client"]>;
+  caps?: string[];
+  commands?: string[];
+  permissions?: ConnectParams["permissions"];
+  minProtocol?: number;
+  maxProtocol?: number;
+  signedAt?: number;
+}): ConnectParams {
+  const publicKey = publicKeyRawBase64UrlFromPem(params.identity.publicKeyPem);
+  const auth = params.deviceToken
+    ? { deviceToken: params.deviceToken }
+    : { bootstrapToken: params.bootstrapToken };
   const signedAt = params.signedAt ?? Date.now();
   const client: ConnectParams["client"] = {
     id: GATEWAY_CLIENT_IDS.WATCHOS_APP,
@@ -154,12 +180,10 @@ export function makeConnectParams(
     permissions: params.permissions ?? { notifications: true },
     role: "node",
     scopes,
-    auth: params.deviceToken
-      ? { deviceToken: params.deviceToken }
-      : { bootstrapToken: params.bootstrapToken },
+    auth,
     device: {
       id: params.identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(params.identity.publicKeyPem),
+      publicKey,
       signature: signDevicePayload(params.identity.privateKeyPem, signaturePayload),
       signedAt,
       nonce: params.nonce,
@@ -171,47 +195,63 @@ export async function readJson(response: Response): Promise<Record<string, unkno
   return (await response.json()) as Record<string, unknown>;
 }
 
-export function postWatchNode(url: string, body?: unknown, token?: unknown, headers = {}) {
-  return fetch(url, {
+export async function connectWatchNode(params: {
+  baseUrl: string;
+  identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
+  client?: Partial<ConnectParams["client"]>;
+  bootstrapToken?: string;
+  deviceToken?: string;
+  commands?: string[];
+  permissions?: ConnectParams["permissions"];
+}): Promise<Response> {
+  const challenge = await readJson(await fetch(`${params.baseUrl}/challenge`));
+  return await fetch(`${params.baseUrl}/connect`, {
     method: "POST",
-    headers: {
-      ...(body === undefined ? {} : JSON_HEADERS),
-      ...(token === undefined ? {} : { authorization: `Bearer ${String(token)}` }),
-      ...headers,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(
+      makeConnectParams({
+        identity: params.identity,
+        client: params.client,
+        nonce: String(challenge.nonce),
+        signedAt: Number(challenge.ts),
+        bootstrapToken: params.bootstrapToken,
+        deviceToken: params.deviceToken,
+        commands: params.commands,
+        permissions: params.permissions,
+      }),
+    ),
   });
 }
 
-export async function connectWatchNode({
-  baseUrl,
-  ...params
-}: { baseUrl: string } & Omit<
-  Parameters<typeof makeConnectParams>[0],
-  "nonce" | "signedAt" | "caps" | "minProtocol" | "maxProtocol"
->): Promise<Response> {
-  const { nonce, ts } = await readJson(await fetch(`${baseUrl}/challenge`));
-  const connect = makeConnectParams({ ...params, nonce: String(nonce), signedAt: Number(ts) });
-  return postWatchNode(`${baseUrl}/connect`, connect);
-}
-
-export function startPartialJsonRequest(params: { url: string; authorization: string }) {
-  const response = createDeferred<{ statusCode: number; body: string }>();
-  const request = httpRequest(
-    params.url,
-    {
-      method: "POST",
-      headers: { ...JSON_HEADERS, authorization: params.authorization },
-    },
-    (result) => {
-      void text(result).then(
-        (body) => response.resolve({ statusCode: result.statusCode ?? 0, body }),
-        response.reject,
-      );
-    },
-  );
-  request.once("error", response.reject);
-  return { request, response: response.promise };
+export function startPartialJsonRequest(params: { url: string; authorization: string }): {
+  request: ClientRequest;
+  response: Promise<{ statusCode: number; body: string }>;
+} {
+  let request!: ClientRequest;
+  const response = new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+    request = httpRequest(
+      params.url,
+      {
+        method: "POST",
+        headers: {
+          authorization: params.authorization,
+          "content-type": "application/json",
+        },
+      },
+      (result) => {
+        const chunks: Buffer[] = [];
+        result.on("data", (chunk: Buffer) => chunks.push(chunk));
+        result.once("end", () => {
+          resolve({
+            statusCode: result.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.once("error", reject);
+  });
+  return { request, response };
 }
 
 export async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Promise<void> {

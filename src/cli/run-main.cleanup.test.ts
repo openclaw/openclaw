@@ -4,14 +4,14 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -25,7 +25,6 @@ const dispatch = vi.hoisted(() => ({
   stopProxy: vi.fn(async (handle: ProxyHandle) => handle.stop()),
 }));
 const temp = useAutoCleanupTempDirTracker(afterEach);
-const closeResources: (() => Promise<void>)[] = [];
 const installUnhandledRejectionHandlerMock = vi.hoisted(() => vi.fn());
 // Only bootstrap/dispatch are replaced; process entry, registry scopes and cleanup are real.
 vi.mock("./route.js", () => ({
@@ -93,6 +92,12 @@ function resourceHarness(id: string) {
   let closed: Promise<unknown[]> | undefined;
   let output: readline.Interface | undefined;
   let disposeCalls = 0;
+  const pending = new Map<string, Deferred>();
+  function line(value: string) {
+    const next = createDeferredCore();
+    pending.set(value, next);
+    return next.promise;
+  }
   const harness: AgentHarness = {
     id,
     label: id,
@@ -101,6 +106,7 @@ function resourceHarness(id: string) {
       throw new Error("catalog-only fixture");
     },
     loadModelCatalog: async () => {
+      const ready = line("ready");
       child = spawn(
         process.execPath,
         [
@@ -118,7 +124,8 @@ function resourceHarness(id: string) {
       );
       closed = once(child, "close");
       output = readline.createInterface({ input: child.stdout });
-      expect((await once(output, "line"))[0]).toBe("ready");
+      output.on("line", (value) => pending.get(value)?.resolve());
+      await ready;
       return [];
     },
     dispose: async () => {
@@ -127,24 +134,25 @@ function resourceHarness(id: string) {
       await closed;
     },
   };
-  async function closeAndJoin() {
-    if (!child) {
-      return;
-    }
-    child.stdin.end();
-    await closed;
-    output?.close();
-    expect(child).toMatchObject({ exitCode: 0, signalCode: null });
-  }
-  closeResources.push(closeAndJoin);
   return {
     harness,
     async ping() {
-      const pong = once(output!, "line");
+      const pong = line("pong");
       child?.stdin.write("ping\n");
-      expect((await pong)[0]).toBe("pong");
+      await pong;
     },
     snapshot: () => ({ disposeCalls, exitCode: child?.exitCode, signalCode: child?.signalCode }),
+    async closeAndJoin() {
+      // Setup can fail before spawn; teardown must preserve that original error.
+      if (!child) {
+        return;
+      }
+      child.stdin.end();
+      await closed;
+      output?.close();
+      expect(child.exitCode).toBe(0);
+      expect(child.signalCode).toBe(null);
+    },
   };
 }
 
@@ -198,22 +206,11 @@ afterEach(() => {
     }
   }
 });
-afterEach(async () => {
-  await Promise.all(closeResources.splice(0).map((close) => close()));
-});
 
 function registerHarness(registry: PluginRegistry, harness: AgentHarness) {
   runtime.withPluginRegistrationContext(registry, "fixture", () =>
     registryApi.registerAgentHarness(harness),
   );
-}
-function registeredResource(id: string, configure?: (harness: AgentHarness) => void) {
-  const registry = emptyRegistry.createEmptyPluginRegistry();
-  const resource = resourceHarness(id);
-  configure?.(resource.harness);
-  registerHarness(registry, resource.harness);
-  dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire(id));
-  return { registry, resource };
 }
 
 async function acquire(id: string) {
@@ -229,398 +226,448 @@ async function runProcessEntry() {
   await dispatch.command;
 }
 
-async function captureFixture(prefix: string) {
-  const stateDir = temp.make(prefix);
-  const source = path.join(stateDir, "fixture");
-  fs.mkdirSync(source);
-  fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
-  const cache = await import("../plugins/plugin-cache.js");
-  const { PluginInstance } = await import("../plugins/plugin-instance.js");
-  const { capturePluginGenerationArtifact } =
-    await import("../plugins/plugin-generation-artifact.js");
-  const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
-  const releases: (() => void | Promise<void>)[] = [];
-  const previous = cache.getProcessPluginCache();
-  closeResources.push(async () => {
-    for (const release of releases) {
-      await release();
-    }
-    await Promise.all(artifacts.map((artifact) => artifact.disposeAsync()));
-    cache.adoptProcessPluginCache(previous);
-  });
-  return {
-    stateDir,
-    source,
-    ...cache,
-    beforeClose: (release: () => void | Promise<void>) => releases.push(release),
-    capture() {
-      const artifact = capturePluginGenerationArtifact(source);
-      artifacts.push(artifact);
-      const instance = new PluginInstance("capture-fixture");
+describe("CLI process harness cleanup", () => {
+  it("reclaims earlier CLI captures and owns periodic cleanup until command exit", async () => {
+    const stateDir = temp.make("cli-capture-orphans-");
+    const source = path.join(stateDir, "fixture");
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+    const { acquireSqliteStagingToken } = await import("../infra/sqlite-staging-token.js");
+    const prior = path.join(stateDir, "tmp", "plugin-captures", "previous-command");
+    fs.mkdirSync(path.join(prior, "captures"), { recursive: true });
+    fs.writeFileSync(path.join(prior, "captures", "source.js"), "retained source");
+    const release = acquireSqliteStagingToken(prior, "create");
+    release();
+    const aged = new Date(Date.now() - 2 * 60 * 60_000);
+    fs.utimesSync(prior, aged, aged);
+    const { getBoundLegacyPluginSdkResourceHost } =
+      await import("../plugins/legacy-sdk-resource-host.js");
+    const { getPluginCache } = await import("../plugins/plugin-cache.js");
+    const { PluginInstance } = await import("../plugins/plugin-instance.js");
+    const { capturePluginGenerationArtifact } =
+      await import("../plugins/plugin-generation-artifact.js");
+    // Fixture imports initialize WAL maintenance before we observe the command scheduler.
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const schedulerModule = await import("../infra/gateway-scheduler.js");
+    const constructor = vi
+      .spyOn(schedulerModule, "GatewayScheduler")
+      .mockImplementation(function () {
+        return scheduler;
+      });
+    let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    dispatch.run = async () => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const host = getBoundLegacyPluginSdkResourceHost();
+      expect(host).toBeDefined();
+      expect(host?.scheduler).toBe(scheduler);
+      artifact = capturePluginGenerationArtifact(source);
+      const instance = new PluginInstance("orphan-recovery-fixture");
       instance.onModuleDispose(artifact.disposeAsync);
-      cache.getPluginCache().instances.add(instance);
-      return artifact;
-    },
-  };
-}
-
-it("reclaims earlier CLI captures and owns periodic cleanup until command exit", async () => {
-  const fixture = await captureFixture("cli-capture-orphans-");
-  const { stateDir, source } = fixture;
-  const { acquireSqliteStagingToken } = await import("../infra/sqlite-staging-token.js");
-  const prior = path.join(stateDir, "tmp", "plugin-captures", "previous-command");
-  fs.mkdirSync(path.join(prior, "captures"), { recursive: true });
-  fs.writeFileSync(path.join(prior, "captures", "source.js"), "retained source");
-  const release = acquireSqliteStagingToken(prior, "create");
-  release();
-  const aged = new Date(Date.now() - 2 * 60 * 60_000);
-  fs.utimesSync(prior, aged, aged);
-  const { getBoundLegacyPluginSdkResourceHost } =
-    await import("../plugins/legacy-sdk-resource-host.js");
-  // Fixture imports initialize WAL maintenance before we observe the command scheduler.
-  const clock = createGatewaySchedulerClock(Date.now());
-  const scheduler = createTestGatewayScheduler(clock.clock);
-  const schedulerModule = await import("../infra/gateway-scheduler.js");
-  const constructor = vi.spyOn(schedulerModule, "GatewayScheduler").mockImplementation(function () {
-    return scheduler;
-  });
-  fixture.beforeClose(async () => {
-    constructor.mockRestore();
-    await scheduler.stop();
-  });
-  let artifact: ReturnType<typeof fixture.capture> | undefined;
-  dispatch.run = async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const host = getBoundLegacyPluginSdkResourceHost();
-    expect(host?.scheduler).toBe(scheduler);
-    artifact = fixture.capture();
-    expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60 * 60_000);
-    expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
-      "retained",
-    );
-  };
-  await runProcessEntry();
-  expect(constructor).toHaveBeenCalledOnce();
-  expect(fs.existsSync(prior)).toBe(false);
-  expect(scheduler).toMatchObject({ signal: { aborted: true }, nextWakeAtMs: null });
-  expect(artifact).toBeDefined();
-  expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
-});
-
-it.each(["failure", "gateway-adopted"])(
-  "retires command captures unless their inventory is adopted (%s)",
-  async (mode) => {
-    const fixture = await captureFixture("cli-capture-custody-");
-    const { stateDir, source, getPluginCache, adoptProcessPluginCache } = fixture;
-    const { retainGatewayPluginMetadata } = await import("../plugins/plugin-metadata-lifecycle.js");
-    let gateway: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
-    fixture.beforeClose(() => gateway?.close());
-    let artifact: ReturnType<typeof fixture.capture> | undefined;
-    const failure = new Error("fixture command failed");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    dispatch.run = async () => {
-      const cache = getPluginCache();
-      artifact = fixture.capture();
-      if (mode === "gateway-adopted") {
-        gateway = retainGatewayPluginMetadata(createTestGatewayScheduler());
-        adoptProcessPluginCache(cache);
-        gateway.publish(undefined);
-      }
-      if (mode === "failure") {
-        throw failure;
-      }
-    };
-    const error = await runProcessEntry().catch((cause: unknown) => cause);
-    expect(error).toBe(mode === "failure" ? failure : undefined);
-    expect(artifact).toBeDefined();
-    expect(fs.existsSync(artifact!.boundaryRoot)).toBe(mode === "gateway-adopted");
-    if (gateway) {
-      expect(fs.readFileSync(artifact!.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
-        "module.exports = 'retained';",
+      getPluginCache().instances.add(instance);
+      expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60 * 60_000);
+      expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
+        "retained",
       );
-      await gateway.close();
-      expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
-    }
-  },
-);
-
-it.each([undefined, "drained", "retained"] as const)(
-  "uses the actual Gateway cleanup receipt (%s), not its command name",
-  async (receipt) => {
-    const { getGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
-    const { runCli } = await import("./run-main.js");
-    dispatch.run = async () => {
-      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-      if (receipt) {
-        getGatewayRunRuntimeHooks().onProcessResourcesSettled?.(receipt);
-      }
     };
-    await runCli(["node", "openclaw", "gateway"]);
-    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-    expect(dispatch.memoryClosed).toHaveBeenCalledTimes(receipt ? 0 : 1);
-  },
-);
+    try {
+      await runProcessEntry();
+      expect(constructor).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prior)).toBe(false);
+      expect(scheduler.signal.aborted).toBe(true);
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(artifact).toBeDefined();
+      expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
+    } finally {
+      constructor.mockRestore();
+      await scheduler.stop();
+      await artifact?.disposeAsync();
+      vi.unstubAllEnvs();
+    }
+  });
 
-it.each(["command", "return", "throw", "SIGTERM", "SIGINT"] as const)(
-  "joins %s work before finalizers and managed proxy cleanup",
-  async (mode) => {
-    const { withCliProcessScope, getCliPluginInvocationResources } =
-      await import("./runtime-cleanup-scope.js");
-    const { getAsyncWorkSignal, trackAsyncWork } = await import("../shared/async-work-scope.js");
+  it.each(["failure", "gateway-adopted"])(
+    "retires command captures unless their inventory is adopted (%s)",
+    async (mode) => {
+      const stateDir = temp.make("cli-capture-custody-");
+      const source = path.join(stateDir, "fixture");
+      fs.mkdirSync(source);
+      fs.writeFileSync(path.join(source, "index.cjs"), "module.exports = 'retained';");
+      const { getPluginCache, adoptProcessPluginCache, getProcessPluginCache } =
+        await import("../plugins/plugin-cache.js");
+      const { PluginInstance } = await import("../plugins/plugin-instance.js");
+      const { capturePluginGenerationArtifact } =
+        await import("../plugins/plugin-generation-artifact.js");
+      const { retainGatewayPluginMetadata } =
+        await import("../plugins/plugin-metadata-lifecycle.js");
+      const previous = getProcessPluginCache();
+      let gateway: ReturnType<typeof retainGatewayPluginMetadata> | undefined;
+      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      const failure = new Error("fixture command failed");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      dispatch.run = async () => {
+        const cache = getPluginCache();
+        artifact = capturePluginGenerationArtifact(source);
+        const instance = new PluginInstance("capture-fixture");
+        instance.onModuleDispose(artifact.disposeAsync);
+        cache.instances.add(instance);
+        if (mode === "gateway-adopted") {
+          gateway = retainGatewayPluginMetadata(createTestGatewayScheduler());
+          adoptProcessPluginCache(cache);
+          gateway.publish(undefined);
+        }
+        if (mode === "failure") {
+          throw failure;
+        }
+      };
+      try {
+        const error = await runProcessEntry().catch((cause: unknown) => cause);
+        expect(error).toBe(mode === "failure" ? failure : undefined);
+        expect(artifact).toBeDefined();
+        expect(fs.existsSync(artifact!.boundaryRoot)).toBe(mode === "gateway-adopted");
+        if (gateway) {
+          expect(fs.readFileSync(artifact!.resolve(path.join(source, "index.cjs")), "utf8")).toBe(
+            "module.exports = 'retained';",
+          );
+          await gateway.close();
+          expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
+        }
+      } finally {
+        await gateway?.close();
+        await artifact?.disposeAsync();
+        adoptProcessPluginCache(previous);
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each([undefined, "drained", "retained"] as const)(
+    "uses the actual Gateway cleanup receipt (%s), not its command name",
+    async (receipt) => {
+      const { getGatewayRunRuntimeHooks } = await import("./gateway-cli/runtime-hooks.js");
+      const { runCli } = await import("./run-main.js");
+      dispatch.run = async () => {
+        expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
+        if (receipt) {
+          getGatewayRunRuntimeHooks().onProcessResourcesSettled?.(receipt);
+        }
+      };
+      await runCli(["node", "openclaw", "gateway"]);
+      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
+      expect(dispatch.memoryClosed).toHaveBeenCalledTimes(receipt ? 0 : 1);
+    },
+  );
+
+  it("joins cancelled command work before signal finalizers", async () => {
+    const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
+    const { getAsyncWorkSignal } = await import("../shared/async-work-scope.js");
     const { exitAfterSignalExitBarriers, registerSignalExitFinalizer, waitForCliSignalExit } =
       await import("./signal-exit-barrier.js");
     const { runCli } = await import("./run-main.js");
     const entered = createDeferredCore();
     const cancelled = createDeferredCore();
-    const settling = createDeferredCore();
     const finish = createDeferredCore();
-    const failure = new Error("command failed with an admitted proxy tail");
-    const direct = mode === "command";
-    const signalCode = direct || mode === "SIGTERM" ? 143 : mode === "SIGINT" ? 130 : undefined;
-    const previousExitCode = process.exitCode;
-    let proxyAlive = true;
-    let tailFinished = false;
-    let tailObservedProxy: boolean | undefined;
-    let tail: Promise<void> | undefined;
-    let restoreSettlementObserver: (() => void) | undefined;
+    let commandFinished = false;
+    dispatch.run = async () => {
+      const signal = getAsyncWorkSignal();
+      expect(signal).toBeDefined();
+      signal!.addEventListener("abort", () => cancelled.resolve(), { once: true });
+      entered.resolve();
+      await finish.promise;
+      commandFinished = true;
+    };
     const finalize = vi.fn(async () => {
-      expect(tailFinished).toBe(true);
+      expect(commandFinished).toBe(true);
       expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
     });
-    const unregister = direct ? registerSignalExitFinalizer(finalize) : () => {};
-    const proxy: ProxyHandle = {
-      proxyUrl: "http://127.0.0.1:19876",
-      stop: vi.fn(async () => {
-        proxyAlive = false;
-      }),
-      kill: vi.fn(),
-    };
-    dispatch.startProxy.mockResolvedValueOnce(proxy);
-    dispatch.run = async () => {
-      const resources = getCliPluginInvocationResources()!;
-      const settleWork = resources.settleWork.bind(resources);
-      const observer = vi.spyOn(resources, "settleWork").mockImplementation(() => {
-        const pending = settleWork();
-        settling.resolve();
-        return pending;
-      });
-      restoreSettlementObserver = () => observer.mockRestore();
-      const signal = getAsyncWorkSignal()!;
-      const work = async () => {
-        signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-        await finish.promise;
-        tailObservedProxy = proxyAlive;
-        tailFinished = true;
-      };
-      tail = direct ? work() : trackAsyncWork(work);
-      entered.resolve();
-      if (direct) {
-        await tail;
-      }
-      if (signalCode !== undefined) {
-        await cancelled.promise;
-      }
-      if (mode === "throw") {
-        throw failure;
-      }
-    };
+    const unregister = registerSignalExitFinalizer(finalize);
+    const previousExitCode = process.exitCode;
     const command = withCliProcessScope(() => runCli(argv));
-    const outcome = command.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
     try {
-      await awaitGateBeforeSettlement(entered.promise, outcome, "command never dispatched");
-      if (signalCode !== undefined) {
-        exitAfterSignalExitBarriers(signalCode);
-      }
-      await awaitGateBeforeSettlement(
-        direct ? cancelled.promise : settling.promise,
-        outcome,
-        "command skipped its work join",
-      );
+      await entered.promise;
+      exitAfterSignalExitBarriers(143);
+      await cancelled.promise;
       expect(finalize).not.toHaveBeenCalled();
-      expect(tailFinished).toBe(false);
-      expect(proxyAlive).toBe(true);
-      expect(dispatch.stopProxy).not.toHaveBeenCalled();
       expect(dispatch.memoryClosed).not.toHaveBeenCalled();
       finish.resolve();
-      expect(await outcome).toBe(mode === "throw" ? failure : undefined);
-      await tail;
-      expect(tailObservedProxy).toBe(true);
-      expect(tailFinished).toBe(true);
-      expect(dispatch.stopProxy).toHaveBeenCalledExactlyOnceWith(proxy);
-      expect(proxy.stop).toHaveBeenCalledOnce();
-      expect(proxy.kill).not.toHaveBeenCalled();
-      expect(proxyAlive).toBe(false);
-      expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
-      expect(dispatch.stopProxy).toHaveBeenCalledBefore(dispatch.memoryClosed);
-      if (signalCode !== undefined) {
-        expect(await waitForCliSignalExit()).toBe(signalCode);
-      }
-      if (direct) {
-        expect(finalize).toHaveBeenCalledOnce();
-      }
+      await command;
+      expect(await waitForCliSignalExit()).toBe(143);
+      expect(finalize).toHaveBeenCalledOnce();
     } finally {
       finish.resolve();
-      await outcome;
-      await tail;
+      await command;
       await waitForCliSignalExit();
-      restoreSettlementObserver?.();
       unregister();
       process.exitCode = previousExitCode;
     }
-  },
-);
+  });
 
-it("awaits a transient disposer before later finalizers and process completion", async () => {
-  const gate = createDeferredCore();
-  const entered = createDeferredCore();
-  const { resource } = registeredResource("awaited", (harness) => {
-    const dispose = harness.dispose!.bind(harness);
-    harness.dispose = async () => {
+  it.each(["return", "throw", "SIGTERM", "SIGINT"] as const)(
+    "joins admitted command tails before stopping their managed proxy (%s)",
+    async (mode) => {
+      const { withCliProcessScope, getCliPluginInvocationResources } =
+        await import("./runtime-cleanup-scope.js");
+      const { getAsyncWorkSignal, trackAsyncWork } = await import("../shared/async-work-scope.js");
+      const { exitAfterSignalExitBarriers, waitForCliSignalExit } =
+        await import("./signal-exit-barrier.js");
+      const { runCli } = await import("./run-main.js");
+      const entered = createDeferredCore();
+      const cancelled = createDeferredCore();
+      const settling = createDeferredCore();
+      const finish = createDeferredCore();
+      const failure = new Error("command failed with an admitted proxy tail");
+      const signalCode = mode === "SIGTERM" ? 143 : mode === "SIGINT" ? 130 : undefined;
+      const previousExitCode = process.exitCode;
+      let proxyAlive = true;
+      let tailFinished = false;
+      let tailObservedProxy: boolean | undefined;
+      let tail: Promise<void> | undefined;
+      let restoreSettlementObserver: (() => void) | undefined;
+      const proxy: ProxyHandle = {
+        proxyUrl: "http://127.0.0.1:19876",
+        stop: vi.fn(async () => {
+          proxyAlive = false;
+        }),
+        kill: vi.fn(),
+      };
+      dispatch.startProxy.mockResolvedValueOnce(proxy);
+      dispatch.run = async () => {
+        const resources = getCliPluginInvocationResources()!;
+        const settleWork = resources.settleWork.bind(resources);
+        const observer = vi.spyOn(resources, "settleWork").mockImplementation(() => {
+          const pending = settleWork();
+          settling.resolve();
+          return pending;
+        });
+        restoreSettlementObserver = () => observer.mockRestore();
+        const signal = getAsyncWorkSignal()!;
+        tail = trackAsyncWork(async () => {
+          signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+          await finish.promise;
+          tailObservedProxy = proxyAlive;
+          tailFinished = true;
+        });
+        entered.resolve();
+        if (signalCode !== undefined) {
+          await cancelled.promise;
+        }
+        if (mode === "throw") {
+          throw failure;
+        }
+      };
+      const command = withCliProcessScope(() => runCli(argv));
+      const outcome = command.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await awaitGateBeforeSettlement(entered.promise, outcome, "command never dispatched");
+        if (signalCode !== undefined) {
+          exitAfterSignalExitBarriers(signalCode);
+        }
+        await awaitGateBeforeSettlement(settling.promise, outcome, "command skipped its work join");
+        expect(tailFinished).toBe(false);
+        expect(proxyAlive).toBe(true);
+        expect(dispatch.stopProxy).not.toHaveBeenCalled();
+        expect(dispatch.memoryClosed).not.toHaveBeenCalled();
+        finish.resolve();
+        expect(await outcome).toBe(mode === "throw" ? failure : undefined);
+        await tail;
+        expect(tailObservedProxy).toBe(true);
+        expect(tailFinished).toBe(true);
+        expect(dispatch.stopProxy).toHaveBeenCalledExactlyOnceWith(proxy);
+        expect(proxy.stop).toHaveBeenCalledOnce();
+        expect(proxy.kill).not.toHaveBeenCalled();
+        expect(proxyAlive).toBe(false);
+        expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
+        expect(dispatch.stopProxy).toHaveBeenCalledBefore(dispatch.memoryClosed);
+        if (signalCode !== undefined) {
+          expect(await waitForCliSignalExit()).toBe(signalCode);
+        }
+      } finally {
+        finish.resolve();
+        await outcome;
+        await tail;
+        await waitForCliSignalExit();
+        restoreSettlementObserver?.();
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
+
+  it("awaits a transient disposer before later finalizers and process completion", async () => {
+    const registry = emptyRegistry.createEmptyPluginRegistry();
+    const gate = createDeferredCore();
+    const entered = createDeferredCore();
+    const resource = resourceHarness("awaited");
+    const dispose = resource.harness.dispose!.bind(resource.harness);
+    resource.harness.dispose = async () => {
       entered.resolve();
       await gate.promise;
       await dispose();
     };
-  });
-  let returned = false;
-  const command = runProcessEntry().then(() => {
-    returned = true;
-  });
-  try {
-    // Early command return must fail the assertion and still reach fixture teardown.
-    await Promise.race([entered.promise, command]);
-    expect(returned).toBe(false);
-    await resource.ping();
-    expect(returned).toBe(false);
-    expect(dispatch.memoryClosed).not.toHaveBeenCalled();
-  } finally {
-    gate.resolve();
-    await command;
-  }
-  expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
-});
-
-it.each(["primary-entry", "direct", "gateway-legacy"])(
-  "respects %s ownership of transient resources",
-  async (mode) => {
-    const owned = mode === "primary-entry";
-    const { registry, resource } = registeredResource(mode);
+    registerHarness(registry, resource.harness);
+    dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire("awaited"));
+    let returned = false;
+    const command = runProcessEntry().then(() => {
+      returned = true;
+    });
     try {
-      if (owned) {
-        await import("../entry.js");
-        await dispatch.command;
-      } else if (mode === "direct") {
-        const { runCli } = await import("./run-main.js");
-        await runCli(argv);
-      } else {
-        const borrowedAction = dispatch.run;
-        dispatch.run = async () => {
-          dispatch.run = borrowedAction;
-          const { runLegacyCliEntry } = await import("../index.js");
-          await runLegacyCliEntry(argv, undefined, {
-            retainConsoleRoutingUntilProcessExit: true,
-          });
-        };
-        process.argv = ["node", "openclaw", "gateway"];
-        await runProcessEntry();
+      // Early command return must fail the assertion and still reach fixture teardown.
+      await Promise.race([entered.promise, command]);
+      expect(returned).toBe(false);
+      await resource.ping();
+      expect(returned).toBe(false);
+      expect(dispatch.memoryClosed).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      try {
+        await command;
+      } finally {
+        await resource.closeAndJoin();
       }
-      expect(resource.snapshot()).toEqual({
-        disposeCalls: owned ? 1 : 0,
-        exitCode: owned ? 0 : null,
-        signalCode: null,
-      });
-      if (!owned) {
+    }
+    expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
+  });
+
+  it("retains transient cleanup from the primary executable bootstrap", async () => {
+    const registry = emptyRegistry.createEmptyPluginRegistry();
+    const resource = resourceHarness("primary-entry");
+    registerHarness(registry, resource.harness);
+    dispatch.run = () =>
+      scopes.withPluginRuntimeRegistryScope(registry, () => acquire("primary-entry"));
+    try {
+      await import("../entry.js");
+      await dispatch.command;
+      expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
+    } finally {
+      await resource.closeAndJoin();
+    }
+  });
+
+  it.each(["direct", "gateway-legacy"])(
+    "leaves %s transient resources with their owner",
+    async (mode) => {
+      const registry = emptyRegistry.createEmptyPluginRegistry();
+      const resource = resourceHarness("borrowed");
+      registerHarness(registry, resource.harness);
+      dispatch.run = () =>
+        scopes.withPluginRuntimeRegistryScope(registry, () => acquire("borrowed"));
+      try {
+        if (mode === "direct") {
+          const { runCli } = await import("./run-main.js");
+          await runCli(argv);
+        } else {
+          const borrowedAction = dispatch.run;
+          dispatch.run = async () => {
+            dispatch.run = borrowedAction;
+            const { runLegacyCliEntry } = await import("../index.js");
+            await runLegacyCliEntry(argv, undefined, {
+              retainConsoleRoutingUntilProcessExit: true,
+            });
+          };
+          process.argv = ["node", "openclaw", "gateway"];
+          await runProcessEntry();
+        }
+        expect(resource.snapshot()).toEqual({ disposeCalls: 0, exitCode: null, signalCode: null });
         await resource.ping();
         const { isPluginRegistryRetired } = await import("../plugins/registry-lifecycle.js");
         expect(isPluginRegistryRetired(registry)).toBe(false);
-      }
-    } finally {
-      if (!owned) {
+      } finally {
         await scopes.withPluginRuntimeRegistryScope(
           registry,
           registryApi.disposeRegisteredAgentHarnesses,
         );
+        await resource.closeAndJoin();
       }
-    }
-    expect(resource.snapshot().disposeCalls).toBe(1);
-  },
-);
+      expect(resource.snapshot().disposeCalls).toBe(1);
+    },
+  );
 
-it("deduplicates exact instances, preserves their first disposal context and continues after errors", async () => {
-  const registry = emptyRegistry.createEmptyPluginRegistry();
-  const second = emptyRegistry.createEmptyPluginRegistry();
-  const resources = [resourceHarness("shared"), resourceHarness("shared")];
-  const order: string[] = [];
-  const contexts: unknown[] = [];
-  for (const [index, target] of [registry, second].entries()) {
-    const resource = resources[index]!;
-    const dispose = resource.harness.dispose!.bind(resource.harness);
-    resource.harness.dispose = async function () {
-      contexts.push([
-        this,
-        runtime.getPluginRegistryForContext(),
-        scopes.getPluginRuntimeGatewayRequestScope()?.pluginId,
-      ]);
-      order.push(`dispose-${index}`);
-      await dispose();
-      contexts.push(runtime.getPluginRegistryForContext());
-      if (index === 0) {
-        throw new Error("synthetic disposer failure");
+  it("deduplicates exact instances, preserves their first disposal context and continues after errors", async () => {
+    const registry = emptyRegistry.createEmptyPluginRegistry();
+    const second = emptyRegistry.createEmptyPluginRegistry();
+    const resources = [resourceHarness("shared"), resourceHarness("shared")];
+    const order: string[] = [];
+    const contexts: unknown[] = [];
+    for (const [index, target] of [registry, second].entries()) {
+      const resource = resources[index]!;
+      const dispose = resource.harness.dispose!.bind(resource.harness);
+      resource.harness.dispose = async function () {
+        contexts.push([
+          this,
+          runtime.getPluginRegistryForContext(),
+          scopes.getPluginRuntimeGatewayRequestScope()?.pluginId,
+        ]);
+        order.push(`dispose-${index}`);
+        await dispose();
+        contexts.push(runtime.getPluginRegistryForContext());
+        if (index === 0) {
+          throw new Error("synthetic disposer failure");
+        }
+      };
+      registerHarness(target, resource.harness);
+    }
+    // The same exact registration can also be visible from the current registry.
+    runtime.getActivePluginRegistry()!.agentHarnesses.push(registry.agentHarnesses[0]!);
+    dispatch.run = async () => {
+      for (const [index, target] of [registry, second].entries()) {
+        await scopes.withPluginRuntimeRegistryScope(target, () =>
+          scopes.withPluginRuntimePluginScope({ pluginId: `request-${index}` }, async () => {
+            await acquire("shared");
+            registryApi.getRegisteredAgentHarness("shared");
+            registryApi.listRegisteredAgentHarnesses();
+          }),
+        );
       }
     };
-    registerHarness(target, resource.harness);
-  }
-  // The same exact registration can also be visible from the current registry.
-  runtime.getActivePluginRegistry()!.agentHarnesses.push(registry.agentHarnesses[0]!);
-  dispatch.run = async () => {
-    for (const [index, target] of [registry, second].entries()) {
-      await scopes.withPluginRuntimeRegistryScope(target, () =>
-        scopes.withPluginRuntimePluginScope({ pluginId: `request-${index}` }, async () => {
-          await acquire("shared");
-          registryApi.getRegisteredAgentHarness("shared");
-          registryApi.listRegisteredAgentHarnesses();
-        }),
-      );
+    try {
+      await runProcessEntry();
+      expect(order).toEqual(["dispose-0", "dispose-1"]);
+      expect(contexts.slice(0, 2)).toEqual([
+        [registry.agentHarnesses[0]!.harness, registry, "request-0"],
+        [second.agentHarnesses[0]!.harness, second, "request-1"],
+      ]);
+      expect(contexts.slice(2)).toEqual(expect.arrayContaining([registry, second]));
+      expect(resources.map((resource) => resource.snapshot().disposeCalls)).toEqual([1, 1]);
+      expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
+    } finally {
+      await Promise.all(resources.map((resource) => resource.closeAndJoin()));
     }
-  };
-  await runProcessEntry();
-  expect(order).toEqual(["dispose-0", "dispose-1"]);
-  expect(contexts.slice(0, 2)).toEqual([
-    [registry.agentHarnesses[0]!.harness, registry, "request-0"],
-    [second.agentHarnesses[0]!.harness, second, "request-1"],
-  ]);
-  expect(contexts.slice(2)).toEqual(expect.arrayContaining([registry, second]));
-  expect(resources.map((resource) => resource.snapshot().disposeCalls)).toEqual([1, 1]);
-  expect(dispatch.memoryClosed).toHaveBeenCalledOnce();
-});
+  });
 
-it("rejects reuse of cleaned registrations without retiring unused cache entries", async () => {
-  const { getPluginLoaderCacheState } = await import("../plugins/registry-lifecycle.js");
-  const cache = getPluginLoaderCacheState();
-  const unused = emptyRegistry.createEmptyPluginRegistry();
-  cache.set("cleanup-unused", unused);
-  const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
-  const { runCli } = await import("./run-main.js");
-  for (let invocation = 0; invocation < 2; invocation++) {
-    const { registry, resource } = registeredResource("sequential");
-    cache.set("cleanup-used", registry);
-    let retainedLookup:
-      | (() => ReturnType<typeof registryApi.getRegisteredAgentHarness>)
-      | undefined;
-    dispatch.run = () =>
-      scopes.withPluginRuntimeRegistryScope(registry, async () => {
-        await acquire("sequential");
-        retainedLookup = AsyncLocalStorage.bind(() =>
-          registryApi.getRegisteredAgentHarness("sequential"),
-        );
-      });
-    await withCliProcessScope(() => runCli(argv));
-    expect(cache.get("cleanup-used")).toBeUndefined();
-    expect(cache.get("cleanup-unused")).toBe(unused);
-    expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
-    expect(retainedLookup).toBeDefined();
-    expect(retainedLookup!()).toBeUndefined();
-  }
+  it("rejects reuse of cleaned registrations without retiring unused cache entries", async () => {
+    const { getPluginLoaderCacheState } = await import("../plugins/registry-lifecycle.js");
+    const cache = getPluginLoaderCacheState();
+    const unused = emptyRegistry.createEmptyPluginRegistry();
+    cache.set("cleanup-unused", unused);
+    const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
+    const { runCli } = await import("./run-main.js");
+    for (let invocation = 0; invocation < 2; invocation++) {
+      const registry = emptyRegistry.createEmptyPluginRegistry();
+      const resource = resourceHarness("sequential");
+      registerHarness(registry, resource.harness);
+      cache.set("cleanup-used", registry);
+      let retainedLookup:
+        | (() => ReturnType<typeof registryApi.getRegisteredAgentHarness>)
+        | undefined;
+      dispatch.run = () =>
+        scopes.withPluginRuntimeRegistryScope(registry, async () => {
+          await acquire("sequential");
+          retainedLookup = AsyncLocalStorage.bind(() =>
+            registryApi.getRegisteredAgentHarness("sequential"),
+          );
+        });
+      try {
+        await withCliProcessScope(() => runCli(argv));
+        expect(cache.get("cleanup-used")).toBeUndefined();
+        expect(cache.get("cleanup-unused")).toBe(unused);
+        expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
+        expect(retainedLookup).toBeDefined();
+        expect(retainedLookup!()).toBeUndefined();
+      } finally {
+        await resource.closeAndJoin();
+      }
+    }
+  });
 });
