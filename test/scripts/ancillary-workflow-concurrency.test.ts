@@ -83,10 +83,7 @@ type Job = {
 type Concurrency = { group: string; "cancel-in-progress": string | boolean };
 type Workflow = {
   name: string;
-  on: {
-    pull_request?: { types: string[] };
-    pull_request_target?: { types: string[] };
-    issues?: { types: string[] };
+  on: Partial<Record<"pull_request" | "pull_request_target" | "issues", { types: string[] }>> & {
     workflow_dispatch?: unknown;
     schedule?: unknown;
     push?: { branches: string[] };
@@ -94,33 +91,19 @@ type Workflow = {
   concurrency?: Concurrency;
   jobs: Record<string, Job>;
 };
-type Github = {
-  workflow: string;
-  repository: string;
-  event_name:
-    | "pull_request"
-    | "pull_request_target"
-    | "issues"
-    | "workflow_dispatch"
-    | "push"
-    | "schedule";
-  run_id: number;
-  sha: string;
-  ref: string;
-  actor?: string;
-  event: {
-    action?: string;
-    pull_request?: {
-      number: number;
-      draft: boolean;
-      head: { sha: string };
-      user?: { login?: string; type?: string };
-      author_association?: string;
-    };
-    issue?: { number: number; author_association?: string };
-    changes?: Record<string, unknown>;
+type GithubEvent = {
+  action?: string;
+  pull_request?: {
+    number: number;
+    draft: boolean;
+    head: { sha: string };
+    user?: { login?: string; type?: string };
+    author_association?: string;
   };
+  issue?: { number: number; author_association?: string };
+  changes?: Record<string, unknown>;
 };
+type Github = ReturnType<typeof refEvent>;
 
 function pr(
   workflow: Workflow,
@@ -145,29 +128,25 @@ function targetEvent(
   draft = false,
 ): Github {
   const github = pr(workflow, runId, action, draft);
-  return {
-    ...github,
-    event_name: "pull_request_target",
-    actor: "contributor",
-    event: {
-      ...github.event,
-      changes,
-      pull_request: {
-        ...github.event.pull_request!,
-        user: { login: "contributor", type: "User" },
-        author_association: "NONE",
-      },
-    },
-  };
+  github.event_name = "pull_request_target";
+  github.actor = "contributor";
+  github.event.changes = changes;
+  Object.assign(github.event.pull_request!, {
+    user: { login: "contributor", type: "User" },
+    author_association: "NONE",
+  });
+  return github;
 }
 
 function refEvent(
   workflow: Workflow,
-  eventName: "workflow_dispatch" | "push" | "schedule",
+  eventName: keyof Workflow["on"],
   runId: number,
   sha = "a",
   ref = "refs/heads/main",
-): Github {
+) {
+  const event: GithubEvent = {};
+  const actor: string | undefined = undefined;
   return {
     workflow: workflow.name,
     repository: "openclaw/openclaw",
@@ -175,7 +154,8 @@ function refEvent(
     run_id: runId,
     sha: sha.repeat(40),
     ref,
-    event: {},
+    event,
+    actor,
   };
 }
 
@@ -207,6 +187,19 @@ const cancellations = (runs: Admission[]) => runs.map(({ cancel }) => cancel);
 const uniqueGroups = (values: string[]) => new Set(values.map((group) => group.toLowerCase())).size;
 const nonScopeJobs = (result: Admission) =>
   Object.entries(result.eligibility.jobs).filter(([id]) => id !== "scope");
+const evaluateRecord = (values: Record<string, string>, context: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(values).map(([key, value]) => [key, evaluate(value, context)]));
+
+function expectPolicies(runs: Admission[], group: string, cancel: boolean) {
+  for (const run of runs) {
+    expect(run).toMatchObject({ group, cancel });
+  }
+}
+
+function expectRejected(run: Admission) {
+  expect(run.group).toBe("");
+  expect(Object.values(run.eligibility.jobs).every((eligible) => !eligible)).toBe(true);
+}
 
 // Evaluate the fixtures' Actions subset; missing properties are empty strings.
 // Fixtures avoid JS/Actions coercion differences; admission folds group case.
@@ -291,11 +284,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
         await runInNewContext(`(async () => {\n${step.with.script}\n})()`, {
           require: createRequire(import.meta.url),
           context: { eventName: github.event_name, payload: github.event },
-          process: {
-            env: Object.fromEntries(
-              Object.entries(step.env ?? {}).map(([key, value]) => [key, evaluate(value, context)]),
-            ),
-          },
+          process: { env: evaluateRecord(step.env ?? {}, context) },
           core: {
             info() {},
             warning() {},
@@ -306,13 +295,9 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
           exec: {
             getExecOutput: async (command: string, args: string[]) => {
               expect(command).toBe("git");
-              expect(args.filter((arg) => arg !== "--no-renames").slice(0, 5)).toEqual([
-                "diff",
-                "--quiet",
-                "HEAD^1",
-                "HEAD",
-                "--",
-              ]);
+              expect(args.filter((arg) => arg !== "--no-renames").slice(0, 5)).toEqual(
+                "diff --quiet HEAD^1 HEAD --".split(" "),
+              );
               diffCalls++;
               return { exitCode: 1 }; // A scoped change; path selection has its own suite.
             },
@@ -321,12 +306,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
       }
     }
     needs.scope = {
-      outputs: Object.fromEntries(
-        Object.entries(scope.outputs ?? {}).map(([key, value]) => [
-          key,
-          evaluate(value, { steps: { scope: { outputs } } }),
-        ]),
-      ),
+      outputs: evaluateRecord(scope.outputs ?? {}, { steps: { scope: { outputs } } }),
       result: jobs.scope ? "success" : "skipped",
     };
   }
@@ -384,8 +364,8 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     const ready = await admission(workflow, pr(workflow, 100, "ready_for_review"));
     const newer = await admission(workflow, pr(workflow, 101, "synchronize", false, "b"));
     const other = await admission(workflow, pr(workflow, 102, "opened", false, "a", 124));
-    expect(groupsOf([ready, newer])).toEqual([prGroup, prGroup]);
-    expect(cancellations([ready, newer, other])).toEqual([true, true, true]);
+    expectPolicies([ready, newer], prGroup, true);
+    expect(other.cancel).toBe(true);
     expect(other.group).not.toBe(prGroup);
     expectUseful(ready, newer, other);
     for (const [id, eligible] of nonScopeJobs(ready)) {
@@ -402,8 +382,7 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       const draft = await admission(workflow, pr(workflow, 103 + index, action, true));
       expectDraftSkipped(draft);
       if (action === "converted_to_draft") {
-        expect(draft.group).toBe(prGroup);
-        expect(draft.cancel).toBe(true);
+        expectPolicies([draft], prGroup, true);
       } else {
         passiveGroups.push(draft.group);
       }
@@ -440,14 +419,10 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
 
   if (push) {
     it("isolates push admission from PR, hourly and manual work", async () => {
-      const enabled = await admission(workflow, refEvent(workflow, "push", 201), {
-        OPENCLAW_CI_ON_PUSH: "true",
-      });
-      const newer = await admission(workflow, refEvent(workflow, "push", 202, "b"), {
-        OPENCLAW_CI_ON_PUSH: "true",
-      });
-      expect([enabled.group, newer.group]).toEqual([push.group, push.group]);
-      expect([enabled.cancel, newer.cancel]).toEqual([push.cancel, push.cancel]);
+      const vars = { OPENCLAW_CI_ON_PUSH: "true" };
+      const enabled = await admission(workflow, refEvent(workflow, "push", 201), vars);
+      const newer = await admission(workflow, refEvent(workflow, "push", 202, "b"), vars);
+      expectPolicies([enabled, newer], push.group, push.cancel);
       const hourly = await admission(workflow, refEvent(workflow, "schedule", 203));
       const laterHourly = await admission(workflow, refEvent(workflow, "schedule", 206, "b"));
       const manualRun = await admission(workflow, refEvent(workflow, "workflow_dispatch", 204));
@@ -488,24 +463,20 @@ describe("Labeler admission", () => {
 
   it.each([
     { action: "opened", changes: undefined },
-    { action: "edited", changes: { title: { from: "Old title" } } },
-    { action: "edited", changes: { base: { ref: { from: "old-base" } } } },
-  ])(
-    "admits useful $action replacement for $changes without admitting ignored edits",
-    async ({ action, changes }) => {
-      const useful = await admission(workflow, event(100, action, changes, true));
-      expect(useful).toMatchObject({
-        group: "Labeler-123",
-        cancel: true,
-        eligibility: { jobs: { label: true } },
-      });
-      for (const ignored of [bodyChange, undefined]) {
-        const rejected = await admission(workflow, event(101, "edited", ignored));
-        expect(rejected.group).toBe("");
-        expect(Object.values(rejected.eligibility.jobs).every((eligible) => !eligible)).toBe(true);
-      }
-    },
-  );
+    { action: "edited", changes: { title: { from: "old" } } },
+    { action: "edited", changes: { base: { ref: { from: "old" } } } },
+  ])("admits $action/$changes but rejects irrelevant edits", async ({ action, changes }) => {
+    const useful = await admission(workflow, event(100, action, changes, true));
+    expect(useful).toMatchObject({
+      group: "Labeler-123",
+      cancel: true,
+      eligibility: { jobs: { label: true } },
+    });
+    for (const ignored of [bodyChange, undefined]) {
+      const rejected = await admission(workflow, event(101, "edited", ignored));
+      expectRejected(rejected);
+    }
+  });
 
   it("retains a non-cancelling manual ref group", async () => {
     const active = await admission(workflow, {
@@ -513,8 +484,7 @@ describe("Labeler admission", () => {
       event: { action: "edited" },
     });
     const repeated = await admission(workflow, refEvent(workflow, "workflow_dispatch", 201));
-    expect([active.group, repeated.group]).toEqual(Array(2).fill("Labeler-refs/heads/main"));
-    expect([active.cancel, repeated.cancel]).toEqual([false, false]);
+    expectPolicies([active, repeated], "Labeler-refs/heads/main", false);
     expectUseful(active, repeated);
   });
 

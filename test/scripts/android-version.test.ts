@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   canonicalAndroidVersionCode,
-  normalizePinnedAndroidVersion,
+  normalizePinnedAndroidVersion as normalizePinned,
   renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
   resolveAndroidVersion,
@@ -11,7 +11,7 @@ import {
   syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
-import { normalizeGatewayVersionToPinnedMobileVersion } from "../../scripts/lib/mobile-version.ts";
+import { normalizeGatewayVersionToPinnedMobileVersion as pinGateway } from "../../scripts/lib/mobile-version.ts";
 import {
   parseVersionQueryArgs,
   parseVersionSyncArgs,
@@ -68,13 +68,8 @@ describe("Android versioning", () => {
     );
   });
 
-  it("rejects impossible pinned release versions", () => {
-    expect(() => normalizePinnedAndroidVersion("2026.13.2")).toThrow(
-      "Expected pinned release version like 2026.6.5",
-    );
-    expect(() => normalizePinnedAndroidVersion("2026.6.9007199254740993")).toThrow(
-      "Expected pinned release version like 2026.6.5",
-    );
+  it.each(["2026.13.2", "2026.6.9007199254740993"])("rejects impossible pinned %s", (version) => {
+    expect(() => normalizePinned(version)).toThrow("Expected pinned release version like 2026.6.5");
   });
 
   it("rejects version codes that do not match the pinned version date", () => {
@@ -85,8 +80,8 @@ describe("Android versioning", () => {
     );
   });
   it("strips prerelease suffixes when pinning from gateway version", () => {
-    expect(normalizeGatewayVersionToPinnedMobileVersion("2026.6.2-beta.3")).toBe("2026.6.2");
-    expect(normalizeGatewayVersionToPinnedMobileVersion("2026.6.2-alpha.1")).toBe("2026.6.2");
+    expect(pinGateway("2026.6.2-beta.3")).toBe("2026.6.2");
+    expect(pinGateway("2026.6.2-alpha.1")).toBe("2026.6.2");
   });
 
   it("rejects pinned versions that cannot derive Play-compatible version codes", () => {
@@ -95,14 +90,12 @@ describe("Android versioning", () => {
     );
   });
 
-  it("rejects impossible gateway release versions", () => {
-    expect(() => normalizeGatewayVersionToPinnedMobileVersion("2026.13.2-beta.1")).toThrow(
-      "Expected YYYY.M.PATCH",
-    );
-    expect(() =>
-      normalizeGatewayVersionToPinnedMobileVersion("2026.6.2-beta.9007199254740993"),
-    ).toThrow("Expected YYYY.M.PATCH");
-  });
+  it.each(["2026.13.2-beta.1", "2026.6.2-beta.9007199254740993"])(
+    "rejects impossible gateway %s",
+    (version) => {
+      expect(() => pinGateway(version)).toThrow("Expected YYYY.M.PATCH");
+    },
+  );
 
   it("reads and normalizes the root package version for Android releases", () => {
     const rootDir = writeAndroidFixture({ packageVersion: "2026.6.5-beta.3" });

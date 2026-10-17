@@ -2,11 +2,18 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AndroidStorePlan } from "../../scripts/lib/android-store-version.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const rootDir = process.cwd();
 const fastfilePath = path.join(rootDir, "apps", "android", "fastlane", "Fastfile");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function run(command: string, args: string[], cwd: string, env = process.env): string {
+  const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout;
+}
 
 function createFixture(): string {
   const fixtureRoot = tempDirs.make("openclaw-android-fastlane-");
@@ -30,18 +37,13 @@ function createFixture(): string {
     ["commit", "-m", "Synthetic Android release source"],
     ["push", "origin", "HEAD:refs/openclaw/mobile-releases/android/2026.8.2-2026080203"],
   ]) {
-    const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
-      cwd: fixtureRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: "Release Fixture",
-        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-        GIT_COMMITTER_NAME: "Release Fixture",
-        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-      },
+    run("git", ["-c", "core.hooksPath=/dev/null", ...args], fixtureRoot, {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Release Fixture",
+      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+      GIT_COMMITTER_NAME: "Release Fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     });
-    expect(result.status, result.stderr).toBe(0);
   }
   return fixtureRoot;
 }
@@ -142,21 +144,14 @@ module Supply
     def update_track(name, track)
       $tracks[name] = track.releases.map { |release| { codes: release.version_codes, status: release.status, notes: release.release_notes.map(&:to_h) } }
     end
-    def listing_for_language(language)
-      Struct.new(:title) do
-        def save; $events << "listing"; end
-      end.new
-    end
+    Listing = Struct.new(:title) { def save; $events << "listing"; end }
+    def listing_for_language(language); Listing.new; end
     def upload_image(**); $events << "image"; end
     def clear_screenshots(**); $events << "screenshots"; end
     def commit_current_edit!
       $events << "commit"
       $committed_config = Supply.config
-      if $supply_commit
-        $supply_commit.bind(self).call
-      else
-        @current_edit = nil
-      end
+      $supply_commit ? $supply_commit.bind(self).call : @current_edit = nil
     end
     def validate_current_edit!; $events << "validate-edit"; end
     def abort_current_edit; $events << "abort"; @current_edit = nil; end
@@ -218,17 +213,14 @@ function runRuby(source: string): LaneResult[] {
     path.join(fixtureRoot, "Fastfile"),
     fixtureRoot,
   ];
-  const result = spawnSync(
-    useBundle ? "bundle" : "ruby",
-    useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
-    {
-      encoding: "utf8",
-      cwd: rootDir,
-      env: { ...process.env, BUNDLE_GEMFILE: path.join(rootDir, "apps/android/Gemfile") },
-    },
+  return JSON.parse(
+    run(
+      useBundle ? "bundle" : "ruby",
+      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      rootDir,
+      { ...process.env, BUNDLE_GEMFILE: path.join(rootDir, "apps/android/Gemfile") },
+    ),
   );
-  expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(result.stdout);
 }
 
 type LaneResult = {
@@ -239,13 +231,7 @@ type LaneResult = {
   wear_code?: string;
   committed_config?: Record<string, boolean | null>;
   committed_query?: Record<string, boolean>;
-  plan?: {
-    schemaVersion: number;
-    version: string;
-    versionCode: number;
-    wearVersionCode: number;
-    releaseNotesBaselines: unknown;
-  };
+  plan?: AndroidStorePlan;
   output_exists?: boolean;
 };
 
@@ -253,6 +239,12 @@ function expectAbsent(result: LaneResult | undefined, ...absent: string[]) {
   for (const event of absent) {
     expect(result?.events).not.toContain(event);
   }
+}
+
+function expectAborted(result: LaneResult | undefined, error: string, ...absent: string[]) {
+  expect(result?.error).toContain(error);
+  expect(result?.events.at(-1)).toBe("abort");
+  expectAbsent(result, ...absent);
 }
 
 const reviewConfig = (changes: boolean | null) => ({
@@ -300,11 +292,8 @@ results = %w(invalid-destination invalid-notes changed-baseline changed-code ini
     ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
     FileUtils.rm_rf(File.join(play_metadata_path, "en-US", "images"))
   end
-    options = case scenario
-              when "internal" then { destination: "internal" }
-              when "invalid-destination" then { destination: "production" }
-              else {}
-              end
+    destination = { "internal" => "internal", "invalid-destination" => "production" }[scenario]
+    options = destination ? { destination: destination } : {}
     $run_lane.call(:release_upload, options)
     { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
   end
@@ -329,13 +318,9 @@ STDOUT.puts JSON.generate(results)
       expect(result).toMatchObject({ error: expect.stringContaining(error), events: [] });
     }
     for (const rejectedPlan of [changedBaseline, changedCode]) {
-      expect(rejectedPlan?.error).toContain("changed after preparation");
-      expectAbsent(rejectedPlan, "upload", "ref:initialize-android");
-      expect(rejectedPlan?.events.at(-1)).toBe("abort");
+      expectAborted(rejectedPlan, "changed after preparation", "upload", "ref:initialize-android");
     }
-    expect(failedInitialize?.error).toContain("Cutover marker initialization failed");
-    expectAbsent(failedInitialize, "upload");
-    expect(failedInitialize?.events.at(-1)).toBe("abort");
+    expectAborted(failedInitialize, "Cutover marker initialization failed", "upload");
     expect(validated?.error).toBeUndefined();
     expect(validated?.events).toContain("validate-edit");
     expectAbsent(validated, "commit", "ref:initialize-android", "ref:record");
@@ -376,15 +361,18 @@ STDOUT.puts JSON.generate(results)
     expect(internal?.events.at(-1)).toBe("ref:record");
     expect(internal?.events.some((event) => event.includes("android-screenshots.sh"))).toBe(false);
     expect(closedTesting?.error).toBeUndefined();
-    expect(closedTesting?.tracks).toMatchObject({
-      beta: [{ codes: [2026080254] }],
-      "wear:beta": [{ codes: [2026080255] }],
+    expect(closedTesting).toMatchObject({
+      tracks: {
+        beta: [{ codes: [2026080254] }],
+        "wear:beta": [{ codes: [2026080255] }],
+      },
+      committed_config: reviewConfig(true),
     });
-    expect(closedTesting?.committed_config).toMatchObject(reviewConfig(true));
     expect(closedTesting?.events.at(-1)).toBe("ref:record");
     if (process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1") {
-      expect(uploaded?.committed_query).toEqual({});
-      expect(internal?.committed_query).toEqual({});
+      for (const result of [uploaded, internal]) {
+        expect(result?.committed_query).toEqual({});
+      }
       expect(closedTesting?.committed_query).toEqual({ changesNotSentForReview: true });
     }
   });
@@ -422,22 +410,16 @@ STDOUT.puts JSON.generate(results)
         sourceRef: "refs/openclaw/mobile-releases/android/2026.8.2-2026080203",
       })),
     });
-    expect(results[0]?.events).toEqual([
-      "begin",
-      "bundles",
-      "apks",
-      "tracks:production,wear:production",
-      "planner:plan",
-      "abort",
-    ]);
+    expect(results[0]?.events).toEqual(
+      "begin bundles apks tracks:production,wear:production planner:plan abort".split(" "),
+    );
     for (const [index, error] of [
       [1, "ambiguous public release state"],
       [2, "invalid versionCode"],
       [3, "Play inventory unavailable"],
     ] as const) {
-      expect(results[index]?.error).toContain(error);
+      expectAborted(results[index], error);
       expect(results[index]?.output_exists).toBe(false);
-      expect(results[index]?.events.at(-1)).toBe("abort");
     }
   });
 });
