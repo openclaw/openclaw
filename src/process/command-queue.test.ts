@@ -616,39 +616,39 @@ describe("command queue", () => {
     });
 
     it("preserves explicitly configured and paused dynamic lanes", async () => {
-      const lanes = getCommandLaneRegistryForTest();
+      const lanes = getQueueState().lanes;
       const configuredLane = "session:agent:main:autoqa-configured";
       const pausedLane = "nested:agent:main:autoqa-paused";
 
-      setCommandLaneConcurrency(configuredLane, 2);
+      queue.setCommandLaneConcurrency(configuredLane, 2);
       await Promise.all([
-        enqueueCommandInLane(configuredLane, async () => "first"),
-        enqueueCommandInLane(configuredLane, async () => "second"),
+        queue.enqueueCommandInLane(configuredLane, async () => "first"),
+        queue.enqueueCommandInLane(configuredLane, async () => "second"),
       ]);
 
       expect(lanes.has(configuredLane)).toBe(true);
-      expect(getCommandLaneSnapshot(configuredLane)).toMatchObject({
+      expect(queue.getCommandLaneSnapshot(configuredLane)).toMatchObject({
         activeCount: 0,
         queuedCount: 0,
         maxConcurrent: 2,
       });
 
-      setCommandLaneConcurrency(pausedLane, 0);
+      queue.setCommandLaneConcurrency(pausedLane, 0);
       let pausedRunStarted = false;
-      const pausedRun = enqueueCommandInLane(pausedLane, async () => {
+      const pausedRun = queue.enqueueCommandInLane(pausedLane, async () => {
         pausedRunStarted = true;
         return "resumed";
       });
 
       expect(pausedRunStarted).toBe(false);
       expect(lanes.has(pausedLane)).toBe(true);
-      expect(getCommandLaneSnapshot(pausedLane)).toMatchObject({
+      expect(queue.getCommandLaneSnapshot(pausedLane)).toMatchObject({
         activeCount: 0,
         queuedCount: 1,
         maxConcurrent: 0,
       });
 
-      setCommandLaneConcurrency(pausedLane, 1);
+      queue.setCommandLaneConcurrency(pausedLane, 1);
       await expect(pausedRun).resolves.toBe("resumed");
       expect(lanes.has(pausedLane)).toBe(false);
       expect(lanes.has(configuredLane)).toBe(true);

@@ -49,7 +49,10 @@ const progressRows = (broadcast: ReturnType<typeof vi.fn>) =>
   );
 const delivery = () => {
   const signal = createDeferredCore();
-  return { promise: signal.promise, broadcast: vi.fn(() => signal.resolve()) };
+  return {
+    promise: signal.promise,
+    broadcast: vi.fn<GatewayRequestContext["broadcast"]>(() => signal.resolve()),
+  };
 };
 
 async function withCatalog(
@@ -171,7 +174,7 @@ async function createCatalog() {
         return Promise.resolve([]);
       }
       const result = release.promise.then(deliver);
-      completion = result;
+      completion = result.then(() => {});
       return result;
     });
     return {

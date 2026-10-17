@@ -65,12 +65,12 @@ function sharingFixture(state: OpenClawTestState, authorizations: DisposableStac
     state,
     cfg,
     [Symbol.dispose]: () => projection?.dispose(),
-    async materialize(resident: boolean) {
+    materialize: async (resident: boolean) => {
       projection = resident ? await createSessionRowProjection({ cfg }) : undefined;
       await projection?.ensureMaterialized();
     },
     refresh: () => projection?.ensureMaterialized(),
-    seed(sessionKey: string, sessionId: string, role: "view" | "write" = "view") {
+    seed: (sessionKey: string, sessionId: string, role: "view" | "write" = "view") => {
       const scope = { agentId: "main", sessionKey, storePath: cfg.session?.store };
       const shared = { sessionId, updatedAt: 1, visibility: "shared" as const };
       replaceSessionEntrySync(scope, shared);
@@ -87,7 +87,7 @@ function sharingFixture(state: OpenClawTestState, authorizations: DisposableStac
         scope,
         shared,
         identityId,
-        async capture(method = "chat.send", expectedTarget?: Request["expectedTarget"]) {
+        capture: async (method = "chat.send", expectedTarget?: Request["expectedTarget"]) => {
           const result = await resolveSessionMutationAuthorizationAsync({
             client,
             context,

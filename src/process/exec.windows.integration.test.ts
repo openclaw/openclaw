@@ -168,7 +168,11 @@ describe.runIf(cliProofEnabled)("ordinary Claude CLI executable launch", () => {
   beforeAll(async () => {
     const instance = await createOpenClawTestInstance({ name: "claude-cli-spawn-prepare" });
     // Reuse CI's built runtime; launcher cases do not own artifact publication.
-    await instance.entrypoint().finally(() => instance.cleanup());
+    try {
+      await instance.entrypoint();
+    } finally {
+      await instance.cleanup();
+    }
   }, 240_000);
 
   const launchKinds = ["native", "node-leading", "npm-shim"] as const;

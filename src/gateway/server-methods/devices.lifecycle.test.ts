@@ -155,7 +155,7 @@ it.each(["remove", "revoke"] as const)("clears node runtime state after %s", asy
   expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
   expect(wake.aborted).toBe(true);
   expect(drainNodePendingWork(nodeId).items.map(({ id }) => id)).toEqual(["baseline-status"]);
-  expect(opts.context.nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
+  expect(vi.mocked(opts.context.nodeRegistry.updateSurface)).toHaveBeenCalledWith(nodeId, {
     caps: [],
     commands: [],
     permissions: undefined,

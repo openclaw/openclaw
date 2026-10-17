@@ -131,17 +131,24 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should keep global tool policy when agent only sets tools.elevated", () => {
-    const cfg = createMainAgentConfig({
+    const cfg: OpenClawConfig = {
       tools: {
         deny: ["write"],
       },
-      agentTools: {
-        elevated: {
-          enabled: true,
-          allowFrom: { whatsapp: ["+15555550123"] },
+      agents: {
+        entries: {
+          main: {
+            workspace: "~/openclaw",
+            tools: {
+              elevated: {
+                enabled: true,
+                allowFrom: { whatsapp: ["+15555550123"] },
+              },
+            },
+          },
         },
       },
-    });
+    };
     const tools = createMainSessionTools(cfg);
 
     const toolNames = tools.map((t) => t.name);

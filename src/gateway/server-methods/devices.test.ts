@@ -25,8 +25,8 @@ const pending = [
   { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
 ];
 const paired = [device(1), device(2)];
-function invoke(opts: ReturnType<typeof createOptions>) {
-  return expectDefined(deviceHandlers[opts.req.method], opts.req.method)(opts);
+async function invoke(opts: ReturnType<typeof createOptions>) {
+  await expectDefined(deviceHandlers[opts.req.method], opts.req.method)(opts);
 }
 function expectPrivate(events: unknown, secrets: string[]) {
   const text = JSON.stringify(events);
@@ -169,7 +169,11 @@ it("retires the previous node generation before returning reapproval success", a
     },
   });
   const lifecycle = captureNodeWakeLifecycle("node-repaired");
-  const opts = createOptions("device.pair.approve", { requestId: "req-node-repair" });
+  const opts = createOptions(
+    "device.pair.approve",
+    { requestId: "req-node-repair" },
+    createDeviceClient(["operator.admin"]),
+  );
   const { invalidateClientsForDevice: invalidate, disconnectClientsForDevice: disconnect } =
     opts.context;
   vi.mocked(opts.respond).mockImplementation(() => {

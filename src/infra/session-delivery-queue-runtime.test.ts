@@ -297,11 +297,11 @@ describe("session delivery queue runtime", () => {
     const sibling = vi.fn();
     r.time.scheduler.schedule({ id: "unrelated-owner", delayMs: 1, run: sibling });
     await r.schedule(id);
-    r.wake();
+    void r.wake();
     await entered.promise;
     expect(deliver).toHaveBeenCalledTimes(1);
     await r.schedule(id);
-    r.wake();
+    void r.wake();
     expect(deliver).toHaveBeenCalledTimes(1);
     const { stopping } = await expectStopPending(stop);
     await expect(r.schedule(id)).resolves.toBe(false);
@@ -382,12 +382,12 @@ describe("session delivery queue runtime", () => {
     const newId = await r.enqueue(agentTurn("new-owner-delivery"));
     const stopOld = r.start({ deliver: oldDeliver });
     await r.schedule(oldId);
-    r.wake();
+    void r.wake();
     await oldEntered.promise;
     expect(oldDeliver).toHaveBeenCalledOnce();
     r.start({ deliver: newDeliver });
     await r.schedule(newId);
-    r.wake();
+    void r.wake();
     await newEntered.promise;
     expect(newDeliver).toHaveBeenCalledOnce();
     const { stopping } = await expectStopPending(stopOld);
@@ -425,9 +425,8 @@ describe("session delivery queue runtime", () => {
           return r.all();
         },
       });
-      const scheduling = r.track(
-        mode === "lookup" ? r.schedule(id) : schedulePendingSessionDeliveries(),
-      );
+      const scheduling =
+        mode === "lookup" ? r.track(r.schedule(id)) : r.track(schedulePendingSessionDeliveries());
       const { stopping } = await expectStopPending(stopOld);
       await expect(r.schedule(id)).resolves.toBe(false);
       const stopNew = r.start({
@@ -437,14 +436,14 @@ describe("session delivery queue runtime", () => {
         },
       });
       const newScheduling = r.track(schedulePendingSessionDeliveries());
-      oldRead.resolve();
+      oldRead.resolve(undefined);
       await scheduling;
       await stopping;
       expect(r.logger.error).toHaveBeenCalledTimes(failure ? 1 : 0);
       await r.time.clock.advanceBy(1_000);
       expect(r.deliver).not.toHaveBeenCalled();
       expect(await r.pending(id)).not.toBeNull();
-      newRead.resolve();
+      newRead.resolve(undefined);
       await newScheduling;
       await r.finish(stopNew);
     },

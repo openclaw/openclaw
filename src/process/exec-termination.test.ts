@@ -14,7 +14,7 @@ import { COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
 import * as adoptedChildren from "./scoped-child-reaper.js";
 
-const isForceSignal = (signal: NodeJS.Signals | number | undefined) =>
+const isForceSignal = (signal: Parameters<typeof process.kill>[1]) =>
   signal === "SIGKILL" || signal === osConstants.signals.SIGKILL;
 
 afterEach(() => {

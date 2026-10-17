@@ -227,9 +227,7 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
         planningRevisions.push(sessionEntries?.revision);
         return hosts(
           (sessionEntries?.entriesForCatalog?.() ?? []).map(({ agentId, sessionKey, entry }) =>
-            session({
-              threadId: `${agentId}:${entry.sessionId}`,
-              sessionKey,
+            Object.assign(session({ threadId: `${agentId}:${entry.sessionId}`, sessionKey }), {
               title: entry.label,
             }),
           ),

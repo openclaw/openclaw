@@ -101,7 +101,7 @@ describe("sessions.catalog.startTerminal", () => {
     activeProvider = provider({ startTerminalSession: blockedStart });
   });
 
-  it.each([
+  it.each<[string, Parameters<typeof startCall>, string, unknown]>([
     [
       "honors the cliAgents opt-out before terminal start",
       [request(), { gateway: { cliAgents: { enabled: false } } }],
@@ -163,7 +163,7 @@ describe("sessions.catalog.startTerminal", () => {
       ErrorCodes.INVALID_REQUEST,
       expect.stringContaining('agent "locked" runs in a sandbox'),
     ],
-  ] as const)("%s", async (_name, args, code, message) => {
+  ])("%s", async (_name, args, code, message) => {
     const respond = await call(...args);
     expect(blockedStart).not.toHaveBeenCalled();
     expectError(respond, code, message);

@@ -19,11 +19,17 @@ vi.mock("./exec-spawn.js", () => ({
   }),
 }));
 
+class CommandChild extends ChildProcess {
+  override stdout = new PassThrough();
+  override stderr = new PassThrough();
+  // The fixture delivers the native state changes behind Node's read-only public fields.
+  override exitCode: number | null = null;
+  override signalCode: NodeJS.Signals | null = null;
+  override killed = false;
+}
+
 function createCommand() {
-  const child = Object.assign(new ChildProcess(), {
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-  });
+  const child = new CommandChild();
   const output = { stdout: "", stderr: "" };
   child.stdout.on("data", (chunk: Buffer) => (output.stdout += chunk.toString()));
   child.stderr.on("data", (chunk: Buffer) => (output.stderr += chunk.toString()));

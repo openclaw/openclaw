@@ -72,8 +72,10 @@ export {
   loadShortTermPromotionDreamingStats,
 };
 
+// mock-isolation: Doctor fixtures use synthetic config, never the operator's config.
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig }));
 
+// mock-isolation: Agent IDs and workspaces belong to this fixture's synthetic inventory.
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds,
   listAgentEntries: (cfg: OpenClawConfig) =>
@@ -86,6 +88,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir,
 }));
 
+// mock-isolation: Memory configuration is supplied by each fixture without live initialization.
 vi.mock("../../agents/memory-search.js", () => ({ resolveMemorySearchConfig }));
 
 vi.mock("../../plugins/memory-runtime.js", () => ({
@@ -94,6 +97,7 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   resolveActiveMemoryBackendConfig,
 }));
 
+// mock-isolation: Exercise fixture-owned authority without a running Gateway session.
 vi.mock("../operator-run-authority.js", () => ({ captureGatewayOperatorRunAuthority }));
 
 import { createDoctorHandlers } from "./doctor.js";

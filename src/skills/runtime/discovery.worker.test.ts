@@ -135,11 +135,15 @@ it.each(["standalone", "gateway"])(
         );
         const results = await scan(structuredClone(requests));
         const expected = dirs.map((_, index) =>
-          [localFact(index), [pluginName, description]].toSorted(),
+          [localFact(index), [pluginName, description]].toSorted((a, b) =>
+            a[0].localeCompare(b[0]),
+          ),
         );
         expect(
           results.map(({ key, sources }) =>
-            mergeSkillRecords(sources.entries, key).map(facts).toSorted(),
+            mergeSkillRecords(sources.entries, key)
+              .map(facts)
+              .toSorted((a, b) => a[0].localeCompare(b[0])),
           ),
         ).toEqual(expected);
         expect(
