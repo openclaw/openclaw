@@ -32,30 +32,45 @@ import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+async function pairBrowser(
+  deviceId: string,
+  scopes: string[],
+  auth = AUTH_TOKEN,
+  controlUi = true,
+) {
+  const requested = await requestDevicePairing({
+    deviceId,
+    publicKey: "fixture-key",
+    role: "operator",
+    scopes,
+    ...(controlUi ? { clientId: "openclaw-control-ui", clientMode: "webchat" } : {}),
+  });
+  await approveDevicePairing(requested.request.requestId, { callerScopes: scopes });
+  const token = await deviceTokens.ensureDeviceToken({
+    deviceId,
+    role: "operator",
+    scopes,
+    issuer: {
+      kind: "shared-gateway-auth",
+      generation: resolveSharedGatewaySessionGeneration(auth, [])!,
+    },
+  });
+  expect(token).not.toBeNull();
+  return token!.token;
+}
+
+function expectUnauthorized(response: ReturnType<typeof createResponse>) {
+  expect(response.res.statusCode).toBe(401);
+  expect(JSON.parse(response.getBody())).toEqual({
+    error: { message: "Unauthorized", type: "unauthorized" },
+  });
+}
+
 it.each(["operator.admin", "operator.read"])(
   "createGatewayHttpServer plugin PUT/POST revalidates paired %s authority after reading the body",
   async (scope) => {
     await withOpenClawTestState({ label: "plugin-device-auth" }, async () => {
-      const scopes = [scope];
-      const requested = await requestDevicePairing({
-        deviceId: "browser",
-        publicKey: "fixture-key",
-        role: "operator",
-        scopes,
-        clientId: "openclaw-control-ui",
-        clientMode: "webchat",
-      });
-      await approveDevicePairing(requested.request.requestId, { callerScopes: scopes });
-      const token = await deviceTokens.ensureDeviceToken({
-        deviceId: "browser",
-        role: "operator",
-        scopes,
-        issuer: {
-          kind: "shared-gateway-auth",
-          generation: resolveSharedGatewaySessionGeneration(AUTH_TOKEN, [])!,
-        },
-      });
-      expect(token).not.toBeNull();
+      const token = await pairBrowser("browser", [scope]);
       const bodyStarted = createDeferred();
       let effects = 0;
       const handlePluginRequest = createGatewayPluginRequestHandler({
@@ -102,7 +117,7 @@ it.each(["operator.admin", "operator.read"])(
             const response = await sendRequest(server, {
               path: "/profile",
               method,
-              authorization: `Bearer ${token!.token}`,
+              authorization: `Bearer ${token}`,
               headers: { "x-openclaw-scopes": "operator.admin" },
             });
             expect(response.res.statusCode).toBe(scope === "operator.admin" ? 200 : 403);
@@ -116,7 +131,7 @@ it.each(["operator.admin", "operator.read"])(
           const pending = createRequest({
             path: "/profile",
             method: "PUT",
-            authorization: `Bearer ${token!.token}`,
+            authorization: `Bearer ${token}`,
             headers: { "content-type": "application/json" },
           });
           const response = createResponse();
@@ -130,21 +145,15 @@ it.each(["operator.admin", "operator.read"])(
           pending.emit("data", Buffer.from("{}"));
           pending.emit("end");
           await dispatch;
-          expect(response.res.statusCode).toBe(401);
-          expect(JSON.parse(response.getBody())).toEqual({
-            error: { message: "Unauthorized", type: "unauthorized" },
-          });
+          expectUnauthorized(response);
           expect(effects).toBe(previousEffects);
-          for (const credential of [token!.token, "wrong-token"]) {
+          for (const credential of [token, "wrong-token"]) {
             const rejected = await sendRequest(server, {
               path: "/profile",
               method: "PUT",
               authorization: `Bearer ${credential}`,
             });
-            expect(rejected.res.statusCode).toBe(401);
-            expect(JSON.parse(rejected.getBody())).toEqual({
-              error: { message: "Unauthorized", type: "unauthorized" },
-            });
+            expectUnauthorized(rejected);
           }
         },
       });
@@ -157,25 +166,8 @@ afterEach(() => vi.restoreAllMocks());
 
 it("authenticates remote HTTP reads only from the grant and refuses reusable credentials", async () => {
   await withOpenClawTestState({ label: "remote-http-device-ceiling" }, async () => {
-    const scopes = ["operator.admin"];
-    const requested = await requestDevicePairing({
-      deviceId: "remote-http-browser",
-      publicKey: "synthetic-key",
-      role: "operator",
-      scopes,
-    });
-    await approveDevicePairing(requested.request.requestId, { callerScopes: scopes });
-    const token = await deviceTokens.ensureDeviceToken({
-      deviceId: "remote-http-browser",
-      role: "operator",
-      scopes,
-      issuer: {
-        kind: "shared-gateway-auth",
-        generation: resolveSharedGatewaySessionGeneration(AUTH_TOKEN, [])!,
-      },
-    });
-    expect(token).not.toBeNull();
-    for (const credential of [token!.token, AUTH_TOKEN.token!, undefined]) {
+    const token = await pairBrowser("remote-http-browser", ["operator.admin"], AUTH_TOKEN, false);
+    for (const credential of [token, AUTH_TOKEN.token!, undefined]) {
       const req = createRequest({
         path: "/control-ui-config.json",
         ...(credential ? { authorization: `Bearer ${credential}` } : {}),
@@ -221,26 +213,7 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
       "<!doctype html><html><head></head><body><openclaw-app></openclaw-app></body></html>",
     );
     const auth = { mode: "token" as const, token: "synthetic-shared-token", allowTailscale: false };
-    const scopes = ["operator.read"];
-    const pairing = await requestDevicePairing({
-      deviceId: "bootstrap-browser",
-      publicKey: "synthetic-public-key",
-      role: "operator",
-      scopes,
-      clientId: "openclaw-control-ui",
-      clientMode: "webchat",
-    });
-    await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes });
-    const token = await deviceTokens.ensureDeviceToken({
-      deviceId: "bootstrap-browser",
-      role: "operator",
-      scopes,
-      issuer: {
-        kind: "shared-gateway-auth",
-        generation: resolveSharedGatewaySessionGeneration(auth, [])!,
-      },
-    });
-    expect(token).not.toBeNull();
+    const token = await pairBrowser("bootstrap-browser", ["operator.read"], auth);
     const verify = deviceTokens.verifyDeviceToken;
     vi.spyOn(deviceTokens, "verifyDeviceToken").mockImplementationOnce(async (params) => {
       const result = await verify(params);
@@ -251,7 +224,7 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
     const req = new IncomingMessage(new Socket());
     req.url = "/control/chat/main/topic";
     req.method = "GET";
-    req.headers = { authorization: `Bearer ${token!.token}` };
+    req.headers = { authorization: `Bearer ${token}` };
     const response = makeMockHttpResponse();
     const config: OpenClawConfig = {};
     await handleControlUiHttpRequest(req, response.res, {

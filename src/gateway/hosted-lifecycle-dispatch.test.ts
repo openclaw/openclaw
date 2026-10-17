@@ -41,6 +41,12 @@ const question = {
   status: "pending",
   questions: [{ questionId: "target", options: [{ label: "Staging" }] }],
 };
+const questionRequest = { cfg: {}, questionId, optionIndex: 0 };
+const childSession = {
+  childSessionKey: "agent:main:subagent:child",
+  expectedSessionId: "child-session",
+  expectedLifecycleRevision: "child-revision",
+};
 
 const runtimes: ReturnType<typeof createGatewayInstanceRuntime>[] = [];
 afterEach(() => {
@@ -127,9 +133,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
       deleteSubagentSessionForCleanup({
         callGateway: (request) => bindGatewayLifecycleRequest()(request),
         gatewayBinding: { resolveGatewayContext },
-        childSessionKey: "agent:main:subagent:child",
-        expectedSessionId: "child-session",
-        expectedLifecycleRevision: "child-revision",
+        ...childSession,
       });
     await expect(cleanup()).resolves.toBe("deleted");
     expect(deletions).toMatchObject([
@@ -156,9 +160,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
           deleteSubagentSessionForCleanup({
             callGateway,
             ...(unbound ? { gatewayBinding: { resolveGatewayContext: undefined } } : {}),
-            childSessionKey: "agent:main:subagent:child",
-            expectedSessionId: "child-session",
-            expectedLifecycleRevision: "child-revision",
+            ...childSession,
           }),
         ).resolves.toBe("deleted"),
       );
@@ -184,9 +186,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
       deleteSubagentSessionForCleanup({
         callGateway: (request) => bindGatewayLifecycleRequest()(request),
         gatewayBinding: { resolveGatewayContext: () => context },
-        childSessionKey: "agent:main:subagent:child",
-        expectedSessionId: "child-session",
-        expectedLifecycleRevision: "child-revision",
+        ...childSession,
         isCurrent: () => current,
       });
     const invoke = await withOperatorToolGatewayAuthority(
@@ -235,17 +235,13 @@ describe("hosted lifecycle Gateway dispatch", () => {
       async () => {
         await expect(
           resolveQuestionOverGateway({
-            cfg: {},
-            questionId,
-            optionIndex: 0,
+            ...questionRequest,
             authorize: () => true,
           }),
         ).resolves.toMatchObject({ status: "answered", optionValue: "Staging" });
         await expect(
           resolveQuestionOverGateway({
-            cfg: {},
-            questionId,
-            optionIndex: 0,
+            ...questionRequest,
             authorize: async () => {
               current = createContext({});
               return true;
@@ -300,9 +296,7 @@ describe("hosted lifecycle Gateway dispatch", () => {
       () =>
         expect(
           resolveQuestionOverGateway({
-            cfg: {},
-            questionId,
-            optionIndex: 0,
+            ...questionRequest,
             gatewayUrl: "wss://gateway.example.test",
           }),
         ).resolves.toMatchObject({ status: "answered" }),
