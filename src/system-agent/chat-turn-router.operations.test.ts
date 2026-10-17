@@ -30,6 +30,39 @@ import { SystemAgentOperationExitError } from "./operations-execution-helpers.js
 import { describeSystemAgentPersistentOperation } from "./operations.js";
 import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
 
+type EngineOptions = ConstructorParameters<typeof SystemAgentChatEngine>[0];
+function createEngine({ deps, ...options }: EngineOptions = {}) {
+  return new SystemAgentChatEngine({
+    ...options,
+    deps: { loadOverview: fakeOverviewLoader(), ...deps },
+  });
+}
+
+const oauthConfig = {
+  agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
+  auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
+} satisfies OpenClawConfig;
+const approvedPortChange = {
+  text: "Applying the approved port change.",
+  directive: {
+    kind: "approved-operation",
+    operation: { kind: "config-set", path: "gateway.port", value: "19001" },
+  },
+} as const;
+
+function mockSnapshot(overrides: Partial<ReturnType<typeof configSnapshot>>) {
+  mocks.readConfigFileSnapshot.mockResolvedValue({
+    ...configSnapshot(overrides.config ?? {}),
+    ...overrides,
+  });
+}
+
+function expectText(text: string | null, ...parts: string[]) {
+  for (const part of parts) {
+    expect(text).toContain(part);
+  }
+}
+
 function createRouterHarness(
   options: ConstructorParameters<typeof ChatTurnRouter>[0],
   internals: {
@@ -292,7 +325,7 @@ describe("SystemAgentChatEngine operations", () => {
       .mockResolvedValueOnce(configSnapshot(baseConfig))
       .mockResolvedValue(configSnapshot(changedConfig));
     const runChannelSetupWizard = vi.fn(async () => {});
-    const engine = new SystemAgentChatEngine({
+    const engine = createEngine({
       verifiedInference,
       runAgentTurn: async () => ({
         text: "Telegram it is.",
@@ -300,7 +333,6 @@ describe("SystemAgentChatEngine operations", () => {
       }),
       deps: {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
-        loadOverview: fakeOverviewLoader(),
       },
       runChannelSetupWizard,
     });
@@ -312,10 +344,7 @@ describe("SystemAgentChatEngine operations", () => {
   });
 
   it("rejects an approved agent operation when OAuth rotates at the persistent-apply boundary", async () => {
-    const config = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
-      auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
-    } satisfies OpenClawConfig;
+    const config = oauthConfig;
     let credential = {
       type: "oauth" as const,
       provider: "anthropic",
@@ -326,15 +355,9 @@ describe("SystemAgentChatEngine operations", () => {
     const verifiedInference = await createOAuthVerifiedBinding(config, credential);
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     let authReads = 0;
-    const engine = new SystemAgentChatEngine({
+    const engine = createEngine({
       verifiedInference,
-      runAgentTurn: async () => ({
-        text: "Applying the approved port change.",
-        directive: {
-          kind: "approved-operation" as const,
-          operation: { kind: "config-set" as const, path: "gateway.port", value: "19001" },
-        },
-      }),
+      runAgentTurn: async () => approvedPortChange,
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
         loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => {
@@ -346,7 +369,6 @@ describe("SystemAgentChatEngine operations", () => {
           }
           return { version: 1, profiles: { "anthropic:oauth": credential } };
         }) as never,
-        loadOverview: fakeOverviewLoader(),
       },
     });
 
@@ -358,10 +380,7 @@ describe("SystemAgentChatEngine operations", () => {
 
   it("applies an approved agent operation across a stable-identity OAuth refresh", async () => {
     useTempStateDir();
-    const config = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
-      auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
-    } satisfies OpenClawConfig;
+    const config = oauthConfig;
     let credential = {
       type: "oauth" as const,
       provider: "anthropic",
@@ -372,17 +391,11 @@ describe("SystemAgentChatEngine operations", () => {
     };
     const verifiedInference = await createOAuthVerifiedBinding(config, credential);
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
-    const engine = new SystemAgentChatEngine({
+    const engine = createEngine({
       verifiedInference,
       runAgentTurn: async () => {
         credential = { ...credential, access: "access-b", refresh: "refresh-b", expires: 2 };
-        return {
-          text: "Applying the approved port change.",
-          directive: {
-            kind: "approved-operation" as const,
-            operation: { kind: "config-set" as const, path: "gateway.port", value: "19001" },
-          },
-        };
+        return approvedPortChange;
       },
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
@@ -390,7 +403,6 @@ describe("SystemAgentChatEngine operations", () => {
           version: 1,
           profiles: { "anthropic:oauth": credential },
         })) as never,
-        loadOverview: fakeOverviewLoader(),
       },
     });
 
@@ -425,10 +437,7 @@ describe("SystemAgentChatEngine operations", () => {
       },
     );
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const engine = createEngine({ runAgentTurn: async () => null });
     const approve = async () => {
       engine.propose(operation);
       const proposal = expectDefined(engine.getPendingOperatorProposal(), "delegated proposal");
@@ -505,7 +514,7 @@ describe("SystemAgentChatEngine operations", () => {
     const runAgentTurn = vi.fn(async (params) => {
       return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
     });
-    const engine = new SystemAgentChatEngine({
+    const engine = createEngine({
       verifiedInference,
       executeOperation,
       runAgentTurn,
@@ -538,11 +547,7 @@ describe("SystemAgentChatEngine operations", () => {
     const runConfigUnset = operationMocks.runConfigUnset.mockImplementation(async () => {
       throw new Error("fixture schema error");
     });
-    const engine = new SystemAgentChatEngine({
-      operatorApprovalOnly: true,
-      runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const engine = createEngine({ operatorApprovalOnly: true, runAgentTurn });
     await engine.handle("config unset agents.defaults.fastModeDefault");
     const reply = expectDefined(
       await engine.resolveOperatorApproval(
@@ -593,22 +598,15 @@ describe("SystemAgentChatEngine operations", () => {
       cause: new Error("fixture refresh failed"),
     });
     operationMocks.runConfigSet.mockImplementation(async () => {
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
+      mockSnapshot({
         path: "/tmp/fixture-openclaw.json",
         hash: "published",
         config: { gateway: { port: 18789 } },
         sourceConfig: { gateway: { port: 18789 } },
-        issues: [],
       });
       throw writerError;
     });
-    const engine = new SystemAgentChatEngine({
-      yes: true,
-      runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const engine = createEngine({ yes: true, runAgentTurn });
     const reply = await engine.handle("config set gateway.port 18789");
     expect(reply.applied).toBe(false);
     expect(reply.text).toContain(writerError.message);
@@ -640,17 +638,17 @@ describe("SystemAgentChatEngine operations", () => {
     operationMocks.runConfigSet.mockImplementation(async () => {
       throw new Error(validationError);
     });
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const engine = createEngine({ runAgentTurn });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
 
     const reply = await engine.handle("yes");
 
-    expect(reply.text).toContain("The config write failed");
-    expect(reply.text).toContain(validationError);
-    expect(reply.text).toContain("That port was not a number");
+    expectText(
+      reply.text,
+      "The config write failed",
+      validationError,
+      "That port was not a number",
+    );
     // The corrective write is proposed, not auto-applied.
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
       kind: "config-set",
@@ -663,62 +661,46 @@ describe("SystemAgentChatEngine operations", () => {
   });
 
   it("reports an applied invalid write when inference cannot propose a repair", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
+    mockSnapshot({
       valid: false,
-      path: "/tmp/openclaw.json",
-      hash: "h",
-      config: {},
-      sourceConfig: {},
       issues: [{ path: "gateway.port", message: "Expected number, received string" }],
-    } as never);
+    });
 
     const reply = await verifyConfigAfterSystemAgentWrite(async () => {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     });
 
-    expect(reply).toContain("failed validation");
-    expect(reply).toContain("The write was applied");
-    expect(reply).toContain("openclaw doctor --fix");
+    expectText(reply, "failed validation", "The write was applied", "openclaw doctor --fix");
   });
 
   it("keeps doctor repair outside OpenClaw when no post-write repair is proposed", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
+    mockSnapshot({
       valid: false,
-      path: "/tmp/openclaw.json",
-      hash: "h",
-      config: {},
-      sourceConfig: {},
       issues: [{ path: "gateway.port", message: "Expected number" }],
-    } as never);
+    });
 
     const reply = await verifyConfigAfterSystemAgentWrite(async () => ({ text: "" }));
 
-    expect(reply).toContain("with OpenClaw stopped");
-    expect(reply).toContain("openclaw doctor --fix");
-    expect(reply).toContain("machine running it");
+    expectText(reply, "with OpenClaw stopped", "openclaw doctor --fix", "machine running it");
   });
 
   it("warns when an applied write leaves no config to verify", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
+    mockSnapshot({
       exists: false,
-      valid: true,
-      path: "/tmp/openclaw.json",
       hash: null,
-      config: {},
-      sourceConfig: {},
-      issues: [],
-    } as never);
+    });
     const resolveRepair = vi.fn(async () => ({ text: "unused" }));
 
     const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
 
     expect(resolveRepair).not.toHaveBeenCalled();
-    expect(reply).toContain("The write was applied");
-    expect(reply).toContain("post-write verification is unavailable");
-    expect(reply).toContain("openclaw.json was not found");
-    expect(reply).toContain("openclaw doctor --fix");
+    expectText(
+      reply,
+      "The write was applied",
+      "post-write verification is unavailable",
+      "openclaw.json was not found",
+      "openclaw doctor --fix",
+    );
   });
 
   it("warns when the applied write cannot be read back for verification", async () => {
@@ -728,10 +710,13 @@ describe("SystemAgentChatEngine operations", () => {
     const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
 
     expect(resolveRepair).not.toHaveBeenCalled();
-    expect(reply).toContain("The write was applied");
-    expect(reply).toContain("post-write verification is unavailable");
-    expect(reply).toContain("openclaw.json could not be read");
-    expect(reply).toContain("openclaw doctor --fix");
+    expectText(
+      reply,
+      "The write was applied",
+      "post-write verification is unavailable",
+      "openclaw.json could not be read",
+      "openclaw doctor --fix",
+    );
   });
 });
 
@@ -767,7 +752,7 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
       payloads: [{ text: "*click* CLI loop checked your shell." }],
       meta: { agentMeta: { cliSessionBinding: { sessionId: "native-1" } } },
     }));
-    const engine = new SystemAgentChatEngine({
+    const engine = createEngine({
       verifiedInference: inference.binding,
       runAgentTurn: (params) =>
         runSystemAgentTurnWithDeps(params, {
@@ -822,12 +807,7 @@ describe("SystemAgentChatEngine handoff", () => {
         directive: { kind: "model-accounts" as const },
       }));
       const executeOperation = vi.fn();
-      const engine = new SystemAgentChatEngine({
-        surface,
-        runAgentTurn,
-        executeOperation,
-        deps: { loadOverview: fakeOverviewLoader() },
-      });
+      const engine = createEngine({ surface, runAgentTurn, executeOperation });
 
       const reply = await engine.handle(
         source === "command" ? "model accounts" : "Help me sign in to my personal account",
@@ -848,11 +828,7 @@ describe("SystemAgentChatEngine handoff", () => {
 
   it("handles the exact agent handoff without consulting a model", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
+    const engine = createEngine({ surface: "gateway", runAgentTurn });
 
     const reply = await engine.handle("talk to agent");
 

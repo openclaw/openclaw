@@ -22,6 +22,7 @@ import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.j
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
+  type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
 it.each(["overlap", "cancel-drain", "route-drift"] as const)(
@@ -79,6 +80,11 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             throw new Error("Approval fixture has no TCP port");
           }
           const profileId = `${fixture.providerId}:verified`;
+          const writeCredentials = (key: string) =>
+            state.writeAuthProfiles({
+              version: 1,
+              profiles: { [profileId]: { type: "api_key", provider: fixture.providerId, key } },
+            });
           const cfg: OpenClawConfig = {
             agents: {
               defaults: {
@@ -117,16 +123,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             },
           };
           await state.writeConfig(cfg);
-          const authDatabase = await state.writeAuthProfiles({
-            version: 1,
-            profiles: {
-              [profileId]: {
-                type: "api_key",
-                provider: fixture.providerId,
-                key: "synthetic-approval-key",
-              },
-            },
-          });
+          const authDatabase = await writeCredentials("synthetic-approval-key");
           expect(fs.existsSync(authDatabase)).toBe(true);
           const snapshot = await readConfigFileSnapshot();
           if (!snapshot.valid) {
@@ -156,37 +153,36 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           if ("error" in probe) {
             throw new Error(probe.error);
           }
-          const verifiedInference = await (async () => {
-            try {
-              const response = await completeWithPreparedSimpleCompletionModel({
-                model: probe.model,
-                auth: probe.auth,
-                cfg: route.runConfig,
-                context: {
-                  messages: [{ role: "user", content: "verify synthetic inference", timestamp: 0 }],
-                },
-              });
-              expect(
-                response.content.some((part) => part.type === "text" && part.text === "approve"),
-              ).toBe(true);
-              if (!probe.sourceAuthFingerprint) {
-                throw new Error("Probe has no bound auth fingerprint");
-              }
-              return await createSystemAgentVerifiedInferenceBinding({
-                configuredRoute: route,
-                executionRoute: route,
-                auth: {
-                  authProfileId: profileId,
-                  authFingerprint: probe.sourceAuthFingerprint,
-                  agentHarnessId: "openclaw",
-                  modelId: probe.model.id,
-                  modelApi: probe.model.api,
-                },
-              });
-            } finally {
-              await probe[Symbol.asyncDispose]();
+          let verifiedInference: SystemAgentVerifiedInferenceBinding;
+          try {
+            const response = await completeWithPreparedSimpleCompletionModel({
+              model: probe.model,
+              auth: probe.auth,
+              cfg: route.runConfig,
+              context: {
+                messages: [{ role: "user", content: "verify synthetic inference", timestamp: 0 }],
+              },
+            });
+            expect(
+              response.content.some((part) => part.type === "text" && part.text === "approve"),
+            ).toBe(true);
+            if (!probe.sourceAuthFingerprint) {
+              throw new Error("Probe has no bound auth fingerprint");
             }
-          })();
+            verifiedInference = await createSystemAgentVerifiedInferenceBinding({
+              configuredRoute: route,
+              executionRoute: route,
+              auth: {
+                authProfileId: profileId,
+                authFingerprint: probe.sourceAuthFingerprint,
+                agentHarnessId: "openclaw",
+                modelId: probe.model.id,
+                modelApi: probe.model.api,
+              },
+            });
+          } finally {
+            await probe[Symbol.asyncDispose]();
+          }
           expect(
             (await resolveSystemAgentVerifiedInferenceRoute(verifiedInference))?.provider,
           ).toBe(fixture.providerId);
@@ -264,10 +260,8 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                 throw new Error("Classifier settled before its provider request");
               }),
             ]);
-          const started = performance.now();
           const first = start(true);
           await arrive(1, first);
-          const coldMs = performance.now() - started;
           const firstBuilds = builds.mock.calls.length;
           expect(firstBuilds).toBeGreaterThan(0);
           if (mode === "cancel-drain") {
@@ -278,29 +272,14 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
               drained = true;
             });
           }
-          const secondStarted = performance.now();
           const second = start();
           await arrive(2, second);
-          console.info("approval completion preparation", {
-            mode,
-            coldMs,
-            overlapMs: performance.now() - secondStarted,
-          });
           expect.soft(builds.mock.calls.length).toBe(firstBuilds);
           if (mode === "cancel-drain") {
             expect.soft(drained).toBe(false);
           }
           if (mode === "route-drift") {
-            await state.writeAuthProfiles({
-              version: 1,
-              profiles: {
-                [profileId]: {
-                  type: "api_key",
-                  provider: fixture.providerId,
-                  key: "rotated-synthetic-key",
-                },
-              },
-            });
+            await writeCredentials("rotated-synthetic-key");
           }
           finishCancel.resolve();
           requests.forEach(finish);
