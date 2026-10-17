@@ -531,19 +531,21 @@ describe("chat pane worker stop", () => {
       const pendingReclaim = dialogs.track(pane.changeHeaderPlacement(sessionA, "reclaim"));
       const actions = await waitForConfirmDialogActions();
       answerConfirmDialog(actions, "confirm");
-      await vi.waitFor(() => expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key));
+      await vi.waitFor(() =>
+        expect(pane.headerPresentation.placementReclaimingKey).toBe(sessionA.key),
+      );
 
       state.sessionKey = sessionB.key;
       const placementA = resolveChatPanePlacement({
         gatewaySnapshot: pane.context.gateway.snapshot,
         movingKey: null,
-        reclaimingKey: pane.headerPlacementReclaimingKey,
+        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
         row: sessionA,
       });
       const placementB = resolveChatPanePlacement({
         gatewaySnapshot: pane.context.gateway.snapshot,
         movingKey: null,
-        reclaimingKey: pane.headerPlacementReclaimingKey,
+        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
         row: sessionB,
       });
       expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
@@ -552,7 +554,7 @@ describe("chat pane worker stop", () => {
       response.resolve({ ok: true });
       await pendingReclaim;
 
-      expect(pane.headerPlacementReclaimingKey).toBeNull();
+      expect(pane.headerPresentation.placementReclaimingKey).toBeNull();
     } finally {
       response.resolve({ ok: true });
     }

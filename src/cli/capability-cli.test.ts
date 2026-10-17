@@ -329,8 +329,12 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel: mocks.completeWithPreparedSimpleCompletionModel,
 }));
 
+// mock-isolation: Capability routing uses fixture profiles, never operator credential discovery.
 vi.mock("../agents/auth-profiles.js", () => ({
   loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync: async (
+    ...args: Parameters<typeof mocks.loadAuthProfileStoreForRuntime>
+  ) => mocks.loadAuthProfileStoreForRuntime(...args),
   listProfilesForProvider: mocks.listProfilesForProvider,
 }));
 
@@ -1817,12 +1821,16 @@ describe("capability cli", () => {
       },
     },
     {
-      name: "channel direct provider",
-      config: { channels: { discord: { tts: { openai: { speakerVoice: "nova" } } } } },
+      name: "channel provider",
+      config: {
+        channels: { discord: { tts: { providers: { openai: { speakerVoice: "nova" } } } } },
+      },
       args: ["--channel", "discord"],
       expected: {
         channels: {
-          discord: { tts: { openai: { speakerVoice: "nova", apiKey: "profile-openai-key" } } },
+          discord: {
+            tts: { providers: { openai: { speakerVoice: "nova", apiKey: "profile-openai-key" } } },
+          },
         },
       },
     },
@@ -1862,8 +1870,8 @@ describe("capability cli", () => {
       resolved: { providerConfigs: { openai: { apiKey: "config-key", speakerVoice: "nova" } } },
     },
     {
-      name: "direct provider",
-      config: { tts: { openai: { apiKey: "config-key" } } },
+      name: "provider map",
+      config: { tts: { providers: { openai: { apiKey: "config-key" } } } },
       args: ["--model", "openai/gpt-4o-mini-tts"],
       resolved: { providerConfigs: {} },
     },

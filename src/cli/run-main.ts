@@ -171,6 +171,9 @@ async function tryRunGatewayRunFastPath(
 }
 
 async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  await readConfigSnapshotForEngineSelection();
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {
@@ -850,6 +853,13 @@ async function runCliWithPreparedOutputMode(
         loadCliDotEnv({ loadGlobalEnv, quiet: true });
       }
     });
+  }
+  const { prepareCliDatabaseEngine } = await import("./database-engine-selection.js");
+  const selectionHandled = await startupTrace.measure("database-engine-selection", () =>
+    prepareCliDatabaseEngine(normalizedArgv),
+  );
+  if (selectionHandled) {
+    return;
   }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {

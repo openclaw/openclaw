@@ -14,16 +14,15 @@ it("resumes deferred platform discovery when the workspace menu opens", async ()
   // SAFETY: the fixture exposes this inherited protected UI boundary for lifecycle coverage.
   const header = pane as typeof pane & {
     loadHeaderPlatform: (client: typeof pane.connectedClient, generation: number) => Promise<void>;
-    headerPlatform: string | null;
   };
   await header.loadHeaderPlatform(client, pane.connectionGeneration);
-  expect(header.headerPlatform).toBeNull();
+  expect(header.headerPresentation.platform).toBeNull();
   expect(request).not.toHaveBeenCalled();
 
   visibility.mockReturnValue("visible");
   const row = { key: "agent:main:current", kind: "direct", updatedAt: 0 } as const;
   await pane.loadHeaderMenuData(row, "/workspace", false);
-  expect(header.headerPlatform).toBe("darwin");
+  expect(header.headerPresentation.platform).toBe("darwin");
   await pane.loadHeaderMenuData(row, "/workspace", false);
   expect(request).toHaveBeenCalledOnce();
 });
@@ -36,7 +35,6 @@ it.each([false, true])(
     const client = createTestGatewayClient(request);
     const { pane } = createTestChatPane({ client });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["system.info"]);
-    const update = vi.spyOn(pane, "invalidate");
     const row = { key: "agent:main:current", kind: "direct", updatedAt: 0 } as const;
     const pending = pane.loadHeaderMenuData(row, "/workspace", false);
     expect(request).toHaveBeenCalledOnce();
@@ -47,10 +45,6 @@ it.each([false, true])(
     }
     result.resolve({ platform: "darwin" });
     await pending;
-    // SAFETY: headerPlatform is the inherited reactive field consumed by the workspace menu.
-    expect((pane as typeof pane & { headerPlatform: string | null }).headerPlatform).toBe(
-      replaced ? null : "darwin",
-    );
-    expect(update).toHaveBeenCalled();
+    expect(pane.headerPresentation.platform).toBe(replaced ? null : "darwin");
   },
 );

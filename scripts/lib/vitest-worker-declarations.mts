@@ -122,6 +122,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
   "extensions/memory-core/manager-publication-admission-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts",
+  "extensions/memory-core/manager-publication-crash-entrypoint.test-support":
+    "extensions/memory-core/src/memory/manager-publication-crash-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-planning-observer-entrypoint.test-support":

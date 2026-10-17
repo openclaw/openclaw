@@ -143,6 +143,7 @@ export type OpenClawStateReadLocation = {
   checkFreshAdmission: boolean;
   expectedIdentity?: string;
   snapshotRoot?: string;
+  postgresSnapshot?: string;
 };
 
 export type OpenClawStateReadAuthority = {
@@ -305,6 +306,9 @@ export type OpenClawStateReadRequest = {
   checkFreshAdmission: boolean;
   expectedIdentity?: string;
   snapshotRoot?: string;
+  postgresSnapshot?: string;
+  /** Keep an admitted read worker's MVCC snapshot until the retained owner drains. */
+  exportPostgresSnapshot?: true;
   command: OpenClawStateReadCommand;
 };
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;

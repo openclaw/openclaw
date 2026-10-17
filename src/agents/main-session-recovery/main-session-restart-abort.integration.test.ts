@@ -17,7 +17,7 @@ import {
 import { callGateway } from "../../gateway/call.js";
 import { buildRestartSafeChatTranscriptState } from "../../gateway/server-methods/chat-restart-recovery.js";
 import { prepareGatewayStartupSessions } from "../../gateway/server-startup-session-migration.js";
-import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import { persistGatewaySessionLifecycleEvent as persistLifecycle } from "../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -40,9 +40,9 @@ import {
   makeUserMessage,
 } from "./main-session-restart-recovery-transcript.test-support.js";
 import {
-  markRestartAbortedMainSessions,
-  markStartupOrphanedMainSessionsForRecovery,
-  recoverRestartAbortedMainSessions,
+  markRestartAbortedMainSessions as markAborted,
+  markStartupOrphanedMainSessionsForRecovery as markOrphans,
+  recoverRestartAbortedMainSessions as recoverSessions,
 } from "./main-session-restart-recovery.js";
 
 vi.mock("../../gateway/call.js", async (importOriginal) => ({
@@ -50,9 +50,7 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
   callGateway: vi.fn(async () => ({ runId: "resumed-chat-run" })),
 }));
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-});
+afterEach(clearRuntimeConfigSnapshot);
 
 async function migrateLegacyInterruption(sessionKey: string, stateDir: string) {
   const { db } = openOpenClawAgentDatabase({ agentId: "main" });
@@ -77,6 +75,8 @@ it.each([
   await withOpenClawTestState({ label: "restart-aborted-chat" }, async (state) => {
     await captureRuntimeConfigAsyncReader()();
     const automationDrain = order === "automation drain";
+    const unclaimed = order === "unclaimed legacy";
+    const persisted = order === "persisted interruption";
     const sessionKey = "agent:main:dashboard:restart-chat";
     const sessionId = "restart-chat-session";
     const runId = "interrupted-chat-run";
@@ -96,14 +96,12 @@ it.each([
       sessionId,
       updatedAt: 100,
       permissionMode: "guarded",
-      delivery: { kind: order === "unclaimed legacy" ? "none" : "internal" },
+      delivery: { kind: unclaimed ? "none" : "internal" },
       spawnDepth: 0,
-      ...(order === "unclaimed legacy"
-        ? { lifecycleRunId: runId, startedAt: 100 }
-        : admitted.sessionLifecyclePatch),
+      ...(unclaimed ? { lifecycleRunId: runId, startedAt: 100 } : admitted.sessionLifecyclePatch),
       activeWriterRunId: runId,
     };
-    if (order === "persisted interruption") {
+    if (persisted) {
       // An older cleanup terminalized the source before its restart snapshot.
       delete entry.restartRecoveryDeliveryRunId;
       delete entry.restartRecoveryDeliverySourceRunId;
@@ -120,10 +118,10 @@ it.each([
     ]) {
       await appendTranscriptMessage({ ...target, sessionId }, { cwd: state.workspaceDir, message });
     }
-    if (order === "persisted interruption" || order === "unclaimed legacy") {
+    if (persisted || unclaimed) {
       await migrateLegacyInterruption(sessionKey, state.stateDir);
     }
-    if (order === "unclaimed legacy") {
+    if (unclaimed) {
       const migrated = loadSessionEntry(target);
       expect(migrated).toMatchObject({
         status: "interrupted",
@@ -132,7 +130,7 @@ it.each([
       expect(migrated?.restartRecoveryDeliveryRunId).toBeUndefined();
     }
     const mark = (isActive: boolean) =>
-      markRestartAbortedMainSessions({
+      markAborted({
         resolveGatewayContext: () => undefined,
         stateDir: state.stateDir,
         activeRuns: [{ sessionKey, sessionId, runId, lifecycleGeneration }],
@@ -183,7 +181,7 @@ it.each([
         cleanupInternalModelRunTargets: async () => {},
         releaseForeground: undefined,
       });
-      await persistGatewaySessionLifecycleEvent({
+      await persistLifecycle({
         sessionKey,
         event: {
           runId,
@@ -219,19 +217,16 @@ it.each([
       sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
     });
     const recover = (activeSessionIds?: string[]) =>
-      recoverRestartAbortedMainSessions({
+      recoverSessions({
         stateDir: state.stateDir,
         gatewayRuntime: runtime,
         ...(activeSessionIds ? { activeSessionIds } : {}),
       });
     try {
-      if (order === "persisted interruption") {
+      if (persisted) {
         const info = vi.spyOn(mainSessionRecoveryLog, "info");
         try {
-          await markStartupOrphanedMainSessionsForRecovery({
-            stateDir: state.stateDir,
-            activeSessionIds: [sessionId],
-          });
+          await markOrphans({ stateDir: state.stateDir, activeSessionIds: [sessionId] });
           expect(await recover([sessionId])).toEqual({
             started: 0,
             settled: 0,
@@ -251,22 +246,19 @@ it.each([
           info.mockRestore();
         }
       }
-      await markStartupOrphanedMainSessionsForRecovery({ stateDir: state.stateDir });
+      await markOrphans({ stateDir: state.stateDir });
       const result = await recover();
       expect(result).toMatchObject({ started: 1, failed: 0, skipped: 0 });
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({
           method: "agent",
-          params: expect.objectContaining({
-            sessionKey,
-            forceRestartSafeTools: true,
-          }),
+          params: expect.objectContaining({ sessionKey, forceRestartSafeTools: true }),
         }),
       );
       expect(loadSessionEntry(target)).toMatchObject({
         abortedLastRun: false,
         lifecycleRunId: expect.any(String),
-        ...(order === "unclaimed legacy" ? {} : { restartRecoveryDeliverySourceRunId: runId }),
+        ...(unclaimed ? {} : { restartRecoveryDeliverySourceRunId: runId }),
         mainRestartRecovery: expect.objectContaining({ chargedAttempts: 1 }),
       });
       expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
@@ -274,7 +266,7 @@ it.each([
         expect(await recover()).toMatchObject({ started: 0, failed: 0 });
         expect(dispatch).toHaveBeenCalledTimes(1);
       }
-      if (order === "persisted interruption") {
+      if (persisted) {
         expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds).toEqual([
           "previous-completed-run",
         ]);
@@ -319,18 +311,15 @@ it("preserves a terminal receipt recorded under the interrupted continuation's s
     });
     await migrateLegacyInterruption(sessionKey, state.stateDir);
 
-    expect(await markStartupOrphanedMainSessionsForRecovery({ stateDir: state.stateDir })).toEqual({
-      marked: 0,
-      skipped: 0,
-    });
+    expect(await markOrphans({ stateDir: state.stateDir })).toEqual({ marked: 0, skipped: 0 });
     const saved = loadSessionEntry(target);
+    expect(saved?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(saved?.mainRestartRecovery).toBeUndefined();
     expect(saved).toMatchObject({
       restartRecoveryTerminalRunIds: ["completed-source", runId],
       restartRecoveryTerminalDeliveryEvidence: [
         expect.objectContaining({ runId: "completed-source", transcriptRunId: runId }),
       ],
     });
-    expect(saved?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(saved?.mainRestartRecovery).toBeUndefined();
   });
 });

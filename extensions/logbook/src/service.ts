@@ -63,8 +63,7 @@ function unwrapInvokePayload(raw: unknown): SnapshotPayload | null {
       return null;
     }
   }
-  // Tolerate transports that already deliver the bare node payload.
-  return "base64" in envelope || "error" in envelope ? (envelope as SnapshotPayload) : null;
+  return null;
 }
 
 /** Capture commands in preference order: app nodes first, headless node hosts second. */

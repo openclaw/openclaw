@@ -21,6 +21,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat4",
     ],
     29: ["session_nodes", "session_reactions", "sqlite_stat1", "sqlite_stat4"],
+    31: ["memory_index_sources", "memory_index_chunks"],
   },
   state: {
     [MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION]: ["meeting_transcript_sessions"],

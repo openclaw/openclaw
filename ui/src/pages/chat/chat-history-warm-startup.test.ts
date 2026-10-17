@@ -31,6 +31,7 @@ import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import {
   observeChatCache,
+  cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
@@ -332,7 +333,137 @@ describe("first chat startup snapshot ordering", () => {
       expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
+    expect(h.request.mock.calls[0]?.[1]).toMatchObject({ knownState: {} });
   });
+
+  it.each(["unchanged", "changed", "empty", "replacement"] as const)(
+    "restores only receipt-matched warm metadata when server state is %s",
+    async (change) => {
+      const initial = mountPane();
+      const pendingInputs = {
+        items: [
+          {
+            id: "followup-1",
+            runId: "run-followup-1",
+            message: { role: "user", content: "Check the attachment before continuing." },
+            acceptedAt: 1,
+            state: "queued" as const,
+            queued: true as const,
+          },
+        ],
+        total: 1,
+        queuedCount: 1,
+      };
+      const stateRevision = { pendingInputs: "pending-1", sessionInfo: "session-1" };
+      const initialInfo = { ...initial.liveResult.sessionInfo, snapshotAt: 100 };
+      initial.read.resolve(null);
+      initial.request.mockResolvedValueOnce({
+        ...initial.liveResult,
+        pendingInputs,
+        stateRevision,
+        sessionInfo: initialInfo,
+      });
+      initial.connect();
+      await initial.start();
+      const snapshot = readChatSessionSnapshot(
+        initial.state.chatMessagesBySession!,
+        initial.state,
+        {
+          sessionKey,
+        },
+      );
+      expect(snapshot?.historyState).toEqual({
+        stateRevision,
+        pendingInputs,
+        sessionInfo: initialInfo,
+      });
+
+      const warm = mountPane();
+      warm.read.resolve(snapshot);
+      await vi.advanceTimersByTimeAsync(0);
+      const response = createDeferred<unknown>();
+      warm.request.mockReturnValueOnce(response.promise);
+      warm.connect();
+      const loading = warm.start();
+      expect(warm.request).toHaveBeenCalledWith(
+        "chat.startup",
+        expect.objectContaining({ cursor: "live-cursor", knownState: stateRevision }),
+        expect.anything(),
+      );
+
+      const emptyInputs = { items: [], total: 0, queuedCount: 0 };
+      const nextInputs =
+        change === "unchanged"
+          ? pendingInputs
+          : change === "changed"
+            ? {
+                ...pendingInputs,
+                items: [
+                  {
+                    ...pendingInputs.items[0]!,
+                    message: { role: "user", content: "Updated followup." },
+                  },
+                ],
+              }
+            : emptyInputs;
+      const nextInfo =
+        change === "replacement"
+          ? { ...warm.liveResult.sessionInfo, sessionId: "replacement-session", snapshotAt: 200 }
+          : { ...warm.liveResult.sessionInfo, snapshotAt: 200 };
+      const nextRevision =
+        change === "unchanged"
+          ? stateRevision
+          : {
+              pendingInputs: "pending-2",
+              sessionInfo: change === "replacement" ? "session-2" : "session-1",
+            };
+      // A sibling may publish a newer cache while this request still owns its earlier receipts.
+      if (snapshot) {
+        cacheChatSessionSnapshot(
+          warm.state.chatMessagesBySession!,
+          warm.state,
+          { sessionKey },
+          {
+            ...snapshot,
+            historyState: {
+              stateRevision: nextRevision,
+              pendingInputs: emptyInputs,
+              sessionInfo: nextInfo,
+            },
+          },
+        );
+      }
+      response.resolve(
+        change === "replacement"
+          ? {
+              ...warm.liveResult,
+              sessionInfo: nextInfo,
+              pendingInputs: nextInputs,
+              stateRevision: nextRevision,
+            }
+          : {
+              kind: "delta",
+              messages: [],
+              deltaCursor: "next-cursor",
+              stateRevision: nextRevision,
+              sessionInfoSnapshotAt: nextInfo.snapshotAt,
+              ...(change === "unchanged" ? {} : { pendingInputs: nextInputs }),
+            },
+      );
+      await loading;
+      expect(warm.state.chatPendingInputs?.page).toEqual(nextInputs);
+      expect(warm.state.chatPendingInputs?.queuedInputs).toEqual(nextInputs.items);
+      expect(warm.state.currentSessionId).toBe(nextInfo.sessionId);
+      expect(
+        readChatSessionSnapshot(warm.state.chatMessagesBySession!, warm.state, { sessionKey })
+          ?.historyState,
+      ).toEqual({
+        stateRevision: nextRevision,
+        pendingInputs: nextInputs,
+        sessionInfo: nextInfo,
+      });
+    },
+  );
 
   it("shares the restored cursor request when the cache settles during stream admission", async () => {
     const h = mountPane();
@@ -364,6 +495,106 @@ describe("first chat startup snapshot ordering", () => {
     await Promise.all([loading, shared]);
     expect(h.request).toHaveBeenCalledTimes(1);
     expect(h.state.chatMessages).toEqual(stored.messages);
+  });
+
+  it("keeps simultaneous startup requests with different metadata receipts separate", async () => {
+    const first = mountPane();
+    const second = mountPane();
+    const emptyInputs = { items: [], total: 0, queuedCount: 0 };
+    for (const [index, pane] of [first, second].entries()) {
+      pane.read.resolve(null);
+      pane.connect();
+      pane.request.mockResolvedValueOnce({
+        ...pane.liveResult,
+        pendingInputs: emptyInputs,
+        stateRevision: { pendingInputs: "empty", sessionInfo: `info-${index}` },
+        sessionInfo: { ...pane.liveResult.sessionInfo, label: `Label ${index}` },
+      });
+      await pane.start();
+    }
+    second.state.client = first.client;
+    second.state.sessions = first.state.sessions;
+    const response = createDeferred<unknown>();
+    first.request.mockClear();
+    first.request.mockReturnValue(response.promise);
+    const loads = [first.start(), second.start()];
+    expect(first.request).toHaveBeenCalledTimes(2);
+    expect(first.request.mock.calls.map(([, params]) => params)).toEqual([
+      expect.objectContaining({ knownState: { pendingInputs: "empty", sessionInfo: "info-0" } }),
+      expect.objectContaining({ knownState: { pendingInputs: "empty", sessionInfo: "info-1" } }),
+    ]);
+    response.resolve({
+      kind: "delta",
+      messages: [],
+      deltaCursor: "next-cursor",
+      sessionInfo: { ...first.liveResult.sessionInfo, label: "Latest label" },
+      stateRevision: { pendingInputs: "empty", sessionInfo: "latest-info" },
+    });
+    await Promise.all(loads);
+    expect(first.state.chatPendingInputs?.page).toEqual(emptyInputs);
+    expect(second.state.chatPendingInputs?.page).toEqual(emptyInputs);
+  });
+
+  it("requests missing pending inputs separately even when cached receipts match", async () => {
+    const initial = mountPane();
+    const pendingInputs = {
+      items: [
+        {
+          id: "followup-1",
+          runId: "run-followup-1",
+          message: { role: "user", content: "Check the attachment." },
+          acceptedAt: 1,
+          state: "queued" as const,
+          queued: true as const,
+        },
+      ],
+      total: 1,
+      queuedCount: 1,
+    };
+    const stateRevision = { pendingInputs: "pending-1", sessionInfo: "info-1" };
+    initial.read.resolve(null);
+    initial.connect();
+    initial.request.mockResolvedValueOnce({ ...initial.liveResult, pendingInputs, stateRevision });
+    await initial.start();
+    const snapshot = readChatSessionSnapshot(initial.state.chatMessagesBySession!, initial.state, {
+      sessionKey,
+    });
+    if (!snapshot?.historyState) {
+      throw new Error("expected cached startup metadata");
+    }
+    const first = mountPane();
+    const second = mountPane();
+    first.read.resolve(snapshot);
+    second.read.resolve({
+      ...snapshot,
+      historyState: { stateRevision, sessionInfo: snapshot.historyState.sessionInfo },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    first.connect();
+    second.connect();
+    second.state.client = first.client;
+    second.state.sessions = first.state.sessions;
+    const omitted = createDeferred<unknown>();
+    const full = createDeferred<unknown>();
+    first.request.mockReturnValueOnce(omitted.promise).mockReturnValueOnce(full.promise);
+    const loads = [first.start(), second.start()];
+    expect(first.request).toHaveBeenCalledTimes(2);
+    expect(first.request.mock.calls.map(([, params]) => params)).toEqual([
+      expect.objectContaining({ knownState: stateRevision }),
+      expect.objectContaining({ knownState: { sessionInfo: "info-1" } }),
+    ]);
+    const delta = {
+      kind: "delta",
+      messages: [],
+      deltaCursor: "next-cursor",
+      stateRevision,
+      sessionInfoSnapshotAt: 2,
+    };
+    omitted.resolve(delta);
+    full.resolve({ ...delta, pendingInputs });
+    await Promise.all(loads);
+    expect(first.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
+    expect(second.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
   });
 
   it("shares an immediate startup between callers while the local read is pending", async () => {

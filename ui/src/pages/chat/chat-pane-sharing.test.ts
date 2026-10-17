@@ -156,7 +156,7 @@ function installReplacementConnection(
     loading: false,
     result: sharingResult(row),
   };
-  pane.sessionSharingStates = new Map([[cacheKey, sharingState]]);
+  pane.collaboration.sharingStates = new Map([[cacheKey, sharingState]]);
   return { cacheKey, request, sessions, sharingState };
 }
 
@@ -185,14 +185,14 @@ describe("public session sharing", () => {
       });
       const row = sessionRow();
       setSharingAuthorization(pane, { scopes: [scope] });
-      const states = pane.sessionSharingStates;
+      const states = pane.collaboration.sharingStates;
       const updates = vi.spyOn(getPaneTestRuntime(pane), "invalidate");
       const workspace = createPaneHeaderWorkspaceFixture(state);
 
       pane.renderPaneHeader(workspace, row, false, undefined, false, null);
       pane.renderPaneHeader(workspace, row, false, undefined, false, null);
 
-      expect(pane.sessionSharingStates).toBe(states);
+      expect(pane.collaboration.sharingStates).toBe(states);
       expect(request).not.toHaveBeenCalled();
       expect(updates).not.toHaveBeenCalled();
     },
@@ -254,7 +254,8 @@ describe("public session sharing", () => {
         true,
       );
       expect(
-        pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result?.publicShare,
+        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result
+          ?.publicShare,
       ).toBeUndefined();
     },
   );
@@ -294,9 +295,9 @@ describe("public session sharing", () => {
     pane.syncSelectedSessionSharing(row);
     await vi.waitFor(() => {
       expect(listCount).toBe(1);
-      expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading).toBe(
-        false,
-      );
+      expect(
+        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading,
+      ).toBe(false);
     });
 
     confirmPublicShare.mockResolvedValue(true);
@@ -318,7 +319,8 @@ describe("public session sharing", () => {
     await vi.waitFor(() => {
       expect(listCount).toBe(2);
       expect(
-        pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result?.publicShare,
+        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result
+          ?.publicShare,
       ).toEqual(publicShare);
     });
   });
@@ -357,9 +359,9 @@ describe("public session sharing", () => {
     pane.syncSelectedSessionSharing(row);
     await vi.waitFor(() => {
       expect(listCount).toBe(1);
-      expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading).toBe(
-        false,
-      );
+      expect(
+        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.loading,
+      ).toBe(false);
     });
 
     confirmPublicShare.mockResolvedValue(true);
@@ -376,7 +378,8 @@ describe("public session sharing", () => {
     await vi.waitFor(() => {
       expect(listCount).toBe(3);
       expect(
-        pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result?.publicShare,
+        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result
+          ?.publicShare,
       ).toEqual(publicShare);
     });
   });
@@ -435,7 +438,7 @@ describe("chat pane sharing authorization", () => {
       sessionKey: row.key,
       agentId: "main",
     });
-    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toEqual({
+    expect(pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))).toEqual({
       loading: false,
       result: sharingResult(row),
     });
@@ -467,9 +470,12 @@ describe("chat pane sharing authorization", () => {
       kind: "global",
       visibility,
     });
-    pane.presencePayload = {
-      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
-    };
+    pane.presence.update({
+      presence: [
+        { ts: 1, user: { id: "owner" } },
+        { ts: 1, user: { id: "alice" } },
+      ],
+    });
 
     await pane.refreshSessionSuggestions();
 
@@ -477,8 +483,8 @@ describe("chat pane sharing authorization", () => {
       sessionKey: "agent:work:main",
       agentId: "work",
     });
-    expect(pane.sessionSuggestions).toEqual([pending]);
-    expect(pane.sessionSuggestionRole).toBe("owner");
+    expect(pane.collaboration.suggestions).toEqual([pending]);
+    expect(pane.collaboration.role).toBe("owner");
   });
 
   it("allows read-scoped owners to load sharing data but not mutate it", async () => {
@@ -616,12 +622,16 @@ describe("chat pane sharing authorization", () => {
     listed.resolve(sharingResult(stale));
     await pending;
 
-    expect(pane.sessionSharingStates.has(pane.sessionSharingCacheKey(stale.key))).toBe(false);
+    expect(pane.collaboration.sharingStates.has(pane.sessionSharingCacheKey(stale.key))).toBe(
+      false,
+    );
 
     await pane.loadSessionSharing(replacement);
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(replacement.key))).toEqual({
+    expect(
+      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(replacement.key)),
+    ).toEqual({
       loading: false,
       result: sharingResult(replacement),
     });
@@ -642,7 +652,9 @@ describe("chat pane sharing authorization", () => {
     listed.reject(new Error("stale sharing load failed"));
     await pending;
 
-    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toBeUndefined();
+    expect(
+      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key)),
+    ).toBeUndefined();
   });
 });
 
@@ -682,7 +694,9 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
 
       expect(replacement.request).not.toHaveBeenCalled();
       expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-      expect(pane.sessionSharingStates.get(replacement.cacheKey)).toBe(replacement.sharingState);
+      expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
+        replacement.sharingState,
+      );
       expect(state.lastError).toBeNull();
       expect(state.chatError).toBeNull();
     },
@@ -719,7 +733,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
         loading: false,
         result: sharingResult(replacement),
       };
-      pane.sessionSharingStates = new Map([[cacheKey, replacementState]]);
+      pane.collaboration.sharingStates = new Map([[cacheKey, replacementState]]);
 
       if (completion === "resolve") {
         response.resolve({});
@@ -730,7 +744,7 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
 
       expect(request).toHaveBeenCalledTimes(1);
       expect(sessions.reconcileMutation).not.toHaveBeenCalled();
-      expect(pane.sessionSharingStates.get(cacheKey)).toBe(replacementState);
+      expect(pane.collaboration.sharingStates.get(cacheKey)).toBe(replacementState);
       expect(state.lastError).toBeNull();
       expect(state.chatError).toBeNull();
     },
@@ -768,7 +782,9 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
     response.reject(new Error(`${mutation.name} failed after session switch`));
     await pending;
 
-    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(previous.key))).toMatchObject({
+    expect(
+      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(previous.key)),
+    ).toMatchObject({
       loading: false,
       error: `${mutation.name} failed after session switch`,
     });
@@ -800,7 +816,9 @@ describe.each(mutations)("chat pane $name mutation connection ownership", (mutat
     response.reject(new Error(`stale ${mutation.name} failed`));
     await pending;
 
-    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toBeUndefined();
+    expect(
+      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key)),
+    ).toBeUndefined();
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
     expect(sessions.reconcileMutation).not.toHaveBeenCalled();
@@ -829,7 +847,7 @@ it("preserves a member sharing refresh failure in the current connection", async
 
   await pane.setSessionMember(row, "identity-alice", true);
 
-  expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))).toMatchObject({
+  expect(pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))).toMatchObject({
     loading: false,
     error: failure,
   });
@@ -872,7 +890,9 @@ describe("chat pane sharing mutation phase ownership", () => {
 
       expect(replacement.request).not.toHaveBeenCalled();
       expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-      expect(pane.sessionSharingStates.get(replacement.cacheKey)).toBe(replacement.sharingState);
+      expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
+        replacement.sharingState,
+      );
     },
   );
 
@@ -917,7 +937,9 @@ describe("chat pane sharing mutation phase ownership", () => {
         expect(oldSessions.reconcileMutation).toHaveBeenCalledTimes(name === "visibility" ? 1 : 0);
         expect(replacement.request).not.toHaveBeenCalled();
         expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-        expect(pane.sessionSharingStates.get(replacement.cacheKey)).toBe(replacement.sharingState);
+        expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
+          replacement.sharingState,
+        );
       },
     );
   });
@@ -952,7 +974,9 @@ describe("chat pane sharing mutation phase ownership", () => {
 
     expect(replacement.request).not.toHaveBeenCalled();
     expect(replacement.sessions.reconcileMutation).not.toHaveBeenCalled();
-    expect(pane.sessionSharingStates.get(replacement.cacheKey)).toBe(replacement.sharingState);
+    expect(pane.collaboration.sharingStates.get(replacement.cacheKey)).toBe(
+      replacement.sharingState,
+    );
   });
 });
 
@@ -985,9 +1009,9 @@ describe("chat pane current sharing mutation refresh order", () => {
       "sessions.reconcileMutation",
       "session.members.listEvidence",
     ]);
-    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result).toEqual(
-      sharingResult(row),
-    );
+    expect(
+      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result,
+    ).toEqual(sharingResult(row));
   });
 
   it("refreshes sharing before sessions after a member change", async () => {
@@ -1018,8 +1042,8 @@ describe("chat pane current sharing mutation refresh order", () => {
       "session.members.listEvidence",
       "sessions.reconcileMutation",
     ]);
-    expect(pane.sessionSharingStates.get(pane.sessionSharingCacheKey(row.key))?.result).toEqual(
-      sharingResult(row),
-    );
+    expect(
+      pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.result,
+    ).toEqual(sharingResult(row));
   });
 });

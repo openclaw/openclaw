@@ -5,6 +5,7 @@ import {
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
@@ -34,6 +35,7 @@ import {
   acceptsHistoryResult,
 } from "./chat-history-state.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
   projectChatTranscriptMetadata,
@@ -111,6 +113,7 @@ type SharedChatHistoryArgs = [
   cursor?: string,
   inputRunIds?: string[],
   budget?: { limit: number; maxBytes: number },
+  historyState?: ChatHistoryState,
 ];
 
 export function requestSharedHistory(
@@ -134,8 +137,21 @@ export function requestSharedHistory(
     cursor,
     inputRunIds = [],
     budget = { limit: CHAT_HISTORY_REQUEST_LIMIT, maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES },
+    historyState,
   ]: SharedChatHistoryArgs
 ): Promise<ChatHistoryResponse & { observation?: ChatHistoryObservation }> {
+  const knownState =
+    cursor !== undefined && historyState
+      ? {
+          ...(historyState.pendingInputs
+            ? { pendingInputs: historyState.stateRevision.pendingInputs }
+            : {}),
+          ...(historyState.sessionInfo
+            ? { sessionInfo: historyState.stateRevision.sessionInfo }
+            : {}),
+        }
+      : {};
+  requestKey += JSON.stringify(knownState);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();
@@ -153,6 +169,7 @@ export function requestSharedHistory(
     const params = {
       sessionKey,
       toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+      knownState,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
       ...budget,
@@ -192,6 +209,26 @@ export function requestSharedHistory(
           timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
         }),
       );
+      if (!(isHistoryCursor(response) && response.kind === "reset") && historyState) {
+        // Resolve omissions against this request's exact payload, never a later cache write.
+        if (
+          response.stateRevision?.pendingInputs &&
+          response.stateRevision.pendingInputs === historyState.stateRevision.pendingInputs
+        ) {
+          response.pendingInputs ??= historyState.pendingInputs;
+        }
+        if (
+          response.stateRevision?.sessionInfo &&
+          response.stateRevision.sessionInfo === historyState.stateRevision.sessionInfo &&
+          !response.sessionInfo &&
+          historyState.sessionInfo
+        ) {
+          response.sessionInfo = {
+            ...historyState.sessionInfo,
+            snapshotAt: response.sessionInfoSnapshotAt,
+          };
+        }
+      }
       return { ...response, observation, consumersAtIssue };
     };
     const signal = controller.signal;
@@ -256,7 +293,7 @@ export function requestSharedHistory(
 
 type ChatSessionSnapshotRequestResult =
   | { kind: "snapshot"; snapshot: ChatSessionSnapshot }
-  | ChatHistoryDeltaResult
+  | (ChatHistoryDeltaResult & { sessionInfo: GatewaySessionRow })
   | ChatHistoryResetResult;
 
 export async function requestChatSessionSnapshot(
@@ -283,7 +320,13 @@ export async function requestChatSessionSnapshot(
     CHAT_HISTORY_PREFETCH_BUDGET,
   );
   if (isHistoryCursor(result)) {
-    return result;
+    if (result.kind === "reset") {
+      return result;
+    }
+    if (!result.sessionInfo) {
+      throw new Error("chat history delta omitted uncached session metadata");
+    }
+    return { ...result, sessionInfo: result.sessionInfo };
   }
   const sessionInfo = result.sessionInfo;
   return {
@@ -297,6 +340,13 @@ export async function requestChatSessionSnapshot(
       messages: visibleChatHistoryMessages(result.messages),
       pagination: resolveChatHistoryPagination(result),
       sessionId: historySessionId(result),
+      historyState: result.stateRevision
+        ? {
+            stateRevision: result.stateRevision,
+            pendingInputs: result.pendingInputs,
+            sessionInfo,
+          }
+        : undefined,
     },
   };
 }

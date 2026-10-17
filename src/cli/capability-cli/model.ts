@@ -369,13 +369,13 @@ async function runModelAuthStatus(agent: string) {
 async function runModelAuthLogout(provider: string, agent: string) {
   const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { listProfilesForProvider, loadAuthProfileStoreForRuntime } =
+  const { listProfilesForProvider, loadAuthProfileStoreForRuntimeAsync } =
     await import("../../agents/auth-profiles.js");
   const { updateAuthProfileStoreWithLock } =
     await import("../../agents/auth-profiles/store-runtime.js");
   const cfg = await captureRuntimeConfigAsyncReader()();
   const agentDir = resolveAgentDir(cfg, agent);
-  const store = loadAuthProfileStoreForRuntime(agentDir);
+  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,

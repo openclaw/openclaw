@@ -393,20 +393,62 @@ export class SwarmRosterHydrator {
       const previous = previousChildren.get(row.key);
       return previous?.swarmGroupId !== row.swarmGroupId || previous?.status !== row.status;
     });
+    const initialGroupSizes = new Map<string, number>();
+    const initialUnlistedActiveGroups = new Set<string>();
+    if (!this.childrenRead) {
+      for (const row of result.sessions) {
+        if (row.swarmGroupId) {
+          initialGroupSizes.set(
+            row.swarmGroupId,
+            (initialGroupSizes.get(row.swarmGroupId) ?? 0) + 1,
+          );
+          if (
+            (row.status === "running" || row.status === "queued") &&
+            !this.parentRow?.swarm?.groups.some((group) => group.groupId === row.swarmGroupId)
+          ) {
+            initialUnlistedActiveGroups.add(row.swarmGroupId);
+          }
+        }
+      }
+    }
     const currentKeys = new Set(result.sessions.map((row) => row.key));
     const removedMember = [...described.keys()].some(
       (key) => previousChildren.has(key) && !currentKeys.has(key),
+    );
+    const initialGroupGrowth = this.parentRow?.swarm?.groups.some(
+      (group) =>
+        (initialGroupSizes.get(group.groupId) ?? 0) >
+        group.queued + group.running + group.done + group.failed,
     );
     // Reuse a parent read that already observed this child change. Equal aggregate
     // counts alone cannot prove unchanged membership outside the primary page.
     const missingDetail = changedMembers.some((row) => {
       const member = described.get(row.key);
+      if (!member && !this.childrenRead) {
+        const group = this.parentRow?.swarm?.groups.find(
+          (candidate) => candidate.groupId === row.swarmGroupId,
+        );
+        // Boot's retained children extend beyond the descriptor's bounded window.
+        // Only a complete displayed group certifies an individual missing member.
+        if (
+          !group ||
+          group.children?.length !== group.queued + group.running + group.done + group.failed
+        ) {
+          return false;
+        }
+      }
       return (
         row.swarmGroupId &&
         (member?.groupId !== row.swarmGroupId || (row.status && member?.status !== row.status))
       );
     });
-    if (this.parentRow && (removedMember || missingDetail)) {
+    if (
+      this.parentRow &&
+      (removedMember ||
+        missingDetail ||
+        initialGroupGrowth ||
+        initialUnlistedActiveGroups.size > (this.parentRow.swarm?.otherActiveGroups ?? 0))
+    ) {
       // Child membership can change without invalidating the parent's descriptor revision.
       void this.readParent(true);
     }
