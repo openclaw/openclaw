@@ -42,6 +42,18 @@ const windowsShells = {
   legacy: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 };
 
+const withCompletionEnv = (homeDir: string, stateDir: string, run: () => Promise<void>) =>
+  withEnvAsync(
+    {
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+      OPENCLAW_STATE_DIR: stateDir,
+      XDG_CONFIG_HOME: undefined,
+      ZDOTDIR: undefined,
+    },
+    run,
+  );
+
 async function withCompletionHome(
   run: (paths: { homeDir: string; stateDir: string }) => Promise<void>,
   stateDirPrefix = "openclaw-bash-completion-state-",
@@ -50,16 +62,7 @@ async function withCompletionHome(
   const homeDir = tempDirs.make("openclaw-bash-completion-home-");
   const stateDir = portable ? path.join(homeDir, ".openclaw") : tempDirs.make(stateDirPrefix);
 
-  await withEnvAsync(
-    {
-      HOME: homeDir,
-      USERPROFILE: homeDir,
-      OPENCLAW_STATE_DIR: stateDir,
-      XDG_CONFIG_HOME: undefined,
-      ZDOTDIR: undefined,
-    },
-    () => run({ homeDir, stateDir }),
-  );
+  await withCompletionEnv(homeDir, stateDir, () => run({ homeDir, stateDir }));
 }
 
 async function writeCompletionCache(shell: CompletionShell, content = "# completion\n") {
@@ -152,25 +155,16 @@ it.skipIf(process.platform === "win32")(
       ["powershell", path.join(".config", "powershell", "Microsoft.PowerShell_profile.ps1")],
     ] as const) {
       const stateDir = tempDirs.make(`openclaw-${shell}-home-symlink-state-`);
-      await withEnvAsync(
-        {
-          HOME: `${linkedHome}${path.sep}..`,
-          USERPROFILE: `${linkedHome}${path.sep}..`,
-          OPENCLAW_STATE_DIR: stateDir,
-          XDG_CONFIG_HOME: undefined,
-          ZDOTDIR: undefined,
-        },
-        async () => {
-          const cachePath = await writeCompletionCache(shell, `# cached ${shell} completion\n`);
-          await installCompletion(shell, true, "openclaw");
-          await expect(readProfile(path.join(realHome, profileName))).resolves.toContain(cachePath);
-          expect(resolveCompletionProfileHint(shell)).toBe(
-            shell === "powershell"
-              ? `${linkedHome}${path.sep}..${path.sep}${profileName}`
-              : `~/${profileName}`,
-          );
-        },
-      );
+      await withCompletionEnv(`${linkedHome}${path.sep}..`, stateDir, async () => {
+        const cachePath = await writeCompletionCache(shell, `# cached ${shell} completion\n`);
+        await installCompletion(shell, true, "openclaw");
+        await expect(readProfile(path.join(realHome, profileName))).resolves.toContain(cachePath);
+        expect(resolveCompletionProfileHint(shell)).toBe(
+          shell === "powershell"
+            ? `${linkedHome}${path.sep}..${path.sep}${profileName}`
+            : `~/${profileName}`,
+        );
+      });
     }
   },
 );

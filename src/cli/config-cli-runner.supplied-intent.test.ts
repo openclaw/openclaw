@@ -4,9 +4,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { runConfigOperations } from "./config-cli-runner.js";
 
-// Exercise the real ordered runner, path mutators, roster projection and reference
-// restorer. Snapshot loading, schema/policy checks and persistence are boundaries;
-// this suite does not claim writer/topology or registered CLI acceptance.
+// Real runner, path/roster mutators and reference restoration; mocked snapshot,
+// validation and persistence boundaries do not prove writer/topology or CLI acceptance.
 const state = vi.hoisted(() => ({
   snapshot: {} as Record<string, unknown>,
   prepare: vi.fn(),
@@ -21,9 +20,7 @@ vi.mock("./config-cli-validation.js", () => ({
   validateConfigMutation: async () => ({ kind: "write" }),
   assertStrictConfigForMutation: vi.fn(),
 }));
-vi.mock("../config/io.write-prepare.js", () => ({
-  prepareConfigWriteValues: state.prepare,
-}));
+vi.mock("../config/io.write-prepare.js", () => ({ prepareConfigWriteValues: state.prepare }));
 vi.mock("../config/io.write-topology.js", () => ({
   prepareConfigWriteTopology: () => state.unexpected("dry-run topology"),
 }));
@@ -31,9 +28,7 @@ vi.mock("../config/config-path-mutation.js", () => ({
   resolveManagedUnsetPathsForWrite: () => state.unexpected("dry-run unsets"),
 }));
 vi.mock("../config/io.meta.js", () => ({ AUTO_MANAGED_CONFIG_META_PATHS: [] }));
-vi.mock("../config/io.read-helpers.js", () => ({
-  coerceConfig: (value: unknown) => value,
-}));
+vi.mock("../config/io.read-helpers.js", () => ({ coerceConfig: (value: unknown) => value }));
 vi.mock("../config/paths.js", () => ({
   resolveConfigPath: () => "/test/openclaw.json",
   resolveStateDir: vi.fn(),
@@ -70,8 +65,7 @@ vi.mock("./config-set-dryrun.js", () => ({
 }));
 vi.mock("./one-shot-exit.js", () => ({ exitCliAfterOutput: vi.fn() }));
 vi.mock("./command-format.js", () => ({ formatCliCommand: (s: string) => s }));
-// This public predecessor keeps roster functions in agent-scope-config.
-// Leave that implementation real and isolate only its workspace services.
+// Keep roster functions real, isolating only their workspace services.
 vi.mock("../config/legacy.default-agent-owner-state.js", () => ({
   getRetainedLegacyDefaultAgentId: vi.fn(),
 }));
@@ -106,16 +100,13 @@ const namedEntries = (...names: string[]) =>
 const modelConfig = (rows: { id: string; name: string }[]) => ({
   models: { providers: { example: { models: rows } } },
 });
-const rows = [
+const referenceRows = (edited: string, untouched: string) => [
   { id: "drop", name: "drop" },
-  { id: "edited", name: "${ALIAS}" },
-  { id: "untouched", name: "${OTHER_ALIAS}" },
+  { id: "edited", name: edited },
+  { id: "untouched", name: untouched },
 ];
-const resolvedRows = [
-  { id: "drop", name: "drop" },
-  { id: "edited", name: "${TARGET}" },
-  { id: "untouched", name: "${OTHER_TARGET}" },
-];
+const rows = referenceRows("${ALIAS}", "${OTHER_ALIAS}");
+const resolvedRows = referenceRows("${TARGET}", "${OTHER_TARGET}");
 function op(
   mutation: ConfigSetOperation["mutation"],
   path: string | string[],
@@ -131,6 +122,8 @@ function op(
     inputMode: "json",
   };
 }
+const editModelName = (index: number, name: string) => op("set", modelPath(index, "name"), name);
+const deleteModel = (index: number) => op("delete", modelPath(index));
 function loadSnapshot(resolved: unknown, authored: unknown = resolved): void {
   state.snapshot = {
     path: "/test/openclaw.json",
@@ -188,10 +181,7 @@ describe("ordered runner supplied intent after deletion", () => {
     async (deleted) => {
       const result = await apply(
         modelConfig(resolvedRows),
-        [
-          op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]),
-          op("delete", modelPath(deleted)),
-        ],
+        [op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]), deleteModel(deleted)],
         modelConfig(rows),
       );
       expect(result.config.models?.providers?.example?.models).toEqual([
@@ -207,27 +197,19 @@ describe("ordered runner supplied intent after deletion", () => {
     [
       "successive splices",
       modelConfig(["a", "b", "c", "d"].map((id) => ({ id, name: id }))),
-      [
-        op("set", modelPath(3, "name"), "edited"),
-        op("delete", modelPath(1)),
-        op("delete", modelPath(0)),
-      ],
+      [editModelName(3, "edited"), deleteModel(1), deleteModel(0)],
       [modelPath(1, "name")],
     ],
     [
       "earlier indices and unrelated arrays",
       { ...modelConfig(resolvedRows), other: [{ name: "first" }, { name: "second" }] },
-      [
-        op("set", modelPath(0, "name"), "edited"),
-        op("set", "other.1.name", "other edited"),
-        op("delete", modelPath(2)),
-      ],
+      [editModelName(0, "edited"), op("set", "other.1.name", "other edited"), deleteModel(2)],
       [modelPath(0, "name"), "other.1.name"],
     ],
     [
       "ancestor replacement",
       modelConfig(resolvedRows),
-      [op("replace", modelsPath, resolvedRows), op("delete", modelPath(0))],
+      [op("replace", modelsPath, resolvedRows), deleteModel(0)],
       [modelsPath],
     ],
     [
@@ -253,8 +235,8 @@ describe("ordered runner supplied intent after deletion", () => {
       "recreated item",
       modelConfig(["a", "b", "c"].map((id) => ({ id, name: id }))),
       [
-        op("set", modelPath(1, "name"), "removed"),
-        op("delete", modelPath(1)),
+        editModelName(1, "removed"),
+        deleteModel(1),
         op("replace", modelPath(1), { id: "fresh", name: "fresh" }),
       ],
       [modelPath(1)],
@@ -262,7 +244,7 @@ describe("ordered runner supplied intent after deletion", () => {
     [
       "missing deletion",
       modelConfig(resolvedRows),
-      [op("set", modelPath(1, "name"), "edited"), op("delete", modelPath(8))],
+      [editModelName(1, "edited"), deleteModel(8)],
       [modelPath(1, "name")],
     ],
   ])("preserves supplied intent for %s", async (_name, config, operations, paths) => {
@@ -286,22 +268,19 @@ describe("ordered runner supplied intent after deletion", () => {
   });
 });
 
-describe("replacement guard advice per subcommand", () => {
-  // The advice has to name flags the running subcommand registers: `config patch` accepts
-  // neither --merge nor --replace, only --replace-path.
-  it.each([
-    ["patch", "Use --replace-path models.providers.example.models to replace intentionally."],
-    ["set", "Use --merge to merge by id or --replace to replace intentionally."],
-  ] as const)(
-    "refuses a %s model list replacement naming its own flags",
-    async (successMode, advice) => {
-      loadSnapshot(modelConfig(resolvedRows));
-      await expect(
-        run([op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])], successMode),
-      ).rejects.toHaveProperty(
-        "message",
-        `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
-      );
-    },
-  );
-});
+// Advice must name registered flags: config patch has --replace-path, not --merge/--replace.
+it.each([
+  ["patch", "Use --replace-path models.providers.example.models to replace intentionally."],
+  ["set", "Use --merge to merge by id or --replace to replace intentionally."],
+] as const)(
+  "refuses a %s model list replacement naming its own flags",
+  async (successMode, advice) => {
+    loadSnapshot(modelConfig(resolvedRows));
+    await expect(
+      run([op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])], successMode),
+    ).rejects.toHaveProperty(
+      "message",
+      `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
+    );
+  },
+);

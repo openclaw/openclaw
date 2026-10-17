@@ -71,17 +71,15 @@ describe("readConfigPatchOperations", () => {
   });
 });
 
-describe("copied --replace-path retry", () => {
+it("replaces the leaf named by a copied --replace-path retry", async () => {
   const patch = '{"models":{"providers":{"local]service":{"models":[{"id":"qwen3:8b"}]}}}}';
   const leaf = ["models", "providers", "local]service", "models"];
 
-  it("replaces the leaf the refusal named", async () => {
-    expect(
-      await readPatch(patch, {
-        replacePath: ['models.providers["local]service"].models'],
-      }),
-    ).toEqual([expect.objectContaining({ setPath: leaf, mutation: "replace" })]);
-  });
+  expect(
+    await readPatch(patch, {
+      replacePath: ['models.providers["local]service"].models'],
+    }),
+  ).toEqual([expect.objectContaining({ setPath: leaf, mutation: "replace" })]);
 });
 
 describe("exec provider config inputs", () => {
@@ -128,16 +126,13 @@ describe("exec provider config inputs", () => {
   });
 });
 
-describe("unused --replace-path echo", () => {
-  const patch = '{"models":{"providers":{"openai":{"models":[{"id":"gpt-4o"}]}}}}';
-
-  it.each([
-    ["channels.discord.guilds", ["channels", "discord", "guilds"]],
-    [
-      'models.providers["local.service"].modals',
-      ["models", "providers", "local.service", "modals"],
-    ],
-  ] as const)("prints a retry that re-parses for %s", async (replacePath, segments) => {
+it.each([
+  ["channels.discord.guilds", ["channels", "discord", "guilds"]],
+  ['models.providers["local.service"].modals', ["models", "providers", "local.service", "modals"]],
+] as const)(
+  "prints an unused --replace-path retry that re-parses for %s",
+  async (replacePath, segments) => {
+    const patch = '{"models":{"providers":{"openai":{"models":[{"id":"gpt-4o"}]}}}}';
     const message = await readPatch(patch, { replacePath: [replacePath] }).then(
       () => "expected the unused --replace-path to be rejected",
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -147,5 +142,5 @@ describe("unused --replace-path echo", () => {
     );
     const printed = /--replace-path (\S+) did not match/u.exec(message)?.[1] ?? "";
     expect(parseConfigSetPath(printed)).toEqual(segments);
-  });
-});
+  },
+);
