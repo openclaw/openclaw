@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { BlobsterUnsupportedRuntimeError } from "../../agents/blobster-generation-errors.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -99,7 +100,10 @@ describe("agents.avatar.generate", () => {
     expect(await response).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Avatar generation access changed. Reconnect and try again.",
+      }),
     );
     expect(release).toHaveBeenCalledOnce();
   });
@@ -112,6 +116,19 @@ describe("agents.avatar.generate", () => {
       expect.objectContaining({
         code: "UNAVAILABLE",
         message: "Could not generate a valid Blobster with the selected model.",
+      }),
+    );
+  });
+
+  it("explains an unsupported runtime without exposing provider details", async () => {
+    generation.mockRejectedValue(new BlobsterUnsupportedRuntimeError());
+    expect(await generate({ agentId: "garden", prompt: "A gardener" })).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message:
+          "The selected agent runtime cannot generate avatars without tools. Choose a supported runtime and try again.",
       }),
     );
   });

@@ -4,6 +4,10 @@ import {
   validateAgentsAvatarGenerateParams,
   validateAgentsAvatarGenerateResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  BlobsterGenerationAuthorityChangedError,
+  BlobsterUnsupportedRuntimeError,
+} from "../../agents/blobster-generation-errors.js";
 import { generateBlobsterForAgent } from "../../agents/blobster-generation.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -15,7 +19,7 @@ export const agentAvatarGenerateHandler = defineValidatedGatewayMethod(
     const assertCurrent = () => {
       signal?.throwIfAborted();
       if (hasCurrentClientAuthority?.() === false) {
-        throw new Error("Avatar generation access changed. Reconnect and try again.");
+        throw new BlobsterGenerationAuthorityChangedError();
       }
     };
     const operator = await captureGatewayOperatorRunAuthority({
@@ -52,9 +56,19 @@ export const agentAvatarGenerateHandler = defineValidatedGatewayMethod(
     }
   },
   // Provider output and account details must not be reflected to the browser.
-  () =>
-    errorShape(
+  (error) => {
+    if (error instanceof BlobsterGenerationAuthorityChangedError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    if (error instanceof BlobsterUnsupportedRuntimeError) {
+      return errorShape(
+        ErrorCodes.UNAVAILABLE,
+        "The selected agent runtime cannot generate avatars without tools. Choose a supported runtime and try again.",
+      );
+    }
+    return errorShape(
       ErrorCodes.UNAVAILABLE,
       "Could not generate a valid Blobster with the selected model.",
-    ),
+    );
+  },
 );
