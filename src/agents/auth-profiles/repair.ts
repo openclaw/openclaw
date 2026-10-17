@@ -1,4 +1,5 @@
 /**
+ * Auth profile repair helpers.
  * Migrates legacy provider:default OAuth config references to safer modern
  * profile ids chosen from store metadata and auth order.
  */
@@ -23,6 +24,7 @@ function isEmailLike(value: string): boolean {
   return value.includes("@") && value.includes(".");
 }
 
+/** Suggests a modern OAuth profile id for a legacy provider:default profile. */
 export function suggestOAuthProfileIdForLegacyDefault(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;

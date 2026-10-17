@@ -18,6 +18,7 @@ const globalState = globalThis as typeof globalThis & {
   [CONTEXT_WINDOW_RUNTIME_STATE_KEY]?: ContextWindowRuntimeState;
 };
 
+/** Shared mutable state for context-window resolution and model discovery. */
 export const CONTEXT_WINDOW_RUNTIME_STATE = (globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY] ||= {
   loadPromise: null,
   configuredConfig: undefined,

@@ -1,4 +1,5 @@
 /**
+ * Auth profile health summarization.
  * Classifies stored and runtime credentials into profile/provider rollups for
  * status commands and doctor output without prompting keychain access.
  */
@@ -61,6 +62,7 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
+/** Format a remaining-duration value for compact auth status displays. */
 export function formatRemainingShort(
   remainingMs?: number,
   opts?: {
@@ -213,6 +215,7 @@ function buildProfileHealth(params: {
   return expiringProfileHealth(effectiveCredential.expires, oauthWarnAfterMs);
 }
 
+/** Build profile and provider auth health rollups from an auth profile store. */
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
   cfg?: OpenClawConfig;

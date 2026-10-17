@@ -1,3 +1,6 @@
+/**
+ * Resolves CLI runtime aliases to provider/model auth labels and execution ids.
+ */
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -29,6 +32,7 @@ export function isRetiredModelPickerProvider(provider: string): boolean {
   return RETIRED_MODEL_PICKER_PROVIDERS.has(normalizeProviderId(provider));
 }
 
+/** Creates a provider visibility predicate for model picker rendering. */
 export function createModelPickerVisibleProviderPredicate(
   params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
 ): (provider: string) => boolean {

@@ -1,4 +1,5 @@
 /**
+ * Public path barrel for auth-profile stores.
  * Import through this file for canonical SQLite display and lock paths.
  */
 import path from "node:path";

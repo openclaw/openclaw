@@ -235,6 +235,7 @@ export function mergeProviderModels(
   };
 }
 
+/** Merges implicit and explicit provider config maps by provider id. */
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;

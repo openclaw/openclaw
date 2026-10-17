@@ -1,4 +1,5 @@
 /**
+ * Auth profile store orchestration.
  * Merges persisted stores, runtime snapshots, inherited main-agent OAuth
  * profiles, and external CLI overlays while keeping save paths local.
  */
@@ -258,6 +259,7 @@ function convergeRuntimeAuthProfileStoreSnapshot(
   }
 }
 
+/** Whether an agent dir resolves to the shared main auth-profile owner. */
 export function isSharedMainAuthProfileAgentDir(agentDir?: string): boolean {
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   if (!effectiveAgentDir) {

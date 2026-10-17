@@ -1,3 +1,6 @@
+/**
+ * Resolves fast-mode state from agent config and runtime defaults.
+ */
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -30,6 +33,7 @@ type FastModeState = {
   fastAutoOnSeconds: number;
 };
 
+/** Resolve the effective fast-mode setting and its source. */
 export function resolveFastModeState(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;

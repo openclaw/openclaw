@@ -1,4 +1,5 @@
 /**
+ * Auth profile usage accounting and cooldown mutation.
  * Records failures under the store lock, applies WHAM usage probes for Codex
  * subscription OAuth profiles, and exposes display helpers for unavailable profiles.
  */

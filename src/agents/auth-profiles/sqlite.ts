@@ -1,4 +1,5 @@
 /**
+ * SQLite persistence adapter for auth profile secrets and runtime state.
  * The public helpers expose raw JSON payloads so normalization stays in the
  * store/state layers that own compatibility rules.
  */

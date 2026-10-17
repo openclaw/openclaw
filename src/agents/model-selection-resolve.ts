@@ -1,3 +1,8 @@
+/**
+ * Model selection resolution facade.
+ *
+ * This module resolves configured fallbacks and explicit model selections.
+ */
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";

@@ -8,6 +8,9 @@ import { parseModelRefProvider } from "./openai-routing.js";
 
 const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 
+/**
+ * Canonical id of the Copilot agent runtime plugin.
+ */
 const COPILOT_RUNTIME_ID = "copilot";
 
 function parseModelRefId(model: string | undefined): string | undefined {
@@ -26,6 +29,7 @@ function parseModelRefId(model: string | undefined): string | undefined {
  * Returns true when the selected model should trigger the external
  * `@openclaw/copilot` runtime plugin install.
  *
+ * Gating contract (review #2, P1):
  *   - Model ref must use the `github-copilot/*` provider prefix.
  *   - The user's config must explicitly opt in by setting
  *     `agentRuntime.id: "copilot"` at the provider, model, or agent scope

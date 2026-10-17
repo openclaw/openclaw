@@ -98,6 +98,7 @@ function routeTupleMatches(
   );
 }
 
+/** True when materialized model metadata belongs to the selected provider route. */
 export function modelMatchesProviderModelRoute(params: {
   provider: string;
   api?: string | null;

@@ -12,6 +12,7 @@ import {
 
 const OPENROUTER_AUTO_COMPAT_ALIAS = "openrouter:auto";
 
+/** Find a provider value by normalized provider ID. */
 export function findNormalizedProviderValue<T>(
   entries: Record<string, T> | undefined,
   provider: string,

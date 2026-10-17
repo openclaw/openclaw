@@ -412,6 +412,7 @@ export function replaceOwnedRuntimeAuthProfileStoreSnapshots(
   }
 }
 
+/** Clears all runtime auth profile snapshots. */
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthFileObservation.reset();
   closeAuthProfileReadPool();

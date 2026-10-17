@@ -1,4 +1,5 @@
 /**
+ * Provider API-key rotation wrapper.
  * Runs provider calls across configured keys on rate-limit failures and keeps
  * same-key transient retries separate from key rotation.
  */

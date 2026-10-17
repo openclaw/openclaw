@@ -1,5 +1,9 @@
+/**
+ * Formats selected model references for UI/session display.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Inputs used to choose the visible model ref/name for status surfaces. */
 type ModelDisplaySelectionParams = {
   runtimeProvider?: unknown;
   runtimeModel?: unknown;
@@ -8,6 +12,7 @@ type ModelDisplaySelectionParams = {
   fallbackModel?: unknown;
 };
 
+/** Resolves the most specific provider/model ref for display. */
 export function resolveModelDisplayRef(params: ModelDisplaySelectionParams): string | undefined {
   for (const [modelKey, providerKey] of [
     ["runtimeModel", "runtimeProvider"],
@@ -25,6 +30,7 @@ export function resolveModelDisplayRef(params: ModelDisplaySelectionParams): str
   return normalizeOptionalString(params.fallbackModel);
 }
 
+/** Resolves the model name shown in compact status output. */
 export function resolveModelDisplayName(params: ModelDisplaySelectionParams): string {
   const modelRef = resolveModelDisplayRef(params);
   if (!modelRef) {
@@ -37,6 +43,7 @@ export function resolveModelDisplayName(params: ModelDisplaySelectionParams): st
   return modelRef;
 }
 
+/** Inputs used to resolve model/provider values for session info. */
 type SessionInfoModelSelectionParams = {
   currentProvider?: unknown;
   currentModel?: unknown;
@@ -48,6 +55,7 @@ type SessionInfoModelSelectionParams = {
   overrideModel?: unknown;
 };
 
+/** Resolves session-info model selection from entry, override, and fallback data. */
 export function resolveSessionInfoModelSelection(params: SessionInfoModelSelectionParams): {
   modelProvider?: string;
   model?: string;

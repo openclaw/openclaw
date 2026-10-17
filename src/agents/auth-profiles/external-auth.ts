@@ -1,4 +1,5 @@
 /**
+ * Runtime external auth profile overlays.
  * Combines provider plugin auth profiles with scoped external CLI credentials
  * and decides which runtime profiles may be persisted back to the store.
  */

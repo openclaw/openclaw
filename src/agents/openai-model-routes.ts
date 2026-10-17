@@ -82,6 +82,7 @@ export function createOpenAIModelRoutesResolver(params: {
   };
 }
 
+/** Returns the authored OpenAI provider auth mode, if one exists. */
 export function resolveConfiguredOpenAIAuthMode(config?: OpenClawConfig): string | undefined {
   return resolveMergedModelProviderConfig(config, OPENAI_PROVIDER_ID)?.auth;
 }

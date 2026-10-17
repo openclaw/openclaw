@@ -1,3 +1,6 @@
+/**
+ * Converts inline provider model config into runtime model definitions.
+ */
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { MODEL_APIS } from "../../config/model-config-vocabulary.js";
@@ -18,6 +21,9 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
 
+/**
+ * Normalizes inline `models.providers` config into runtime model entries.
+ */
 export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow" | "input"> & {
   api?: Api;
   contextWindow?: number;
@@ -40,6 +46,7 @@ export type InlineProviderConfig = {
   localService?: ModelProviderConfig["localService"];
 };
 
+/** Returns a supported transport API id from raw config values. */
 export function normalizeResolvedTransportApi(
   api: unknown,
 ): ModelDefinitionConfig["api"] | undefined {

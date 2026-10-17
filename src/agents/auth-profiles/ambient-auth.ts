@@ -7,6 +7,7 @@ import {
 } from "../provider-auth-aliases.js";
 import type { AuthProfileCredential } from "./types.js";
 
+/** Returns whether ambient credential material agrees with a provider's declared auth mode. */
 export function isAmbientCredentialAllowedByProviderAuthPin(params: {
   config?: OpenClawConfig;
   authAliasLookupParams?: Omit<ProviderAuthAliasLookupParams, "config">;

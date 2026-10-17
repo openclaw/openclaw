@@ -1,4 +1,5 @@
 /**
+ * Legacy OAuth reference recognizer.
  * Used by migration/health code to detect older Codex/OpenClaw credential
  * sidecar references without accepting arbitrary ref-like objects.
  */
@@ -15,6 +16,7 @@ export type LegacyOAuthRef = {
   id: string;
 };
 
+/** Return true for the legacy OAuth reference shape persisted by older stores. */
 export function isLegacyOAuthRef(value: unknown): value is LegacyOAuthRef {
   if (!isRecord(value)) {
     return false;

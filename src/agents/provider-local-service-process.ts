@@ -117,6 +117,7 @@ async function waitForChildProcessTreeExit(
   }
 }
 
+/** Return whether a child process has already reported an exit code or signal. */
 export function hasLocalServiceProcessExited(
   child: Pick<ChildProcess, "exitCode" | "signalCode">,
 ): boolean {

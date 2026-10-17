@@ -1,4 +1,5 @@
 /**
+ * OpenAI text verbosity normalization for provider-owned stream parameters.
  *
  * Invalid operator-supplied values are ignored with a warning instead of leaking into API payloads.
  */

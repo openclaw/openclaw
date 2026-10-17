@@ -14,6 +14,7 @@ export function resolveUsageWindowUntil(now: number, durationMs: number): number
     resolveExpiresAtMsFromDurationMs(Math.max(1, Math.floor(durationMs)), { nowMs: now }) ?? now
   );
 }
+/** Returns the regular transient-failure cooldown duration for an error count. */
 function calculateAuthProfileCooldownMs(errorCount: number): number {
   const normalized = Math.max(1, errorCount);
   if (normalized <= 1) {

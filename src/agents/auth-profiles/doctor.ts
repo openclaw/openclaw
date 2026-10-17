@@ -1,4 +1,5 @@
 /**
+ * Provider-specific auth doctor hints.
  * Adds local migration guidance for known legacy profiles before falling back
  * to provider plugin doctor copy.
  */
@@ -27,6 +28,7 @@ type FormatAuthDoctorHintParams = {
   profileId?: string;
 };
 
+/** Formats provider-specific auth doctor guidance for a profile/store. */
 export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
   const normalizedProvider = normalizeProviderId(params.provider);
   if (

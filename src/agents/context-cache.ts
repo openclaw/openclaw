@@ -38,6 +38,7 @@ export function providerContextTokenCacheKey(provider: string, modelId: string):
   return `${PROVIDER_CONTEXT_TOKEN_CACHE_PREFIX}${provider}\0${modelId}`;
 }
 
+/** Looks up cached context-token count for a model id. */
 export function lookupCachedContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;

@@ -1,3 +1,6 @@
+/**
+ * Resolves configured provider secrets from env, profiles, and SecretRefs.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,6 +17,8 @@ import {
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 
 /**
+ * Secret-aware provider config helpers.
+ *
  * The exported helpers normalize user config, auth profiles, and environment
  * lookups into provider apiKey/header values while preserving non-printable
  * markers for secrets managed outside plain environment variables.
@@ -60,6 +65,7 @@ export function toDiscoveryApiKey(value: string | undefined): string | undefined
   return trimmed;
 }
 
+/** Resolves which environment variable supplies a provider API key. */
 export function resolveEnvApiKeyVarName(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,

@@ -25,6 +25,7 @@ function normalizeAuthProfileEntries<T>(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+/** Coerces persisted auth profile runtime state into the current shape. */
 export function coerceAuthProfileState(raw: unknown): AuthProfileState {
   if (!isRecord(raw)) {
     return {};

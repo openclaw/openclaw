@@ -1,4 +1,5 @@
 /**
+ * Strict tool-schema default resolution for native OpenAI-compatible routes.
  *
  * Compatible providers can support strict schemas without inheriting OpenAI's required default.
  */
@@ -44,6 +45,7 @@ function resolvesToNativeOpenAIStrictTools(
   );
 }
 
+/** Resolve the strict-tool setting for one OpenAI-compatible model/transport. */
 export function resolveOpenAIStrictToolSetting(
   model: OpenAIStrictToolModel,
   options?: { transport?: OpenAITransportKind; supportsStrictMode?: boolean },

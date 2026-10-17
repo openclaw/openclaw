@@ -1,4 +1,5 @@
 /**
+ * Runtime-state normalization and persistence for auth profile selection.
  * This state tracks order, last-good profile, and cooldown/failure metadata
  * separately from secret-bearing credentials.
  */
@@ -28,6 +29,7 @@ export function mergeAuthProfileState(
   };
 }
 
+/** Loads persisted auth profile runtime state from SQLite. */
 export function loadPersistedAuthProfileState(
   agentDir?: string,
   database?: AuthProfileDatabase,
@@ -35,6 +37,7 @@ export function loadPersistedAuthProfileState(
   return coerceAuthProfileState(readPersistedAuthProfileStateRaw(agentDir, database));
 }
 
+/** Builds the persisted auth profile runtime state payload. */
 export function buildPersistedAuthProfileState(
   store: AuthProfileState,
 ): AuthProfileStateStore | null {

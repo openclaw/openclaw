@@ -1,3 +1,6 @@
+/**
+ * Provider-entry configuration and stored-profile binding for model auth.
+ */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {

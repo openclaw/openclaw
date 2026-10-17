@@ -1,3 +1,4 @@
+/** Discovers agent models and auth storage with provider/plugin normalization hooks. */
 import path from "node:path";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
