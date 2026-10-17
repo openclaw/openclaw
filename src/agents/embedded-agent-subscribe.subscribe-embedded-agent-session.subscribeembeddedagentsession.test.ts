@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
@@ -17,12 +16,28 @@ import {
   createOpenAiResponsesTextEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
 
 type BlockReply = NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>;
 type ToolResult = NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>;
+
+function emitMessage(
+  emit: (event: unknown) => void,
+  type: "message_start" | "message_end",
+  message: unknown = { role: "assistant" },
+) {
+  emit({ type, message });
+}
+
+function emitUpdate(
+  emit: (event: unknown) => void,
+  message: unknown,
+  assistantMessageEvent: unknown,
+) {
+  emit({ type: "message_update", message, assistantMessageEvent });
+}
 
 function blockReplyHarness(
   options: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> & {
@@ -125,19 +140,28 @@ describe("subscribeEmbeddedAgentSession", () => {
     }
   });
 
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+  function createAgentEventHarness(
+    options: Omit<
+      Parameters<typeof createSubscribedSessionHarness>[0],
+      "runId" | "onAgentEvent"
+    > & { runId?: string } = {},
+  ) {
     const onAgentEvent = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: options?.runId ?? "run",
+    return {
+      ...createSubscribedSessionHarness({ runId: "run", onAgentEvent, ...options }),
       onAgentEvent,
-      sessionKey: options?.sessionKey,
-    });
-
-    return { emit, onAgentEvent };
+    };
   }
 
   function createToolErrorHarness(runId: string) {
-    return createSubscribedSessionHarness({ runId, sessionKey: "test-session" });
+    const harness = createSubscribedSessionHarness({ runId, sessionKey: "test-session" });
+    return {
+      ...harness,
+      fail: (id: string, path: string) =>
+        runTool(harness.emit, "write", id, { path, content: "next" }, { error: "disk full" }, true),
+      recover: (id: string, path: string) =>
+        runTool(harness.emit, "write", id, { path, content: "retry" }, { ok: true }),
+    };
   }
 
   function emitAssistantTextDelta(
@@ -145,7 +169,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     delta: string,
     message: Record<string, unknown> = { role: "assistant" },
   ) {
-    emit({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", delta } });
+    emitUpdate(emit, message, { type: "text_delta", delta });
   }
 
   function emitThinkingEvent(
@@ -153,11 +177,11 @@ describe("subscribeEmbeddedAgentSession", () => {
     thinking: string,
     assistantMessageEvent: { type: "thinking_delta"; delta: string } | { type: "thinking_end" },
   ) {
-    emit({
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "thinking", thinking }] },
+    emitUpdate(
+      emit,
+      { role: "assistant", content: [{ type: "thinking", thinking }] },
       assistantMessageEvent,
-    });
+    );
   }
 
   async function createGeneratedImageHarness(
@@ -175,12 +199,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       ...options,
     });
     runTool(emit, "image_generate", "tool-1", undefined, {
-      content: [
-        {
-          type: "text",
-          text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
-        },
-      ],
+      content: [{ type: "text", text: "Generated image.\nMEDIA:/tmp/generated.png" }],
       details: { media: { mediaUrls: ["/tmp/generated.png"] } },
     });
     await vi.waitFor(() => {
@@ -264,7 +283,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
     const caption = "Here is the selected image.";
     const first = { text: caption, id: "caption", signaturePhase: "final_answer" as const };
-    emit({ type: "message_start", message: { role: "assistant" } });
+    emitMessage(emit, "message_start");
     for (const type of ["text_delta", "text_end"] as const) {
       emit(createOpenAiResponsesTextEvent({ type, ...first }));
     }
@@ -276,7 +295,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         phase: "final_answer",
       }),
     );
-    emit({ type: "message_end", message });
+    emitMessage(emit, "message_end", message);
     await subscription.waitForPendingEvents();
     const payloads = onBlockReply.mock.calls.map(([payload]) => payload);
     expect({
@@ -290,7 +309,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       blockReplyBreak: "text_end",
       blockReplyChunking: { minChars: 5, maxChars: 200, breakPreference: "newline" },
     });
-    emit({ type: "message_start", message: { role: "assistant" } });
+    emitMessage(emit, "message_start");
     emitAssistantTextDelta(emit, "Generated 1 image.\n");
     await subscription.waitForPendingEvents();
     expectBlockReplyPayload(onBlockReply, { text: "Generated 1 image." });
@@ -299,18 +318,12 @@ describe("subscribeEmbeddedAgentSession", () => {
       .filter((payload) => payload.mediaUrls?.length);
     expect(earlyMediaPayloads).toStrictEqual([]);
     emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Generated 1 image.\nMEDIA:/tmp/generated.png",
-      },
-    });
-    emit({
-      type: "message_end",
-      message: textAssistant("Generated 1 image.\nMEDIA:/tmp/generated.png"),
-    });
+    emitUpdate(
+      emit,
+      { role: "assistant" },
+      { type: "text_end", content: "Generated 1 image.\nMEDIA:/tmp/generated.png" },
+    );
+    emitMessage(emit, "message_end", textAssistant("Generated 1 image.\nMEDIA:/tmp/generated.png"));
     emit({ type: "agent_end" });
     await subscription.waitForPendingEvents();
     const mediaPayloads = onBlockReply.mock.calls
@@ -328,10 +341,10 @@ describe("subscribeEmbeddedAgentSession", () => {
         completion("subagent", "/tmp/untrusted.mp3"),
       ],
     });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+    emitMessage(emit, "message_start");
+    emitMessage(emit, "message_end", {
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
     });
     emit({ type: "agent_end" });
     await subscription.waitForPendingEvents();
@@ -387,23 +400,16 @@ describe("subscribeEmbeddedAgentSession", () => {
       role: "assistant" as const,
       content: [{ type: "thinking" as const, thinking: "Checking files" }],
     };
-    emit({ type: "message_start", message: thinkingMessage });
-    emit({
-      type: "message_update",
-      message: thinkingMessage,
-      assistantMessageEvent: { type: "thinking_delta", delta: "Checking files" },
-    });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        phase: "commentary",
-        content: [
-          { type: "thinking", thinking: "Checking files" },
-          { type: "text", text: "Final answer" },
-        ],
-      },
+    emitMessage(emit, "message_start", thinkingMessage);
+    emitUpdate(emit, thinkingMessage, { type: "thinking_delta", delta: "Checking files" });
+    emitMessage(emit, "message_end", {
+      role: "assistant",
+      stopReason: "stop",
+      phase: "commentary",
+      content: [
+        { type: "thinking", thinking: "Checking files" },
+        { type: "text", text: "Final answer" },
+      ],
     });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
     expect(visibleEvents[0]).toBe("reasoning-end");
@@ -439,15 +445,11 @@ describe("subscribeEmbeddedAgentSession", () => {
         { type: "toolCall", id: "tool-live-edit", name: "edit", arguments: {}, partialJson },
       ],
     };
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: {
-        type: "toolcall_delta",
-        contentIndex: 0,
-        delta: partialJson,
-        partial: message,
-      },
+    emitUpdate(emit, message, {
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: partialJson,
+      partial: message,
     });
     expect(
       emitAgentEventSpy.mock.calls
@@ -474,62 +476,45 @@ describe("subscribeEmbeddedAgentSession", () => {
       onReasoningStream: vi.fn(),
       onReasoningEnd,
     });
-    emit({ type: "message_start", message: { role: "assistant" } });
+    emitMessage(emit, "message_start");
     emitAssistantTextDelta(emit, "<think>Checking");
     emitThinkingEvent(emit, "Checking", { type: "thinking_end" });
     emitAssistantTextDelta(emit, " files</think>\nFinal answer");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
   });
 
-  it.each<{
-    name: string;
-    chunks: string[];
-    expected?: Array<Record<string, unknown>>;
-    last?: Record<string, unknown>;
-    messageEnd?: string;
-    noReplacement?: boolean;
-  }>([
-    {
-      name: "preserves media directives when orphan close replacement has no text",
-      chunks: ["private chain of thought </thi", "nk>\nMEDIA:/tmp/a.png\n"],
-      messageEnd: "private chain of thought </think>\nMEDIA:/tmp/a.png\n",
-      last: { text: "", mediaUrls: ["/tmp/a.png"] },
-      noReplacement: true,
-    },
-    {
-      name: "keeps close tag literals inside hidden fenced code stripped across deltas",
-      chunks: ["<think>\n```ts\nliteral ", "</think> still private"],
-      expected: [],
-    },
-  ])("$name", (scenario) => {
+  function hiddenTextEvents(chunks: string[], messageEnd?: string) {
     const { emit, onAgentEvent } = createAgentEventHarness();
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const chunk of scenario.chunks) {
+    emitMessage(emit, "message_start");
+    for (const chunk of chunks) {
       emitAssistantTextDelta(emit, chunk);
     }
-    if (scenario.messageEnd !== undefined) {
-      emit({ type: "message_end", message: textAssistant(scenario.messageEnd) });
+    if (messageEnd !== undefined) {
+      emitMessage(emit, "message_end", textAssistant(messageEnd));
     }
-    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    if (scenario.expected !== undefined) {
-      expect(payloads).toHaveLength(scenario.expected.length);
-      expect(payloads).toMatchObject(scenario.expected);
-    }
-    if (scenario.last !== undefined) {
-      expect(payloads.at(-1)).toMatchObject(scenario.last);
-    }
-    if (scenario.noReplacement) {
-      expect(payloads.at(-1)?.replace).toBeUndefined();
-    }
+    return extractAgentEventPayloads(onAgentEvent.mock.calls);
+  }
+
+  it("preserves media directives when orphan close replacement has no text", () => {
+    const last = hiddenTextEvents(
+      ["private chain of thought </thi", "nk>\nMEDIA:/tmp/a.png\n"],
+      "private chain of thought </think>\nMEDIA:/tmp/a.png\n",
+    ).at(-1);
+    expect(last).toMatchObject({ text: "", mediaUrls: ["/tmp/a.png"] });
+    expect(last?.replace).toBeUndefined();
+  });
+
+  it("keeps close tag literals inside hidden fenced code stripped across deltas", () => {
+    expect(hiddenTextEvents(["<think>\n```ts\nliteral ", "</think> still private"])).toEqual([]);
   });
 
   it.each([
-    { replyToId: "new-target", text: "Corrected", terminal: "text_end" },
-    { replyToId: undefined, text: "Draft", terminal: "text_end" },
-    { replyToId: undefined, text: "Corrected", terminal: "message_end", priorText: "First block." },
-  ])(
+    ["new-target", "Corrected", "text_end", undefined],
+    [undefined, "Draft", "text_end", undefined],
+    [undefined, "Corrected", "message_end", "First block."],
+  ] as const)(
     "replaces pending reply directives with authoritative checkpoint target %j",
-    async ({ replyToId, text, terminal, priorText = "" }) => {
+    async (replyToId, text, terminal, priorText = "") => {
       const { emit, subscription, onBlockReply } = blockReplyHarness({
         runId: "run-directive-replacement",
         blockReplyBreak: terminal === "message_end" && !priorText ? "message_end" : "text_end",
@@ -539,7 +524,7 @@ describe("subscribeEmbeddedAgentSession", () => {
             : undefined,
       });
       try {
-        emit({ type: "message_start", message: { role: "assistant" } });
+        emitMessage(emit, "message_start");
         if (priorText) {
           for (const type of ["text_delta", "text_end"] as const) {
             emitResponsesText(emit, type, priorText, "prior-answer");
@@ -570,7 +555,7 @@ describe("subscribeEmbeddedAgentSession", () => {
               }),
             );
           }
-          emit({ type: "message_end", message });
+          emitMessage(emit, "message_end", message);
         } else {
           emit(createOpenAiResponsesTextEvent({ type: "text_end", ...checkpoint }));
         }
@@ -592,15 +577,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   );
 
   it("keeps unresolved mutating failure when an unrelated tool succeeds", async () => {
-    const { emit, subscription } = createToolErrorHarness("run-tools-1");
-    runTool(
-      emit,
-      "write",
-      "w1",
-      { path: "/tmp/demo.txt", content: "next" },
-      { error: "disk full" },
-      true,
-    );
+    const { emit, subscription, fail } = createToolErrorHarness("run-tools-1");
+    fail("w1", "/tmp/demo.txt");
     expect(subscription.getLastToolError()?.toolName).toBe("write");
     runTool(emit, "read", "r1", { path: "/tmp/demo.txt" }, { text: "ok" });
     await subscription.waitForPendingEvents();
@@ -608,37 +586,20 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("preserves distinct mutation failures through compaction until each action recovers", async () => {
-    const { emit, subscription } = createToolErrorHarness("run-tools-compaction-retry");
+    const { emit, subscription, fail, recover } = createToolErrorHarness(
+      "run-tools-compaction-retry",
+    );
     for (const [toolCallId, filePath] of [
       ["write-a-failed", "/tmp/a.txt"],
       ["write-b-failed", "/tmp/b.txt"],
     ] as const) {
-      runTool(
-        emit,
-        "write",
-        toolCallId,
-        { path: filePath, content: "next" },
-        { error: "disk full" },
-        true,
-      );
+      fail(toolCallId, filePath);
     }
     emit(retryingCompactionEnd());
-    runTool(
-      emit,
-      "write",
-      "write-b-recovered",
-      { path: "/tmp/b.txt", content: "retry" },
-      { ok: true },
-    );
+    recover("write-b-recovered", "/tmp/b.txt");
     await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
-    runTool(
-      emit,
-      "write",
-      "write-a-recovered",
-      { path: "/tmp/a.txt", content: "retry" },
-      { ok: true },
-    );
+    recover("write-a-recovered", "/tmp/a.txt");
     await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
   });
@@ -659,26 +620,21 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("reads terminal abort state before emitting lifecycle:end", () => {
-    const onAgentEvent = vi.fn();
     let terminalAborted = false;
-    const { emit } = createSubscribedSessionHarness({
+    const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "run-aborted",
       sessionKey: "test-session",
-      onAgentEvent,
       isTerminalAborted: () => terminalAborted,
     });
-    const assistantMessage = {
+    const assistantMessage = makeAgentAssistantMessage({
       api: "test",
       provider: "test",
       model: "test",
-      role: "assistant",
       stopReason: "aborted",
       content: [],
-      usage: makeZeroUsageSnapshot(),
-      timestamp: 0,
-    } as AssistantMessage;
-    emit({ type: "message_start", message: assistantMessage });
-    emit({ type: "message_end", message: assistantMessage });
+    });
+    emitMessage(emit, "message_start", assistantMessage);
+    emitMessage(emit, "message_end", assistantMessage);
     terminalAborted = true;
     emit({ type: "agent_end", messages: [assistantMessage] });
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
@@ -687,40 +643,36 @@ describe("subscribeEmbeddedAgentSession", () => {
     );
   });
 
+  const childSpawn = {
+    runId: "run-child",
+    childSessionKey: "agent:claude:subagent:child",
+    expectsCompletionMessage: true,
+  };
   it.each([
-    {
-      toolName: "edit",
-      args: { file_path: "/tmp/demo.txt", old_string: "before", new_string: "after" },
-      result: { ok: true },
-      livenessState: "abandoned",
-    },
-    {
-      toolName: "cron",
-      args: { action: "add", job: { name: "reminder" } },
-      result: { details: { status: "ok" } },
-      livenessState: "working",
-    },
-    {
-      toolName: "sessions_spawn",
-      args: { prompt: "continue in a child session" },
-      result: {
-        details: {
-          status: "accepted",
-          runId: "run-child",
-          childSessionKey: "agent:claude:subagent:child",
-          expectsCompletionMessage: true,
-        },
-      },
-      livenessState: "working",
-    },
-  ])(
-    "preserves $toolName terminal evidence across compaction retries",
-    async ({ toolName, args, result, livenessState }) => {
-      const onAgentEvent = vi.fn();
-      const { emit, subscription } = createSubscribedSessionHarness({
+    [
+      "edit",
+      { file_path: "/tmp/demo.txt", old_string: "before", new_string: "after" },
+      { ok: true },
+      "abandoned",
+    ],
+    [
+      "cron",
+      { action: "add", job: { name: "reminder" } },
+      { details: { status: "ok" } },
+      "working",
+    ],
+    [
+      "sessions_spawn",
+      { prompt: "continue in a child session" },
+      { details: { status: "accepted", ...childSpawn } },
+      "working",
+    ],
+  ] as const)(
+    "preserves %s terminal evidence across compaction retries",
+    async (toolName, args, result, livenessState) => {
+      const { emit, subscription, onAgentEvent } = createAgentEventHarness({
         runId: `run-${toolName}-compaction-evidence`,
         sessionKey: toolName === "cron" ? undefined : "test-session",
-        onAgentEvent,
       });
       runTool(emit, toolName, "side-effect", args, result);
       await subscription.waitForPendingEvents();
@@ -733,13 +685,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         expect(subscription.isCompacting()).toBe(true);
         expect(subscription.getSuccessfulCronAdds()).toBe(1);
       } else if (toolName === "sessions_spawn") {
-        expect(subscription.getAcceptedSessionSpawns()).toEqual([
-          {
-            runId: "run-child",
-            childSessionKey: "agent:claude:subagent:child",
-            expectsCompletionMessage: true,
-          },
-        ]);
+        expect(subscription.getAcceptedSessionSpawns()).toEqual([childSpawn]);
       }
       emit({ type: "agent_end" });
       await subscription.waitForPendingEvents();
