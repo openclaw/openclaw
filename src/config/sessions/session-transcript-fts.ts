@@ -55,12 +55,11 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
       if (postgres) {
         return entries
           .with(
-            (cte) => cte("allocated").materialized(),
+            (cte) => cte("ids").materialized(),
             (query) =>
               query
                 .selectFrom("entries")
-                .selectAll()
-                // Allocate once per position: message IDs may be null or repeated.
+                // Allocate exactly once per entry, independent of evaluation order.
                 .select((eb) =>
                   eb
                     .fn<number>("nextval", [
@@ -70,8 +69,41 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
                       ]),
                     ])
                     .as("id"),
+                ),
+          )
+          .with(
+            (cte) => cte("allocated").materialized(),
+            (query) =>
+              query
+                .selectFrom(
+                  query
+                    .selectFrom("entries")
+                    .selectAll()
+                    .select((eb) =>
+                      eb.fn
+                        .agg<number>("row_number", [])
+                        .over((window) => window.orderBy("position"))
+                        .as("rn"),
+                    )
+                    .as("ordered_entries"),
                 )
-                .orderBy("position"),
+                .innerJoin(
+                  query
+                    .selectFrom("ids")
+                    .select("id")
+                    .select((eb) =>
+                      eb.fn
+                        .agg<number>("row_number", [])
+                        .over((window) => window.orderBy("id"))
+                        .as("rn"),
+                    )
+                    .as("ordered_ids"),
+                  "ordered_ids.rn",
+                  "ordered_entries.rn",
+                )
+                // Recent-search ties and cold export use IDs as chronology.
+                .selectAll("ordered_entries")
+                .select("ordered_ids.id"),
           )
           .with("inserted", (query) =>
             query
