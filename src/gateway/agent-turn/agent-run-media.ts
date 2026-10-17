@@ -7,7 +7,10 @@ import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.j
 /** Prepare input and assistant media while dispatch retains the run's authority. */
 export function dispatchAgentRunWithMedia(
   dispatch: Parameters<typeof dispatchAgentRunFromGateway>[0],
-  params: Pick<StartAgentRunExecutionParams, "cfg" | "client" | "activeSessionAgentId"> & {
+  params: Pick<
+    StartAgentRunExecutionParams,
+    "cfg" | "client" | "activeSessionAgentId" | "sessionEntry"
+  > & {
     prepared: Pick<
       StartAgentRunExecutionParams["prepared"],
       "lifecycleStorePath" | "imageUnderstandingModel" | "replyDispatchRuntime"
@@ -38,6 +41,8 @@ export function dispatchAgentRunWithMedia(
         agentDir: runtime.agentDir,
         workspaceDir: ingressOpts.workspaceDir ?? runtime.workspaceDir,
         sessionKey,
+        channel: runContext?.messageChannel ?? ingressOpts.messageChannel,
+        chatType: params.sessionEntry?.chatType,
         activeModel: params.prepared.imageUnderstandingModel,
         execution: {
           signal: abortController.signal,

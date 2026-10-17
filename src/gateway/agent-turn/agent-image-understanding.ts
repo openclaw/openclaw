@@ -13,11 +13,20 @@ export async function prepareAgentImageUnderstanding(params: {
   agentDir: string;
   workspaceDir: string;
   sessionKey?: string;
+  channel?: string;
+  chatType?: string;
   activeModel: ActiveMediaModel;
   execution?: MediaExecutionContext;
 }): Promise<{ message: string; media: MediaFact[] }> {
-  const { message, media, sessionKey, ...runtime } = params;
-  const ctx: MsgContext = { Body: message, media, SessionKey: sessionKey, AgentId: params.agentId };
+  const { message, media, sessionKey, channel, chatType, ...runtime } = params;
+  const ctx: MsgContext = {
+    Body: message,
+    media,
+    SessionKey: sessionKey,
+    AgentId: params.agentId,
+    Provider: channel,
+    ChatType: chatType,
+  };
   const { applyMediaUnderstanding } = await import("../../media-understanding/apply.runtime.js");
   await applyMediaUnderstanding({ ...runtime, ctx });
   params.execution?.signal.throwIfAborted();
@@ -33,6 +42,6 @@ export async function prepareAgentImageUnderstanding(params: {
   return {
     message: ctx.agentText ?? message,
     // The pixels remain in the transcript; this text-only turn consumes the description.
-    media: media.map((fact) => ({ ...fact, hydrationSuppressed: true })),
+    media: media.map((fact) => Object.assign({}, fact, { hydrationSuppressed: true })),
   };
 }

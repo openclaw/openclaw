@@ -51,8 +51,13 @@ const configuredVision: OpenClawConfig = {
 let workspaceDir: string;
 let imagePath: string;
 
-function prepare(cfg = configuredVision, execution?: MediaExecutionContext) {
+function prepare(
+  cfg = configuredVision,
+  execution?: MediaExecutionContext,
+  source: { channel?: string; chatType?: string } = {},
+) {
   return prepareAgentImageUnderstanding({
+    ...source,
     message: "What color is the square?",
     media: [{ path: imagePath, contentType: "image/png", fileName: "square.png" }],
     cfg,
@@ -113,6 +118,26 @@ describe("agent image understanding", () => {
 
     await expect(prepare()).rejects.toThrow("Image attachments could not be analyzed.");
   });
+
+  it.each([{ channel: "webchat" }, { chatType: "group" as const }])(
+    "honors image scope restrictions for %j before sending pixels",
+    async (source) => {
+      const cfg: OpenClawConfig = {
+        ...configuredVision,
+        tools: {
+          media: {
+            ...configuredVision.tools?.media,
+            image: { scope: { default: "allow", rules: [{ action: "deny", match: source }] } },
+          },
+        },
+      };
+
+      await expect(prepare(cfg, undefined, source)).rejects.toThrow(
+        "Image attachments could not be analyzed.",
+      );
+      expect(describeImage).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not send pixels after request authority is revoked during image preparation", async () => {
     let current = true;
