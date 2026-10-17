@@ -13,6 +13,9 @@ import type {
   runQaTestFileScenarios,
 } from "./test-file-scenario-runner.js";
 
+export const writeFixtureJson = (file: string, value: unknown) =>
+  fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+
 export const QA_TEST_RUNNER_DEFAULTS = {
   providerMode: "mock-openai",
   primaryModel: "mock-openai/gpt-5.6-luna",
@@ -222,27 +225,13 @@ export async function writeScriptProducerEvidence(
       : path.join(scenarioArtifactBase, "run-1");
   const evidencePath = path.join(evidenceDir, QA_EVIDENCE_FILENAME);
   await fs.mkdir(evidenceDir, { recursive: true });
-  await fs.writeFile(
-    evidencePath,
-    `${JSON.stringify(buildScriptProducerEvidence(params), null, 2)}\n`,
-    "utf8",
-  );
+  await writeFixtureJson(evidencePath, buildScriptProducerEvidence(params));
   const latestRun = params.latestRun ?? "absolute";
   if (latestRun !== "none") {
-    await fs.writeFile(
-      path.join(scenarioArtifactBase, "latest-run.json"),
-      `${JSON.stringify(
-        {
-          qaEvidence:
-            latestRun === "relative"
-              ? path.relative(scenarioArtifactBase, evidencePath)
-              : evidencePath,
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    await writeFixtureJson(path.join(scenarioArtifactBase, "latest-run.json"), {
+      qaEvidence:
+        latestRun === "relative" ? path.relative(scenarioArtifactBase, evidencePath) : evidencePath,
+    });
   }
   return { evidenceDir, evidencePath, scenarioArtifactBase };
 }
