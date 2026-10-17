@@ -297,6 +297,8 @@ test.for(
           return prepare(...args);
         });
       try {
+        await projection.ensureMaterialized();
+        projection.describe({ key, agentId: "ops" });
         await previewPublished.promise;
         publication.mockRestore();
         expect(
