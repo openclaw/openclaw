@@ -84,6 +84,18 @@ async function grantTools(tools: string[], harness = createHarness()) {
   return { ...harness, ticket: (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.viewTicket };
 }
 
+function sessionBoard(sessionKey: string, sessionId: string, permissionMode?: "guarded") {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey, storePath: database.path },
+    { sessionId, updatedAt: 1, ...(permissionMode ? { permissionMode } : {}) },
+  );
+  const store = new SqliteBoardStore({
+    resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
+  });
+  return { database, store };
+}
+
 describe("board gateway runtime boundaries", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -99,17 +111,8 @@ describe("board gateway runtime boundaries", () => {
   it.each(["agent:main:guarded"])(
     "reads current permission mode from its session owner: %s",
     async (sessionKey) => {
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-      });
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey, storePath: database.path },
-        { sessionId: "guarded-widget", updatedAt: 1, permissionMode: "guarded" },
-      );
+      const { store } = sessionBoard(sessionKey, "guarded-widget", "guarded");
       const cfg = { tools: { exec: { mode: "auto" as const } } };
-      const store = new SqliteBoardStore({
-        resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
-      });
       const harness = createHarness(undefined, undefined, store, {
         getRuntimeConfig: () => cfg,
       });
@@ -119,10 +122,10 @@ describe("board gateway runtime boundaries", () => {
         content: { kind: "html", html: "<p>health</p>" },
         declared: { tools: ["health"] },
       });
-      expect(response).toHaveBeenCalledWith(
+      expect(response.mock.calls[0]).toMatchObject([
         true,
-        expect.objectContaining({ widgets: [expect.objectContaining({ grantState: "pending" })] }),
-      );
+        { widgets: [{ grantState: "pending" }] },
+      ]);
       expect(reviewWidgetApproval).not.toHaveBeenCalled();
     },
   );
@@ -138,15 +141,8 @@ describe("board gateway runtime boundaries", () => {
   it("serves board.data.read while a transcript-only database writer is held", async ({
     signal,
   }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
     const sessionKey = "agent:main:session";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath: database.path },
-      { sessionId: "board-concurrent-reader", updatedAt: 1 },
-    );
-    const store = new SqliteBoardStore({
-      resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
-    });
+    const { database, store } = sessionBoard(sessionKey, "board-concurrent-reader");
     const { invoke, ticket } = await grantTools(
       ["sessions.list"],
       createHarness(undefined, undefined, store),
@@ -184,21 +180,7 @@ describe("board gateway runtime boundaries", () => {
   });
 
   it("registers every contract method with its required scope", () => {
-    expect(
-      Object.fromEntries(
-        [
-          "board.get",
-          "board.update",
-          "board.widget.put",
-          "board.widget.grant",
-          "board.widget.appView",
-          "board.event",
-          "board.prompt.authorize",
-          "board.data.read",
-          "board.action",
-        ].map((method) => [method, resolveCoreOperatorGatewayMethodScope(method)]),
-      ),
-    ).toEqual({
+    const scopes = {
       "board.get": "operator.read",
       "board.update": "operator.write",
       "board.widget.put": "operator.write",
@@ -208,7 +190,10 @@ describe("board gateway runtime boundaries", () => {
       "board.prompt.authorize": "operator.read",
       "board.data.read": "operator.read",
       "board.action": "operator.write",
-    });
+    };
+    for (const [method, scope] of Object.entries(scopes)) {
+      expect(resolveCoreOperatorGatewayMethodScope(method)).toBe(scope);
+    }
   });
 
   it.each(["commit", "retired"] as const)(
@@ -489,11 +474,11 @@ describe("board gateway runtime boundaries", () => {
       ticket,
       bindingId: "secrets.dump",
     });
-    expect(response).toHaveBeenCalledWith(
+    expect(response.mock.calls[0]).toMatchObject([
       false,
       undefined,
-      expect.objectContaining({ message: expect.stringContaining("not allowed") }),
-    );
+      { message: expect.stringContaining("not allowed") },
+    ]);
   });
 
   it("runs only the exact granted cron job capability", async () => {

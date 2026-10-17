@@ -21,22 +21,15 @@ function createWorkboardCapabilityRegistry(params: {
   actionHandler: GatewayRequestHandlers[string];
 }) {
   const registry = createEmptyPluginRegistry();
-  registry.gatewayHandlers["workboard.cards.list"] = params.readHandler;
-  registry.gatewayHandlers["workboard.cards.dispatch"] = params.actionHandler;
+  for (const [name, scope, handler] of [
+    ["workboard.cards.list", "operator.read", params.readHandler],
+    ["workboard.cards.dispatch", "operator.write", params.actionHandler],
+  ] as const) {
+    registry.gatewayHandlers[name] = handler;
   registry.gatewayMethodDescriptors.push(
-    createPluginGatewayMethodDescriptor({
-      pluginId: "workboard",
-      name: "workboard.cards.list",
-      handler: params.readHandler,
-      scope: "operator.read",
-    }),
-    createPluginGatewayMethodDescriptor({
-      pluginId: "workboard",
-      name: "workboard.cards.dispatch",
-      handler: params.actionHandler,
-      scope: "operator.write",
-    }),
+      createPluginGatewayMethodDescriptor({ pluginId: "workboard", name, handler, scope }),
   );
+  }
   const plugin = createPluginRecord({
     id: "workboard",
     source: "workboard-stub-plugin-fixture",

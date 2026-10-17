@@ -60,6 +60,13 @@ const run = {
 };
 const result = { total_count: 1, workflow_runs: [run] };
 const json = (value: unknown) => new Response(JSON.stringify(value));
+const accountResponse = () => json({ id: 100, login: "fixture-user", avatar_url: null });
+async function expectResult(
+  pending: ReturnType<ReturnType<typeof createBoardHarness>["invoke"]>,
+  payload: unknown = result,
+) {
+  expect((await pending).mock.calls[0]).toEqual([true, payload]);
+}
 const commandResult = (value = "", code = 0) => ({
   stdout: Buffer.from(value),
   stderr: Buffer.alloc(0),
@@ -92,7 +99,7 @@ describe("board authenticated GitHub Actions", () => {
   let config: OpenClawConfig;
   let actions: () => Response | Promise<Response>;
   let http: Mock<typeof fetch>;
-  const account = vi.fn(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
+  const account = vi.fn(async () => accountResponse());
   const native = vi.fn<typeof processExec.runCommandBuffered>();
   const credentialDirs = new Set<string>();
   const workScopes: AsyncWorkScope[] = [];
@@ -147,9 +154,7 @@ describe("board authenticated GitHub Actions", () => {
     native.mockReset().mockRejectedValue(new Error("Unexpected native credential subprocess"));
     vi.spyOn(processExec, "runCommandBuffered").mockImplementation(native);
     actions = () => json(result);
-    account
-      .mockReset()
-      .mockImplementation(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
+    account.mockReset().mockImplementation(async () => accountResponse());
     // Each test owns an independent GitHub transport, including its quota state.
     http = vi
       .fn<typeof fetch>()
@@ -214,6 +219,24 @@ describe("board authenticated GitHub Actions", () => {
     };
   }
   const actionCalls = () => http.mock.calls.filter(([url]) => !toRequestUrl(url).endsWith("/user"));
+  function holdActions(next = () => json(result)) {
+    const started = createDeferred();
+    const release = createDeferred();
+    actions = async () => {
+      started.resolve();
+      await release.promise;
+      return next();
+    };
+    return { started, release };
+  }
+  const removeWidget = (
+    harness: Pick<ReturnType<typeof createBoardHarness>, "invoke">,
+    name = "runs",
+  ) =>
+    harness.invoke("board.update", {
+      sessionKey: boardSessionKey(),
+      ops: [{ kind: "widget_remove", name }],
+    });
 
   it.each(["managed", "native environment", "native CLI"])(
     "keeps public Actions credentials and transport together with Enterprise selected (%s)",
@@ -342,7 +365,7 @@ describe("board authenticated GitHub Actions", () => {
         if (changed === "routing") {
           config.session = { scope: "global", mainKey: `runs-${caseNumber}` };
         }
-        return json({ id: 100, login: "fixture-user", avatar_url: null });
+        return accountResponse();
       });
       await handlers["board.widget.put"]!(invocation);
       expect(respond.mock.calls[0]?.[0]).toBe(false);
@@ -396,7 +419,7 @@ describe("board authenticated GitHub Actions", () => {
       expect(http).toHaveBeenCalledTimes(callsBeforeRead);
     }
     expect(await store.getSnapshot(target)).toEqual(before);
-    expect((await read()).mock.calls[0]).toEqual([true, result]);
+    await expectResult(read());
     expect(actionCalls()).toHaveLength(1);
   });
 
@@ -472,7 +495,7 @@ describe("board authenticated GitHub Actions", () => {
         expect(actionCalls()).toHaveLength(1);
         clock.mockReturnValue(now + cooldownMs);
       }
-      expect((await read()).mock.calls[0]).toEqual([true, result]);
+      await expectResult(read());
       expect(actionCalls()).toHaveLength(2);
     },
   );
@@ -495,10 +518,7 @@ describe("board authenticated GitHub Actions", () => {
       expect(
         await Promise.race([started.promise.then(() => "reading"), pending.then(() => "done")]),
       ).toBe("reading");
-      await invoke("board.update", {
-        sessionKey: boardSessionKey(),
-        ops: [{ kind: "widget_remove", name: "runs" }],
-      });
+      await removeWidget({ invoke });
     } finally {
       release.resolve();
     }
@@ -507,13 +527,7 @@ describe("board authenticated GitHub Actions", () => {
   });
 
   it("coalesces successful reads and scopes cache entries to filters and current credentials", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
-    actions = async () => {
-      started.resolve();
-      await release.promise;
-      return json(result);
-    };
+    const { started, release } = holdActions();
     const harness = createGitHubBoardHarness();
     const { read } = await reader({ harness });
     config.agents!.entries!.other = {};
@@ -523,11 +537,11 @@ describe("board authenticated GitHub Actions", () => {
     const second = read();
     await started.promise;
     release.resolve();
-    expect((await first).mock.calls[0]).toEqual([true, result]);
-    expect((await second).mock.calls[0]).toEqual([true, result]);
-    expect((await sharedSecond).mock.calls[0]).toEqual([true, result]);
-    expect((await otherSession.read()).mock.calls[0]).toEqual([true, result]);
-    expect((await read()).mock.calls[0]).toEqual([true, result]);
+    await expectResult(first);
+    await expectResult(second);
+    await expectResult(sharedSecond);
+    await expectResult(otherSession.read());
+    await expectResult(read());
     expect(actionCalls()).toHaveLength(1);
     const [url, init] = actionCalls()[0]!;
     expect(url).toBe(
@@ -559,24 +573,17 @@ describe("board authenticated GitHub Actions", () => {
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const { read } = await reader();
-      expect((await read()).mock.calls[0]).toEqual([true, result]);
+      await expectResult(read());
       clock.mockReturnValue(now + 30_001);
-      const started = createDeferred();
-      const release = createDeferred();
       const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
-      actions = async () => {
-        started.resolve();
-        await release.promise;
-        return outcome === "success" ? json(updated) : new Response(token, { status: 503 });
-      };
+      const { started, release } = holdActions(() =>
+        outcome === "success" ? json(updated) : new Response(token, { status: 503 }),
+      );
       const pending = read();
       try {
         await withinTest(started.promise, signal);
-        expect((await withinTest(pending, signal)).mock.calls[0]).toEqual([
-          true,
-          { ...result, stale: true },
-        ]);
-        expect((await read()).mock.calls[0]).toEqual([true, { ...result, stale: true }]);
+        await expectResult(withinTest(pending, signal), { ...result, stale: true });
+        await expectResult(read(), { ...result, stale: true });
         expect(actionCalls()).toHaveLength(2);
       } finally {
         release.resolve();
@@ -602,13 +609,7 @@ describe("board authenticated GitHub Actions", () => {
   it.each(["session ownership", "token"] as const)(
     "rejects changed %s across an awaited fetch",
     async (changed) => {
-      const started = createDeferred();
-      const release = createDeferred();
-      actions = async () => {
-        started.resolve();
-        await release.promise;
-        return json(result);
-      };
+      const { started, release } = holdActions();
       const { read } = await reader();
       const pending = read();
       await started.promise;
@@ -626,22 +627,13 @@ describe("board authenticated GitHub Actions", () => {
     const removed = "leader";
     const leader = await reader({ name: "leader" });
     const follower = await reader({ harness: leader.harness, name: "follower" });
-    const started = createDeferred();
-    const release = createDeferred();
-    actions = async () => {
-      started.resolve();
-      await release.promise;
-      return json(result);
-    };
+    const { started, release } = holdActions();
     const leaderRead = leader.read();
     await started.promise;
     const joined = observeSharedReadAdmission();
     const followerRead = follower.read();
     await joined;
-    await leader.invoke("board.update", {
-      sessionKey: boardSessionKey(),
-      ops: [{ kind: "widget_remove", name: removed }],
-    });
+    await removeWidget(leader, removed);
     release.resolve();
     const responses = { leader: await leaderRead, follower: await followerRead };
     const surviving = "follower";
@@ -656,15 +648,12 @@ describe("board authenticated GitHub Actions", () => {
     expect(responses[surviving].mock.calls[0]).toEqual([true, result]);
     expect(actionCalls()).toHaveLength(1);
     const survivor = follower;
-    expect((await survivor.read()).mock.calls[0]).toEqual([true, result]);
+    await expectResult(survivor.read());
     expect(actionCalls()).toHaveLength(1);
     clearGitHubCredentialVerificationCache();
     account.mockImplementationOnce(async () => {
-      await survivor.invoke("board.update", {
-        sessionKey: boardSessionKey(),
-        ops: [{ kind: "widget_remove", name: surviving }],
-      });
-      return json({ id: 100, login: "fixture-user", avatar_url: null });
+      await removeWidget(survivor, surviving);
+      return accountResponse();
     });
     expect((await survivor.read()).mock.calls[0]?.[0]).toBe(false);
     expect(actionCalls()).toHaveLength(1);
@@ -676,24 +665,15 @@ describe("board authenticated GitHub Actions", () => {
     const leader = await reader({ name: "leader" });
     const follower = await reader({ harness: leader.harness, name: "follower" });
     const third = await reader({ harness: leader.harness, name: "third" });
-    const started = createDeferred();
-    const release = createDeferred();
+    const { started, release } = holdActions();
     const rereading = createDeferred();
     const resume = createDeferred();
-    actions = async () => {
-      started.resolve();
-      await release.promise;
-      return json(result);
-    };
     const leaderRead = leader.read();
     await started.promise;
     const joined = observeSharedReadAdmission();
     const followerRead = follower.read();
     await joined;
-    await leader.invoke("board.update", {
-      sessionKey: boardSessionKey(),
-      ops: [{ kind: "widget_remove", name: "leader" }],
-    });
+    await removeWidget(leader, "leader");
     clearGitHubCredentialVerificationCache();
     native.mockImplementationOnce(async () => {
       rereading.resolve();
@@ -716,23 +696,17 @@ describe("board authenticated GitHub Actions", () => {
         await Promise.race([nativeJoined.then(() => "joined"), thirdRead.then(() => "done")]),
       ).toBe("joined");
       resume.resolve();
-      expect((await thirdRead).mock.calls[0]).toEqual([true, result]);
+      await expectResult(thirdRead);
       expect(actionCalls()).toHaveLength(1);
     } finally {
       resume.resolve();
       await followerRead;
     }
-    expect((await followerRead).mock.calls[0]).toEqual([true, result]);
+    await expectResult(followerRead);
   });
 
   it("bounds concurrent callers without retaining failed work", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
-    actions = async () => {
-      started.resolve();
-      await release.promise;
-      return json(result);
-    };
+    const { started, release } = holdActions();
     const { read } = await reader();
     const pending = Array.from({ length: 32 }, () => read());
     await started.promise;

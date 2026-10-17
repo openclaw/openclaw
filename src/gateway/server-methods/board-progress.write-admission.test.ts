@@ -38,7 +38,6 @@ const cases = methods.flatMap((method) =>
   (["allow", "guard"] as const).map((change) => ({
     method,
     change,
-    cold: false,
   })),
 );
 const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
@@ -51,22 +50,20 @@ describe("board and progress-card database write admission", () => {
       .map((method) => ({
         method,
         change: "allow-worker" as const,
-        cold: false,
       })),
     ...(["board.update", "board.widget.grant", "progressCard.put"] as const).map((method) => ({
       method,
       change: "abort" as const,
-      cold: true,
     })),
     ...(["board.widget.put", "progressCard.put"] as const).map((method) => ({
       method,
       change: "route" as const,
-      cold: false,
     })),
-    { method: "progressCard.put" as const, change: "lifecycle" as const, cold: false },
+    { method: "progressCard.put" as const, change: "lifecycle" as const },
   ])(
-    "queues registered $method behind a native reservation ($change, cold=$cold)",
-    async ({ method, change, cold }) => {
+    "queues registered $method behind a native reservation ($change)",
+    async ({ method, change }) => {
+      const cold = change === "abort";
       await withOpenClawTestState(stateOptions, async () => {
         let cfg: OpenClawConfig = {
           ...rolePolicyConfig(),

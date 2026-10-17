@@ -28,11 +28,19 @@ import {
 
 const mainTarget = { sessionKey: "agent:main:main" };
 type Widget = BoardSnapshot["widgets"][number];
+type WidgetIdentity = Pick<Widget, "name" | "revision" | "instanceId">;
 
 function widgetHarness(...args: Parameters<typeof createHarness>) {
   const harness = createHarness(...args);
+  return scopeWidgets(harness, mainTarget);
+}
+
+function scopeWidgets(
+  harness: ReturnType<typeof createHarness>,
+  target: { sessionKey: string; agentId?: string },
+) {
   const get = async () => {
-    const response = await harness.invoke("board.get", mainTarget);
+    const response = await harness.invoke("board.get", target);
     return response.mock.calls[0]![1] as BoardSnapshot;
   };
   const put = (
@@ -41,26 +49,24 @@ function widgetHarness(...args: Parameters<typeof createHarness>) {
     declared?: BoardWidgetPutParams["declared"],
   ) =>
     harness.invoke("board.widget.put", {
-      ...mainTarget,
+      ...target,
       name,
       content,
       ...(declared ? { declared } : {}),
     });
-  const grant = (widget: Widget, decision: "granted" | "rejected" = "granted") =>
+  const identity = ({ name, revision, instanceId }: WidgetIdentity) => ({
+    ...target,
+    name,
+    revision,
+    instanceId,
+  });
+  const grant = (widget: WidgetIdentity, decision: "granted" | "rejected" = "granted") =>
     harness.invoke("board.widget.grant", {
-      ...mainTarget,
-      name: widget.name,
+      ...identity(widget),
       decision,
-      revision: widget.revision,
-      instanceId: widget.instanceId,
     });
-  const appView = (widget: Widget) =>
-    harness.invoke("board.widget.appView", {
-      ...mainTarget,
-      name: widget.name,
-      revision: widget.revision,
-      instanceId: widget.instanceId,
-    });
+  const appView = (widget: WidgetIdentity) =>
+    harness.invoke("board.widget.appView", identity(widget));
   return { ...harness, get, put, grant, appView };
 }
 const appSource = { kind: "mcp-app", viewId: "mcp-app-source" } as const;
@@ -92,10 +98,7 @@ describe("board gateway methods", () => {
       name: "owner",
       content: { kind: "html", html: "work" },
     });
-    expect(work).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sessionKey: "agent:work:global" }),
-    );
+    expect(work.mock.calls[0]).toMatchObject([true, { sessionKey: "agent:work:global" }]);
     expect(await store.getSnapshot({ sessionKey: "global", agentId: "work" })).toMatchObject({
       sessionKey: "global",
       revision: 1,
@@ -103,20 +106,16 @@ describe("board gateway methods", () => {
     });
 
     const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
-    expect(main).toHaveBeenCalledWith(
+    expect(main.mock.calls[0]).toMatchObject([
       true,
-      expect.objectContaining({ sessionKey: "agent:main:global", revision: 0 }),
-    );
+      { sessionKey: "agent:main:global", revision: 0 },
+    ]);
     expect((await store.getSnapshot({ sessionKey: "global", agentId: "main" })).widgets).toEqual(
       [],
     );
 
     const ambiguous = await invoke("board.get", { sessionKey: "global" });
-    expect(ambiguous).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expect(ambiguous.mock.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
   });
 
   it("adds fresh frames from prepared metadata only for admitted widgets, starting the sandbox once", async () => {
@@ -296,44 +295,36 @@ describe("board gateway methods", () => {
   it.each([{ sessionKey: "global", agentId: "work" }])(
     "captures MCP App tools and binds fresh leases to $agentId/$sessionKey",
     async (target) => {
-      const { invoke, mcpApp, store } = createHarness(undefined, {}, undefined, {
+      const harness = createHarness(undefined, {}, undefined, {
         getRuntimeConfig: () => ({
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
           mcp: { apps: { enabled: true } },
           tools: { exec: { mode: "ask" } },
         }),
       });
-      const content = { kind: "mcp-app", viewId: "mcp-app-source" };
+      const { invoke, mcpApp, store, put, grant, appView } = scopeWidgets(harness, target);
 
-      const put = await invoke("board.widget.put", {
-        ...target,
-        name: "server-app",
-        content,
-      });
-      expect(put).toHaveBeenCalledWith(
+      const saved = await put("server-app", appSource);
+      expect(saved.mock.calls[0]).toMatchObject([
         true,
-        expect.objectContaining({
+        {
           widgets: [
-            expect.objectContaining({
+            {
               name: "server-app",
               grantState: "pending",
               declaredSummary: ["Tool access: server.refresh", "Tool access: server.search"],
-            }),
+            },
           ],
-        }),
-      );
+        },
+      ]);
       expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
         expect.objectContaining({ ...target, viewId: "mcp-app-source" }),
       );
       const originalInstanceId = (await store.getSnapshot(target)).widgets[0]?.instanceId;
       expect(originalInstanceId).toMatch(/^[a-f0-9]{32}$/u);
+      const widget = { name: "server-app", revision: 1, instanceId: originalInstanceId! };
 
-      const readOnly = await invoke("board.widget.appView", {
-        ...target,
-        name: "server-app",
-        revision: 1,
-        instanceId: originalInstanceId,
-      });
+      const readOnly = await appView(widget);
       expect(readOnly).toHaveBeenCalledWith(true, {
         viewId: "mcp-app-board-1",
         expiresAtMs: 10_001,
@@ -346,19 +337,8 @@ describe("board gateway methods", () => {
         }),
       );
 
-      await invoke("board.widget.grant", {
-        ...target,
-        name: "server-app",
-        decision: "granted",
-        revision: 1,
-        instanceId: originalInstanceId,
-      });
-      const interactive = await invoke("board.widget.appView", {
-        ...target,
-        name: "server-app",
-        revision: 1,
-        instanceId: originalInstanceId,
-      });
+      await grant(widget);
+      const interactive = await appView(widget);
       expect(interactive).toHaveBeenCalledWith(true, {
         viewId: "mcp-app-board-2",
         expiresAtMs: 10_002,
@@ -383,27 +363,11 @@ describe("board gateway methods", () => {
       });
       expect(await authorizeAppInteraction()).toBe(false);
 
-      await invoke("board.widget.put", {
-        ...target,
-        name: "server-app",
-        content,
-      });
+      await put("server-app", appSource);
       const replacementInstanceId = (await store.getSnapshot(target)).widgets[0]?.instanceId;
-      const staleGrant = await invoke("board.widget.grant", {
-        ...target,
-        name: "server-app",
-        decision: "granted",
-        revision: 1,
-        instanceId: originalInstanceId,
-      });
+      const staleGrant = await grant(widget);
       expect(staleGrant.mock.calls[0]?.[0]).toBe(false);
-      await invoke("board.widget.grant", {
-        ...target,
-        name: "server-app",
-        decision: "granted",
-        revision: 1,
-        instanceId: replacementInstanceId,
-      });
+      await grant({ ...widget, instanceId: replacementInstanceId! });
       expect(replacementInstanceId).not.toBe(originalInstanceId);
       expect(await authorizeAppInteraction()).toBe(false);
     },
@@ -445,49 +409,41 @@ describe("board gateway methods", () => {
     expect(html).toContain("connect-src https://api.open-meteo.com");
   });
 
-  it("rejects Canvas sources whose strict sandbox forbids scripts", async () => {
-    const readCanvasDocument = vi.fn(async () => ({ html: "<script>unsafe()</script>" }));
+  async function expectCanvasRejected(
+    readCanvasDocument: Parameters<typeof createHarness>[0],
+    name: string,
+    docId: string,
+  ) {
     const { invoke, store, broadcast } = createHarness(readCanvasDocument);
-
     const response = await invoke("board.widget.put", {
       sessionKey: "session",
-      name: "strict-canvas-widget",
-      content: { kind: "canvas-doc", docId: "cv_strict" },
+      name,
+      content: { kind: "canvas-doc", docId },
     });
-
-    expect(response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
     expect((await store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets).toEqual(
       [],
     );
     expect(broadcast).not.toHaveBeenCalled();
+  }
+
+  it("rejects Canvas sources whose strict sandbox forbids scripts", async () => {
+    await expectCanvasRejected(
+      vi.fn(async () => ({ html: "<script>unsafe()</script>" })),
+      "strict-canvas-widget",
+      "cv_strict",
+    );
   });
 
   it("rejects a resolved canvas document above the board HTML limit", async () => {
-    const readCanvasDocument = vi.fn(async () => ({
-      html: "x".repeat(10 * 1024 * 1024 + 1),
-      cspSandbox: "scripts" as const,
-    }));
-    const { invoke, store, broadcast } = createHarness(readCanvasDocument);
-
-    const response = await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "oversized-canvas-widget",
-      content: { kind: "canvas-doc", docId: "cv_oversized" },
-    });
-
-    expect(response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    await expectCanvasRejected(
+      vi.fn(async () => ({
+        html: "x".repeat(10 * 1024 * 1024 + 1),
+        cspSandbox: "scripts" as const,
+      })),
+      "oversized-canvas-widget",
+      "cv_oversized",
     );
-    expect((await store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets).toEqual(
-      [],
-    );
-    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("skips prompt confirmation only for an explicitly granted prompt tool", async () => {
@@ -620,14 +576,7 @@ describe("website dashboard authoring", () => {
 
   it.each([
     { name: "HTTP URL", props: { url: "http://status.example" } },
-    ...[{ name: "password-only", username: "", password: "example-password" }].map(
-      ({ name, username, password }) => {
-        const url = new URL("https://status.example");
-        url.username = username;
-        url.password = password;
-        return { name, props: { url: url.href } };
-      },
-    ),
+    { name: "password-only", props: { url: "https://:example-password@status.example/" } },
     {
       name: "oversized URL shortened by normalization",
       props: { url: `https://status.example/${"a/../".repeat(500)}` },

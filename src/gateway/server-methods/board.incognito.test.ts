@@ -31,12 +31,36 @@ const cfg = {
 };
 const env = { OPENCLAW_STATE_DIR: "/synthetic/board-incognito-rpc" };
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+const approved = { decision: "allow-once", risk: "low", rationale: "Synthetic Board" };
+
+function privateBoard(sessionKey: string) {
+  const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
+  const put = (name = "health", html = "<p>health</p>") =>
+    harness.invoke("board.widget.put", {
+      sessionKey,
+      name,
+      content: { kind: "html", html },
+      declared: { tools: ["health"] },
+    });
+  return { ...harness, put };
+}
+
+function holdReview(result = () => approved) {
+  const started = createDeferred();
+  const release = createDeferred();
+  review.mockImplementation(async () => {
+    started.resolve();
+    await release.promise;
+    return result();
+  });
+  return { started, release };
+}
 
 beforeAll(() => {
   setRuntimeConfigSnapshot(cfg, cfg);
 });
 
-async function createSession(sessionKey: string, entry: SessionEntry) {
+async function createSession(sessionKey: string, entry: Partial<SessionEntry>) {
   const binding = await acquireSessionActorStorage(
     { sessionKey, agentId: "main", storePath, env },
     { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
@@ -44,7 +68,10 @@ async function createSession(sessionKey: string, entry: SessionEntry) {
   assert(binding);
   try {
     const result = await binding.actor.storage.mutate(
-      { type: "session.entry.create", input: { entry } },
+      {
+        type: "session.entry.create",
+        input: { entry: { updatedAt: 1, incognito: true, sessionId: sessionKey, ...entry } },
+      },
       authority,
     );
     expect(result.kind).toBe("committed");
@@ -82,16 +109,12 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
       permissionMode: "workspace" as const,
     };
     await createSession(sessionKey, entry);
-    const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
-    const started = createDeferred();
-    const release = createDeferred();
-    review.mockImplementation(async () => {
-      started.resolve();
-      await release.promise;
+    const harness = privateBoard(sessionKey);
+    const { started, release } = holdReview(() => {
       if (outcome === "review-failure") {
         throw new Error("Synthetic reviewer failure");
       }
-      return { decision: "allow-once", risk: "low", rationale: "Synthetic Board" };
+      return approved;
     });
     if (outcome === "approval-failure") {
       vi.mocked(approvals.readExecApprovalsPolicyReadOnlyAsync).mockImplementationOnce(async () => {
@@ -101,12 +124,7 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
       });
     }
     const sql = observeMainThreadSql();
-    const putting = harness.invoke("board.widget.put", {
-      sessionKey,
-      name: "status",
-      content: { kind: "html", html: "<p>Private status</p>" },
-      declared: { tools: ["health"] },
-    });
+    const putting = harness.put("status", "<p>Private status</p>");
     try {
       await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
       if (outcome === "permission" || outcome === "replacement") {
@@ -127,14 +145,10 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
         expect(response.mock.calls[0]?.[0]).toBe(false);
         expect(harness.broadcast).not.toHaveBeenCalled();
       } else {
-        expect(response).toHaveBeenCalledWith(
+        expect(response.mock.calls[0]).toMatchObject([
           true,
-          expect.objectContaining({
-            widgets: [
-              expect.objectContaining({ grantState: outcome === "grant" ? "granted" : "rejected" }),
-            ],
-          }),
-        );
+          { widgets: [{ grantState: outcome === "grant" ? "granted" : "rejected" }] },
+        ]);
       }
       const stored = await boardStore.getSnapshot({ sessionKey });
       expect(stored.widgets).toHaveLength(1);
@@ -154,7 +168,7 @@ it.each(["grant", "permission", "replacement", "approval-failure", "review-failu
 
 it("returns explicit absence without opening Board, progress, or deletion sources", async () => {
   const sessionKey = "agent:absent:dashboard:incognito-missing";
-  const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
+  const harness = privateBoard(sessionKey);
   Object.assign(harness.handlers, createProgressCardHandlers(), sessionDeleteHandlers);
   const sql = observeMainThreadSql();
   try {
@@ -176,11 +190,11 @@ it("returns explicit absence without opening Board, progress, or deletion source
       sessionKey,
       idempotencyKey: "missing-card",
     });
-    expect(refresh).toHaveBeenCalledWith(
+    expect(refresh.mock.calls[0]).toMatchObject([
       false,
       undefined,
-      expect.objectContaining({ message: "There is no progress card to refresh." }),
-    );
+      { message: "There is no progress card to refresh." },
+    ]);
     const deleted = await harness.invoke("sessions.delete", { key: sessionKey });
     expect(deleted).toHaveBeenCalledWith(
       true,
@@ -203,23 +217,11 @@ it("reads guarded permission mode from the memory owner before granting a widget
   const sessionKey = "agent:main:dashboard:incognito-guarded";
   await createSession(sessionKey, {
     sessionId: "guarded-widget",
-    updatedAt: 1,
-    incognito: true,
     permissionMode: "guarded",
   });
-  const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
-  const response = await harness.invoke("board.widget.put", {
-    sessionKey,
-    name: "health",
-    content: { kind: "html", html: "<p>health</p>" },
-    declared: { tools: ["health"] },
-  });
-  expect(response).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({
-      widgets: [expect.objectContaining({ grantState: "pending" })],
-    }),
-  );
+  const harness = privateBoard(sessionKey);
+  const response = await harness.put();
+  expect(response.mock.calls[0]).toMatchObject([true, { widgets: [{ grantState: "pending" }] }]);
   expect(review).not.toHaveBeenCalled();
 });
 
@@ -227,24 +229,11 @@ it("refuses a pending Board approval after its memory owner closes", async () =>
   const sessionKey = "agent:main:dashboard:incognito-board-close";
   await createSession(sessionKey, {
     sessionId: "closing-widget",
-    updatedAt: 1,
-    incognito: true,
     permissionMode: "workspace",
   });
-  const harness = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
-  const started = createDeferred();
-  const finish = createDeferred();
-  review.mockImplementation(async () => {
-    started.resolve();
-    await finish.promise;
-    return { decision: "allow-once", risk: "low", rationale: "Synthetic Board" };
-  });
-  const putting = harness.invoke("board.widget.put", {
-    sessionKey,
-    name: "health",
-    content: { kind: "html", html: "<p>health</p>" },
-    declared: { tools: ["health"] },
-  });
+  const harness = privateBoard(sessionKey);
+  const { started, release: finish } = holdReview();
+  const putting = harness.put();
   try {
     await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
     memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });

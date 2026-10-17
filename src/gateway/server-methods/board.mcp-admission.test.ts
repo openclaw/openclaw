@@ -41,15 +41,13 @@ afterEach(() => {
 });
 
 describe("MCP App source authority at board write admission", () => {
-  it.for([
-    { revoke: false, cancel: false, retire: false, sharing: false },
-    { revoke: true, cancel: false, retire: false, sharing: false },
-    { revoke: false, cancel: true, retire: false, sharing: false },
-    { revoke: false, cancel: false, retire: true, sharing: false },
-    { revoke: false, cancel: false, retire: false, sharing: true },
-  ])(
-    "retains only current source tool authority after queueing (revoke=$revoke, cancel=$cancel, retire=$retire, sharing=$sharing)",
-    async ({ revoke, cancel, retire, sharing }, { signal: testSignal }) => {
+  it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
+    "retains only current source tool authority after queueing (%s)",
+    async (outcome, { signal: testSignal }) => {
+      const revoke = outcome === "revoke";
+      const cancel = outcome === "cancel";
+      const retire = outcome === "retire";
+      const sharing = outcome === "sharing";
       await withOpenClawTestState(profileState, async ({ workspaceDir }) => {
         const target = { agentId: "main", sessionKey: "agent:main:mcp-admission" };
         const cfg: OpenClawConfig = {
@@ -201,15 +199,11 @@ describe("MCP App source authority at board write admission", () => {
           });
           return respond;
         };
-        expect(
-          (
-            await invoke("board.widget.appView", {
-              name: "source",
-              revision: sourceWidget.revision,
-              instanceId: sourceWidget.instanceId,
-            })
-          ).mock.calls[0]?.[0],
-        ).toBe(true);
+        const appView = async (name: string, { revision, instanceId }: typeof sourceWidget) => {
+          const response = await invoke("board.widget.appView", { name, revision, instanceId });
+          expect(response.mock.calls[0]?.[0]).toBe(true);
+        };
+        await appView("source", sourceWidget);
         const sourceView = views[0]!;
         await requireMcpAppInteraction(sourceView.view);
         const authorizeSource = sourceView.view.authorizeAppInteraction!;
@@ -334,15 +328,7 @@ describe("MCP App source authority at board write admission", () => {
           (widget) => widget.name === "destination",
         )!;
         const document = await boardStore.readWidgetMcpApp(target, "destination");
-        expect(
-          (
-            await invoke("board.widget.appView", {
-              name: "destination",
-              revision: destination.revision,
-              instanceId: destination.instanceId,
-            })
-          ).mock.calls[0]?.[0],
-        ).toBe(true);
+        await appView("destination", destination);
         const destinationView = views[1]!;
         const effect = await executeMcpAppOperation(destinationView, {
           method: "tools/call",
