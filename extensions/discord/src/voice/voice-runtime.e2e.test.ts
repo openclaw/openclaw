@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -49,7 +50,7 @@ defineDiscordVoiceTests(
     handleSpeakingStart,
     receiveRecordedSpeech,
   }) => {
-    const lastAgentCommandToolNames = () => {
+    const lastAgentCommandTools = () => {
       const args = lastAgentCommandArgs();
       if (typeof args.senderIsOwner !== "boolean") {
         throw new Error("expected agent command owner identity");
@@ -60,7 +61,7 @@ defineDiscordVoiceTests(
         messageProvider: "discord",
         workspaceDir: "/tmp/openclaw-discord-voice-tools",
         agentDir: "/tmp/openclaw-discord-voice-agent",
-      }).map((tool) => tool.name);
+      });
     };
 
     it("composes join, audio ingress, agent dispatch, playback, and leave", async () => {
@@ -90,7 +91,7 @@ defineDiscordVoiceTests(
 
     it.each([
       {
-        name: "withholds owner-only tools from account allowlisted voice speakers",
+        name: "gates owner-only tools for account allowlisted voice speakers",
         userId: "u-owner",
         client: () => createClientWithMember("u-owner", "Owner", "1234"),
         manager: (client: ReturnType<typeof createClient>) =>
@@ -99,7 +100,7 @@ defineDiscordVoiceTests(
             client,
           ),
         expectedOwner: false,
-        toolNames: { include: ["exec"], exclude: ["gateway", "nodes", "openclaw"] },
+        toolNames: { include: ["exec"], ownerGated: ["gateway", "nodes", "openclaw"] },
       },
       ...["*", " * "].map((allowFrom, index) => ({
         name:
@@ -131,7 +132,7 @@ defineDiscordVoiceTests(
             },
           ),
         expectedOwner: true,
-        toolNames: { include: ["gateway", "nodes", "openclaw"], exclude: [] },
+        toolNames: { include: ["gateway", "nodes", "openclaw"], ownerGated: [] },
       },
       {
         name: "admits the Discord command-owner wildcard without owner voice authority",
@@ -146,7 +147,7 @@ defineDiscordVoiceTests(
             },
           ),
         expectedOwner: false,
-        toolNames: { include: ["exec"], exclude: ["gateway", "nodes", "openclaw"] },
+        toolNames: { include: ["exec"], ownerGated: ["gateway", "nodes", "openclaw"] },
       },
       {
         name: "does not use another provider's command owners for Discord voice",
@@ -203,9 +204,18 @@ defineDiscordVoiceTests(
           );
         }
         if ("toolNames" in scenario && scenario.toolNames) {
-          const toolNames = lastAgentCommandToolNames();
+          const tools = lastAgentCommandTools();
+          const toolNames = tools.map((tool) => tool.name);
           scenario.toolNames.include.forEach((name) => expect(toolNames).toContain(name));
-          scenario.toolNames.exclude.forEach((name) => expect(toolNames).not.toContain(name));
+          for (const name of scenario.toolNames.ownerGated) {
+            const tool = expectDefined(
+              tools.find((candidate) => candidate.name === name),
+              "offered owner-only tool " + name,
+            );
+            const result = await tool.execute("voice-non-owner-" + name, {});
+            expect(result.details).toMatchObject({ gated: true });
+            expect(JSON.stringify(result.content)).toContain(name + " needs the owner's authority");
+          }
         }
       },
     );
