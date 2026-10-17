@@ -32,7 +32,7 @@ function createStdin(writeResult: boolean): TestStdin {
 
 function createProcess(params: { stdin?: TestStdin | null; stdout?: EventEmitter | null }) {
   const events = new EventEmitter();
-  const proc = {
+  const proc = Object.assign(events, {
     exitCode: null as number | null,
     signalCode: null as NodeJS.Signals | null,
     stdin: params.stdin ?? null,
@@ -46,11 +46,7 @@ function createProcess(params: { stdin?: TestStdin | null; stdout?: EventEmitter
       });
       return true;
     }),
-    on: events.on.bind(events),
-    once: events.once.bind(events),
-    off: events.off.bind(events),
-    emit: events.emit.bind(events),
-  };
+  });
   return proc;
 }
 

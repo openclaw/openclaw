@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { makeBridge } from "../talk/session-runtime.test-support.js";
+import { makeBridge, makeVoiceProvider } from "../talk/session-runtime.test-support.js";
 import {
   TEST_CAPTION_SOURCE,
   TEST_MEETING_URL,
@@ -94,22 +93,16 @@ describe("MeetingSessionRuntime startup custody", () => {
               }
             }
           },
-          handleBargeIn: () => {},
           isConnected: () => liveProviders.has(session.id),
           sendUserMessage: () => {
             spoken.push(session.id);
           },
         });
-        const provider: RealtimeVoiceProviderPlugin = {
-          id: "startup-custody-test",
-          label: "Startup custody test",
-          isConfigured: () => true,
-          createBridge: () => {
-            liveProviders.add(session.id);
-            createdProviders.push(session.id);
-            return bridge;
-          },
-        };
+        const provider = makeVoiceProvider(() => {
+          liveProviders.add(session.id);
+          createdProviders.push(session.id);
+          return bridge;
+        });
         const handle = await startMeetingRealtimeEngine({
           config: {
             chrome: { audioFormat: "pcm16-24khz" },
@@ -404,13 +397,7 @@ describe("MeetingSessionRuntime participation ownership", () => {
   );
 
   it("records a caption's original order before finalization and revokes it on a pending correction", async () => {
-    const source = {
-      id: "caption-1",
-      epoch: "page-1",
-      revision: "1",
-      finalized: false,
-      ownEcho: false,
-    };
+    const source = { ...TEST_CAPTION_SOURCE, epoch: "page-1", revision: "1", finalized: false };
     const completed = {
       text: "Please share the recap",
       source: { ...source, revision: "2", finalized: true },
@@ -444,13 +431,7 @@ describe("MeetingSessionRuntime participation ownership", () => {
       [
         {
           text: "Please share the recap",
-          source: {
-            id: "caption-1",
-            epoch: "old-page",
-            revision: "2",
-            finalized: true,
-            ownEcho: false,
-          },
+          source: { ...TEST_CAPTION_SOURCE, epoch: "old-page" },
         },
       ],
       { epoch: "old-page" },

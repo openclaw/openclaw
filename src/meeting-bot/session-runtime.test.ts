@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createMeetingNodeBrowserFixture } from "../plugin-sdk/test-helpers/meeting-browser.js";
 import { defineMeetingChromeCleanupTests } from "../plugin-sdk/test-helpers/meeting-chrome-contract.js";
 import { useMeetingTestState } from "../plugin-sdk/test-helpers/meeting-state.js";
@@ -174,22 +173,20 @@ describe("createMeetingSession", () => {
   });
 });
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
+  tempDirs.cleanup();
 });
 
 describe("MeetingSessionRuntime durable transcripts", () => {
-  const policyTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
   it.each([false, true])(
     "suspends durable notes without leaving and resumes past disabled captions (failed finalization: %s)",
     async (failFinalization) => {
-      const stateDir = policyTempDirs.make("openclaw-meeting-policy-");
+      const stateDir = tempDirs.make("openclaw-meeting-policy-");
       const lines = [{ text: "before suspension" }];
       const releaseBrowserTab = vi.fn(async () => true);
       const captureTranscript = vi.fn(async () => ({
@@ -252,8 +249,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
   );
 
   it("persists joined agent-mode captions and writes summary rows on leave", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make("openclaw-meeting-notes-");
     const first = {
       at: "2026-07-23T12:00:00.000Z",
       speaker: "Avery",
@@ -319,8 +315,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
   });
 
   it("keeps transcribe finalization when durable session startup fails", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
-    tempDirs.push(tempDir);
+    const tempDir = tempDirs.make("openclaw-meeting-notes-");
     const blockedStateDir = path.join(tempDir, "not-a-directory");
     await fs.writeFile(blockedStateDir, "blocked", "utf8");
     const captureTranscript = vi.fn(async () => ({ droppedLines: 0, lines: [] }));
@@ -338,8 +333,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
   });
 
   it("does not let subscriber delivery failure block meeting leave", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make("openclaw-meeting-notes-");
     const empty = { droppedLines: 0, epoch: "page-1", lines: [] };
     const final = {
       droppedLines: 0,
