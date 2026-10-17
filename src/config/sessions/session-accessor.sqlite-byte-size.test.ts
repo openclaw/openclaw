@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -226,18 +227,14 @@ it("bounds display delta sizing before its byte limit and resumes in order", asy
         0,
       );
       const first = read(scope, { ...limits, maxBytes });
-      if (first.kind !== "page") {
-        throw new Error("Expected the first delta page");
-      }
+      assert(first.kind === "page", "Expected the first delta page");
       expect(first.events.map(({ event }) => event)).toEqual(expected);
       expect(first).toMatchObject({ hasMore: true, serializedBytes: maxBytes });
       expect(first).not.toHaveProperty("requiredBytes");
       expect(counter.rowCounts.metadata).toBeLessThanOrEqual(256);
 
       const rest = read(scope, { cursor: first.cursor, maxEvents: 1_000, maxBytes: 1_000_000 });
-      if (rest.kind !== "page") {
-        throw new Error("Expected the remaining delta page");
-      }
+      assert(rest.kind === "page", "Expected the remaining delta page");
       expect(rest.events.map(({ event }) => event)).toEqual(events.slice(expected.length));
       expect(rest.hasMore).toBe(false);
       expect(read(scope, { cursor: rest.cursor })).toMatchObject({
