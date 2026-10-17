@@ -103,22 +103,19 @@ it("returns the committed workspace identity when ordinary result delivery fails
 });
 
 it("publishes native base changes and deletion before returning without exposing rollback", async () => {
-  const { database, store } = await fixture();
+  const { database, store, transaction, rollback } = await fixture();
   const initial = await store.create(source);
   const prepared = await store.prepare(initial.workspaceId);
   const bind = () =>
     bindSessionRepositoryWorkspaceBaseInDatabase(database.db, baseInput(initial), 2);
-  expectRollback(database, () => {
+  rollback(() => {
     bind();
     expect(prepared.current()).toEqual(initial);
   });
   expect(prepared.current()).toEqual(initial);
-  runOpenClawStateWriteTransaction(bind, { database });
+  transaction(bind);
   expect(prepared.current()).toMatchObject({ baseCommit, baseManifestHash, revision: 1 });
-  runOpenClawStateWriteTransaction(
-    () => deleteSessionRepositoryWorkspaceInDatabase(database.db, initial.workspaceId),
-    { database },
-  );
+  transaction(() => deleteSessionRepositoryWorkspaceInDatabase(database.db, initial.workspaceId));
   expect(prepared.current()).toBeUndefined();
 });
 
@@ -152,22 +149,24 @@ async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-repository-owner-"));
   roots.push(root);
   const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
-  return { database, store: createSessionRepositoryWorkspaceStore({ path: database.path }) };
+  const transaction = <T>(write: () => T) => runOpenClawStateWriteTransaction(write, { database });
+  const rollback = (write: () => void) => {
+    expect(() =>
+      transaction(() => {
+        write();
+        throw new Error("rollback");
+      }),
+    ).toThrow("rollback");
+  };
+  return {
+    database,
+    store: createSessionRepositoryWorkspaceStore({ path: database.path }),
+    transaction,
+    rollback,
+  };
 }
 
 const owner = { agentId: source.agentId, sessionKey: source.sessionKey };
-
-function expectRollback(database: ReturnType<typeof openOpenClawStateDatabase>, write: () => void) {
-  expect(() =>
-    runOpenClawStateWriteTransaction(
-      () => {
-        write();
-        throw new Error("rollback");
-      },
-      { database },
-    ),
-  ).toThrow("rollback");
-}
 
 function observeChanges() {
   const changed = vi.fn();
@@ -209,23 +208,21 @@ it("captures a lazy store location and retains it across environment changes and
 });
 
 it("retries rolled-back first-use pending owner DDL and preserves the committed column on reopen", async () => {
-  const { database } = await fixture();
+  const { database, transaction, rollback } = await fixture();
   database.db.exec(
     "ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id",
   );
   const hasPendingRepositoryColumn = (db = database.db) =>
     tableHasColumn(db, "worker_workspace_pending_results", "repository_workspace_id");
   expect(hasPendingRepositoryColumn()).toBe(false);
-  expectRollback(database, () => {
+  rollback(() => {
     ensureRepositoryWorkspacePendingResultSchema(database.db);
     // A later first-use writer must not cache this uncommitted column.
     ensureRepositoryWorkspacePendingResultSchema(database.db);
     expect(hasPendingRepositoryColumn()).toBe(true);
   });
   expect(hasPendingRepositoryColumn()).toBe(false);
-  runOpenClawStateWriteTransaction(({ db }) => ensureRepositoryWorkspacePendingResultSchema(db), {
-    database,
-  });
+  transaction(() => ensureRepositoryWorkspacePendingResultSchema(database.db));
   expect(hasPendingRepositoryColumn()).toBe(true);
   await closeOpenClawStateDatabaseByPathAsync(database.path);
   expect(hasPendingRepositoryColumn(openOpenClawStateDatabase({ path: database.path }).db)).toBe(
@@ -234,11 +231,11 @@ it("retries rolled-back first-use pending owner DDL and preserves the committed 
 });
 
 it("creates one stable logical-session owner without widening replayed setup intent", async () => {
-  const { database, store } = await fixture();
+  const { database, store, rollback } = await fixture();
   const changed = observeChanges();
   expect(await store.find(source)).toBeUndefined();
   expect(tableExists(database.db, "session_repository_workspaces")).toBe(false);
-  expectRollback(database, () => {
+  rollback(() => {
     createSessionRepositoryWorkspaceInDatabase(database.db, source, Date.now());
     expect(changed).not.toHaveBeenCalled();
   });

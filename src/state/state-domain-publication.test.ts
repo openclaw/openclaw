@@ -48,6 +48,7 @@ function observe(publication: ReturnType<typeof domain>, facts = false) {
 
 const postimages = (...rows: Row[]) =>
   new Map(rows.map((value) => [value.id, { kind: "postimage", value }]));
+const kinds = (changes: StateDomainChange<Row>[]) => changes.map(({ kind }) => kind);
 
 function fixture(publishPending = true) {
   const db = openTrackedStateDatabase(
@@ -87,15 +88,10 @@ it("publishes committed facts under the domain's admitted source identity", () =
   const pending = publication.begin({ identity, assertCurrent() {} });
   pending.committed(captured.receipt);
   pending.finish(true);
+  const receipt = { source: { identity }, facts: postimages(credential) };
   expect(changes).toMatchObject([
     { kind: "pending", identity },
-    {
-      kind: "committed",
-      receipt: {
-        source: { identity },
-        facts: postimages(credential),
-      },
-    },
+    { kind: "committed", receipt },
     { kind: "settled", identity },
   ]);
 });
@@ -234,12 +230,10 @@ it.each([true, false])(
     const { publication, begin } = fixture(publishPending);
     const changes = observe(publication, true);
     begin().finish(true, true);
-    expect(changes.map((change) => change.kind)).toEqual(
-      publishPending ? ["pending", "settled"] : [],
-    );
+    expect(kinds(changes)).toEqual(publishPending ? ["pending", "settled"] : []);
     changes.length = 0;
     begin().finish(true);
-    expect(changes.map((change) => change.kind)).toEqual(
+    expect(kinds(changes)).toEqual(
       publishPending ? ["pending", "unknown", "settled"] : ["unknown"],
     );
   },
@@ -257,10 +251,5 @@ it("invalidates installed facts when their publisher throws before completed set
     }),
   ).toThrow(failure);
   pending.finish(true);
-  expect(changes.map((change) => change.kind)).toEqual([
-    "pending",
-    "committed",
-    "unknown",
-    "settled",
-  ]);
+  expect(kinds(changes)).toEqual(["pending", "committed", "unknown", "settled"]);
 });
