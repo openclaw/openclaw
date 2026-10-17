@@ -105,6 +105,17 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
         ["doctor", "--non-interactive", "--no-workspace-suggestions"],
         ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
       ];
+      // These safety journals are intentionally local even when application stores use PG.
+      const localJournals = new Map([
+        [
+          path.join("state", "openclaw-quarantine.sqlite"),
+          ["agent_integrity_verifications", "quarantined_databases"],
+        ],
+        [
+          path.join("control", "services.sqlite"),
+          ["daemon_runtime_pin_migration", "daemon_runtime_pins"],
+        ],
+      ]);
       await client.connect();
       try {
         const schemas = new Set<string>();
@@ -118,9 +129,7 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
             }),
           ).toBe(0);
           const databases = (await fs.readdir(stateDir, { recursive: true }))
-            .filter((file) =>
-              ["openclaw.sqlite", "openclaw-agent.sqlite"].includes(path.basename(file)),
-            )
+            .filter((file) => file.endsWith(".sqlite"))
             .map((file) => path.join(stateDir, file));
           expect(databases).toContain(resolveOpenClawStateSqlitePath(env));
           expect(databases.some((file) => path.basename(file) === "openclaw-agent.sqlite")).toBe(
@@ -128,12 +137,16 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
           );
           for (const database of databases) {
             using anchor = openNodeSqliteDatabase(database, { readOnly: true });
+            const journal = localJournals.get(path.relative(stateDir, database));
             expect(
               anchor
                 .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
                 .all(),
               `${args[0]} left application tables in ${path.relative(stateDir, database)}`,
-            ).toEqual([{ name: "openclaw_engine_anchor" }]);
+            ).toEqual((journal ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
+            if (journal) {
+              continue;
+            }
             const identity = anchor
               .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
               .get();
