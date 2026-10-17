@@ -11,7 +11,7 @@ import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fi
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 function timedHook(
-  hookName: "before_compaction" | "after_compaction",
+  hookName: "before_compaction" | "after_compaction" | "agent_end",
   pluginId: string,
   handler: () => Promise<void>,
   timeoutMs?: number,
@@ -86,39 +86,35 @@ describe("hook timeouts", () => {
     expect(child.stdout).toContain("settled-after-timeout");
   });
 
-  it("clamps oversized registration timeouts before scheduling", async () => {
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        { hookName: "agent_end", handler: async () => {}, timeoutMs: Number.MAX_SAFE_INTEGER },
-      ]),
+  it.each([
+    ["agent_end", Number.MAX_SAFE_INTEGER, MAX_TIMER_TIMEOUT_MS],
+    ["after_compaction", undefined, 30_000],
+  ] as const)("bounds the %s timeout", async (hookName, timeoutMs, delay) => {
+    vi.useFakeTimers();
+    const hung = hookName === "after_compaction";
+    const { runner, logger } = timedHook(
+      hookName,
+      "plugin-a",
+      () => (hung ? new Promise<void>(() => {}) : Promise.resolve()),
+      timeoutMs,
     );
     const timer = vi.spyOn(globalThis, "setTimeout");
     try {
-      await runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
-      expect(timer).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      const run = hung
+        ? runner.runAfterCompaction({ messageCount: 2, compactedCount: 1 }, TEST_PLUGIN_AGENT_CTX)
+        : runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
+      if (hung) {
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      await expect(run).resolves.toBeUndefined();
+      expect(timer).toHaveBeenCalledWith(expect.any(Function), delay);
+      if (hung) {
+        expect(logger.error).toHaveBeenCalledWith(
+          "[hooks] after_compaction handler from plugin-a failed: timed out after 30000ms",
+        );
+      }
     } finally {
       timer.mockRestore();
-    }
-  });
-
-  it("bounds a hung after_compaction hook with its default timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const { runner, logger } = timedHook(
-        "after_compaction",
-        "plugin-a",
-        () => new Promise<void>(() => {}),
-      );
-      const run = runner.runAfterCompaction(
-        { messageCount: 2, compactedCount: 1 },
-        TEST_PLUGIN_AGENT_CTX,
-      );
-      await vi.advanceTimersByTimeAsync(30_000);
-      await expect(run).resolves.toBeUndefined();
-      expect(logger.error).toHaveBeenCalledWith(
-        "[hooks] after_compaction handler from plugin-a failed: timed out after 30000ms",
-      );
-    } finally {
       vi.useRealTimers();
     }
   });

@@ -30,6 +30,7 @@ const mockRunner = (
   hooks: Parameters<typeof createMockPluginRegistry>[0],
   options?: Parameters<typeof createHookRunner>[1],
 ) => createHookRunner(createMockPluginRegistry(hooks), options);
+afterEach(() => vi.restoreAllMocks());
 
 describe("before_tool_call isolation and approval", () => {
   it("binds the first approval to its owner and snapshot while allowing a later block", async () => {
@@ -70,26 +71,20 @@ describe("before_tool_call isolation and approval", () => {
     expect(skipped).not.toHaveBeenCalled();
   });
 
+  const shared = () => new SharedArrayBuffer(4);
   it.each([
-    { name: "uncloneable callback", params: { callback: () => undefined } },
-    {
-      name: "shared WebAssembly memory",
-      params: { memory: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }) },
-    },
-    { name: "shared buffer", params: { buffer: new SharedArrayBuffer(4) } },
-    { name: "shared view", params: { view: new DataView(new SharedArrayBuffer(4)) } },
-    { name: "shared map key", params: { map: new Map([[new SharedArrayBuffer(4), "value"]]) } },
-    { name: "shared map value", params: { map: new Map([["key", new SharedArrayBuffer(4)]]) } },
-    { name: "shared set entry", params: { set: new Set([new SharedArrayBuffer(4)]) } },
-    {
-      name: "shared memory returned by a getter",
-      params: {
-        get buffer() {
-          return new SharedArrayBuffer(4);
-        },
-      },
-    },
-  ])("fails closed before invoking a handler for $name", async ({ params }) => {
+    ["uncloneable callback", { callback: () => undefined }],
+    [
+      "shared WebAssembly memory",
+      { memory: new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }) },
+    ],
+    ["shared buffer", { buffer: shared() }],
+    ["shared view", { view: new DataView(shared()) }],
+    ["shared map key", { map: new Map([[shared(), "value"]]) }],
+    ["shared map value", { map: new Map([["key", shared()]]) }],
+    ["shared set entry", { set: new Set([shared()]) }],
+    ["shared getter", Object.defineProperty({}, "buffer", { get: shared, enumerable: true })],
+  ] as const)("fails closed before invoking a handler for %s", async (_name, params) => {
     const handler = vi.fn<Handler>(() => ({}));
     await expect(runParams(handler, params, true)).rejects.toThrow(isolationError);
     expect(handler).not.toHaveBeenCalled();
@@ -108,20 +103,17 @@ describe("before_tool_call isolation and approval", () => {
   });
 
   it("clones collections without invoking overridden iterators", async () => {
+    const fail = (): never => {
+      throw new Error("overridden iterator");
+    };
     class HostileMap extends Map {
-      override [Symbol.iterator](): MapIterator<[unknown, unknown]> {
-        throw new Error("overridden map iterator");
-      }
+      override [Symbol.iterator] = fail;
     }
     class HostileSet extends Set {
-      override [Symbol.iterator](): SetIterator<unknown> {
-        throw new Error("overridden set iterator");
-      }
+      override [Symbol.iterator] = fail;
     }
-    const map = new HostileMap();
-    const set = new HostileSet();
-    Map.prototype.set.call(map, "key", "value");
-    Set.prototype.add.call(set, "value");
+    const map = new HostileMap([["key", "value"]]);
+    const set = new HostileSet(["value"]);
     const handler = vi.fn<Handler>(() => ({}));
     await runParams(handler, { map, set });
     expect(handler).toHaveBeenCalledOnce();
@@ -135,13 +127,9 @@ describe("before_tool_call isolation and approval", () => {
     const bytes = new Uint8Array(1024 * 1024);
     const ownKeys = vi.spyOn(Reflect, "ownKeys");
     const handler = vi.fn<Handler>(() => ({}));
-    try {
-      await runParams(handler, { bytes });
-      expect(handler).toHaveBeenCalledOnce();
-      expect(ownKeys.mock.calls.some(([value]) => ArrayBuffer.isView(value))).toBe(false);
-    } finally {
-      ownKeys.mockRestore();
-    }
+    await runParams(handler, { bytes });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(ownKeys.mock.calls.some(([value]) => ArrayBuffer.isView(value))).toBe(false);
   });
 
   it("fails closed before later hooks when approved params cannot be snapshotted", async () => {
@@ -170,11 +158,9 @@ describe("before_tool_call receipts", () => {
   });
   afterEach(() => clear());
   const expectReceipt = (outcome: string, reasonCode: string, coverageState: string) => {
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]).toMatchObject({
-      decision: { outcome, reasonCode },
-      enforcement: { coverageState },
-    });
+    expect(receipts).toMatchObject([
+      { decision: { outcome, reasonCode }, enforcement: { coverageState } },
+    ]);
   };
   const admission = (assertAuthority: () => boolean | void = () => true) => ({
     token: createExecutionIdentityAdmissionToken("run-hook", {
@@ -184,7 +170,6 @@ describe("before_tool_call receipts", () => {
     }),
     assertAuthority,
   });
-
   it.each([
     { result: { params: { approved: true } }, outcome: "allowed", reason: "plugin_hook_allowed" },
     {

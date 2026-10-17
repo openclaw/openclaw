@@ -1,4 +1,3 @@
-// Covers plugin install behavior from git-backed sources.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -171,8 +170,7 @@ describe("installPluginFromGitSpec", () => {
     preflightPluginGitInstallPolicyMock.mockReset();
     preflightPluginGitInstallPolicyMock.mockResolvedValue(null);
     state = await createOpenClawTestState({ label: "git-install" });
-    const globalConfig = await state.writeText("global-npmrc", "");
-    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
+    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", await state.writeText("global-npmrc", ""));
   });
 
   afterEach(async () => {
@@ -194,25 +192,13 @@ describe("installPluginFromGitSpec", () => {
   });
 
   it.each([
-    {
-      mode: "install",
-      timeoutMs: undefined,
-      workTimeoutMs: undefined,
-      gitWork: 120_000,
-      npmWork: 300_000,
-    },
-    {
-      mode: "update",
-      timeoutMs: undefined,
-      workTimeoutMs: undefined,
-      gitWork: undefined,
-      npmWork: undefined,
-    },
-    { mode: "update", timeoutMs: 50, workTimeoutMs: undefined, gitWork: 50, npmWork: 50 },
-    { mode: "update", timeoutMs: 500, workTimeoutMs: null, gitWork: undefined, npmWork: undefined },
+    ["install", undefined, undefined, 120_000, 300_000],
+    ["update", undefined, undefined, undefined, undefined],
+    ["update", 50, undefined, 50, 50],
+    ["update", 500, null, undefined, undefined],
   ] as const)(
-    "acquires and installs with $mode work=$gitWork, preserving bounded ref probes",
-    async ({ mode, timeoutMs, workTimeoutMs, gitWork, npmWork }) => {
+    "acquires and installs in %s mode with timeout %s and work timeout %s, preserving bounded ref probes",
+    async (mode, timeoutMs, workTimeoutMs, gitWork, npmWork) => {
       mockGitCommands("", "abc123\n", "", "abc123\n", "");
       mockSuccessfulPackageInstall();
 

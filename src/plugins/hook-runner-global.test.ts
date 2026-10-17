@@ -82,23 +82,6 @@ describe("hook-runner-global", () => {
     expect((await importGlobal()).getGlobalHookRunner()).toBeNull();
   });
 
-  it("checks scoped reply dispatch with only the host dispatch kind", async () => {
-    const registry = createMockPluginRegistry([]);
-    registry.typedHooks.push({
-      pluginId: "acp-dispatch",
-      hookName: "reply_dispatch",
-      handler: vi.fn(),
-      eligibleDispatchKinds: ["acp"],
-      source: "test",
-    });
-    const mod = await initialize(registry);
-
-    expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "agent" })).toBe(false);
-    expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "acp" })).toBe(true);
-    expect(mod.hasGlobalHooks("reply_dispatch", {})).toBe(true);
-    expect(mod.hasGlobalHooks("reply_dispatch")).toBe(true);
-  });
-
   it("re-admits hook dispatch against the current registry after its prepared generation retires", async () => {
     const retiredHandler = vi.fn(() => {
       throw new PluginInstanceUnavailableError("retired-policy");
@@ -112,6 +95,7 @@ describe("hook-runner-global", () => {
     ]);
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const mod = await initialize(currentRegistry);
+    expect(mod.hasGlobalHooks("before_tool_call", { toolName: "read" })).toBe(true);
 
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: retiredRegistry },

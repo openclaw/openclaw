@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewayPlugins } from "../gateway/server-plugins.js";
 import { collectConfiguredAgentModelProviderIds } from "./gateway-startup-plugin-providers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import {
   disposePluginRegistryInstances,
@@ -15,32 +16,26 @@ import {
   resetPluginRuntimeStateForTest,
 } from "./runtime.js";
 
-function createManifestRecord(
-  plugin: Pick<PluginManifestRecord, "id"> & Partial<PluginManifestRecord>,
-): PluginManifestRecord {
-  return {
-    channels: [],
-    providers: [plugin.id],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: `/tmp/plugins/${plugin.id}`,
-    source: `/tmp/plugins/${plugin.id}/index.ts`,
-    manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
-    ...plugin,
-  };
-}
-
 function createManifestRegistry(
   plugins: Array<Pick<PluginManifestRecord, "id"> & Partial<PluginManifestRecord>>,
 ): PluginManifestRegistry {
-  return { plugins: plugins.map(createManifestRecord), diagnostics: [] };
+  return {
+    plugins: plugins.map((plugin) =>
+      createPluginManifestRecordFixture({ providers: [plugin.id], ...plugin }),
+    ),
+    diagnostics: [],
+  };
 }
 
-function writeJson(dir: string, name: string, value: object) {
-  writeFileSync(path.join(dir, name), JSON.stringify(value));
+function writeFixture(root: string, id: string, files: Record<string, string | object>) {
+  const dir = path.join(root, id);
+  mkdirSync(dir);
+  for (const [name, value] of Object.entries(files)) {
+    writeFileSync(path.join(dir, name), typeof value === "string" ? value : JSON.stringify(value));
+  }
+  return dir;
 }
+const configSchema = { type: "object", additionalProperties: false };
 
 function catalog(id: string, provider: ModelCatalogProvider) {
   return { id, modelCatalog: { providers: { [id]: provider } } };
@@ -118,22 +113,15 @@ describe("selected CLI backend Gateway startup", () => {
   it("services queued I/O between registrations without publishing a partial registry", async () => {
     const root = startupRoot("openclaw-incremental-startup-");
     const ids = ["first", "second"];
-    const paths = ids.map((id) => {
-      const dir = path.join(root, id);
-      mkdirSync(dir);
-      writeJson(dir, "openclaw.plugin.json", {
-        id,
-        configSchema: { type: "object", additionalProperties: false },
-      });
-      writeFileSync(
-        path.join(dir, "index.cjs"),
-        `module.exports = { id: "${id}", register(api) {
+    const paths = ids.map((id) =>
+      writeFixture(root, id, {
+        "openclaw.plugin.json": { id, configSchema },
+        "index.cjs": `module.exports = { id: "${id}", register(api) {
           api.registerService({ id: "${id}", start() {} });
           process.emit("openclaw-test-incremental-startup", "${id}");
         } };`,
-      );
-      return dir;
-    });
+      }),
+    );
     const events: string[] = [];
     const previous = getActivePluginRegistry();
     const observedRegistries: unknown[] = [];
@@ -188,36 +176,27 @@ describe("selected CLI backend Gateway startup", () => {
       { id: "unused-plugin", providers: ["unused-cli"], cliBackends: ["unused-cli"] },
       { id: "http-plugin", providers: ["ordinary-http"], cliBackends: [] },
     ];
-    const backendConfig = {
-      command: process.execPath,
-      args: ["-e", "process.stdout.write('CLI_STARTUP_OK')"],
-      input: "stdin",
-      output: "text",
-      sessionMode: "none",
-    };
-    const pluginPaths = owners.map((owner) => {
-      const dir = path.join(root, owner.id);
-      mkdirSync(dir);
-      writeJson(dir, "package.json", {
-        name: owner.id,
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.cjs"] },
-      });
-      writeJson(dir, "openclaw.plugin.json", {
-        ...owner,
-        activation: { onStartup: false },
-        configSchema: { type: "object", additionalProperties: false },
-      });
-      writeFileSync(
-        path.join(dir, "index.cjs"),
-        owner.id === "selected-plugin"
-          ? `module.exports = { id: "selected-plugin", register(api) {
+    const backendConfig = { command: process.execPath };
+    const pluginPaths = owners.map((owner) =>
+      writeFixture(root, owner.id, {
+        "package.json": {
+          name: owner.id,
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        "openclaw.plugin.json": {
+          ...owner,
+          activation: { onStartup: false },
+          configSchema,
+        },
+        "index.cjs":
+          owner.id === "selected-plugin"
+            ? `module.exports = { id: "selected-plugin", register(api) {
               api.registerCliBackend({ id: "selected-cli", config: ${JSON.stringify(backendConfig)} });
             } };`
-          : `throw new Error("Unexpected startup runtime: ${owner.id}");`,
-      );
-      return dir;
-    });
+            : `throw new Error("Unexpected startup runtime: ${owner.id}");`,
+      }),
+    );
     const model = {
       id: "auto",
       name: "Auto",
@@ -262,8 +241,8 @@ describe("selected CLI backend Gateway startup", () => {
         slots: { memory: "none" },
       },
     };
-    writeFileSync(configPath, JSON.stringify(config));
 
+    writeFileSync(configPath, JSON.stringify(config));
     const loaded = await loadGatewayPlugins({
       cfg: config,
       workspaceDir,
