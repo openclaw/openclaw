@@ -26,6 +26,40 @@ describe("desktop panel sizing", () => {
     vi.unstubAllGlobals();
   });
 
+  function observeRequest(observed: object) {
+    return vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return { environments: [desktopEnvironment] };
+      }
+      if (method === "environments.status") {
+        return desktopEnvironment;
+      }
+      if (method === "desktop.observe") {
+        return { transport: "rfb", wsPath: "/view", ...observed };
+      }
+      throw new Error(`Unexpected desktop RPC: ${method}`);
+    });
+  }
+
+  async function mount(
+    request: unknown,
+    connect: DesktopClient["connect"],
+    options: Partial<ReturnType<typeof createPanel>> = {},
+  ) {
+    const panel = createPanel();
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      requestedSource: desktopEnvironment.id,
+      desktopClientFactory: () => ({ connect }),
+      ...options,
+    });
+    await mountPanel(panel);
+    return panel;
+  }
+
   it.each([
     {
       name: "worker password without auth metadata",
@@ -48,31 +82,11 @@ describe("desktop panel sizing", () => {
       credentials: undefined,
     },
   ])("passes only resolved credentials to noVNC for $name", async ({ observed, credentials }) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "environments.list") {
-        return { environments: [desktopEnvironment] };
-      }
-      if (method === "environments.status") {
-        return desktopEnvironment;
-      }
-      if (method === "desktop.observe") {
-        return { transport: "rfb", wsPath: "/view", control: false, ...observed };
-      }
-      throw new Error(`Unexpected desktop RPC: ${method}`);
-    });
+    const request = observeRequest({ control: false, ...observed });
     const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) =>
       createConnectionHandle(),
     );
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: createGatewayClient(request).client,
-      available: true,
-      embedded: true,
-      presented: true,
-      requestedSource: desktopEnvironment.id,
-      desktopClientFactory: () => ({ connect }),
-    });
-    await mountPanel(panel);
+    await mount(request, connect);
 
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     expect(connect.mock.calls[0]![0].credentials).toEqual(credentials);
@@ -90,32 +104,10 @@ describe("desktop panel sizing", () => {
   )(
     "offers Match only after capable controller authentication ($documentMode/$canResize/$control)",
     async ({ documentMode, canResize, control }) => {
-      const request = vi.fn(async (method: string) => {
-        if (method === "environments.list") {
-          return { environments: [desktopEnvironment] };
-        }
-        if (method === "environments.status") {
-          return desktopEnvironment;
-        }
-        if (method === "desktop.observe") {
-          return { transport: "rfb", wsPath: "/view", control, canResize };
-        }
-        throw new Error(`Unexpected desktop RPC: ${method}`);
-      });
+      const request = observeRequest({ control, canResize });
       const handle = createConnectionHandle();
       const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) => handle);
-      const panel = createPanel();
-      updatePanel(panel, {
-        client: createGatewayClient(request).client,
-        available: true,
-        embedded: true,
-        presented: true,
-        documentMode,
-        documentControl: control,
-        requestedSource: desktopEnvironment.id,
-        desktopClientFactory: () => ({ connect }),
-      });
-      await mountPanel(panel);
+      const panel = await mount(request, connect, { documentMode, documentControl: control });
 
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       await panel.updateComplete;
@@ -179,18 +171,7 @@ describe("desktop panel sizing", () => {
         options.onConnect?.();
         return handle;
       });
-      const panel = createPanel();
-      updatePanel(panel, {
-        client: createGatewayClient(request).client,
-        available: true,
-        embedded: true,
-        presented: true,
-        documentMode: true,
-        documentControl: true,
-        requestedSource: desktopEnvironment.id,
-        desktopClientFactory: () => ({ connect }),
-      });
-      await mountPanel(panel);
+      const panel = await mount(request, connect, { documentMode: true, documentControl: true });
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       await panel.updateComplete;
       selectSizing(panel, "match");
@@ -223,35 +204,13 @@ describe("desktop panel sizing", () => {
   );
 
   it("applies Fit selected during a Match reconnect before authentication enables sizing", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "environments.list") {
-        return { environments: [desktopEnvironment] };
-      }
-      if (method === "environments.status") {
-        return desktopEnvironment;
-      }
-      if (method === "desktop.observe") {
-        return { transport: "rfb", wsPath: "/view", control: true, canResize: true };
-      }
-      throw new Error(`Unexpected desktop RPC: ${method}`);
-    });
+    const request = observeRequest({ control: true, canResize: true });
     const handles = [createConnectionHandle(), createConnectionHandle()];
     let connectionIndex = 0;
     const connect = vi.fn(
       async (_options: Parameters<DesktopClient["connect"]>[0]) => handles[connectionIndex++]!,
     );
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: createGatewayClient(request).client,
-      available: true,
-      embedded: true,
-      presented: true,
-      documentMode: true,
-      documentControl: true,
-      requestedSource: desktopEnvironment.id,
-      desktopClientFactory: () => ({ connect }),
-    });
-    await mountPanel(panel);
+    const panel = await mount(request, connect, { documentMode: true, documentControl: true });
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     await panel.updateComplete;
     const initial = connect.mock.calls[0]![0];

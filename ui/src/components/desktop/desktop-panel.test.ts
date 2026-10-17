@@ -19,6 +19,22 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
+async function mount(
+  client: ReturnType<typeof createGatewayClient>["client"],
+  connect: DesktopClient["connect"],
+  options: Partial<ReturnType<typeof createPanel>> = {},
+) {
+  const panel = createPanel();
+  updatePanel(panel, {
+    client,
+    available: true,
+    desktopClientFactory: () => ({ connect }),
+    ...options,
+  });
+  await mountPanel(panel);
+  return panel;
+}
+
 describe("embedded desktop panel presentation", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -46,18 +62,13 @@ describe("embedded desktop panel presentation", () => {
       options.onConnect?.();
       return createConnectionHandle();
     });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: createGatewayClient(request).client,
-      available: true,
+    const panel = await mount(createGatewayClient(request).client, connect, {
       documentMode: true,
       documentControl: true,
       embedded: true,
       presented: true,
       requestedSource: desktopEnvironment.id,
-      desktopClientFactory: () => ({ connect }),
     });
-    await mountPanel(panel);
 
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     await panel.updateComplete;
@@ -93,17 +104,12 @@ describe("embedded desktop panel presentation", () => {
       options.onConnect?.();
       return createConnectionHandle({ disconnect });
     });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: createGatewayClient(request).client,
-      available: true,
+    const panel = await mount(createGatewayClient(request).client, connect, {
       embedded: true,
       presented: true,
       sessionKey: "agent:main:cloud",
       requestedSource: desktopEnvironment.id,
-      desktopClientFactory: () => ({ connect }),
     });
-    await mountPanel(panel);
 
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("environments.status", {
@@ -196,18 +202,13 @@ describe("embedded desktop panel presentation", () => {
         options.onConnect?.();
         return createConnectionHandle({ disconnect });
       });
-      const panel = createPanel();
-      updatePanel(panel, {
-        client: gateway.client,
-        available: true,
+      const panel = await mount(gateway.client, connect, {
         documentMode: presentation !== "embedded" && presentation !== "floating",
         embedded: presentation === "embedded",
         presented: true,
         sessionKey: presentation === "session" ? sessionKey : null,
-        requestedSource: presentation === "source" || panel.embedded ? node.id : null,
-        desktopClientFactory: () => ({ connect }),
+        requestedSource: presentation === "source" || presentation === "embedded" ? node.id : null,
       });
-      await mountPanel(panel);
       await panel.updateComplete;
       if (presentation === "floating") {
         window.dispatchEvent(
@@ -298,15 +299,10 @@ describe("embedded desktop panel presentation", () => {
       options.onConnect?.();
       return createConnectionHandle({ disconnect });
     });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: gateway.client,
-      available: true,
+    const panel = await mount(gateway.client, connect, {
       documentMode: true,
       requestedSource: node.id,
-      desktopClientFactory: () => ({ connect }),
     });
-    await mountPanel(panel);
     try {
       await panel.updateComplete;
       expect(request).toHaveBeenCalledWith("environments.status", { environmentId: node.id });
@@ -356,15 +352,10 @@ describe("embedded desktop panel presentation", () => {
       options.onConnect?.();
       return createConnectionHandle({ disconnect });
     });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: gateway.client,
-      available: true,
+    const panel = await mount(gateway.client, connect, {
       documentMode: true,
       sessionKey: session.key,
-      desktopClientFactory: () => ({ connect }),
     });
-    await mountPanel(panel);
     let oldSessionRequest: Promise<unknown> | undefined;
     const startOldSessionRead = async () => {
       const reads = request.mock.calls.filter(([method]) => method === "sessions.describe").length;
@@ -471,17 +462,13 @@ describe("embedded desktop panel presentation", () => {
         options.onConnect?.();
         return createConnectionHandle({ disconnect });
       });
-      const panel = createPanel();
-      updatePanel(panel, {
-        client: gateway.client,
-        available: true,
+      const onFocusTargetChange = vi.fn();
+      const panel = await mount(gateway.client, connect, {
         embedded: true,
         presented: true,
         requestedSource: desktopEnvironment.id,
+        onFocusTargetChange,
       });
-      const onFocusTargetChange = vi.fn();
-      updatePanel(panel, { onFocusTargetChange, desktopClientFactory: () => ({ connect }) });
-      await mountPanel(panel);
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       clickPanelButton(panel, 'button[aria-label="Disconnect"]');
       await panel.updateComplete;
@@ -569,16 +556,12 @@ describe("embedded desktop panel presentation", () => {
         return createConnectionHandle({ disconnect });
       });
       const gateway = createGatewayClient(request);
-      const panel = createPanel();
-      updatePanel(panel, {
-        client: gateway.client,
-        available: true,
+      const onFocusTargetChange = vi.fn();
+      const panel = await mount(gateway.client, connect, {
         documentMode: true,
         sessionKey,
+        onFocusTargetChange,
       });
-      const onFocusTargetChange = vi.fn();
-      updatePanel(panel, { onFocusTargetChange, desktopClientFactory: () => ({ connect }) });
-      await mountPanel(panel);
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       const descriptions = () =>
         request.mock.calls.filter(([method]) => method === "sessions.describe");
@@ -707,18 +690,13 @@ describe("embedded desktop panel presentation", () => {
         return previous;
       });
       const gateway = createGatewayClient(request);
-      const panel = createPanel();
-      updatePanel(panel, {
-        client: gateway.client,
-        available: true,
+      const panel = await mount(gateway.client, connect, {
         documentMode: true,
         documentControl: initialControl,
         embedded: true,
         presented: true,
         requestedSource: desktopEnvironment.id,
-        desktopClientFactory: () => ({ connect }),
       });
-      await mountPanel(panel);
       try {
         await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
         await panel.updateComplete;
@@ -851,16 +829,11 @@ describe("embedded desktop panel presentation", () => {
       options.onConnect?.();
       return previous;
     });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: createGatewayClient(request).client,
-      available: true,
+    const panel = await mount(createGatewayClient(request).client, connect, {
       embedded: true,
       presented: true,
       requestedSource: desktopEnvironment.id,
-      desktopClientFactory: () => ({ connect }),
     });
-    await mountPanel(panel);
     try {
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       await panel.updateComplete;

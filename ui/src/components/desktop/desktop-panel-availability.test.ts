@@ -31,6 +31,28 @@ const observed = {
 
 afterEach(() => document.body.replaceChildren());
 
+async function mount(
+  request: unknown,
+  options: Partial<ReturnType<typeof createPanel>> = {},
+  handle?: ReturnType<typeof createConnectionHandle>,
+) {
+  const gateway = createGatewayClient(request);
+  const connect = vi.fn(async (connection: Parameters<DesktopClient["connect"]>[0]) => {
+    connection.onConnect?.();
+    return handle ?? createConnectionHandle();
+  });
+  const panel = createPanel();
+  updatePanel(panel, {
+    client: gateway.client,
+    available: true,
+    requestedSource: workstation.id,
+    desktopClientFactory: () => ({ connect }),
+    ...options,
+  });
+  await mountPanel(panel);
+  return { gateway, connect, panel };
+}
+
 describe("Desktop native availability", () => {
   it("refreshes the same node after a DOM reconnect without accepting its old availability", async () => {
     const unlocked: EnvironmentSummary = {
@@ -41,20 +63,7 @@ describe("Desktop native availability", () => {
     const request = vi.fn(async (method: string) =>
       method === "environments.status" ? statusReply : observed,
     );
-    const gateway = createGatewayClient(request);
-    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-      options.onConnect?.();
-      return createConnectionHandle();
-    });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: gateway.client,
-      available: true,
-      documentMode: true,
-      requestedSource: workstation.id,
-      desktopClientFactory: () => ({ connect }),
-    });
-    await mountPanel(panel);
+    const { gateway, connect, panel } = await mount(request, { documentMode: true });
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     statusReply = Promise.resolve(workstation);
     gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
@@ -88,23 +97,16 @@ describe("Desktop native availability", () => {
         }
         return method === "environments.status" ? current : observed;
       });
-      const gateway = createGatewayClient(request);
       const handle = createConnectionHandle();
-      const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-        options.onConnect?.();
-        return handle;
-      });
-      const panel = createPanel();
-      updatePanel(panel, {
-        client: gateway.client,
-        available: true,
-        embedded: true,
-        presented: true,
-        documentMode,
-        requestedSource: workstation.id,
-        desktopClientFactory: () => ({ connect }),
-      });
-      await mountPanel(panel);
+      const { gateway, connect, panel } = await mount(
+        request,
+        {
+          embedded: true,
+          presented: true,
+          documentMode,
+        },
+        handle,
+      );
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       expect(panel.textContent).toContain("This Mac is locked");
       expect(panel.textContent).toContain("Sign in");
@@ -159,22 +161,11 @@ describe("Desktop native availability", () => {
       }
       return observed;
     });
-    const gateway = createGatewayClient(request);
-    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-      options.onConnect?.();
-      return createConnectionHandle();
-    });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: gateway.client,
-      available: true,
+    const { gateway, connect, panel } = await mount(request, {
       embedded: true,
       presented: true,
       documentMode: true,
-      requestedSource: workstation.id,
-      desktopClientFactory: () => ({ connect }),
     });
-    await mountPanel(panel);
     await waitForSolid(() => expect(request).toHaveBeenCalled());
     gateway.emit("node.runnerInventory.changed", { nodeId: "workstation" });
     await request.mock.results.at(-1)!.value;
