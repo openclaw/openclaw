@@ -1,4 +1,5 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -311,10 +312,7 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-        if (Array.isArray(record.paths)) {
-          record.paths = [...record.paths];
-        }
+        const record = asRecord(args);
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),

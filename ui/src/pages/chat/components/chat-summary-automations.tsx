@@ -128,6 +128,7 @@ export function ChatSummaryAutomations(props: Props) {
       let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
       // Reject obsolete event delivery before queued binding cleanup runs.
       const current = () => untrack(() => props.gateway === source && props.sessionKey === key);
+      // Connection publications retire request scopes before the next cron event is delivered.
       const unsubscribe = source.subscribe((snapshot) => {
         if (!current()) {
           return;

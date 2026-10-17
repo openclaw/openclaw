@@ -2481,6 +2481,8 @@ export const en: TranslationMap & {
       retry: "Retry",
       frameResolverMissing: "Widget content is unavailable.",
       sandboxUnavailable: "Widget sandbox host is unavailable.",
+      accessDenied: "You don’t have access to this widget in this conversation.",
+      waitingForResult: "Waiting for the widget result.",
       runtimeError: "Script error: {message}",
       waitingForConnection: "Waiting for the connection. This view will recover automatically.",
       resourceUnavailable:

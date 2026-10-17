@@ -1,9 +1,12 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
+import fs from "node:fs";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { assertBaseSnapshotStillCurrent } from "../config/io.write-safety.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { isMergePatchObjectKeyAllowed } from "../config/patch-replace-paths.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
@@ -217,6 +220,25 @@ export function createWizardInferenceConfigTarget(
 
 export async function readSetupConfigFileSnapshot() {
   return await createConfigIO({ pluginValidation: "skip" }).readConfigFileSnapshot();
+}
+
+export async function readSetupConfigAuthority(env?: NodeJS.ProcessEnv) {
+  const io = createConfigIO({ env, pluginValidation: "skip", observe: false });
+  const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+  if (snapshot.readError || (snapshot.exists && snapshot.raw === null)) {
+    throw new ConfigMutationConflictError("Setup config could not be read; rerun setup.");
+  }
+  const includeGraph = {
+    hashes: writeOptions.includeFileHashesForWrite ?? {},
+    targets: writeOptions.includeFileTargetsForWrite ?? {},
+  };
+  return {
+    snapshot,
+    assertCurrent: () => {
+      writeOptions.assertConfigPathForWrite?.();
+      assertBaseSnapshotStillCurrent(snapshot, io.configPath, fs, includeGraph);
+    },
+  };
 }
 
 export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {

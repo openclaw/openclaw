@@ -205,6 +205,7 @@ function summarizeSidebarWindows(
 const { values } = parseArgs({
   options: {
     "warm-reload": { type: "boolean", default: false },
+    "large-snapshot": { type: "boolean", default: false },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "probe-dir": { type: "string" },
@@ -301,6 +302,7 @@ const fixture = createControlUiTeamScaleFixture({
   sessionEventChurn: values["session-event-churn"],
   duplicateBootReads: values["duplicate-boot-reads"],
   closedMenuMembers: values["closed-menu-members"],
+  largeSnapshot: values["large-snapshot"],
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(
@@ -514,47 +516,65 @@ try {
   await settle();
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   for (let run = 0; run < runs; run++) {
+    let snapshotSave: unknown;
     if (values["warm-reload"]) {
-      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element, sessionKey) => {
-        const store = Reflect.get(element, "sessionSnapshotStore");
-        if (!store) {
-          throw new Error("Missing transcript snapshot owner");
-        }
-        await store.flush();
-        const request = indexedDB.open("openclaw-chat-snapshots");
-        const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          request.addEventListener("success", () => resolve(request.result), { once: true });
-          request.addEventListener(
-            "error",
-            () => reject(new Error("Cannot open transcript cache", { cause: request.error })),
-            { once: true },
-          );
-        });
-        try {
-          const read = database.transaction("snapshots").objectStore("snapshots").getAll();
-          const snapshots = await new Promise<unknown[]>((resolve, reject) => {
-            read.addEventListener("success", () => resolve(read.result), { once: true });
-            read.addEventListener(
+      snapshotSave = await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate(async (element, sessionKey) => {
+          const store = Reflect.get(element, "sessionSnapshotStore");
+          if (!store) {
+            throw new Error("Missing transcript snapshot owner");
+          }
+          const cache = Reflect.get(element, "chatMessagesBySession");
+          const entry = [...cache.entries()].find(([key]) => key.endsWith(`\u0000${sessionKey}`));
+          if (!entry) {
+            throw new Error("Missing live transcript snapshot");
+          }
+          store.write(entry[0], { ...entry[1].snapshot });
+          const writeStarted = performance.now();
+          const flushed = store.flush();
+          const serializeMs = performance.now() - writeStarted;
+          await flushed;
+          const writeMs = performance.now() - writeStarted;
+          const request = indexedDB.open("openclaw-chat-snapshots");
+          const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            request.addEventListener("success", () => resolve(request.result), { once: true });
+            request.addEventListener(
               "error",
-              () => reject(new Error("Cannot read transcript cache", { cause: read.error })),
+              () => reject(new Error("Cannot open transcript cache", { cause: request.error })),
               { once: true },
             );
           });
-          if (
-            !snapshots.some((value) => {
+          try {
+            const read = database.transaction("snapshots").objectStore("snapshots").getAll();
+            const snapshots = await new Promise<unknown[]>((resolve, reject) => {
+              read.addEventListener("success", () => resolve(read.result), { once: true });
+              read.addEventListener(
+                "error",
+                () => reject(new Error("Cannot read transcript cache", { cause: read.error })),
+                { once: true },
+              );
+            });
+            const record = snapshots.find((value) => {
               const key =
                 typeof value === "object" && value !== null
                   ? Reflect.get(value, "sessionKey")
                   : undefined;
               return typeof key === "string" && key.endsWith(`\u0000${sessionKey}`);
-            })
-          ) {
-            throw new Error("Warm reload requires the selected session's persisted transcript");
+            });
+            if (!record) {
+              throw new Error("Warm reload requires the selected session's persisted transcript");
+            }
+            return {
+              serializeMs,
+              writeMs,
+              bytes: new TextEncoder().encode(JSON.stringify(record)).byteLength,
+              messages: Reflect.get(record, "snapshot").messages.length,
+            };
+          } finally {
+            database.close();
           }
-        } finally {
-          database.close();
-        }
-      }, fixture.selectedSessionKey);
+        }, fixture.selectedSessionKey);
     }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
@@ -974,6 +994,7 @@ try {
       live,
       streaming,
       warmReload,
+      snapshotSave,
       overlays,
     };
     results.push(result);

@@ -14,7 +14,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
-import { verifyBackupArchive } from "./backup-verify.js";
+import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 async function listArchiveLeafEntries(archivePath: string): Promise<string[]> {
@@ -46,11 +46,13 @@ async function listFilesystemLeafEntries(root: string, relative = ""): Promise<s
 
 function encodeTarEntry(params: {
   path: string;
-  contents?: string;
+  contents?: string | Buffer;
   type?: "File" | "Directory" | "Link" | "SymbolicLink";
   linkpath?: string;
 }): Buffer {
-  const body = Buffer.from(params.contents ?? "", "utf8");
+  const body = Buffer.isBuffer(params.contents)
+    ? params.contents
+    : Buffer.from(params.contents ?? "", "utf8");
   const type = params.type ?? "File";
   const header = new tar.Header({
     path: params.path,
@@ -127,6 +129,103 @@ async function writeUnextractableArchive(archivePath: string) {
 }
 
 describe("backupRestoreCommand", () => {
+  it("selects a captured config payload from a legacy relative alias without following live paths", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const archiveRoot = "backup";
+      const configPath = "/missing/openclaw.json";
+      const configSourcePath = "/missing/captured.json";
+      const archivePath = state.path("alias.tar.gz");
+      const payloadPath = buildBackupArchivePath(archiveRoot, configSourcePath);
+      const aliasPath = buildBackupArchivePath(archiveRoot, configPath);
+      await writeArchive({
+        archivePath,
+        archiveRoot,
+        payloadPath,
+        manifest: JSON.stringify({
+          schemaVersion: 1,
+          archiveRoot,
+          platform: "linux",
+          createdAt: "2026-08-12T00:00:00.000Z",
+          paths: { configPath },
+          assets: [
+            { kind: "config", sourcePath: configSourcePath, archivePath: payloadPath },
+            { kind: "config", sourcePath: configPath, archivePath: aliasPath },
+          ],
+        }),
+        extraEntries: [
+          encodeTarEntry({ path: aliasPath, type: "SymbolicLink", linkpath: "captured.json" }),
+        ],
+      });
+
+      expect(await prepareBackupArchive(archivePath)).toMatchObject({
+        recoveryConfigPath: payloadPath,
+        recoveryConfigContextPath: aliasPath,
+      });
+    });
+  });
+
+  it.each(["legacy", "current"])(
+    "preserves opaque SQLite and PostgreSQL-named files in %s archives",
+    async (format) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-restore-user-files-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const databasePath = state.path("ordinary.sqlite");
+          {
+            const sqlite = requireNodeSqlite();
+            using database = new sqlite.DatabaseSync(databasePath);
+            database.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('user note')");
+          }
+          const archiveRoot = "backup";
+          const damaged = Buffer.alloc(128);
+          damaged.write("SQLite format 3\0");
+          const files = new Map([
+            ["notes.postgres/manifest.json", Buffer.from("user document\n")],
+            ["lookalike.postgres/manifest.json", Buffer.from('{"source":{"engine":"postgres"}}')],
+            ["ordinary.sqlite", await fs.readFile(databasePath)],
+            ["ordinary.sqlite.postgres/manifest.json", Buffer.from("another user document\n")],
+            ["text.sqlite", Buffer.from("plain text named sqlite\n")],
+            ["damaged.sqlite", damaged],
+          ]);
+          const archivePath = state.path("user-files.tar.gz");
+          await writeArchive({
+            archivePath,
+            archiveRoot,
+            payloadPath: buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json"),
+            manifest: JSON.stringify({
+              schemaVersion: 1,
+              archiveRoot,
+              createdAt: "2026-08-12T00:00:00.000Z",
+              platform: process.platform,
+              assets: [
+                {
+                  kind: "config",
+                  sourcePath: "/tmp/openclaw.json",
+                  archivePath: buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json"),
+                },
+              ],
+              ...(format === "current" ? { postgresSnapshots: [] } : {}),
+            }),
+            extraEntries: [...files].map(([file, contents]) =>
+              encodeTarEntry({ path: `${archiveRoot}/payload/${file}`, contents }),
+            ),
+          });
+          const target = state.path("restored");
+          await backupRestoreCommand(createTestRuntime(), { archive: archivePath, target });
+          for (const [file, contents] of files) {
+            expect(await fs.readFile(path.join(target, archiveRoot, "payload", file))).toEqual(
+              contents,
+            );
+          }
+        },
+      );
+    },
+  );
+
   it.each([false, true])("restores verified root-relative hardlinks (mixed: %s)", async (mixed) => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-backup-restore-hardlink-", scenario: "minimal" },

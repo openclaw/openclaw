@@ -328,7 +328,7 @@ extensions/file-transfer/src/tools/file-fetch-tool.ts	1
 extensions/file-transfer/src/tools/file-write-tool.ts	1
 extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
-extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
+extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	4
 extensions/github-copilot/embeddings.ts	3
 extensions/github-copilot/index.ts	3
 extensions/github-copilot/login.ts	2
@@ -1329,7 +1329,6 @@ src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-models.ts	1
 src/agents/sessions/agent-session-tree.ts	1
-src/agents/sessions/agent-session-utils.ts	1
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
@@ -2306,7 +2305,6 @@ src/plugins/native-module-require.ts	2
 src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
-src/plugins/plugin-command-execution.ts	1
 src/plugins/plugin-command-runtime.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	2
 src/plugins/plugin-package-update.ts	1
@@ -2427,7 +2425,7 @@ src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
-src/snapshot/local-repository.ts	4
+src/snapshot/local-repository.ts	3
 src/snapshot/manifest.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2

@@ -38,6 +38,9 @@ export class AsyncWorkScope {
 
   private enter<T>(run: () => T): T {
     const owner = currentWorkScope.getStore();
+    if (owner === this) {
+      return run();
+    }
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
     return currentWorkScopeAncestry.run({ scope: this, parent }, () =>

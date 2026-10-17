@@ -91,6 +91,8 @@ function hook(engine: ContextEngine, options: HookOptions = {}, agent = makeGuar
   };
 }
 
+const textBlock = (text: string) => ({ type: "text" as const, text });
+
 async function pressureCheck(
   agent: ReturnType<typeof makeGuardableAgent>,
   messages: AgentMessage[],
@@ -120,8 +122,7 @@ describe("installToolResultContextGuard", () => {
   ])("delivers the diagnostic %s through the real agent loop", async (diagnostic) => {
     const hint = "Inspect src/fixture.ts before retrying.";
     const preamble = "progress output\n".repeat(400);
-    const sourceTexts = [preamble + diagnostic + " " + hint];
-    const content = sourceTexts.map((text) => ({ type: "text" as const, text }));
+    const content = [textBlock(preamble + diagnostic + " " + hint)];
     const original = structuredClone(content);
     const requests: Message[][] = [];
     const execute = vi.fn(async () => ({ content, details: { privateReference: "fixture" } }));
@@ -151,19 +152,16 @@ describe("installToolResultContextGuard", () => {
         requests.push(structuredClone(context.messages));
         const result = context.messages.find((message) => message.role === "toolResult");
         const hasHint = result && getAllToolResultText(result).includes(hint);
+        const reason = requests.length === 1 ? "toolUse" : "stop";
         const message = makeAgentAssistantMessage({
           content:
-            requests.length === 1
+            reason === "toolUse"
               ? [{ type: "toolCall", id: "call_diagnostic", name: "diagnostic", arguments: {} }]
-              : [{ type: "text", text: hasHint ? hint : "The diagnostic hint was unavailable." }],
-          stopReason: requests.length === 1 ? "toolUse" : "stop",
+              : [textBlock(hasHint ? hint : "The diagnostic hint was unavailable.")],
+          stopReason: reason,
         });
         const stream = createAssistantMessageEventStream();
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
+        stream.push({ type: "done", reason, message });
         stream.end();
         return stream;
       },
@@ -202,7 +200,7 @@ describe("installToolResultContextGuard", () => {
     expect(getAllToolResultText(projected)).toContain(hint);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",
-      content: [{ type: "text", text: hint }],
+      content: [textBlock(hint)],
       stopReason: "stop",
     });
     expect(agent.state.isStreaming).toBe(false);
@@ -211,10 +209,10 @@ describe("installToolResultContextGuard", () => {
 
   it("omits oversized metadata within the cap", async () => {
     const metadata = { type: "custom", value: "m".repeat(8_192) };
-    const hint = { type: "text", text: "Inspect src/fixture.ts before retrying." };
+    const hint = textBlock("Inspect src/fixture.ts before retrying.");
     const source = castAgentMessage({
       ...makeToolResult("blocks", ""),
-      content: [{ type: "text", text: "x".repeat(6_000) }, metadata, hint],
+      content: [textBlock("x".repeat(6_000)), metadata, hint],
       details: { privateReference: "not model context" },
     });
     const original = structuredClone(source);
@@ -417,28 +415,22 @@ describe("installContextEngineLoopHook", () => {
   it("keeps original text for ingestion and replays the recorded model projection", async () => {
     const engine = makeEngine();
     const { run } = hook(engine, { getPrePromptMessageCount: () => 0 });
+    const visible = "visible prompt";
+    const projection = "model-only context\n\nvisible prompt";
     const prompt = {
-      ...makeUser("visible prompt"),
-      __openclaw: {
-        modelPromptProjection: { version: 1, text: "model-only context\n\nvisible prompt" },
-      },
+      ...makeUser(visible),
+      __openclaw: { modelPromptProjection: { version: 1, text: projection } },
     };
     const transformed = await run([prompt, makeToolResult("one", "result")]);
-    expect(engine.afterTurn.mock.calls[0]?.[0].messages[0]).toMatchObject({
-      role: "user",
-      content: "visible prompt",
-    });
-    expect(engine.assemble.mock.calls[0]?.[0].messages[0]).toMatchObject({
-      role: "user",
-      content: "visible prompt",
-    });
-    expect(normalizeMessagesForLlmBoundary(transformed)[0]).toMatchObject({
-      role: "user",
-      content: "model-only context\n\nvisible prompt",
-    });
-    expect(JSON.stringify(normalizeMessagesForLlmBoundary(transformed))).not.toContain(
-      "modelPromptProjection",
-    );
+    for (const message of [
+      engine.afterTurn.mock.calls[0]?.[0].messages[0],
+      engine.assemble.mock.calls[0]?.[0].messages[0],
+    ]) {
+      expect(message).toMatchObject({ role: "user", content: visible });
+    }
+    const normalized = normalizeMessagesForLlmBoundary(transformed);
+    expect(normalized[0]).toMatchObject({ role: "user", content: projection });
+    expect(JSON.stringify(normalized)).not.toContain("modelPromptProjection");
   });
 
   it("repairs orphan results from an engine returning its working array", async () => {

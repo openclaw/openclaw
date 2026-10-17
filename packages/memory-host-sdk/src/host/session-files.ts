@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { safeStatSync } from "@openclaw/fs-safe/path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
 import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
-import { hashText } from "./hash.js";
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
@@ -725,7 +725,7 @@ async function buildSessionEntryFromSource(
           absPath,
           mtimeMs: stat.mtimeMs,
           size: stat.size,
-          hash: hashText("\n\n"),
+          hash: sha256Hex("\n\n"),
           content: "",
           lineMap: [],
           messageTimestampsMs: [],

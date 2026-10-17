@@ -2506,6 +2506,7 @@ src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
 src/shared/text/reasoning-tags.ts
+src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts
 src/shared/text/tool-call-xml.ts
 src/shared/text/xml-tag-at.ts

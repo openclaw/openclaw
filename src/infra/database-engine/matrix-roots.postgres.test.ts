@@ -273,9 +273,23 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         const findings = await withDatabaseEngineSelection(selection, () =>
           noteDatabaseEngines(doctorConfig, { env: state.env }),
         );
-        expect(findings.filter((finding) => files.includes(finding.path ?? ""))).toEqual([]);
+        const storeFindings = findings.filter((finding) => files.includes(finding.path ?? ""));
+        expect(storeFindings).toHaveLength(files.length);
         const output = String(note.mock.lastCall?.[0]);
         for (const [index, file] of files.entries()) {
+          expect(storeFindings.find((finding) => finding.path === file)).toMatchObject({
+            severity: "info",
+            details: {
+              family: "state",
+              observed: "postgres",
+              mismatch: false,
+              connectivity: "reachable",
+              namespace: physical[index]!.anchor.namespace,
+              storeId: physical[index]!.anchor.storeId,
+              schema: { pending: 0 },
+              issues: [],
+            },
+          });
           expect(output).toContain(
             `Shared state root: ${file} (physical=postgres, namespace=${physical[index]!.anchor.namespace})`,
           );

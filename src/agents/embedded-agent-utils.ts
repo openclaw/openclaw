@@ -8,6 +8,7 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  isAssistantTextContentBlockType,
   normalizeAssistantPhase,
   parseAssistantTextSignature,
   type AssistantPhase,
@@ -46,10 +47,6 @@ function sanitizeAssistantText(
       options,
     ),
   );
-}
-
-function isAssistantTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "input_text" || value === "output_text";
 }
 
 export function sanitizeAssistantVisibleStreamText(

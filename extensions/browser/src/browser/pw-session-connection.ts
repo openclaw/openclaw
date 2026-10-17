@@ -316,7 +316,6 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => ensurePageState(page));
 }
 
-/** Ensure shared Playwright browser-context state. */
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
   if (existing) {
