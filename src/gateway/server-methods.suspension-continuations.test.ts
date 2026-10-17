@@ -25,6 +25,7 @@ import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "./node-reg
 import { NodeRegistry } from "./node-registry.js";
 import { QuestionManager } from "./question-manager.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import { expectRejected } from "./server-methods.request-gate.test-support.js";
 import { handleNodeInvokeProgress } from "./server-methods/nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
@@ -38,10 +39,6 @@ afterEach(async () => {
     resetGatewayWorkAdmission();
   }
 });
-
-function expectRejected(respond: unknown, code = "UNAVAILABLE") {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
-}
 
 function closeAdmission(mode: "suspension" | "restart signal" | "restart drain" | "direct close") {
   if (mode === "restart signal") {
@@ -295,15 +292,10 @@ describe("draining Gateway completion ownership", () => {
     const answered = await call("question.resolve", { id: "question-owned" }, ({ respond }) => {
       respond(true, manager.resolve("question-owned", { answers: { choice: ["yes"] } }));
     });
-    expect(answered).toHaveBeenCalledWith(true, {
-      status: "answered",
-      answers: { answers: { choice: ["yes"] } },
-    });
+    const answerPayload = { status: "answered", answers: { answers: { choice: ["yes"] } } };
+    expect(answered).toHaveBeenCalledWith(true, answerPayload);
     expect(manager.get("question-owned")).toMatchObject({ status: "answered" });
-    await expect(answer).resolves.toEqual({
-      status: "answered",
-      answers: { answers: { choice: ["yes"] } },
-    });
+    await expect(answer).resolves.toEqual(answerPayload);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     const replay = await call("question.resolve", { id: "question-owned" }, newWork);
     expectRejected(replay);
