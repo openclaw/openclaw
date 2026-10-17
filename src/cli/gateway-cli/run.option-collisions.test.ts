@@ -99,24 +99,21 @@ const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _er
   message: "wrote stability bundle: /tmp/openclaw-stability.json",
   path: "/tmp/openclaw-stability.json",
 }));
+function bootDecision(tripped = false, recovered = false) {
+  return {
+    tripped,
+    uncleanBoots: tripped ? 3 : 0,
+    windowMs: 300_000,
+    shouldWriteStabilityBundle: tripped,
+    recovered,
+  };
+}
 const bootLifecycle = vi.hoisted(() => ({
   manualChannelStartHint: `Start a channel manually with: openclaw gateway call channels.start --params '{"channel":"<id>"}'`,
-  decisions: [] as Array<{
-    tripped: boolean;
-    uncleanBoots: number;
-    windowMs: number;
-    shouldWriteStabilityBundle: boolean;
-    recovered: boolean;
-  }>,
+  decisions: [] as ReturnType<typeof bootDecision>[],
   inspect: vi.fn(
     (_env?: NodeJS.ProcessEnv, _nowMs?: number) =>
-      bootLifecycle.decisions.shift() ?? {
-        tripped: false,
-        uncleanBoots: 0,
-        windowMs: 300_000,
-        shouldWriteStabilityBundle: false,
-        recovered: false,
-      },
+      bootLifecycle.decisions.shift() ?? bootDecision(),
   ),
   nextBootId: vi.fn((): string | undefined => "boot-id"),
   begin: vi.fn(async (env?: NodeJS.ProcessEnv, nowMs?: number) => ({
@@ -420,19 +417,14 @@ describe("gateway run option collisions", () => {
     gatewayLogMessages.length = 0;
     gatewayErrorMessages.length = 0;
     bootLifecycle.decisions.length = 0;
-    findVerifiedGatewayListenerPidsOnPortSync.mockReset();
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-    isTerminalInteractive.mockReset();
-    isTerminalInteractive.mockReturnValue(true);
-    parkCurrentLaunchAgentForMaintenance.mockReset();
-    parkCurrentLaunchAgentForMaintenance.mockResolvedValue(false);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReset().mockReturnValue([]);
+    isTerminalInteractive.mockReset().mockReturnValue(true);
+    parkCurrentLaunchAgentForMaintenance.mockReset().mockResolvedValue(false);
     warnAboutGatewayRestartStorm.mockReset();
     normalizeStateDirEnv.mockReset();
     loadGlobalRuntimeDotEnvFiles.mockReset();
-    shouldDeferShellEnvFallback.mockReset();
-    shouldDeferShellEnvFallback.mockReturnValue(false);
-    shouldEnableShellEnvFallback.mockReset();
-    shouldEnableShellEnvFallback.mockReturnValue(false);
+    shouldDeferShellEnvFallback.mockReset().mockReturnValue(false);
+    shouldEnableShellEnvFallback.mockReset().mockReturnValue(false);
   });
 
   function configSnapshot(
@@ -452,6 +444,11 @@ describe("gateway run option collisions", () => {
   async function runGatewayCli(argv: string[]) {
     await sharedProgram.parseAsync(argv, { from: "user" });
   }
+
+  const runUnconfigured = (...args: string[]) =>
+    runGatewayCli(["gateway", "run", "--allow-unconfigured", ...args]);
+  const expectExit = (code: number, ...args: string[]) =>
+    expect(runUnconfigured(...args)).rejects.toThrow(`__exit__:${code}`);
 
   async function prepareGatewayReset() {
     const { prepareGatewayRunBootstrap } = await import("./pre-bootstrap.js");
@@ -474,7 +471,7 @@ describe("gateway run option collisions", () => {
   registerGatewayRunCleanupReceiptTests({ runGatewayCli, runGatewayLoop });
 
   it("allows ambient channel triggers with the deprecated alias", async () => {
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev-ambient-channels"]);
+    await runUnconfigured("--dev-ambient-channels");
 
     expect(gatewayStartOptions().ambientEnvTriggers).toBe("allow");
   });
@@ -804,9 +801,7 @@ describe("gateway run option collisions", () => {
       return { killed: [], waitedMs: 0, escalatedToSigkill: false };
     });
 
-    await expect(
-      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
-    ).rejects.toThrow("__exit__:1");
+    await expectExit(1, "--force");
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(forceFreePortAndWait).toHaveBeenCalledTimes(1);
@@ -829,7 +824,7 @@ describe("gateway run option collisions", () => {
           [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "4242",
         },
         async () => {
-          await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+          await runUnconfigured();
 
           expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789, {
             protectedPid: 4242,
@@ -874,9 +869,7 @@ describe("gateway run option collisions", () => {
       sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
     };
 
-    await expect(
-      runGatewayCli(["gateway", "run", "--allow-unconfigured", "--force"]),
-    ).rejects.toThrow("__exit__:1");
+    await expectExit(1, "--force");
 
     expect(forceFreePortAndWait).not.toHaveBeenCalled();
     expect(startGatewayServer).not.toHaveBeenCalled();
@@ -890,19 +883,7 @@ describe("gateway run option collisions", () => {
       config: { meta: { lastTouchedVersion: "9999.1.1" } },
       sourceConfig: { meta: { lastTouchedVersion: "9999.1.1" } },
     };
-    const previousMarker = process.env.OPENCLAW_SERVICE_MARKER;
-    process.env.OPENCLAW_SERVICE_MARKER = "gateway";
-    try {
-      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:78",
-      );
-    } finally {
-      if (previousMarker === undefined) {
-        delete process.env.OPENCLAW_SERVICE_MARKER;
-      } else {
-        process.env.OPENCLAW_SERVICE_MARKER = previousMarker;
-      }
-    }
+    await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "gateway" }, () => expectExit(78));
 
     expect(forceFreePortAndWait).not.toHaveBeenCalled();
     expect(startGatewayServer).not.toHaveBeenCalled();
@@ -979,7 +960,7 @@ describe("gateway run option collisions", () => {
         });
 
         await prepareGatewayReset();
-        await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev", "--reset"]);
+        await runUnconfigured("--dev", "--reset");
 
         expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
         expect(gatewayStartOptions().ambientEnvTriggers).toBe("suppress");
@@ -991,13 +972,10 @@ describe("gateway run option collisions", () => {
 
   it("refuses dev reset if trusted dotenv retargets after pre-bootstrap", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: "/tmp/openclaw-reset-original" }, async () => {
-      configState.snapshot = {
-        config: { gateway: { mode: "local" } },
-        exists: true,
-        path: "/tmp/openclaw-reset-original/openclaw.json",
-        sourceConfig: { gateway: { mode: "local" } },
-        valid: true,
-      };
+      configState.snapshot = configSnapshot(
+        { gateway: { mode: "local" } },
+        { path: "/tmp/openclaw-reset-original/openclaw.json" },
+      );
       await prepareGatewayReset();
       loadGlobalRuntimeDotEnvFiles.mockImplementation(() => {
         setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-reset-retargeted");
@@ -1008,9 +986,7 @@ describe("gateway run option collisions", () => {
         };
       });
 
-      await expect(
-        runGatewayCli(["gateway", "run", "--allow-unconfigured", "--dev", "--reset"]),
-      ).rejects.toThrow("__exit__:1");
+      await expectExit(1, "--dev", "--reset");
 
       expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
       expect(process.env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-reset-original");
@@ -1089,7 +1065,7 @@ describe("gateway run option collisions", () => {
 
   it("enables CLI backend log filtering", async () => {
     delete process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT;
-    await runGatewayCli(["gateway", "run", "--cli-backend-logs", "--allow-unconfigured"]);
+    await runUnconfigured("--cli-backend-logs");
     expect(setConsoleSubsystemFilter).toHaveBeenCalledWith(["agent/cli-backend"]);
     expect(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT).toBe("1");
   });
@@ -1099,9 +1075,7 @@ describe("gateway run option collisions", () => {
     netState.container = true;
 
     await withEnvAsync(withoutGatewayAuthEnv, async () => {
-      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:78",
-      );
+      await expectExit(78);
     });
 
     expect(runtimeErrors.join("\n")).toContain("Refusing to bind gateway to auto without auth.");
@@ -1110,9 +1084,7 @@ describe("gateway run option collisions", () => {
 
   it("blocks non-loopback startup without explicit gateway auth", async () => {
     await withEnvAsync(withoutGatewayAuthEnv, async () => {
-      await expect(
-        runGatewayCli(["gateway", "run", "--bind", "lan", "--allow-unconfigured"]),
-      ).rejects.toThrow("__exit__:78");
+      await expectExit(78, "--bind", "lan");
     });
 
     expect(runtimeErrors.join("\n")).toContain("Refusing to bind gateway to lan without auth.");
@@ -1129,24 +1101,9 @@ describe("gateway run option collisions", () => {
       await beginBoot?.(2000);
       await start({ startupStartedAt: 2000 });
     });
-    bootLifecycle.decisions.push(
-      {
-        tripped: true,
-        uncleanBoots: 3,
-        windowMs: 300_000,
-        shouldWriteStabilityBundle: true,
-        recovered: false,
-      },
-      {
-        tripped: false,
-        uncleanBoots: 0,
-        windowMs: 300_000,
-        shouldWriteStabilityBundle: false,
-        recovered: true,
-      },
-    );
+    bootLifecycle.decisions.push(bootDecision(true), bootDecision(false, true));
 
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    await runUnconfigured();
 
     expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
     expect(bootLifecycle.inspect.mock.calls.map((call) => call[1])).toEqual([1000, 2000]);
@@ -1166,13 +1123,7 @@ describe("gateway run option collisions", () => {
     });
     expect(gatewayStartOptions(1).startupConfigSnapshotRead).toBeUndefined();
     expect(gatewayStartOptions(1).startupStartedAt).toBe(2000);
-    bootLifecycle.decisions.push({
-      tripped: false,
-      uncleanBoots: 0,
-      windowMs: 300_000,
-      shouldWriteStabilityBundle: false,
-      recovered: true,
-    });
+    bootLifecycle.decisions.push(bootDecision(false, true));
     await expect(firstBootRecovery?.(new AbortController().signal)).rejects.toThrow(
       "replaced boot",
     );
@@ -1191,13 +1142,7 @@ describe("gateway run option collisions", () => {
       triageAfterFailure.mockClear();
       detectRespawnSupervisor.mockReturnValue(supervised ? "systemd" : null);
       bootLifecycle.nextBootId.mockReturnValueOnce(recorded ? "boot-id" : undefined);
-      bootLifecycle.decisions.push({
-        tripped: transition,
-        uncleanBoots: transition ? 3 : 0,
-        windowMs: 300_000,
-        shouldWriteStabilityBundle: transition,
-        recovered: false,
-      });
+      bootLifecycle.decisions.push(bootDecision(transition));
       let failure: Error = new Error("configured plugin crashed during startup");
       if (cleanupFailure) {
         const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
@@ -1216,9 +1161,7 @@ describe("gateway run option collisions", () => {
         await params.onRestartStartupFailure?.(failure, new AbortController().signal);
         throw failure;
       });
-      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:1",
-      );
+      await expectExit(1);
       expect(triageAfterFailure).toHaveBeenCalledTimes(attempts);
       if (attempts) {
         expect(triageAfterFailure).toHaveBeenCalledWith(
@@ -1261,9 +1204,7 @@ describe("gateway run option collisions", () => {
         throw failure;
       });
       await withEnvAsync({ CODEX_THREAD_ID: undefined }, async () => {
-        await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-          "__exit__:78",
-        );
+        await expectExit(78);
       });
       expect(triageAfterFailure).not.toHaveBeenCalled();
       expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
@@ -1288,9 +1229,7 @@ describe("gateway run option collisions", () => {
     startGatewayServer.mockRejectedValueOnce(err);
 
     await withEnvAsync(withoutSupervisorEnv, async () => {
-      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:1",
-      );
+      await expectExit(1);
     });
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
@@ -1318,9 +1257,7 @@ describe("gateway run option collisions", () => {
     );
     parkCurrentLaunchAgentForMaintenance.mockResolvedValueOnce(true);
 
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:78",
-    );
+    await expectExit(78);
 
     expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
     expect(bootLifecycle.complete).toHaveBeenCalledWith(undefined, {
@@ -1363,9 +1300,7 @@ describe("gateway run option collisions", () => {
     parkCurrentLaunchAgentForMaintenance.mockResolvedValueOnce(true);
     const restoreHooks = installGatewayRunRuntimeHooks({ refreshManagedProxy });
     try {
-      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-        "__exit__:78",
-      );
+      await expectExit(78);
     } finally {
       restoreHooks();
     }
@@ -1435,18 +1370,14 @@ describe("gateway run option collisions", () => {
       createInvalidConfigError("/tmp/openclaw.json", "gateway.mode: invalid"),
     );
 
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:78",
-    );
+    await expectExit(78);
 
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     expect(startGatewayServer).toHaveBeenCalledOnce();
   });
 
   it("prints all supported modes on invalid --auth value", async () => {
-    await expect(
-      runGatewayCli(["gateway", "run", "--auth", "bad-mode", "--allow-unconfigured"]),
-    ).rejects.toThrow("__exit__:1");
+    await expectExit(1, "--auth", "bad-mode");
 
     expect(runtimeErrors).toContain(
       'Invalid --auth. Use "none", "token", "password", or "trusted-proxy".',
@@ -1461,11 +1392,7 @@ describe("gateway run option collisions", () => {
           password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
         },
       },
-      secrets: {
-        defaults: {
-          env: "default",
-        },
-      },
+      secrets: { defaults: { env: "default" } },
     };
     configState.snapshot = {
       exists: true,
@@ -1474,7 +1401,7 @@ describe("gateway run option collisions", () => {
       parsed: configState.cfg,
     };
 
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    await runUnconfigured();
 
     expect(gatewayStartOptions().bind).toBe("loopback");
   });
@@ -1484,15 +1411,7 @@ describe("gateway run option collisions", () => {
       "openclaw-gateway-run-",
       { password: "pw_from_file\n" },
       async ({ passwordFile }) => {
-        await runGatewayCli([
-          "gateway",
-          "run",
-          "--auth",
-          "password",
-          "--password-file",
-          passwordFile ?? "",
-          "--allow-unconfigured",
-        ]);
+        await runUnconfigured("--auth", "password", "--password-file", passwordFile ?? "");
       },
     );
 
@@ -1505,15 +1424,7 @@ describe("gateway run option collisions", () => {
   });
 
   it("warns when gateway password is passed inline", async () => {
-    await runGatewayCli([
-      "gateway",
-      "run",
-      "--auth",
-      "password",
-      "--password",
-      "pw_inline",
-      "--allow-unconfigured",
-    ]);
+    await runUnconfigured("--auth", "password", "--password", "pw_inline");
 
     expect(runtimeErrors).toContain(
       "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
@@ -1525,17 +1436,7 @@ describe("gateway run option collisions", () => {
       "openclaw-gateway-run-",
       { password: "pw_from_file\n" },
       async ({ passwordFile }) => {
-        await expect(
-          runGatewayCli([
-            "gateway",
-            "run",
-            "--password",
-            "pw_inline",
-            "--password-file",
-            passwordFile ?? "",
-            "--allow-unconfigured",
-          ]),
-        ).rejects.toThrow("__exit__:1");
+        await expectExit(1, "--password", "pw_inline", "--password-file", passwordFile ?? "");
       },
     );
     expect(runtimeErrors[0]).toContain("Use either --password or --password-file.");

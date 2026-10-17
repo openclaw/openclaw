@@ -1,4 +1,3 @@
-// Gateway register option collision tests cover gateway command option registration.
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,18 +55,16 @@ vi.mock("../../runtime.js", async () => ({
 }));
 
 vi.mock("../../commands/gateway-status.js", () => ({
-  gatewayStatusCommand: (opts: unknown, runtime: unknown) =>
-    mocks.gatewayStatusCommand(opts, runtime),
+  gatewayStatusCommand: mocks.gatewayStatusCommand,
 }));
 
 vi.mock("../../commands/gateway-auth-token.js", () => ({
-  gatewayAuthTokenCommand: (runtime: unknown) => mocks.gatewayAuthTokenCommand(runtime),
+  gatewayAuthTokenCommand: mocks.gatewayAuthTokenCommand,
 }));
 
 vi.mock("../gateway-rpc.js", async () => ({
   ...(await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js")),
-  callGatewayFromCliWithTransport: (method: string, opts: unknown, params?: unknown) =>
-    mocks.callGatewayCli(method, opts, params),
+  callGatewayFromCliWithTransport: mocks.callGatewayCli,
 }));
 
 vi.mock("./run-command.js", () => ({
@@ -83,9 +80,8 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 }));
 
 vi.mock("../../commands/health.js", () => ({
-  emitReachableGatewayAuthDiagnostic: (params: unknown) =>
-    mocks.emitReachableGatewayAuthDiagnostic(params),
-  formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
+  emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
+  formatHealthChannelLines: mocks.formatHealthChannelLines,
   readNonObservingHealthConfig: async () => ({}),
 }));
 
@@ -142,10 +138,6 @@ function firstGatewayCall() {
   return callGatewayCli.mock.calls[0] ?? [];
 }
 
-function firstGatewayStatusCall() {
-  return gatewayStatusCommand.mock.calls[0] ?? [];
-}
-
 function expectLocalGatewayCall(method: string, port: number, params?: unknown) {
   expect(defaultRuntime.error.mock.calls).toEqual([]);
   expect(callGatewayCli).toHaveBeenCalledTimes(1);
@@ -158,6 +150,16 @@ function expectLocalGatewayCall(method: string, port: number, params?: unknown) 
   expect(gatewayOpts?.localPortOverride).toBe(port);
 }
 
+function expectCliError(message: string | ReturnType<typeof expect.stringContaining>) {
+  expect(callGatewayCli).not.toHaveBeenCalled();
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+    ok: false,
+    error: { type: "cli_error", message },
+  });
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+}
+
 describe("gateway register option collisions", () => {
   const sharedProgram: Command = new Command();
 
@@ -165,16 +167,7 @@ describe("gateway register option collisions", () => {
   registerGatewayCli(sharedProgram);
 
   beforeEach(() => {
-    callGatewayCli.mockClear();
-    emitReachableGatewayAuthDiagnostic.mockClear();
-    mocks.formatHealthChannelLines.mockClear();
-    gatewayStatusCommand.mockClear();
-    mocks.gatewayAuthTokenCommand.mockClear();
-    defaultRuntime.log.mockClear();
-    defaultRuntime.error.mockClear();
-    defaultRuntime.writeStdout.mockClear();
-    defaultRuntime.writeJson.mockClear();
-    defaultRuntime.exit.mockClear();
+    vi.clearAllMocks();
   });
 
   it("requires explicit confirmation before revealing the Gateway token", async () => {
@@ -235,23 +228,19 @@ describe("gateway register option collisions", () => {
       argv: ["gateway", "--port", "19082", "probe", "--json"],
       assert: () => {
         expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-        const [opts] = firstGatewayStatusCall();
+        const [opts] = gatewayStatusCommand.mock.calls[0] ?? [];
         expect((opts as { port?: string } | undefined)?.port).toBe("19082");
       },
     },
     {
       name: "prefers the explicit usage-cost --port over the parent --port",
       argv: ["gateway", "--port", "19090", "usage-cost", "--port", "19091", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("usage.cost", 19091, { days: 30 });
-      },
+      assert: () => expectLocalGatewayCall("usage.cost", 19091, { days: 30 }),
     },
     {
       name: "prefers the explicit live stability --port over the parent --port",
       argv: ["gateway", "--port", "19094", "stability", "--port", "19095", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("diagnostics.stability", 19095, { limit: 25 });
-      },
+      assert: () => expectLocalGatewayCall("diagnostics.stability", 19095, { limit: 25 }),
     },
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
@@ -263,13 +252,7 @@ describe("gateway register option collisions", () => {
       from: "user",
     });
 
-    expect(callGatewayCli).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      error: { type: "cli_error", message: expect.stringContaining("Invalid --days") },
-    });
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectCliError(expect.stringContaining("Invalid --days"));
   });
 
   it("rejects combining --url and --port for gateway call", async () => {
@@ -278,13 +261,7 @@ describe("gateway register option collisions", () => {
       { from: "user" },
     );
 
-    expect(callGatewayCli).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      error: { type: "cli_error", message: "Use either --url or --port, not both." },
-    });
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectCliError("Use either --url or --port, not both.");
   });
 
   it("uses the effective local port and timeout for gateway health auth diagnostics", async () => {
