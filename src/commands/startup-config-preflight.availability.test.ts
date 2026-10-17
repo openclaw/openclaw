@@ -23,25 +23,13 @@ import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 const sourceBytes = '{"triggers":["leave-for-doctor"]}\n';
 const migrationMeta = { migrations: { webhookListeners: true as const } };
+const pluginId = "fixture";
+const localGateway = { mode: "local" as const, auth: { mode: "none" as const } };
 
 async function writeJson(file: string, value: unknown) {
   const bytes = `${JSON.stringify(value)}\n`;
   await fs.writeFile(file, bytes);
   return bytes;
-}
-
-async function seedRetiredState(
-  home: string,
-  config: OpenClawConfig,
-  installed: Parameters<typeof seedInstalledPluginIndex>[0] = {},
-) {
-  const configPath = path.join(home, ".openclaw", "openclaw.json");
-  const sourcePath = path.join(home, ".openclaw", "settings", "voicewake.json");
-  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-  const configBytes = await writeJson(configPath, config);
-  await fs.writeFile(sourcePath, sourceBytes);
-  await seedInstalledPluginIndex(installed, { config });
-  return { configPath, sourcePath, configBytes };
 }
 
 async function withStartupHome(run: (home: string) => Promise<void>) {
@@ -58,30 +46,32 @@ afterEach(() => {
 
 it.each(["unavailable", "no-home", "EACCES"])(
   "preserves retired state during %s startup",
-  async (fault) => {
-    await withStartupHome(async (home) => {
+  (fault) =>
+    withStartupHome(async (home) => {
       const unavailable = fault === "unavailable";
-      const pluginId = "unavailable-fixture";
       const config: OpenClawConfig = {
-        gateway: { mode: "local", ...(unavailable ? { auth: { mode: "none" as const } } : {}) },
+        gateway: unavailable ? localGateway : { mode: "local" },
         plugins: unavailable
           ? { allow: [pluginId], entries: { [pluginId]: { enabled: true } } }
           : { enabled: false },
         meta: migrationMeta,
       };
-      const { configPath, sourcePath, configBytes } = await seedRetiredState(
-        home,
-        config,
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const sourcePath = path.join(home, ".openclaw", "settings", "voicewake.json");
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      const configBytes = await writeJson(configPath, config);
+      await fs.writeFile(sourcePath, sourceBytes);
+      await seedInstalledPluginIndex(
         unavailable ? { [pluginId]: { source: "npm", spec: `${pluginId}@1.0.0` } } : {},
+        { config },
       );
       const lstat = fsSync.lstatSync;
+      const denied = `EACCES: permission denied, lstat ${sourcePath}`;
       try {
         if (fault === "EACCES") {
           vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
             if (args[0] === sourcePath) {
-              throw Object.assign(new Error(`EACCES: permission denied, lstat ${sourcePath}`), {
-                code: "EACCES",
-              });
+              throw Object.assign(new Error(denied), { code: "EACCES" });
             }
             return lstat(...args);
           });
@@ -89,18 +79,17 @@ it.each(["unavailable", "no-home", "EACCES"])(
         const ready = await runStartupConfigPreflight({
           gateway: fault !== "no-home",
           observe: false,
-          ...(fault === "no-home"
-            ? {
-                beforeStatePreparation: async () => {
+          beforeStatePreparation:
+            fault === "no-home"
+              ? async () => {
                   for (const key of ["OPENCLAW_HOME", "HOME", "USERPROFILE", "PREFIX"]) {
                     vi.stubEnv(key, undefined);
                   }
                   vi.spyOn(os, "homedir").mockReturnValue("");
                   vi.spyOn(safeCwd, "tryProcessCwd").mockReturnValue(undefined);
                   return true;
-                },
-              }
-            : {}),
+                }
+              : undefined,
         });
         expect(ready.snapshot.valid).toBe(true);
         const warning = readStartupMigrationWarning();
@@ -126,9 +115,7 @@ it.each(["unavailable", "no-home", "EACCES"])(
           expect(warning).toContain("Could not inspect retired runtime state:");
           expect(warning).toContain("; run openclaw doctor");
           expect(warning).toContain(
-            fault === "no-home"
-              ? "Unable to resolve an OpenClaw home"
-              : `EACCES: permission denied, lstat ${sourcePath}`,
+            fault === "no-home" ? "Unable to resolve an OpenClaw home" : denied,
           );
         }
       } finally {
@@ -137,14 +124,12 @@ it.each(["unavailable", "no-home", "EACCES"])(
       }
       expect(await fs.readFile(configPath, "utf8")).toBe(configBytes);
       expect(await fs.readFile(sourcePath, "utf8")).toBe(sourceBytes);
-    });
-  },
+    }),
 );
 it.each([false, true])(
   "loads plugin repair diagnostics only for invalid startup config (invalid: %s)",
-  async (invalid) => {
-    await withStartupHome(async (home) => {
-      const pluginId = "repair-fixture";
+  (invalid) =>
+    withStartupHome(async (home) => {
       const pluginDir = path.join(home, "plugins", pluginId);
       const marker = path.join(home, "doctor-loaded");
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -164,7 +149,7 @@ exports.legacyConfigRules = [{
 }];\n`,
       );
       const config = {
-        gateway: { mode: "local" as const, auth: { mode: "none" as const } },
+        gateway: localGateway,
         plugins: {
           allow: [pluginId],
           load: { paths: [pluginDir] },
@@ -197,6 +182,5 @@ exports.legacyConfigRules = [{
         });
         expect(await fs.readFile(marker, "utf8")).toBe("loaded");
       }
-    });
-  },
+    }),
 );
