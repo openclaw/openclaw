@@ -11,6 +11,8 @@ import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-uti
 
 const cleanupTasks: Array<() => Promise<void>> = [];
 const model = "fixture-model";
+const keyRef = { source: "env", provider: "default", id: "CUSTOM_SETUP_FIXTURE_KEY" } as const;
+const profileShape = { type: "api_key", provider: "fixture-custom" } as const;
 
 afterEach(async () => {
   await Promise.allSettled(cleanupTasks.splice(0).map((cleanup) => cleanup()));
@@ -237,9 +239,8 @@ async function runCustomSetup(scenario: Scenario) {
           );
           expect(Object.values(saved.profiles)).toEqual([
             expect.objectContaining({
-              type: "api_key",
-              provider: "fixture-custom",
-              keyRef: { source: "env", provider: "default", id: "CUSTOM_SETUP_FIXTURE_KEY" },
+              ...profileShape,
+              keyRef,
             }),
           ]);
           deleteTestEnvValue("CUSTOM_SETUP_FIXTURE_KEY");
@@ -310,6 +311,18 @@ async function runCustomSetup(scenario: Scenario) {
   };
 }
 
+type Setup = Awaited<ReturnType<typeof runCustomSetup>>;
+function expectUnpromoted(setup: Setup, sent = false) {
+  expect(setup.requests).toEqual(
+    sent ? [expect.objectContaining({ stream: true, authorized: true })] : [],
+  );
+  expect(setup.config).toEqual(setup.initialConfig);
+  expect(setup.output).not.toContain(setup.credential);
+}
+function expectActivationFailure(setup: Setup, status: string) {
+  expect(setup.activationResults).toEqual([expect.objectContaining({ ok: false, status })]);
+}
+
 describe("guided custom provider activation", () => {
   it(
     "refuses a SecretRef source whose generation changes before preparation",
@@ -351,11 +364,8 @@ describe("guided custom provider activation", () => {
       expect(setup.authProfiles).toHaveLength(scenario.authless ? 0 : 1);
       if (!scenario.authless) {
         expect(setup.authProfiles[0]).toMatchObject({
-          type: "api_key",
-          provider: "fixture-custom",
-          ...(scenario.secretRef
-            ? { keyRef: { source: "env", provider: "default", id: "CUSTOM_SETUP_FIXTURE_KEY" } }
-            : { key: setup.credential }),
+          ...profileShape,
+          ...(scenario.secretRef ? { keyRef } : { key: setup.credential }),
         });
         expect(setup.authProfiles[0]?.setup).toBeUndefined();
       }
@@ -387,12 +397,8 @@ describe("guided custom provider activation", () => {
       unavailableSecretRef: true,
       preparationFailure: "abort",
     });
-    expect(setup.requests).toEqual([]);
-    expect(setup.config).toEqual(setup.initialConfig);
-    expect(setup.activationResults).toEqual([
-      expect.objectContaining({ ok: false, status: "unavailable" }),
-    ]);
-    expect(setup.output).not.toContain(setup.credential);
+    expectUnpromoted(setup);
+    expectActivationFailure(setup, "unavailable");
   });
 
   it("keeps credential-generation drift ahead of a missing SecretRef refusal", async () => {
@@ -402,12 +408,8 @@ describe("guided custom provider activation", () => {
       unavailableSecretRef: true,
       revokeDuringPreparation: true,
     });
-    expect(setup.requests).toEqual([]);
-    expect(setup.config).toEqual(setup.initialConfig);
-    expect(setup.activationResults).toEqual([
-      expect.objectContaining({ ok: false, status: "auth" }),
-    ]);
-    expect(setup.output).not.toContain(setup.credential);
+    expectUnpromoted(setup);
+    expectActivationFailure(setup, "auth");
   });
 
   it("saves an unresolved SecretRef without promoting the prior route", async () => {
@@ -416,19 +418,10 @@ describe("guided custom provider activation", () => {
       secretRef: true,
       unavailableSecretRef: true,
     });
-    expect(setup.requests).toEqual([]);
+    expectUnpromoted(setup);
     expect(setup.result).toBeNull();
-    expect(setup.config).toEqual(setup.initialConfig);
     expect(Object.values(setup.authProfiles)).toEqual([
-      expect.objectContaining({
-        type: "api_key",
-        provider: "fixture-custom",
-        keyRef: {
-          source: "env",
-          provider: "default",
-          id: "CUSTOM_SETUP_FIXTURE_KEY",
-        },
-      }),
+      expect.objectContaining({ ...profileShape, keyRef }),
     ]);
     expect(setup.activationResults).toEqual([
       expect.objectContaining({
@@ -437,7 +430,6 @@ describe("guided custom provider activation", () => {
         disposition: "rejected-before-promotion",
       }),
     ]);
-    expect(setup.output).not.toContain(setup.credential);
   });
 
   it.each<Scenario>([
@@ -450,16 +442,9 @@ describe("guided custom provider activation", () => {
     { timeout: 300_000 },
     async (scenario) => {
       const setup = await runCustomSetup(scenario);
-      expect(setup.requests).toEqual([expect.objectContaining({ stream: true, authorized: true })]);
+      expectUnpromoted(setup, true);
       expect(setup.result).toBeNull();
-      expect(setup.config).toEqual(setup.initialConfig);
-      expect(setup.output).not.toContain(setup.credential);
-      expect(setup.activationResults).toEqual([
-        expect.objectContaining({
-          ok: false,
-          status: scenario.outcome === "fail" ? "auth" : "unavailable",
-        }),
-      ]);
+      expectActivationFailure(setup, scenario.outcome === "fail" ? "auth" : "unavailable");
     },
   );
 

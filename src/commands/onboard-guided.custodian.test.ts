@@ -9,6 +9,8 @@ vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli }));
 
 describe("runGuidedOnboarding", () => {
   const {
+    expectCallOrder,
+    expectNotCalled,
     candidate,
     detection,
     existingModelCandidate,
@@ -22,6 +24,12 @@ describe("runGuidedOnboarding", () => {
     setupDeps,
     withConfigMutationExclusive,
   } = setupGuidedCustodianTestSuite();
+  const run = (
+    deps: Parameters<typeof runGuidedOnboarding>[2],
+    opts: Parameters<typeof runGuidedOnboarding>[0] = {},
+    runtime = makeRuntime(),
+  ) => runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work", ...opts }, runtime, deps);
+
   beforeAll(() => {
     vi.doMock("./auth-choice-prompt.js", async () => ({
       ...(await vi.importActual<typeof import("./auth-choice-prompt.js")>(
@@ -38,27 +46,17 @@ describe("runGuidedOnboarding", () => {
     const prompter = createWizardPrompter();
     const deps = setupDeps({ prompter });
 
-    await runGuidedOnboarding(
-      { acceptRisk: true, workspace: "/tmp/work", skipUi: true },
-      makeRuntime(),
-      deps,
-    );
+    await run(deps, { skipUi: true });
 
-    expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
-    expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expectNotCalled(deps.runBrowserHandoff, deps.launchHatchTui);
     expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
   });
 
   it("launches the guided terminal hatch through the running Gateway", async () => {
-    const prompter = createWizardPrompter();
-    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    const deps: GuidedOnboardingDeps = setupDeps();
     delete deps.launchHatchTui;
 
-    await runGuidedOnboarding(
-      { acceptRisk: true, workspace: "/tmp/work", tui: true },
-      makeRuntime(),
-      deps,
-    );
+    await run(deps, { tui: true });
 
     expect(launchTuiCli).toHaveBeenCalledOnce();
     const options = launchTuiCli.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -68,15 +66,10 @@ describe("runGuidedOnboarding", () => {
 
   it("keeps the local terminal hatch for configured reruns", async () => {
     localOnboarding.persisted.config = { gateway: {} };
-    const prompter = createWizardPrompter();
-    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    const deps: GuidedOnboardingDeps = setupDeps();
     delete deps.launchHatchTui;
 
-    await runGuidedOnboarding(
-      { acceptRisk: true, workspace: "/tmp/work", tui: true },
-      makeRuntime(),
-      deps,
-    );
+    await run(deps, { tui: true });
 
     expect(launchTuiCli).toHaveBeenCalledOnce();
     expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ local: true }));
@@ -84,21 +77,17 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("never attempts browser handoff for remote chat onboarding", async () => {
-    const prompter = createWizardPrompter();
     const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupDeps({
-      prompter,
       handoffMode: "chat",
       runBrowserHandoff,
     });
 
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+    await run(deps);
 
     expect(runBrowserHandoff).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
-    expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(localOnboarding.read).not.toHaveBeenCalled();
-    expect(localOnboarding.begin).not.toHaveBeenCalled();
+    expectNotCalled(deps.launchHatchTui, localOnboarding.read, localOnboarding.begin);
   });
 
   it("never replaces a configured model by fallthrough when its check fails", async () => {
@@ -132,17 +121,13 @@ describe("runGuidedOnboarding", () => {
       activate,
     });
 
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+    await run(deps);
 
     // Both attempts follow an explicit choice of the existing route.
     expect(activate).toHaveBeenCalledTimes(2);
-    expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
-      "existing-model",
-      "existing-model",
-    ]);
-    expect(activate.mock.calls.map(([call]) => call.modelRef)).toEqual([
-      "acme/workspace-model",
-      "acme/workspace-model",
+    expect(activate.mock.calls.map(([{ kind, modelRef }]) => ({ kind, modelRef }))).toEqual([
+      { kind: "existing-model", modelRef: "acme/workspace-model" },
+      { kind: "existing-model", modelRef: "acme/workspace-model" },
     ]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
@@ -178,7 +163,7 @@ describe("runGuidedOnboarding", () => {
     });
     const runtime = makeRuntime();
 
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
+    await run(deps, {}, runtime);
 
     expect(activate).toHaveBeenCalledWith({
       kind: "provider-auth",
@@ -200,8 +185,7 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ tui: true }, runtime, deps);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(deps.detect).not.toHaveBeenCalled();
-    expect(deps.activate).not.toHaveBeenCalled();
+    expectNotCalled(deps.detect, deps.activate);
   });
 
   it("shows copyable repair commands without opening AI when config is invalid", async () => {
@@ -226,13 +210,10 @@ describe("runGuidedOnboarding", () => {
       expect.stringContaining("openclaw config validate"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
-    expect(deps.detect).not.toHaveBeenCalled();
-    expect(deps.activate).not.toHaveBeenCalled();
+    expectNotCalled(deps.runSystemAgentChat, deps.detect, deps.activate);
   });
 
   it("records setup ownership at inference commit and completes before optional imports", async () => {
-    const prompter = createWizardPrompter();
     const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
       expect(localOnboarding.begin).not.toHaveBeenCalled();
       params.onCommitStarted?.(localOnboarding.persisted.config ?? {});
@@ -250,31 +231,24 @@ describe("runGuidedOnboarding", () => {
       expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("completed");
       return { status: "skipped", providers: [] };
     });
-    const deps = setupDeps({ prompter, activate, runSetupMemoryImportStep });
+    const deps = setupDeps({ activate, runSetupMemoryImportStep });
 
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+    await run(deps);
 
     expect(localOnboarding.begin).toHaveBeenCalledOnce();
     expect(localOnboarding.complete).toHaveBeenCalledOnce();
-    expect(localOnboarding.complete.mock.invocationCallOrder[0]).toBeLessThan(
-      runSetupMemoryImportStep.mock.invocationCallOrder[0]!,
-    );
+    expectCallOrder(localOnboarding.complete, runSetupMemoryImportStep);
   });
 
   it("resumes an interrupted gateway install using its approved workspace", async () => {
     const first = setupDeps({
-      prompter: createWizardPrompter(),
       applySetup: vi.fn(async () => ({
         ...setupApplyResult(),
         gateway: { status: "failed" as const, error: "service install failed" },
       })),
     });
 
-    await runGuidedOnboarding(
-      { acceptRisk: true, workspace: "/tmp/approved-workspace", tui: true },
-      makeRuntime(),
-      first,
-    );
+    await run(first, { workspace: "/tmp/approved-workspace", tui: true });
 
     const pending = localOnboarding.states.get("/tmp/openclaw.json");
     expect(pending).toMatchObject({ status: "pending", workspace: "/tmp/approved-workspace" });
@@ -297,7 +271,6 @@ describe("runGuidedOnboarding", () => {
       },
     });
     const retry = setupDeps({
-      prompter: createWizardPrompter(),
       detect: vi.fn(async () =>
         detection({
           candidates: [existingModelCandidate()],
@@ -307,7 +280,7 @@ describe("runGuidedOnboarding", () => {
       ),
     });
 
-    await runGuidedOnboarding({ acceptRisk: true, tui: true }, makeRuntime(), retry);
+    await run(retry, { workspace: undefined, tui: true });
 
     expect(retry.applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/approved-workspace", resume: true }),
@@ -330,13 +303,9 @@ describe("runGuidedOnboarding", () => {
     });
     const securityAcknowledgedAt = "2026-08-03T00:00:00.000Z";
     localOnboarding.persisted.config = { wizard: { securityAcknowledgedAt } };
-    const deps = setupDeps({ prompter: createWizardPrompter() });
+    const deps = setupDeps();
 
-    await runGuidedOnboarding(
-      { acceptRisk: true, workspace: "/tmp/replacement-workspace" },
-      makeRuntime(),
-      deps,
-    );
+    await run(deps, { workspace: "/tmp/replacement-workspace" });
 
     expect(localOnboarding.begin).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -364,13 +333,9 @@ describe("runGuidedOnboarding", () => {
       completedAtMs: 2,
     });
     localOnboarding.persisted.config = { wizard: { securityAcknowledgedAt } };
-    const deps = setupDeps({ prompter: createWizardPrompter() });
+    const deps = setupDeps();
 
-    await runGuidedOnboarding(
-      { acceptRisk: true, workspace: "/tmp/new-workspace" },
-      makeRuntime(),
-      deps,
-    );
+    await run(deps, { workspace: "/tmp/new-workspace" });
 
     expect(localOnboarding.begin).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -390,7 +355,6 @@ describe("runGuidedOnboarding", () => {
   it("binds a new receipt to the acknowledgement actually won by a concurrent writer", async () => {
     const committedAcknowledgement = "2026-08-03T00:00:00.000Z";
     const deps = setupDeps({
-      prompter: createWizardPrompter(),
       persistRiskAcknowledgement: async () => {
         localOnboarding.persisted.config = {
           wizard: { securityAcknowledgedAt: committedAcknowledgement },
@@ -399,7 +363,7 @@ describe("runGuidedOnboarding", () => {
       },
     });
 
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+    await run(deps);
 
     expect(localOnboarding.begin).toHaveBeenCalledWith(
       expect.objectContaining({ securityAcknowledgedAt: committedAcknowledgement }),
@@ -424,14 +388,13 @@ describe("runGuidedOnboarding", () => {
         lines: ["Inference verified"],
       };
     });
-    const deps = setupDeps({ prompter: createWizardPrompter(), activate });
+    const deps = setupDeps({ activate });
 
-    await expect(
-      runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps),
-    ).rejects.toThrow("configuration changed before inference could be saved");
+    await expect(run(deps)).rejects.toThrow(
+      "configuration changed before inference could be saved",
+    );
 
-    expect(localOnboarding.begin).not.toHaveBeenCalled();
-    expect(deps.applySetup).not.toHaveBeenCalled();
+    expectNotCalled(localOnboarding.begin, deps.applySetup);
   });
 
   it("never mistakes a concurrently created config owner for a stale reset receipt", async () => {
@@ -451,13 +414,10 @@ describe("runGuidedOnboarding", () => {
       wizard: { securityAcknowledgedAt: competing.securityAcknowledgedAt },
     };
     const deps = setupDeps({
-      prompter: createWizardPrompter(),
       persistRiskAcknowledgement: async () => competing.securityAcknowledgedAt,
     });
 
-    await expect(
-      runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps),
-    ).rejects.toThrow("already owns this installation");
+    await expect(run(deps)).rejects.toThrow("already owns this installation");
 
     expect(localOnboarding.begin).not.toHaveBeenCalled();
     expect(localOnboarding.states.get(competing.configPath)).toEqual(competing);
@@ -471,18 +431,13 @@ describe("runGuidedOnboarding", () => {
     localOnboarding.persisted.config = {
       wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
     };
-    const deps = setupDeps({ prompter: createWizardPrompter() });
+    const deps = setupDeps();
 
-    await expect(
-      runGuidedOnboarding(
-        { acceptRisk: true, workspace: "/tmp/different-workspace" },
-        makeRuntime(),
-        deps,
-      ),
-    ).rejects.toThrow("owns a different workspace");
+    await expect(run(deps, { workspace: "/tmp/different-workspace" })).rejects.toThrow(
+      "owns a different workspace",
+    );
 
-    expect(localOnboarding.begin).not.toHaveBeenCalled();
-    expect(deps.applySetup).not.toHaveBeenCalled();
+    expectNotCalled(localOnboarding.begin, deps.applySetup);
   });
 
   it("rejects a resolved fleet workspace that differs from the pending approved workspace", async () => {
@@ -497,14 +452,11 @@ describe("runGuidedOnboarding", () => {
       },
       wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
     };
-    const deps = setupDeps({ prompter: createWizardPrompter() });
+    const deps = setupDeps();
 
-    await expect(runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps)).rejects.toThrow(
-      "owns a different workspace",
-    );
+    await expect(run(deps, { workspace: undefined })).rejects.toThrow("owns a different workspace");
 
-    expect(deps.applySetup).not.toHaveBeenCalled();
-    expect(localOnboarding.complete).not.toHaveBeenCalled();
+    expectNotCalled(deps.applySetup, localOnboarding.complete);
   });
 
   it("rejects replacement config identity at the setup config-write boundary", async () => {
@@ -518,12 +470,11 @@ describe("runGuidedOnboarding", () => {
       setupEffects();
       return setupApplyResult();
     });
-    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
+    const deps = setupDeps({ applySetup });
 
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+    await run(deps);
 
-    expect(setupEffects).not.toHaveBeenCalled();
-    expect(localOnboarding.complete).not.toHaveBeenCalled();
+    expectNotCalled(setupEffects, localOnboarding.complete);
     expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
   });
 
@@ -553,14 +504,13 @@ describe("runGuidedOnboarding", () => {
         return await effect(localOnboarding.persisted.config);
       });
       const deps = setupDeps({
-        prompter: createWizardPrompter(),
         applySetup: vi.fn(async () => {
           withConfigMutationExclusive.mockImplementationOnce(completionLock);
           return setupApplyResult();
         }),
       });
 
-      await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+      await run(deps);
 
       expect(completionLock).toHaveBeenCalledOnce();
       expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("pending");
@@ -576,20 +526,16 @@ describe("runGuidedOnboarding", () => {
     });
     localOnboarding.states.delete(competing.configPath);
     const deps = setupDeps({
-      prompter: createWizardPrompter(),
       persistRiskAcknowledgement: async (config) => {
         localOnboarding.persisted.config = config;
         localOnboarding.states.set("/tmp/openclaw.json", competing);
       },
     });
 
-    await expect(
-      runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps),
-    ).rejects.toThrow("already owns this installation");
+    await expect(run(deps)).rejects.toThrow("already owns this installation");
 
     expect(localOnboarding.states.get("/tmp/openclaw.json")).toEqual(competing);
-    expect(localOnboarding.complete).not.toHaveBeenCalled();
-    expect(deps.applySetup).not.toHaveBeenCalled();
+    expectNotCalled(localOnboarding.complete, deps.applySetup);
   });
 
   it("identifies workspace failures and keeps the setup-chat recovery", async () => {
@@ -604,7 +550,7 @@ describe("runGuidedOnboarding", () => {
     const deps = setupDeps({ prompter, applySetup });
     const runtime = makeRuntime();
 
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
+    await run(deps, {}, runtime);
 
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true, "main");
@@ -649,7 +595,7 @@ describe("runGuidedOnboarding", () => {
       detect: async () =>
         detection({ candidates: [utilityCandidate], setupModel: "fixture/small" }),
     });
-    await runGuidedOnboarding({ acceptRisk: true, tui: true }, makeRuntime(), deps);
+    await run(deps, { workspace: undefined, tui: true });
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({ modelTarget: "utility", modelRef: "fixture/small" }),
     );

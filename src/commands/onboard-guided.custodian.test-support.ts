@@ -1,14 +1,18 @@
-import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
+import type {
+  beginLocalOnboarding,
+  LocalOnboardingState,
+} from "../state/local-onboarding-state.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   runGuidedOnboardingWithFixtures as runGuidedOnboardingImpl,
-  type GuidedOrchestrationFixture as GuidedOnboardingDeps,
+  type GuidedOrchestrationFixture as Deps,
 } from "./onboard-guided-runtime.test-support.js";
 
 const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
@@ -23,14 +27,10 @@ const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
-vi.mock("./auth-choice-prompt.js", () => ({
-  promptAuthChoiceGrouped,
-}));
+vi.mock("./auth-choice-prompt.js", () => ({ promptAuthChoiceGrouped }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
-vi.mock("../plugins/provider-setup-availability.js", () => ({
-  detectAvailableSetupProviderIds,
-}));
+vi.mock("../plugins/provider-setup-availability.js", () => ({ detectAvailableSetupProviderIds }));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -59,45 +59,35 @@ const localOnboarding = vi.hoisted(() => {
         ? state
         : undefined;
     }),
-    begin: vi.fn(
-      (params: {
-        configPath: string;
-        workspace: string;
-        teamCoordinatorId?: string;
-        securityAcknowledgedAt: string;
-        replace?: boolean;
-        expectedRunId?: string;
-        runId: string;
-      }) => {
-        const existing = states.get(params.configPath);
-        if (existing && (!params.replace || existing.runId !== params.expectedRunId)) {
-          return existing;
-        }
-        const pending: LocalOnboardingState = {
-          version: 1,
-          status: "pending",
-          runId: params.runId,
-          configPath: params.configPath,
-          workspace: params.workspace,
-          ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
-          securityAcknowledgedAt: params.securityAcknowledgedAt,
-          startedAtMs: 1,
-        };
-        states.set(params.configPath, pending);
-        persisted.config = {
-          ...persisted.config,
-          agents: {
-            ...persisted.config?.agents,
-            defaults: { ...persisted.config?.agents?.defaults, workspace: pending.workspace },
-          },
-          wizard: {
-            ...persisted.config?.wizard,
-            securityAcknowledgedAt: pending.securityAcknowledgedAt,
-          },
-        };
-        return pending;
-      },
-    ),
+    begin: vi.fn((params: Parameters<typeof beginLocalOnboarding>[0]) => {
+      const existing = states.get(params.configPath);
+      if (existing && (!params.replace || existing.runId !== params.expectedRunId)) {
+        return existing;
+      }
+      const pending: LocalOnboardingState = {
+        version: 1,
+        status: "pending",
+        runId: params.runId,
+        configPath: params.configPath,
+        workspace: params.workspace,
+        ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
+        securityAcknowledgedAt: params.securityAcknowledgedAt,
+        startedAtMs: 1,
+      };
+      states.set(params.configPath, pending);
+      persisted.config = {
+        ...persisted.config,
+        agents: {
+          ...persisted.config?.agents,
+          defaults: { ...persisted.config?.agents?.defaults, workspace: pending.workspace },
+        },
+        wizard: {
+          ...persisted.config?.wizard,
+          securityAcknowledgedAt: pending.securityAcknowledgedAt,
+        },
+      };
+      return pending;
+    }),
     complete: vi.fn((params: { configPath: string; runId: string }) => {
       const current = states.get(params.configPath);
       if (current?.status !== "pending" || current.runId !== params.runId) {
@@ -149,11 +139,23 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+}
+
+type RecordedCall = { mock: { invocationCallOrder: number[] } };
+
+function expectCallOrder(...calls: RecordedCall[]) {
+  for (const [index, call] of calls.slice(1).entries()) {
+    expect(calls[index]?.mock.invocationCallOrder[0]).toBeLessThan(
+      call.mock.invocationCallOrder[0]!,
+    );
+  }
+}
+
+function expectNotCalled(...calls: unknown[]) {
+  for (const call of calls) {
+    expect(call).not.toHaveBeenCalled();
+  }
 }
 
 function candidate(kind: "claude-cli" | "codex-cli", label: string) {
@@ -178,9 +180,7 @@ function existingModelCandidate() {
   } as const;
 }
 
-function detection(
-  overrides: Partial<Awaited<ReturnType<NonNullable<GuidedOnboardingDeps["detect"]>>>> = {},
-) {
+function detection(overrides: Partial<Awaited<ReturnType<NonNullable<Deps["detect"]>>>> = {}) {
   return {
     candidates: [candidate("claude-cli", "Claude Code")],
     unavailableCandidates: [],
@@ -223,27 +223,30 @@ function pendingLocalSetup(params: {
   return pending;
 }
 
-function setupDeps(params: {
-  prompter: WizardPrompter;
-  detect?: GuidedOnboardingDeps["detect"];
-  activate?: GuidedOnboardingDeps["activate"];
-  runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
-  persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
-  runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
-  runMemorySetupFlow?: GuidedOnboardingDeps["runMemorySetupFlow"];
-  runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
-  runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
-  applySetup?: GuidedOnboardingDeps["applySetup"];
-  handoffMode?: GuidedOnboardingDeps["handoffMode"];
-}) {
-  const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
+function setupDeps(
+  params: {
+    prompter?: WizardPrompter;
+    detect?: Deps["detect"];
+    activate?: Deps["activate"];
+    runSystemAgentChat?: Deps["runSystemAgentChat"];
+    persistRiskAcknowledgement?: Deps["persistRiskAcknowledgement"];
+    runSetupMemoryImportStep?: Deps["runSetupMemoryImportStep"];
+    runMemorySetupFlow?: Deps["runMemorySetupFlow"];
+    runAppRecommendations?: Deps["runAppRecommendations"];
+    runBrowserHandoff?: Deps["runBrowserHandoff"];
+    applySetup?: Deps["applySetup"];
+    handoffMode?: Deps["handoffMode"];
+  } = {},
+) {
+  const { prompter = createWizardPrompter() } = params;
+  const runSystemAgentChat = vi.fn<NonNullable<Deps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
   );
-  const runSetupMemoryImportStep = vi.fn<
-    NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
-  >(params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })));
+  const runSetupMemoryImportStep = vi.fn<NonNullable<Deps["runSetupMemoryImportStep"]>>(
+    params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })),
+  );
   return {
-    createPrompter: () => params.prompter,
+    createPrompter: () => prompter,
     persistAccessMode: vi.fn(async () => undefined),
     applySetup: params.applySetup ?? vi.fn(async () => setupApplyResult()),
     launchHatchTui: vi.fn<typeof import("../tui/tui-launch.js").launchTuiCli>(
@@ -259,7 +262,7 @@ function setupDeps(params: {
     detect: params.detect ?? vi.fn(async () => detection()),
     activate:
       params.activate ??
-      vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (activation) => {
+      vi.fn<NonNullable<Deps["activate"]>>(async (activation) => {
         activation.onCommitStarted?.(localOnboarding.persisted.config ?? {});
         return {
           ok: true as const,
@@ -284,13 +287,11 @@ function setupDeps(params: {
     runSystemAgentChat,
     observeHandoff: vi.fn(),
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
-  } satisfies GuidedOnboardingDeps;
+  } satisfies Deps;
 }
 
 export function setupGuidedCustodianTestSuite() {
-  beforeAll(async () => {
-    await logPathTracker.setup();
-  });
+  beforeAll(() => logPathTracker.setup());
 
   beforeEach(() => {
     localOnboarding.states.clear();
@@ -309,18 +310,14 @@ export function setupGuidedCustodianTestSuite() {
         async ({ additionalGroups }) => additionalGroups?.[0]?.options[0]?.value ?? "skip",
       );
     ensureAuthProfileStore.mockClear();
-    detectAvailableSetupProviderIds.mockReset();
-    detectAvailableSetupProviderIds.mockResolvedValue(new Set());
-    readConfigFileSnapshot.mockReset();
-    readConfigFileSnapshot.mockImplementation(async () => {
-      return {
-        exists: localOnboarding.persisted.config !== undefined,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: localOnboarding.persisted.config ?? {},
-      };
-    });
+    detectAvailableSetupProviderIds.mockReset().mockResolvedValue(new Set());
+    readConfigFileSnapshot.mockReset().mockImplementation(async () => ({
+      exists: localOnboarding.persisted.config !== undefined,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config: localOnboarding.persisted.config ?? {},
+    }));
   });
 
   afterEach(() => {
@@ -328,11 +325,11 @@ export function setupGuidedCustodianTestSuite() {
     resetLogger();
   });
 
-  afterAll(async () => {
-    await logPathTracker.cleanup();
-  });
+  afterAll(() => logPathTracker.cleanup());
 
   return {
+    expectCallOrder,
+    expectNotCalled,
     candidate,
     detection,
     existingModelCandidate,
