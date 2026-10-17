@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -41,12 +41,14 @@ const facts = {
 
 type RunInput = Partial<Parameters<typeof prepareAgentRunAdmission>[0]> & { runId?: string };
 function prepareRun({ runId = facts.runId, ...input }: RunInput = {}) {
-  return prepareAgentRunAdmission({
+  const prepared = prepareAgentRunAdmission({
     cfg: {},
     facts: { ...facts, runId },
     operationalRunInstance: createOperationalRunInstanceRef(input.facts?.runId ?? runId),
     ...input,
   });
+  onTestFinished(prepared.close);
+  return prepared;
 }
 
 let cleanupSink: (() => void) | undefined;
@@ -105,25 +107,21 @@ describe("prepared run admission", () => {
           bindGatewayContextResolver(context, resolver);
         },
       });
-      try {
-        const admitted = await prepared.admit("embedded");
-        expect(admitted.operationalRunInstance.runId).toBe(facts.runId);
-        expect(Object.isFrozen(admitted.operationalRunInstance)).toBe(true);
-        if (!audit) {
-          const second = await prepareRun().admit("embedded");
-          expect(second.operationalRunInstance.instanceId).not.toBe(
-            admitted.operationalRunInstance.instanceId,
-          );
-          expect(admitted).not.toHaveProperty("executionIdentityToken");
-          expect(readAdmittedRunOperatorAuthority(admitted)).toBeUndefined();
-        }
-        expect(getGatewayContextResolver(admitted)).toBe(resolver);
-        expect(getGatewayContextResolver({ ...admitted })).toBeUndefined();
-        expect(clearGatewayContextResolver(admitted)).toBe(true);
-        expect(getGatewayContextResolver(admitted)).toBeUndefined();
-      } finally {
-        prepared.close();
+      const admitted = await prepared.admit("embedded");
+      expect(admitted.operationalRunInstance.runId).toBe(facts.runId);
+      expect(Object.isFrozen(admitted.operationalRunInstance)).toBe(true);
+      if (!audit) {
+        const second = await prepareRun().admit("embedded");
+        expect(second.operationalRunInstance.instanceId).not.toBe(
+          admitted.operationalRunInstance.instanceId,
+        );
+        expect(admitted).not.toHaveProperty("executionIdentityToken");
+        expect(readAdmittedRunOperatorAuthority(admitted)).toBeUndefined();
       }
+      expect(getGatewayContextResolver(admitted)).toBe(resolver);
+      expect(getGatewayContextResolver({ ...admitted })).toBeUndefined();
+      expect(clearGatewayContextResolver(admitted)).toBe(true);
+      expect(getGatewayContextResolver(admitted)).toBeUndefined();
     },
   );
 
@@ -164,28 +162,20 @@ describe("prepared run admission", () => {
 
   it("keeps missing or mismatched recovery identity unbound", async () => {
     const sink = installSink();
-    const missing = await prepareRun({
-      cfg: enabledConfig,
-      recovery: createExecutionIdentityRecoveryAdmission({ retryOnly: true }),
-    }).admit("embedded");
-    const mismatch = await prepareRun({
-      cfg: enabledConfig,
-      recovery: createExecutionIdentityRecoveryAdmission({
+    for (const recovery of [
+      createExecutionIdentityRecoveryAdmission({ retryOnly: true }),
+      createExecutionIdentityRecoveryAdmission({
         retryOnly: true,
         token: createExecutionIdentityAdmissionToken("different-run"),
       }),
-    }).admit("embedded");
-    const unauthorizedClone = await prepareRun({
-      cfg: enabledConfig,
-      recovery: {
+      {
         retryOnly: false,
         token: { ...createExecutionIdentityAdmissionToken(facts.runId) },
       } as never,
-    }).admit("embedded");
-
-    expect(missing).not.toHaveProperty("executionIdentityToken");
-    expect(mismatch).not.toHaveProperty("executionIdentityToken");
-    expect(unauthorizedClone).not.toHaveProperty("executionIdentityToken");
+    ]) {
+      const admitted = await prepareRun({ cfg: enabledConfig, recovery }).admit("embedded");
+      expect(admitted).not.toHaveProperty("executionIdentityToken");
+    }
     expect(sink).not.toHaveBeenCalled();
   });
 
@@ -205,15 +195,15 @@ describe("prepared run admission", () => {
     expect(first).toBe(fallback);
     expect(first).toBe(retry);
     expect(first.executionIdentityToken).toBeDefined();
-    expect(sink).toHaveBeenCalledTimes(1);
-    const work = sink.mock.calls[0]?.[0] as ExecutionIdentityAdmissionWork | undefined;
-    expect(work?.kind).toBe("capture");
-    if (work?.kind === "capture") {
-      expect(work.envelope.contextId).toBe(first.executionIdentityToken?.contextId);
-      expect(work.envelope.executionId).toBe(first.executionIdentityToken?.executionId);
-      expect(work.envelope.runtime).toEqual({ kind: "plugin-harness" });
-      expect(work.envelope.runtimeInstanceId).toBe("plugin-instance-1");
-    }
+    expect(sink).toHaveBeenCalledExactlyOnceWith({
+      kind: "capture",
+      envelope: expect.objectContaining({
+        contextId: first.executionIdentityToken?.contextId,
+        executionId: first.executionIdentityToken?.executionId,
+        runtime: { kind: "plugin-harness" },
+        runtimeInstanceId: "plugin-instance-1",
+      }),
+    });
   });
 
   it("keeps one claim across fallback and never revives it after outer close", async () => {
@@ -246,17 +236,10 @@ describe("prepared run admission", () => {
         ...input,
         admissionSource: admissionSource === undefined ? "operator-schedule" : "requester-schedule",
       });
-      try {
-        const authority = getAdmittedRunDelegatedAuthority(await original.admit("embedded"));
-        expect(authority).toBeDefined();
-        expect(getAdmittedRunDelegatedAuthority(await replacement.admit("embedded"))).toBe(
-          authority,
-        );
-        expect(getAdmittedRunSource(authority)).toBe(admissionSource);
-      } finally {
-        replacement.close();
-        original.close();
-      }
+      const authority = getAdmittedRunDelegatedAuthority(await original.admit("embedded"));
+      expect(authority).toBeDefined();
+      expect(getAdmittedRunDelegatedAuthority(await replacement.admit("embedded"))).toBe(authority);
+      expect(getAdmittedRunSource(authority)).toBe(admissionSource);
     },
   );
 
@@ -266,32 +249,27 @@ describe("prepared run admission", () => {
       const input = { runId: "source-lifetime", admissionSource: "operator-schedule" as const };
       const original = prepareRun(input);
       const replacement = prepareRun(input);
-      try {
-        const admitted = await original.admit("embedded");
-        const authority = getAdmittedRunDelegatedAuthority(admitted);
-        const abort = new AbortController();
-        const assertActive = resolveAdmittedRunActiveAssertion(admitted, abort.signal);
-        expect(assertActive).toBeDefined();
-        expect(() => assertActive?.()).not.toThrow();
-        expect(getAdmittedRunSource(authority)).toBe("operator-schedule");
-        if (end === "replacement") {
-          await replacement.admit("embedded");
-        } else if (end === "rotation") {
-          rotateAgentRunRegistryLifecycleGeneration();
-        } else {
-          abort.abort();
-        }
-        expect(() => assertActive?.()).toThrow("no longer active");
-        if (end !== "abort") {
-          expect(getAdmittedRunSource(authority)).toBeUndefined();
-        }
-        original.close();
-        expect(() => assertActive?.()).toThrow("no longer active");
-        expect(getAdmittedRunSource(authority)).toBeUndefined();
-      } finally {
-        replacement.close();
-        original.close();
+      const admitted = await original.admit("embedded");
+      const authority = getAdmittedRunDelegatedAuthority(admitted);
+      const abort = new AbortController();
+      const assertActive = resolveAdmittedRunActiveAssertion(admitted, abort.signal);
+      expect(assertActive).toBeDefined();
+      expect(() => assertActive?.()).not.toThrow();
+      expect(getAdmittedRunSource(authority)).toBe("operator-schedule");
+      if (end === "replacement") {
+        await replacement.admit("embedded");
+      } else if (end === "rotation") {
+        rotateAgentRunRegistryLifecycleGeneration();
+      } else {
+        abort.abort();
       }
+      expect(() => assertActive?.()).toThrow("no longer active");
+      if (end !== "abort") {
+        expect(getAdmittedRunSource(authority)).toBeUndefined();
+      }
+      original.close();
+      expect(() => assertActive?.()).toThrow("no longer active");
+      expect(getAdmittedRunSource(authority)).toBeUndefined();
     },
   );
 
@@ -306,30 +284,21 @@ describe("prepared run admission", () => {
         }
       },
     });
-    try {
-      const admitted = await prepared.admit("embedded");
-      const assertActive = resolveAdmittedRunActiveAssertion(admitted)!;
-      assertActive();
-      prepared.assertSourceCurrent();
-      sourceFailure = failure;
-      expect(assertActive).toThrow(
-        expect.objectContaining({
-          message: "admitted run authority is no longer active",
-          cause: failure,
-        }),
-      );
-      sourceFailure = undefined;
-      expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-      expect(assertActive).toThrow(expect.objectContaining({ cause: failure }));
-      expect(() => prepared.assertSourceCurrent()).toThrow(
-        expect.objectContaining({
-          message: "source execution authority is no longer active",
-          cause: failure,
-        }),
-      );
-    } finally {
-      prepared.close();
-    }
+    const admitted = await prepared.admit("embedded");
+    const assertActive = resolveAdmittedRunActiveAssertion(admitted)!;
+    assertActive();
+    prepared.assertSourceCurrent();
+    sourceFailure = failure;
+    const revoked = (scope: string) =>
+      expect.objectContaining({
+        message: `${scope} authority is no longer active`,
+        cause: failure,
+      });
+    expect(assertActive).toThrow(revoked("admitted run"));
+    sourceFailure = undefined;
+    expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
+    expect(assertActive).toThrow(expect.objectContaining({ cause: failure }));
+    expect(prepared.assertSourceCurrent).toThrow(revoked("source execution"));
   });
 
   it("closes generic authority while keeping a recovery-only lease active", async () => {
@@ -354,25 +323,22 @@ describe("prepared run admission", () => {
     "keeps retained native policy fenced after foreground close (refusedRebind=%s)",
     async (refusedRebind) => {
       let current = true;
-      let sourceHolds = 0;
+      const sourceHolds = new Set<symbol>();
       const source = prepareRun({
         runId: "native-source-lease",
         operatorAuthority: createAdmittedRunOperatorAuthority({
           profileId: "native-operator",
           scopes: ["operator.write"],
           assertCurrent: () => {
-            if (!current || sourceHolds === 0) {
+            if (!current || sourceHolds.size === 0) {
               throw new Error("source claim lost");
             }
           },
           retain: () => {
-            sourceHolds += 1;
-            let released = false;
+            const hold = Symbol("source hold");
+            sourceHolds.add(hold);
             return () => {
-              if (!released) {
-                released = true;
-                sourceHolds -= 1;
-              }
+              sourceHolds.delete(hold);
             };
           },
         }),
@@ -382,6 +348,7 @@ describe("prepared run admission", () => {
       const admitted = await prepared.admit("embedded");
       const recovery = retainAdmittedRunBeforeToolCallRecovery(admitted);
       expect(recovery).toBeDefined();
+      const assertRecoveryActive = recovery!.assertActive;
       try {
         if (refusedRebind) {
           const refused = prepareRun({
@@ -389,32 +356,27 @@ describe("prepared run admission", () => {
             operationalRunInstance: admitted.operationalRunInstance,
             assertSourceCurrent: () => {},
           });
-          try {
-            await expect(refused.admit("embedded")).rejects.toThrow("already bound");
-          } finally {
-            refused.close();
-          }
-          expect(() => recovery!.assertActive()).not.toThrow();
+          await expect(refused.admit("embedded")).rejects.toThrow("already bound");
+          refused.close();
+          expect(assertRecoveryActive).not.toThrow();
         }
         prepared.close();
-        expect(sourceHolds).toBe(1);
+        expect(sourceHolds.size).toBe(1);
         expect(() => readAdmittedRunOperatorAuthority(admitted)).toThrow("no longer active");
         expect(() => readPreparedRunOperatorAuthority(prepared)).toThrow("no longer active");
-        expect(() => prepared.assertSourceCurrent()).not.toThrow();
-        expect(() => recovery!.assertActive()).not.toThrow();
+        expect(prepared.assertSourceCurrent).not.toThrow();
+        expect(assertRecoveryActive).not.toThrow();
         current = false;
-        expect(() => recovery!.assertActive()).toThrow("source claim lost");
+        expect(assertRecoveryActive).toThrow("source claim lost");
         current = true;
-        expect(() => recovery!.assertActive()).toThrow(
-          "source execution authority is no longer active",
-        );
-        expect(() => prepared.assertSourceCurrent()).toThrow(
+        expect(assertRecoveryActive).toThrow("source execution authority is no longer active");
+        expect(prepared.assertSourceCurrent).toThrow(
           "source execution authority is no longer active",
         );
       } finally {
         recovery?.release();
         prepared.close();
-        expect(sourceHolds).toBe(0);
+        expect(sourceHolds.size).toBe(0);
       }
     },
   );
