@@ -35,11 +35,11 @@ import {
   acceptsHistoryResult,
 } from "./chat-history-state.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
   projectChatTranscriptMetadata,
   type ChatSessionSnapshot,
-  type ChatHistoryState,
 } from "./session-message-cache.ts";
 
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;

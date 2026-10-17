@@ -4,14 +4,10 @@ import {
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import type {
-  ChatHistoryDeltaResult,
-  ChatPendingInputsPage,
-} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
-import type { ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
+import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -66,12 +62,6 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
-
-export type ChatHistoryState = {
-  stateRevision: NonNullable<ChatHistoryDeltaResult["stateRevision"]>;
-  pendingInputs?: ChatPendingInputsPage;
-  sessionInfo?: GatewaySessionRow;
-};
 
 export type ChatSessionSnapshot = {
   widgetHeights?: Record<string, number>;

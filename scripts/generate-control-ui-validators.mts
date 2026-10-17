@@ -161,7 +161,7 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
       },
       { additionalProperties: false },
     ),
-    'import("../../pages/chat/session-message-cache.ts").ChatHistoryState',
+    'import("../../pages/chat/chat-transcript-metadata.ts").ChatHistoryState',
     "history-state",
   ],
   [

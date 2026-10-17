@@ -17,6 +17,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
@@ -25,7 +26,6 @@ import {
   readChatHistoryCursor,
   setChatHistoryCursor,
   projectChatTranscriptMetadata,
-  type ChatHistoryState,
 } from "./session-message-cache.ts";
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
