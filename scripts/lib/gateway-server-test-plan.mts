@@ -89,7 +89,7 @@ export function createGatewayServerTestTargetChunks(
     collectVitestFileFilters(args).some((filter) => /:\d+$/u.test(filter)) ||
     args.some(
       (arg, index) =>
-        /^(?:-r|--(?:shard|changed|bail|coverage|mergeReports|outputFile|reporters?|project|root|dir|no-run))(?:[.=]|$)/u.test(
+        /^(?:-[rhv]|--(?:shard|changed|bail|coverage|mergeReports|outputFile|reporters?|project|root|dir|no-run|listTags|clearCache|standalone|help|version))(?:[.=]|$)/u.test(
           arg,
         ) ||
         arg === "--run=false" ||

@@ -123,6 +123,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     { flags: ["--reporter=json"] },
     { flags: ["--reporter", "blob"] },
     { flags: ["--reporters", "junit"] },
+    { flags: ["--listTags"] },
+    { flags: ["--clearCache"] },
+    { flags: ["--standalone"] },
+    { flags: ["--help"] },
+    { flags: ["-h"] },
+    { flags: ["--version"] },
+    { flags: ["-v"] },
   ])("preserves the native Gateway invocation for $flags", ({ flags }) => {
     const config = "test/vitest/vitest.gateway-server.config.ts";
     const specs = createVitestRunSpecs([config, "--", ...flags], { baseEnv: {} });
