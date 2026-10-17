@@ -25,15 +25,13 @@ function configuredRow(modelId: string, maxSidePx: number, provider = PROVIDER) 
   return {
     provider,
     modelId,
-    model: {
-      ...makeProviderModelFixture({
-        provider: "wire-provider",
-        id: `wire-${modelId}`,
-        api: "openai-completions",
-        baseUrl: BASE_URL,
-      }),
+    model: makeProviderModelFixture({
+      provider: "wire-provider",
+      id: `wire-${modelId}`,
+      api: "openai-completions",
+      baseUrl: BASE_URL,
       mediaInput: { image: { maxSidePx } },
-    },
+    }),
   } satisfies PreparedConfiguredRuntimeModel;
 }
 
@@ -60,15 +58,15 @@ function fixture(
   stores.modelRegistry.registerProvider(PROVIDER, {
     api: "openai-completions",
     baseUrl: BASE_URL,
-    models: modelIds.map((id) => ({
-      ...makeProviderModelFixture({
+    models: modelIds.map((id) =>
+      makeProviderModelFixture({
         provider: PROVIDER,
         id,
         api: "openai-completions",
         baseUrl: BASE_URL,
+        contextWindow: 16_000,
       }),
-      contextWindow: 16_000,
-    })),
+    ),
   });
   const authStore = { version: 1 as const, profiles: {} };
   const modelCatalog = { entries: [], routeVariants: [] };
@@ -213,15 +211,14 @@ describe("selected model materialization", () => {
       api: "openai-completions",
       baseUrl: "https://selected-model.example/v1",
       models: ["middle", "final"].map((id) =>
-        Object.assign(
-          makeProviderModelFixture({
-            provider,
-            id,
-            api: "openai-completions",
-            baseUrl: "https://selected-model.example/v1",
-          }),
-          { contextWindow: 16_000, maxTokens: 4_096 },
-        ),
+        makeProviderModelFixture({
+          provider,
+          id,
+          api: "openai-completions",
+          baseUrl: "https://selected-model.example/v1",
+          contextWindow: 16_000,
+          maxTokens: 4_096,
+        }),
       ),
     });
     return { ...stores, skipAgentDiscovery: true, skipProviderRuntimeHooks: true };
@@ -304,17 +301,15 @@ describe("configured model discovery facts", () => {
         },
       };
       const stores = createEmptyAgentDiscoveryStores();
-      const catalogModel = {
-        ...makeProviderModelFixture({
-          provider,
-          id: modelId,
-          api: "openai-completions",
-          baseUrl,
-        }),
+      const catalogModel = makeProviderModelFixture({
+        provider,
+        id: modelId,
+        api: "openai-completions",
+        baseUrl,
         contextWindow: 32_768,
         contextTokens: 32_768,
         compat: { supportsTools, supportsUsageInStreaming: true },
-      } satisfies ProviderRuntimeModel;
+      }) satisfies ProviderRuntimeModel;
       stores.modelRegistry.registerProvider(provider, {
         api: "openai-completions",
         baseUrl,
