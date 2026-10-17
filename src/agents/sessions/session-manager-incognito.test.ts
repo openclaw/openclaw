@@ -95,12 +95,10 @@ async function captureCommitRevocation(
   target: SessionTranscriptRuntimeTarget,
   operation: (assertCurrent: () => void) => Promise<unknown>,
 ) {
-  try {
-    await withCommitRevocation(target, operation);
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected committed operation to report revoked publication");
+  return withCommitRevocation(target, operation).then(
+    () => assert.fail("Expected committed operation to report revoked publication"),
+    (error: unknown) => error,
+  );
 }
 
 function readWatermark(binding: SelectedSessionActorStorageBinding) {
@@ -346,10 +344,9 @@ it("retains the static-note receipt after acknowledged caller authority loss", a
   expect(failure).toBeInstanceOf(SessionTranscriptMessageCommittedError);
   assert(failure instanceof SessionTranscriptMessageCommittedError);
   expect(isRecordedModelFallbackStop(failure)).toBe(true);
-  expect(failure.committedTarget).toMatchObject(target);
-  expect(failure.committedVersion).toMatchObject({
-    generation: expect.any(String),
-    rawSeq: expect.any(Number),
+  expect(failure).toMatchObject({
+    committedTarget: target,
+    committedVersion: { generation: expect.any(String), rawSeq: expect.any(Number) },
   });
   expect((await SessionManager.openAsync(target)).getEntries()).toMatchObject([
     { id: failure.committedMessageId, type: "message" },

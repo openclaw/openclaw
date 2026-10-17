@@ -28,6 +28,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { withSessionState } from "./session-manager-fixtures.test-support.js";
 
 const { prepareSessionTranscriptHydration } = transcriptHydration;
 
@@ -212,9 +213,7 @@ it.each(["canonical", "shared"])(
 );
 
 it("preserves the shipped SDK omitted-history option for bounded views", async () => {
-  await withOpenClawTestState({ label: "sdk-omitted-history" }, async (state) => {
-    const target = canonicalTarget(state, "sdk-omitted-history");
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await withSessionState("sdk-omitted-history", async ({ scope: target }) => {
     const source = SessionManager.open(target);
     const userId = source.appendMessage(makeUserMessage("current SDK user", 1));
     const activity = {
@@ -245,9 +244,7 @@ it("preserves the shipped SDK omitted-history option for bounded views", async (
 });
 
 it("pairs current-turn entries with the complete hydrated version and captured prefix in durable storage", async () => {
-  await withOpenClawTestState({ label: "current-turn-entry-version" }, async (state) => {
-    const target = canonicalTarget(state, "current-turn-version");
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await withSessionState("current-turn-version", async ({ scope: target }) => {
     const source = SessionManager.open(target);
     const beforeEntryId = source.appendMessage(makeUserMessage("earlier user", 0));
     const entryId = source.appendMessage(makeUserMessage("current user", 1));
@@ -303,9 +300,8 @@ it("pairs current-turn entries with the complete hydrated version and captured p
 });
 
 it("does not publish a stale retarget over a manager changed while its worker read waits", async () => {
-  await withOpenClawTestState({ label: "session-hydration-retarget" }, async (state) => {
-    const target = canonicalTarget(state, "retarget");
-    await seedHistory(target, "persisted");
+  await withSessionState("retarget", async ({ scope: target }) => {
+    SessionManager.open(target).appendMessage(makeUserMessage("persisted", 1));
     const manager = SessionManager.inMemory("/detached");
     const gate = pauseHistoryRead("request");
     const pending = manager.setSessionTargetAsync(target);
@@ -331,9 +327,10 @@ it("does not publish a stale retarget over a manager changed while its worker re
 it.each(["hydration", "current-turn"] as const)(
   "releases queued %s admission on abort before its predecessors finish",
   async (kind) => {
-    await withOpenClawTestState({ label: "session-hydration-queued-abort" }, async (state) => {
-      const target = canonicalTarget(state, "queued-abort");
-      const entryId = await seedHistory(target, "preserved predecessor");
+    await withSessionState("queued-abort", async ({ scope: target }) => {
+      const entryId = SessionManager.open(target).appendMessage(
+        makeUserMessage("preserved predecessor", 1),
+      );
       const { snapshot } = await prepareSessionTranscriptHydration(target).read();
       const entered = createDeferredCore();
       const queued = createDeferredCore();
@@ -439,9 +436,8 @@ it("keeps absent storage absent, lazy headers unpersisted, and malformed retarge
 it.each(["abort", "database-close"] as const)(
   "rejects a prepared result after %s before publication",
   async (reason) => {
-    await withOpenClawTestState({ label: "session-hydration-revoked" }, async (state) => {
-      const target = canonicalTarget(state, "revoked");
-      await seedHistory(target, "retained");
+    await withSessionState("revoked", async ({ scope: target }) => {
+      SessionManager.open(target).appendMessage(makeUserMessage("retained", 1));
       const controller = new AbortController();
       const gate = pauseHistoryRead("reply");
       const pending = SessionManager.openAsync(target, undefined, undefined, controller.signal);
@@ -469,102 +465,95 @@ it.each(["abort", "database-close"] as const)(
 );
 
 it.each([
-  { entry: "openAsync", environment: "explicit" },
-  { entry: "openBoundedAsync", environment: "process" },
-  { entry: "setSessionTargetAsync", environment: "explicit" },
+  { entry: "openAsync", environment: "explicit", storage: "incognito" },
+  { entry: "openBoundedAsync", environment: "process", storage: "incognito" },
+  { entry: "setSessionTargetAsync", environment: "explicit", storage: "incognito" },
+  { entry: "openAsync", environment: "explicit", storage: "file" },
+  { entry: "openAsync", environment: "process", storage: "file" },
 ])(
-  "$entry retains $environment environment identity after publication",
-  async ({ entry, environment }) => {
-    await withOpenClawTestState({ label: "session-hydration-environment" }, async (state) => {
-      const target = canonicalTarget(
-        state,
-        "private-environment",
-        "agent:main:dashboard:incognito-environment",
-      );
-      const ownerLocation = {
-        agentId: target.agentId,
-        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: target.agentId, env: state.env }),
-      };
-      const seed = await SessionManager.openAsync(target);
-      await seed.appendMessageAsync(makeUserMessage("original private history", 1));
-      const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
-      const env = { OPENCLAW_STATE_DIR: state.stateDir };
-      const input = environment === "explicit" ? { ...target, env } : target;
-      const detached = SessionManager.inMemory();
-      const pending =
-        entry === "openAsync"
-          ? SessionManager.openAsync(input)
-          : entry === "openBoundedAsync"
-            ? SessionManager.openBoundedAsync(input, { maxBytes: 4096, maxEvents: 10 })
-            : detached.setSessionTargetAsync(input).then(() => detached);
-      if (environment === "explicit") {
-        env.OPENCLAW_STATE_DIR = state.statePath("different-root");
-      } else {
-        process.env.OPENCLAW_STATE_DIR = state.statePath("different-root");
-      }
-      try {
-        const manager = await pending;
-        expectMessages(manager, makeUserMessage("original private history", 1));
-        const exposed = manager.getSessionTarget();
-        expect(exposed?.env?.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-        Object.assign(exposed?.env ?? {}, { OPENCLAW_STATE_DIR: state.statePath("getter-root") });
-        await manager.reloadPersistedTranscriptAsync();
-        expectMessages(manager, makeUserMessage("original private history", 1));
-        await manager.appendMessageAsync(makeUserMessage("same private owner", 2));
-        const original = { ...target, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-        expectMessages(
-          await SessionManager.openAsync(original),
-          makeUserMessage("original private history", 1),
-          makeUserMessage("same private owner", 2),
-        );
-      } finally {
-        restoreStateDir(originalEnvironment);
-        await Promise.allSettled([pending]);
-        memorySessionActorOwners.closeDatabase(ownerLocation);
-      }
-    });
-  },
-);
-
-it.each(["process", "explicit"])(
-  "keeps file-backed metadata writes in the published %s storage environment",
-  async (environment) => {
+  "$entry retains $environment $storage environment identity after publication",
+  async ({ entry, environment, storage }) => {
+    const privateStorage = storage === "incognito";
     const canary = "synthetic-hydration-private-value";
     await withOpenClawTestState(
       {
-        label: "session-hydration-file-environment",
-        env: { SESSION_HYDRATION_TEST_CANARY: canary, OPENCLAW_SUPERVISOR_MODE: undefined },
+        label: "session-hydration-environment",
+        ...(!privateStorage && {
+          env: { SESSION_HYDRATION_TEST_CANARY: canary, OPENCLAW_SUPERVISOR_MODE: undefined },
+        }),
       },
       async (state) => {
-        const target = canonicalTarget(state, "file-environment");
-        await seedHistory(target, "file history");
-        await waitForSessionTranscriptProjection(target);
-        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        const target = canonicalTarget(
+          state,
+          privateStorage ? "private-environment" : "file-environment",
+          privateStorage
+            ? "agent:main:dashboard:incognito-environment"
+            : "agent:main:file-environment",
+        );
+        if (privateStorage) {
+          await (
+            await SessionManager.openAsync(target)
+          ).appendMessageAsync(makeUserMessage("original private history", 1));
+        } else {
+          await seedHistory(target, "file history");
+          await waitForSessionTranscriptProjection(target);
+          await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        }
         const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
         const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: state.stateDir };
         const input = environment === "explicit" ? { ...target, env } : target;
-        const pending = SessionManager.openAsync(input);
+        const detached = SessionManager.inMemory();
+        const pending =
+          entry === "openAsync"
+            ? SessionManager.openAsync(input)
+            : entry === "openBoundedAsync"
+              ? SessionManager.openBoundedAsync(input, { maxBytes: 4096, maxEvents: 10 })
+              : detached.setSessionTargetAsync(input).then(() => detached);
         const otherState = state.statePath("different-root");
-        if (environment === "explicit") {
-          env.OPENCLAW_STATE_DIR = otherState;
-          env.OPENCLAW_SUPERVISOR_MODE = "external";
-        } else {
-          process.env.OPENCLAW_STATE_DIR = otherState;
-          process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+        const changedEnvironment = environment === "explicit" ? env : process.env;
+        changedEnvironment.OPENCLAW_STATE_DIR = otherState;
+        if (!privateStorage) {
+          changedEnvironment.OPENCLAW_SUPERVISOR_MODE = "external";
         }
         try {
           const manager = await pending;
-          // Check a boolean so a faulty environment capture cannot print real process values.
-          expect(JSON.stringify(manager.getSessionTarget()).includes(canary)).toBe(false);
-          expect(manager.getSessionTarget()?.env?.OPENCLAW_SUPERVISOR_MODE).toBeUndefined();
-          await manager.appendThinkingLevelChange("high");
-          expect(fs.existsSync(path.join(otherState, "state", "openclaw.sqlite"))).toBe(false);
           const original = { ...target, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-          expect(SessionManager.open(original).buildSessionContext().thinkingLevel).toBe("high");
+          if (privateStorage) {
+            const initial = makeUserMessage("original private history", 1);
+            expectMessages(manager, initial);
+            const exposed = manager.getSessionTarget();
+            expect(exposed?.env?.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+            Object.assign(exposed?.env ?? {}, {
+              OPENCLAW_STATE_DIR: state.statePath("getter-root"),
+            });
+            await manager.reloadPersistedTranscriptAsync();
+            expectMessages(manager, initial);
+            const added = makeUserMessage("same private owner", 2);
+            await manager.appendMessageAsync(added);
+            expectMessages(await SessionManager.openAsync(original), initial, added);
+          } else {
+            // A boolean prevents a failed environment capture from printing process secrets.
+            expect(JSON.stringify(manager.getSessionTarget()).includes(canary)).toBe(false);
+            expect(manager.getSessionTarget()?.env?.OPENCLAW_SUPERVISOR_MODE).toBeUndefined();
+            await manager.appendThinkingLevelChange("high");
+            expect(fs.existsSync(path.join(otherState, "state", "openclaw.sqlite"))).toBe(false);
+            expect(SessionManager.open(original).buildSessionContext().thinkingLevel).toBe("high");
+          }
         } finally {
           restoreStateDir(originalEnvironment);
-          delete process.env.OPENCLAW_SUPERVISOR_MODE;
+          if (!privateStorage) {
+            delete process.env.OPENCLAW_SUPERVISOR_MODE;
+          }
           await Promise.allSettled([pending]);
+          if (privateStorage) {
+            memorySessionActorOwners.closeDatabase({
+              agentId: target.agentId,
+              path: resolveIncognitoOpenClawAgentSqlitePath({
+                agentId: target.agentId,
+                env: state.env,
+              }),
+            });
+          }
         }
       },
     );
