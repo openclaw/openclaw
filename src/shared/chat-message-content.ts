@@ -33,7 +33,7 @@ const assistantTextSignatureCache = new WeakMap<
   { text: unknown; result: AssistantTextSignature }
 >();
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
+export function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 

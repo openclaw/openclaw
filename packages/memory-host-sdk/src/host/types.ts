@@ -55,6 +55,13 @@ export type MemoryCliSearchResult = {
   action?: string;
 };
 
+/** Indexed-memory search response shared by the Gateway and browser presentation. */
+export type MemorySearchResponse = MemoryCliSearchResult & {
+  agentId: string;
+  provider: string;
+  searchMode: "hybrid" | "fts-only";
+};
+
 export type MemoryCliSearchOutcome =
   | MemoryCliSearchResult
   | { agentId: string; status: "disabled" }

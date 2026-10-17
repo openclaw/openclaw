@@ -21,11 +21,10 @@ import {
   resolveMessageActionDetails,
 } from "./components/chat-message-markdown-view.tsx";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
-import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import {
-  createTranscriptTestOwner,
-  type TestChatTranscript,
-} from "./components/chat-transcript-owner.test-support.ts";
+  createChatTranscript,
+  type ChatTranscript,
+} from "./components/chat-transcript-controller.ts";
 
 type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
@@ -65,14 +64,9 @@ let nextTestTranscriptId = 0;
 
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
-): TestChatTranscript {
-  return createTranscriptTestOwner(
-    {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: () => undefined,
-      updateComplete: Promise.resolve(true),
-    } satisfies Parameters<typeof createTranscriptTestOwner>[0],
+): ChatTranscript {
+  return createChatTranscript(
+    () => undefined,
     () => paneId,
   );
 }

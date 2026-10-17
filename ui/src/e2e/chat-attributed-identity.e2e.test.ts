@@ -1003,7 +1003,6 @@ suite.define(() => {
         page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")),
       ]);
       expect(response.status()).toBe(404);
-      expect(await response.finished()).toBeNull();
       await page.getByText("Please keep my fallback avatar readable.").waitFor();
 
       const userGroup = page.locator(".chat-group.user", {

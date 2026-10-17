@@ -1,4 +1,3 @@
-// IRC plugin module owns raw PRIVMSG durable admission and replay draining.
 import { randomUUID } from "node:crypto";
 import {
   createChannelIngressError,

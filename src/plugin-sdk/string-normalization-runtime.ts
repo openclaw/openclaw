@@ -9,3 +9,4 @@ export {
   normalizeStringEntriesLower,
 } from "../../packages/normalization-core/src/string-normalization.js";
 export { escapeChatDisplayText, sanitizeChatDisplayText } from "../shared/text/chat-display.js";
+export { shellEscape, shellEscapeBackslash } from "../shared/shell-quote.js";

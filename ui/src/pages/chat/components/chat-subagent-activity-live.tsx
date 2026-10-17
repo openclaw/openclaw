@@ -52,6 +52,7 @@ function SubagentActivityLive(props: SubagentActivityProps) {
     const gateway = context.gateway;
     let connection = gateway.snapshot.hello;
     const changed = () => setRevision((value) => value + 1);
+    // Clear prior-connection digests before the next observer frame can be accepted.
     const unsubscribe = gateway.subscribe(() => {
       if (connection !== gateway.snapshot.hello) {
         connection = gateway.snapshot.hello;

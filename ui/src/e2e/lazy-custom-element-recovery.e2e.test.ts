@@ -165,7 +165,7 @@ const focusedCases = [
     name: "desktop",
     label: "desktop panel",
     path: focusPath({ kind: "desktop", control: false }),
-    modulePath: "ui/src/components/desktop/desktop-panel.ts",
+    modulePath: "ui/src/components/desktop/desktop-panel-solid.tsx",
     gateway: {
       featureMethods: [...defaultControlUiFeatureMethods, "desktop.observe", "environments.list"],
       methodResponses: {

@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { ErrorShapeSchema } from "./error-shape.js";
 import {
   ControlUiLinkReaderDescriptorSchema,
   ControlUiPluginTabSchema,
@@ -18,6 +19,7 @@ import { stringLiteralUnion } from "./string-literal-union.js";
 import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
+export { ErrorShapeSchema, type ErrorShape } from "./error-shape.js";
 
 export const TickEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
@@ -166,15 +168,6 @@ export const HelloOkSchema = closedObject({
   }),
 });
 
-/** Standard structured error shape used in response frames and connect failures. */
-export const ErrorShapeSchema = closedObject({
-  code: NonEmptyString,
-  message: NonEmptyString,
-  details: Type.Optional(Type.Unknown()),
-  retryable: Type.Optional(Type.Boolean()),
-  retryAfterMs: Type.Optional(Type.Integer({ minimum: 0 })),
-});
-
 /** Client request frame envelope; `method` selects the payload validator. */
 export const RequestFrameSchema = closedObject({
   type: Type.Literal("req"),
@@ -215,7 +208,6 @@ export const GatewayFrameSchema = Type.Union(
 // Keeping them off the aggregate registry avoids retaining every RPC schema.
 export type ConnectParams = Static<typeof ConnectParamsSchema>;
 export type HelloOk = Static<typeof HelloOkSchema>;
-export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type RequestFrame = Static<typeof RequestFrameSchema>;
 export type ResponseFrame = Static<typeof ResponseFrameSchema>;
 export type EventFrame = Static<typeof EventFrameSchema>;

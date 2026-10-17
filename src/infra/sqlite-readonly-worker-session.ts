@@ -75,6 +75,7 @@ export function createSqliteReadOnlyWorkerSession(
     // Inheriting the current directory avoids a redundant chdir that can fail under sudo -u.
     ...(transport.kind === "native" && cwd === tryProcessCwd() ? {} : { cwd }),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
+    windowsHide: true,
   };
   const child: ChildProcess =
     transport.kind === "broker"

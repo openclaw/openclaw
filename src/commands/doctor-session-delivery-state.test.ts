@@ -316,6 +316,85 @@ describe("doctor canonical session delivery state", () => {
 });
 
 describe("doctor canonical session resolved skills", () => {
+  it("refuses prepared repairs on a malformed excluded snapshot and retries in-process", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-skills-malformed-snapshot-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:a-skills";
+    const tombstoneKey = "agent:main:z-tombstone";
+    insertSessionRow(env, sessionKey, { sessionId: "skills-session", updatedAt: 42 });
+    insertSessionRow(env, tombstoneKey, { sessionId: "tombstone-session", updatedAt: 43 });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = '{}', entry_valid = 0 WHERE session_key = ?")
+      .run(tombstoneKey);
+    const compactSkills = { prompt: "compact prompt", skills: [{ name: "demo" }], version: 7 };
+    const snapshots = {
+      skillsSnapshot: {
+        ...compactSkills,
+        resolvedSkills: [{ name: "demo", description: "runtime" }],
+      },
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId: "skills-session",
+        root: "/synthetic",
+        files: [],
+      },
+      systemPromptReport: { source: "run", generatedAt: 1, sessionKey },
+    };
+    for (const [field, value] of Object.entries(snapshots)) {
+      database.db
+        .prepare(
+          "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, ?, ?)",
+        )
+        .run(sessionKey, field, JSON.stringify(value));
+    }
+    database.db
+      .prepare(
+        "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, 'skillsSnapshot', '{')",
+      )
+      .run(tombstoneKey);
+    const originalEntry = readEntryJson(env, sessionKey);
+    const readSnapshots = () =>
+      database.db
+        .prepare(
+          "SELECT session_key, field, value_json FROM session_entry_snapshots ORDER BY session_key, field",
+        )
+        .all();
+    const originalSnapshots = readSnapshots();
+
+    expect(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env })).toEqual({
+      found: 0,
+      repaired: 0,
+      scannedStores: 1,
+    });
+    expect(readEntryJson(env, sessionKey)).toBe(originalEntry);
+    expect(readEntryJson(env, tombstoneKey)).toBe("{}");
+    expect(readSnapshots()).toEqual(originalSnapshots);
+
+    database.db
+      .prepare("UPDATE session_entry_snapshots SET value_json = '{}' WHERE session_key = ?")
+      .run(tombstoneKey);
+    expect(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    const repaired = loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey })?.entry;
+    expect(repaired).toMatchObject({
+      sessionId: "skills-session",
+      updatedAt: 42,
+      sessionDiffBaseline: snapshots.sessionDiffBaseline,
+      systemPromptReport: snapshots.systemPromptReport,
+    });
+    expect(repaired?.skillsSnapshot).toEqual(compactSkills);
+    expect(readEntryJson(env, tombstoneKey)).toBe("{}");
+    expect(repairCanonicalSessionResolvedSkills({ apply: true, cfg: {}, env })).toEqual({
+      found: 0,
+      repaired: 0,
+      scannedStores: 1,
+    });
+  });
+
   it("repairs all agents without mutating dry-run rows or losing compact snapshots", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-skills-all-agents-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

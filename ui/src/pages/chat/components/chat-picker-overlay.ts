@@ -55,6 +55,7 @@ function bindChatPickerOverlay(
   };
   details.setAttribute("data-chat-native-picker", "");
   let lastOpen = overlay.open;
+  // Mirror each open/close edge into native details and its dismissal callback synchronously.
   const stop = overlay.subscribe((open) => {
     details.open = open;
     if (open !== lastOpen) {

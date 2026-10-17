@@ -2,6 +2,7 @@ import {
   asFiniteNumber as normalizeFiniteNumber,
   asNonNegativeFiniteNumber as normalizeNonNegativeNumber,
   asPositiveFiniteNumber as normalizePositiveNumber,
+  asPositiveInteger as normalizePositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -98,10 +99,6 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
     MODEL_CATALOG_INPUTS.has(input),
   );
   return inputs.length > 0 ? inputs : undefined;
-}
-
-function normalizePositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function normalizeModelCatalogTieredCost(value: unknown): ModelCatalogTieredCost[] | undefined {
