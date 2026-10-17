@@ -1,4 +1,3 @@
-// Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,6 +17,23 @@ import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const clientOptions = { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 };
+const stalledOptions = {
+  ...clientOptions,
+  token: "x",
+  statePath: "/tmp/unused-gateway-network-state.json",
+  timeoutMs: 25,
+};
+const busyResponse = {
+  status: 200,
+  body: {
+    ok: true,
+    payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
+  },
+};
+function readyPayload(expiresAtMs = Date.now() + 10_000) {
+  return { status: "ready", suspensionId: "lease-1", expiresAtMs, activeCount: 0, blockers: [] };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -68,30 +84,19 @@ describe("gateway network client", () => {
       "gateway.suspend.resume",
     ],
   ) {
-    return {
-      ok: true,
-      payload: {
-        features: { methods },
-      },
-    };
+    return { ok: true, payload: { features: { methods } } };
   }
 
   it("rejects loose client timeout env values instead of parsing prefixes", () => {
-    expect(() =>
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: "100ms",
-      }),
-    ).toThrow("invalid OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: 100ms");
-    expect(() =>
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS: 1e3");
-    expect(() =>
-      readGatewayNetworkClientConnectTimeoutMs({
-        OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: "0",
-      }),
-    ).toThrow("invalid OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS: 0");
+    for (const [key, value] of [
+      ["OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS", "100ms"],
+      ["OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS", "1e3"],
+      ["OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS", "0"],
+    ]) {
+      expect(() => readGatewayNetworkClientConnectTimeoutMs({ [key]: value })).toThrow(
+        `invalid ${key}: ${value}`,
+      );
+    }
   });
 
   it("prefers the explicit client timeout over the connect-ready fallback", () => {
@@ -112,24 +117,12 @@ describe("gateway network client", () => {
     const expiresAtMs = Date.now() + 10_000;
     const rpc = vi
       .fn()
+      .mockResolvedValueOnce(busyResponse)
       .mockResolvedValueOnce({
         status: 200,
         body: {
           ok: true,
-          payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
-        },
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        body: {
-          ok: true,
-          payload: {
-            status: "ready",
-            suspensionId: "lease-1",
-            expiresAtMs,
-            activeCount: 0,
-            blockers: [],
-          },
+          payload: readyPayload(expiresAtMs),
         },
       });
     const delayImpl = vi.fn(async () => undefined);
@@ -149,13 +142,7 @@ describe("gateway network client", () => {
 
   it("stops busy suspension retries at the client deadline", async () => {
     let nowMs = 1_000;
-    const rpc = vi.fn(async () => ({
-      status: 200,
-      body: {
-        ok: true,
-        payload: { status: "busy", retryAfterMs: 250, activeCount: 1, blockers: ["agent"] },
-      },
-    }));
+    const rpc = vi.fn(async () => busyResponse);
     const delayImpl = vi.fn(async (ms: number) => {
       nowMs += ms;
     });
@@ -179,15 +166,7 @@ describe("gateway network client", () => {
     });
 
     await expect(
-      runGatewaySuspensionPreRestartClient(
-        {
-          statePath: "/tmp/unused-gateway-network-state.json",
-          token: "x",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 25,
-        },
-        { fetchImpl },
-      ),
+      runGatewaySuspensionPreRestartClient(stalledOptions, { fetchImpl }),
     ).rejects.toMatchObject({ name: "TimeoutError" });
 
     expectDeadlineBudgets(timeoutSpy.mock.calls);
@@ -202,16 +181,7 @@ describe("gateway network client", () => {
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
       callCount += 1;
       if (callCount === 1) {
-        return Response.json({
-          ok: true,
-          payload: {
-            status: "ready",
-            suspensionId: "lease-1",
-            expiresAtMs: Date.now() + 10_000,
-            activeCount: 0,
-            blockers: [],
-          },
-        });
+        return Response.json({ ok: true, payload: readyPayload() });
       }
       bodySignal = init?.signal;
       const response = new Response(null, { status: 200 });
@@ -220,15 +190,7 @@ describe("gateway network client", () => {
     });
 
     await expect(
-      runGatewaySuspensionPreRestartClient(
-        {
-          statePath: "/tmp/unused-gateway-network-state.json",
-          token: "x",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 25,
-        },
-        { fetchImpl },
-      ),
+      runGatewaySuspensionPreRestartClient(stalledOptions, { fetchImpl }),
     ).rejects.toMatchObject({ name: "TimeoutError" });
 
     expectDeadlineBudgets(timeoutSpy.mock.calls);
@@ -263,15 +225,7 @@ describe("gateway network client", () => {
     });
 
     await expect(
-      runGatewaySuspensionPostRestartClient(
-        {
-          statePath,
-          token: "x",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 25,
-        },
-        { fetchImpl },
-      ),
+      runGatewaySuspensionPostRestartClient({ ...stalledOptions, statePath }, { fetchImpl }),
     ).rejects.toMatchObject({ name: "TimeoutError" });
 
     expectDeadlineBudgets(timeoutSpy.mock.calls);
@@ -341,11 +295,9 @@ describe("gateway network client", () => {
     const frames = [...responses];
     const sentMethods: string[] = [];
     const stdout: string[] = [];
-    let closeCount = 0;
+    const close = vi.fn();
     const socket = {
-      close: () => {
-        closeCount += 1;
-      },
+      close,
       send: (payload: string) => {
         sentMethods.push(JSON.parse(payload).method);
       },
@@ -353,7 +305,7 @@ describe("gateway network client", () => {
 
     return {
       get closeCount() {
-        return closeCount;
+        return close.mock.calls.length;
       },
       sentMethods,
       stdout,
@@ -399,15 +351,7 @@ describe("gateway network client", () => {
     ]);
 
     await expect(
-      runGatewayNetworkClient(
-        {
-          capabilitiesPath,
-          token: "test-token",
-          url: "ws://127.0.0.1:12345",
-          timeoutMs: 1000,
-        },
-        harness.deps,
-      ),
+      runGatewayNetworkClient({ ...clientOptions, capabilitiesPath }, harness.deps),
     ).resolves.toEqual({ suspension: testCase.expected });
     expect(JSON.parse(readFileSync(capabilitiesPath, "utf8"))).toEqual({
       suspension: testCase.expected,
@@ -421,12 +365,9 @@ describe("gateway network client", () => {
   ])("rejects %s suspension methods only after baseline health", async (_label, methods) => {
     const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
 
-    await expect(
-      runGatewayNetworkClient(
-        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-        harness.deps,
-      ),
-    ).rejects.toThrow(/suspension methods/u);
+    await expect(runGatewayNetworkClient(clientOptions, harness.deps)).rejects.toThrow(
+      /suspension methods/u,
+    );
     expect(harness.sentMethods).toEqual(["connect", "health"]);
   });
 
@@ -438,7 +379,7 @@ describe("gateway network client", () => {
     try {
       await expect(
         runGatewayNetworkClient(
-          { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
+          { ...clientOptions, timeoutMs: 250 },
           {
             delay: async (ms: number) => {
               delays.push(ms);
@@ -463,12 +404,9 @@ describe("gateway network client", () => {
   it("fails a connected socket whose health success lacks summary evidence", async () => {
     const harness = createNetworkClientHarness([{ ok: true }, { ok: true }]);
 
-    await expect(
-      runGatewayNetworkClient(
-        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-        harness.deps,
-      ),
-    ).rejects.toThrow("health failed: missing health summary payload");
+    await expect(runGatewayNetworkClient(clientOptions, harness.deps)).rejects.toThrow(
+      "health failed: missing health summary payload",
+    );
 
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.stdout).toEqual([]);
@@ -481,25 +419,16 @@ describe("gateway network client", () => {
       { ok: false, error: { message: "health unavailable" } },
     ]);
 
-    await expect(
-      runGatewayNetworkClient(
-        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
-        harness.deps,
-      ),
-    ).rejects.toThrow("health failed: health unavailable");
+    await expect(runGatewayNetworkClient(clientOptions, harness.deps)).rejects.toThrow(
+      "health failed: health unavailable",
+    );
 
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.closeCount).toBe(1);
   });
 
   it("accepts only an idle future suspension lease", () => {
-    const payload = {
-      status: "ready",
-      suspensionId: "lease-1",
-      expiresAtMs: 2_000,
-      activeCount: 0,
-      blockers: [],
-    };
+    const payload = readyPayload(2_000);
     const response = (overrides = {}) => ({
       status: 200,
       body: { ok: true, payload: { ...payload, ...overrides } },

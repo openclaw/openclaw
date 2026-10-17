@@ -53,19 +53,17 @@ describe("Kysely declarations", () => {
       fs.copyFileSync(file, path.join(root, file));
     }
     const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: path.join(root, ".state") };
-    const packed = spawnSync(
-      process.execPath,
-      [
-        path.resolve("node_modules/npm/bin/npm-cli.js"),
-        "pack",
-        "--ignore-scripts",
-        "--json",
-        "--offline",
-        "--cache",
-        path.join(root, "cache"),
-      ],
-      { cwd: root, env, encoding: "utf8" },
-    );
+    const runCommand = (command: string, args: string[], cwd = root) =>
+      spawnSync(command, args, { cwd, env, encoding: "utf8" });
+    const packed = runCommand(process.execPath, [
+      path.resolve("node_modules/npm/bin/npm-cli.js"),
+      "pack",
+      "--ignore-scripts",
+      "--json",
+      "--offline",
+      "--cache",
+      path.join(root, "cache"),
+    ]);
     expect(packed.status, packed.stderr).toBe(0);
     const inventoryByName = JSON.parse(packed.stdout) as Record<
       string,
@@ -81,14 +79,12 @@ describe("Kysely declarations", () => {
     }
     const unpacked = path.join(root, "unpacked");
     fs.mkdirSync(unpacked);
-    const extracted = spawnSync(
-      "tar",
-      ["-xzf", path.join(root, inventory.filename), "-C", unpacked],
-      {
-        env,
-        encoding: "utf8",
-      },
-    );
+    const extracted = runCommand("tar", [
+      "-xzf",
+      path.join(root, inventory.filename),
+      "-C",
+      unpacked,
+    ]);
     expect(extracted.status, extracted.stderr).toBe(0);
     const packageRoot = path.join(unpacked, "package");
     expect(
@@ -98,11 +94,7 @@ describe("Kysely declarations", () => {
       }),
     ).toEqual([]);
     const run = (file: string) =>
-      spawnSync(process.execPath, [path.join(packageRoot, file)], {
-        cwd: packageRoot,
-        env,
-        encoding: "utf8",
-      });
+      runCommand(process.execPath, [path.join(packageRoot, file)], packageRoot);
     for (const file of [
       "scripts/generate-kysely-types.mts",
       "scripts/prepare-git-hooks.mjs",
