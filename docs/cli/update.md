@@ -827,6 +827,14 @@ addressing the reported storage or dependency problem. This protection belongs
 to the installed updater, so selecting a newer candidate cannot fix an older
 updater that is already stuck in retention.
 
+Without `--timeout`, each candidate check's allowance scales with the measured
+state size. A `--timeout` replaces that allowance. An update started from the
+Gateway also passes its step deadline to the background updater as `--timeout`.
+When the deadline is shorter than the automatic allowance, the update report
+includes a warning with both values. This warning belongs to the installed
+updater; installing a release with the fix enables it for the next update that
+release performs.
+
 After activation or rollback is verified, obsolete package and launcher backup
 trees share a five-minute cleanup budget. Expiry retains the remaining backups
 and records their paths as a warning without undoing the verified installation.
