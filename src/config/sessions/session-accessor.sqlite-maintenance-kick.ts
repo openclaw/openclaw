@@ -590,9 +590,6 @@ async function runPendingMaintenance(
           "SQLite maintenance snapshot changed before commit",
         );
       }
-      if (result.kind !== "maintenance-plan") {
-        throw new Error("SQLite automatic maintenance returned another operation's result");
-      }
       const plan = result.value;
       const noChanges = plan.archived === 0 && plan.entryRemovals.length === 0;
       noFinalization = noChanges && plan.stateDeletePlans.length === 0;
