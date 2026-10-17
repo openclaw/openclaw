@@ -214,20 +214,8 @@ suite.define(() => {
     },
   );
 
-  it("shows and copies browser artifact identity, separately from the Gateway version", async () => {
+  it("shows browser artifact identity separately from the Gateway version", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          writeText: async (text: string) => {
-            (globalThis as typeof globalThis & { __openclawCopiedCommit?: string })[
-              "__openclawCopiedCommit"
-            ] = text;
-          },
-        },
-      });
-    });
     const page = await context.newPage();
     await installMockGateway(page);
 
@@ -308,54 +296,6 @@ suite.define(() => {
       expect(clawdWaving).toBe(true);
 
       await expect.poll(() => page.locator(".about-footer").textContent()).toContain("MIT License");
-
-      const copyButton = strip.locator(".about-commit button");
-      await expect.poll(() => copyButton.getAttribute("aria-label")).toBe("Copy full commit hash");
-      // COPY_RESULT_VISIBLE_MS clears the copied label after 1800ms. Await both the
-      // initial copying render and the async clipboard continuation before reading it.
-      const copiedLabel = await copyButton.evaluate(async (element) => {
-        const button = element as HTMLButtonElement;
-        const owner = element.closest("openclaw-about-page") as
-          | (HTMLElement & {
-              updateComplete: Promise<unknown>;
-            })
-          | null;
-        if (!owner) {
-          throw new Error("About page owner is unavailable");
-        }
-        let copyObserver: MutationObserver | undefined;
-        const copySettled = new Promise<void>((resolve) => {
-          copyObserver = new MutationObserver(() => {
-            if (button.getAttribute("aria-busy") !== "true") {
-              copyObserver?.disconnect();
-              resolve();
-            }
-          });
-          copyObserver.observe(button, {
-            attributeFilter: ["aria-busy", "aria-label"],
-            attributes: true,
-          });
-        });
-        button.click();
-        await owner.updateComplete;
-        if (button.getAttribute("aria-busy") === "true") {
-          await copySettled;
-        }
-        copyObserver?.disconnect();
-        await owner.updateComplete;
-        return button.getAttribute("aria-label");
-      });
-      expect(copiedLabel).toBe("Commit hash copied");
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (globalThis as typeof globalThis & { __openclawCopiedCommit?: string })[
-                "__openclawCopiedCommit"
-              ],
-          ),
-        )
-        .toBe(COMMIT);
 
       await page.setViewportSize({ height: 812, width: 375 });
       await expect

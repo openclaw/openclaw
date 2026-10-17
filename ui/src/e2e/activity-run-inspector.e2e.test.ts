@@ -128,6 +128,17 @@ async function measureWithinAncestor(element: Locator, ancestorSelector: string)
   }, ancestorSelector);
 }
 
+async function expectReferenceCounts(page: Page, count: string) {
+  for (const label of ["Policy references used", "Grant references used"]) {
+    expect(
+      await page
+        .getByText(label, { exact: true })
+        .locator("xpath=following-sibling::dd")
+        .textContent(),
+    ).toBe(count);
+  }
+}
+
 suite.define(() => {
   it("deep-links, reloads durable evidence, and exposes text-first accessible states", async () => {
     const context = await newContext({ video: true });
@@ -330,18 +341,7 @@ suite.define(() => {
       await page.getByText("Verified producer", { exact: true }).waitFor();
       await page.getByText("operator-approval", { exact: true }).waitFor();
       await page.getByText("No follow-up is required.", { exact: true }).waitFor();
-      expect(
-        await page
-          .getByText("Policy references used", { exact: true })
-          .locator("xpath=following-sibling::dd")
-          .textContent(),
-      ).toBe("1");
-      expect(
-        await page
-          .getByText("Grant references used", { exact: true })
-          .locator("xpath=following-sibling::dd")
-          .textContent(),
-      ).toBe("1");
+      await expectReferenceCounts(page, "1");
 
       const deniedLink = page.getByText(denied.action.summary!, { exact: true }).locator("..");
       await deniedLink.focus();
@@ -474,18 +474,7 @@ suite.define(() => {
           exact: false,
         })
         .waitFor();
-      expect(
-        await page
-          .getByText("Policy references used", { exact: true })
-          .locator("xpath=following-sibling::dd")
-          .textContent(),
-      ).toBe("0");
-      expect(
-        await page
-          .getByText("Grant references used", { exact: true })
-          .locator("xpath=following-sibling::dd")
-          .textContent(),
-      ).toBe("0");
+      await expectReferenceCounts(page, "0");
 
       const detail = page.locator(".run-inspector__receipt-detail");
       await detail.getByText("decision_fact_display_unverified", { exact: true }).waitFor();

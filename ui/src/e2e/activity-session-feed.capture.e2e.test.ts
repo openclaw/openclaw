@@ -21,6 +21,20 @@ beforeEach(() => {
   outputDir = createControlUiE2eArtifactDir("session-activity-feed");
 });
 const proofPhase = process.env.OPENCLAW_MENU_THEME_PROOF_PHASE;
+const person = (id: string, label: string) => ({
+  identity: { type: "profile" as const, id },
+  label,
+});
+const actor = (id: string, label: string) => ({ type: "human" as const, id, ...person(id, label) });
+const alice = actor("profile-alice", "Alice Chen");
+const bob = actor("profile-bob", "Bob Rivera");
+const carol = actor("profile-carol", "Carol Singh");
+const presence = <T>(id: string, name: string, details: T) => ({
+  id,
+  identity: { type: "profile" as const, id },
+  name,
+  ...details,
+});
 
 suite.define(() => {
   it("captures online, global activity, and person-filtered activity surfaces", async () => {
@@ -32,6 +46,12 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const capture = (name: string, fullPage = false) =>
+          page.screenshot({
+            animations: "disabled",
+            path: path.join(outputDir, name),
+            ...(fullPage ? { fullPage } : {}),
+          });
         await page.route("**/plugins/geolocation/lookup?ip=203.0.113.20", async (route) => {
           await route.fulfill({
             contentType: "application/json",
@@ -44,23 +64,17 @@ suite.define(() => {
           });
         });
         const current = new Date();
-        const since = new Date(
-          current.getFullYear(),
-          current.getMonth(),
-          current.getDate() - 7,
-        ).getTime();
-        const until = new Date(
-          current.getFullYear(),
-          current.getMonth(),
-          current.getDate() + 1,
-        ).getTime();
+        const day = (offset: number, hour = 0) =>
+          new Date(
+            current.getFullYear(),
+            current.getMonth(),
+            current.getDate() + offset,
+            hour,
+          ).getTime();
+        const since = day(-7);
+        const until = day(1);
         // Keep the automation fixtures on one local calendar day in every timezone.
-        const now = new Date(
-          current.getFullYear(),
-          current.getMonth(),
-          current.getDate() - 1,
-          12,
-        ).getTime();
+        const now = day(-1, 12);
         const releaseKey = "agent:main:release-readiness";
         const designKey = "agent:main:design-review";
         const gatewayHandoffKey = "agent:main:gateway-handoff";
@@ -68,6 +82,20 @@ suite.define(() => {
         const incidentNotesKey = "agent:main:incident-notes";
         const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
         const nonAutomationKeys = [releaseKey, incidentNotesKey];
+        const session = (
+          key: string,
+          displayName: string,
+          createdActor: typeof alice,
+          minutes: number,
+        ) => ({
+          key,
+          displayName,
+          kind: "direct",
+          agentId: "main",
+          createdActor,
+          owner: { actor: createdActor },
+          updatedAt: now - minutes * 60_000,
+        });
         const sessionList = {
           activityPulse: {
             since,
@@ -80,21 +108,9 @@ suite.define(() => {
           },
           peopleIncomplete: true,
           people: [
-            {
-              identity: { type: "profile", id: "profile-alice" },
-              label: "Alice Chen",
-              sessionCount: 3,
-            },
-            {
-              identity: { type: "profile", id: "profile-bob" },
-              label: "Bob Rivera",
-              sessionCount: 2,
-            },
-            {
-              identity: { type: "profile", id: "profile-carol" },
-              label: "Carol Singh",
-              sessionCount: 2,
-            },
+            { ...person(alice.id, alice.label), sessionCount: 3 },
+            { ...person(bob.id, bob.label), sessionCount: 2 },
+            { ...person(carol.id, carol.label), sessionCount: 2 },
           ],
           peopleSessionCount: 5,
           count: 5,
@@ -107,28 +123,9 @@ suite.define(() => {
           path: "",
           sessions: [
             {
-              key: releaseKey,
-              kind: "direct",
-              displayName: "Release readiness",
-              agentId: "main",
+              ...session(releaseKey, "Release readiness", alice, 4),
               channel: "webchat",
-              createdActor: {
-                type: "human",
-                id: "profile-alice",
-                identity: { type: "profile", id: "profile-alice" },
-                label: "Alice Chen",
-              },
-              owner: {
-                actor: {
-                  type: "human",
-                  id: "profile-alice",
-                  identity: { type: "profile", id: "profile-alice" },
-                  label: "Alice Chen",
-                },
-              },
-              participants: [
-                { identity: { type: "profile", id: "profile-bob" }, label: "Bob Rivera" },
-              ],
+              participants: [person(bob.id, bob.label)],
               activeRunIds: ["mock run:a/b"],
               hasActiveRun: true,
               observerDigest: {
@@ -139,117 +136,32 @@ suite.define(() => {
                 updatedAt: now - 4 * 60_000,
               },
               status: "running",
-              updatedAt: now - 4 * 60_000,
             },
             {
-              key: designKey,
-              kind: "direct",
-              displayName: "Control UI design review",
-              agentId: "main",
-              createdActor: {
-                type: "human",
-                id: "profile-bob",
-                identity: { type: "profile", id: "profile-bob" },
-                label: "Bob Rivera",
-              },
-              owner: {
-                actor: {
-                  type: "human",
-                  id: "profile-bob",
-                  identity: { type: "profile", id: "profile-bob" },
-                  label: "Bob Rivera",
-                },
-              },
+              ...session(designKey, "Control UI design review", bob, 42),
               createdVia: "cron",
-              participants: [
-                { identity: { type: "profile", id: "profile-alice" }, label: "Alice Chen" },
-              ],
+              participants: [person(alice.id, alice.label)],
               hasAutomation: true,
-              updatedAt: now - 42 * 60_000,
             },
             {
-              key: gatewayHandoffKey,
-              kind: "direct",
-              displayName: "Gateway handoff",
-              agentId: "main",
-              createdActor: {
-                type: "human",
-                id: "profile-carol",
-                identity: { type: "profile", id: "profile-carol" },
-                label: "Carol Singh",
-              },
-              owner: {
-                actor: {
-                  type: "human",
-                  id: "profile-carol",
-                  identity: { type: "profile", id: "profile-carol" },
-                  label: "Carol Singh",
-                },
-              },
+              ...session(gatewayHandoffKey, "Gateway handoff", carol, 120),
               createdVia: "cron",
               hasAutomation: true,
-              updatedAt: now - 2 * 60 * 60_000,
             },
             {
-              key: nightlyMaintenanceKey,
-              kind: "direct",
-              displayName: "Nightly mock maintenance",
-              agentId: "main",
-              createdActor: {
-                type: "human",
-                id: "profile-carol",
-                identity: { type: "profile", id: "profile-carol" },
-                label: "Carol Singh",
-              },
-              owner: {
-                actor: {
-                  type: "human",
-                  id: "profile-carol",
-                  identity: { type: "profile", id: "profile-carol" },
-                  label: "Carol Singh",
-                },
-              },
+              ...session(nightlyMaintenanceKey, "Nightly mock maintenance", carol, 180),
               createdVia: "cron",
               hasAutomation: true,
-              updatedAt: now - 3 * 60 * 60_000,
             },
-            {
-              key: incidentNotesKey,
-              kind: "direct",
-              displayName: "Incident follow-up",
-              agentId: "main",
-              createdActor: {
-                type: "human",
-                id: "profile-alice",
-                identity: { type: "profile", id: "profile-alice" },
-                label: "Alice Chen",
-              },
-              owner: {
-                actor: {
-                  type: "human",
-                  id: "profile-alice",
-                  identity: { type: "profile", id: "profile-alice" },
-                  label: "Alice Chen",
-                },
-              },
-              updatedAt: now - 50 * 60 * 60_000,
-            },
+            session(incidentNotesKey, "Incident follow-up", alice, 50 * 60),
           ],
           ts: now,
         };
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
-            {
-              self: true,
-              id: "profile-self",
-              identity: { type: "profile", id: "profile-self" },
-              name: "Operator",
-            },
-            {
-              id: "profile-alice",
-              identity: { type: "profile", id: "profile-alice" },
-              name: "Alice Chen",
+            presence("profile-self", "Operator", { self: true }),
+            presence(alice.id, alice.label, {
               email: "alice@example.test",
               host: "Alice's MacBook Pro",
               platform: "macOS 26.5",
@@ -257,32 +169,23 @@ suite.define(() => {
               ip: "203.0.113.20",
               lastInputSeconds: 32,
               watchedSessions: [releaseKey, designKey],
-            },
-            {
-              id: "profile-bob",
-              identity: { type: "profile", id: "profile-bob" },
-              name: "Bob Rivera",
+            }),
+            presence(bob.id, bob.label, {
               email: "bob@example.test",
               host: "Bob's Mac Studio",
               platform: "macOS 26.5",
               deviceFamily: "Mac",
               lastInputSeconds: 640,
               watchedSessions: [],
-            },
-            {
-              id: "profile-carol",
-              identity: { type: "profile", id: "profile-carol" },
-              name: "Carol Singh",
+            }),
+            presence(carol.id, carol.label, {
               lastInputSeconds: 14,
               watchedSessions: [releaseKey],
-            },
-            {
-              id: "profile-dan",
-              identity: { type: "profile", id: "profile-dan" },
-              name: "Dan Wu",
+            }),
+            presence("profile-dan", "Dan Wu", {
               lastInputSeconds: 70,
               watchedSessions: [designKey],
-            },
+            }),
           ],
           methodResponses: {
             "sessions.list": {
@@ -369,10 +272,7 @@ suite.define(() => {
         const peoplePopover = activityPage.locator(".activity-feed__people-popover:popover-open");
         const peoplePaint = await readThemedPopupPaint(peoplePopover, "body");
         if (proofPhase) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(outputDir, `05-people-menu-${proofPhase}.png`),
-          });
+          await capture(`05-people-menu-${proofPhase}.png`);
         }
         expect(peoplePaint.actual).toEqual(peoplePaint.expected);
         await page.keyboard.press("Escape");
@@ -425,10 +325,7 @@ suite.define(() => {
             .locator(".settings-segmented__btn")
             .evaluateAll((buttons) => buttons.map((button) => button.textContent?.trim())),
         ).toEqual(["Last 24 hours", "Last 7 days", "Last 30 days", "All time"]);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(outputDir, "05-global-activity.png"),
-        });
+        await capture("05-global-activity.png");
 
         await onlineView.click();
         await page.locator('[data-online-user-id="profile-alice"]').click();
@@ -444,10 +341,7 @@ suite.define(() => {
             activityPage.locator(".activity-feed__viewing-list .activity-feed__session").count(),
           )
           .toBe(2);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(outputDir, "06-person-activity.png"),
-        });
+        await capture("06-person-activity.png");
 
         await activityPage.locator(".activity-feed__people-clear").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
@@ -462,10 +356,7 @@ suite.define(() => {
               .count(),
           )
           .toBe(1);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(outputDir, "06-automation-creator-desktop.png"),
-        });
+        await capture("06-automation-creator-desktop.png");
 
         await activityPage.locator(".activity-feed__people-clear").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
@@ -514,11 +405,7 @@ suite.define(() => {
         await expect
           .poll(() => activityFeed.locator('[data-activity-created-via="cron"]').count())
           .toBe(2);
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(outputDir, "07-automation-creator-mobile.png"),
-        });
+        await capture("07-automation-creator-mobile.png", true);
       },
     );
   });
