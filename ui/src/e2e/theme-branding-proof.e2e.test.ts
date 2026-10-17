@@ -20,7 +20,6 @@ const artUrl = "/__openclaw__/plugin-theme-art/northstar/workspace/icon/compass?
 const artwork = { icons: { compass: { url: artUrl } } };
 const definition: ThemeDefinition = {
   name: "Northstar",
-  description: "A quiet, unbranded workspace",
   brandName: "Northstar",
   mascot: "none",
   brandIcon: "compass",
@@ -28,13 +27,7 @@ const definition: ThemeDefinition = {
   workingPhrases: [],
   lobsterdex: false,
   communityLinks: false,
-  light: createThemePaletteFixture({
-    background: "#f3f2eb",
-    foreground: "#172226",
-    primary: "#207d82",
-    accent: "#207d82",
-    "font-sans": "Instrument Sans, sans-serif",
-  }),
+  light: createThemePaletteFixture(),
   dark: createThemePaletteFixture(),
 };
 function catalog(value: ThemeDefinition) {

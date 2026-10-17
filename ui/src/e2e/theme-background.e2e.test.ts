@@ -7,6 +7,7 @@ import {
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
 import {
@@ -39,15 +40,7 @@ function themeConfig(family: ThemeName, mode: ColorMode | "system") {
     ui: { prefs: { theme: family === "claw" ? undefined : family, themeMode: mode } },
   };
   const hash = `theme-background-${family}-${mode}`;
-  return {
-    appliedConfigHash: hash,
-    config,
-    configRevisionHash: hash,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
+  return configSnapshot(config, hash, true);
 }
 
 async function changeTheme(

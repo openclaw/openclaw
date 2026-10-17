@@ -5,7 +5,9 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createThemedChatOpener, themeConfigResponse } from "./theme-typography.test-support.ts";
 
@@ -30,13 +32,10 @@ const cssToken = (page: Page, token: string) =>
 const styleToken = (page: Page, token: string) =>
   page.evaluate((key) => document.documentElement.style.getPropertyValue(key), token);
 const attribute = (page: Page, name: string) => page.locator("html").getAttribute(name);
+const ligaturesOf = (locator: Locator) =>
+  locator.evaluate((element) => getComputedStyle(element).fontVariantLigatures);
 const expectTheme = (page: Page, theme: string) =>
   expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(theme);
-const historyMessage = (role: "user" | "assistant", text: string, timestamp: number) => ({
-  role,
-  timestamp,
-  content: [{ text, type: "text" }],
-});
 
 suite.define(() => {
   it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
@@ -117,12 +116,8 @@ suite.define(() => {
   it.each(["crt", "phosphor"])(
     "paints typed operator sequences like their own value in the %s composer",
     async (theme) => {
-      const timestamp = Date.now();
       const { page } = await openThemedChat(theme, "dark", {
-        historyMessages: [
-          historyMessage("user", "say something", timestamp - 1),
-          historyMessage("assistant", "a >= b and keep ... going", timestamp),
-        ],
+        historyMessages: [historyMessage("assistant", "a >= b and keep ... going", Date.now())],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("keep");
@@ -150,24 +145,26 @@ suite.define(() => {
 
       expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);
 
-      expect(
-        await textarea.evaluate((el) =>
-          getComputedStyle(el)
-            .fontFamily.split(",")[0]
-            ?.trim()
-            .replace(/^["']|["']$/gu, ""),
-        ),
-      ).toBe("JetBrains Mono");
-      expect(
-        await page
-          .locator(".chat-text")
-          .first()
-          .evaluate((el) => getComputedStyle(el).fontVariantLigatures),
-      ).toBe("normal");
+      const family = await textarea.evaluate((el) => getComputedStyle(el).fontFamily);
+      const primaryFamily = family
+        .split(",")[0]
+        ?.trim()
+        .replace(/^["']|["']$/gu, "");
+      expect(primaryFamily).toBe("JetBrains Mono");
+      expect(await ligaturesOf(page.locator(".chat-text").first())).toBe("normal");
     },
   );
 
   it("scopes the ligature opt-out to native controls, not the file editor", async () => {
+    const file = {
+      previewKind: "text",
+      contentEncoding: "utf8",
+      content: COMPOSER_LIGATURE_SEQUENCE,
+      hash: "a".repeat(64),
+      kind: "read",
+      missing: false,
+      path: "notes.txt",
+    };
     const { gateway, page } = await openThemedChat("crt", "dark", {
       featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.set"],
       historyMessages: [
@@ -175,25 +172,7 @@ suite.define(() => {
       ],
       methodResponses: {
         "sessions.files.get": {
-          cases: [
-            {
-              match: { path: "notes.txt" },
-              response: {
-                file: {
-                  previewKind: "text",
-                  contentEncoding: "utf8",
-                  content: COMPOSER_LIGATURE_SEQUENCE,
-                  hash: "a".repeat(64),
-                  kind: "read",
-                  missing: false,
-                  name: "notes.txt",
-                  path: "notes.txt",
-                  workspacePath: "notes.txt",
-                },
-                root: "/workspace",
-              },
-            },
-          ],
+          cases: [{ match: { path: file.path }, response: { file, root: "/workspace" } }],
         },
       },
     });
@@ -209,8 +188,6 @@ suite.define(() => {
     const editableContent = page.locator('.cm-content[contenteditable="true"]');
     await editableContent.waitFor();
 
-    const ligaturesOf = (locator: Locator) =>
-      locator.evaluate((element) => getComputedStyle(element).fontVariantLigatures);
     const fileEditorLigatures = await ligaturesOf(editableContent);
     const fileLineLigatures = await ligaturesOf(page.locator(".cm-line").first());
 
@@ -268,61 +245,35 @@ suite.define(() => {
     },
   );
 
-  it("keeps system chrome with the mounted route across shell and viewport lifecycles", async () => {
+  it("keeps system chrome and mounted routing when the shell is reparented", async () => {
     const { page } = await openThemedChat("claw", "light");
     await page.setViewportSize({ width: 720, height: 900 });
     await page.goto(`${suite.server.baseUrl}chat`);
     await waitForComposer(page);
 
-    const readChrome = () =>
-      page.evaluate(() => ({
-        color: document.documentElement.style.getPropertyValue(
-          "--control-ui-system-chrome-background",
-        ),
-        metas: Array.from(
-          document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
-          (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
-        ),
-      }));
     const expectChrome = (color: string) =>
-      expect.poll(readChrome).toEqual({
-        color,
-        metas: [
-          { color, media: null },
-          { color, media: null },
-        ],
-      });
+      expect
+        .poll(() =>
+          page.evaluate(() => [
+            document.documentElement.style.getPropertyValue(
+              "--control-ui-system-chrome-background",
+            ),
+            ...Array.from(
+              document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
+              (meta) => [meta.content, meta.getAttribute("media")],
+            ),
+          ]),
+        )
+        .toEqual([color, [color, null], [color, null]]);
     const pageColor = "#faf9f7";
     const chatColor = "#f4f1ec";
     await expectChrome(chatColor);
 
-    const visitSettingsAndBack = async (returnSelector: string) => {
-      await page.locator(".shell-skip-link").focus();
-      await page.keyboard.press("ControlOrMeta+Shift+,");
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/appearance",
-        routeId: "appearance",
-      });
-      await expectChrome(pageColor);
-      await page.goBack();
-      await page.locator(returnSelector).waitFor();
-      await expectChrome(chatColor);
-    };
-    await visitSettingsAndBack(composerSelector);
+    // Boot continuity covers viewport/route transitions; this case owns reparenting.
     await page.locator(".chat-pane__nav-toggle").first().click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
-
-    for (const [width, height, color] of [
-      [1280, 900, pageColor],
-      [900, 450, chatColor],
-      [900, 900, pageColor],
-      [720, 900, chatColor],
-    ] as const) {
-      await page.setViewportSize({ width, height });
-      await expectChrome(color);
-    }
 
     const reconnect = await page.locator("openclaw-app-shell").evaluate((element) => {
       const shell = element;
@@ -330,24 +281,24 @@ suite.define(() => {
       const next = shell.nextSibling;
       const color = () =>
         document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
-      try {
-        shell.remove();
-        const removed = color();
-        parent.insertBefore(shell, next);
-        return {
-          removed,
-          reconnected: color(),
-          sameShell: document.querySelector("openclaw-app-shell") === shell,
-        };
-      } finally {
-        if (!shell.isConnected) {
-          parent.insertBefore(shell, next);
-        }
-      }
+      shell.remove();
+      const removed = color();
+      parent.insertBefore(shell, next);
+      return {
+        removed,
+        reconnected: color(),
+        sameShell: document.querySelector("openclaw-app-shell") === shell,
+      };
     });
     expect(reconnect).toEqual({ removed: chatColor, reconnected: chatColor, sameShell: true });
     await expectChrome(chatColor);
-    await visitSettingsAndBack(".new-session-page__message");
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("ControlOrMeta+Shift+,");
+    await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
+    await expectChrome(pageColor);
+    await page.goBack();
+    await page.locator(".new-session-page__message").waitFor();
+    await expectChrome(chatColor);
   });
 
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
@@ -391,12 +342,7 @@ suite.define(() => {
       const response = page.waitForResponse(tidePaletteUrl);
       releasePalette();
       await response;
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await twoFrames(page);
       expect(await attribute(page, "data-theme")).toBe("beacon-light");
       await changeTheme("tide");
       await expect.poll(() => attribute(page, "data-observed-theme-background")).toBe("#f7f9fb");

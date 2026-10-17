@@ -2,16 +2,14 @@ import { readFile } from "node:fs/promises";
 import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-  type MockGatewayControls,
-} from "../test-helpers/control-ui-e2e.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
+import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
   meetingPage,
   meetingStatus,
 } from "../test-helpers/transcripts.test-support.ts";
+import { configSnapshot, pageRunner } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Meeting transcript library mocked Gateway E2E" });
@@ -22,43 +20,28 @@ const methods = [
   "transcripts.export",
   "transcripts.status",
 ];
-function pageOptions(mobile = false) {
-  const viewport = mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 };
-  return {
-    viewport,
-    locale: "en-US",
-    serviceWorkers: "block" as const,
-    ...(mobile ? { colorScheme: "dark" as const } : {}),
-  };
-}
-function configResponse(config: unknown, hash: string) {
-  return {
-    config,
-    hash,
-    appliedConfigHash: hash,
-    raw: JSON.stringify(config),
-    valid: true,
-    issues: [],
-  };
-}
-function exportResponse(contents: string, extension: string, mimeType: string) {
-  return {
-    selector: meetingEntry.selector,
-    filename: `design-review.${extension}`,
-    mimeType,
-    encoding: "base64",
-    data: Buffer.from(contents).toString("base64"),
-    sizeBytes: Buffer.byteLength(contents),
-  };
-}
+const withPage = pageRunner(suite, {
+  viewport: { width: 1440, height: 1000 },
+  locale: "en-US",
+  serviceWorkers: "block",
+});
+const configResponse = (config: Record<string, unknown>, hash: string) => ({
+  ...configSnapshot(config, hash),
+  appliedConfigHash: hash,
+});
+const exportResponse = (contents: string, extension: string, mimeType: string) => ({
+  selector: meetingEntry.selector,
+  filename: `design-review.${extension}`,
+  mimeType,
+  encoding: "base64",
+  data: Buffer.from(contents).toString("base64"),
+  sizeBytes: Buffer.byteLength(contents),
+});
 const control = (root: Page | Locator, role: Parameters<Page["getByRole"]>[0], name: string) =>
   root.getByRole(role, { name, exact: true });
 const text = (root: Page | Locator, value: string) => root.getByText(value, { exact: true });
 const click = (root: Page | Locator, name: string) => control(root, "button", name).click();
-const transcriptCase = (match: object, response: TranscriptsGetResult = meetingPage) => ({
-  match,
-  response,
-});
+const pageCase = (match: object, response: TranscriptsGetResult) => ({ match, response });
 const transcriptPage = (utterances: TranscriptsGetResult["utterances"]) => ({
   ...meetingPage,
   utterances,
@@ -71,15 +54,10 @@ async function expectSource(gateway: MockGatewayControls, source: object & { tit
   const write = (await gateway.getRequests("config.set")).at(-1)?.params as { raw: string };
   expect(JSON.parse(write.raw).transcripts.autoStart).toEqual([source]);
 }
-async function expectDownload(
-  page: Page,
-  reader: Locator,
-  format: string,
-  extension: string,
-  contents: string,
-) {
+async function expectDownload(page: Page, format: "Markdown" | "JSONL", contents: string) {
+  const extension = format === "Markdown" ? "md" : "jsonl";
   const event = page.waitForEvent("download");
-  await click(reader, `Download ${format}`);
+  await click(control(page, "article", "Transcript reader"), `Download ${format}`);
   const download = await event;
   expect(download.suggestedFilename()).toBe(`design-review.${extension}`);
   const file = await download.path();
@@ -89,7 +67,7 @@ async function expectDownload(
 
 suite.define(() => {
   it("renders provider locators after native selection and saves a new capture source", async () => {
-    await suite.withPage(pageOptions(), async ({ page }) => {
+    await withPage(async ({ page }) => {
       const config = { transcripts: { enabled: false, autoStart: [] } };
       const gateway = await installMockGateway(page, {
         featureMethods: methods,
@@ -104,11 +82,9 @@ suite.define(() => {
       const capture = page.locator("openclaw-meeting-capture-settings");
       await click(capture, "Add source");
       const redirected = new URL(page.url());
-      expect([
-        redirected.pathname,
-        redirected.searchParams.get("advanced"),
-        redirected.hash,
-      ]).toEqual(["/settings/communications", "1", "#config-section-transcripts"]);
+      expect(redirected.pathname).toBe("/settings/communications");
+      expect(redirected.searchParams.get("advanced")).toBe("1");
+      expect(redirected.hash).toBe("#config-section-transcripts");
       const save = control(capture, "button", "Save source");
       expect(await save.isDisabled()).toBe(true);
       expect(await control(capture, "textbox", "Guild ID").count()).toBe(0);
@@ -116,14 +92,12 @@ suite.define(() => {
       await control(capture, "combobox", "Provider").selectOption("test-voice");
       const guild = control(capture, "textbox", "Guild ID");
       const channel = control(capture, "textbox", "Channel ID");
-      await guild.waitFor();
       expect(await guild.getAttribute("required")).not.toBeNull();
       expect(await channel.getAttribute("required")).not.toBeNull();
       await expect.poll(() => save.isEnabled()).toBe(true);
       await guild.fill("synthetic-guild");
       await channel.fill("synthetic-room");
       await control(capture, "textbox", "Title").fill("New capture source");
-      await save.scrollIntoViewIfNeeded();
       await save.click();
       await expectSource(gateway, {
         providerId: "test-voice",
@@ -135,12 +109,9 @@ suite.define(() => {
   });
 
   it("reads, searches, extracts, downloads and edits capture through normal navigation", async () => {
-    await suite.withPage(pageOptions(), async ({ page }) => {
-      const source = {
-        ...meetingEntry.source,
-        title: meetingEntry.title,
-        sessionId: "custom-session",
-      };
+    await withPage(async ({ page }) => {
+      const { source: locator, title, sessionId } = meetingStatus.configuredSources[0]!;
+      const source = { ...locator, title, sessionId };
       const config = { transcripts: { enabled: true, autoStart: [source] } };
       const markdown = "# Design review\n\nAvery: Keep the reader quiet and readable.\n";
       const gateway = await installMockGateway(page, {
@@ -151,14 +122,12 @@ suite.define(() => {
           "transcripts.list": { sessions: [meetingEntry], nextCursor: "list-next" },
           "transcripts.get": {
             cases: [
-              transcriptCase({ query: "quiet" }, transcriptPage(meetingPage.utterances)),
-              transcriptCase(
+              pageCase({ query: "quiet" }, transcriptPage(meetingPage.utterances)),
+              pageCase(
                 { cursor: "reader-page-2" },
-                transcriptPage([
-                  { sequence: 1, speakerLabel: "Blair", text: "The next page is readable too." },
-                ]),
+                transcriptPage([{ sequence: 1, speakerLabel: "Blair", text: "Readable page 2." }]),
               ),
-              transcriptCase({}),
+              pageCase({}, meetingPage),
             ],
           },
           "transcripts.status": meetingStatus,
@@ -187,7 +156,7 @@ suite.define(() => {
       expect(await reader.getAttribute("aria-busy")).toBe("false");
       await control(reader, "tab", "Transcript").click();
       await text(reader, "Keep the reader quiet and readable.").waitFor();
-      await text(reader, "The next page is readable too.").waitFor();
+      await text(reader, "Readable page 2.").waitFor();
       await control(reader, "searchbox", "Search within this transcript").fill("quiet");
       await click(reader, "Search");
       await expectParams(gateway, "transcripts.get", {
@@ -200,13 +169,13 @@ suite.define(() => {
       await expect
         .poll(() => reader.textContent())
         .toContain("Notes extracted using text heuristics");
-      await expectDownload(page, reader, "Markdown", "md", markdown);
+      await expectDownload(page, "Markdown", markdown);
       const jsonl = `${JSON.stringify(meetingPage.utterances![0])}\n`;
       await gateway.setMethodResponse(
         "transcripts.export",
         exportResponse(jsonl, "jsonl", "application/x-ndjson"),
       );
-      await expectDownload(page, reader, "JSONL", "jsonl", jsonl);
+      await expectDownload(page, "JSONL", jsonl);
       await gateway.setMethodResponse("transcripts.export", {
         __mockError: { code: "INVALID_REQUEST", message: "Transcript export exceeds 4 MiB" },
       });
@@ -229,36 +198,39 @@ suite.define(() => {
   });
 
   it("uses a single column on mobile, keeps text escaped, and shows restricted access", async () => {
-    await suite.withPage(pageOptions(true), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: methods,
-        methodResponses: {
-          "transcripts.list": { sessions: [meetingEntry], nextCursor: null },
-          "transcripts.get": transcriptPage([
-            { sequence: 0, text: "<script>unsafe()</script> Plain transcript text." },
-          ]),
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}meetings?selector=`);
-      await page.locator(".transcripts-library").waitFor({ state: "visible" });
-      await page.goto(
-        `${suite.server.baseUrl}meetings?tab=transcript&selector=${encodeURIComponent(meetingEntry.selector)}`,
-      );
-      const reader = control(page, "article", "Transcript reader");
-      await text(reader, "<script>unsafe()</script> Plain transcript text.").waitFor();
-      expect(await page.locator(".transcripts-library").isVisible()).toBe(false);
-      expect(await reader.locator("script").count()).toBe(0);
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-      ).toBe(true);
-      await control(reader, "link", "Back to library").click();
-      await page.locator(".transcripts-library").waitFor({ state: "visible" });
-      await gateway.setMethodResponse("transcripts.list", {
-        __mockError: { code: "FORBIDDEN", message: "Shared archive restricted" },
-      });
-      await click(page, "Refresh");
-      await control(page, "heading", "Transcript access is restricted").waitFor();
-      expect(await page.locator(".transcripts-list__entry").count()).toBe(0);
-    });
+    await withPage(
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: methods,
+          methodResponses: {
+            "transcripts.list": { sessions: [meetingEntry], nextCursor: null },
+            "transcripts.get": transcriptPage([
+              { sequence: 0, text: "<script>unsafe()</script> Plain transcript text." },
+            ]),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}meetings?selector=`);
+        await page.locator(".transcripts-library").waitFor({ state: "visible" });
+        await page.goto(
+          `${suite.server.baseUrl}meetings?tab=transcript&selector=${encodeURIComponent(meetingEntry.selector)}`,
+        );
+        const reader = control(page, "article", "Transcript reader");
+        await text(reader, "<script>unsafe()</script> Plain transcript text.").waitFor();
+        expect(await page.locator(".transcripts-library").isVisible()).toBe(false);
+        expect(await reader.locator("script").count()).toBe(0);
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        ).toBe(true);
+        await control(reader, "link", "Back to library").click();
+        await page.locator(".transcripts-library").waitFor({ state: "visible" });
+        await gateway.setMethodResponse("transcripts.list", {
+          __mockError: { code: "FORBIDDEN", message: "Shared archive restricted" },
+        });
+        await click(page, "Refresh");
+        await control(page, "heading", "Transcript access is restricted").waitFor();
+        expect(await page.locator(".transcripts-list__entry").count()).toBe(0);
+      },
+      { viewport: { width: 390, height: 844 }, colorScheme: "dark" },
+    );
   });
 });

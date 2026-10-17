@@ -6,6 +6,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI theme continuity during startup" });
@@ -68,20 +69,11 @@ function sampleThemeFrame() {
 requestAnimationFrame(sampleThemeFrame);
 `;
 
-async function settleThemeFrames(page: Page): Promise<void> {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
-  );
-}
-
 async function assertThemeFrames(
   page: Page,
   expected: { theme: string; mode: string },
 ): Promise<void> {
-  await settleThemeFrames(page);
+  await twoFrames(page);
   const { frames, stable, surfaces } = await page.evaluate(() => {
     const root = document.documentElement;
     const style = getComputedStyle(root);
@@ -183,31 +175,31 @@ async function checkStartup({
           "users.prefs.get": profileResponse,
         },
       });
-      await page.addInitScript(
-        (seed) => {
-          if (!seed.saved || sessionStorage.getItem("theme-boot-seeded")) {
-            return;
-          }
-          sessionStorage.setItem("theme-boot-seeded", "1");
-          const prefs = { theme: seed.theme, themeMode: seed.mode };
-          const gatewayUrl = seed.gatewayUrl;
-          localStorage.setItem(
-            `openclaw.control.settings.v1:${gatewayUrl}`,
-            JSON.stringify({ gatewayUrl, ...prefs }),
-          );
-          localStorage.setItem(
-            `openclaw.control.serverPrefs.v1:${gatewayUrl}:profile:${seed.profileId}`,
-            JSON.stringify(prefs),
-          );
-        },
-        {
-          gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-          theme,
-          mode,
-          saved,
-          profileId,
-        },
-      );
+      if (saved) {
+        const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
+        const prefs = { theme, themeMode: mode };
+        await page.addInitScript(
+          (entries) => {
+            if (sessionStorage.getItem("theme-boot-seeded")) {
+              return;
+            }
+            sessionStorage.setItem("theme-boot-seeded", "1");
+            for (const [key, value] of entries) {
+              localStorage.setItem(key, value);
+            }
+          },
+          [
+            [
+              `openclaw.control.settings.v1:${gatewayUrl}`,
+              JSON.stringify({ gatewayUrl, ...prefs }),
+            ],
+            [
+              `openclaw.control.serverPrefs.v1:${gatewayUrl}:profile:${profileId}`,
+              JSON.stringify(prefs),
+            ],
+          ] satisfies Array<[string, string]>,
+        );
+      }
       await page.addInitScript({ content: themeFrameObserver });
       const expectedAppearance = appearance(theme, resolvedMode);
       let appScriptsReady = Promise.resolve();
@@ -239,7 +231,7 @@ async function checkStartup({
         if (saved) {
           await gateway.waitForRequest("users.prefs.get");
           await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-          await settleThemeFrames(page);
+          await twoFrames(page);
           await gateway.resolveDeferred("users.prefs.get", profileResponse);
         }
         await ready(page);

@@ -5,6 +5,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { configSnapshot, settingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const themeCases = [
@@ -45,27 +46,15 @@ function themeConfigResponse(
     ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode, accent } },
   };
   const hash = `theme-contrast-${family}-${mode}-${accent ?? "default"}`;
-  return {
-    appliedConfigHash: hash,
-    config,
-    configRevisionHash: hash,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
+  return configSnapshot(config, hash, true);
 }
 
-async function expectCommittedConfig(
-  page: Page,
-  committed: ReturnType<typeof themeConfigResponse>,
-) {
-  await expect
+const expectCommittedConfig = (page: Page, committed: ReturnType<typeof themeConfigResponse>) =>
+  expect
     .poll(() =>
       evaluateControlUiContext(page, (context) => context.runtimeConfig.state.configSnapshot),
     )
     .toMatchObject({ config: committed.config, hash: committed.hash });
-}
 
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
   if (background.alpha !== 1) {
@@ -103,9 +92,11 @@ function expectContrast(front: RenderedColor, back: RenderedColor, label: string
 
 const suite = createControlUiE2eSuite({
   name: "Control UI browser-rendered muted theme contrast",
-  trackBrowserContexts: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is required for theme contrast proof at ${executablePath}`,
+});
+const pageOptions = (colorScheme: "dark" | "light") => ({
+  ...settingsPageOptions,
+  colorScheme,
+  viewport: { height: 900, width: 1440 },
 });
 
 suite.define(() => {
@@ -139,39 +130,22 @@ suite.define(() => {
   )(
     "keeps $resolved appearance and picker states legible (accent $accent)",
     async ({ family, mode, resolved, accent }) => {
-      const context = await suite.newBrowserContext({
-        colorScheme: mode,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      });
-      const initialFamily = family === "claw" ? "knot" : "claw";
-      await context.addInitScript(
-        ({ gatewayUrl, initialMode, initialTheme }) => {
-          localStorage.setItem(
-            `openclaw.control.settings.v1:${gatewayUrl}`,
-            JSON.stringify({ gatewayUrl, theme: initialTheme, themeMode: initialMode }),
-          );
-        },
-        {
-          gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-          initialMode: mode,
-          initialTheme: initialFamily,
-        },
-      );
-
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "config.get": themeConfigResponse(initialFamily, mode, accent),
-        },
-      });
-
-      try {
+      await suite.withPage(pageOptions(mode), async ({ page, context }) => {
+        const initialFamily = family === "claw" ? "knot" : "claw";
+        const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
+        const preferences = { gatewayUrl, theme: initialFamily, themeMode: mode };
+        await context.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+          key: `openclaw.control.settings.v1:${gatewayUrl}`,
+          value: JSON.stringify(preferences),
+        });
+        const initial = themeConfigResponse(initialFamily, mode, accent);
+        const methodResponses = { "config.get": initial };
+        const gateway = await installMockGateway(page, { methodResponses });
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
         expect(response?.status()).toBe(200);
 
         const selectedCard = page.locator(`.settings-theme-card--${family}`);
+        const root = page.locator("html");
         await selectedCard.waitFor({ state: "visible" });
         await gateway.waitForRequest("config.get");
         const initialConfigGets = (await gateway.getRequests("config.get")).length;
@@ -186,8 +160,8 @@ suite.define(() => {
         });
 
         const selection = async () => ({
-          theme: await page.locator("html").getAttribute("data-theme"),
-          mode: await page.locator("html").getAttribute("data-theme-mode"),
+          theme: await root.getAttribute("data-theme"),
+          mode: await root.getAttribute("data-theme-mode"),
           active: (await selectedCard.getAttribute("class"))?.includes(
             "settings-theme-card--active",
           ),
@@ -201,8 +175,7 @@ suite.define(() => {
 
         await expect.poll(selection).toEqual({ theme: resolved, mode, active: true });
 
-        // Reapply each extreme through the real picker after theme defaults,
-        // rather than accidentally dropping custom-accent contrast coverage.
+        // Reapply the custom accent cleared by the theme selection.
         if (accent) {
           const accentCommitted = themeConfigResponse(family, mode, accent);
           await gateway.setMethodResponse("config.get", accentCommitted);
@@ -223,8 +196,7 @@ suite.define(() => {
             .toBe(accent);
         }
 
-        const visibleDescription = page.locator(".settings-section__desc").first();
-        await visibleDescription.waitFor({ state: "visible" });
+        await page.locator(".settings-section__desc").first().waitFor({ state: "visible" });
 
         const rendered = await page.evaluate(
           ({ foregroundNames, surfaceNames }) => {
@@ -282,15 +254,9 @@ suite.define(() => {
           descriptionBackground = compositeColor(colors[`layer-${index}`]!, descriptionBackground);
         }
         const descriptionColor = colors.description!;
-        const descriptionForeground = compositeColor(
-          {
-            ...descriptionColor,
-            alpha: descriptionColor.alpha * rendered.descriptionOpacity,
-          },
-          descriptionBackground,
-        );
+        descriptionColor.alpha *= rendered.descriptionOpacity;
         expectContrast(
-          descriptionForeground,
+          compositeColor(descriptionColor, descriptionBackground),
           descriptionBackground,
           `${resolved}: rendered Appearance description`,
         );
@@ -304,13 +270,15 @@ suite.define(() => {
           return option.evaluate((element) => {
             const style = getComputedStyle(element);
             return {
-              background: style.backgroundColor,
-              label: getComputedStyle(element.querySelector(".picker-select__label")!).color,
-              description: getComputedStyle(element.querySelector(".picker-select__description")!)
-                .color,
+              colors: {
+                background: style.backgroundColor,
+                label: getComputedStyle(element.querySelector(".picker-select__label")!).color,
+                description: getComputedStyle(element.querySelector(".picker-select__description")!)
+                  .color,
+                outline: style.outlineColor,
+              },
               outline: style.outlineStyle,
               outlineWidth: Number.parseFloat(style.outlineWidth),
-              outlineColor: style.outlineColor,
             };
           });
         };
@@ -321,11 +289,8 @@ suite.define(() => {
         const assertOptionContrast = async (option: typeof selected) => {
           const paint = await optionPaint(option);
           const optionColors = await page.evaluate(resolveRenderedColors, {
-            background: paint.background,
+            ...paint.colors,
             listbox: listboxBackground,
-            label: paint.label,
-            description: paint.description,
-            outline: paint.outlineColor,
           });
           const background = compositeColor(optionColors.background!, optionColors.listbox!);
           for (const text of [optionColors.label!, optionColors.description!]) {
@@ -340,8 +305,8 @@ suite.define(() => {
         await expect.poll(() => current.getAttribute("data-value")).not.toBe(selectedValue);
         expect(await selected.getAttribute("data-value")).toBe(selectedValue);
         await expect
-          .poll(async () => (await optionPaint(selected)).background)
-          .toBe(initialPaint.background);
+          .poll(async () => (await optionPaint(selected)).colors.background)
+          .toBe(initialPaint.colors.background);
         await assertOptionContrast(selected);
         const focused = await assertOptionContrast(current);
         expect(focused.paint.outline).not.toBe("none");
@@ -353,9 +318,7 @@ suite.define(() => {
         expect(new URL(page.url()).pathname).toBe("/settings/appearance");
         expect(await pickerValue(picker)).toBe(selectedValue);
         expect(await gateway.getRequests("config.get")).toHaveLength(initialConfigGets);
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     },
   );
 });
