@@ -49,6 +49,7 @@ vi.mock("./update-command-schema.js", () => ({
   preflightUpdateCommandSchemas: async () => ({ preflightNotes: [], preflightFailures: [] }),
   captureUpdateActivationSchemas: async () => ({}),
 }));
+// mock-isolation: Native-stop fixtures bypass database admission rather than inspect operator stores.
 vi.mock("./update-command-database-context.js", () => ({
   inspectUpdateDatabaseContexts: async (): ReturnType<
     typeof import("./update-command-database-context.js").inspectUpdateDatabaseContexts
