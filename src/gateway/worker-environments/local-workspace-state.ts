@@ -125,7 +125,7 @@ export function projectionOperations(
           : undefined,
     });
   };
-  const capture = async (target: Direction) => {
+  const capture = async (target: Direction, preserveDirectories?: ReadonlySet<string>) => {
     const selected = current();
     const root = sourcePath(target);
     await assertOwnedDirectory(root);
@@ -137,6 +137,7 @@ export function projectionOperations(
       root,
       baseCommit: selected.base_commit,
       includePaths,
+      preserveDirectories,
       signal,
     });
     current();
@@ -567,8 +568,16 @@ export function projectionOperations(
           };
         }
       }
-      if (accepted && (await capture("canonical")).manifestRef !== accepted.ref) {
-        throw new Error("Local sandbox has unaccepted edits; restore its worktree before cleanup");
+      if (accepted) {
+        // Authenticate the retained bytes, then compare eligible content under
+        // today's exclusions without changing the immutable receipt identity.
+        const acceptedManifest = parseWorkerWorkspaceManifest(accepted.raw, accepted.ref);
+        const actual = await capture("canonical", new Set(acceptedManifest.directories));
+        if (actual.rawManifest !== serializeWorkerWorkspaceManifest(acceptedManifest)) {
+          throw new Error(
+            "Local sandbox has unaccepted edits; restore its worktree before cleanup",
+          );
+        }
       }
       const { readLocalWorkspaceRuntimes } =
         await import("../../agents/sandbox/local-workspace-quiescence.js");

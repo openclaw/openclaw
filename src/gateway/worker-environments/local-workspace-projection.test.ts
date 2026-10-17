@@ -159,6 +159,12 @@ describe("local sandbox workspace reconciliation", () => {
     },
   );
 
+  it("expires an old runtime-file baseline while preserving unaccepted source", async () => {
+    const { proveGeneratedWorkspaceExpiry } =
+      await import("./local-workspace-generated-paths.test-support.js");
+    await proveGeneratedWorkspaceExpiry(owner);
+  });
+
   it("settles stopped commands without admitting new work or a replacement session", async () => {
     const { proveStoppedLocalWorkspaceCheckpoint } =
       await import("./local-workspace-cancellation.test-support.js");

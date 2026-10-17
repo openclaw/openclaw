@@ -30,6 +30,37 @@ function legacyManifest(manifest: WorkerWorkspaceManifest) {
   return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
 }
 
+export async function proveGeneratedWorkspaceExpiry(owner: LocalWorkspaceOwner) {
+  const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  await writeWorkspaceFiles(projection, {
+    ".cache/vitest/results.json": "old cache",
+    ".artifacts/dist-artifacts.lock/owner.json": "old owner",
+  });
+  const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;
+  const legacy = legacyManifest({
+    ...(await manifestFor(projection)),
+    baseCommit: row.base_commit,
+  });
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    await store.update(store.get()!, { baseline_json: legacy.raw, baseline_ref: legacy.ref });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  await fs.writeFile(path.join(projection, ".cache/vitest/results.json"), "new cache");
+  await fs.rm(path.join(projection, ".artifacts/dist-artifacts.lock"), { recursive: true });
+  await fs.writeFile(path.join(projection, "source.txt"), "unaccepted source");
+  await expect(withLocalWorkspaceProjection(owner, (state) => state.expire())).rejects.toThrow(
+    "unaccepted edits",
+  );
+  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeDefined();
+  await fs.writeFile(path.join(projection, "source.txt"), "original\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.expire());
+  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
+  await expect(fs.stat(projection)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await fs.readFile(path.join(owner.worktree.path, ".env.local"), "utf8")).toBe(
+    "host-only-secret",
+  );
+}
+
 export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner, copied: boolean) {
   const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
   const cache = ".cache/vitest/results.json";
