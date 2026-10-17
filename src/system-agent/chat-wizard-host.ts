@@ -27,6 +27,8 @@ type SystemAgentChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 export type SystemAgentChatReply = {
   text: string;
   action: SystemAgentChatReplyAction;
+  /** Host history must not retain the original input of a refused run. */
+  policyBlocked?: true;
   applied?: boolean;
   agentDraft?: "hatch";
   sensitive?: boolean;
