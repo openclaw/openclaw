@@ -196,7 +196,7 @@ async function reconcileRecoveryCursorToWatermark(
 export async function loadIMessageRecoveryCursor(
   accountId: string,
   dbIdentity: string,
-  options: { migrateLegacyCatchup?: boolean; watermarkRowid?: number | null } = {},
+  options: { watermarkRowid?: number | null } = {},
 ): Promise<number | null> {
   const watermarkRowid =
     typeof options.watermarkRowid === "number" && Number.isFinite(options.watermarkRowid)
@@ -205,9 +205,6 @@ export async function loadIMessageRecoveryCursor(
   const current = await readRecoveryCursor(accountId, dbIdentity);
   if (current !== null) {
     return await reconcileRecoveryCursorToWatermark(accountId, dbIdentity, current, watermarkRowid);
-  }
-  if (options.migrateLegacyCatchup === false) {
-    return null;
   }
   return await reconcileRecoveryCursorToWatermark(
     accountId,

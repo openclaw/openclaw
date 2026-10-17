@@ -70,10 +70,15 @@ describe("registered iMessage account startup", () => {
     }
   }
 
-  function startAccount() {
+  function startAccount(catchupEnabled = false) {
     const cfg: OpenClawConfig = {
       channels: {
-        imessage: { cliPath: path.join(stateDir, "synthetic-imsg"), dbPath, dmPolicy: "disabled" },
+        imessage: {
+          cliPath: path.join(stateDir, "synthetic-imsg"),
+          dbPath,
+          dmPolicy: "disabled",
+          ...(catchupEnabled ? { catchup: { enabled: true } } : {}),
+        },
       },
     };
     const account = resolveIMessageAccount({ cfg, accountId: "default" });
@@ -81,6 +86,9 @@ describe("registered iMessage account startup", () => {
     const request = vi.spyOn(client, "request").mockImplementation(async (method) => {
       if (method === "watch.subscribe") {
         return { subscription: 1 };
+      }
+      if (method === "chats.list") {
+        return { chats: [] };
       }
       throw new Error(`unexpected bridge method ${method}`);
     });
@@ -190,6 +198,30 @@ describe("registered iMessage account startup", () => {
       );
     },
   );
+
+  it("starts compatibility catchup when its unused recovery cursor is unavailable", async () => {
+    seedChatDb();
+    const state = getIMessageRuntime().state;
+    const open = state.openKeyedStoreV2.bind(state);
+    vi.spyOn(state, "openKeyedStoreV2").mockImplementation(
+      <T>(options: OpenAsyncKeyedStoreOptions) => {
+        if (options.namespace === "imessage.recovery-cursor") {
+          throw new Error("synthetic unused recovery cursor unavailable");
+        }
+        return open<T>(options);
+      },
+    );
+
+    const { request, starting } = startAccount(true);
+    await starting;
+
+    expect(request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true },
+      expect.any(Object),
+    );
+    expect(request).toHaveBeenCalledWith("chats.list", expect.any(Object), expect.any(Object));
+  });
 
   it("joins startup watermark cleanup before probing or subscribing", async () => {
     seedChatDb();

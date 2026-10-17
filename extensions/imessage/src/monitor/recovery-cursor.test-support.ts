@@ -69,9 +69,7 @@ describe("iMessage recovery cursor", () => {
     // A high-water from db-a must not seed since_rowid after repointing to db-b,
     // or every lower rowid in db-b is silently suppressed forever.
     await advanceIMessageRecoveryCursor("default", DB, 12396);
-    expect(
-      await loadIMessageRecoveryCursor("default", DB_B, { migrateLegacyCatchup: false }),
-    ).toBeNull();
+    expect(await loadIMessageRecoveryCursor("default", DB_B)).toBeNull();
     // The original database still reports its cursor.
     expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
   });
@@ -89,13 +87,9 @@ describe("iMessage recovery cursor", () => {
     writeLegacyRecoveryCursor("default", 12396);
     // Upgrade restart: the identity-less cursor is adopted for the active
     // database so downtime replay still works (not dropped to the watermark).
-    expect(await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(
-      12396,
-    );
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
     // It is consumed and re-scoped, so a different database does not inherit it.
-    expect(
-      await loadIMessageRecoveryCursor("default", DB_B, { migrateLegacyCatchup: false }),
-    ).toBeNull();
+    expect(await loadIMessageRecoveryCursor("default", DB_B)).toBeNull();
     // The adopted database keeps it across reloads.
     expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
   });
@@ -104,13 +98,10 @@ describe("iMessage recovery cursor", () => {
     await advanceIMessageRecoveryCursor("default", DB, 9000);
     expect(
       await loadIMessageRecoveryCursor("default", DB, {
-        migrateLegacyCatchup: false,
         watermarkRowid: 5,
       }),
     ).toBe(5);
-    expect(await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(
-      5,
-    );
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(5);
     await advanceIMessageRecoveryCursor("default", DB, 6);
     expect(await loadIMessageRecoveryCursor("default", DB)).toBe(6);
   });
@@ -119,13 +110,10 @@ describe("iMessage recovery cursor", () => {
     await advanceIMessageRecoveryCursor("default", DB, 9000);
     expect(
       await loadIMessageRecoveryCursor("default", DB, {
-        migrateLegacyCatchup: false,
         watermarkRowid: 0,
       }),
     ).toBe(0);
-    expect(await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false })).toBe(
-      0,
-    );
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(0);
     await advanceIMessageRecoveryCursor("default", DB, 1);
     expect(await loadIMessageRecoveryCursor("default", DB)).toBe(1);
   });
@@ -154,14 +142,6 @@ describe("iMessage recovery cursor", () => {
     expect(await loadIMessageRecoveryCursor("default", DB)).toBe(4321);
     // The legacy entry is consumed and the value is now the recovery cursor, so
     // a later load still returns it without re-reading the legacy store.
-    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(4321);
-  });
-
-  it("can skip legacy catchup cursor migration when compatibility catchup still owns it", async () => {
-    writeLegacyCatchupCursor("default", 4321);
-    expect(
-      await loadIMessageRecoveryCursor("default", DB, { migrateLegacyCatchup: false }),
-    ).toBeNull();
     expect(await loadIMessageRecoveryCursor("default", DB)).toBe(4321);
   });
 
