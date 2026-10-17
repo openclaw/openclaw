@@ -306,10 +306,10 @@ describe("memory wiki source sync state", () => {
       await fs.writeFile(pageAbsPath, invalidPage);
       const state = createImportedSourceState(pagePath, group);
       const entry = state.entries["sync-key"];
-      const prune = () =>
+      const prunePage = () =>
         pruneImportedSourceEntries({ vaultRoot, group, activeKeys: new Set<string>(), state });
 
-      await expect(prune()).resolves.toBe(0);
+      await expect(prunePage()).resolves.toBe(0);
       await expect(fs.readFile(pageAbsPath)).resolves.toEqual(invalidPage);
       expect(state.entries["sync-key"]).toBe(entry);
       await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
@@ -317,7 +317,7 @@ describe("memory wiki source sync state", () => {
       });
 
       await fs.writeFile(pageAbsPath, validPage);
-      await expect(prune()).resolves.toBe(1);
+      await expect(prunePage()).resolves.toBe(1);
       expect(state.entries["sync-key"]).toBeUndefined();
       await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
