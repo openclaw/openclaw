@@ -27,6 +27,18 @@ const recordSchema = z.record(z.string(), z.unknown());
 const hostInfo = { name: "OpenClaw", version: "test" };
 const requestRecord = (app: App, method: string, params: Record<string, unknown>) =>
   app.request({ method, params }, recordSchema);
+function acceptEvent<T extends { respond: (accepted: boolean) => void }>(
+  element: HTMLElement,
+  type: string,
+  received: (detail: T) => void,
+) {
+  element.addEventListener(type, (event) => {
+    event.preventDefault();
+    const detail = (event as CustomEvent<T>).detail;
+    received(detail);
+    detail.respond(true);
+  });
+}
 
 function createBridgePair(
   capabilities: ReturnType<typeof buildMcpAppHostCapabilities>,
@@ -82,12 +94,7 @@ it("confirms file paths in the pane before requesting or opening a file", async 
   });
   const request = vi.fn(async () => ({ path: "/workspace/parts.txt", name: "parts.txt" }));
   const opened = vi.fn();
-  root.addEventListener(MCP_APP_FILE_OPEN_EVENT, (event) => {
-    event.preventDefault();
-    const detail = (event as CustomEvent<McpAppFileOpenEventDetail>).detail;
-    opened(detail);
-    detail.respond(true);
-  });
+  acceptEvent<McpAppFileOpenEventDetail>(root, MCP_APP_FILE_OPEN_EVENT, opened);
   bindMcpAppResourceHandlers({
     bridge,
     request,
@@ -171,12 +178,7 @@ it("negotiates extension capabilities and preserves rich request metadata over t
   frame.checkVisibility = () => true;
   Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
   const received = vi.fn();
-  frame.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
-    event.preventDefault();
-    const detail = (event as CustomEvent<McpAppMessageEventDetail>).detail;
-    received(detail);
-    detail.respond(true);
-  });
+  acceptEvent<McpAppMessageEventDetail>(frame, MCP_APP_MESSAGE_EVENT, received);
   bridge.setMessageHandler(async (params) =>
     (await dispatchMcpAppMessage(frame, { sessionKey: "one", viewId: "app" }, params, () => true))
       ? {}
@@ -190,8 +192,12 @@ it("negotiates extension capabilities and preserves rich request metadata over t
   bridge.setHostRequestHandler("openai/resources/write", writes);
   await connect();
   // The installed stable SDK helper omits extension metadata; exercise the documented wire method.
-  const sendMessage = (params: Parameters<typeof dispatchMcpAppMessage>[2]) =>
-    app.request({ method: "ui/message", params }, z.object({ isError: z.boolean().optional() }));
+  type Message = Parameters<typeof dispatchMcpAppMessage>[2];
+  const sendMessage = (content: Message["content"], _meta?: Message["_meta"]) =>
+    app.request(
+      { method: "ui/message", params: { role: "user", content, _meta } },
+      z.object({ isError: z.boolean().optional() }),
+    );
   try {
     expect(app.getHostCapabilities()?.experimental).toMatchObject({
       "openai/modelContext": {},
@@ -230,36 +236,25 @@ it("negotiates extension capabilities and preserves rich request metadata over t
       },
       { type: "image" as const, data: "AA==", mimeType: "image/png" },
     ];
-    const result = await app.updateModelContext({ content, structuredContent: { selected: 1 } });
+    const selection = { content, structuredContent: { selected: 1 } };
+    const result = await app.updateModelContext(selection);
     expect(result).toMatchObject({ _meta: { "openai/modelContext": { updateId: "update-1" } } });
-    expect(context.mock.calls[0]?.[0]).toMatchObject({
-      content,
-      structuredContent: { selected: 1 },
-    });
-    await sendMessage({
-      role: "user",
-      content,
-      _meta: { "openai/message": { target: "new" } },
-    });
+    expect(context.mock.calls[0]?.[0]).toMatchObject(selection);
+    await sendMessage(content, { "openai/message": { target: "new" } });
     expect(received).toHaveBeenCalledWith(expect.objectContaining({ target: "new", content }));
     for (const options of [null, [], 1, { target: "other" }, { send: false }]) {
       expect(
-        await sendMessage({
-          role: "user",
-          content: [{ type: "text", text: "invalid options" }],
-          _meta: { "openai/message": options },
+        await sendMessage([{ type: "text", text: "invalid options" }], {
+          "openai/message": options,
         }),
       ).toEqual({ isError: true });
     }
     for (const command of ["/reset", "!pwd"]) {
       expect(
-        await sendMessage({
-          role: "user",
-          content: [
-            { type: "text", text: "Harmless attachment", _meta: { "openai/title": "Note" } },
-            { type: "text", text: "  " + command },
-          ],
-        }),
+        await sendMessage([
+          { type: "text", text: "Harmless attachment", _meta: { "openai/title": "Note" } },
+          { type: "text", text: "  " + command },
+        ]),
       ).toEqual({ isError: true });
     }
     expect(received).toHaveBeenCalledTimes(1);

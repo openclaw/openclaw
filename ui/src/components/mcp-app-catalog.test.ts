@@ -21,20 +21,30 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-const result: McpAppDiscoverResult = {
-  servers: [
-    {
-      serverName: "parts",
-      label: "Parts plugin",
-      entrypoints: [
-        makeEntry("Parts tray", "tray", "thread"),
-        makeEntry("Library", "library", "global"),
-      ],
-    },
+const server = {
+  serverName: "parts",
+  label: "Parts plugin",
+  entrypoints: [
+    makeEntry("Parts tray", "tray", "thread"),
+    makeEntry("Library", "library", "global"),
   ],
 };
+const result: McpAppDiscoverResult = { servers: [server] };
+const target = { sessionKey: "agent:main:one", agentId: "main" };
+const mainTarget = { sessionKey: "agent:main:main", agentId: "main" };
+const mainReference = { key: mainTarget.sessionKey, agentId: mainTarget.agentId };
 function makeEntry(title: string, toolName: string, type: "thread" | "global") {
   return { title, toolName, resourceUri: `ui://parts/${toolName}`, entrypoint: { type } };
+}
+function reviseServer(value: typeof server, suffix: string, prefix = "") {
+  return {
+    ...value,
+    entrypoints: value.entrypoints.map((entry) => ({
+      ...entry,
+      title: prefix + entry.title,
+      resourceUri: entry.resourceUri + suffix,
+    })),
+  };
 }
 
 function gatewayContext(request: ReturnType<typeof vi.fn>, scopes = ["operator.admin"]) {
@@ -120,6 +130,13 @@ function clickButton(element: HTMLElement, text: string) {
   expect(button).toBeDefined();
   button!.click();
 }
+const expectLaunch = (container: HTMLElement, sessionKey: string, resourceUri: string) =>
+  waitForSolid(() =>
+    expect(container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
+      sessionKey,
+      entrypoint: { resourceUri },
+    }),
+  );
 
 describe("app launch catalog", () => {
   it("waits for the new session's discovery before retaining an Apps page launch", async () => {
@@ -148,31 +165,13 @@ describe("app launch catalog", () => {
     try {
       await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
       first.resolve(result);
-      await waitForSolid(() =>
-        expect(container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
-          sessionKey: "agent:main:one",
-          entrypoint: { resourceUri: "ui://parts/library" },
-        }),
-      );
+      await expectLaunch(container, target.sessionKey, "ui://parts/library");
       publish({ ...gateway.snapshot, sessionKey: "agent:main:two" });
       flush();
       expect(container.querySelector("openclaw-chat-pane")).toBeNull();
       await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-      second.resolve({
-        servers: result.servers.map((server) => ({
-          ...server,
-          entrypoints: server.entrypoints.map((entry) => ({
-            ...entry,
-            resourceUri: `${entry.resourceUri}-second`,
-          })),
-        })),
-      });
-      await waitForSolid(() =>
-        expect(container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
-          sessionKey: "agent:main:two",
-          entrypoint: { resourceUri: "ui://parts/library-second" },
-        }),
-      );
+      second.resolve({ servers: [reviseServer(server, "-second")] });
+      await expectLaunch(container, "agent:main:two", "ui://parts/library-second");
     } finally {
       unmount();
     }
@@ -203,22 +202,18 @@ describe("app launch catalog", () => {
     const resources = document.createElement("openclaw-mcp-app-resources");
     const elements = [sidebar, thread, resources];
     for (const element of elements) {
-      element.sessionKey = "agent:main:one";
-      element.agentId = "main";
+      Object.assign(element, target);
       appendElement(element, context);
       await element.updateComplete;
     }
-    expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-    });
+    expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", target);
 
     emitConfigChanged(events);
     expect(request).toHaveBeenCalledOnce();
-    const server = {
-      ...result.servers[0]!,
+    const alternates = {
+      ...server,
       mentionTool: "search",
-      entrypoints: result.servers[0]!.entrypoints.flatMap((entry) => [
+      entrypoints: server.entrypoints.flatMap((entry) => [
         entry,
         {
           ...entry,
@@ -227,7 +222,7 @@ describe("app launch catalog", () => {
         },
       ]),
     };
-    current.resolve({ servers: [server] });
+    current.resolve({ servers: [alternates] });
     await current.promise;
     for (const element of elements) {
       await element.updateComplete;
@@ -251,14 +246,8 @@ describe("app launch catalog", () => {
     refreshed.resolve({
       servers: [
         {
-          ...server,
+          ...reviseServer(alternates, "-updated", "Updated "),
           label: "Updated parts plugin",
-          entrypoints: server.entrypoints.map((entry) =>
-            Object.assign({}, entry, {
-              title: `Updated ${entry.title}`,
-              resourceUri: `${entry.resourceUri}-updated`,
-            }),
-          ),
         },
       ],
     });
@@ -379,17 +368,11 @@ describe("app launch catalog", () => {
     });
     const { context: base, events: configChanged } = gatewayContext(request);
     const describeSession = vi.fn(async () => ({ session: null }));
+    Object.assign(base.gateway.snapshot, { sessionKey: "agent:main:main" });
+    Object.assign(base.gateway, { connection: { gatewayUrl: "ws://gateway.example.test" } });
     // SAFETY: The fixture supplies the capabilities exercised by Apps and discovery.
     const context = {
       ...base,
-      gateway: {
-        ...base.gateway,
-        snapshot: {
-          ...base.gateway.snapshot,
-          sessionKey: "agent:main:main",
-        },
-        connection: { gatewayUrl: "ws://gateway.example.test" },
-      },
       sessions: {
         createResult,
         state: { error: null },
@@ -409,24 +392,17 @@ describe("app launch catalog", () => {
     await catalog.updateComplete;
     await catalog.updateComplete;
     await catalog.updateComplete;
-    expect(createResult).toHaveBeenCalledExactlyOnceWith(
-      { key: "agent:main:main", agentId: "main" },
-      { reconciliation: "background" },
-    );
-    expect(request).toHaveBeenCalledWith("mcp.app.discover", {
-      sessionKey: "agent:main:main",
-      agentId: "main",
+    expect(createResult).toHaveBeenCalledExactlyOnceWith(mainReference, {
+      reconciliation: "background",
     });
+    expect(request).toHaveBeenCalledWith("mcp.app.discover", mainTarget);
     flush();
     await waitForSolid(() => expect(element.textContent).toContain("Library"));
     expect(element.querySelector('[role="alert"]')).toBeNull();
     emitConfigChanged(configChanged);
     await catalog.updateComplete;
     flush();
-    expect(describeSession).toHaveBeenCalledExactlyOnceWith({
-      key: "agent:main:main",
-      agentId: "main",
-    });
+    expect(describeSession).toHaveBeenCalledExactlyOnceWith(mainReference);
     expect(createResult).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -498,16 +474,8 @@ describe("app launch catalog", () => {
     const request = vi.fn(() => read.promise);
     const { context } = gatewayContext(request);
     const { client } = context.gateway.snapshot;
-    const element = mountCatalog(
-      {
-        ...context,
-        gateway: {
-          ...context.gateway,
-          snapshot: { ...context.gateway.snapshot, sessionKey: "agent:main:one" },
-        },
-      },
-      { surface: "thread", agentId: "main" },
-    );
+    Object.assign(context.gateway.snapshot, { sessionKey: target.sessionKey });
+    const element = mountCatalog(context, { surface: "thread", agentId: target.agentId });
     await element.updateComplete;
     read.resolve(result);
     await read.promise;
@@ -518,14 +486,11 @@ describe("app launch catalog", () => {
     element.addEventListener(MCP_APP_OPEN_EVENT, launch);
     clickButton(element, "Parts tray");
     expect((launch.mock.calls[0]![0] as CustomEvent<McpAppOpenDetail>).detail).toMatchObject({
-      sessionKey: "agent:main:one",
-      agentId: "main",
+      ...target,
       serverName: "parts",
       owner: client,
       entrypoint: { toolName: "tray" },
     });
-    expect(request.mock.calls).toEqual([
-      ["mcp.app.discover", { sessionKey: "agent:main:one", agentId: "main" }],
-    ]);
+    expect(request.mock.calls).toEqual([["mcp.app.discover", target]]);
   });
 });

@@ -19,23 +19,16 @@ const restoreProperties: Array<() => void> = [];
 
 function stubProperty(target: object, key: PropertyKey, value: unknown) {
   const descriptor = Object.getOwnPropertyDescriptor(target, key);
-  restoreProperties.push(() => {
-    if (descriptor) {
-      Object.defineProperty(target, key, descriptor);
-    } else {
-      Reflect.deleteProperty(target, key);
-    }
-  });
+  restoreProperties.push(() =>
+    descriptor
+      ? Object.defineProperty(target, key, descriptor)
+      : Reflect.deleteProperty(target, key),
+  );
   Object.defineProperty(target, key, { configurable: true, value });
 }
 
-const markdown = `Open agent:main:dashboard:table
-
-<progress value="3" max="7"></progress>
-
-| Name | Value |
-| --- | --- |
-| Alpha | One |`;
+const table = "| Name | Value |\n| --- | --- |\n| Alpha | One |";
+const markdown = `Open agent:main:dashboard:table\n\n<progress value="3" max="7"></progress>\n\n${table}`;
 
 const MutationObserverMock = vi.fn(function (_callback: MutationCallback) {
   return { disconnect: vi.fn(), observe: vi.fn() };
@@ -51,16 +44,18 @@ function deliverTableResize(target: HTMLElement): void {
 }
 
 const renderOptions = { progressBars: true, sessionLinks: true };
-function interactiveOwner(content = markdown) {
+const interactiveOptions = { ...renderOptions, tableInteractions: "enabled" as const };
+function query<T extends HTMLElement = HTMLElement>(owner: ParentNode, selector: string) {
+  return owner.querySelector<T>(selector)!;
+}
+
+function interactiveOwner(content = table) {
   const owner = document.createElement("div");
   owner.className = "chat-thread";
-  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, {
-    ...renderOptions,
-    tableInteractions: "enabled",
-  })}</div>`;
+  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, interactiveOptions)}</div>`;
   document.body.append(owner);
-  const shell = owner.querySelector<HTMLElement>(".markdown-table")!;
-  const viewport = owner.querySelector<HTMLElement>(".markdown-table__viewport")!;
+  const shell = query(owner, ".markdown-table");
+  const viewport = query(owner, ".markdown-table__viewport");
   Object.defineProperties(viewport, {
     clientWidth: { configurable: true, value: 100 },
     scrollLeft: { configurable: true, value: 0, writable: true },
@@ -73,12 +68,13 @@ function interactiveOwner(content = markdown) {
     owner,
     shell,
     viewport,
-    expand: owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!,
+    expand: query<HTMLButtonElement>(owner, ".markdown-table__expand"),
+    copy: query<HTMLButtonElement>(owner, ".markdown-table__copy"),
   };
 }
 
 async function openTable(owner: HTMLElement) {
-  owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!.click();
+  query<HTMLButtonElement>(owner, ".markdown-table__expand").click();
   return waitForRenderedModalDialog(owner);
 }
 
@@ -121,11 +117,7 @@ describe("Markdown table interactions", () => {
 
   it("composes table chrome with session links and progress markup", () => {
     const disabled = toSanitizedMarkdownHtml(markdown, renderOptions);
-    const enabled = toSanitizedMarkdownHtml(markdown, {
-      ...renderOptions,
-      tableInteractions: "enabled",
-    });
-
+    const enabled = toSanitizedMarkdownHtml(markdown, interactiveOptions);
     expect(disabled).not.toContain("data-table-interactions");
     expect(enabled).toContain("data-table-interactions");
     expect(enabled).toContain('data-session-key="agent:main:dashboard:table"');
@@ -134,17 +126,19 @@ describe("Markdown table interactions", () => {
 
   it("tracks hidden columns in both scroll directions", () => {
     const { shell, viewport } = interactiveOwner();
-
-    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
-    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
-    viewport.scrollLeft = 100;
-    viewport.dispatchEvent(new Event("scroll"));
-    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(true);
-    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
-    viewport.scrollLeft = 200;
-    viewport.dispatchEvent(new Event("scroll"));
-    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(true);
-    expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+    const canScroll = (side: string) =>
+      shell.classList.contains(`markdown-table--can-scroll-${side}`);
+    for (const [offset, left, right] of [
+      [0, false, true],
+      [100, true, true],
+      [200, true, false],
+    ] as const) {
+      viewport.scrollLeft = offset;
+      if (offset) {
+        viewport.dispatchEvent(new Event("scroll"));
+      }
+      expect([canScroll("left"), canScroll("right")]).toEqual([left, right]);
+    }
   });
 
   it.each([true, false])(
@@ -154,14 +148,11 @@ describe("Markdown table interactions", () => {
       if (!observed) {
         Reflect.deleteProperty(globalThis, "ResizeObserver");
       }
-      const { owner, shell, viewport } = interactiveOwner(`${markdown}\n\n${markdown}`);
+      const { owner, shell, viewport } = interactiveOwner(`${table}\n\n${table}`);
       const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
       const otherWidth = vi.fn(() => 300);
       const changedWidth = vi.fn(() => 100);
-      Object.defineProperty(otherViewport, "scrollWidth", {
-        configurable: true,
-        get: otherWidth,
-      });
+      Object.defineProperty(otherViewport, "scrollWidth", { configurable: true, get: otherWidth });
       Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
 
       try {
@@ -178,9 +169,7 @@ describe("Markdown table interactions", () => {
         expect(otherWidth).not.toHaveBeenCalled();
 
         changedWidth.mockClear();
-        shell
-          .querySelector(".markdown-table__copy")!
-          .replaceChildren(document.createElement("span"));
+        query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
         await Promise.resolve();
         await Promise.resolve();
         expect(changedWidth).not.toHaveBeenCalled();
@@ -195,8 +184,7 @@ describe("Markdown table interactions", () => {
     vi.useFakeTimers();
     const legacyCopy = vi.fn(() => false);
     stubProperty(document, "execCommand", legacyCopy);
-    const { owner } = interactiveOwner();
-    const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
+    const { copy } = interactiveOwner();
     await copyTable(copy, "Copied!");
 
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
@@ -230,15 +218,14 @@ describe("Markdown table interactions", () => {
 
     expand.click();
     const reopened = await waitForRenderedModalDialog(owner);
-    reopened.modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    query<HTMLButtonElement>(reopened.modal, ".markdown-table-dialog__close").click();
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
   });
 
   it("cancels a pending expansion when its owner disconnects and reconnects", async () => {
-    const { owner } = interactiveOwner(
-      `${markdown}\n\n| Updated | Value |\n| --- | --- |\n| Beta | Two |`,
-    );
+    const updated = "| Updated | Value |\n| --- | --- |\n| Beta | Two |";
+    const { owner } = interactiveOwner(`${table}\n\n${updated}`);
     const [first, second] = owner.querySelectorAll<HTMLButtonElement>(".markdown-table__expand");
     first!.click();
 
@@ -252,7 +239,7 @@ describe("Markdown table interactions", () => {
     const { modal } = await waitForRenderedModalDialog(owner);
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
-    modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    query<HTMLButtonElement>(modal, ".markdown-table-dialog__close").click();
     await Promise.resolve();
     expect(document.activeElement).toBe(second);
   });
