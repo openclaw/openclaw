@@ -45,10 +45,13 @@ enum ControlUIHubPage {
             storedOperatorToken: storedOperatorToken)
     }
 
-    func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
+    func webContentIdentity(
+        config: GatewayConnectConfig?, storedOperatorToken: String?, authorityGeneration: UInt64 = 0) -> Int
+    {
         let identity = AuthenticatedControlUI.webContentIdentity(
             config: config,
-            storedOperatorToken: storedOperatorToken)
+            storedOperatorToken: storedOperatorToken,
+            authorityGeneration: authorityGeneration)
         guard case .desktop = self else { return identity }
         var hasher = Hasher()
         hasher.combine(identity)
@@ -92,7 +95,10 @@ struct ControlUIHubScreen: View {
                     authScript: self.page.authUserScript(config: config, storedOperatorToken: storedOperatorToken),
                     tls: config?.tls)
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
-                        .id(self.page.webContentIdentity(config: config, storedOperatorToken: storedOperatorToken))
+                        .id(self.page.webContentIdentity(
+                            config: config,
+                            storedOperatorToken: storedOperatorToken,
+                            authorityGeneration: self.appModel.operatorAuthorityGeneration))
                         .ignoresSafeArea(.container, edges: .bottom)
             } else {
                 self.unavailableCard
