@@ -26,29 +26,16 @@ vi.mock("../config.js", async () => ({
 type ChildResult =
   | {
       ok: true;
-      sessionEntry: {
-        sessionFile?: string;
-        sessionId?: string;
-        updatedAt?: number;
-      };
+      sessionEntry: { sessionFile?: string; sessionId?: string; updatedAt?: number };
     }
   | {
-      currentEntry?: {
-        sessionId?: string;
-        updatedAt?: number;
-      };
+      currentEntry?: { sessionId?: string; updatedAt?: number };
       ok: false;
       reason: string;
       revision: string;
     };
 
-type TranscriptRewriteChildResult =
-  | { ok: true }
-  | {
-      message: string;
-      name: string;
-      ok: false;
-    };
+type TranscriptRewriteChildResult = { ok: true } | { message: string; name: string; ok: false };
 
 type ConcurrencyWorkerRequest =
   | {
@@ -114,22 +101,23 @@ function waitForProceed(requestId) {
   });
 }
 
+async function ready(request, value) {
+  const proceed = waitForProceed(request.requestId);
+  send({ phase: "ready", requestId: request.requestId, value });
+  await proceed;
+}
+
+function message(id, content) {
+  return { type: "message", id, parentId: null, message: { role: "assistant", content } };
+}
+
 async function runReplyInit(request) {
   const snapshot = await loadReplySessionInitializationSnapshot({
     agentId: AGENT_ID,
     sessionKey: SESSION_KEY,
     storePath: request.storePath,
   });
-  const proceed = waitForProceed(request.requestId);
-  send({
-    phase: "ready",
-    requestId: request.requestId,
-    value: {
-      currentEntry: snapshot.currentEntry,
-      revision: snapshot.revision,
-    },
-  });
-  await proceed;
+  await ready(request, { currentEntry: snapshot.currentEntry, revision: snapshot.revision });
   return commitReplySessionInitialization({
     activeSessionKey: SESSION_KEY,
     agentId: AGENT_ID,
@@ -158,40 +146,18 @@ async function runTranscriptRewrite(request) {
         if (request.rewriteMode === "replace-twice") {
           const firstReplacement = [
             { type: "session", version: 3, id: request.sessionId },
-            {
-              type: "message",
-              id: "first-replacement",
-              parentId: null,
-              message: { role: "assistant", content: "first replacement" },
-            },
+            message("first-replacement", "first replacement"),
           ];
           await transcript.replaceEvents(firstReplacement);
-          const proceed = waitForProceed(request.requestId);
-          send({
-            phase: "ready",
-            requestId: request.requestId,
-            value: { eventCount: firstReplacement.length },
-          });
-          await proceed;
+          await ready(request, { eventCount: firstReplacement.length });
           await transcript.replaceEvents([
             firstReplacement[0],
-            {
-              type: "message",
-              id: "first-replacement",
-              parentId: null,
-              message: { role: "assistant", content: "second replacement" },
-            },
+            message("first-replacement", "second replacement"),
           ]);
           return;
         }
         const events = await transcript.readEvents();
-        const proceed = waitForProceed(request.requestId);
-        send({
-          phase: "ready",
-          requestId: request.requestId,
-          value: { eventCount: events.length },
-        });
-        await proceed;
+        await ready(request, { eventCount: events.length });
         const rewrittenEvents = events.map((event) => {
           if (
             typeof event !== "object" ||
@@ -266,40 +232,55 @@ function isWorkerMessage(message: unknown): message is ConcurrencyWorkerMessage 
   return typeof message === "object" && message !== null && "phase" in message;
 }
 
-async function waitForWorkerBoot(child: ReturnType<typeof spawn>): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+function waitForWorkerMessage<T>(
+  child: ReturnType<typeof spawn>,
+  label: string,
+  timeoutMs: number,
+  handle: (
+    message: ConcurrencyWorkerMessage,
+    resolve: (value: T) => void,
+    fail: (error: Error) => void,
+  ) => void,
+  start?: (fail: (error: Error) => void) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("timeout waiting for concurrency worker startup"));
-    }, WORKER_BOOT_TIMEOUT_MS);
+      fail(new Error(`timeout waiting for concurrency worker ${label}`));
+    }, timeoutMs);
     const cleanup = () => {
       clearTimeout(timeout);
       child.off("error", onError);
       child.off("exit", onExit);
       child.off("message", onMessage);
     };
-    const onError = (error: Error) => {
+    const fail = (error: Error) => {
       cleanup();
       reject(error);
     };
+    const onError = fail;
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
+      fail(
         new Error(
-          `concurrency worker exited during startup code=${String(code)} signal=${String(signal)}`,
+          `concurrency worker exited during ${label} code=${String(code)} signal=${String(signal)}`,
         ),
       );
     };
     const onMessage = (message: unknown) => {
-      if (!isWorkerMessage(message) || message.phase !== "booted") {
-        return;
+      if (isWorkerMessage(message)) {
+        handle(
+          message,
+          (value) => {
+            cleanup();
+            resolve(value);
+          },
+          fail,
+        );
       }
-      cleanup();
-      resolve();
     };
     child.once("error", onError);
     child.once("exit", onExit);
     child.on("message", onMessage);
+    start?.(fail);
   });
 }
 
@@ -319,7 +300,16 @@ async function getConcurrencyWorker(): Promise<ReturnType<typeof spawn>> {
     { stdio: ["ignore", "pipe", "pipe", "ipc"] },
   );
   try {
-    await waitForWorkerBoot(child);
+    await waitForWorkerMessage<void>(
+      child,
+      "startup",
+      WORKER_BOOT_TIMEOUT_MS,
+      (message, resolve) => {
+        if (message.phase === "booted") {
+          resolve();
+        }
+      },
+    );
   } catch (error) {
     child.kill();
     throw error;
@@ -334,31 +324,13 @@ async function runConcurrencyScenario<TRequest extends ConcurrencyWorkerRequest>
 ): Promise<ConcurrencyWorkerResult<TRequest>> {
   const child = await getConcurrencyWorker();
   const requestId = ++nextRequestId;
-  return await new Promise<ConcurrencyWorkerResult<TRequest>>((resolve, reject) => {
-    let readyHandled = false;
-    const timeout = setTimeout(() => {
-      fail(new Error(`timeout waiting for concurrency worker ${request.kind}`));
-    }, SCENARIO_TIMEOUT_MS);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("error", onError);
-      child.off("exit", onExit);
-      child.off("message", onMessage);
-    };
-    const fail = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onError = (error: Error) => fail(error);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      fail(new Error(`concurrency worker exited code=${String(code)} signal=${String(signal)}`));
-    };
-    const onMessage = (message: unknown) => {
-      if (
-        !isWorkerMessage(message) ||
-        !("requestId" in message) ||
-        message.requestId !== requestId
-      ) {
+  let readyHandled = false;
+  return waitForWorkerMessage<ConcurrencyWorkerResult<TRequest>>(
+    child,
+    request.kind,
+    SCENARIO_TIMEOUT_MS,
+    (message, resolve, fail) => {
+      if (!("requestId" in message) || message.requestId !== requestId) {
         return;
       }
       if (message.phase === "error") {
@@ -382,18 +354,41 @@ async function runConcurrencyScenario<TRequest extends ConcurrencyWorkerRequest>
         return;
       }
       if (message.phase === "result") {
-        cleanup();
         resolve(message.value as ConcurrencyWorkerResult<TRequest>);
       }
-    };
-    child.once("error", onError);
-    child.once("exit", onExit);
-    child.on("message", onMessage);
-    child.send({ ...request, requestId }, (error) => {
-      if (error) {
-        fail(error);
-      }
-    });
+    },
+    (fail) =>
+      child.send({ ...request, requestId }, (error) => {
+        if (error) {
+          fail(error);
+        }
+      }),
+  );
+}
+
+const message = (id: string, content: string) => ({
+  type: "message",
+  id,
+  parentId: null,
+  message: { role: "assistant", content },
+});
+const transcriptEvents = (
+  sessionId: string,
+  id = "rewrite-target",
+  content = "original content",
+) => [{ type: "session", version: 3, id: sessionId }, message(id, content)];
+async function fixture(sessionId: string) {
+  const tempDir = sessionDirs.make();
+  const storePath = path.join(tempDir, "sessions.json");
+  const scope = { agentId: AGENT_ID, sessionId, sessionKey: SESSION_KEY, storePath };
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+  return { tempDir, storePath, scope };
+}
+function expectConflict(result: TranscriptRewriteChildResult, sessionId: string) {
+  expect(result).toMatchObject({
+    ok: false,
+    name: "SqliteTranscriptMutationConflictError",
+    message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
   });
 }
 
@@ -457,20 +452,8 @@ describe("session accessor cross-process concurrency", () => {
   });
 
   it("commits after same-session activity from another process", async () => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "sessions.json");
-    await upsertSessionEntryCore(
-      { sessionKey: SESSION_KEY, storePath },
-      {
-        sessionId: "existing-session",
-        updatedAt: Date.now(),
-      },
-    );
-    const initialUpdatedAt = loadSessionEntry({
-      readConsistency: "latest",
-      sessionKey: SESSION_KEY,
-      storePath,
-    })?.updatedAt;
+    const { storePath, scope } = await fixture("existing-session");
+    const initialUpdatedAt = loadSessionEntry({ ...scope, readConsistency: "latest" })?.updatedAt;
     if (typeof initialUpdatedAt !== "number") {
       throw new Error("initial session timestamp was not persisted");
     }
@@ -485,11 +468,9 @@ describe("session accessor cross-process concurrency", () => {
       },
       async (snapshot) => {
         expect(snapshot.revision).toBe(JSON.stringify({ sessionId: "existing-session" }));
-        await updateSessionEntry(
-          { sessionKey: SESSION_KEY, storePath },
-          () => ({ updatedAt: activeTurnUpdatedAt }),
-          { skipMaintenance: true },
-        );
+        await updateSessionEntry(scope, () => ({ updatedAt: activeTurnUpdatedAt }), {
+          skipMaintenance: true,
+        });
       },
     );
     expect(result).toMatchObject({
@@ -499,37 +480,16 @@ describe("session accessor cross-process concurrency", () => {
         updatedAt: preparedUpdatedAt,
       },
     });
-    expect(
-      loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath }),
-    ).toMatchObject({
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
       sessionId: "existing-session",
       updatedAt: preparedUpdatedAt,
     });
   }, 15_000);
 
   it("rejects a transcript rewrite after another process commits an append", async () => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "cross-process-transcript";
-    const scope = {
-      agentId: AGENT_ID,
-      sessionId,
-      sessionKey: SESSION_KEY,
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId,
-      updatedAt: Date.now(),
-    });
-    await replaceTranscriptEvents(scope, [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "rewrite-target",
-        parentId: null,
-        message: { role: "assistant", content: "original content" },
-      },
-    ]);
+    const { tempDir, storePath, scope } = await fixture(sessionId);
+    await replaceTranscriptEvents(scope, transcriptEvents(sessionId));
 
     const result = await runConcurrencyScenario(
       {
@@ -550,19 +510,9 @@ describe("session accessor cross-process concurrency", () => {
         });
       },
     );
-    expect(result).toMatchObject({
-      ok: false,
-      name: "SqliteTranscriptMutationConflictError",
-      message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
-    });
+    expectConflict(result, sessionId);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "rewrite-target",
-        parentId: null,
-        message: { role: "assistant", content: "original content" },
-      },
+      ...transcriptEvents(sessionId),
       expect.objectContaining({
         type: "message",
         message: expect.objectContaining({
@@ -574,25 +524,8 @@ describe("session accessor cross-process concurrency", () => {
   }, 15_000);
 
   it("guards a second replace after replacing without a prior read", async () => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "double-replace-without-read";
-    const scope = {
-      agentId: AGENT_ID,
-      sessionId,
-      sessionKey: SESSION_KEY,
-      storePath,
-    };
-    const firstReplacement = [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "first-replacement",
-        parentId: null,
-        message: { role: "assistant", content: "first replacement" },
-      },
-    ];
-    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+    const { tempDir, storePath, scope } = await fixture(sessionId);
     const result = await runConcurrencyScenario(
       {
         kind: "transcript-rewrite",
@@ -610,13 +543,9 @@ describe("session accessor cross-process concurrency", () => {
         });
       },
     );
-    expect(result).toMatchObject({
-      ok: false,
-      name: "SqliteTranscriptMutationConflictError",
-      message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
-    });
+    expectConflict(result, sessionId);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      ...firstReplacement,
+      ...transcriptEvents(sessionId, "first-replacement", "first replacement"),
       expect.objectContaining({
         type: "message",
         id: "concurrent-append",
@@ -630,26 +559,9 @@ describe("session accessor cross-process concurrency", () => {
   }, 15_000);
 
   it("refreshes a read snapshot after an append in the same locked callback", async () => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "rewrite-after-own-append";
-    const scope = {
-      agentId: AGENT_ID,
-      sessionId,
-      sessionKey: SESSION_KEY,
-      storePath,
-    };
-
-    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    await replaceTranscriptEvents(scope, [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "rewrite-target",
-        parentId: null,
-        message: { role: "assistant", content: "original content" },
-      },
-    ]);
+    const { tempDir, scope } = await fixture(sessionId);
+    await replaceTranscriptEvents(scope, transcriptEvents(sessionId));
 
     await withTranscriptWriteLock(scope, async (transcript) => {
       await transcript.readEvents();
@@ -677,13 +589,7 @@ describe("session accessor cross-process concurrency", () => {
     });
 
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "rewrite-target",
-        parentId: null,
-        message: { role: "assistant", content: "rewritten content" },
-      },
+      ...transcriptEvents(sessionId, "rewrite-target", "rewritten content"),
       expect.objectContaining({
         type: "message",
         id: "owned-append",

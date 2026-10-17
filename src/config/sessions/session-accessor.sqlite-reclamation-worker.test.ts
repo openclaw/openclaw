@@ -20,7 +20,10 @@ import {
 import * as stateCache from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
 import type {
   SessionAccessScope,
@@ -68,6 +71,72 @@ function createEntryFixture(
   };
 }
 
+function scopeFor(
+  state: OpenClawTestState,
+  sessionId: string,
+  sessionKey = `agent:main:${sessionId}`,
+) {
+  return {
+    agentId: "main",
+    env: state.env,
+    sessionId,
+    sessionKey,
+  };
+}
+
+function seed(
+  state: OpenClawTestState,
+  sessionId: string,
+  sessionKey: string,
+  updatedAt = Date.now(),
+) {
+  const scope = scopeFor(state, sessionId, sessionKey);
+  ensureSessionEntrySync(scope, { sessionId, updatedAt });
+  return scope;
+}
+
+function observeWorkers(onMessage?: (message: SqliteReclamationWorkerMessage) => void) {
+  const workers: Worker[] = [];
+  const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
+  const spawn = vi
+    .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
+    .mockImplementation((data, nativeLocations) => {
+      const worker = create(data, nativeLocations);
+      workers.push(worker);
+      if (onMessage) {
+        worker.prependListener("message", onMessage);
+      }
+      return worker;
+    });
+  return { workers, spawn };
+}
+
+const preservation = (providerKeys: string[] = []) => ({
+  providerKeys,
+  workIdentities: [],
+  lifecycleIdentities: [],
+});
+
+async function logTo(state: OpenClawTestState, name: string, level: "info" | "debug" = "info") {
+  const file = state.path(name);
+  await fs.writeFile(file, "");
+  setLoggerOverride({ level, consoleLevel: "silent", file });
+  vi.spyOn(performance, "now").mockReturnValue(0);
+  return file;
+}
+
+async function readLogs(file: string): Promise<{ content: string; records: unknown[] }> {
+  await flushLogger();
+  const content = await fs.readFile(file, "utf8");
+  return {
+    content,
+    records: content
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line)),
+  };
+}
+
 test("retains one archive Worker across refused and interleaved reclamation operations", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
@@ -84,18 +153,11 @@ test("retains one archive Worker across refused and interleaved reclamation oper
     );
     let refusalPoint: "admission-request" | undefined;
     let superseded = false;
-    const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    const spawn = vi
-      .spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker")
-      .mockImplementation((data, nativeLocations) => {
-        const worker = create(data, nativeLocations);
-        worker.prependListener("message", (message: { type: string }) => {
-          if (message.type === refusalPoint) {
-            superseded = true;
-          }
-        });
-        return worker;
-      });
+    const { spawn } = observeWorkers((message) => {
+      if (message.type === refusalPoint) {
+        superseded = true;
+      }
+    });
     try {
       for (const { scope, plan } of entries) {
         const plans: SqliteSessionReclamationPlan[] = [
@@ -170,19 +232,9 @@ test.each(["root"] as const)(
       const databaseOptions = reclamation.resolveSessionReclamationDatabaseOptions(options);
       const scope = { ...options, sessionId: "linked", sessionKey: "agent:main:linked" };
       const { plan } = createEntryFixture(scope, databaseOptions);
-      const spawned: Worker[] = [];
-      const create = sqliteArchive.createSqliteTranscriptArchiveWorker;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
-        (data, nativeLocations) => {
-          const worker = create(data, nativeLocations);
-          spawned.push(worker);
-          return worker;
-        },
-      );
+      const { workers: spawned } = observeWorkers();
       try {
-        await runSqliteSessionReclamation({
-          plan,
-        });
+        await runSqliteSessionReclamation({ plan });
         expect(spawned).toHaveLength(1);
         await closeOpenClawAgentDatabasesAsync(link);
         expect(spawned[0]?.threadId).toBe(-1);
@@ -227,15 +279,7 @@ test("binds first shared-state creation without host SQL and reuses reclamation 
         databaseOptions,
       ),
     );
-    const workers: Worker[] = [];
-    const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
-      (data, nativeLocations) => {
-        const worker = spawn(data, nativeLocations);
-        workers.push(worker);
-        return worker;
-      },
-    );
+    const { workers } = observeWorkers();
     const reclaim = async (index: number) => {
       const diagnostics: SqliteSessionReclamationDiagnostics = {};
       const fixture = entries[index];
@@ -275,12 +319,7 @@ test.each(["established", "first-created"] as const)(
   "retains a late lease receipt for exact cleanup after source read admission is revoked (%s)",
   async (sharedState) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionId: "synthetic-late-lease",
-        sessionKey: "agent:main:synthetic-late-lease",
-      };
+      const scope = scopeFor(state, "synthetic-late-lease");
       const databaseOptions = {
         agentId: scope.agentId,
         env:
@@ -293,44 +332,33 @@ test.each(["established", "first-created"] as const)(
       const sharedPath = resolveOpenClawStateSqlitePath(databaseOptions.env);
       const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
       expect(admission.identity.key.startsWith("path:")).toBe(sharedState === "first-created");
-      const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-      let child: Worker | undefined;
       let revoked = false;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
-        (data, nativeLocations) => {
-          const worker = spawn(data, nativeLocations);
-          child = worker;
-          worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
-            if (message.type === "lease") {
-              // Native acquisition already committed, but its notification has not reached the owner.
-              const physical = readDatabasePathIdentitySync(sharedPath);
-              const receipt = message.receipt;
-              expect(receipt.sharedStateIdentity).toBe(physical.key);
-              expect(receipt.sharedStatePath).toBe(sharedPath);
-              expect(receipt.agentId).toBe(databaseOptions.agentId);
-              expect(receipt.path).toBe(databaseOptions.path);
-              expect(receipt.ownerPid).toBe(process.pid);
-              expect(admission.identity.key.startsWith("path:")).toBe(
-                sharedState === "first-created",
-              );
-              stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
-              revoked = true;
-              expect(() => admission.assertCurrent()).toThrow("read admission changed");
-            }
+      const { workers } = observeWorkers((message) => {
+        if (message.type === "lease") {
+          // Native acquisition already committed, but its notification has not reached the owner.
+          const physical = readDatabasePathIdentitySync(sharedPath);
+          const receipt = message.receipt;
+          expect(receipt).toMatchObject({
+            sharedStateIdentity: physical.key,
+            sharedStatePath: sharedPath,
+            agentId: databaseOptions.agentId,
+            path: databaseOptions.path,
+            ownerPid: process.pid,
           });
-          return worker;
-        },
-      );
+          expect(admission.identity.key.startsWith("path:")).toBe(sharedState === "first-created");
+          stateCache.clearOpenClawStateDatabaseOpenFailure(sharedPath);
+          revoked = true;
+          expect(() => admission.assertCurrent()).toThrow("read admission changed");
+        }
+      });
       try {
-        await expect(
-          runSqliteSessionReclamation({
-            plan,
-          }),
-        ).rejects.toThrow("OpenClaw state database read admission changed");
+        await expect(runSqliteSessionReclamation({ plan })).rejects.toThrow(
+          "OpenClaw state database read admission changed",
+        );
         expect(revoked).toBe(true);
         expect(admission.assertCurrent).toThrow("read admission changed");
         expect(admission.identity.key).toBe(readDatabasePathIdentitySync(sharedPath).key);
-        expect(child?.threadId).toBe(-1);
+        expect(workers.at(-1)?.threadId).toBe(-1);
         expect(loadSessionEntry(scope)).toEqual(entry);
         await closeOpenClawAgentDatabasesAsync(state.stateDir);
         expect(
@@ -349,22 +377,14 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
     async (state) => {
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionId: "synthetic-reclamation-session",
-        sessionKey: "agent:main:synthetic-reclamation-session",
-      };
+      const scope = scopeFor(state, "synthetic-reclamation-session");
       const databaseOptions = {
         agentId: scope.agentId,
         env: state.env,
         path: openOpenClawAgentDatabase(scope).path,
       };
       const { entry, plan } = createEntryFixture(scope, databaseOptions);
-      const file = state.path("reclamation.log");
-      await fs.writeFile(file, "");
-      setLoggerOverride({ level: "info", consoleLevel: "silent", file });
-      vi.spyOn(performance, "now").mockReturnValue(0);
+      const file = await logTo(state, "reclamation.log");
       const secret = "synthetic-worker-credential";
       const worker = new Worker(
         `const { parentPort, workerData } = require("node:worker_threads");
@@ -379,19 +399,12 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
       const workerThreadId = worker.threadId;
       vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockReturnValueOnce(worker);
       try {
-        await expect(
-          runSqliteSessionReclamation({
-            plan,
-          }),
-        ).rejects.toThrow("synthetic reclamation crash");
+        await expect(runSqliteSessionReclamation({ plan })).rejects.toThrow(
+          "synthetic reclamation crash",
+        );
         expect(worker.threadId).toBe(-1);
         expect(loadSessionEntry(scope)).toEqual(entry);
-        await flushLogger();
-        const content = await fs.readFile(file, "utf8");
-        const records: unknown[] = content
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => JSON.parse(line));
+        const { content, records } = await readLogs(file);
         expect(records).toEqual([
           expect.objectContaining({
             message: "SQLite reclamation Worker failed",
@@ -436,29 +449,10 @@ test.each(["active key", "provider"] as const)(
     await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
       async (state) => {
-        const sessionKey = "agent:main:synthetic-maintenance-race";
-        const scope = {
-          agentId: "main",
-          env: state.env,
-          sessionKey,
-          sessionId: "maintenance-race",
-        };
-        ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-        const victim = {
-          ...scope,
-          sessionKey: "agent:main:maintenance-victim",
-          sessionId: "victim",
-        };
-        ensureSessionEntrySync(victim, { sessionId: victim.sessionId, updatedAt: 1 });
-        const unrelated = {
-          ...scope,
-          sessionKey: "agent:main:maintenance-unrelated",
-          sessionId: "unrelated",
-        };
-        ensureSessionEntrySync(unrelated, {
-          sessionId: unrelated.sessionId,
-          updatedAt: Date.now(),
-        });
+        const scope = seed(state, "maintenance-race", "agent:main:synthetic-maintenance-race");
+        const { sessionKey } = scope;
+        const victim = seed(state, "victim", "agent:main:maintenance-victim", 1);
+        const unrelated = seed(state, "unrelated", "agent:main:maintenance-unrelated");
         const database = openOpenClawAgentDatabase(scope);
         const request = {
           activeSessionKey: sessionKey,
@@ -467,10 +461,7 @@ test.each(["active key", "provider"] as const)(
           scope: { agentId: scope.agentId, env: state.env, path: database.path },
           storePath: database.path,
         };
-        const file = state.path("maintenance-race.log");
-        await fs.writeFile(file, "");
-        setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
-        vi.spyOn(performance, "now").mockReturnValue(0);
+        const file = await logTo(state, "maintenance-race.log", "debug");
         const plans = new Set<
           Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }>
         >();
@@ -535,11 +526,7 @@ test.each(["active key", "provider"] as const)(
           expect(loadSessionEntry(unrelated)?.label).toBe("concurrent-write");
           expect(workerThreadIds).toHaveLength(1);
           expect(workerThreadIds[0]).toBeGreaterThan(0);
-          await flushLogger();
-          const records: unknown[] = (await fs.readFile(file, "utf8"))
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => JSON.parse(line));
+          const { records } = await readLogs(file);
           const logged = (message: string) => expect.objectContaining({ message });
           expect(records).not.toContainEqual(
             logged("SQLite reclamation Worker superseded by newer inputs"),
@@ -563,27 +550,12 @@ test.each(["active key", "provider"] as const)(
 
 test("retains a selected maintenance row protected after native preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const active = {
-      agentId: "main",
-      env: state.env,
-      sessionKey: "agent:main:maintenance-protection-active",
-      sessionId: "protection-active",
-    };
-    const victim = {
-      ...active,
-      sessionKey: "agent:main:maintenance-protection-victim",
-      sessionId: "protection-victim",
-    };
-    ensureSessionEntrySync(active, { sessionId: active.sessionId, updatedAt: Date.now() });
-    ensureSessionEntrySync(victim, { sessionId: victim.sessionId, updatedAt: 1 });
+    const active = seed(state, "protection-active", "agent:main:maintenance-protection-active");
+    const victim = seed(state, "protection-victim", "agent:main:maintenance-protection-victim", 1);
     const originalVictim = structuredClone(loadSessionEntry(victim));
     expect(originalVictim).toMatchObject({ sessionId: victim.sessionId, updatedAt: 1 });
     const database = openOpenClawAgentDatabase(active);
-    let protection: NonNullable<SessionMaintenanceLiveProtection["preservation"]> = {
-      providerKeys: [],
-      workIdentities: [],
-      lifecycleIdentities: [],
-    };
+    let protection: NonNullable<SessionMaintenanceLiveProtection["preservation"]> = preservation();
     const plan = {
       kind: "maintenance-plan",
       databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions({
@@ -609,11 +581,7 @@ test("retains a selected maintenance row protected after native preparation", as
     observeSessionMaintenancePlanningWorker({
       afterPrepare(id) {
         prepared.push(id);
-        protection = {
-          providerKeys: [victim.sessionKey],
-          workIdentities: [],
-          lifecycleIdentities: [],
-        };
+        protection = preservation([victim.sessionKey]);
       },
       afterRelease(id) {
         released.push(id);
@@ -628,11 +596,7 @@ test("retains a selected maintenance row protected after native preparation", as
       ).resolves.toEqual({ kind: "maintenance-plan-stale" });
       expect(refreshed).toHaveReturnedWith({
         activeSessionKeys: [active.sessionKey],
-        preservation: {
-          providerKeys: [victim.sessionKey],
-          workIdentities: [],
-          lifecycleIdentities: [],
-        },
+        preservation: preservation([victim.sessionKey]),
       });
       expect(prepared).toHaveLength(1);
       expect(released).toEqual(prepared);

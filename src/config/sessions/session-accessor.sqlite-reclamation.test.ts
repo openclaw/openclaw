@@ -32,7 +32,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionAccessScope,
+  SqliteSessionReclamationDiagnostics,
+} from "./session-accessor.sqlite-contract.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -217,22 +220,53 @@ async function readLogRecords(file: string) {
     });
 }
 
+function append(scope: SessionAccessScope & { sessionId: string }, type = "session") {
+  expect(
+    appendTranscriptEventSync(scope, {
+      type,
+      ...(type === "session" ? { id: scope.sessionId } : {}),
+    }),
+  ).toEqual({ ok: true, value: true });
+}
+
+const write = <T>(
+  options: Parameters<typeof runExclusiveSqliteSessionWrite>[0],
+  run: () => Promise<T>,
+) => runExclusiveSqliteSessionWrite(options, run, "session.transcript.batch");
+
+async function expectWorkerRetirement(
+  workers: ReturnType<typeof observeWorkers>["workers"],
+  diagnostics: SqliteSessionReclamationDiagnostics,
+) {
+  const matching = workers.filter(({ id }) => id === diagnostics.workerThreadId);
+  expect(matching).toHaveLength(1);
+  const observed = matching[0]!;
+  expect(observed.id).toBeGreaterThan(0);
+  expect(observed.worker.threadId).toBe(observed.id);
+  expect(observed.exits).toEqual([]);
+  await closeOpenClawAgentDatabasesAsync();
+  expect(observed.worker.threadId).toBe(-1);
+  expect(observed.exits).toEqual([0]);
+  return observed.id;
+}
+
+async function finishLogging(stopObserving: () => void) {
+  stopObserving();
+  vi.restoreAllMocks();
+  await flushLogger();
+  setLoggerOverride(null);
+}
+
 test.each([false, true])(
   "in-process reclamation checks authority before cold database admission (revoked: %s)",
   async (revoked) => {
     const { database, databaseOptions, scopes } = createFixture();
     const removed = scopes[0]!;
     const survivor = scopes[1]!;
-    expect(appendTranscriptEventSync(removed, { type: "session", id: removed.sessionId })).toEqual({
-      ok: true,
-      value: true,
-    });
+    append(removed);
     const current = { ...removed, sessionId: "parent-current" };
     replaceSessionEntrySync(current, { sessionId: current.sessionId, updatedAt: 2 });
-    expect(appendTranscriptEventSync(current, { type: "session", id: current.sessionId })).toEqual({
-      ok: true,
-      value: true,
-    });
+    append(current);
     const expectedEntry = loadSessionEntry(current);
     if (!expectedEntry) {
       throw new Error("expected the native removal fixture entry");
@@ -359,13 +393,9 @@ test.runIf(process.platform !== "win32")(
       // The claim and Worker plan already belong to the original open database.
       await fs.unlink(aliasPath);
       symlinkSync(replacementPath, aliasPath);
-      canonicalWrite = runExclusiveSqliteSessionWrite(
-        databaseOptions,
-        async () => {
-          canonicalWriteRan = true;
-        },
-        "session.transcript.batch",
-      );
+      canonicalWrite = write(databaseOptions, async () => {
+        canonicalWriteRan = true;
+      });
       await yieldToEventLoop();
       expect(canonicalWriteRan).toBe(false);
     };
@@ -414,10 +444,7 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   expect(before - after).toBeLessThanOrEqual(512);
   expect(after).toBeGreaterThan(0);
   for (const scope of scopes) {
-    expect(appendTranscriptEventSync(scope, { type: "session", id: scope.sessionId })).toEqual({
-      ok: true,
-      value: true,
-    });
+    append(scope);
   }
   const budgetBefore = freePages();
   const databaseOptions = plan.databaseOptions;
@@ -428,10 +455,7 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
     expect(budgetBefore - first.remainingFreePages!).toBeLessThanOrEqual(512);
     expect(database.db.isTransaction).toBe(false);
     for (const scope of scopes) {
-      expect(appendTranscriptEventSync(scope, { type: "budget-progress" })).toEqual({
-        ok: true,
-        value: true,
-      });
+      append(scope, "budget-progress");
     }
     await reclaimSqliteFreePages(databaseOptions, undefined, { reclaimPages });
   });
@@ -494,11 +518,7 @@ test("file warnings retain rejected native admission releases without attributin
   let second: Promise<string> | undefined;
   hooks.afterWriteAdmission = async () => {
     if (++admissions === 1) {
-      second = runExclusiveSqliteSessionWrite(
-        databaseOptions,
-        async () => "successor",
-        "session.transcript.batch",
-      );
+      second = write(databaseOptions, async () => "successor");
     }
     // Advance at actual admitted work, independently of timer-call counts.
     clock += 1_100;
@@ -524,17 +544,9 @@ test("file warnings retain rejected native admission releases without attributin
         assert.ok(isRecord(details));
         return details;
       });
-    const workers = observedWorkers.filter(({ id }) => id === diagnostics.workerThreadId);
-    expect(workers).toHaveLength(1);
-    const exits = workers[0]?.exits;
-    expect(workers[0]?.id).toBeGreaterThan(0);
-    expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
-    expect(exits).toEqual([]);
-    await closeOpenClawAgentDatabasesAsync();
-    expect(workers[0]?.worker.threadId).toBe(-1);
-    expect(exits).toEqual([0]);
+    const workerThreadId = await expectWorkerRetirement(observedWorkers, diagnostics);
     expect(records).toHaveLength(3);
-    const workerRecords = records.filter((record) => record.workerThreadId === workers[0]?.id);
+    const workerRecords = records.filter((record) => record.workerThreadId === workerThreadId);
     expect(workerRecords).toHaveLength(2);
     expect(
       workerRecords.map((record) => ({
@@ -565,10 +577,7 @@ test("file warnings retain rejected native admission releases without attributin
     }
   } finally {
     await Promise.allSettled([first, second]);
-    stopObserving();
-    vi.restoreAllMocks();
-    await flushLogger();
-    setLoggerOverride(null);
+    await finishLogging(stopObserving);
   }
 });
 
@@ -606,13 +615,9 @@ test.each([
         return;
       }
       // The first admission has ended; the second has not entered the writer FIFO.
-      await runExclusiveSqliteSessionWrite(
-        databaseOptions,
-        async () => {
-          otherWriterRan = true;
-        },
-        "session.transcript.batch",
-      );
+      await write(databaseOptions, async () => {
+        otherWriterRan = true;
+      });
       clock = elapsedMs;
       revoked = rejected;
     };
@@ -642,15 +647,7 @@ test.each([
           record.message === "SQLite reclamation Worker failed",
       );
       expect(otherWriterRan).toBe(true);
-      const workers = observedWorkers.filter(({ id }) => id === diagnostics.workerThreadId);
-      expect(workers).toHaveLength(1);
-      const exits = workers[0]?.exits;
-      expect(workers[0]?.id).toBeGreaterThan(0);
-      expect(workers[0]?.worker.threadId).toBe(workers[0]?.id);
-      expect(exits).toEqual([]);
-      await closeOpenClawAgentDatabasesAsync();
-      expect(workers[0]?.worker.threadId).toBe(-1);
-      expect(exits).toEqual([0]);
+      const workerThreadId = await expectWorkerRetirement(observedWorkers, diagnostics);
       expect(records.some((record) => record["2"] === "slow SQLite session write")).toBe(false);
       expect(hooks.workerLogAttempts).toBe(elapsedMs > 0 || rejected ? 1 : 0);
       expect(observations).toHaveLength((elapsedMs > 0 || rejected) && !failLog ? 1 : 0);
@@ -666,7 +663,7 @@ test.each([
           threadId,
           isMainThread,
           reclamationKind: "history-eviction",
-          workerThreadId: workers[0]?.id,
+          workerThreadId,
           elapsedMs,
           outcome: rejected ? "rejected" : "resolved",
           ...(rejected
@@ -681,19 +678,10 @@ test.each([
         });
         expect(JSON.stringify(observations)).not.toContain("synthetic-private-token");
       }
-      await expect(
-        runExclusiveSqliteSessionWrite(
-          databaseOptions,
-          async () => "after",
-          "session.transcript.batch",
-        ),
-      ).resolves.toBe("after");
+      await expect(write(databaseOptions, async () => "after")).resolves.toBe("after");
     } finally {
       await Promise.allSettled([operation]);
-      stopObserving();
-      vi.restoreAllMocks();
-      await flushLogger();
-      setLoggerOverride(null);
+      await finishLogging(stopObserving);
     }
   },
 );

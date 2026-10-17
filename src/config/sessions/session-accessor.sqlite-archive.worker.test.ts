@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -84,10 +85,12 @@ describe("SQLite transcript archive worker", () => {
     sessionKey: `agent:main:${sessionId}`,
     storePath,
   });
+  const entry = async (target: ReturnType<typeof scope>, updatedAt = Date.now()) =>
+    replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt });
   async function seed(sessionId: string, events = [event(sessionId)], withEntry = true) {
     const target = scope(sessionId);
     if (withEntry) {
-      await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+      await entry(target);
     }
     await replaceTranscriptEvents(target, events);
     return target;
@@ -98,6 +101,24 @@ describe("SQLite transcript archive worker", () => {
       throw new Error("expected SQLite database path");
     }
     return openOpenClawAgentDatabase({ agentId: target.agentId ?? "main", path: target.path });
+  }
+  function databaseQueries() {
+    const db = database();
+    return {
+      db,
+      query: getNodeSqliteKysely<DB>(db.db),
+      rows: <Row>(query: Compilable<Row>) => executeSqliteQuerySync(db.db, query).rows,
+    };
+  }
+  async function acp(target: ReturnType<typeof scope>, text: string, runId: string) {
+    const db = database();
+    await recordAcpParentStreamEvents({
+      agentId: db.agentId,
+      path: db.path,
+      sessionId: target.sessionId,
+      runId,
+      events: [{ event: { type: "output", text }, createdAt: Date.now() }],
+    });
   }
   function deletion(sessionKey: string) {
     return deleteSessionEntryLifecycle({
@@ -204,20 +225,14 @@ describe("SQLite transcript archive worker", () => {
       event: event(`worker-byte-session-${index}`, `${index}:${largeContent}`),
     }));
     for (const [index, session] of sessions.entries()) {
-      await replaceSessionEntry(session, {
-        sessionId: session.sessionId,
-        updatedAt: Date.now() + index,
-      });
+      await entry(session, Date.now() + index);
       await replaceTranscriptEvents(session, [session.event]);
     }
     const retained = {
       ...scope("subagent:worker-byte-retained"),
       sessionId: "worker-byte-session-retained",
     };
-    await replaceSessionEntry(retained, {
-      sessionId: retained.sessionId,
-      updatedAt: Date.now() + sessions.length,
-    });
+    await entry(retained, Date.now() + sessions.length);
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       maintenanceOverride: {
@@ -235,14 +250,13 @@ describe("SQLite transcript archive worker", () => {
     });
     expect(result.archivedTranscriptDirectories).toEqual([path.dirname(storePath)]);
     expect(loadSessionEntry(retained)).toBeDefined();
-    const db = database();
-    const archives = executeSqliteQuerySync(
-      db.db,
-      getNodeSqliteKysely<DB>(db.db)
+    const { query, rows } = databaseQueries();
+    const archives = rows(
+      query
         .selectFrom("session_transcript_archives")
         .select(["archive_name", "archive_sha256", "published_at", "session_id"])
         .orderBy("session_id"),
-    ).rows;
+    );
     expect(archives).toHaveLength(2);
     for (const session of sessions) {
       expect(loadSessionEntry(session)).toBeUndefined();
@@ -299,7 +313,7 @@ describe("SQLite transcript archive worker", () => {
         "UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ? AND generation = ?",
       )
       .run(target.sessionId, first.generation);
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 2 });
+    await entry(target, 2);
     await replaceTranscriptEvents(target, [event(target.sessionId, "second generation")]);
     expect(readSessionGenerationIdsForKeys(database(), [target.sessionKey])).toEqual([
       target.sessionId,
@@ -386,7 +400,7 @@ describe("SQLite transcript archive worker", () => {
       defaultAgentId: "main",
     };
     for (const target of [main, ops]) {
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+      await entry(target);
       await replaceTranscriptEvents(target, [event(target.sessionId)]);
     }
     expect(resolveSqliteTargetFromSessionStorePath(storePath, ops)).toMatchObject({
@@ -427,19 +441,18 @@ describe("SQLite transcript archive worker", () => {
 
   it("deletes empty lifecycle state without producing an archive", async () => {
     const target = scope("empty-transcript");
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+    await entry(target);
     const result = await deletion(target.sessionKey);
     expect(result).toMatchObject({ deleted: true, archivedTranscripts: [] });
     expect(loadSessionEntry(target)).toBeUndefined();
-    const db = database();
+    const { query, rows } = databaseQueries();
     expect(
-      executeSqliteQuerySync(
-        db.db,
-        getNodeSqliteKysely<DB>(db.db)
+      rows(
+        query
           .selectFrom("session_windows")
           .select("session_id")
           .where("session_id", "=", target.sessionId),
-      ).rows,
+      ),
     ).toEqual([]);
   });
 
@@ -449,7 +462,7 @@ describe("SQLite transcript archive worker", () => {
       const target = scope("changed-before-worker-snapshot");
       const original = event(target.sessionId, "original transcript");
       if (initial === "empty") {
-        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+        await entry(target);
       } else {
         await replaceTranscriptEvents(target, [original]);
       }
@@ -493,50 +506,35 @@ describe("SQLite transcript archive worker", () => {
       },
     ]);
     appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
-    const db = database();
-    await recordAcpParentStreamEvents({
-      agentId: db.agentId,
-      path: db.path,
-      sessionId: target.sessionId,
-      runId: "failure-run",
-      events: [{ event: { type: "output", text: "preserve ACP state" }, createdAt: Date.now() }],
-    });
-    const query = getNodeSqliteKysely<DB>(db.db);
-    function count(
-      table:
-        | "acp_parent_stream_events"
-        | "session_transcript_fts"
-        | "session_transcript_index_state"
-        | "transcript_rewrite_watermarks"
-        | "trajectory_runtime_events"
-        | "transcript_events"
-        | "session_windows",
-    ) {
-      return (
-        executeSqliteQuerySync(
-          db.db,
-          query
-            .selectFrom(table)
-            .select(({ fn }) => fn.countAll<number>().as("count"))
-            .where("session_id", "=", target.sessionId),
-        ).rows[0]?.count ?? 0
-      );
-    }
+    await acp(target, "preserve ACP state", "failure-run");
+    const { query, rows } = databaseQueries();
+    const tables = {
+      acp: "acp_parent_stream_events",
+      fts: "session_transcript_fts",
+      indexState: "session_transcript_index_state",
+      rewriteWatermarks: "transcript_rewrite_watermarks",
+      trajectory: "trajectory_runtime_events",
+      transcript: "transcript_events",
+      windows: "session_windows",
+    } as const;
     const counts = () => ({
-      acp: count("acp_parent_stream_events"),
-      fts: count("session_transcript_fts"),
-      indexState: count("session_transcript_index_state"),
-      rewriteWatermarks: count("transcript_rewrite_watermarks"),
-      trajectory: count("trajectory_runtime_events"),
-      transcript: count("transcript_events"),
-      windows: count("session_windows"),
-      nodes: executeSqliteQuerySync(
-        db.db,
+      ...Object.fromEntries(
+        Object.entries(tables).map(([label, table]) => [
+          label,
+          rows(
+            query
+              .selectFrom(table)
+              .select(({ fn }) => fn.countAll<number>().as("count"))
+              .where("session_id", "=", target.sessionId),
+          )[0]?.count ?? 0,
+        ]),
+      ),
+      nodes: rows(
         query
           .selectFrom("session_nodes")
           .select("current_session_id")
           .where("current_session_id", "=", target.sessionId),
-      ).rows.length,
+      ).length,
     });
     await waitForSessionTranscriptProjection(target);
     const before = counts();
@@ -582,8 +580,7 @@ describe("SQLite transcript archive worker", () => {
   ] as const)("keeps rows when %s changes after deletion planning", async (kind) => {
     const target = await seed("stale-snapshot", undefined, false);
     const { sessionId, sessionKey } = target;
-    const db = database();
-    const query = getNodeSqliteKysely<DB>(db.db);
+    const { db, query: sql, rows } = databaseQueries();
     const planned = plan(sessionId, kind !== "non-archive append");
     expect(planned.snapshot.generation).not.toBeNull();
     expect(planned.snapshot.sessionUpdatedAt).not.toBeNull();
@@ -593,7 +590,7 @@ describe("SQLite transcript archive worker", () => {
       case "rewrite generation":
         executeSqliteQuerySync(
           db.db,
-          query
+          sql
             .updateTable("transcript_rewrite_watermarks")
             .set({
               generation: `${planned.snapshot.generation ?? "missing"}-changed`,
@@ -610,7 +607,7 @@ describe("SQLite transcript archive worker", () => {
             : { updated_at: (planned.snapshot.sessionUpdatedAt ?? 0) + 1 };
         executeSqliteQuerySync(
           db.db,
-          query.updateTable("session_windows").set(update).where("session_id", "=", sessionId),
+          sql.updateTable("session_windows").set(update).where("session_id", "=", sessionId),
         );
         break;
       }
@@ -640,13 +637,7 @@ describe("SQLite transcript archive worker", () => {
         appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]);
         break;
       case "ACP parent-stream":
-        await recordAcpParentStreamEvents({
-          agentId: db.agentId,
-          path: db.path,
-          sessionId,
-          runId: "run-1",
-          events: [{ event: { type: "output", text: "concurrent" }, createdAt: Date.now() }],
-        });
+        await acp(target, "concurrent", "run-1");
         break;
     }
     expect(() => deletePlans(materialized, sessionKey)).toThrow(
@@ -658,10 +649,8 @@ describe("SQLite transcript archive worker", () => {
         : kind === "ACP parent-stream"
           ? "acp_parent_stream_events"
           : "transcript_events";
-    const rows = executeSqliteQuerySync(
-      db.db,
-      query.selectFrom(table).select("seq").where("session_id", "=", sessionId),
-    ).rows;
-    expect(rows).toHaveLength(kind === "non-archive append" ? 2 : 1);
+    expect(
+      rows(sql.selectFrom(table).select("seq").where("session_id", "=", sessionId)),
+    ).toHaveLength(kind === "non-archive append" ? 2 : 1);
   });
 });
