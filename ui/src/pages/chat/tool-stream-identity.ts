@@ -100,8 +100,8 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
 }
 
 export function resolveLiveToolStreamRefs(state: LiveToolStreamState): LiveToolStreamRef[] {
-  return (state.toolStreamOrder ?? []).map((identity) => {
-    const entry = state.toolStreamById?.get(identity);
+  return state.toolStreamOrder.map((identity) => {
+    const entry = state.toolStreamById.get(identity);
     const id = normalizeOptionalString(entry?.toolCallId) ?? identity;
     const runId = normalizeOptionalString(entry?.runId);
     return runId ? { identity, id, runId } : { identity, id };

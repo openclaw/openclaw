@@ -24,7 +24,7 @@ import { formatEventPayload } from "../../lib/presenter.ts";
 import { projectGateway, projectGatewayEventLog } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { requestDebugOverlayToggle } from "./debug-overlay-contract.ts";
 import { CommandLaneRows } from "./lane-table.tsx";
 import "../../styles/debug-data.css";
@@ -131,7 +131,7 @@ export function DebugPage() {
   let client = context.gateway.snapshot.client;
   let needsRefresh = true;
   let disposed = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  const polling = useVisiblePoll(3000, () => void loadLiveDiagnostics());
 
   function invalidate() {
     fullFlight?.abort();
@@ -234,28 +234,17 @@ export function DebugPage() {
     publish();
   });
   function syncPolling() {
-    if (!lifecycle.capture() || document.visibilityState === "hidden") {
-      clearInterval(timer);
-      timer = undefined;
-    } else if (timer === undefined) {
-      timer = setInterval(() => void loadLiveDiagnostics(), 3000);
+    if (lifecycle.capture()) {
+      polling.start();
+    } else {
+      polling.stop();
     }
   }
-  const visibilityChanged = () => {
-    const wasStopped = timer === undefined;
-    syncPolling();
-    if (wasStopped && timer !== undefined) {
-      void loadLiveDiagnostics();
-    }
-  };
-  const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
   syncPolling();
   void loadDiagnostics();
   onCleanup(() => {
     disposed = true;
     invalidate();
-    clearInterval(timer);
-    stopVisibility();
     stopSelection();
     stopGateway();
     lifecycle.dispose();
