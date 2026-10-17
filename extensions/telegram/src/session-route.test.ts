@@ -1,6 +1,10 @@
 // Telegram tests cover session route plugin behavior.
 import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "./channel.js";
+import {
+  resolveTelegramConversationRoute,
+  resolveTelegramTargetSession,
+} from "./conversation-route.js";
 
 describe("telegram session route", () => {
   it("aligns isolated direct topic sessions with inbound reply routing", async () => {
@@ -81,6 +85,77 @@ describe("telegram session route", () => {
       expect(route?.recipientSessionExact).toBe(true);
     },
   );
+
+  const boundNamedAccountCfg = {
+    session: { dmScope: "per-channel-peer" as const },
+    bindings: [
+      { agentId: "fallback", match: { channel: "telegram", accountId: "*" } },
+      { agentId: "drafts", match: { channel: "telegram", accountId: "drafts" } },
+    ],
+    channels: { telegram: { accounts: { default: {}, drafts: {} } } },
+  };
+
+  it("routes sends from an explicitly bound named account to the inbound DM topic session", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: boundNamedAccountCfg,
+      agentId: "drafts",
+      accountId: "drafts",
+      target: "12345",
+      threadId: 21,
+      currentSessionKey: "agent:drafts:telegram:direct:12345:thread:12345:10",
+    });
+    const { route: inboundRoute } = await resolveTelegramConversationRoute({
+      cfg: boundNamedAccountCfg,
+      accountId: "drafts",
+      chatId: 12345,
+      isGroup: false,
+      threadSpec: { id: 21, scope: "dm" },
+      senderId: 12345,
+    });
+    const inboundSessionKey = resolveTelegramTargetSession({
+      cfg: boundNamedAccountCfg,
+      route: inboundRoute,
+      chatId: 12345,
+      isGroup: false,
+      senderId: 12345,
+      dmThreadId: 21,
+      botHasTopicsEnabled: true,
+    });
+
+    expect(inboundSessionKey).toBe("agent:drafts:telegram:direct:12345:thread:12345:21");
+    expect(route?.sessionKey).toBe(inboundSessionKey);
+    expect(route?.baseSessionKey).toBe("agent:drafts:telegram:direct:12345");
+    expect(route?.threadId).toBe(21);
+  });
+
+  it("keeps fallback isolation when the named account is bound to another agent", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: boundNamedAccountCfg,
+      agentId: "fallback",
+      accountId: "drafts",
+      target: "12345",
+    });
+
+    expect(route?.sessionKey).toBe("agent:fallback:telegram:drafts:direct:12345");
+  });
+
+  it("keeps the caller's agent for unbound destinations in an explicit multi-agent roster", async () => {
+    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        session: { dmScope: "per-channel-peer" },
+        agents: {
+          ownership: "explicit",
+          entries: { drafts: {}, other: {} },
+        },
+        channels: { telegram: { accounts: { default: {}, drafts: {} } } },
+      },
+      agentId: "drafts",
+      accountId: "drafts",
+      target: "12345",
+    });
+
+    expect(route?.sessionKey).toBe("agent:drafts:telegram:drafts:direct:12345");
+  });
 
   it("keeps direct-message and forum topics with the same id in distinct group routes", async () => {
     const direct = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
