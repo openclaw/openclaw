@@ -15,4 +15,18 @@ describe("nextcloudTalkApprovalAuth", () => {
       }),
     ).toEqual({ authorized: true });
   });
+
+  it("matches Talk users/ actor ids against bare allowlisted user ids", () => {
+    const authorize = (senderId: string, allowFrom = ["owner"]) =>
+      nextcloudTalkApprovalAuth.authorizeActorAction({
+        cfg: { channels: { "nextcloud-talk": { allowFrom } } },
+        senderId,
+        action: "approve",
+        approvalKind: "exec",
+      }).authorized;
+
+    expect(authorize("users/owner")).toBe(true);
+    expect(authorize("guests/owner")).toBe(false);
+    expect(authorize("users/owner", ["other-approver"])).toBe(false);
+  });
 });

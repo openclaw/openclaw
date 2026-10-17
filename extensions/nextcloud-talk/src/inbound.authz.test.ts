@@ -602,4 +602,51 @@ describe("nextcloud-talk inbound authz", () => {
     expect(buildMentionRegexes).not.toHaveBeenCalled();
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
+
+  it("admits a Talk users/ actor listed by bare user id and keeps the raw sender id", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.pairing.readAllowFromStore = vi.fn(async () => []);
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    const account = createAccount({
+      groupAllowFrom: ["trusted-user"],
+      rooms: { "room-1": { requireMention: false } },
+    });
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({ senderId: "users/trusted-user" }),
+      account,
+      config: { channels: { "nextcloud-talk": account.config } },
+      runtime: createTestRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+    const [dispatchParams] = vi.mocked(coreRuntime.channel.inbound.dispatch).mock.calls[0] ?? [];
+    expect(dispatchParams?.ctxPayload).toMatchObject({ SenderId: "users/trusted-user" });
+  });
+
+  it.each(["guests/trusted-user", "federated_users/trusted-user"])(
+    "drops Talk actor %s whose id equals a bare allowlisted user id",
+    async (senderId) => {
+      const coreRuntime = createPluginRuntimeMock();
+      coreRuntime.channel.pairing.readAllowFromStore = vi.fn(async () => []);
+      setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+      const runtime = createTestRuntimeEnv();
+      const account = createAccount({
+        groupAllowFrom: ["trusted-user"],
+        rooms: { "room-1": { requireMention: false } },
+      });
+
+      await handleNextcloudTalkInbound({
+        message: createMessage({ senderId }),
+        account,
+        config: { channels: { "nextcloud-talk": account.config } },
+        runtime,
+      });
+
+      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith(
+        `nextcloud-talk: drop group sender ${senderId} (reason=group_policy_not_allowlisted)`,
+      );
+    },
+  );
 });
