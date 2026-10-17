@@ -1,3 +1,5 @@
+// System gateway methods expose device and host identity, heartbeat controls,
+// presence snapshots, and normalized system events.
 import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -185,6 +187,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   };
 }
 
+/** Gateway handlers for identity, host information, heartbeat toggles, and presence events. */
 export const systemHandlers: GatewayRequestHandlers = {
   "gateway.identity.get": async ({ respond }) => {
     const identity = await loadOrCreateProcessDeviceIdentityAsync();

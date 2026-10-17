@@ -1,3 +1,4 @@
+// Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { resolveAgentRunLifecycleTerminalFacts } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";

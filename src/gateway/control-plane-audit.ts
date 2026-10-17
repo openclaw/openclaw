@@ -1,3 +1,4 @@
+// Gateway control-plane audit helpers.
 // Extracts stable actor identity and compact changed-path summaries for audit logs.
 import {
   normalizeOptionalString,

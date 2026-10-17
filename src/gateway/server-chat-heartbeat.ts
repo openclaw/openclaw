@@ -13,6 +13,9 @@ export function resolveHeartbeatFlag(runId: string, sourceRunId?: string, captur
   return source ? primary?.isHeartbeat : (captured ?? primary?.isHeartbeat);
 }
 
+/**
+ * Check if heartbeat ACK/noise should be hidden from interactive chat surfaces.
+ */
 export function shouldHideHeartbeatChatOutput(
   runId: string,
   sourceRunId?: string,

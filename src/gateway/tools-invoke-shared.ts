@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+// Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
   normalizeOptionalLowercaseString,

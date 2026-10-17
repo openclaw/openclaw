@@ -1,3 +1,4 @@
+// Read-only agent workspace browsing for operator clients (mobile apps, UI).
 // Deliberately no write/delete/upload surface: mutations need their own
 // reviewed contract; see the allowlisted agents.files.* API for edits.
 import path from "node:path";

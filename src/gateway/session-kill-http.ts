@@ -1,3 +1,4 @@
+// Gateway HTTP session kill handler.
 // Stops subagent runs through the admin-scoped HTTP control surface.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";

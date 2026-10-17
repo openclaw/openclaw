@@ -1,3 +1,4 @@
+// Gateway credential secret-input resolver.
 // Resolves SecretRefs before applying Gateway credential precedence rules.
 import {
   cloneConfigWithResolutionFacts,

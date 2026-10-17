@@ -1,3 +1,4 @@
+// Plugin/channel activation config merge helpers.
 // Carries activation enablement into runtime config without copying stale state.
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";

@@ -1,3 +1,4 @@
+// Node system.run approval binding matcher.
 // Verifies command approvals against argv, cwd, session, agent, and env keys.
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
