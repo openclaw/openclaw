@@ -7,6 +7,7 @@ type DiagnosticSnapshot = Omit<ConfigFileSnapshot, "sourceConfig">;
 
 const readSnapshot = vi.hoisted(() => vi.fn<() => Promise<DiagnosticSnapshot>>());
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readSnapshot }));
+// mock-isolation: Invalid-snapshot tests have no prepared runtime config or plugin registry.
 vi.mock("../config/runtime-schema.js", () => ({
   loadGatewayConfigRedactionHints: () => undefined,
 }));
