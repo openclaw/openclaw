@@ -1,7 +1,42 @@
 // Telegram tests cover canonical thread-scope resolution and encoding.
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
-import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  resolveTelegramMessageThreadSpec,
+  withResolvedTelegramForumFlag,
+} from "./bot/helpers.js";
+import { adoptTelegramDmTopicMessage, createTelegramDmTopicAdoptState } from "./dm-topic-adopt.js";
+
+describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
+  const chat = { id: 1001, type: "private" };
+  const from = { id: 1001, is_bot: false, first_name: "User" };
+  const topicCreated = {
+    message_id: 500,
+    date: 1_760_000_000,
+    chat,
+    from,
+    message_thread_id: 500,
+    is_topic_message: true,
+    forum_topic_created: { name: "hello", icon_color: 0, is_name_implicit: true },
+  } as unknown as Message;
+  const rootMessage = () =>
+    ({ message_id: 501, date: 1_760_000_000, chat, from, text: "hello" }) as unknown as Message;
+
+  it("keeps the adopted topic on normalized message copies but not in serialized JSON", () => {
+    const state = createTelegramDmTopicAdoptState();
+    adoptTelegramDmTopicMessage(topicCreated, state);
+    const message = rootMessage();
+    expect(adoptTelegramDmTopicMessage(message, state)).toBe(500);
+    // Inbound normalization spreads a private message without `is_forum` into a copy.
+    const normalized = withResolvedTelegramForumFlag(message, false);
+    expect(normalized).not.toBe(message);
+    expect(resolveTelegramMessageThreadSpec(normalized)).toEqual({ id: 500, scope: "dm" });
+    // Durable rows carry the fact as explicit payload metadata, never as message state.
+    expect(JSON.stringify(message)).toBe(JSON.stringify(rootMessage()));
+    expect(resolveTelegramMessageThreadSpec(structuredClone(message))).toEqual({ scope: "dm" });
+  });
+});
 
 describe("resolveTelegramMessageThreadSpec", () => {
   it.each([
