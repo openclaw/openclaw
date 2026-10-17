@@ -218,7 +218,7 @@ describe("sidebar attention refresh ownership", () => {
     document.body.append(provider);
 
     await waitForFast(() => expect(issues(element, "button")).not.toBeNull());
-    const trigger = issues(element, "button")!;
+    const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
     return { element, provider, store, trigger };
   }
 
@@ -321,7 +321,7 @@ describe("sidebar attention refresh ownership", () => {
     provider.append(element);
     await waitForFast(() => expect(issues(element, "button")).not.toBeNull());
     expect(issues(element, "panel")).toBeNull();
-    const reconnectedTrigger = issues(element, "button")!;
+    const reconnectedTrigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
     expect(reconnectedTrigger.getAttribute("aria-expanded")).toBe("false");
     await openPanel(element, reconnectedTrigger);
   });
