@@ -13,6 +13,15 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+const saveManifest = ({ directory, manifest }: { directory: string; manifest: Capture }) =>
+  writeFile(path.join(directory, "manifest.json"), JSON.stringify(manifest));
+const htmlAt = (directory: string) => readFile(path.join(directory, "index.html"), "utf8");
+async function compare(before: string, after: string, expected: number) {
+  const output = temporary.make("parity-output-");
+  expect(await compareCaptures(before, after, output)).toBe(expected);
+  const [name] = await readdir(output);
+  return path.join(output, name!);
+}
 async function fixture(pixel: number | readonly number[], width = 1, id = "scene--profile") {
   const directory = temporary.make("parity-report-");
   const image = new photon.PhotonImage(
@@ -55,7 +64,7 @@ async function fixture(pixel: number | readonly number[], width = 1, id = "scene
     ],
   };
   await writeFile(path.join(directory, `${id}.png`), png);
-  await writeFile(path.join(directory, "manifest.json"), JSON.stringify(manifest));
+  await saveManifest({ directory, manifest });
   return { directory, manifest };
 }
 
@@ -67,11 +76,9 @@ it("links comparison images in directories with URL delimiters", async () => {
     after = path.join(parent, "after?2%");
   await rename(a.directory, before);
   await rename(b.directory, after);
-  const output = temporary.make("parity-output-");
-  expect(await compareCaptures(before, after, output)).toBe(0);
-  const [name] = await readdir(output);
-  const index = path.join(output, name!, "index.html");
-  const html = await readFile(index, "utf8");
+  const comparisonDir = await compare(before, after, 0);
+  const index = path.join(comparisonDir, "index.html");
+  const html = await htmlAt(comparisonDir);
   for (const [alt, directory] of [
     ["Before", before],
     ["After", after],
@@ -92,20 +99,20 @@ it.each([0])(
       const b = await fixture(
         baseline.map((value, index) => value + (index === channel ? delta : 0)),
       );
-      const output = temporary.make("parity-boundary-");
       const noise = Math.abs(delta) === 1;
-      expect(await compareCaptures(a.directory, b.directory, output)).toBe(noise ? 0 : 1);
-      const [name] = await readdir(output);
-      const report = JSON.parse(await readFile(path.join(output, name!, "report.json"), "utf8"));
-      expect(report.maxRasterNoiseChannelDelta).toBe(1);
-      expect(report.rasterNoisePixels).toBe(noise ? 1 : 0);
-      expect(report.results[0]).toMatchObject({
-        changedPixels: noise ? 0 : 1,
+      const output = await compare(a.directory, b.directory, noise ? 0 : 1);
+      const report = JSON.parse(await readFile(path.join(output, "report.json"), "utf8"));
+      expect(report).toMatchObject({
+        maxRasterNoiseChannelDelta: 1,
         rasterNoisePixels: noise ? 1 : 0,
+        results: [
+          expect.objectContaining({
+            changedPixels: noise ? 0 : 1,
+            rasterNoisePixels: noise ? 1 : 0,
+          }),
+        ],
       });
-      expect(await readFile(path.join(output, name!, "index.html"), "utf8")).toContain(
-        `raster noise (≤1 level): ${noise ? 1 : 0} px`,
-      );
+      expect(await htmlAt(output)).toContain(`raster noise (≤1 level): ${noise ? 1 : 0} px`);
     }
   },
 );
@@ -119,26 +126,25 @@ it.each([
     const a = await fixture(0, 1, id),
       b = await fixture(37, 1, id);
     await writeGallery(a.directory, a.manifest);
-    expect(
-      (await readFile(path.join(a.directory, "index.html"), "utf8")).includes(
-        "Known nondeterministic:",
-      ),
-    ).toBe(known);
-    const output = temporary.make("parity-known-");
-    expect(await compareCaptures(a.directory, b.directory, output)).toBe(known ? 0 : 1);
-    const [name] = await readdir(output);
-    const report = JSON.parse(await readFile(path.join(output, name!, "report.json"), "utf8"));
-    expect(report.changed).toBe(known ? 0 : 1);
-    expect(report.knownNondeterministic).toBe(known ? 1 : 0);
-    expect(report.results[0]).toMatchObject({
-      status: known ? "known-nondeterministic" : "pixels",
-      changedPixels: 1,
-      rasterNoisePixels: 0,
-      diff: `${id}.png`,
+    expect((await htmlAt(a.directory)).includes("Known nondeterministic:")).toBe(known);
+    const output = await compare(a.directory, b.directory, known ? 0 : 1);
+    const report = JSON.parse(await readFile(path.join(output, "report.json"), "utf8"));
+    expect(report).toMatchObject({
+      changed: known ? 0 : 1,
+      knownNondeterministic: known ? 1 : 0,
+      results: [
+        expect.objectContaining({
+          status: known ? "known-nondeterministic" : "pixels",
+          changedPixels: 1,
+          rasterNoisePixels: 0,
+          diff: `${id}.png`,
+        }),
+      ],
     });
-    const html = await readFile(path.join(output, name!, "index.html"), "utf8");
-    expect(html).toContain(known ? "Image clipping paints differently" : `${id}: pixels`);
-    expect(await readFile(path.join(output, name!, `${id}.png`))).not.toHaveLength(0);
+    expect(await htmlAt(output)).toContain(
+      known ? "Image clipping paints differently" : `${id}: pixels`,
+    );
+    expect(await readFile(path.join(output, `${id}.png`))).not.toHaveLength(0);
   },
 );
 
@@ -148,43 +154,34 @@ it.each(["route-apps--mobile-light"])("fails changed dimensions for %s", async (
   expect(await compareCaptures(a.directory, b.directory, temporary.make("parity-output-"))).toBe(1);
 });
 
-it.each(["metadata", "missing-shot", "incomplete", "duplicate", "unsafe-path", "checksum"])(
-  "rejects %s evidence",
-  async (defect) => {
-    const a = await fixture(0),
-      b = await fixture(0);
-    const manifest = b.manifest;
-    if (defect === "metadata") {
-      manifest.browser = "";
-    }
-    if (defect === "missing-shot") {
-      manifest.contract.expectedShots.push("other--profile");
-      manifest.catalog = hash(JSON.stringify(manifest.contract));
-    }
-    if (defect === "incomplete") {
-      manifest.complete = false;
-    }
-    if (defect === "duplicate") {
-      manifest.shots.push(manifest.shots[0]!);
-    }
-    if (defect === "unsafe-path") {
-      manifest.shots[0]!.file = "../outside.png";
-    }
-    if (defect === "checksum") {
-      manifest.shots[0]!.sha256 = hash("changed-file");
-    }
-    await writeFile(path.join(b.directory, "manifest.json"), JSON.stringify(manifest));
-    await expect(
-      compareCaptures(a.directory, b.directory, temporary.make("parity-output-")),
-    ).rejects.toThrow();
-  },
-);
+it.each<[string, (manifest: Capture) => void]>([
+  ["metadata", (m) => Object.assign(m, { browser: "" })],
+  [
+    "missing-shot",
+    (m) => {
+      m.contract.expectedShots.push("other--profile");
+      m.catalog = hash(JSON.stringify(m.contract));
+    },
+  ],
+  ["incomplete", (m) => Object.assign(m, { complete: false })],
+  ["duplicate", (m) => m.shots.push(m.shots[0]!)],
+  ["unsafe-path", (m) => Object.assign(m.shots[0]!, { file: "../outside.png" })],
+  ["checksum", (m) => Object.assign(m.shots[0]!, { sha256: hash("changed-file") })],
+])("rejects %s evidence", async (_defect, corrupt) => {
+  const a = await fixture(0),
+    b = await fixture(0);
+  corrupt(b.manifest);
+  await saveManifest(b);
+  await expect(
+    compareCaptures(a.directory, b.directory, temporary.make("parity-output-")),
+  ).rejects.toThrow();
+});
 
 it("rejects incompatible browser metadata even with identical images", async () => {
   const a = await fixture(0),
     b = await fixture(0);
   b.manifest.browser = "another-browser";
-  await writeFile(path.join(b.directory, "manifest.json"), JSON.stringify(b.manifest));
+  await saveManifest(b);
   expect(await compareCaptures(a.directory, b.directory, temporary.make("parity-output-"))).toBe(1);
 });
 
