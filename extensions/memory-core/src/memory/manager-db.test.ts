@@ -1,8 +1,7 @@
-// Memory Core tests cover shared agent database publication and shadow cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import {
   encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
@@ -27,38 +26,28 @@ import {
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
-function ensureTestMemorySchema(db: DatabaseSync, cacheEnabled = true, ftsEnabled = false): void {
-  ensureMemoryIndexSchema({
-    db,
-    cacheEnabled,
-    ftsEnabled,
-  });
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toThrow("ENOENT");
-}
-
-async function publishPreparedMemoryDatabase(
-  params: Parameters<typeof publishMemoryDatabaseTables>[0] & {
-    sourceHasVectors: boolean;
-    vectorExtensionPath?: string;
-  },
-): Promise<void> {
-  if (params.sourceHasVectors) {
-    const loaded = await loadSqliteVecExtension({
-      db: params.targetDb,
-      extensionPath: params.vectorExtensionPath,
-    });
-    if (!loaded.ok) {
-      throw new Error(loaded.error);
-    }
-  }
+async function publish(params: Parameters<typeof publishMemoryDatabaseTables>[0]): Promise<void> {
   publishMemoryDatabaseTables(params);
 }
 
 describe("memory manager database publication", () => {
   let fixtureRoot = "";
+  function database(name: string, ftsEnabled = false, allowExtension = false) {
+    const db = new DatabaseSync(path.join(fixtureRoot, name), { allowExtension });
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled });
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+  const rows = (db: DatabaseSync, query: string) => db.prepare(query).all();
+  const insertSource = (db: DatabaseSync, file: string, hash: string, id?: number, stamp = 1) =>
+    db
+      .prepare(`INSERT INTO memory_index_sources (id, path, source, hash, mtime, size)
+      VALUES (?, ?, 'memory', ?, ?, ?)`)
+      .run(id ?? null, file, hash, stamp, stamp);
 
   beforeAll(async () => {
     await configureMemoryCoreDreamingStateForTests();
@@ -87,12 +76,10 @@ describe("memory manager database publication", () => {
 
   it("resets only derived memory tables, preserves their schema, and is repeatable", async () => {
     const dbPath = path.join(fixtureRoot, "index.sqlite");
-    const db = new DatabaseSync(dbPath, { allowExtension: true });
-    try {
-      ensureTestMemorySchema(db, true, true);
-      const vector = await loadSqliteVecExtension({ db });
-      expect(vector.ok).toBe(true);
-      db.exec(`
+    using db = database("index.sqlite", true, true);
+    const vector = await loadSqliteVecExtension({ db });
+    expect(vector.ok).toBe(true);
+    db.exec(`
         CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3]);
         CREATE TABLE memory_unrelated (payload BLOB);
         INSERT INTO memory_unrelated VALUES (x'00ff80');
@@ -106,44 +93,40 @@ describe("memory manager database publication", () => {
         INSERT INTO memory_index_chunk_provenance VALUES ('chunk', 'owner', 'interactive', 1, NULL);
         INSERT INTO memory_index_meta VALUES ('meta', 'old');
       `);
-      const embedding = encodeMemoryEmbedding([0, 1, 0]);
-      db.prepare("UPDATE memory_index_chunks SET embedding = ? WHERE id = 'chunk'").run(embedding);
-      db.prepare(
-        "INSERT INTO memory_embedding_cache VALUES ('test', 'model', 'key', 'old', ?, 3, 1)",
-      ).run(embedding);
-      const schema = () =>
-        db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all();
-      const beforeSchema = schema();
-      const revision = readMemoryDatabaseRevision(db);
-      await resetMemoryDatabase({ targetDb: db, dbPath, workspaceDir: fixtureRoot });
-      expect(schema()).toEqual(beforeSchema);
-      expect(db.prepare("SELECT hex(payload) AS bytes FROM memory_unrelated").all()).toEqual([
-        { bytes: "00FF80" },
-      ]);
-      for (const table of [
-        "memory_index_sources",
-        "memory_index_chunks",
-        "memory_index_chunks_fts",
-        "memory_index_paths_fts",
-        "memory_index_chunks_vec",
-        "memory_index_chunk_recall_metadata",
-        "memory_index_chunk_provenance",
-        "memory_embedding_cache",
-        "memory_index_meta",
-      ]) {
-        expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(), table).toEqual({
-          count: 0,
-        });
-      }
-      const resetRevision = readMemoryDatabaseRevision(db);
-      expect(resetRevision).toBe(revision + 1);
-      expect(await resetMemoryDatabase({ targetDb: db, dbPath, workspaceDir: fixtureRoot })).toBe(
-        false,
-      );
-      expect(readMemoryDatabaseRevision(db)).toBe(resetRevision);
-    } finally {
-      db.close();
+    const embedding = encodeMemoryEmbedding([0, 1, 0]);
+    db.prepare("UPDATE memory_index_chunks SET embedding = ? WHERE id = 'chunk'").run(embedding);
+    db.prepare(
+      "INSERT INTO memory_embedding_cache VALUES ('test', 'model', 'key', 'old', ?, 3, 1)",
+    ).run(embedding);
+    const schema = () => rows(db, "SELECT type, name, sql FROM sqlite_schema ORDER BY name");
+    const beforeSchema = schema();
+    const revision = readMemoryDatabaseRevision(db);
+    await resetMemoryDatabase({ targetDb: db, dbPath, workspaceDir: fixtureRoot });
+    expect(schema()).toEqual(beforeSchema);
+    expect(rows(db, "SELECT hex(payload) AS bytes FROM memory_unrelated")).toEqual([
+      { bytes: "00FF80" },
+    ]);
+    for (const table of [
+      "memory_index_sources",
+      "memory_index_chunks",
+      "memory_index_chunks_fts",
+      "memory_index_paths_fts",
+      "memory_index_chunks_vec",
+      "memory_index_chunk_recall_metadata",
+      "memory_index_chunk_provenance",
+      "memory_embedding_cache",
+      "memory_index_meta",
+    ]) {
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(), table).toEqual({
+        count: 0,
+      });
     }
+    const resetRevision = readMemoryDatabaseRevision(db);
+    expect(resetRevision).toBe(revision + 1);
+    expect(await resetMemoryDatabase({ targetDb: db, dbPath, workspaceDir: fixtureRoot })).toBe(
+      false,
+    );
+    expect(readMemoryDatabaseRevision(db)).toBe(resetRevision);
   });
 
   it("does not create an index when there is nothing to reset", async () => {
@@ -271,141 +254,88 @@ describe("memory manager database publication", () => {
   });
 
   it("publishes stable path and chunk identities and restores FTS maintenance", async () => {
-    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    using targetDb = database("target.sqlite", true);
+    using sourceDb = database("source.sqlite", true);
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
-    const targetDb = new DatabaseSync(targetPath);
-    const sourceDb = new DatabaseSync(sourcePath);
-    try {
-      ensureTestMemorySchema(targetDb, true, true);
-      ensureTestMemorySchema(sourceDb, true, true);
-      targetDb
-        .prepare(
-          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run("memory/stale.md", "memory", "stale", 1, 1);
-      const embedding = encodeMemoryEmbedding([0.1234567890123456, -0.5]);
-      const insertChunk = (db: DatabaseSync, rowid: number, id: string, text: string) => {
-        db.prepare(
-          `INSERT INTO memory_index_chunks
+    const query = (sql: string, ...values: SQLInputValue[]) => targetDb.prepare(sql).all(...values);
+    const select = (table: string, fields: string) =>
+      query(`SELECT ${fields} FROM memory_index_${table}`);
+    const replacementPath = "memory/replacement.md";
+    insertSource(targetDb, "memory/stale.md", "stale");
+    const embedding = encodeMemoryEmbedding([0.1234567890123456, -0.5]);
+    const insertChunk = (db: DatabaseSync, rowid: number, id: string, text: string) => {
+      db.prepare(
+        `INSERT INTO memory_index_chunks
              (chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
            VALUES (?, ?, ?, 'memory', 1, 1, ?, 'model', ?, ?, 1)`,
-        ).run(rowid, id, `memory/${id}.md`, id, text, embedding);
-        db.prepare(`INSERT INTO memory_index_chunk_provenance
+      ).run(rowid, id, `memory/${id}.md`, id, text, embedding);
+      db.prepare(`INSERT INTO memory_index_chunk_provenance
           (chunk_id, origin_class, session_kind, observed_at)
           VALUES (?, 'owner', 'interactive', 1)`).run(id);
-      };
-      insertChunk(targetDb, 7, "stale", "Old violetmarker");
+    };
+    insertChunk(targetDb, 7, "stale", "Old violetmarker");
+    for (const [fts, table, label] of [
+      ["paths", "sources", "path"],
+      ["chunks", "chunks", "body"],
+    ]) {
       targetDb.exec(`
-        DROP TRIGGER memory_index_paths_fts_after_delete;
-        CREATE TRIGGER memory_index_paths_fts_after_delete
-        AFTER DELETE ON memory_index_sources
-        BEGIN
-          SELECT RAISE(ABORT, 'path FTS trigger fired during bulk publish');
-        END;
-        DROP TRIGGER memory_index_chunks_fts_after_delete;
-        CREATE TRIGGER memory_index_chunks_fts_after_delete
-        AFTER DELETE ON memory_index_chunks
-        BEGIN
-          SELECT RAISE(ABORT, 'body FTS trigger fired during bulk publish');
-        END;
+        DROP TRIGGER memory_index_${fts}_fts_after_delete;
+        CREATE TRIGGER memory_index_${fts}_fts_after_delete AFTER DELETE ON memory_index_${table}
+        BEGIN SELECT RAISE(ABORT, '${label} FTS trigger fired during bulk publish'); END;
       `);
-      sourceDb
-        .prepare(
-          "INSERT INTO memory_index_sources (id, path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .run(42, "memory/replacement.md", "memory", "replacement", 2, 2);
-      insertChunk(sourceDb, 84, "replacement", "New ambermarker");
-      const expectedRevision = readMemoryDatabaseRevision(targetDb);
-      sourceDb.close();
-
-      await publishPreparedMemoryDatabase({
-        targetDb,
-        sourcePath,
-        sourceHasVectors: false,
-        metaKey: "meta",
-        expectedRevision,
-      });
-
-      expect(targetDb.prepare("SELECT path, source FROM memory_index_paths_fts").all()).toEqual([
-        { path: "memory/replacement.md", source: "memory" },
-      ]);
-      expect(targetDb.prepare("SELECT id, path FROM memory_index_sources").all()).toEqual([
-        { id: 42, path: "memory/replacement.md" },
-      ]);
-      expect(targetDb.prepare("SELECT rowid, path FROM memory_index_paths_fts").all()).toEqual([
-        { rowid: 42, path: "memory/replacement.md" },
-      ]);
-      expect(
-        targetDb.prepare("SELECT chunk_rowid, id, embedding FROM memory_index_chunks").all(),
-      ).toEqual([
-        {
-          chunk_rowid: 84,
-          id: "replacement",
-          embedding,
-        },
-      ]);
-      expect(targetDb.prepare("SELECT rowid, id FROM memory_index_chunks_fts").all()).toEqual([
-        { rowid: 84, id: "replacement" },
-      ]);
-      const bodyMatches = (query: string) =>
-        targetDb
-          .prepare(
-            "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? ORDER BY id",
-          )
-          .all(query);
-      expect(bodyMatches("ambermarker")).toEqual([{ id: "replacement" }]);
-      expect(bodyMatches("violetmarker")).toEqual([]);
-      expect(
-        targetDb
-          .prepare("SELECT path FROM memory_index_paths_fts WHERE memory_index_paths_fts MATCH ?")
-          .all('"replacement"'),
-      ).toEqual([{ path: "memory/replacement.md" }]);
-      expect(
-        targetDb
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'memory_index_paths_fts_after_%' ORDER BY name",
-          )
-          .all(),
-      ).toEqual([
-        { name: "memory_index_paths_fts_after_delete" },
-        { name: "memory_index_paths_fts_after_insert" },
-        { name: "memory_index_paths_fts_after_update" },
-      ]);
-
-      targetDb
-        .prepare(
-          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run("memory/after-publish.md", "memory", "after", 3, 3);
-      insertChunk(targetDb, 85, "after-publish", "Fresh ambermarker");
-      expect(bodyMatches("ambermarker")).toEqual([{ id: "after-publish" }, { id: "replacement" }]);
-      targetDb
-        .prepare("UPDATE memory_index_chunks SET text = ? WHERE id = ?")
-        .run("Updated saffronmarker", "after-publish");
-      targetDb.prepare("DELETE FROM memory_index_chunks WHERE id = ?").run("replacement");
-      expect(bodyMatches("ambermarker")).toEqual([]);
-      expect(bodyMatches("saffronmarker")).toEqual([{ id: "after-publish" }]);
-      expect(
-        targetDb
-          .prepare("SELECT path FROM memory_index_paths_fts ORDER BY path")
-          .all()
-          .map((row) => (row as { path: string }).path),
-      ).toEqual(["memory/after-publish.md", "memory/replacement.md"]);
-      targetDb
-        .prepare("UPDATE memory_index_sources SET path = ? WHERE path = ? AND source = ?")
-        .run("memory/after-update.md", "memory/after-publish.md", "memory");
-      targetDb
-        .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ?")
-        .run("memory/replacement.md", "memory");
-      expect(targetDb.prepare("SELECT path FROM memory_index_paths_fts").all()).toEqual([
-        { path: "memory/after-update.md" },
-      ]);
-    } finally {
-      try {
-        sourceDb.close();
-      } catch {}
-      targetDb.close();
     }
+    insertSource(sourceDb, replacementPath, "replacement", 42, 2);
+    insertChunk(sourceDb, 84, "replacement", "New ambermarker");
+    const expectedRevision = readMemoryDatabaseRevision(targetDb);
+    sourceDb.close();
+
+    await publish({ targetDb, sourcePath, metaKey: "meta", expectedRevision });
+
+    expect(select("paths_fts", "path, source")).toEqual([
+      { path: replacementPath, source: "memory" },
+    ]);
+    expect(select("sources", "id, path")).toEqual([{ id: 42, path: replacementPath }]);
+    expect(select("paths_fts", "rowid, path")).toEqual([{ rowid: 42, path: replacementPath }]);
+    expect(select("chunks", "chunk_rowid, id, embedding")).toEqual([
+      { chunk_rowid: 84, id: "replacement", embedding },
+    ]);
+    expect(select("chunks_fts", "rowid, id")).toEqual([{ rowid: 84, id: "replacement" }]);
+    const bodyMatches = (text: string) =>
+      query(
+        "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? ORDER BY id",
+        text,
+      );
+    expect(bodyMatches("ambermarker")).toEqual([{ id: "replacement" }]);
+    expect(bodyMatches("violetmarker")).toEqual([]);
+    expect(
+      query(
+        "SELECT path FROM memory_index_paths_fts WHERE memory_index_paths_fts MATCH ?",
+        '"replacement"',
+      ),
+    ).toEqual([{ path: replacementPath }]);
+    insertSource(targetDb, "memory/after-publish.md", "after", undefined, 3);
+    insertChunk(targetDb, 85, "after-publish", "Fresh ambermarker");
+    expect(bodyMatches("ambermarker")).toEqual([{ id: "after-publish" }, { id: "replacement" }]);
+    targetDb
+      .prepare("UPDATE memory_index_chunks SET text = ? WHERE id = ?")
+      .run("Updated saffronmarker", "after-publish");
+    targetDb.prepare("DELETE FROM memory_index_chunks WHERE id = ?").run("replacement");
+    expect(bodyMatches("ambermarker")).toEqual([]);
+    expect(bodyMatches("saffronmarker")).toEqual([{ id: "after-publish" }]);
+    expect(
+      query("SELECT path FROM memory_index_paths_fts ORDER BY path").map(
+        (row) => (row as { path: string }).path,
+      ),
+    ).toEqual(["memory/after-publish.md", replacementPath]);
+    targetDb
+      .prepare("UPDATE memory_index_sources SET path = ? WHERE path = ? AND source = ?")
+      .run("memory/after-update.md", "memory/after-publish.md", "memory");
+    targetDb
+      .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ?")
+      .run(replacementPath, "memory");
+    expect(query("SELECT path FROM memory_index_paths_fts")).toEqual([
+      { path: "memory/after-update.md" },
+    ]);
   });
 
   it("removes FTS tables and triggers when the shadow has FTS disabled", async () => {
@@ -462,117 +392,94 @@ describe("memory manager database publication", () => {
   });
 
   it("publishes a prepared shadow vector table", async () => {
-    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    using targetDb = database("target.sqlite", false, true);
+    using sourceDb = database("source.sqlite", false, true);
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
-    const targetDb = new DatabaseSync(targetPath, { allowExtension: true });
-    const sourceDb = new DatabaseSync(sourcePath, { allowExtension: true });
-    try {
-      ensureTestMemorySchema(targetDb);
-      ensureTestMemorySchema(sourceDb);
-      const sourceVector = await loadSqliteVecExtension({ db: sourceDb });
-      if (!sourceVector.ok) {
-        return;
-      }
-      sourceDb.exec(`
+    const sourceVector = await loadSqliteVecExtension({ db: sourceDb });
+    if (!sourceVector.ok) {
+      return;
+    }
+    sourceDb.exec(`
         CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
           id TEXT PRIMARY KEY,
           embedding FLOAT[3]
         )
       `);
-      sourceDb
-        .prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)")
-        .run("vector", JSON.stringify([0, 1, 0]));
-      sourceDb.close();
+    sourceDb
+      .prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)")
+      .run("vector", JSON.stringify([0, 1, 0]));
+    sourceDb.close();
 
-      await publishPreparedMemoryDatabase({
-        targetDb,
-        sourcePath,
-        sourceHasVectors: true,
-        metaKey: "memory_index_meta",
-        expectedRevision: readMemoryDatabaseRevision(targetDb),
-        vectorExtensionPath: sourceVector.extensionPath,
-      });
+    const targetVector = await loadSqliteVecExtension({
+      db: targetDb,
+      extensionPath: sourceVector.extensionPath,
+    });
+    expect(targetVector.ok).toBe(true);
+    await publish({
+      targetDb,
+      sourcePath,
+      metaKey: "memory_index_meta",
+      expectedRevision: readMemoryDatabaseRevision(targetDb),
+    });
 
-      expect(targetDb.prepare("SELECT id FROM memory_index_chunks_vec").all()).toEqual([
-        { id: "vector" },
-      ]);
-    } finally {
-      try {
-        sourceDb.close();
-      } catch {}
-      targetDb.close();
-    }
+    expect(rows(targetDb, "SELECT id FROM memory_index_chunks_vec")).toEqual([{ id: "vector" }]);
   });
 
   it("rejects a stale shadow publish after a concurrent live memory update", async () => {
-    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    using targetDb = database("target.sqlite");
+    using sourceDb = database("source.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
-    const targetDb = new DatabaseSync(targetPath);
-    const sourceDb = new DatabaseSync(sourcePath);
-    let concurrentDb: DatabaseSync | undefined;
-    try {
-      ensureTestMemorySchema(targetDb);
-      ensureTestMemorySchema(sourceDb);
-      targetDb
-        .prepare(
-          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run("memory.md", "sessions", "published", 1, 1);
-      sourceDb
-        .prepare(
-          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run("memory.md", "sessions", "shadow", 1, 1);
-      const expectedRevision = readMemoryDatabaseRevision(targetDb);
-      sourceDb.close();
-
-      concurrentDb = new DatabaseSync(targetPath);
-      const publisher = bindSqliteWorkerBackend(
-        { kind: "agent" },
-        { databasePath: targetPath, database: concurrentDb, admit: () => undefined },
-      );
-      try {
-        expect(
-          publisher.execute({
-            type: "source.refresh",
-            input: {
-              path: "memory.md",
-              expectedHash: "published",
-              hash: "newer",
-              mtime: 2,
-              size: 2,
-            },
-          }),
-        ).toMatchObject({ ok: true, value: true });
-      } finally {
-        publisher.close();
-      }
-      concurrentDb.close();
-      concurrentDb = undefined;
-
-      const publication = publishPreparedMemoryDatabase({
-        targetDb,
-        sourcePath,
-        sourceHasVectors: false,
-        metaKey: "memory_index_meta",
-        expectedRevision,
-      });
-      await expect(publication).rejects.toBeInstanceOf(MemoryIndexRevisionConflictError);
-      await expect(publication).rejects.toThrow(/changed while full reindex was building/);
-      expect(
-        targetDb
-          .prepare("SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?")
-          .get("memory.md", "sessions"),
-      ).toEqual({ hash: "newer" });
-    } finally {
-      try {
-        concurrentDb?.close();
-      } catch {}
-      try {
-        sourceDb.close();
-      } catch {}
-      targetDb.close();
+    for (const [db, hash] of [
+      [targetDb, "published"],
+      [sourceDb, "shadow"],
+    ] as const) {
+      db.prepare(
+        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+      ).run("memory.md", "sessions", hash, 1, 1);
     }
+    const expectedRevision = readMemoryDatabaseRevision(targetDb);
+    sourceDb.close();
+
+    using concurrentDb = new DatabaseSync(path.join(fixtureRoot, "target.sqlite"));
+    const publisher = bindSqliteWorkerBackend(
+      { kind: "agent" },
+      {
+        databasePath: path.join(fixtureRoot, "target.sqlite"),
+        database: concurrentDb,
+        admit: () => undefined,
+      },
+    );
+    try {
+      expect(
+        publisher.execute({
+          type: "source.refresh",
+          input: {
+            path: "memory.md",
+            expectedHash: "published",
+            hash: "newer",
+            mtime: 2,
+            size: 2,
+          },
+        }),
+      ).toMatchObject({ ok: true, value: true });
+    } finally {
+      publisher.close();
+    }
+    concurrentDb.close();
+
+    const publication = publish({
+      targetDb,
+      sourcePath,
+      metaKey: "memory_index_meta",
+      expectedRevision,
+    });
+    await expect(publication).rejects.toBeInstanceOf(MemoryIndexRevisionConflictError);
+    await expect(publication).rejects.toThrow(/changed while full reindex was building/);
+    expect(
+      targetDb
+        .prepare("SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?")
+        .get("memory.md", "sessions"),
+    ).toEqual({ hash: "newer" });
   });
 
   it("preserves the live embedding cache instead of publishing the shadow cache", async () => {
@@ -620,8 +527,7 @@ describe("memory manager database publication", () => {
 
   it("removes aged orphan shadows under the maintenance lease but preserves young shadows", async () => {
     const databasePath = path.join(fixtureRoot, "agent.sqlite");
-    const database = new DatabaseSync(databasePath);
-    database.close();
+    new DatabaseSync(databasePath).close();
     const oldShadow = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
     const youngShadow = `${databasePath}.memory-reindex-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
     const old = new Date(Date.now() - 48 * 60 * 60_000);
@@ -639,9 +545,9 @@ describe("memory manager database publication", () => {
       await lock.release();
     }
 
-    await expectPathMissing(oldShadow);
-    await expectPathMissing(`${oldShadow}-wal`);
-    await expectPathMissing(`${oldShadow}-journal`);
+    for (const suffix of ["", "-wal", "-journal"]) {
+      await expect(fs.access(`${oldShadow}${suffix}`)).rejects.toThrow("ENOENT");
+    }
     await fs.access(youngShadow);
   });
 });
