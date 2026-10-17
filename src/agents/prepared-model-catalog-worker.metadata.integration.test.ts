@@ -28,29 +28,25 @@ function writeStaticContextPlugin(root: string, id: string, staticCatalog = true
     const extension = artifact === "source" ? "cts" : "cjs";
     const pluginDir = path.join(root, ...(artifact === "built" ? ["dist"] : []), "extensions", id);
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: id,
-        version: "1.0.0",
-        type: "commonjs",
-        openclaw: {
-          extensions: [`./index.${extension}`],
-          build: { bundledDist: false, runtimeFormat: "cjs" },
-        },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        providers: [id],
-        enabledByDefault: true,
-        activation: { onStartup: false },
-        providerCatalogEntry: `./provider-discovery.${extension}`,
-        configSchema: { type: "object", properties: {}, additionalProperties: false },
-      }),
-    );
+    const writeJson = (name: string, value: unknown) =>
+      fs.writeFileSync(path.join(pluginDir, name), JSON.stringify(value));
+    writeJson("package.json", {
+      name: id,
+      version: "1.0.0",
+      type: "commonjs",
+      openclaw: {
+        extensions: [`./index.${extension}`],
+        build: { bundledDist: false, runtimeFormat: "cjs" },
+      },
+    });
+    writeJson("openclaw.plugin.json", {
+      id,
+      providers: [id],
+      enabledByDefault: true,
+      activation: { onStartup: false },
+      providerCatalogEntry: `./provider-discovery.${extension}`,
+      configSchema: { type: "object", properties: {}, additionalProperties: false },
+    });
     fs.writeFileSync(
       path.join(pluginDir, `index.${extension}`),
       'throw new Error("Static context must not load the full plugin");\n',

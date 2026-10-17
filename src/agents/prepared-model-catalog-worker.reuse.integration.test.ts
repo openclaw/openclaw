@@ -24,6 +24,11 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
+function readRecords<T>(root: string, file: string, allowEmptyLines = true): T[] {
+  const lines = fs.readFileSync(path.join(root, file), "utf8").trim().split("\n");
+  return (allowEmptyLines ? lines.filter(Boolean) : lines).map((line) => JSON.parse(line) as T);
+}
+
 it("prepares known provider owners once while keeping catalog execution and auth request-local", async () => {
   vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-reuse-empty-codex-"));
   const agentIds = ["fleet-a", "fleet-b"];
@@ -189,19 +194,9 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
     { agentCount: agentIds.length, publication: "individual" },
   );
   const registrations = () =>
-    fs
-      .readFileSync(path.join(fixture.root, "registrations.jsonl"), "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { provider: string; filename: string });
+    readRecords<{ provider: string; filename: string }>(fixture.root, "registrations.jsonl");
   const executions = () =>
-    fs
-      .readFileSync(path.join(fixture.root, "executions.jsonl"), "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { provider: string; agentDir: string });
+    readRecords<{ provider: string; agentDir: string }>(fixture.root, "executions.jsonl");
   for (const provider of providerIds) {
     expect(
       fixture.snapshots[0]!.metadataSnapshot.plugins.find(({ id }) => id === provider),
@@ -346,18 +341,11 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
     registries: 1,
     controlCollected: true,
   });
-  const heap = fs
-    .readFileSync(path.join(fixture.root, "heap.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          memory: NodeJS.MemoryUsage;
-          payloads: number;
-          currentPayload?: { filename: string; row: number; bufferBytes: number };
-        },
-    );
+  const heap = readRecords<{
+    memory: NodeJS.MemoryUsage;
+    payloads: number;
+    currentPayload?: { filename: string; row: number; bufferBytes: number };
+  }>(fixture.root, "heap.jsonl", false);
   expect(heap).toHaveLength(providerIds.length * agentIds.length * 2);
   const currentFilename = warmedRegistrations.findLast(
     ({ provider }) => provider === PROVIDER_ID,

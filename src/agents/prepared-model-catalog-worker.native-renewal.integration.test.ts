@@ -214,32 +214,7 @@ module.exports = {
     const initialCatalogs = await Promise.all(
       snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)),
     );
-    expect(
-      requests,
-      JSON.stringify({
-        metadataRequests,
-        initialCatalogs,
-        registrations: fs.readFileSync(registrations, "utf8"),
-        owners: snapshots.map((snapshot) => ({
-          agentId: snapshot.agentId,
-          authModes: snapshot.authModes,
-          metadataPlugins: snapshot.metadataSnapshot.index.plugins.map((plugin) => ({
-            id: plugin.pluginId,
-            enabled: plugin.enabled,
-            origin: plugin.origin,
-            source: plugin.source,
-          })),
-          metadataDiagnostics: snapshot.metadataSnapshot.diagnostics,
-          registryDiagnostics: snapshot.metadataSnapshot.registryDiagnostics,
-          runtimePlugins: snapshot.pluginRegistry?.plugins.map(({ id, status, error }) => ({
-            id,
-            status,
-            error,
-          })),
-          runtimeDiagnostics: snapshot.pluginRegistry?.diagnostics,
-        })),
-      }),
-    ).toHaveLength(2);
+    expect(requests, JSON.stringify({ metadataRequests, initialCatalogs })).toHaveLength(2);
     for (const snapshot of snapshots) {
       expect(snapshot.readFullModelCatalog?.()?.entries).toContainEqual(
         expect.objectContaining({ provider: PROVIDER_ID, id: "provider-0" }),
@@ -264,6 +239,11 @@ module.exports = {
     expect(initialFootprint.bytes).toBeGreaterThanOrEqual(1024 * 1024);
     for (revision = 1; revision <= 3; revision++) {
       const nativeProvider = revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID;
+      const nativeEntry = {
+        provider: nativeProvider,
+        id: `native-${revision}`,
+        nativeRuntime: HARNESS_ID,
+      };
       clock += 1001;
       fs.writeFileSync(path.join(fixture.root, "catalog-clock.txt"), String(clock));
       held = createDeferred();
@@ -313,13 +293,7 @@ module.exports = {
         "Native selection did not complete",
       );
       expect(native).toMatchObject({
-        entries: expect.arrayContaining([
-          expect.objectContaining({
-            provider: nativeProvider,
-            id: `native-${revision}`,
-            nativeRuntime: HARNESS_ID,
-          }),
-        ]),
+        entries: expect.arrayContaining([expect.objectContaining(nativeEntry)]),
       });
       held?.resolve();
       held = undefined;
@@ -331,11 +305,7 @@ module.exports = {
       expect(published.entries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: `provider-${revision}` }),
-          expect.objectContaining({
-            provider: nativeProvider,
-            id: `native-${revision}`,
-            nativeRuntime: HARNESS_ID,
-          }),
+          expect.objectContaining(nativeEntry),
         ]),
       );
       for (const [index, snapshot] of snapshots.entries()) {

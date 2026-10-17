@@ -11,6 +11,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import {
@@ -38,6 +39,33 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   await state.cleanup();
 });
+
+function providerConfig(
+  config: OpenClawConfig,
+  overrides: Partial<ModelProviderConfig>,
+): OpenClawConfig {
+  return {
+    ...config,
+    models: {
+      ...config.models,
+      providers: {
+        ...config.models?.providers,
+        [provider]: { ...config.models!.providers![provider]!, ...overrides },
+      },
+    },
+  };
+}
+
+function readConfig(env: NodeJS.ProcessEnv) {
+  return readConfigFileSnapshotFromContext(
+    createConfigIoContext({
+      configPath: state.configPath,
+      env,
+      homedir: () => state.home,
+      observe: false,
+    }),
+  );
+}
 
 describe("serialized catalog credential provenance", () => {
   it.each<{
@@ -164,18 +192,7 @@ module.exports = {
             },
           },
         } satisfies OpenClawConfig;
-        let runtime: OpenClawConfig = {
-          ...source,
-          models: {
-            providers: {
-              ...source.models.providers,
-              [provider]: {
-                ...source.models.providers[provider],
-                ...(owner === "config" ? { apiKey: value } : {}),
-              },
-            },
-          },
-        };
+        let runtime = providerConfig(source, owner === "config" ? { apiKey: value } : {});
         const env = {
           ...state.env,
           LITERAL_KEY: undefined,
@@ -185,14 +202,7 @@ module.exports = {
         let runtimeSource: OpenClawConfig = source;
         if (loader) {
           await state.writeConfig(source);
-          const snapshot = await readConfigFileSnapshotFromContext(
-            createConfigIoContext({
-              configPath: state.configPath,
-              env,
-              homedir: () => state.home,
-              observe: false,
-            }),
-          );
+          const snapshot = await readConfig(env);
           expect(snapshot.valid).toBe(true);
           runtime = snapshot.config;
           runtimeSource = snapshot.sourceConfig;
@@ -251,30 +261,14 @@ module.exports = {
         const serialized = structuredClone(createPreparedModelCatalogWorkerInput(params));
         let alternativeFingerprint: string | undefined;
         if (owner === "config" && !loader?.pending) {
-          const alternativeSource: OpenClawConfig = {
-            ...source,
-            models: {
-              providers: {
-                ...source.models.providers,
-                [provider]: {
-                  ...source.models.providers[provider],
-                  apiKey: loader ? value : { ...ref, id: "OTHER_WORKER_KEY" },
-                },
-              },
-            },
-          };
+          const alternativeSource = providerConfig(source, {
+            apiKey: loader ? value : { ...ref, id: "OTHER_WORKER_KEY" },
+          });
           let alternativeRuntime = runtime;
           let alternativeRuntimeSource = alternativeSource;
           if (loader) {
             await state.writeConfig(alternativeSource);
-            const snapshot = await readConfigFileSnapshotFromContext(
-              createConfigIoContext({
-                configPath: state.configPath,
-                env,
-                homedir: () => state.home,
-                observe: false,
-              }),
-            );
+            const snapshot = await readConfig(env);
             expect(snapshot.valid).toBe(true);
             // Identical decoded bytes, but this source actually authored the pending reference.
             expect(snapshot.config).toEqual(runtime);
@@ -330,23 +324,14 @@ module.exports = {
           const expectedRef = loader.pending
             ? { source: "env", provider: "default", id: "PENDING_KEY" }
             : null;
-          expect({
-            nativeAuthMatches: nativeAuth === expectedAuth,
-            nativeRequests,
-            workerAuthMatches: inspection.credentialMatches,
-            workerRequests: requests,
-            authoredRef: inspection.authoredRef,
-            resolvedEnvRef: inspection.resolvedEnvRef,
-          }).toEqual({
-            nativeAuthMatches: true,
-            nativeRequests: loader.pending ? [] : [true],
-            workerAuthMatches: true,
-            workerRequests: loader.pending ? [] : [true],
-            authoredRef: expectedRef,
-            resolvedEnvRef: loader.resolved
-              ? { source: "env", provider: "default", id: "SOURCE_KEY" }
-              : null,
-          });
+          expect(nativeAuth).toBe(expectedAuth);
+          expect(nativeRequests).toEqual(loader.pending ? [] : [true]);
+          expect(requests).toEqual(loader.pending ? [] : [true]);
+          expect(inspection.credentialMatches).toBe(true);
+          expect(inspection.authoredRef).toEqual(expectedRef);
+          expect(inspection.resolvedEnvRef).toEqual(
+            loader.resolved ? { source: "env", provider: "default", id: "SOURCE_KEY" } : null,
+          );
           if (loader.pending) {
             return;
           }

@@ -28,6 +28,8 @@ import {
 
 const fixture = usePreparedModelRuntimeHarness();
 const { mocks } = fixture;
+const catalogWorker = mocks.runPreparedModelCatalogWorker;
+const gatewayOptions = { gatewayLifecycle: true, catalogMode: "static" as const };
 
 function makeCatalog(
   entries: ModelCatalogSnapshot["entries"] = [],
@@ -47,6 +49,10 @@ function catalogAuth(
     authModes: { [provider]: "api_key" },
     providerAuthLabels: new Map(),
   };
+}
+
+function apiKeyStore(provider: string, key: string): PreparedModelCatalogAuth["authStore"] {
+  return { version: 1, profiles: { [`${provider}:default`]: { type: "api_key", provider, key } } };
 }
 
 function modelDefinition(id: string, name = id) {
@@ -74,31 +80,28 @@ function gatewayCatalog(config: OpenClawConfig) {
 }
 
 function serveCatalog(catalog: ModelCatalogSnapshot) {
-  mocks.runPreparedModelCatalogWorker.mockImplementation(
-    async (providerIds?: readonly string[]) => {
-      const included = (provider: string) => !providerIds || providerIds.includes(provider);
-      const reply: ModelCatalogSnapshot = {
-        ...catalog,
-        entries: catalog.entries.filter((entry) => included(entry.provider)),
-        routeVariants: catalog.routeVariants.filter((entry) => included(entry.provider)),
-        staticEntries: catalog.staticEntries?.filter((entry) => included(entry.provider)),
-        providerOutcomes: catalog.providerOutcomes?.filter((outcome) => included(outcome.provider)),
-      };
-      const auth = getPreparedModelFullCatalogAuth(catalog);
-      if (auth) {
-        setPreparedModelFullCatalogAuth(reply, auth);
-      }
-      return reply;
-    },
-  );
+  catalogWorker.mockImplementation(async (providerIds?: readonly string[]) => {
+    const included = (provider: string) => !providerIds || providerIds.includes(provider);
+    const reply: ModelCatalogSnapshot = {
+      ...catalog,
+      entries: catalog.entries.filter((entry) => included(entry.provider)),
+      routeVariants: catalog.routeVariants.filter((entry) => included(entry.provider)),
+      staticEntries: catalog.staticEntries?.filter((entry) => included(entry.provider)),
+      providerOutcomes: catalog.providerOutcomes?.filter((outcome) => included(outcome.provider)),
+    };
+    const auth = getPreparedModelFullCatalogAuth(catalog);
+    if (auth) {
+      setPreparedModelFullCatalogAuth(reply, auth);
+    }
+    return reply;
+  });
 }
 
 async function prepareCatalogOwner(config: OpenClawConfig, catalog: ModelCatalogSnapshot) {
   mocks.configuredAgentIds = ["pro"];
   serveCatalog(catalog);
   await refreshPreparedModelRuntimeSnapshots(config, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
+    ...gatewayOptions,
     allowGatewaySubagentBinding: true,
   });
   const owner = getPreparedModelRuntimeSnapshot(ownerInput(config))!;
@@ -134,6 +137,11 @@ describe("prepared model runtime scoped refresh", () => {
         requestedTier: "ultrafast",
         responseTier: "priority",
       };
+      const readTier = (profileId: string) =>
+        accounts.readServiceTierObservation({
+          ...observation,
+          identityKey: `profile:${profileId}`,
+        });
       const recordChanged = accounts.prepareServiceTierObserver({
         selectedCredential: {
           source: "profile",
@@ -163,31 +171,22 @@ describe("prepared model runtime scoped refresh", () => {
         }
       };
       await refresh(authStore);
-      expect(
-        accounts.readServiceTierObservation({
-          ...observation,
-          identityKey: "profile:demo:changed",
-        }),
-      ).toEqual({ requestedTier: "ultrafast", responseTier: "priority" });
+      expect(readTier("demo:changed")).toEqual({
+        requestedTier: "ultrafast",
+        responseTier: "priority",
+      });
       await refresh({
         version: 1,
         profiles: { "demo:changed": { ...credential, key: "synthetic-replacement" } },
       });
       for (const profileId of ["demo:changed", "demo:removed"]) {
-        expect(
-          accounts.readServiceTierObservation({
-            ...observation,
-            identityKey: `profile:${profileId}`,
-          }),
-        ).toBeUndefined();
+        expect(readTier(profileId)).toBeUndefined();
       }
       for (const profileId of ["other:retained", personalId]) {
-        expect(
-          accounts.readServiceTierObservation({
-            ...observation,
-            identityKey: `profile:${profileId}`,
-          }),
-        ).toEqual({ requestedTier: "ultrafast", responseTier: "priority" });
+        expect(readTier(profileId)).toEqual({
+          requestedTier: "ultrafast",
+          responseTier: "priority",
+        });
       }
       expect(recordChanged({ ...observation, modelId: "next-model" })).toBe(false);
       expect(owner.isCurrent()).toBe(true);
@@ -208,17 +207,14 @@ describe("prepared model runtime scoped refresh", () => {
       },
     };
     const failure = new Error("previous source failed to refresh");
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await refreshPreparedModelRuntimeSnapshots(config, gatewayOptions);
     const input = fixture.agentInput("default", config);
     const original = await prepareModelRuntimeSnapshot(input);
     if (!original.loadFullModelCatalog) {
       throw new Error("catalog source diagnostic requires a full catalog loader");
     }
     await original.loadFullModelCatalog();
-    mocks.runPreparedModelCatalogWorker.mockRejectedValue(failure);
+    catalogWorker.mockRejectedValue(failure);
     await expect(original.loadFullModelCatalog({ refresh: true })).rejects.toBe(failure);
     expect(original.modelCatalog.refreshFailed).toBe(true);
 
@@ -233,10 +229,7 @@ describe("prepared model runtime scoped refresh", () => {
       },
     };
     serveCatalog(makeCatalog());
-    await refreshPreparedModelRuntimeSnapshots(replacementConfig, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await refreshPreparedModelRuntimeSnapshots(replacementConfig, gatewayOptions);
     const replacement = await prepareModelRuntimeSnapshot({
       ...input,
       config: replacementConfig,
@@ -248,13 +241,7 @@ describe("prepared model runtime scoped refresh", () => {
 
   it("retains failed-provider inventory and variants until authoritative recovery", async () => {
     const profileId = "provider-a:default";
-    mocks.preparedAuthStore = {
-      version: 1,
-      profiles: {
-        "provider-a:default": { type: "api_key", provider: "provider-a", key: "fixture-key" },
-      },
-    };
-    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    mocks.preparedAuthStore = apiKeyStore("provider-a", "fixture-key");
     const learned = { provider: "provider-a", id: "learned", name: "Learned" };
     const caseDistinct = { provider: "provider-a", id: "Learned", name: "Case distinct" };
     const variant = { ...learned, baseUrl: "https://catalog.example.test/v1" };
@@ -266,36 +253,30 @@ describe("prepared model runtime scoped refresh", () => {
       name: "Native",
       nativeRuntime: "fixture-runtime",
     };
+    const unavailable = { provider: "provider-a", profileId, status: "unavailable" as const };
+    const ready = { provider: "provider-a", profileId, status: "ready" as const };
+    const siblingReady = { provider: "provider-b", status: "ready" as const };
     const snapshots = [
       makeCatalog([], {
         staticEntries: [fallback],
-        providerOutcomes: [{ provider: "provider-a", profileId, status: "unavailable" }],
+        providerOutcomes: [unavailable],
       }),
       makeCatalog([caseDistinct, native], {
         routeVariants: [variant, caseDistinct, native],
-        providerOutcomes: [{ provider: "provider-a", profileId, status: "ready" }],
+        providerOutcomes: [ready],
       }),
       makeCatalog([fallback, sibling], {
         staticEntries: [fallback],
-        providerOutcomes: [
-          { provider: "provider-a", profileId, status: "unavailable" },
-          { provider: "provider-b", status: "ready" },
-        ],
+        providerOutcomes: [unavailable, siblingReady],
       }),
       makeCatalog([sibling], {
-        providerOutcomes: [
-          { provider: "provider-a", profileId, status: "unavailable" },
-          { provider: "provider-b", status: "ready" },
-        ],
+        providerOutcomes: [unavailable, siblingReady],
       }),
       makeCatalog([sibling], {
-        providerOutcomes: [
-          { provider: "provider-a", profileId, status: "ready" },
-          { provider: "provider-b", status: "ready" },
-        ],
+        providerOutcomes: [ready, siblingReady],
       }),
     ];
-    const owner = await prepareCatalogOwner(config, snapshots[0]!);
+    const owner = await prepareCatalogOwner({ agents: { entries: { pro: {} } } }, snapshots[0]!);
     expect(await owner.loadFullModelCatalog!()).toMatchObject({
       entries: [fallback],
       routeVariants: [fallback],
@@ -454,12 +435,7 @@ describe("prepared model runtime scoped refresh", () => {
   it("retains compatible discovery and reacquires it after credentials change", async () => {
     mocks.configuredAgentIds = ["pro"];
     const credential = { type: "api_key" as const, key: "discovered-provider-key" };
-    mocks.preparedAuthStore = {
-      version: 1,
-      profiles: {
-        "discovered-provider:default": { ...credential, provider: "discovered-provider" },
-      },
-    };
+    mocks.preparedAuthStore = apiKeyStore("discovered-provider", credential.key);
     mocks.authStorage.getAll.mockReturnValue({ "discovered-provider": credential });
     const config: OpenClawConfig = {
       agents: { entries: { pro: {} } },
@@ -486,7 +462,7 @@ describe("prepared model runtime scoped refresh", () => {
     const input = ownerInput(config);
     const original = getPreparedModelRuntimeSnapshot(input)!;
     await original.loadFullModelCatalog!();
-    const initialDiscoveryRequests = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+    const initialDiscoveryRequests = catalogWorker.mock.calls.length;
     expect(await gatewayCatalog(config)).toMatchObject({
       entries: [discovered],
       authModes: auth.authModes,
@@ -516,7 +492,7 @@ describe("prepared model runtime scoped refresh", () => {
         entries: [discovered],
         authModes: auth.authModes,
       });
-      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests);
+      expect(catalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests);
     }
     expect(() => original.readFullModelCatalog!()).toThrow("superseded");
     await expect(original.loadFullModelCatalog!()).rejects.toThrow("superseded");
@@ -527,7 +503,7 @@ describe("prepared model runtime scoped refresh", () => {
     const refreshedCatalog = await replacement.loadFullModelCatalog!({ refresh: true });
     expect(refreshedCatalog).toMatchObject(refreshed);
     expect(replacement.readFullModelCatalog!()).toBe(refreshedCatalog);
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
+    expect(catalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
     mocks.preparedAuthStore = { version: 1, profiles: {} };
     mocks.authStorage.getAll.mockReturnValue({});
     serveCatalog(makeCatalog());
@@ -537,7 +513,7 @@ describe("prepared model runtime scoped refresh", () => {
     const afterAuth = await gatewayCatalog(currentConfig);
     expect(afterAuth.entries).not.toContainEqual(discovered);
     expect(afterAuth.authModes).not.toHaveProperty("discovered-provider");
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 2);
+    expect(catalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 2);
   });
 
   it("acquires full inventory at a cold start and keeps a retained reload scoped", async () => {
@@ -550,7 +526,7 @@ describe("prepared model runtime scoped refresh", () => {
     // Discovered by full acquisition only: neither configured nor credentialed.
     const unrelated = { provider: "unrelated", id: "found", name: "Found" };
     serveCatalog(makeCatalog([learned, unrelated]));
-    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+    const options = gatewayOptions;
 
     await refreshPreparedModelRuntimeSnapshots(config, options);
     const startup = getPreparedModelRuntimeSnapshot(ownerInput(config))!;
@@ -559,15 +535,13 @@ describe("prepared model runtime scoped refresh", () => {
         expect.objectContaining(unrelated),
       ),
     );
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(catalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
 
     mocks.authStorage.getAll.mockReturnValue({
       demo: { type: "api_key", key: "replacement-synthetic-credential" },
     });
     await refreshPreparedModelRuntimeSnapshots(config, options);
-    await vi.waitFor(() =>
-      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenLastCalledWith(["demo"]),
-    );
+    await vi.waitFor(() => expect(catalogWorker).toHaveBeenLastCalledWith(["demo"]));
     const reloaded = getPreparedModelRuntimeSnapshot(ownerInput(config))!;
     expect(reloaded.readFullModelCatalog!()?.entries).toContainEqual(
       expect.objectContaining(unrelated),
@@ -601,7 +575,7 @@ describe("prepared model runtime scoped refresh", () => {
           routeVariants: [learned],
         }),
       );
-      const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+      const options = gatewayOptions;
       const input = ownerInput(config);
       try {
         await refreshPreparedModelRuntimeSnapshots(config, options);
@@ -700,7 +674,7 @@ describe("prepared model runtime scoped refresh", () => {
     };
     // The harness stubs discovery, not the snapshot's catalog guards. Real worker retirement
     // and auth liveness are covered by prepared-model-catalog-worker.integration.test.ts.
-    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => makeCatalog());
+    catalogWorker.mockImplementation(async () => makeCatalog());
     await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
     const retainedReader = getPreparedModelRuntimeSnapshot(freeInput)!;
     const retainedAuthStore = getPreparedModelRuntimeAuthStore(retainedReader);
@@ -746,12 +720,7 @@ describe("prepared model runtime scoped refresh", () => {
 
   it("reprojects retained discovery when a runtime override is added and removed", async () => {
     mocks.configuredAgentIds = ["pro"];
-    mocks.preparedAuthStore = {
-      version: 1,
-      profiles: {
-        "custom:default": { type: "api_key", provider: "custom", key: "test-key" },
-      },
-    };
+    mocks.preparedAuthStore = apiKeyStore("custom", "test-key");
     mocks.resolveStaticCatalogModel.mockImplementation(({ provider, modelId }) => ({
       ...modelDefinition(modelId),
       provider,
@@ -797,7 +766,7 @@ describe("prepared model runtime scoped refresh", () => {
         serveCatalog(failed);
         await snapshot.loadFullModelCatalog!({ refresh: true });
       }
-      const discoveryRequests = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+      const discoveryRequests = catalogWorker.mock.calls.length;
       const projected = await gatewayCatalog(config);
       expect(projected.entries).toMatchObject([
         {
@@ -811,7 +780,7 @@ describe("prepared model runtime scoped refresh", () => {
       );
       expect(projected.authModes).toEqual({ custom: "api_key" });
       expect(projected.catalogComplete).toBe(true);
-      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveryRequests);
+      expect(catalogWorker).toHaveBeenCalledTimes(discoveryRequests);
     }
   });
 
@@ -905,7 +874,7 @@ describe("prepared model runtime scoped refresh", () => {
       status: "auth-rejected",
       rejectionScope: "catalog",
     });
-    const initialDiscoveryRequests = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+    const initialDiscoveryRequests = catalogWorker.mock.calls.length;
     const nextConfig: OpenClawConfig = {
       ...config,
       agents: {
@@ -931,9 +900,7 @@ describe("prepared model runtime scoped refresh", () => {
     const ordinaryRead = nextOwner.loadFullModelCatalog!();
     await nativeStarted.promise;
     const newlyDiscovered = { provider: "demo", id: "new-discovery", name: "New discovery" };
-    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(
-      makeCatalog([learned, newlyDiscovered]),
-    );
+    catalogWorker.mockResolvedValueOnce(makeCatalog([learned, newlyDiscovered]));
     const refreshParams = {
       ...ownerInput(nextConfig),
       readOnly: false,
@@ -969,7 +936,7 @@ describe("prepared model runtime scoped refresh", () => {
       .readFullModelCatalog!()!;
     expect(retired.entries).toContainEqual(expect.objectContaining(learned));
     expect(retired.entries.some((entry) => entry.nativeRuntime === "fixture-native")).toBe(false);
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
+    expect(catalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
   });
 
   it("falls back to full refresh when an out-of-scope owner dependency changes", async () => {
