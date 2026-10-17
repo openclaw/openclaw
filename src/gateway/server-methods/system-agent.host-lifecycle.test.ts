@@ -80,6 +80,7 @@ it.for([
       assertCaller();
       preparationStarted.resolve();
       await releasePreparation.promise;
+      // The real host owner must revalidate before accepting this prepared intent.
       return { execute: nativeEffect, dispose };
     });
     let serving = true;

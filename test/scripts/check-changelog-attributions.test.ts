@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   findForbiddenChangelogThanks,
@@ -35,8 +36,13 @@ function failureOutput(action: () => string, stdoutOnly = false): string {
     action();
     return "";
   } catch (error) {
-    const result = error as { stderr?: unknown; stdout?: unknown };
-    return String(result.stdout ?? "") + (stdoutOnly ? "" : String(result.stderr ?? ""));
+    const result = asOptionalRecord(error);
+    const stdout = result?.stdout ?? "";
+    const stderr = result?.stderr ?? "";
+    if (typeof stdout !== "string" || typeof stderr !== "string") {
+      throw error;
+    }
+    return stdout + (stdoutOnly ? "" : stderr);
   }
 }
 
