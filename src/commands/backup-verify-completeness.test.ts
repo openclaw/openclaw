@@ -305,8 +305,15 @@ describe("standalone backup database completeness", () => {
 });
 
 describe("archive PostgreSQL capsule verification", () => {
-  it.each(["image", "manifest", "inner anchor", "outer anchor", "pending capture"])(
-    "rejects a damaged %s in a plugin-only archive before restore",
+  it.each([
+    "image",
+    "manifest",
+    "inner anchor",
+    "outer anchor",
+    "pending capture",
+    "inventory omission",
+  ])(
+    "rejects incomplete or damaged plugin-only PostgreSQL archives (%s) before restore",
     async (damage) => {
       const sourcePath = "/synthetic/plugins/workboard.sqlite";
       const fixture = await writeSmallArchive([], [{ sourcePath }]);
@@ -372,7 +379,10 @@ describe("archive PostgreSQL capsule verification", () => {
       await expect(
         verifyBackupArchive(await repack(fixture.root, fixture.archiveRoot, "valid")),
       ).resolves.toMatchObject({ ok: true });
-      if (damage === "pending capture") {
+      if (damage === "inventory omission") {
+        manifest.postgresSnapshots = [];
+        await fs.writeFile(archiveManifestPath, JSON.stringify(manifest));
+      } else if (damage === "pending capture") {
         await fs.writeFile(path.join(directory, ".pending"), "");
       } else if (damage === "image") {
         await fs.appendFile(path.join(directory, "database.sqlite"), "corrupt");
@@ -389,9 +399,24 @@ describe("archive PostgreSQL capsule verification", () => {
           await fs.writeFile(manifestPath, JSON.stringify(envelope));
         }
       }
-      await expect(
-        verifyBackupArchive(await repack(fixture.root, fixture.archiveRoot, "damaged")),
-      ).rejects.toThrow(/verification failed/);
+      const damaged = await repack(fixture.root, fixture.archiveRoot, "damaged");
+      const error =
+        damage === "inventory omission"
+          ? /inventory omits PostgreSQL capsule/
+          : /verification failed/;
+      await expect.soft(verifyBackupArchive(damaged)).rejects.toThrow(error);
+      if (damage === "inventory omission") {
+        await withOpenClawTestState(
+          { prefix: "backup-omitted-postgres-", scenario: "minimal" },
+          async (state) => {
+            const target = state.path("restored");
+            await expect
+              .soft(backupRestoreCommand(createTestRuntime(), { archive: damaged, target }))
+              .rejects.toThrow(error);
+            await expect.soft(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+          },
+        );
+      }
     },
   );
 });

@@ -243,8 +243,9 @@ into fresh namespaces, then replaces the extracted historical anchors with
 verified matching anchors. All stores are prepared before any anchor is
 published; a failed restore drops its new namespaces and cleans the target.
 After successful publication, restore consumes the generated PostgreSQL export
-files. New archives list their PostgreSQL stores explicitly; older archives use
-their matched export manifests. A legacy archive cannot identify a store whose
+files. New archives list their PostgreSQL stores explicitly; verification rejects
+valid PostgreSQL capsules missing from that inventory. Older archives use their
+matched export manifests. A legacy archive cannot identify a store whose
 entire export was already missing. Unmanaged SQLite files remain opaque.
 
 Before restoring PostgreSQL, configure the recovery installation's connection

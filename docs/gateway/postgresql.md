@@ -368,7 +368,8 @@ retained Matrix roots. It publishes matching anchors only after all stores pass
 their providers' verification. A failed restore discards its new namespaces and
 cleans the incomplete staging tree. Original namespaces are left untouched.
 
-New archives record their PostgreSQL stores explicitly. Older archives are
+New archives record their PostgreSQL stores explicitly. Verification rejects
+valid PostgreSQL capsules missing from that inventory. Older archives are
 restored from their matched PostgreSQL export manifests; a legacy archive whose
 entire export is missing cannot identify that missing store. Restore consumes
 the generated export files after publishing their verified anchors, so a later

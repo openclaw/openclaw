@@ -581,30 +581,35 @@ export async function resolvePostgresRestoreEntries(
     const anchorPath = buildBackupArchivePath(manifest.archiveRoot, sourcePath);
     return { anchorPath, directoryPath: `${anchorPath}.postgres` };
   });
-  if (manifest.postgresSnapshots === undefined) {
-    const { parsePostgresEnvelope } = await import("../snapshot/export-envelope.js");
-    // Older archives record PG identity only inside the generated capsule.
-    for (const entry of entries) {
-      if (
-        !isRegularArchiveFile(entry.type) ||
-        !entry.normalized.endsWith(".postgres/manifest.json")
-      ) {
-        continue;
+  const declaredDirectories = new Set(captures.map(({ directoryPath }) => directoryPath));
+  const { parsePostgresEnvelope } = await import("../snapshot/export-envelope.js");
+  for (const entry of entries) {
+    if (
+      !isRegularArchiveFile(entry.type) ||
+      !entry.normalized.endsWith(".postgres/manifest.json")
+    ) {
+      continue;
+    }
+    const directoryPath = path.posix.dirname(entry.normalized);
+    if (declaredDirectories.has(directoryPath)) {
+      continue;
+    }
+    let envelope;
+    try {
+      const value: unknown = JSON.parse(
+        await extractManifest({ archivePath, manifestEntryPath: entry.raw }),
+      );
+      envelope = parsePostgresEnvelope(value, path.posix.basename(directoryPath));
+    } catch {
+      // Ordinary user files may share this name; only PG envelopes claim a store.
+      continue;
+    }
+    if (envelope.profile === "user-backup") {
+      if (manifest.postgresSnapshots !== undefined) {
+        throw new Error(`Backup inventory omits PostgreSQL capsule: ${directoryPath}`);
       }
-      const directoryPath = path.posix.dirname(entry.normalized);
-      let envelope;
-      try {
-        const value: unknown = JSON.parse(
-          await extractManifest({ archivePath, manifestEntryPath: entry.raw }),
-        );
-        envelope = parsePostgresEnvelope(value, path.posix.basename(directoryPath));
-      } catch {
-        // Ordinary user files may share this name; only PG envelopes claim a store.
-        continue;
-      }
-      if (envelope.profile === "user-backup") {
-        captures.push({ directoryPath, anchorPath: directoryPath.slice(0, -".postgres".length) });
-      }
+      // Older archives record PG identity only inside the generated capsule.
+      captures.push({ directoryPath, anchorPath: directoryPath.slice(0, -".postgres".length) });
     }
   }
   const byPath = new Map(entries.map((entry) => [entry.normalized, entry]));
