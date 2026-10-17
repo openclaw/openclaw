@@ -64,6 +64,7 @@ function ensureSkillSelectionAuditSchema(db: EngineConnection): void {
     // this legacy backfill DDL is SQLite-only (STRICT tables).
     return;
   }
+  // SAFETY: Postgres connections returned above; remaining EngineConnection is SQLite DatabaseSync.
   const sqlite = db as import("node:sqlite").DatabaseSync;
   // sqlite-allow-raw -- Canonical additive DDL only; skill-selection rows use Kysely.
   sqlite.exec(`
