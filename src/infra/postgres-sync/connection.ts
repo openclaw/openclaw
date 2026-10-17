@@ -244,8 +244,8 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       { operation: "query", sql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
+    this.isTransaction = result.inTransaction;
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
-      this.isTransaction = false;
       if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
         this.finishWrite();
         throw new Error("PostgreSQL transaction rolled back instead of committing");

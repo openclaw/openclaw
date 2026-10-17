@@ -44,6 +44,7 @@ function transportFixture(
     requestId: 1,
     anchor,
     isOpen: true,
+    isTransaction: false,
     mutationRevision: 0,
   });
   const sent = vi.spyOn(port1, "postMessage");
@@ -87,6 +88,13 @@ function transportFixture(
           : {
               id: mode === "mismatched" && pending.operation === "query" ? id + 1 : id,
               result: {
+                inTransaction:
+                  pending.operation === "query" && /^\s*BEGIN\b/i.test(pending.sql)
+                    ? true
+                    : pending.operation === "query" &&
+                        /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(pending.sql)
+                      ? false
+                      : db.isTransaction,
                 command,
                 mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
                   ? "scoped"

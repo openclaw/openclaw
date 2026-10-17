@@ -2,6 +2,7 @@ import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
 import type { MessagePort } from "node:worker_threads";
 
 export type PostgresResult = {
+  inTransaction: boolean;
   command?: string;
   mutation?: "scoped" | "unscoped";
   rows: Record<string, unknown>[];
@@ -151,7 +152,10 @@ export function validatePostgresBindings(parameters: readonly unknown[]): void {
   }
 }
 
-export function decodePostgresRows(result: PostgresResult, readBigInts: boolean) {
+export function decodePostgresRows(
+  result: Pick<PostgresResult, "rows" | "fields">,
+  readBigInts: boolean,
+) {
   return result.rows.map((row) =>
     Object.fromEntries(
       result.fields.map((field) => {

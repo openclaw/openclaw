@@ -89,7 +89,6 @@ describe("experimental PostgreSQL SQL boundary", () => {
               truth: true,
             },
           ],
-          rowCount: 1,
           fields: [
             { name: "count", dataTypeID: 20 },
             { name: "bytes", dataTypeID: 17 },

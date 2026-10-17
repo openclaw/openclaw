@@ -37,7 +37,10 @@ async function handleRequest(request: BridgeRequest) {
         try {
           // Validate only while idle: user statements are never replayed after a lost connection.
           await client.query("SELECT 1");
-          reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+          reply = {
+            id: request.id,
+            result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+          };
           port.postMessage(reply);
           Atomics.store(control, 0, request.id);
           Atomics.notify(control, 0);
@@ -74,10 +77,16 @@ async function handleRequest(request: BridgeRequest) {
         [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`],
       );
       await client.query(`SET search_path TO "${schema.replaceAll('"', '""')}"`);
-      reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+      reply = {
+        id: request.id,
+        result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+      };
     } else if (request.operation === "close") {
       await client.end();
-      reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+      reply = {
+        id: request.id,
+        result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+      };
     } else {
       if (connectionError) {
         throw connectionError;
@@ -121,6 +130,7 @@ async function handleRequest(request: BridgeRequest) {
         reply = {
           id: request.id,
           result: {
+            inTransaction: client.getTransactionStatus() !== "I",
             command: result.command,
             mutation,
             rows: result.rows,

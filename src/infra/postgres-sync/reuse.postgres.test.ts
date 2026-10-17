@@ -170,6 +170,26 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     run(() => second.close());
   });
 
+  it("settles committed batches and retains transactions opened later in a batch", () => {
+    const db = open();
+    run(() => db.exec("CREATE TABLE batch_entries (id integer)"));
+    const before = readSqliteDatabaseScopedWriteToken(db, "first");
+    run(() => db.exec("BEGIN; INSERT INTO batch_entries VALUES (1); COMMIT"));
+    expect(db.isTransaction).toBe(false);
+    const committed = readSqliteDatabaseScopedWriteToken(db, "first");
+    expect(committed).not.toBe(before);
+    expect(run(() => db.prepare("SELECT id FROM batch_entries").all())).toEqual([{ id: 1 }]);
+
+    run(() => db.exec("SELECT 1; BEGIN; INSERT INTO batch_entries VALUES (2)"));
+    expect(db.isTransaction).toBe(true);
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).toBe(committed);
+    run(() => db.close());
+    const reader = open();
+    expect(run(() => reader.prepare("SELECT id FROM batch_entries").all())).toEqual([{ id: 1 }]);
+    run(() => reader.exec("DROP TABLE batch_entries"));
+    run(() => reader.close());
+  });
+
   it("does not reuse across connection settings or namespaces", () => {
     const first = open();
     const originalPid = pid(first);
