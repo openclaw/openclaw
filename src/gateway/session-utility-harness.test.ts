@@ -46,6 +46,52 @@ vi.mock("../agents/embedded-agent-runner/run/attempt.js", () => ({
 describe("utility completion with an unavailable implicit harness", () => {
   let state: OpenClawTestState;
   let config: OpenClawConfig;
+  const completionPrompt = {
+    systemPrompt: "Return a short reply.",
+    prompt: "Check the fix.",
+    timeoutMs: 1000,
+  };
+  const prepare = () =>
+    defaultPrepareModel({ cfg: config, agentId: "main", useUtilityModel: true });
+  const runtimeSnapshot = (pluginRegistry = createEmptyPluginRegistry()) => ({
+    config,
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    metadataSnapshot: createEmptyPluginMetadataSnapshot(state.workspaceDir),
+    pluginRegistry,
+  });
+  const useFallbacks = () => {
+    config.agents!.defaults!.utilityModel = {
+      primary: "openai/gpt-5.4-mini",
+      fallbacks: ["openai/utility-backup"],
+    };
+    config.agents!.entries!.main!.model = {
+      primary: "openai/gpt-5.4",
+      fallbacks: ["openai/main-backup"],
+    };
+  };
+  const transportReply = (text: string) =>
+    vi
+      .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
+      .mockResolvedValue(
+        makeAssistantMessageFixture({ stopReason: "stop", content: [{ type: "text", text }] }),
+      );
+  const expectBuiltInCompletion = (
+    transport: ReturnType<typeof transportReply>,
+    maxTokens: number,
+    fallback: boolean,
+  ) => {
+    expect(transport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ tools: [] }),
+        options: expect.objectContaining({ maxTokens, temperature: 0.2, reasoning: "off" }),
+      }),
+    );
+    expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(transport.mock.calls.map(([request]) => request.model.id)).toEqual(
+      fallback ? ["gpt-5.4-mini", "utility-backup"] : ["gpt-5.4-mini"],
+    );
+  };
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ scenario: "minimal" });
@@ -63,13 +109,7 @@ describe("utility completion with an unavailable implicit harness", () => {
     };
     setRuntimeConfigSnapshot(config);
     runtimeMocks.acquire.mockReset().mockResolvedValue({
-      snapshot: {
-        config,
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        metadataSnapshot: createEmptyPluginMetadataSnapshot(state.workspaceDir),
-        pluginRegistry: createEmptyPluginRegistry(),
-      },
+      snapshot: runtimeSnapshot(),
       [Symbol.asyncDispose]: async () => {},
     });
     runtimeMocks.runEmbeddedAttempt.mockReset();
@@ -104,25 +144,9 @@ describe("utility completion with an unavailable implicit harness", () => {
     "publishes the observer digest without inheriting session harness state: fallback=%s",
     async (fallback) => {
       if (fallback) {
-        config.agents!.defaults!.utilityModel = {
-          primary: "openai/gpt-5.4-mini",
-          fallbacks: ["openai/utility-backup"],
-        };
-        config.agents!.entries!.main!.model = {
-          primary: "openai/gpt-5.4",
-          fallbacks: ["openai/main-backup"],
-        };
+        useFallbacks();
       }
-      const transport = vi
-        .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
-        .mockResolvedValue(
-          makeAssistantMessageFixture({
-            stopReason: "stop",
-            content: [
-              { type: "text", text: '{"headline":"Checking the fix","health":"on-track"}' },
-            ],
-          }),
-        );
+      const transport = transportReply('{"headline":"Checking the fix","health":"on-track"}');
       if (fallback) {
         transport.mockRejectedValueOnce(
           new FailoverError("Fixture server unavailable", { reason: "server_error" }),
@@ -156,20 +180,7 @@ describe("utility completion with an unavailable implicit harness", () => {
           expect.any(Set),
           expect.anything(),
         );
-        expect(transport).toHaveBeenCalledWith(
-          expect.objectContaining({
-            context: expect.objectContaining({ tools: [] }),
-            options: expect.objectContaining({
-              maxTokens: 300,
-              temperature: 0.2,
-              reasoning: "off",
-            }),
-          }),
-        );
-        expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
-        expect(transport.mock.calls.map(([request]) => request.model.id)).toEqual(
-          fallback ? ["gpt-5.4-mini", "utility-backup"] : ["gpt-5.4-mini"],
-        );
+        expectBuiltInCompletion(transport, 300, fallback);
       } finally {
         observer.observer.dispose();
       }
@@ -180,21 +191,10 @@ describe("utility completion with an unavailable implicit harness", () => {
     "preserves Activity recap behavior through the utility chain: %s",
     async (outcome) => {
       if (outcome !== "direct") {
-        config.agents!.defaults!.utilityModel = {
-          primary: "openai/gpt-5.4-mini",
-          fallbacks: ["openai/utility-backup"],
-        };
-        config.agents!.entries!.main!.model = {
-          primary: "openai/gpt-5.4",
-          fallbacks: ["openai/main-backup"],
-        };
+        useFallbacks();
       }
       const text = "Finished checking the requested fix.";
-      const transport = vi
-        .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
-        .mockResolvedValue(
-          makeAssistantMessageFixture({ stopReason: "stop", content: [{ type: "text", text }] }),
-        );
+      const transport = transportReply(text);
       if (outcome !== "direct") {
         transport.mockRejectedValueOnce(
           new FailoverError("Fixture credentials rejected", { reason: "auth" }),
@@ -258,20 +258,7 @@ describe("utility completion with an unavailable implicit harness", () => {
             expect(entry?.activitySummary).toBeUndefined();
           }
         });
-        expect(transport).toHaveBeenCalledWith(
-          expect.objectContaining({
-            context: expect.objectContaining({ tools: [] }),
-            options: expect.objectContaining({
-              maxTokens: 240,
-              temperature: 0.2,
-              reasoning: "off",
-            }),
-          }),
-        );
-        expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
-        expect(transport.mock.calls.map(([request]) => request.model.id)).toEqual(
-          outcome === "direct" ? ["gpt-5.4-mini"] : ["gpt-5.4-mini", "utility-backup"],
-        );
+        expectBuiltInCompletion(transport, 240, outcome !== "direct");
       } finally {
         await recaps.dispose();
       }
@@ -286,7 +273,6 @@ describe("utility completion with an unavailable implicit harness", () => {
     config.agents!.entries!.main!.models!["utility-fixture/small"] = {
       agentRuntime: { id: "admitted-utility" },
     };
-    const metadataSnapshot = createEmptyPluginMetadataSnapshot(state.workspaceDir);
     const registry = createEmptyPluginRegistry();
     const dispatch = vi.fn(async () => ({
       assistant: makeAssistantMessageFixture({
@@ -310,35 +296,23 @@ describe("utility completion with an unavailable implicit harness", () => {
       },
     });
     const release = vi.fn(async () => {});
+    const snapshot = runtimeSnapshot(registry);
     runtimeMocks.acquire.mockResolvedValue({
-      snapshot: {
-        config,
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        metadataSnapshot,
-        pluginRegistry: registry,
-      },
+      snapshot,
       [Symbol.asyncDispose]: release,
     });
     const builtInTransport = vi
       .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
       .mockRejectedValue(new Error("Unexpected built-in utility completion"));
-    const prepared = await defaultPrepareModel({
-      cfg: config,
-      agentId: "main",
-      useUtilityModel: true,
-    });
+    const prepared = await prepare();
 
     await expect(
       withPluginRuntimeGenerationScope(
-        { metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
-        () =>
-          defaultCompleteModel({
-            ...prepared,
-            systemPrompt: "Return a short reply.",
-            prompt: "Check the fix.",
-            timeoutMs: 1000,
-          }),
+        {
+          metadataSnapshot: snapshot.metadataSnapshot,
+          pluginRegistry: createEmptyPluginRegistry(),
+        },
+        () => defaultCompleteModel({ ...prepared, ...completionPrompt }),
       ),
     ).resolves.toMatchObject({
       text: "The admitted utility harness answered.",
@@ -359,18 +333,12 @@ describe("utility completion with an unavailable implicit harness", () => {
           agentRuntime: { id: "codex" },
         };
       }
-      const prepared = await defaultPrepareModel({
-        cfg: config,
-        agentId: "main",
-        useUtilityModel: true,
-      });
+      const prepared = await prepare();
       await expect(
         defaultCompleteModel({
           ...prepared,
+          ...completionPrompt,
           ...(source === "request override" ? { agentHarnessRuntimeOverride: "codex" } : {}),
-          systemPrompt: "Return a short reply.",
-          prompt: "Check the fix.",
-          timeoutMs: 1000,
         }),
       ).rejects.toThrow('Agent harness runtime "codex" is unavailable');
       expect(simpleCompletionRuntime.prepareSimpleCompletionModel).not.toHaveBeenCalled();
