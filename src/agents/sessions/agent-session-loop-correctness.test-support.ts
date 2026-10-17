@@ -3,16 +3,14 @@ import {
   type AssistantMessage,
   type Model,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionConfig, AgentSessionEvent } from "./agent-session-types.js";
+import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
-import type { ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
-import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
+import { createAgentSession, type CreateAgentSessionOptions } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -20,8 +18,7 @@ type TestStreamSimple = NonNullable<ProviderConfigInput["streamSimple"]>;
 const hoistedStreamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn<TestStreamSimple>(),
 }));
-
-export const streamMocks: { streamSimple: Mock<TestStreamSimple> } = hoistedStreamMocks;
+export const streamMocks = hoistedStreamMocks;
 
 export const testModel: Model = {
   id: "test-model",
@@ -56,13 +53,13 @@ function createUsage(contextTokens: number) {
 
 export function createAssistant(
   activeModel: Model,
-  content: AssistantMessage["content"],
+  content: AssistantMessage["content"] | string,
   stopReason: AssistantMessage["stopReason"] = "stop",
   contextTokens = 1,
 ): AssistantMessage {
   return {
     role: "assistant",
-    content,
+    content: typeof content === "string" ? [{ type: "text", text: content }] : content,
     api: activeModel.api,
     provider: activeModel.provider,
     model: activeModel.id,
@@ -111,55 +108,50 @@ export function createOverflowAssistant(activeModel: Model) {
   if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     throw new Error("Overflow fixture requires a finite positive model context window");
   }
-  return {
-    ...createAssistant(
-      activeModel,
-      [{ type: "text", text: "truncated answer" }],
-      "length",
-      contextWindow,
-    ),
-    usage: { ...createUsage(contextWindow), output: 0 },
-  };
+  const message = createAssistant(activeModel, "truncated answer", "length", contextWindow);
+  message.usage.output = 0;
+  return message;
 }
 
-export const createAutoCompactionSettings = () =>
+export const createAutoCompactionSettings = (
+  compaction: Partial<ReturnType<SettingsManager["getCompactionSettings"]>> = {},
+) =>
   SettingsManager.inMemory({
-    compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+    compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1, ...compaction },
     retry: { enabled: false },
   });
 
 export function mockInvalidThenTextSummary(recoveredText: string) {
   let requests = 0;
-  streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
-    return createAssistantResultStream(
+  streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+    createAssistantResultStream(
       createAssistant(
         activeModel,
         ++requests === 1
           ? [{ type: "thinking", thinking: "internal summary reasoning" }]
           : [{ type: "text", text: recoveredText }],
       ),
-    );
-  });
+    ),
+  );
   return () => requests;
 }
 
-export async function createTestSession(
-  options: {
-    systemPrompt?: string;
-    model?: Model;
-    settingsManager?: SettingsManager;
-    sessionManager?: SessionManager;
-    resourceLoader?: ResourceLoader;
-    customTools?: ToolDefinition[];
-    contextOverflowRecoveryOwner?: "session" | "caller";
-    resolveCompactionThinkingLevel?: NonNullable<
-      AgentSessionConfig["resolveCompactionThinkingLevel"]
-    >;
-    withSessionWriteSettlement?: NonNullable<
-      Parameters<typeof createAgentSession>[0]
-    >["withSessionWriteSettlement"];
-  } = {},
-) {
+type TestSessionOptions = Partial<
+  Pick<
+    CreateAgentSessionOptions,
+    | "systemPrompt"
+    | "model"
+    | "settingsManager"
+    | "sessionManager"
+    | "resourceLoader"
+    | "customTools"
+    | "contextOverflowRecoveryOwner"
+    | "resolveCompactionThinkingLevel"
+    | "withSessionWriteSettlement"
+  >
+>;
+
+export async function createTestSession(options: TestSessionOptions = {}) {
   const model = options.model ?? testModel;
   const authStorage = AuthStorage.inMemory();
   authStorage.setRuntimeApiKey(model.provider, "test-api-key");
@@ -176,18 +168,16 @@ export async function createTestSession(
     streamSimple: streamMocks.streamSimple,
   });
   const result = await createAgentSession({
+    ...options,
     systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
     thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
     tools: options.customTools?.map((tool) => tool.name) ?? [],
-    customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
     modelRegistry,
-    withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
-    resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
     cleanupProviderSessionResourcesOnDispose: !(
       options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
     ),
@@ -227,8 +217,6 @@ export function registerAgentSessionLoopTestLifecycle(): void {
   });
 
   afterEach(() => {
-    for (const session of sessions.splice(0)) {
-      session.dispose();
-    }
+    sessions.splice(0).forEach((session) => session.dispose());
   });
 }
