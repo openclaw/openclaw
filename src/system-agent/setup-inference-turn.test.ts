@@ -52,22 +52,27 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConfiguredRoute {
+function embeddedRoute(
+  runtime: "codex" | "openclaw" = "codex",
+  provider = "openai",
+  model = "gpt-5.6-sol",
+): SystemAgentConfiguredRoute {
+  const modelLabel = `${provider}/${model}`;
   const config: OpenClawConfig = {
     agents: {
       entries: { main: { agentDir: "/tmp/openclaw-agent" } },
       defaults: {
-        model: "openai/gpt-5.6-sol",
-        models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
+        model: modelLabel,
+        models: { [modelLabel]: { agentRuntime: { id: runtime } } },
         workspace: "/tmp/openclaw-workspace",
       },
     },
   };
   return {
     runner: "embedded",
-    provider: "openai",
-    model: "gpt-5.6-sol",
-    modelLabel: "openai/gpt-5.6-sol",
+    provider,
+    model,
+    modelLabel,
     agentId: "main",
     agentDir: "/tmp/openclaw-agent",
     agentHarnessRuntimeOverride: runtime,
@@ -214,99 +219,87 @@ describe("setup inference plugin ownership", () => {
     );
   });
 
-  it.each([true])(
-    "retains the probing registry artifact preference (%s)",
-    async (preferBuiltPluginArtifacts) => {
-      const order: string[] = [];
-      const pluginRegistry = createEmptyPluginRegistry();
-      const route = embeddedRoute();
-      const { binding } = await createSystemAgentVerifiedInferenceTestFixture(route.sourceConfig);
-      const metadataSnapshot = createPluginMetadataSnapshot({
-        config: route.runConfig,
-        manifestRegistry: makeRegistry([]),
-        workspaceDir: "/tmp/openclaw-workspace",
-      });
-      const probingRegistry = createEmptyPluginRegistry();
-      setPluginRuntimeLoadContext(
-        probingRegistry,
-        resolvePluginRuntimeLoadContext({
-          config: route.runConfig,
-          metadataSnapshot,
-          preferBuiltPluginArtifacts,
-        }),
-      );
-      const previousMetadata = getCurrentPluginMetadataSnapshot();
-      const resolveMetadataSnapshot = vi
-        .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
-        .mockImplementation(async () => {
-          order.push("metadata");
-          return metadataSnapshot;
-        });
-      mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
-        order.push("load");
-        expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
-        return pluginRegistry;
-      });
-      const createSystemAgentVerifiedInferenceBinding = vi.fn(async () => {
-        order.push("validate");
-        expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
-        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
-        return binding;
-      });
-
-      await withPluginRuntimeRegistryScope(probingRegistry, async () => {
-        await expect(
-          revalidateStableSetupInferenceOwner({
-            route,
-            auth: {
-              agentHarnessId: "codex",
-              runtimeOwnerKind: "plugin-harness",
-            },
-            stagedOwnerPluginArtifacts: binding,
-            deps: {
-              createSystemAgentVerifiedInferenceBinding,
-            },
-          }),
-        ).resolves.toBe(binding);
-      });
-
-      expect(order).toEqual(["metadata", "load", "validate"]);
-      expect(getCurrentPluginMetadataSnapshot()).toBe(previousMetadata);
-      expect(resolveMetadataSnapshot).toHaveBeenCalledWith({
-        config: route.runConfig,
-        env: process.env,
-        workspaceDir: "/tmp/openclaw-workspace",
-        allowCurrent: false,
-      });
-      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+  it("retains the probing registry artifact preference", async () => {
+    const order: string[] = [];
+    const pluginRegistry = createEmptyPluginRegistry();
+    const route = embeddedRoute();
+    const { binding } = await createSystemAgentVerifiedInferenceTestFixture(route.sourceConfig);
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config: route.runConfig,
+      manifestRegistry: makeRegistry([]),
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    const probingRegistry = createEmptyPluginRegistry();
+    setPluginRuntimeLoadContext(
+      probingRegistry,
+      resolvePluginRuntimeLoadContext({
         config: route.runConfig,
         metadataSnapshot,
-        preferBuiltPluginArtifacts,
-        workspaceDir: "/tmp/openclaw-workspace",
-        selections: [
-          { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
-        ],
+        preferBuiltPluginArtifacts: true,
+      }),
+    );
+    const previousMetadata = getCurrentPluginMetadataSnapshot();
+    const resolveMetadataSnapshot = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockImplementation(async () => {
+        order.push("metadata");
+        return metadataSnapshot;
       });
-    },
-  );
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
+      order.push("load");
+      expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+      return pluginRegistry;
+    });
+    const createSystemAgentVerifiedInferenceBinding = vi.fn(async () => {
+      order.push("validate");
+      expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+      return binding;
+    });
+
+    await withPluginRuntimeRegistryScope(probingRegistry, async () => {
+      await expect(
+        revalidateStableSetupInferenceOwner({
+          route,
+          auth: {
+            agentHarnessId: "codex",
+            runtimeOwnerKind: "plugin-harness",
+          },
+          stagedOwnerPluginArtifacts: binding,
+          deps: {
+            createSystemAgentVerifiedInferenceBinding,
+          },
+        }),
+      ).resolves.toBe(binding);
+    });
+
+    expect(order).toEqual(["metadata", "load", "validate"]);
+    expect(getCurrentPluginMetadataSnapshot()).toBe(previousMetadata);
+    expect(resolveMetadataSnapshot).toHaveBeenCalledWith({
+      config: route.runConfig,
+      env: process.env,
+      workspaceDir: "/tmp/openclaw-workspace",
+      allowCurrent: false,
+    });
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+      config: route.runConfig,
+      metadataSnapshot,
+      preferBuiltPluginArtifacts: true,
+      workspaceDir: "/tmp/openclaw-workspace",
+      selections: [
+        { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
+      ],
+    });
+  });
 
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        entries: { main: { agentDir: "/tmp/openclaw-agent" } },
-        defaults: {
-          model: "fixture/direct-model",
-          models: { "fixture/direct-model": { agentRuntime: { id: "openclaw" } } },
-          workspace: "/tmp/openclaw-workspace",
-        },
-      },
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://provider.example/v1",
-            models: [],
-          },
+    const config = embeddedRoute("openclaw", "fixture", "direct-model").runConfig;
+    config.models = {
+      providers: {
+        fixture: {
+          api: "openai-completions",
+          baseUrl: "https://provider.example/v1",
+          models: [],
         },
       },
     };

@@ -76,12 +76,8 @@ async function observeScenario(scenario: Scenario, json: boolean) {
     },
   };
   const policy = { redactSensitive: "off", redactPatterns: ["PR140392_PRIVATE_[A-Z]+"] };
-  let restorePolicy = () => {};
+  const policySpy = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(policy);
   try {
-    const policySpy = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(policy);
-    restorePolicy = () => {
-      policySpy.mockRestore();
-    };
     await withEnvAsync(
       {
         OPENCLAW_STATE_DIR: path.join(root, "state"),
@@ -258,34 +254,10 @@ async function observeScenario(scenario: Scenario, json: boolean) {
   } finally {
     try {
       runtimeLoader.mockReset();
-      restorePolicy();
+      policySpy.mockRestore();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
       await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
-      const evidenceDir = process.env.OPENCLAW_SETUP_ERROR_PROOF_DIR;
-      if (evidenceDir) {
-        await fs.writeFile(
-          path.join(evidenceDir, `${scenario}-${json ? "json" : "text"}.json`),
-          JSON.stringify(
-            {
-              scenario,
-              json,
-              stdout,
-              stderr,
-              exits,
-              phases,
-              faultReached,
-              callbackAttempts,
-              managedDispatches,
-              onboardingDispatches,
-              tempDirsCreated: tempDirs.length,
-              rootRemoved: true,
-            },
-            null,
-            2,
-          ),
-        );
-      }
     }
   }
 }

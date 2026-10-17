@@ -17,10 +17,36 @@ import { prepareAutomaticSetupCodex, stageCodexCandidate } from "./setup-inferen
 import {
   SetupInferenceCancelledError,
   throwIfSetupInferenceCancelled,
+  type StageContext,
 } from "./setup-inference-core.js";
 import { pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+function stageContext(
+  state: { workspaceDir: string; agentDir: () => string },
+  cfg: OpenClawConfig,
+  snapshot: StageContext["snapshot"],
+  isCancelled?: () => boolean,
+): StageContext {
+  return {
+    cfg,
+    snapshot,
+    workspace: state.workspaceDir,
+    agentDir: state.agentDir(),
+    routeAgentId: "main",
+    params: {
+      kind: "codex-cli",
+      automaticSetup: true,
+      surface: "gateway",
+      runtime: createNonExitingRuntime(),
+      isCancelled,
+    },
+    deps: {},
+    effects: { credentialsSaved: false },
+    beforePersistentEffect: async () => {},
+  };
+}
 
 it("binds automatic Codex path trust to the selected bundle", async () => {
   await withOpenClawTestState(
@@ -62,22 +88,7 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
           },
         });
         const staged = await stageCodexCandidate(
-          {
-            cfg,
-            snapshot,
-            workspace: state.workspaceDir,
-            agentDir: state.agentDir(),
-            routeAgentId: "main",
-            params: {
-              kind: "codex-cli",
-              automaticSetup: true,
-              surface: "gateway",
-              runtime: createNonExitingRuntime(),
-            },
-            deps: {},
-            effects: { credentialsSaved: false },
-            beforePersistentEffect: async () => {},
-          },
+          stageContext(state, cfg, snapshot),
           "openai/fixture",
         );
         if (accepted) {
@@ -134,18 +145,17 @@ it.each([
           plugins: { entries: { codex: { enabled: true } } },
         };
         await state.writeConfig(cfg);
+        const installedRecord = {
+          source: "npm" as const,
+          spec: "@openclaw/codex@2026.10.2",
+          resolvedName: "@openclaw/codex",
+          resolvedVersion: "2026.10.2",
+          integrity: "sha512-before-repair",
+          installPath,
+        };
         await withPluginLifecycleLease({}, async (lease) => {
           await records.writePersistedInstalledPluginIndexInstallRecordsWithLease(
-            {
-              codex: {
-                source: "npm",
-                spec: "@openclaw/codex@2026.10.2",
-                resolvedName: "@openclaw/codex",
-                resolvedVersion: "2026.10.2",
-                integrity: "sha512-before-repair",
-                installPath,
-              },
-            },
+            { codex: installedRecord },
             { config: cfg, lease },
           );
         });
@@ -162,12 +172,8 @@ it.each([
                   ...params.config.plugins?.installs,
                   codex: {
                     ...params.config.plugins?.installs?.codex,
-                    source: "npm",
-                    spec: "@openclaw/codex@2026.10.2",
-                    resolvedName: "@openclaw/codex",
-                    resolvedVersion: "2026.10.2",
+                    ...installedRecord,
                     integrity: "sha512-after-repair",
-                    installPath,
                   },
                 },
               },
@@ -194,26 +200,7 @@ it.each([
         const runtime = createNonExitingRuntime();
         const snapshot = await readConfigFileSnapshot();
         const preparing = candidate
-          ? stageCodexCandidate(
-              {
-                cfg,
-                snapshot,
-                workspace: state.workspaceDir,
-                agentDir: state.agentDir(),
-                routeAgentId: "main",
-                params: {
-                  kind: "codex-cli",
-                  automaticSetup: true,
-                  surface: "gateway",
-                  runtime,
-                  isCancelled,
-                },
-                deps: {},
-                effects: { credentialsSaved: false },
-                beforePersistentEffect,
-              },
-              "openai/fixture",
-            )
+          ? stageCodexCandidate(stageContext(state, cfg, snapshot, isCancelled), "openai/fixture")
           : prepareAutomaticSetupCodex({
               cfg,
               runtime,

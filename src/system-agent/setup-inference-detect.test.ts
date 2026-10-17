@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describePendingFakeTimers } from "../../test/helpers/fake-timer-diagnostics.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { AuthProfileStore, SavedSetupCredential } from "../agents/auth-profiles/types.js";
 import type { InferenceBackendCandidate } from "../commands/onboard-inference-ambient.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
@@ -64,6 +64,23 @@ const choice: ProviderAuthChoiceMetadata = {
   appGuidedSecret: true,
 };
 
+function savedStore(
+  setup: SavedSetupCredential | undefined,
+  id = "saved",
+  key = "fixture-key",
+): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      [`fixture:${id}`]: { type: "api_key", provider: "fixture", key, ...(setup ? { setup } : {}) },
+    },
+  };
+}
+
+function savedSetup(modelRef = "fixture/saved-model"): SavedSetupCredential {
+  return { replacement: true, modelRef, configJson: "{}" };
+}
+
 function detectWithProvider(
   detect: NonNullable<ProviderPlugin["auth"][number]["appGuidedSetup"]>["detect"],
   nativeCandidates:
@@ -104,23 +121,13 @@ beforeEach(() => {
   fixture.config = {
     agents: { entries: { main: {} }, defaults: { workspace: "/fixture/workspace" } },
   };
-  fixture.loadAuthProfileStore.mockReturnValue({
-    version: 1,
-    profiles: {
-      "fixture:saved": {
-        type: "api_key",
-        provider: "fixture",
-        key: "fixture-key",
-        setup: {
-          replacement: true,
-          modelRef: "fixture/saved-model",
-          configJson: "{}",
-          authChoice: choice.choiceId,
-          pluginId: choice.pluginId,
-        },
-      },
-    },
-  });
+  fixture.loadAuthProfileStore.mockReturnValue(
+    savedStore({
+      ...savedSetup(),
+      authChoice: choice.choiceId,
+      pluginId: choice.pluginId,
+    }),
+  );
   fixture.withSetupProviderAuthMethod.mockReset();
 });
 
@@ -219,19 +226,7 @@ describe("setup inference discovery deadline", () => {
       fixture.config.auth = {
         profiles: { "fixture:saved": { provider: "fixture", mode: "api_key" } },
       };
-      fixture.loadAuthProfileStore.mockReturnValue({
-        version: 1,
-        profiles: {
-          "fixture:saved": {
-            type: "api_key",
-            provider: "fixture",
-            key: "fixture-key",
-            ...(retry
-              ? { setup: { replacement: true, modelRef: "fixture/saved-model", configJson: "{}" } }
-              : {}),
-          },
-        },
-      });
+      fixture.loadAuthProfileStore.mockReturnValue(savedStore(retry ? savedSetup() : undefined));
       fixture.withSetupProviderAuthMethod.mockImplementation(async (_params, consume) =>
         consume({ method: { starterModel: "fixture/saved-model" } }),
       );
@@ -297,23 +292,17 @@ describe("setup inference discovery deadline", () => {
     const detection = detectWithProvider(async () => null, [], { onPartial });
     await requested.promise;
     expect(onPartial).not.toHaveBeenCalled();
-    loaded.resolve({
-      version: 1,
-      profiles: {
-        "fixture:worker": {
-          type: "api_key",
-          provider: "fixture",
-          key: "fixture-worker-key",
-          setup: {
-            replacement: true,
-            modelRef: "fixture/worker-model",
-            configJson: "{}",
-            authChoice: choice.choiceId,
-            pluginId: choice.pluginId,
-          },
+    loaded.resolve(
+      savedStore(
+        {
+          ...savedSetup("fixture/worker-model"),
+          authChoice: choice.choiceId,
+          pluginId: choice.pluginId,
         },
-      },
-    });
+        "worker",
+        "fixture-worker-key",
+      ),
+    );
     const result = await detection;
     expect(result.candidates).toEqual(
       expect.arrayContaining([
@@ -434,12 +423,7 @@ describe("setup inference discovery deadline", () => {
 
   it("keeps manual setup available when loading a saved sign-in stalls", async () => {
     const loading = createDeferred();
-    fixture.loadAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "fixture:saved": { type: "api_key", provider: "fixture", key: "fixture-key" },
-      },
-    });
+    fixture.loadAuthProfileStore.mockReturnValue(savedStore(undefined));
     fixture.withSetupProviderAuthMethod.mockImplementation(() => {
       loading.resolve();
       return new Promise(() => {});
