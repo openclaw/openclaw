@@ -6,8 +6,6 @@ const mocks = vi.hoisted(() => ({
   acquireSessionMcpRuntime: vi.fn(),
   releaseLease: vi.fn(),
   loadSessionEntry: vi.fn(),
-  resolveAgentDir: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
 }));
 
@@ -19,8 +17,8 @@ vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
 }));
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
-  resolveAgentDir: mocks.resolveAgentDir,
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveAgentDir: () => "/tmp/agent",
+  resolveAgentWorkspaceDir: () => "/tmp/workspace",
 }));
 vi.mock("../agents/mcp-ui-resource.js", () => ({
   fetchMcpAppView: mocks.fetchMcpAppView,
@@ -52,31 +50,26 @@ import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-recon
 
 const runtime = { mcpAppsEnabled: true };
 const view = { id: "view-lease" };
+const viewId = "mcp-app-restored";
+const defaultSessionKey = "agent:main:main";
 
 beforeEach(() => {
-  for (const mock of Object.values(mocks)) {
-    mock.mockReset();
-  }
-  mocks.resolveAgentDir.mockReturnValue("/tmp/agent");
-  mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
+  vi.resetAllMocks();
   mocks.loadSessionEntry.mockReturnValue({
-    canonicalKey: "agent:main:main",
+    canonicalKey: defaultSessionKey,
     entry: { sessionId: "session-1" },
     storePath: "/tmp/sessions.json",
   });
-  mocks.acquireSessionMcpRuntime.mockResolvedValue({
-    runtime,
-    releaseLease: mocks.releaseLease,
-  });
+  mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime, releaseLease: mocks.releaseLease });
   mocks.fetchMcpAppView.mockImplementation(async (params: { viewId?: string }) => ({
     viewId: params.viewId ?? "mcp-app-fresh",
   }));
   mocks.getMcpAppViewLease.mockReturnValue(view);
 });
 
-async function restoreFromMessages(messages: unknown[], viewId: string) {
+async function restoreFromMessages(messages: unknown[]) {
   setMessages(messages);
-  return await restoreMcpAppView({ cfg: {}, sessionKey: "agent:main:main", viewId });
+  return await restoreMcpAppView({ cfg: {}, sessionKey: defaultSessionKey, viewId });
 }
 
 function setMessages(messages: unknown[]) {
@@ -97,7 +90,7 @@ function toolCall(id = "call-1", args: object = {}, name = "demo__show", inputKe
   };
 }
 
-function toolResult(viewId: string, toolCallId: string, extraDescriptor: object = {}) {
+function toolResult(toolCallId = "call-1", extraDescriptor: object = {}) {
   return {
     role: "toolResult",
     toolCallId,
@@ -121,10 +114,7 @@ describe("MCP App transcript reconstruction", () => {
       entry: { sessionId: "session-1" },
       storePath: "/tmp/openclaw-agent.sqlite",
     });
-    setMessages([
-      toolCall("call-1", { city: "Paris" }, "demo__show", "arguments"),
-      toolResult("mcp-app-original", "call-1"),
-    ]);
+    setMessages([toolCall("call-1", { city: "Paris" }, "demo__show", "arguments"), toolResult()]);
 
     const authorizeAppInteraction = vi.fn(async () => true);
     await expect(
@@ -132,10 +122,7 @@ describe("MCP App transcript reconstruction", () => {
         cfg: {},
         sessionKey,
         agentId,
-        descriptor: {
-          ...appTool,
-          toolCallId: "call-1",
-        },
+        descriptor: { ...appTool, toolCallId: "call-1" },
         allowedAppToolNames: new Set(["refresh"]),
         authorizeAppInteraction,
         readOnly: false,
@@ -149,11 +136,7 @@ describe("MCP App transcript reconstruction", () => {
         toolCallId: "call-1",
       }),
     );
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith({
-      cfg: {},
-      key: sessionKey,
-      agentId,
-    });
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith({ cfg: {}, key: sessionKey, agentId });
     expect(mocks.fetchMcpAppView.mock.calls.at(-1)?.[0]).not.toHaveProperty("viewId");
   });
 
@@ -170,10 +153,7 @@ describe("MCP App transcript reconstruction", () => {
       } else {
         mocks.fetchMcpAppView.mockRejectedValue(new DOMException("aborted", "AbortError"));
       }
-      const restored = restoreFromMessages(
-        [toolCall(), toolResult("mcp-app-abandoned", "call-1")],
-        "mcp-app-abandoned",
-      );
+      const restored = restoreFromMessages([toolCall(), toolResult()]);
       if (outcome === "aborted") {
         await expect(restored).rejects.toMatchObject({ name: "AbortError" });
       } else {
@@ -183,79 +163,56 @@ describe("MCP App transcript reconstruction", () => {
     },
   );
 
-  it("rejects client-selected descriptors that do not match transcript ownership", async () => {
-    await expect(
-      restoreFromMessages(
-        [
-          {
-            ...toolResult("mcp-app-ownership", "call-1"),
-            toolCallId: "call-other",
-          },
-        ],
-        "mcp-app-ownership",
-      ),
-    ).resolves.toBeUndefined();
+  it.each([
+    {
+      reason: "mismatched transcript ownership",
+      messages: [{ ...toolResult(), toolCallId: "call-other" }],
+    },
+    {
+      reason: "unpersisted app metadata",
+      messages: [toolCall(), toolResult("call-1", { resultMetaState: "unavailable" })],
+    },
+    { reason: "missing tool-call input", messages: [toolResult()] },
+  ])("declines reconstruction with $reason", async ({ messages }) => {
+    await expect(restoreFromMessages(messages)).resolves.toBeUndefined();
     expect(mocks.fetchMcpAppView).not.toHaveBeenCalled();
   });
 
   it("binds reused call IDs to the nearest preceding matching tool", async () => {
-    const restored = await restoreFromMessages(
-      [
-        toolCall("shared", { secret: 1 }, "other__tool"),
-        toolCall("shared", { page: 2 }),
-        toolResult("mcp-app-reused", "shared"),
-        toolCall("shared", { page: 3 }),
-      ],
-      "mcp-app-reused",
-    );
+    const restored = await restoreFromMessages([
+      toolCall("shared", { secret: 1 }, "other__tool"),
+      toolCall("shared", { page: 2 }),
+      toolResult("shared"),
+      toolCall("shared", { page: 3 }),
+    ]);
 
     expect(restored).toEqual({ runtime, view });
     expect(mocks.releaseLease).toHaveBeenCalledOnce();
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith({
       runtime,
       agentId: "main",
-      serverName: "demo",
-      toolName: "show",
-      uiResourceUri: "ui://demo/app",
+      ...appTool,
       toolCallId: "shared",
       toolInput: { page: 2 },
       toolResult: {
         content: [{ type: "text", text: "ok" }],
         structuredContent: { city: "Paris" },
       },
-      viewId: "mcp-app-reused",
+      viewId,
       allowedAppToolNames: new Set(),
       readOnly: true,
     });
   });
 
-  it("declines reconstruction when app-only result metadata was not persisted", async () => {
-    await expect(
-      restoreFromMessages(
-        [toolCall(), toolResult("mcp-app-meta", "call-1", { resultMetaState: "unavailable" })],
-        "mcp-app-meta",
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  it("rejects a descriptor without its matching tool-call input", async () => {
-    await expect(
-      restoreFromMessages([toolResult("mcp-app-missing", "call-1")], "mcp-app-missing"),
-    ).resolves.toBeUndefined();
-  });
-
   it("streams the full active transcript instead of limiting reconstruction to its tail", async () => {
-    const messages = [
+    await restoreFromMessages([
       toolCall("call-1", { page: 1 }),
-      toolResult("mcp-app-stream", "call-1"),
+      toolResult(),
       ...Array.from({ length: 2_500 }, (_, index) => ({
         role: "assistant",
         content: [{ type: "text", text: `later-${index}` }],
       })),
-    ];
-
-    await restoreFromMessages(messages, "mcp-app-stream");
-
+    ]);
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
       expect.objectContaining({ toolInput: { page: 1 } }),
     );

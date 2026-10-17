@@ -1,13 +1,9 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { setImmediate as settle } from "node:timers/promises";
-import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createMcpAppStandaloneTicket,
   createSerializedHost,
-  handleMcpAppStandaloneHttpRequest,
   issueTicket,
   mocks,
   nowMs,
@@ -15,6 +11,7 @@ import {
   request,
   resetStandaloneMcpAppTestState,
   runtime,
+  startStandaloneHttp,
   view,
 } from "./mcp-app-standalone.http.test-support.js";
 
@@ -23,10 +20,10 @@ function call(host: Host, id: string | number) {
   host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
 }
 function expectReply(host: Host, id: string | number, result: unknown) {
-  expect(host.postMessage).toHaveBeenCalledWith(
-    { jsonrpc: "2.0", id, result },
-    "http://127.0.0.1:18790",
-  );
+  expectMessage(host, { jsonrpc: "2.0", id, result });
+}
+function expectMessage(host: Host, message: unknown) {
+  expect(host.postMessage).toHaveBeenCalledWith(message, "http://127.0.0.1:18790");
 }
 function appRequest(ticket: string, params: Partial<Parameters<typeof request>[0]> = {}) {
   return request({
@@ -36,7 +33,22 @@ function appRequest(ticket: string, params: Partial<Parameters<typeof request>[0
   });
 }
 function operations(ticket: string) {
-  return (body: unknown) => appRequest(ticket, { method: "POST", body });
+  return (body: unknown) => appStatus(ticket, { method: "POST", body });
+}
+async function appStatus(ticket: string, params: Partial<Parameters<typeof request>[0]> = {}) {
+  return (await appRequest(ticket, params)).res.statusCode;
+}
+const appCall = (name = "app-only") => ({ method: "tools/call", params: { name, arguments: {} } });
+const resourceRead = { method: "resources/read", params: { uri: "ui://demo/state" } };
+function mintTicket(
+  sessionKey: string,
+  changes: Partial<Parameters<typeof createMcpAppStandaloneTicket>[0]["view"]> = {},
+) {
+  return createMcpAppStandaloneTicket({
+    sessionKey,
+    view: { ...view, ...changes },
+    toolOperationsAuthorized: true,
+  });
 }
 
 describe("MCP App standalone host", () => {
@@ -51,27 +63,21 @@ describe("MCP App standalone host", () => {
       params: { mode: "fullscreen" },
     });
     expect(host.frame.style.height).toBe("900px");
-    expect(host.postMessage).toHaveBeenCalledWith(
+    expectMessage(
+      host,
       expect.objectContaining({
         method: "ui/notifications/host-context-changed",
         params: { displayMode: "fullscreen" },
       }),
-      "http://127.0.0.1:18790",
     );
-    expect(host.postMessage).toHaveBeenCalledWith(
-      { jsonrpc: "2.0", id: "fullscreen", result: { mode: "fullscreen" } },
-      "http://127.0.0.1:18790",
-    );
+    expectReply(host, "fullscreen", { mode: "fullscreen" });
     host.emit({
       jsonrpc: "2.0",
       id: "pip",
       method: "ui/request-display-mode",
       params: { mode: "pip" },
     });
-    expect(host.postMessage).toHaveBeenCalledWith(
-      { jsonrpc: "2.0", id: "pip", result: { mode: "fullscreen" } },
-      "http://127.0.0.1:18790",
-    );
+    expectReply(host, "pip", { mode: "fullscreen" });
   });
 
   it("mints an opaque reusable ticket and rejects tampering and expiry at HTTP admission", async () => {
@@ -80,22 +86,16 @@ describe("MCP App standalone host", () => {
     expect(issued.ticket).not.toContain("agent:main:main");
     expect(issued.expiresAtMs).toBe(nowMs + 2 * 60_000);
     expect(issueTicket({ sessionKey: "agent:main:main", view, nowMs: nowMs + 1 })).toEqual(issued);
-    const invoke = (ticket: string, now = nowMs) => appRequest(ticket, { now });
-    expect((await invoke(issued.ticket)).res.statusCode).toBe(200);
+    const invoke = (ticket: string, now = nowMs) => appStatus(ticket, { now });
+    expect(await invoke(issued.ticket)).toBe(200);
     expect(mocks.peekSessionMcpRuntime).toHaveBeenCalledWith({ sessionKey: "agent:main:main" });
     const suffix = issued.ticket.endsWith("x") ? "y" : "x";
-    expect((await invoke(`${issued.ticket.slice(0, -1)}${suffix}`)).res.statusCode).toBe(401);
-    expect((await invoke(issued.ticket, issued.expiresAtMs + 1)).res.statusCode).toBe(401);
+    expect(await invoke(`${issued.ticket.slice(0, -1)}${suffix}`)).toBe(401);
+    expect(await invoke(issued.ticket, issued.expiresAtMs + 1)).toBe(401);
   });
 
   it("does not downgrade requester-bound views into bearer-only standalone authority", () => {
-    expect(
-      createMcpAppStandaloneTicket({
-        sessionKey: "agent:main:main",
-        view: { ...view, requesterId: "alice" },
-        toolOperationsAuthorized: true,
-      }),
-    ).toBeUndefined();
+    expect(mintTicket("agent:main:main", { requesterId: "alice" })).toBeUndefined();
   });
 
   it("bounds ticket lifetime and omits issuance at capacity", () => {
@@ -105,21 +105,9 @@ describe("MCP App standalone host", () => {
     );
     vi.spyOn(Date, "now").mockReturnValue(nowMs + 1_001);
     for (let index = 0; index < 256; index += 1) {
-      expect(
-        createMcpAppStandaloneTicket({
-          sessionKey: `agent:${index}`,
-          view: { ...view, viewId: `mcp-app-${index}` },
-          toolOperationsAuthorized: true,
-        }),
-      ).toBeDefined();
+      expect(mintTicket(`agent:${index}`, { viewId: `mcp-app-${index}` })).toBeDefined();
     }
-    expect(
-      createMcpAppStandaloneTicket({
-        sessionKey: "agent:overflow",
-        view: { ...view, viewId: "mcp-app-overflow" },
-        toolOperationsAuthorized: true,
-      }),
-    ).toBeUndefined();
+    expect(mintTicket("agent:overflow", { viewId: "mcp-app-overflow" })).toBeUndefined();
   });
 
   it("binds tool authority and never reuses a stronger ticket for a read-only issuer", async () => {
@@ -137,59 +125,30 @@ describe("MCP App standalone host", () => {
       serverTools: false,
     });
 
-    const denied = await appRequest(readOnly.ticket, {
-      method: "POST",
-      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
-    });
-    expect(denied.res.statusCode).toBe(403);
+    expect(await operations(readOnly.ticket)(appCall())).toBe(403);
     expect(runtime.callTool).not.toHaveBeenCalled();
 
-    const allowed = await appRequest(stronger.ticket, {
-      method: "POST",
-      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
-    });
-    expect(allowed.res.statusCode).toBe(200);
+    expect(await operations(stronger.ticket)(appCall())).toBe(200);
     expect(runtime.callTool).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { label: "public shell", path: "/__openclaw__/mcp-app", expectedStatus: 200 },
-    {
-      label: "authenticated multibyte view",
-      path: "/__openclaw__/mcp-app/view",
-      expectedStatus: 200,
-      authorized: true,
-    },
-  ])(
-    "keeps GET and HEAD metadata aligned over HTTP for $label",
-    async ({ path, expectedStatus, authorized }) => {
+  it.each([false, true])(
+    "keeps GET and HEAD metadata aligned over HTTP (authorized=%s)",
+    async (authorized) => {
+      const path = `/__openclaw__/mcp-app${authorized ? "/view" : ""}`;
       const originalHtml = view.html;
       view.html = "<!doctype html><p>caf\u00e9 \ud83e\udd9e</p>";
       const ticket = authorized
         ? issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket
         : undefined;
-      const server = createServer((req, res) => {
-        void handleMcpAppStandaloneHttpRequest(req, res, {
-          sandboxPort: 18_790,
-        }).catch((error: unknown) => {
-          res.statusCode = 500;
-          res.end(String(error));
-        });
-      });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-
+      const server = await startStandaloneHttp({ sandboxPort: 18_790 });
       try {
-        const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
         const headers = ticket ? { Authorization: `MCP-App ${ticket}` } : undefined;
-        const get = await fetch(`${origin}${path}`, { headers });
+        const get = await fetch(`${server.origin}${path}`, { headers });
         const body = Buffer.from(await get.arrayBuffer());
-        const head = await fetch(`${origin}${path}`, { method: "HEAD", headers });
+        const head = await fetch(`${server.origin}${path}`, { method: "HEAD", headers });
 
-        expect(get.status).toBe(expectedStatus);
-        expect(head.status).toBe(expectedStatus);
+        expect([get.status, head.status]).toEqual([200, 200]);
         expect(get.headers.get("content-length")).toBe(String(body.byteLength));
         expect(head.headers.get("content-length")).toBe(String(body.byteLength));
         expect((await head.arrayBuffer()).byteLength).toBe(0);
@@ -209,51 +168,24 @@ describe("MCP App standalone host", () => {
         }
       } finally {
         view.html = originalHtml;
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server.close();
       }
     },
   );
 
   it("bounds initial serialized body fetch with a visible outcome", async () => {
-    const shell = await request({ url: "/__openclaw__/mcp-app" });
-    const html = String(shell.end.mock.calls[0]?.[0]);
-    const source = /<script>([\s\S]+)<\/script>/u.exec(html)?.[1];
-    expect(source).toBeDefined();
-
-    let renderedError = "";
     const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
     const initialSignal = AbortSignal.abort(timeoutError);
-    const initialTimeout = vi.fn(() => initialSignal);
-    const initialFetch = vi.fn(() =>
-      Promise.resolve({ ok: true, json: () => Promise.reject(timeoutError) }),
-    );
-
-    runInNewContext(source!, {
-      AbortSignal: { timeout: initialTimeout },
-      URL,
-      addEventListener: vi.fn(),
-      document: {
-        createElement: () => ({ className: "", textContent: "" }),
-        getElementById: () => ({
-          replaceChildren: (child: { textContent?: string }) => {
-            renderedError = child.textContent ?? "";
-          },
-        }),
-      },
-      fetch: initialFetch,
-      innerWidth: 800,
-      location: { hash: "#ticket", origin: "http://127.0.0.1:18789" },
-      matchMedia: () => ({ matches: false }),
-      navigator: { language: "en" },
-      setTimeout,
-    });
+    const initialBody = createDeferred<unknown>();
+    const host = await createSerializedHost({ initialBody, initialSignal });
+    initialBody.reject(timeoutError);
     await vi.waitFor(() =>
-      expect(renderedError).toBe("MCP App view timed out; reload to try again"),
+      expect(host.replaceChildren).toHaveBeenCalledWith(
+        expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
+      ),
     );
-    expect(initialTimeout).toHaveBeenCalledWith(30_000);
-    expect(initialFetch).toHaveBeenCalledWith(
+    expect(host.timeout).toHaveBeenCalledWith(30_000);
+    expect(host.fetch).toHaveBeenCalledWith(
       "/__openclaw__/mcp-app/view",
       expect.objectContaining({ signal: initialSignal }),
     );
@@ -272,10 +204,10 @@ describe("MCP App standalone host", () => {
       serverTools: true,
       serverResources: true,
     });
-    expect((await appRequest(issued.ticket)).res.statusCode).toBe(200);
+    expect(await appStatus(issued.ticket)).toBe(200);
     for (const replacement of [null, { ...runtime, sessionId: "runtime-replaced" }]) {
       mocks.peekSessionMcpRuntime.mockReturnValue(replacement);
-      expect((await appRequest(issued.ticket)).res.statusCode).toBe(401);
+      expect(await appStatus(issued.ticket)).toBe(401);
     }
     mocks.peekSessionMcpRuntime.mockReturnValue(runtime);
     for (const replacement of [
@@ -283,7 +215,7 @@ describe("MCP App standalone host", () => {
       { ...view, sessionId: "runtime-replaced" },
     ]) {
       mocks.getMcpAppViewLease.mockReturnValue(replacement);
-      expect((await appRequest(issued.ticket)).res.statusCode).toBe(401);
+      expect(await appStatus(issued.ticket)).toBe(401);
     }
   });
 
@@ -324,39 +256,44 @@ describe("MCP App standalone host", () => {
     expectReply(host, 0, "original result");
   });
 
-  it("retires resource reads when the page closes", async () => {
-    const method = "resources/read";
-    const host = await createSerializedHost();
-    host.emit({ jsonrpc: "2.0", id: 1, method, params: {} });
-    host.pagehide();
-    expect(host.operations[0]?.signal?.aborted).toBe(true);
-    host.pageshow(true);
-    expect(host.reload).not.toHaveBeenCalled();
-    host.emit({ jsonrpc: "2.0", id: 2, method, params: {} });
-    expect(host.operations).toHaveLength(1);
-    host.operations[0]!.result.resolve("late result");
-    await settle();
-    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
-  });
-
-  it("requests one fresh document on a persisted live-host return without replaying work", async () => {
-    const host = await createSerializedHost();
-    call(host, "old");
-    expect(host.operations).toHaveLength(1);
-    host.pagehide(true);
-    expect(host.operations[0]!.signal?.aborted).toBe(true);
-    host.operations[0]!.result.resolve("late result");
-    await settle();
-    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
-    // Observe the real serialized owner's Location API, not simulated browser cache eligibility.
-    host.pageshow(true);
-    expect(host.reload).toHaveBeenCalledOnce();
-    host.pageshow(true);
-    expect(host.reload).toHaveBeenCalledOnce();
-    call(host, "next");
-    expect(host.operations).toHaveLength(1);
-    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
-  });
+  it.each(["closed", "suspended", "failed"])(
+    "does not revive a %s host on pageshow",
+    async (phase) => {
+      const host = await createSerializedHost(phase === "failed" ? { operationStatus: 401 } : {});
+      const send = (id: number) =>
+        phase === "closed"
+          ? host.emit({ jsonrpc: "2.0", id, method: "resources/read", params: {} })
+          : call(host, id);
+      send(1);
+      expect(host.operations).toHaveLength(1);
+      if (phase === "failed") {
+        host.operations[0]!.result.resolve("rejected");
+        await vi.waitFor(() => expect(host.frame.remove).toHaveBeenCalledOnce());
+      }
+      host.pagehide(phase !== "closed");
+      expect(host.operations[0]!.signal?.aborted).toBe(true);
+      if (phase === "suspended") {
+        host.operations[0]!.result.resolve("late result");
+        await settle();
+        expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+      }
+      host.pageshow(true);
+      if (phase === "suspended") {
+        expect(host.reload).toHaveBeenCalledOnce();
+        host.pageshow(true);
+        expect(host.reload).toHaveBeenCalledOnce();
+      } else {
+        expect(host.reload).not.toHaveBeenCalled();
+      }
+      send(2);
+      expect(host.operations).toHaveLength(1);
+      if (phase !== "suspended") {
+        host.operations[0]!.result.resolve("late result");
+        await settle();
+      }
+      expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
+    },
+  );
 
   it("keeps an active host callable after a persisted pageshow without reload", async () => {
     const host = await createSerializedHost();
@@ -366,22 +303,6 @@ describe("MCP App standalone host", () => {
     expect(host.operations).toHaveLength(1);
     host.operations[0]!.result.resolve("live result");
     await vi.waitFor(() => expectReply(host, "live", "live result"));
-  });
-
-  it("does not resurrect a failed host after persisted history events", async () => {
-    const host = await createSerializedHost({ operationStatus: 401 });
-    call(host, "old");
-    host.operations[0]!.result.resolve("rejected");
-    await vi.waitFor(() => expect(host.frame.remove).toHaveBeenCalledOnce());
-    host.pagehide(true);
-    expect(host.operations[0]!.signal?.aborted).toBe(true);
-    host.pageshow(true);
-    expect(host.reload).not.toHaveBeenCalled();
-    call(host, "next");
-    expect(host.operations).toHaveLength(1);
-    host.operations[0]!.result.resolve("late result");
-    await settle();
-    expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
   });
 
   it.each([
@@ -425,8 +346,7 @@ describe("MCP App standalone host", () => {
       const operation = host.operations[0]!;
       await vi.waitFor(() => expect(operation.response?.bodyUsed).toBe(true));
       host.emit(cancel);
-      expect(operation.signal?.aborted).toBe(true);
-      expect(operation.signal?.reason.name).toBe("AbortError");
+      expect(operation.signal).toMatchObject({ aborted: true, reason: { name: "AbortError" } });
       // Native Response consumption rejects from the stream's actual AbortError; drain promise jobs.
       await settle();
       expect(host.frame.remove).not.toHaveBeenCalled();
@@ -441,10 +361,7 @@ describe("MCP App standalone host", () => {
     const host = await createSerializedHost();
     call(host, 1);
     host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
-    expect(host.postMessage).toHaveBeenCalledWith(
-      { jsonrpc: "2.0", id: 1, method: "ui/resource-teardown", params: {} },
-      "http://127.0.0.1:18790",
-    );
+    expectMessage(host, { jsonrpc: "2.0", id: 1, method: "ui/resource-teardown", params: {} });
     host.emit({ jsonrpc: "2.0", id: 1, result: {} });
     expect(host.frame.remove).toHaveBeenCalledOnce();
     expect(host.operations[0]?.signal?.aborted).toBe(true);
@@ -561,20 +478,13 @@ describe("MCP App standalone host", () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const invoke = operations(issued.ticket);
 
-    const tool = await invoke({
-      method: "tools/call",
-      params: { name: "app-only", arguments: {} },
-    });
-    expect(tool.res.statusCode).toBe(200);
+    expect(await invoke(appCall())).toBe(200);
     expect(runtime.callTool).toHaveBeenCalledWith("demo", "app-only", {});
-    const resource = await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } });
-    expect(resource.res.statusCode).toBe(200);
+    expect(await invoke(resourceRead)).toBe(200);
     expect(runtime.readResource).toHaveBeenCalledWith("demo", "ui://demo/state");
 
     for (const name of ["model-only", "not-allowed", "cross-only"]) {
-      expect(
-        (await invoke({ method: "tools/call", params: { name, arguments: {} } })).res.statusCode,
-      ).toBe(403);
+      expect(await invoke(appCall(name))).toBe(403);
     }
     expect(runtime.callTool).toHaveBeenCalledTimes(1);
     expect(releaseRuntimeLease).toHaveBeenCalled();
@@ -594,7 +504,7 @@ describe("MCP App standalone host", () => {
 
     const pending = appRequest(issued.ticket, {
       method: "POST",
-      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
+      body: appCall(),
     });
     await catalogStarted.promise;
     expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
@@ -609,69 +519,52 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
-  it("denies resource reads from reconstructed read-only views", async () => {
-    Object.assign(view, { readOnly: true });
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const payload = await appRequest(issued.ticket);
-    expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
-      serverResources: false,
-    });
-    const invoke = operations(issued.ticket);
-    expect(
-      (await invoke({ method: "tools/call", params: { name: "app-only", arguments: {} } })).res
-        .statusCode,
-    ).toBe(403);
-    expect(
-      (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
-        .statusCode,
-    ).toBe(403);
-    expect(runtime.readResource).not.toHaveBeenCalled();
-  });
-
-  it("does not accept standalone server operations without explicit run authority", async () => {
-    Object.assign(view, { allowedAppToolNames: undefined });
+  it.each(["read-only", "unbound"])("denies server operations for a %s view", async (mode) => {
+    Object.assign(
+      view,
+      mode === "read-only" ? { readOnly: true } : { allowedAppToolNames: undefined },
+    );
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const invoke = operations(issued.ticket);
-
-    expect((await invoke({ method: "tools/list", params: {} })).res.statusCode).toBe(403);
-    expect(
-      (await invoke({ method: "tools/call", params: { name: "app-only", arguments: {} } })).res
-        .statusCode,
-    ).toBe(403);
-    expect(
-      (await invoke({ method: "resources/read", params: { uri: "ui://demo/state" } })).res
-        .statusCode,
-    ).toBe(403);
+    if (mode === "read-only") {
+      const payload = await appRequest(issued.ticket);
+      expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+        serverResources: false,
+      });
+    } else {
+      expect(await invoke({ method: "tools/list", params: {} })).toBe(403);
+    }
+    expect(await invoke(appCall())).toBe(403);
+    expect(await invoke(resourceRead)).toBe(403);
     expect(runtime.callTool).not.toHaveBeenCalled();
+    expect(runtime.readResource).not.toHaveBeenCalled();
   });
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const invoke = (now: number) =>
-      appRequest(issued.ticket, {
+      appStatus(issued.ticket, {
         method: "POST",
         now,
         body: { method: "resources/list", params: {} },
       });
     view.activeRequests = 4;
-    expect((await appRequest(issued.ticket, { now: nowMs })).res.statusCode).toBe(429);
-    expect((await invoke(nowMs)).res.statusCode).toBe(403);
+    expect(await appStatus(issued.ticket, { now: nowMs })).toBe(429);
+    expect(await invoke(nowMs)).toBe(403);
     view.activeRequests = 0;
-    expect((await invoke(issued.expiresAtMs + 1)).res.statusCode).toBe(401);
+    expect(await invoke(issued.expiresAtMs + 1)).toBe(401);
 
     let currentTime = nowMs;
     const clock = () => currentTime;
     expect(
-      (
-        await appRequest(issued.ticket, {
-          method: "POST",
-          clock,
-          beforeBody: () => {
-            currentTime = issued.expiresAtMs + 1;
-          },
-          body: { method: "resources/list", params: {} },
-        })
-      ).res.statusCode,
+      await appStatus(issued.ticket, {
+        method: "POST",
+        clock,
+        beforeBody: () => {
+          currentTime = issued.expiresAtMs + 1;
+        },
+        body: { method: "resources/list", params: {} },
+      }),
     ).toBe(401);
     expect(runtime.listResources).not.toHaveBeenCalled();
   });
@@ -683,12 +576,10 @@ describe("MCP App standalone host", () => {
     );
     expect((await request({ url: "/__openclaw__/mcp-app/other" })).handled).toBe(false);
     expect(
-      (
-        await appRequest(issued.ticket, {
-          method: "POST",
-          body: { method: "gateway.call", params: {} },
-        })
-      ).res.statusCode,
+      await appStatus(issued.ticket, {
+        method: "POST",
+        body: { method: "gateway.call", params: {} },
+      }),
     ).toBe(400);
   });
 });

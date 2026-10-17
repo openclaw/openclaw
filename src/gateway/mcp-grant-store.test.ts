@@ -7,19 +7,19 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import {
-  activateMcpLoopbackClientGrantCapture,
-  bindMcpLoopbackClientGrantAdmission,
-  deactivateMcpLoopbackClientGrantCapture,
+  activateMcpLoopbackClientGrantCapture as activateCapture,
+  bindMcpLoopbackClientGrantAdmission as bindAdmission,
+  deactivateMcpLoopbackClientGrantCapture as deactivateCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
-  registerMcpLoopbackClientGrantRevocationListener,
+  registerMcpLoopbackClientGrantRevocationListener as registerRevocations,
   resolveAttachGrant,
-  resolveMcpLoopbackClientGrant,
+  resolveMcpLoopbackClientGrant as resolveClient,
   revokeAttachGrant,
   revokeAttachGrantsForSession,
-  revokeMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrantsForRuntime,
-  transferMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant as revokeClient,
+  revokeMcpLoopbackClientGrantsForRuntime as revokeRuntime,
+  transferMcpLoopbackClientGrant as transferClient,
 } from "./mcp-grant-store.js";
 
 const T0 = 1_000_000_000_000;
@@ -29,9 +29,15 @@ const grantParams = (token: string, captureKey: string, runtimeOwnerToken = "run
   captureKey,
   runtimeOwnerToken,
 });
-function mintClient(params: Partial<Parameters<typeof mintMcpLoopbackClientGrant>[0]> = {}) {
+type ClientParams = Parameters<typeof mintMcpLoopbackClientGrant>[0];
+function mintClient({
+  context,
+  ...params
+}: Partial<Omit<ClientParams, "context">> & {
+  context?: Partial<ClientParams["context"]>;
+} = {}) {
   return mintMcpLoopbackClientGrant({
-    context: { sessionKey: "agent:main:first", senderIsOwner: false },
+    context: { sessionKey: "agent:main:first", senderIsOwner: false, ...context },
     runtimeOwnerToken: "runtime-one",
     ...params,
   });
@@ -52,10 +58,7 @@ async function admitted(runId: string): Promise<AdmittedRunContext> {
 }
 
 describe("mcp-grant-store", () => {
-  beforeEach(() => {
-    revokeMcpLoopbackClientGrantsForRuntime("runtime-one");
-    revokeMcpLoopbackClientGrantsForRuntime("runtime-two");
-  });
+  beforeEach(() => ["runtime-one", "runtime-two"].forEach(revokeRuntime));
 
   afterEach(() => {
     for (const admission of admissions.splice(0)) {
@@ -135,13 +138,12 @@ describe("mcp-grant-store", () => {
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
     };
-    const grant = mintClient({
+    const grant = mintMcpLoopbackClientGrant({
       context,
       admittedRunContext,
+      runtimeOwnerToken: "runtime-one",
     });
-    expect(
-      activateMcpLoopbackClientGrantCapture(grantParams(grant.token, "capture-one")),
-    ).toBeTruthy();
+    expect(activateCapture(grantParams(grant.token, "capture-one"))).toBeTruthy();
 
     context.clientCaps.push("caller-mutation");
     context.pinnedWidgetAuthoring = false;
@@ -152,7 +154,7 @@ describe("mcp-grant-store", () => {
     grant.context.sourceReplyOnly = false;
     grant.context.toolsAllow?.push("write");
 
-    const resolved = resolveMcpLoopbackClientGrant(grantParams(grant.token, "capture-one"));
+    const resolved = resolveClient(grantParams(grant.token, "capture-one"));
     expect(resolved?.admittedRunContext).toBe(admittedRunContext);
     expect(grant.context).not.toHaveProperty("admittedRunContext");
     expect(resolved?.context).toEqual({
@@ -166,17 +168,13 @@ describe("mcp-grant-store", () => {
   });
 
   it("admits only the active capture on the grant's Gateway runtime", async () => {
-    const grant = mintClient({
-      admittedRunContext: await admitted("run-active-capture"),
-    });
+    const grant = mintClient({ admittedRunContext: await admitted("run-active-capture") });
     const resolve = (runtimeOwnerToken: string, captureKey: string) =>
-      resolveMcpLoopbackClientGrant(grantParams(grant.token, captureKey, runtimeOwnerToken));
+      resolveClient(grantParams(grant.token, captureKey, runtimeOwnerToken));
     const activate = (captureKey: string, runtimeOwnerToken = "runtime-one") =>
-      activateMcpLoopbackClientGrantCapture(
-        grantParams(grant.token, captureKey, runtimeOwnerToken),
-      );
+      activateCapture(grantParams(grant.token, captureKey, runtimeOwnerToken));
     const deactivate = (captureKey: string) =>
-      deactivateMcpLoopbackClientGrantCapture(grantParams(grant.token, captureKey));
+      deactivateCapture(grantParams(grant.token, captureKey));
 
     expect(resolve("runtime-one", "capture-a")).toBeUndefined();
     expect(activate("capture-a", "runtime-other")).toBe(false);
@@ -200,39 +198,27 @@ describe("mcp-grant-store", () => {
   });
 
   it("replaces native authority only from the current observed capture", async () => {
-    const admittedRunContext = await admitted("run-native-authority");
     const grant = mintClient({
-      context: {
-        sessionKey: "agent:main:first",
-        senderIsOwner: false,
-        nativeCronCreatorToolAllowlist: ["read", "exec"],
-      },
-      admittedRunContext,
+      context: { nativeCronCreatorToolAllowlist: ["read", "exec"] },
+      admittedRunContext: await admitted("run-native-authority"),
     });
     const params = grantParams(grant.token, "capture-native");
-    const capture = activateMcpLoopbackClientGrantCapture(params);
+    const capture = activateCapture(params);
     if (!capture) {
       throw new Error("expected an active native capture");
     }
-    const pending = resolveMcpLoopbackClientGrant(params);
+    const pending = resolveClient(params);
     expect(pending?.context.nativeCronCreatorToolAllowlist).toBeNull();
     const observed = ["read"];
     expect(capture.captureNativeToolAuthority(observed)).toBe(true);
     observed.push("exec");
     expect(pending?.isCurrent()).toBe(false);
-    expect(resolveMcpLoopbackClientGrant(params)?.context.nativeCronCreatorToolAllowlist).toEqual([
-      "read",
-    ]);
+    expect(resolveClient(params)?.context.nativeCronCreatorToolAllowlist).toEqual(["read"]);
 
     expect(capture.captureNativeToolAuthority([])).toBe(true);
-    expect(resolveMcpLoopbackClientGrant(params)?.context.nativeCronCreatorToolAllowlist).toEqual(
-      [],
-    );
-    const replacement = activateMcpLoopbackClientGrantCapture(params);
-    expect(replacement).toBeTruthy();
-    expect(
-      resolveMcpLoopbackClientGrant(params)?.context.nativeCronCreatorToolAllowlist,
-    ).toBeNull();
+    expect(resolveClient(params)?.context.nativeCronCreatorToolAllowlist).toEqual([]);
+    expect(activateCapture(params)).toBeTruthy();
+    expect(resolveClient(params)?.context.nativeCronCreatorToolAllowlist).toBeNull();
     expect(capture.captureNativeToolAuthority(["exec"])).toBe(false);
   });
 
@@ -250,11 +236,7 @@ describe("mcp-grant-store", () => {
     let callerCurrent = true;
     let revokeDuringAssertion = false;
     const grant = mintClient({
-      context: {
-        sessionKey: "agent:main:first",
-        senderIsOwner: false,
-        nativeCronCreatorToolAllowlist: [],
-      },
+      context: { nativeCronCreatorToolAllowlist: [] },
       admittedRunContext,
       abortSignal: sourceController.signal,
       assertCurrent: () => {
@@ -262,12 +244,12 @@ describe("mcp-grant-store", () => {
           throw new Error("caller revoked");
         }
         if (revokeDuringAssertion) {
-          revokeMcpLoopbackClientGrant(grant.token);
+          revokeClient(grant.token);
         }
       },
     });
     const params = grantParams(grant.token, "capture-stale-native");
-    const capture = activateMcpLoopbackClientGrantCapture({
+    const capture = activateCapture({
       ...params,
       assertCurrent: () => captureController.signal.throwIfAborted(),
     });
@@ -275,48 +257,39 @@ describe("mcp-grant-store", () => {
       throw new Error("expected an active native capture");
     }
     expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
-    const retained = resolveMcpLoopbackClientGrant(params);
+    const retained = resolveClient(params);
     expect(retained?.isCurrent()).toBe(true);
-    if (invalidation === "rebind") {
-      bindMcpLoopbackClientGrantAdmission({ ...params, admittedRunContext });
-    } else if (invalidation === "close") {
-      admissions.at(-1)?.close();
-    } else if (invalidation === "source-abort") {
-      sourceController.abort();
-    } else if (invalidation === "caller-revocation") {
-      callerCurrent = false;
-    } else if (invalidation === "capture-abort") {
-      captureController.abort();
-    } else if (invalidation === "revoke-during-assertion") {
-      revokeDuringAssertion = true;
-    }
+    const invalidate = {
+      rebind: () => bindAdmission({ ...params, admittedRunContext }),
+      close: () => admissions.at(-1)?.close(),
+      "source-abort": () => sourceController.abort(),
+      "caller-revocation": () => {
+        callerCurrent = false;
+      },
+      "capture-abort": () => captureController.abort(),
+      "revoke-during-assertion": () => {
+        revokeDuringAssertion = true;
+      },
+    };
+    invalidate[invalidation]();
     expect(retained?.isCurrent()).toBe(false);
     expect(capture.captureNativeToolAuthority(["exec"])).toBe(false);
     expect(capture.captureNativeToolAuthority(null)).toBe(false);
-    expect(resolveMcpLoopbackClientGrant(params)?.context.nativeCronCreatorToolAllowlist).toEqual(
+    expect(resolveClient(params)?.context.nativeCronCreatorToolAllowlist).toEqual(
       invalidation === "rebind" ? ["read"] : undefined,
     );
   });
 
   it("binds one exact late admission and rejects replacement authority", async () => {
-    const first = await admitted("run-late-binding");
     const grant = mintClient();
-
-    expect(
-      bindMcpLoopbackClientGrantAdmission({
+    const bind = async () =>
+      bindAdmission({
         token: grant.token,
         runtimeOwnerToken: "runtime-one",
-        admittedRunContext: first,
-      }),
-    ).toBe(true);
-    const replacement = await admitted("run-late-binding");
-    expect(
-      bindMcpLoopbackClientGrantAdmission({
-        token: grant.token,
-        runtimeOwnerToken: "runtime-one",
-        admittedRunContext: replacement,
-      }),
-    ).toBe(false);
+        admittedRunContext: await admitted("run-late-binding"),
+      });
+    expect(await bind()).toBe(true);
+    expect(await bind()).toBe(false);
   });
 
   it("transfers fresh turn authority onto a process-stable bearer", async () => {
@@ -334,7 +307,7 @@ describe("mcp-grant-store", () => {
       },
     };
     const stable = mintClient({
-      context: { sessionKey: "agent:main:first", runId: "run-first-turn", senderIsOwner: false },
+      context: { runId: "run-first-turn" },
       admittedRunContext: firstAdmission,
       abortSignal: firstController.signal,
     });
@@ -348,22 +321,19 @@ describe("mcp-grant-store", () => {
         store: { version: 1, profiles: {} },
       },
     });
-    expect(
-      activateMcpLoopbackClientGrantCapture(grantParams(stable.token, "stale-capture")),
-    ).toBeTruthy();
-    const first = resolveMcpLoopbackClientGrant(grantParams(stable.token, "stale-capture"));
+    expect(activateCapture(grantParams(stable.token, "stale-capture"))).toBeTruthy();
+    const first = resolveClient(grantParams(stable.token, "stale-capture"));
     expect(first?.isCurrent()).toBe(true);
-    // Turn cleanup revokes the process bearer while the warm child still holds its token.
-    // The next admitted turn must be able to restore that exact inactive bearer.
+    // A warm child's exact revoked bearer must be restorable for the next turn.
     firstController.abort();
-    expect(revokeMcpLoopbackClientGrant(stable.token)).toBe(true);
+    expect(revokeClient(stable.token)).toBe(true);
     expect(first?.isCurrent()).toBe(false);
     const revocations: Array<{ token: string; runtimeOwnerToken: string }> = [];
-    const unregister = registerMcpLoopbackClientGrantRevocationListener((event) => {
+    const unregister = registerRevocations((event) => {
       revocations.push(event);
     });
     const transfer = (runtimeOwnerToken: string) =>
-      transferMcpLoopbackClientGrant({
+      transferClient({
         sourceToken: next.token,
         targetToken: stable.token,
         runtimeOwnerToken,
@@ -376,13 +346,9 @@ describe("mcp-grant-store", () => {
       unregister();
     }
 
-    expect(
-      resolveMcpLoopbackClientGrant(grantParams(stable.token, "stale-capture")),
-    ).toBeUndefined();
-    expect(
-      activateMcpLoopbackClientGrantCapture(grantParams(stable.token, "next-capture")),
-    ).toBeTruthy();
-    const transferred = resolveMcpLoopbackClientGrant(grantParams(stable.token, "next-capture"));
+    expect(resolveClient(grantParams(stable.token, "stale-capture"))).toBeUndefined();
+    expect(activateCapture(grantParams(stable.token, "next-capture"))).toBeTruthy();
+    const transferred = resolveClient(grantParams(stable.token, "next-capture"));
     expect(transferred).toMatchObject({
       context: {
         sessionKey: "agent:main:next",
@@ -399,38 +365,32 @@ describe("mcp-grant-store", () => {
     expect(transferred?.skillLibraryAuthoring).toBe(skillLibraryAuthoring);
     expect(transferred?.isCurrent()).toBe(true);
     expect(first?.isCurrent()).toBe(false);
-    expect(
-      activateMcpLoopbackClientGrantCapture(grantParams(next.token, "forged-source-capture")),
-    ).toBe(false);
+    expect(activateCapture(grantParams(next.token, "forged-source-capture"))).toBe(false);
     expect(revocations).toEqual([
       { token: stable.token, runtimeOwnerToken: "runtime-one" },
       { token: next.token, runtimeOwnerToken: "runtime-one" },
     ]);
     nextController.abort();
     expect(transferred?.isCurrent()).toBe(false);
-    expect(
-      resolveMcpLoopbackClientGrant(grantParams(stable.token, "next-capture")),
-    ).toBeUndefined();
+    expect(resolveClient(grantParams(stable.token, "next-capture"))).toBeUndefined();
   });
 
   it("notifies revocation listeners for single and runtime-wide cleanup", () => {
     const successor = mintClient({
-      context: { sessionKey: "agent:main:successor", senderIsOwner: false },
+      context: { sessionKey: "agent:main:successor" },
       runtimeOwnerToken: "runtime-two",
     });
     const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
-    const unregister = registerMcpLoopbackClientGrantRevocationListener((event) => {
+    const unregister = registerRevocations((event) => {
       events.push(event);
     });
     try {
       const first = mintClient();
-      const second = mintClient({
-        context: { sessionKey: "agent:main:second", senderIsOwner: false },
-      });
+      const second = mintClient({ context: { sessionKey: "agent:main:second" } });
 
-      expect(revokeMcpLoopbackClientGrant(first.token)).toBe(true);
-      expect(revokeMcpLoopbackClientGrant(first.token)).toBe(false);
-      expect(revokeMcpLoopbackClientGrantsForRuntime("runtime-one")).toBe(1);
+      expect(revokeClient(first.token)).toBe(true);
+      expect(revokeClient(first.token)).toBe(false);
+      expect(revokeRuntime("runtime-one")).toBe(1);
       expect(events).toEqual([
         { token: first.token, runtimeOwnerToken: "runtime-one" },
         { token: second.token, runtimeOwnerToken: "runtime-one" },
@@ -438,27 +398,15 @@ describe("mcp-grant-store", () => {
     } finally {
       unregister();
     }
-    expect(revokeMcpLoopbackClientGrant(successor.token)).toBe(true);
+    expect(revokeClient(successor.token)).toBe(true);
 
-    const afterUnregister = mintClient({
-      context: { sessionKey: "agent:main:later", senderIsOwner: false },
-    });
-    expect(revokeMcpLoopbackClientGrant(afterUnregister.token)).toBe(true);
+    const afterUnregister = mintClient({ context: { sessionKey: "agent:main:later" } });
+    expect(revokeClient(afterUnregister.token)).toBe(true);
     expect(events).toHaveLength(2);
   });
 
   it("requires a session key for loopback client grants", () => {
-    expect(() =>
-      mintMcpLoopbackClientGrant({
-        context: { sessionKey: "  ", senderIsOwner: false },
-        runtimeOwnerToken: "runtime-one",
-      }),
-    ).toThrow(/sessionKey is required/);
-    expect(() =>
-      mintMcpLoopbackClientGrant({
-        context: { sessionKey: "agent:main:main", senderIsOwner: false },
-        runtimeOwnerToken: "  ",
-      }),
-    ).toThrow(/runtimeOwnerToken is required/);
+    expect(() => mintClient({ context: { sessionKey: "  " } })).toThrow(/sessionKey is required/);
+    expect(() => mintClient({ runtimeOwnerToken: "  " })).toThrow(/runtimeOwnerToken is required/);
   });
 });

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { AddressInfo } from "node:net";
@@ -5,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
+import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -17,6 +19,35 @@ import {
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+const RESOURCE_PATH = "/__openclaw__/renderer/app.js";
+const javascript = (body: string) => ({
+  body: Buffer.from(body),
+  contentType: "application/javascript",
+});
+
+async function getAndHead(url: string | URL) {
+  const get = await fetch(url);
+  const head = await fetch(url, { method: "HEAD" });
+  const body = await get.text();
+  expect(head.status).toBe(get.status);
+  expect(await head.text()).toBe("");
+  expect(get.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
+  for (const header of [
+    "content-type",
+    "content-length",
+    "cache-control",
+    "content-security-policy",
+    "permissions-policy",
+    "cross-origin-resource-policy",
+    "origin-agent-cluster",
+    "referrer-policy",
+    "x-content-type-options",
+  ]) {
+    expect(head.headers.get(header), header).toBe(get.headers.get(header));
+  }
+  return { get, body };
+}
+
 function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
   const { res, end, setHeader } = makeMockHttpResponse();
   const server = createSandboxHostHttpServer();
@@ -27,16 +58,12 @@ function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
 
 async function withSandboxHost(
   run: (origin: string) => Promise<void>,
-  resolvePluginRegistry?: () => PluginRegistry,
+  registry?: PluginRegistry,
 ): Promise<void> {
-  const server = createSandboxHostHttpServer(undefined, resolvePluginRegistry);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const server = createSandboxHostHttpServer(undefined, registry && (() => registry));
+  const listening = once(server, "listening");
+  server.listen(0, "127.0.0.1");
+  await listening;
   const address = server.address() as AddressInfo;
   try {
     await run(`http://127.0.0.1:${address.port}`);
@@ -48,9 +75,7 @@ async function withSandboxHost(
 }
 
 function publicResourceRegistry(
-  readPublicResource: (
-    resourcePath: string,
-  ) => Promise<{ body: Uint8Array; contentType: string } | undefined>,
+  readPublicResource: PluginBoardWidgetContentKind["resources"]["readPublicResource"],
 ) {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({
@@ -65,7 +90,7 @@ function publicResourceRegistry(
     label: "Diagram",
     resources: {
       surface: "renderer",
-      paths: ["/__openclaw__/renderer/app.js"],
+      paths: [RESOURCE_PATH],
       readPublicResource,
     },
     validateSource() {},
@@ -82,33 +107,25 @@ describe("MCP App sandbox HTTP origin", () => {
       started.resolve();
       return await resource.promise;
     });
-    let current = true;
+    const controller = new AbortController();
     const req = new IncomingMessage(new Socket());
     req.method = "GET";
-    req.url = "/__openclaw__/renderer/app.js";
+    req.url = RESOURCE_PATH;
     markGatewayIngressTransport(req, {
       kind: "remote-forwarded",
       context: createRemoteControlUiIngressTestContext({
         operatorScopeCeiling: ["operator.read"],
         frameAncestors: [],
-        assertCurrent() {
-          if (!current) {
-            throw new Error("grant closed");
-          }
-        },
+        assertCurrent: () => controller.signal.throwIfAborted(),
       }),
     });
     const res = new ServerResponse(req);
     const serve = createSandboxHostHttpRequestHandler(() => registry)(req, res);
     await started.promise;
-    current = false;
-    resource.resolve({
-      body: Buffer.from("private-after-close"),
-      contentType: "application/javascript",
-    });
+    controller.abort();
+    resource.resolve(javascript("private-after-close"));
     await serve;
-    expect(res.destroyed).toBe(true);
-    expect(res.writableEnded).toBe(false);
+    expect(res).toMatchObject({ destroyed: true, writableEnded: false });
     req.destroy();
   });
 
@@ -136,10 +153,9 @@ describe("MCP App sandbox HTTP origin", () => {
         const version = url.searchParams.get("v");
         expect(version).toMatch(/^[a-f0-9]{64}$/);
         versions.add(version!);
-        const get = await fetch(url);
+        const { get, body } = await getAndHead(url);
         expect(get.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
         expect(get.headers.get("set-cookie")).toBeNull();
-        const body = await get.text();
         if (path === paths[1]) {
           const csp = get.headers.get("content-security-policy");
           expect(csp).toContain("connect-src https://api.example.com");
@@ -155,11 +171,6 @@ describe("MCP App sandbox HTTP origin", () => {
           );
           expect(body).not.toContain("allow-popups");
         }
-        const head = await fetch(url, { method: "HEAD" });
-        expect(head.headers.get("cache-control")).toBe(get.headers.get("cache-control"));
-        expect(head.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
-        expect(await head.text()).toBe("");
-
         url.searchParams.set("v", "stale-version");
         const stale = await fetch(url);
         expect(stale.headers.get("cache-control")).toBe("no-store");
@@ -182,47 +193,32 @@ describe("MCP App sandbox HTTP origin", () => {
   });
 
   it("serves only explicitly public registered assets without Gateway credentials", async () => {
-    const read = vi.fn(async () => ({
-      body: Buffer.from("window.rendererReady=true"),
-      contentType: "application/javascript",
-    }));
+    const read = vi.fn(async () => javascript("window.rendererReady=true"));
     const registry = publicResourceRegistry(read);
-    await withSandboxHost(
-      async (origin) => {
-        const url = `${origin}/__openclaw__/renderer/app.js`;
-        const get = await fetch(url);
-        const head = await fetch(url, { method: "HEAD" });
-        expect(get.status).toBe(200);
-        expect(await get.text()).toBe("window.rendererReady=true");
-        expect(head.status).toBe(200);
-        expect(await head.text()).toBe("");
-        expect(head.headers.get("content-length")).toBe(get.headers.get("content-length"));
-        expect(get.headers.get("set-cookie")).toBeNull();
-        expect(read).toHaveBeenCalledWith("/__openclaw__/renderer/app.js");
-        expect((await fetch(url, { method: "POST" })).status).toBe(404);
-        for (const deniedPath of [
-          "/",
-          "/__openclaw__/renderer/private.js",
-          "/__openclaw__/canvas/documents/private/index.html",
-        ]) {
-          expect((await fetch(`${origin}${deniedPath}`)).status).toBe(404);
-        }
-        expect(read).toHaveBeenCalledTimes(2);
-      },
-      () => registry,
-    );
+    await withSandboxHost(async (origin) => {
+      const url = `${origin}${RESOURCE_PATH}`;
+      const { get, body } = await getAndHead(url);
+      expect(get.status).toBe(200);
+      expect(body).toBe("window.rendererReady=true");
+      expect(get.headers.get("set-cookie")).toBeNull();
+      expect(read).toHaveBeenCalledWith(RESOURCE_PATH);
+      expect((await fetch(url, { method: "POST" })).status).toBe(404);
+      for (const deniedPath of [
+        "/",
+        "/__openclaw__/renderer/private.js",
+        "/__openclaw__/canvas/documents/private/index.html",
+      ]) {
+        expect((await fetch(`${origin}${deniedPath}`)).status).toBe(404);
+      }
+      expect(read).toHaveBeenCalledTimes(2);
+    }, registry);
   });
 
   it("does not expose registered assets without the public-reader opt-in", async () => {
-    const registry = publicResourceRegistry(async () => undefined);
-    registry.boardWidgetContentKinds.get("diagram")!.definition.resources.readPublicResource =
-      undefined;
-    await withSandboxHost(
-      async (origin) => {
-        expect((await fetch(`${origin}/__openclaw__/renderer/app.js`)).status).toBe(404);
-      },
-      () => registry,
-    );
+    const registry = publicResourceRegistry(undefined);
+    await withSandboxHost(async (origin) => {
+      expect((await fetch(`${origin}${RESOURCE_PATH}`)).status).toBe(404);
+    }, registry);
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
@@ -244,39 +240,11 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(request(`${SANDBOX_HOST_PATH}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(400);
   });
 
-  it.each([
-    {
-      label: "missing path",
-      path: "/missing",
-      statusCode: 404,
-    },
-  ])(
-    "keeps GET and HEAD representation metadata aligned for $label",
-    async ({ path, statusCode }) => {
-      await withSandboxHost(async (origin) => {
-        const get = await fetch(`${origin}${path}`);
-        const head = await fetch(`${origin}${path}`, { method: "HEAD" });
-        const getBody = await get.text();
-
-        expect(get.status).toBe(statusCode);
-        expect(head.status).toBe(statusCode);
-        expect(getBody).not.toBe("");
-        expect(await head.text()).toBe("");
-        expect(get.headers.get("content-length")).toBe(String(Buffer.byteLength(getBody)));
-        for (const header of [
-          "content-type",
-          "content-length",
-          "cache-control",
-          "content-security-policy",
-          "permissions-policy",
-          "cross-origin-resource-policy",
-          "origin-agent-cluster",
-          "referrer-policy",
-          "x-content-type-options",
-        ]) {
-          expect(head.headers.get(header), header).toBe(get.headers.get(header));
-        }
-      });
-    },
-  );
+  it("keeps GET and HEAD representation metadata aligned for a missing path", async () => {
+    await withSandboxHost(async (origin) => {
+      const { get, body } = await getAndHead(`${origin}/missing`);
+      expect(get.status).toBe(404);
+      expect(body).not.toBe("");
+    });
+  });
 });

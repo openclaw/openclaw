@@ -240,6 +240,13 @@ async function fixture(
     params.target === "mcp_app_tool"
       ? { type: "mcp_app_tool", name: "inspect", arguments: { id: "declared" } }
       : { type: "resource_link", uri: "parts://declared", name: "Part" };
+  const resourceInput = {
+    type: "resource",
+    options: [
+      { uri: "parts://choice", name: "Part", _meta: { "openai/preview": { target: preview } } },
+    ],
+    ...(params.kind ? { userOptions: { kind: params.kind, accept: [".stl"] } } : {}),
+  };
   const snapshot = {
     mode: "openai/form",
     message: "Pick resources",
@@ -249,32 +256,22 @@ async function fixture(
         files: {
           type: "array",
           items: { type: "string", format: "uri" },
-          "x-openai-input": {
-            type: "resource",
-            options: [
-              {
-                uri: "parts://choice",
-                name: "Part",
-                _meta: { "openai/preview": { target: preview } },
-              },
-            ],
-            ...(params.kind ? { userOptions: { kind: params.kind, accept: [".stl"] } } : {}),
-          },
+          "x-openai-input": resourceInput,
         },
       },
     },
   };
   const uploadResources = params.upload ?? (params.kind ? workspaceUploads() : undefined);
+  const origin = {
+    runtime,
+    serverName: "origin",
+    sessionKey,
+    agentId: "main",
+    requesterId: params.requesterId === null ? undefined : (params.requesterId ?? "alice"),
+    assertCurrent,
+  };
   const form = await createMcpAppFormResourceContext({
-    origin: {
-      runtime,
-      serverName: "origin",
-      sessionKey,
-      agentId: "main",
-      requesterId: params.requesterId === null ? undefined : (params.requesterId ?? "alice"),
-      assertCurrent,
-      prepareToolCall,
-    },
+    origin: { ...origin, prepareToolCall },
     snapshot,
     signal: controller.signal,
     uploadResources,
@@ -332,8 +329,9 @@ async function fixture(
     callTool,
     prepareToolCall,
     runtime,
+    origin,
     controller,
-    compiled,
+    fields: compiled.plan.fields,
     questions,
     claim,
     snapshot,
@@ -427,14 +425,7 @@ describe("registered MCP form resource route", () => {
       }));
       const result = await callMcpAppToolWithElicitation({
         options,
-        origin: {
-          runtime: f.runtime,
-          serverName: "origin",
-          agentId: "main",
-          sessionKey,
-          requesterId: "alice",
-          assertCurrent,
-        },
+        origin: f.origin,
         toolName: "pick",
         input: {},
         assertCurrent,
@@ -459,13 +450,9 @@ describe("registered MCP form resource route", () => {
     expect(reply[1]).toEqual({ preview: { contents: [{ text: "private-preview" }] } });
     expect(f.readResource).toHaveBeenCalledWith("origin", "parts://declared");
     expect((await f.preview({ requestId: "upstream-id" }))[0]).toBe(false);
-    expect(
-      (
-        await f.preview({
-          target: { type: "resource_link", uri: "parts://secret" },
-        })
-      )[0],
-    ).toBe(false);
+    expect((await f.preview({ target: { type: "resource_link", uri: "parts://secret" } }))[0]).toBe(
+      false,
+    );
     expect((await f.preview({ optionIndex: 1 }))[0]).toBe(false);
     expect(f.readResource).toHaveBeenCalledTimes(1);
   });
@@ -479,22 +466,22 @@ describe("registered MCP form resource route", () => {
     expect(f.readResource).not.toHaveBeenCalled();
   });
 
-  it("does not rebind an identical public question ID to a replacement manager entry", async () => {
-    const f = await fixture();
-    manager.close();
-    await manager.drain();
-    manager = new QuestionManager(createTestGatewayScheduler());
-    pendingQuestion(f.questions, f.base.requestId);
-    expect((await f.preview())[0]).toBe(false);
-    expect(f.readResource).not.toHaveBeenCalled();
-  });
-
-  it("releases form authority when the actual pending question owner retires", async () => {
-    const f = await fixture();
-    f.claim.dispose();
-    expect((await f.preview())[0]).toBe(false);
-    expect(f.readResource).not.toHaveBeenCalled();
-  });
+  it.each(["replacement manager entry", "retired question owner"])(
+    "refuses previews for a %s",
+    async (reason) => {
+      const f = await fixture();
+      if (reason === "retired question owner") {
+        f.claim.dispose();
+      } else {
+        manager.close();
+        await manager.drain();
+        manager = new QuestionManager(createTestGatewayScheduler());
+        pendingQuestion(f.questions, f.base.requestId);
+      }
+      expect((await f.preview())[0]).toBe(false);
+      expect(f.readResource).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["origin", "upload policy", "apps disabled"])(
     "rechecks %s after await before writing uploads",
@@ -600,9 +587,7 @@ describe("registered MCP form resource route", () => {
       expect(await readFile(file, "utf8")).toBe("solid part");
       expect(f.form.context.isUploadedResource("files", resource.uri)).toBe(true);
       expect(f.form.context.isUploadedResource("other", resource.uri)).toBe(false);
-      if (f.compiled.kind === "ready" && f.compiled.plan.kind === "form") {
-        expect(f.compiled.plan.fields[0]!.decode([resource.uri]).kind).toBe("present");
-      }
+      expect(f.fields[0]!.decode([resource.uri]).kind).toBe("present");
       f.form.dispose();
       expect(await readFile(file, "utf8")).toBe("solid part");
     },

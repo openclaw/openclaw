@@ -159,9 +159,11 @@ describe("cold App request admission", () => {
             assertCurrent: mocks.assert,
           });
     expect(mocks.approval).toHaveBeenCalledOnce();
-    expect(mocks.approval).toHaveBeenCalledWith(
-      expect.objectContaining({ serverName: "demo", toolName: "show", input }),
-    );
+    expect(mocks.approval.mock.lastCall?.[0]).toMatchObject({
+      serverName: "demo",
+      toolName: "show",
+      input,
+    });
     expect(assertion).toBeTypeOf("function");
     expect(() => assertion?.()).not.toThrow();
     accessController.abort(new Error("revoked"));
@@ -171,22 +173,20 @@ describe("cold App request admission", () => {
   });
   it("selects the current harness before any historical model turn and admits its native setup", async () => {
     const active = await prepareMcpAppExtensionRuntime(options());
-    expect(mocks.selection).toHaveBeenCalledWith(expect.objectContaining({ sessionEntry: entry }));
-    expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ownerPluginId: "codex",
-        sourceAuthority: { kind: "fixture" },
-        input: expect.objectContaining({
-          senderId: "alice",
-          sessionId: "session",
-          workspaceDir: "/workspace",
-          abortSignal: accessController.signal,
-        }),
-      }),
-    );
-    expect(mocks.native).toHaveBeenCalledWith(
-      expect.objectContaining({ appRequester: { kind: "gateway-profile", profileId: "alice" } }),
-    );
+    expect(mocks.selection.mock.lastCall?.[0]).toMatchObject({ sessionEntry: entry });
+    expect(mocks.prepare.mock.lastCall?.[0]).toMatchObject({
+      ownerPluginId: "codex",
+      sourceAuthority: { kind: "fixture" },
+      input: {
+        senderId: "alice",
+        sessionId: "session",
+        workspaceDir: "/workspace",
+        abortSignal: accessController.signal,
+      },
+    });
+    expect(mocks.native.mock.lastCall?.[0]).toMatchObject({
+      appRequester: { kind: "gateway-profile", profileId: "alice" },
+    });
     expect(mocks.direct).not.toHaveBeenCalled();
     expect(mocks.dispose).toHaveBeenCalledOnce();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
@@ -207,49 +207,6 @@ describe("cold App request admission", () => {
     expect(mocks.releaseAccess).toHaveBeenCalledOnce();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
   });
-  it.each([{ agentHarnessId: "previous-harness" }])(
-    "keeps a retained App valid after ordinary turn observations %j",
-    async (observations) => {
-      const active = await prepareMcpAppExtensionRuntime(options());
-      // Use a fresh view borrow, independent of the completed setup lifetime.
-      accessController = new AbortController();
-      const view = active.retainViewAuthority([]);
-      entry = { ...entry, ...observations };
-      expect(active.assertCurrent).not.toThrow();
-      expect(view.assertCurrent).not.toThrow();
-      expect(mocks.native).toHaveBeenCalledOnce();
-      view.release();
-      await active.dispose();
-    },
-  );
-  it.each([{ authProfileOverride: "other-profile" }, { sandboxMode: "off" as const }])(
-    "continues to revoke changed authority %j",
-    async (change) => {
-      const active = await prepareMcpAppExtensionRuntime(options());
-      entry = { ...entry, ...change };
-      expect(active.assertCurrent).toThrow("runtime selection changed");
-      await active.dispose();
-    },
-  );
-  it("does not fall back to a second transport when the selected harness is unavailable", async () => {
-    mocks.registered.mockReturnValue(undefined);
-    await expect(prepareMcpAppExtensionRuntime(options())).rejects.toThrow(
-      "harness is unavailable",
-    );
-    expect(mocks.direct).not.toHaveBeenCalled();
-  });
-  it.each([{ acquireMcpAppRuntime: mocks.native }, { loadMcpToolCatalog: vi.fn() }])(
-    "does not replace a registered native harness missing an App capability (%j)",
-    async (harness) => {
-      mocks.registered.mockReturnValue({ ownerPluginId: "codex", harness });
-      await expect(prepareMcpAppExtensionRuntime(options())).rejects.toThrow(
-        "session harness cannot open MCP Apps",
-      );
-      expect(mocks.direct).not.toHaveBeenCalled();
-      expect(mocks.native).not.toHaveBeenCalled();
-      expect(mocks.prepare).not.toHaveBeenCalled();
-    },
-  );
   it("does not prepare credentials after source authority disappears", async () => {
     mocks.source.mockImplementation(async () => {
       mocks.assert.mockImplementation(() => {
@@ -261,4 +218,42 @@ describe("cold App request admission", () => {
     expect(mocks.prepare).not.toHaveBeenCalled();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
   });
+  it("keeps a retained App valid after ordinary turn observations", async () => {
+    const active = await prepareMcpAppExtensionRuntime(options());
+    // Use a fresh view borrow, independent of the completed setup lifetime.
+    accessController = new AbortController();
+    const view = active.retainViewAuthority([]);
+    entry = { ...entry, agentHarnessId: "previous-harness" };
+    expect(active.assertCurrent).not.toThrow();
+    expect(view.assertCurrent).not.toThrow();
+    expect(mocks.native).toHaveBeenCalledOnce();
+    view.release();
+    await active.dispose();
+  });
+  it.each([{ authProfileOverride: "other-profile" }, { sandboxMode: "off" as const }])(
+    "continues to revoke changed authority %j",
+    async (change) => {
+      const active = await prepareMcpAppExtensionRuntime(options());
+      entry = { ...entry, ...change };
+      expect(active.assertCurrent).toThrow("runtime selection changed");
+      await active.dispose();
+    },
+  );
+  it.each([
+    { harness: undefined, error: "harness is unavailable" },
+    {
+      harness: { acquireMcpAppRuntime: mocks.native },
+      error: "session harness cannot open MCP Apps",
+    },
+    { harness: { loadMcpToolCatalog: vi.fn() }, error: "session harness cannot open MCP Apps" },
+  ])(
+    "rejects incomplete native harness %j without replacing its transport",
+    async ({ harness, error }) => {
+      mocks.registered.mockReturnValue(harness && { ownerPluginId: "codex", harness });
+      await expect(prepareMcpAppExtensionRuntime(options())).rejects.toThrow(error);
+      expect(mocks.direct).not.toHaveBeenCalled();
+      expect(mocks.native).not.toHaveBeenCalled();
+      expect(mocks.prepare).not.toHaveBeenCalled();
+    },
+  );
 });
