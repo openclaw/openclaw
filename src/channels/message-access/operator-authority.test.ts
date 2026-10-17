@@ -84,10 +84,17 @@ const authorityFor = (ctx: MsgContext) =>
 const requesterProfile = (prompt: string) =>
   JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!).requester_profile;
 const namedProfile = (id: string) => ({ id, display_name: "Ada Lovelace" });
+const expectNoRequester = (ctx: MsgContext) =>
+  expect(buildInboundUserContextPrefix(ctx)).not.toContain("requester_profile");
 const forgeSymbols = (ctx: MsgContext, value: unknown) => ({
   ...ctx,
   ...Object.fromEntries(Object.getOwnPropertySymbols(ctx).map((key) => [key, value])),
 });
+const githubIdentity = (login: string) =>
+  syncGitHubIdentity({
+    identity: { accountId: 123, login },
+    authenticationAlias: { kind: "email", email: "ada@example.test" },
+  });
 async function hasSessionTools(
   cfg: Parameters<typeof authorize>[0],
   ctx: MsgContext,
@@ -145,10 +152,7 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
         const overlays = [];
         for (const { identity } of admins) {
           const ctx = await context(identity.senderId);
-          const operatorAuthority = expectDefined(
-            authorityFor(ctx),
-            "linked-channel operator authority",
-          );
+          const operatorAuthority = expectDefined(authorityFor(ctx), "linked-channel authority");
           overlays.push(
             resolveInboundReplyToolAuthorityOverlay({
               ctx,
@@ -212,8 +216,8 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
     ),
 );
 
-it("exposes a verified linked requester in trusted metadata without widening owner tools", async () => {
-  await withOperator(async ({ cfg, admins, context }) => {
+it("exposes verified requester metadata without widening owner tools", () =>
+  withOperator(async ({ cfg, admins, context }) => {
     using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     for (const [index, sender, verified, role, linked, owner] of [
       [0, undefined, true, "admin", true, true],
@@ -236,14 +240,12 @@ it("exposes a verified linked requester in trusted metadata without widening own
       }
       const prompt = buildInboundUserContextPrefix({ ...ctx });
       expect(requesterProfile(prompt)).toEqual(linked ? namedProfile(admin.profile.id) : undefined);
-      // The requester hint is model-only context; display and CLI-history dedupe strip it.
       expect(prompt.includes("requester_profile is the verified linked requester")).toBe(linked);
       const text = "assign this to me";
       const submitted = `${prompt}\n\n${text}`;
       for (const strip of [stripInboundMetadata, stripLeadingInboundMetadata]) {
         expect(strip(submitted)).toBe(text);
       }
-      // Claude CLI stores the full prompt; history merge must fold it into the local turn.
       const sentAt = Date.parse("2026-09-29T03:28:00.915Z");
       expect(
         mergeImportedChatHistoryMessages({
@@ -285,11 +287,10 @@ it("exposes a verified linked requester in trusted metadata without widening own
       }
       expect(await hasSessionTools(cfg, ctx, senderIsOwner)).toBe(owner);
     }
-  });
-});
+  }));
 
-it("refreshes requester facts on later turns and rejects unlinked or forged context", async () => {
-  await withOperator(async ({ cfg, admin, admins, context, retire }) => {
+it("refreshes requester facts and rejects forged context", () =>
+  withOperator(async ({ cfg, admin, admins, context, retire }) => {
     const original = await context(admin.identity.senderId);
     const stablePrompt = buildInboundMetaSystemPrompt(original, cfg);
     for (const sender of [admins[1]!.identity.senderId, "unlinked"]) {
@@ -315,7 +316,7 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
         RequesterProfile: { id: admin.profile.id },
       },
     ]) {
-      expect(buildInboundUserContextPrefix(forged)).not.toContain("requester_profile");
+      expectNoRequester(forged);
     }
     const adminContext = await context(admin.identity.senderId);
     expect(authorize(cfg, adminContext).senderIsOwner).toBe(true);
@@ -341,20 +342,17 @@ it("refreshes requester facts on later turns and rejects unlinked or forged cont
       expect(authorize(cfg, ctx).senderIsOwner).toBe(false);
     }
     unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-    expect(buildInboundUserContextPrefix(original)).not.toContain("requester_profile");
-    expect(buildInboundUserContextPrefix(await context(admin.identity.senderId))).not.toContain(
-      "requester_profile",
-    );
+    expectNoRequester(original);
+    expectNoRequester(await context(admin.identity.senderId));
     linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
     const relinked = await context(admin.identity.senderId);
     expect(buildInboundUserContextPrefix(relinked)).toContain(admins[1]!.profile.id);
     retire();
-    expect(buildInboundUserContextPrefix(relinked)).not.toContain("requester_profile");
-  });
-});
+    expectNoRequester(relinked);
+  }));
 
-it("keeps native policy readable by schema-19 predecessors without configured owners", async () => {
-  await withOperator(async ({ cfg, activatePolicy }) => {
+it("keeps policy readable by schema-19 predecessors", () =>
+  withOperator(async ({ cfg, activatePolicy }) => {
     for (const owners of [undefined, []]) {
       cfg.commands!.ownerAllowFrom = owners;
       await activatePolicy({});
@@ -363,8 +361,7 @@ it("keeps native policy readable by schema-19 predecessors without configured ow
         .soft(readConfigMachineState("operator.channelPolicy"))
         .toEqual(resolveUserChannelAuthorizationPolicy(cfg.gateway));
     }
-  });
-});
+  }));
 
 it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
   "revokes admitted channel owner authority when its %s changes",
@@ -544,8 +541,8 @@ it.each(["allowed", "revoked", "replaced", "unavailable"] as const)(
     }),
 );
 
-it("keeps the active policy and its reference when durable policy retirement rolls back", async () => {
-  await withOperator(async ({ cfg, activatePolicy, prepare, closeDatabase }) => {
+it("rolls back policy retirement with its active reference", () =>
+  withOperator(async ({ cfg, activatePolicy, prepare, closeDatabase }) => {
     const original = await prepare();
     const activeRoles = structuredClone(cfg.gateway!.roles!);
     const changed = structuredClone(activeRoles);
@@ -559,8 +556,7 @@ it("keeps the active policy and its reference when durable policy retirement rol
     db.exec("DROP TRIGGER fail_policy_publication");
     await closeDatabase();
     expect((await prepare(original!.recoveryReference!))?.isCurrent(cfg)).toBe(true);
-  });
-});
+  }));
 
 it.each(["role", "identity-grant", "missing", "malformed", "version", "extra", "basis"] as const)(
   "resumes only an exact, live JSON recovery reference: %s",
@@ -612,10 +608,7 @@ it.each([
     withOperator(async ({ cfg, admin, context, activatePolicy }) => {
       setUserProfileRole(admin.profile.id, scenario.role);
       if (scenario.github) {
-        syncGitHubIdentity({
-          identity: { accountId: 123, login: "Channel-Admin" },
-          authenticationAlias: { kind: "email", email: "ada@example.test" },
-        });
+        githubIdentity("Channel-Admin");
         await activatePolicy({
           roles: {
             ...cfg.gateway!.roles!,
@@ -634,19 +627,13 @@ it.each([
       const ctx = await context(admin.identity.senderId);
       expect(authorize(cfg, ctx).senderIsOwner).toBe(scenario.owner);
       if (scenario.github) {
-        const authority = expectDefined(
-          authorityFor(ctx),
-          "GitHub-assigned channel operator authority",
-        );
+        const authority = expectDefined(authorityFor(ctx), "GitHub operator authority");
         expect(authority).toMatchObject({
           profileId: admin.profile.id,
           scopes: ["operator.admin"],
           rolePolicy: { sessionAccessCap: "write" },
         });
-        syncGitHubIdentity({
-          identity: { accountId: 123, login: "Renamed-Channel-Admin" },
-          authenticationAlias: { kind: "email", email: "ada@example.test" },
-        });
+        githubIdentity("Renamed-Channel-Admin");
         expect(() => authority.assertCurrent()).toThrow();
         const renamed = await context(admin.identity.senderId);
         expect(authorityFor(renamed)).toBeUndefined();
@@ -654,8 +641,8 @@ it.each([
     }),
 );
 
-it("keeps configured owners independent of Team role and identity links", async () => {
-  await withOperator(async ({ cfg, admins, context }) => {
+it("keeps configured owners independent of role and identity links", () =>
+  withOperator(async ({ cfg, admins, context }) => {
     cfg.commands!.ownerAllowFrom = admins.map(({ identity }) => `discord:${identity.senderId}`);
     const contexts = await Promise.all(admins.map(({ identity }) => context(identity.senderId)));
     const assertions = contexts.map(captureCommandOwnerAssertion);
@@ -673,11 +660,10 @@ it("keeps configured owners independent of Team role and identity links", async 
     expect(assertions[0]).toThrow();
     expect(authorize(cfg, contexts[1]!).senderIsOwner).toBe(true);
     expect(assertions[1]).not.toThrow();
-  });
-});
+  }));
 
-it("carries native Slack requester authority through preparation and keeps replayed relay input asserted", async () => {
-  await withOperator(async ({ cfg, state, admin }) => {
+it("carries native Slack requester authority and keeps relay replays asserted", () =>
+  withOperator(async ({ cfg, state, admin }) => {
     cfg.channels = { slack: { accounts: { team: { allowFrom: ["*"] } } } };
     const profile = admin.profile;
     setDisplayName(profile.id, "Ada Lovelace");
@@ -756,5 +742,4 @@ it("carries native Slack requester authority through preparation and keeps repla
         await check(4, true, true);
       },
     );
-  });
-});
+  }));

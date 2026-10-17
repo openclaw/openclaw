@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 
 const injected = "params.buildContext ?? buildChannelInboundEventContext";
 const coreBuilder = "core.channel.inbound.buildContext";
@@ -139,39 +139,37 @@ function source(file: string): string {
   );
 }
 
-describe("channel context builder caller inventory", () => {
-  it("keeps all production sinks wired to exact ingress or named unsupported paths", () => {
-    for (const [file, ingress] of SINKS) {
-      expect(source(file), file).toContain(ingress);
+it("keeps all production sinks wired to exact ingress or named unsupported paths", () => {
+  for (const [file, ingress] of SINKS) {
+    expect(source(file), file).toContain(ingress);
+  }
+});
+it("binds all supported producers to finalized host context identity", () => {
+  for (const file of CONTEXT_BINDING_PRODUCERS) {
+    expect(source(file), file).toContain("contextBinding");
+  }
+});
+it("routes every production sink through its selected context builder", () => {
+  for (const [file, , builder] of SINKS) {
+    expect(source(file), file).toContain(builder);
+  }
+  expect(source("signal/src/monitor")).toContain("channelRuntime: opts.channelRuntime");
+});
+it("does not rediscover host context builders through process-global runtime stores", () => {
+  for (const sink of SINKS) {
+    const [file] = sink;
+    const late = sink[3];
+    if (late) {
+      expect(source(file), file).not.toContain(late);
     }
-  });
-  it("binds all supported producers to finalized host context identity", () => {
-    for (const file of CONTEXT_BINDING_PRODUCERS) {
-      expect(source(file), file).toContain("contextBinding");
-    }
-  });
-  it("routes every production sink through its selected context builder", () => {
-    for (const [file, , builder] of SINKS) {
-      expect(source(file), file).toContain(builder);
-    }
-    expect(source("signal/src/monitor")).toContain("channelRuntime: opts.channelRuntime");
-  });
-  it("does not rediscover host context builders through process-global runtime stores", () => {
-    for (const sink of SINKS) {
-      const [file] = sink;
-      const late = sink[3];
-      if (late) {
-        expect(source(file), file).not.toContain(late);
-      }
-    }
-  });
-  it("hands scoped context builders from each migrated startup path to its sink", () => {
-    for (const [file, marker] of SCOPED_BUILDER_HANDOFFS) {
-      expect(source(file), file).toContain(marker);
-    }
-  });
-  it("keeps direct-DM classifications at their authoritative producers", () => {
-    expect(source("nostr/src/gateway")).toContain("resolveChannelIngress: async (contextBinding)");
-    expect(source("reef/src/channel")).toContain('channelIngress: "unsupported"');
-  });
+  }
+});
+it("hands scoped context builders from each migrated startup path to its sink", () => {
+  for (const [file, marker] of SCOPED_BUILDER_HANDOFFS) {
+    expect(source(file), file).toContain(marker);
+  }
+});
+it("keeps direct-DM classifications at their authoritative producers", () => {
+  expect(source("nostr/src/gateway")).toContain("resolveChannelIngress: async (contextBinding)");
+  expect(source("reef/src/channel")).toContain('channelIngress: "unsupported"');
 });

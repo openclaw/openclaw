@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressState } from "./state.js";
 import type {
@@ -69,139 +69,137 @@ const policy: ChannelIngressPolicyInput = {
   groupPolicy: "allowlist",
 };
 
-describe("channel message access ingress", () => {
-  it.each([
-    {
-      name: "keeps pairing-store entries DM-policy scoped",
-      input: { subject: subject("paired-sender"), allowlists: { pairingStore: ["paired-sender"] } },
-      blocked: { dmPolicy: "open" as const },
-      enabled: {},
-      reason: "dm_policy_not_allowlisted",
-    },
-    {
-      name: "requires explicit group fallback to DM allowlists",
-      input: {
-        conversation: { kind: "group" as const, id: "room-1" },
-        allowlists: { dm: ["sender-1"] },
-      },
-      blocked: {},
-      enabled: { groupAllowFromFallbackToAllowFrom: true },
-      reason: "group_policy_empty_allowlist",
-    },
-    {
-      name: "requires explicit dangerous identifier matching",
-      input: { subject: subject("display:sender-1"), allowlists: { dm: ["display:sender-1"] } },
-      blocked: { dmPolicy: "allowlist" as const },
-      enabled: { dmPolicy: "allowlist" as const, mutableIdentifierMatching: "enabled" as const },
-      reason: "dm_policy_not_allowlisted",
-    },
-  ])("$name", async ({ input, blocked, enabled, reason }) => {
-    const state = await resolveState(input);
-    expect(decideChannelIngress(state, { ...policy, ...blocked })).toMatchObject({
-      admission: "drop",
-      reasonCode: reason,
-    });
-    expect(decideChannelIngress(state, { ...policy, ...enabled })).toMatchObject({
-      admission: "dispatch",
-      decision: "allow",
-    });
-  });
-
-  it("applies route sender allowlists without retaining raw sender values", async () => {
-    const rawSender = "route-sender@example.test";
-    const state = await resolveState({
-      subject: subject(rawSender),
-      conversation: { kind: "group", id: "room-1" },
-      routeFacts: [routeFact("replace", [rawSender])],
-      allowlists: { group: ["group-sender"] },
-    });
-
-    const decision = decideChannelIngress(state, policy);
-
-    expect(state.routeFacts[0]?.senderAllowlist).toMatchObject({
-      hasConfiguredEntries: true,
-      match: { matched: true },
-    });
-    expect(decision).toMatchObject({ admission: "dispatch", decision: "allow" });
-    expect(JSON.stringify(state)).not.toContain(rawSender);
-    expect(JSON.stringify(decision)).not.toContain(rawSender);
-  });
-
-  it("blocks matched routes with deny-when-empty sender policy", async () => {
-    const state = await resolveState({
-      routeFacts: [routeFact("deny-when-empty", [])],
+it.each([
+  {
+    name: "keeps pairing-store entries DM-policy scoped",
+    input: { subject: subject("paired-sender"), allowlists: { pairingStore: ["paired-sender"] } },
+    blocked: { dmPolicy: "open" as const },
+    enabled: {},
+    reason: "dm_policy_not_allowlisted",
+  },
+  {
+    name: "requires explicit group fallback to DM allowlists",
+    input: {
+      conversation: { kind: "group" as const, id: "room-1" },
       allowlists: { dm: ["sender-1"] },
-    });
+    },
+    blocked: {},
+    enabled: { groupAllowFromFallbackToAllowFrom: true },
+    reason: "group_policy_empty_allowlist",
+  },
+  {
+    name: "requires explicit dangerous identifier matching",
+    input: { subject: subject("display:sender-1"), allowlists: { dm: ["display:sender-1"] } },
+    blocked: { dmPolicy: "allowlist" as const },
+    enabled: { dmPolicy: "allowlist" as const, mutableIdentifierMatching: "enabled" as const },
+    reason: "dm_policy_not_allowlisted",
+  },
+])("$name", async ({ input, blocked, enabled, reason }) => {
+  const state = await resolveState(input);
+  expect(decideChannelIngress(state, { ...policy, ...blocked })).toMatchObject({
+    admission: "drop",
+    reasonCode: reason,
+  });
+  expect(decideChannelIngress(state, { ...policy, ...enabled })).toMatchObject({
+    admission: "dispatch",
+    decision: "allow",
+  });
+});
 
-    expect(decideChannelIngress(state, policy)).toMatchObject({
-      admission: "drop",
-      reasonCode: "route_sender_empty",
-    });
-    expect(state.routeFacts[0]).not.toHaveProperty("senderAllowFrom");
+it("applies route sender allowlists without retaining raw sender values", async () => {
+  const rawSender = "route-sender@example.test";
+  const state = await resolveState({
+    subject: subject(rawSender),
+    conversation: { kind: "group", id: "room-1" },
+    routeFacts: [routeFact("replace", [rawSender])],
+    allowlists: { group: ["group-sender"] },
   });
 
-  it("translates implicit mention config before shared activation evaluation", async () => {
-    const state = await resolveState({
-      conversation: { kind: "group", id: "room-1" },
-      mentionFacts: {
-        canDetectMention: true,
-        wasMentioned: false,
-        implicitMentionKinds: ["reply_to_bot", "bot_thread_participant"],
-      },
-      allowlists: { group: ["sender-1"] },
-    });
-    const decision = decideChannelIngress(state, {
-      ...policy,
-      activation: {
-        requireMention: true,
-        allowTextCommands: false,
-        implicitMentions: {
-          replyToBot: false,
-          quotedBot: true,
-          threadParticipation: true,
-        },
-      },
-    });
+  const decision = decideChannelIngress(state, policy);
 
-    expect(decision).toMatchObject({ admission: "dispatch", decision: "allow" });
-    const activation = decision.graph.gates.find((gate) => gate.phase === "activation")?.activation;
-    expect(activation).toMatchObject({
-      allowedImplicitMentionKinds: ["quoted_bot", "bot_thread_participant", "native"],
-      effectiveWasMentioned: true,
-    });
+  expect(state.routeFacts[0]?.senderAllowlist).toMatchObject({
+    hasConfiguredEntries: true,
+    match: { matched: true },
+  });
+  expect(decision).toMatchObject({ admission: "dispatch", decision: "allow" });
+  expect(JSON.stringify(state)).not.toContain(rawSender);
+  expect(JSON.stringify(decision)).not.toContain(rawSender);
+});
+
+it("blocks matched routes with deny-when-empty sender policy", async () => {
+  const state = await resolveState({
+    routeFacts: [routeFact("deny-when-empty", [])],
+    allowlists: { dm: ["sender-1"] },
   });
 
-  it.each([
-    ["matches the same origin actor", "sender-1", "sender-1", false, true],
-    ["rejects different origin actors", "sender-1", "different-sender", false, false],
-    ["uses adapter-normalized identity values", "Sender-1", "sender-1", true, true],
-  ] as const)("%s", async (_name, current, origin, foldCase, matched) => {
-    const state = await resolveState({
-      adapter: foldCase ? lowerCaseAdapter : adapter,
-      subject: subject(current),
-      event: {
-        kind: "reaction",
-        authMode: "origin-subject",
-        mayPair: false,
-        originSubject: subject(origin),
-      },
-    });
-    const decision = decideChannelIngress(state, policy);
+  expect(decideChannelIngress(state, policy)).toMatchObject({
+    admission: "drop",
+    reasonCode: "route_sender_empty",
+  });
+  expect(state.routeFacts[0]).not.toHaveProperty("senderAllowFrom");
+});
 
-    expect(state.event.originSubjectMatched).toBe(matched);
-    expect(decision).toMatchObject(
-      matched
-        ? { admission: "dispatch", decision: "allow" }
-        : { admission: "drop", decision: "block", reasonCode: "origin_subject_not_matched" },
+it("translates implicit mention config before shared activation evaluation", async () => {
+  const state = await resolveState({
+    conversation: { kind: "group", id: "room-1" },
+    mentionFacts: {
+      canDetectMention: true,
+      wasMentioned: false,
+      implicitMentionKinds: ["reply_to_bot", "bot_thread_participant"],
+    },
+    allowlists: { group: ["sender-1"] },
+  });
+  const decision = decideChannelIngress(state, {
+    ...policy,
+    activation: {
+      requireMention: true,
+      allowTextCommands: false,
+      implicitMentions: {
+        replyToBot: false,
+        quotedBot: true,
+        threadParticipation: true,
+      },
+    },
+  });
+
+  expect(decision).toMatchObject({ admission: "dispatch", decision: "allow" });
+  const activation = decision.graph.gates.find((gate) => gate.phase === "activation")?.activation;
+  expect(activation).toMatchObject({
+    allowedImplicitMentionKinds: ["quoted_bot", "bot_thread_participant", "native"],
+    effectiveWasMentioned: true,
+  });
+});
+
+it.each([
+  ["matches the same origin actor", "sender-1", "sender-1", false, true],
+  ["rejects different origin actors", "sender-1", "different-sender", false, false],
+  ["uses adapter-normalized identity values", "Sender-1", "sender-1", true, true],
+] as const)("%s", async (_name, current, origin, foldCase, matched) => {
+  const state = await resolveState({
+    adapter: foldCase ? lowerCaseAdapter : adapter,
+    subject: subject(current),
+    event: {
+      kind: "reaction",
+      authMode: "origin-subject",
+      mayPair: false,
+      originSubject: subject(origin),
+    },
+  });
+  const decision = decideChannelIngress(state, policy);
+
+  expect(state.event.originSubjectMatched).toBe(matched);
+  expect(decision).toMatchObject(
+    matched
+      ? { admission: "dispatch", decision: "allow" }
+      : { admission: "drop", decision: "block", reasonCode: "origin_subject_not_matched" },
+  );
+  if (matched) {
+    const gate = decision.graph.gates.find(
+      (gateLocal) => gateLocal.phase === "sender" && gateLocal.kind === "dmSender",
     );
-    if (matched) {
-      const gate = decision.graph.gates.find(
-        (gateLocal) => gateLocal.phase === "sender" && gateLocal.kind === "dmSender",
-      );
-      expect(gate).toMatchObject({
-        effect: "ignore",
-        reasonCode: "sender_not_required",
-      });
-    }
-  });
+    expect(gate).toMatchObject({
+      effect: "ignore",
+      reasonCode: "sender_not_required",
+    });
+  }
 });

@@ -64,6 +64,7 @@ it.each([
       }
       const effectsPath = state.path("acp-effects.log");
       const effects = () => readFile(effectsPath, "utf8");
+      const record = (effect: string) => appendFile(effectsPath, effect + "\n");
       const acceptedOptions = new Map<string, string>();
       const readinessAwaited = createDeferredCore();
       const releaseReadiness = createDeferredCore();
@@ -71,7 +72,7 @@ it.each([
       const runtime: AcpRuntime = {
         ownerAwareSessions: 1,
         async ensureSession(input) {
-          await appendFile(effectsPath, "initialize\n");
+          await record("initialize");
           acceptedOptions.clear();
           if (input.model) {
             acceptedOptions.set("model", input.model);
@@ -96,7 +97,7 @@ it.each([
           return { controls: ["session/set_config_option"] };
         },
         async setConfigOption({ key, value }) {
-          await appendFile(effectsPath, `configure:${key}\n`);
+          await record(`configure:${key}`);
           acceptedOptions.set(key, value);
           if (pauseReadiness && preparation === "settle" && key === "model") {
             readinessAwaited.resolve();
@@ -106,9 +107,7 @@ it.each([
             configOptions: [...acceptedOptions].map(([id, currentValue]) => ({ id, currentValue })),
           };
         },
-        async close() {
-          await appendFile(effectsPath, "close\n");
-        },
+        close: () => record("close"),
         async cancel() {},
         runTurn() {
           throw new Error("This fixture must not start a provider turn");
@@ -119,15 +118,11 @@ it.each([
       const manager = getAcpSessionManager();
       try {
         if (preparation !== "initialize") {
-          const existing = { ...spec };
-          if (preparation === "replace") {
-            existing.cwd = state.root;
-          } else {
-            existing.model = "fixture/previous";
-          }
-          if (preparation === "settle") {
-            existing.thinking = "off";
-          }
+          const existing = {
+            ...spec,
+            ...(preparation === "replace" ? { cwd: state.root } : { model: "fixture/previous" }),
+            ...(preparation === "settle" ? { thinking: "off" } : {}),
+          };
           expect(await ensureConfiguredAcpBindingSession({ cfg, spec: existing })).toMatchObject({
             ok: true,
           });
@@ -170,24 +165,19 @@ it.each([
             );
             expect(await effects()).toBe("");
             const after = manager.resolveSession(target);
-            if (
-              before.kind !== "ready" ||
-              after.kind !== "ready" ||
-              !before.entry ||
-              !after.entry
-            ) {
+            const previous = before.kind === "ready" && before.entry;
+            const current = after.kind === "ready" && after.entry;
+            if (!previous || !current) {
               expect(after).toEqual(before);
               return;
             }
             // Delivered /status replies are transcript activity, not ACP ownership changes.
             expect({
               ...after,
-              entry: { ...after.entry, updatedAt: before.entry.updatedAt },
+              entry: { ...current, updatedAt: previous.updatedAt },
             }).toEqual(before);
-            expect(after.entry.updatedAt).toBeGreaterThanOrEqual(
-              lastUpdatedAt ?? before.entry.updatedAt,
-            );
-            lastUpdatedAt = after.entry.updatedAt;
+            expect(current.updatedAt).toBeGreaterThanOrEqual(lastUpdatedAt ?? previous.updatedAt);
+            lastUpdatedAt = current.updatedAt;
           };
           await expectStatus(denied);
           await expectStatus(await run(command));
