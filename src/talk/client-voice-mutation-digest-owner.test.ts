@@ -30,20 +30,32 @@ describe("client voice mutation digest owner", () => {
     voiceSessionId = "v1",
   ) => owner.record({ agentId: "a", voiceSessionId, context });
   function pendingOwner() {
+    let active = 0;
+    let maxActive = 0;
+    const warn = vi.fn();
     const attempts: Array<{
+      id: string;
       context: number;
       signal: AbortSignal;
       completion: ReturnType<typeof createDeferred<boolean>>;
     }> = [];
     const owner = makeOwner<number>({
-      attempt: async ({ context, signal }) => {
+      warn,
+      attempt: async ({ voiceSessionId: id, context, signal }) => {
         const completion = createDeferred<boolean>();
-        attempts.push({ context, signal, completion });
-        return await completion.promise;
+        attempts.push({ id, context, signal, completion });
+        maxActive = Math.max(maxActive, ++active);
+        try {
+          return await completion.promise;
+        } finally {
+          active--;
+        }
       },
     });
-    return { owner, attempts };
+    return { owner, attempts, warn, maxActive: () => maxActive };
   }
+  const expectReleased = (releases: Array<ReturnType<typeof vi.fn>>) =>
+    releases.forEach((release) => expect(release).toHaveBeenCalledOnce());
   beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
   afterEach(() => {
     owners.splice(0).forEach((owner) => owner.clear());
@@ -64,44 +76,20 @@ describe("client voice mutation digest owner", () => {
         return capture(releases);
       },
     });
-    try {
-      record(owner, 1, "first");
-      record(owner, 2, "second");
-      await flushMicrotasks();
-      expect(owner.snapshot()).toMatchObject({ active: 0, retained: 2 });
-      retrying = true;
-      expect(() => owner.retryAgent("a", 0)).toThrow(refused);
-      await flushMicrotasks();
-      expect(attempt).toHaveBeenCalledTimes(3);
-      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
-      expect(releases).toHaveLength(3);
-      for (const release of releases) {
-        expect(release).toHaveBeenCalledOnce();
-      }
-    } finally {
-      owner.clear();
-    }
+    record(owner, 1, "first");
+    record(owner, 2, "second");
+    await flushMicrotasks();
+    expect(owner.snapshot()).toMatchObject({ active: 0, retained: 2 });
+    retrying = true;
+    expect(() => owner.retryAgent("a", 0)).toThrow(refused);
+    await flushMicrotasks();
+    expect(attempt).toHaveBeenCalledTimes(3);
+    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+    expect(releases).toHaveLength(3);
+    expectReleased(releases);
   });
   it("bounds retained identities, dedupes keys, and limits concurrency", async () => {
-    const attempts: Array<{ id: string; completion: ReturnType<typeof createDeferred<boolean>> }> =
-      [];
-    let active = 0;
-    let maxActive = 0;
-    const warn = vi.fn();
-    const owner = makeOwner<number>({
-      warn,
-      attempt: async ({ voiceSessionId }) => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        const completion = createDeferred<boolean>();
-        attempts.push({ id: voiceSessionId, completion });
-        try {
-          return await completion.promise;
-        } finally {
-          active -= 1;
-        }
-      },
-    });
+    const { owner, attempts, warn, maxActive } = pendingOwner();
     for (let index = 1; index <= 66; index += 1) {
       owner.record({ agentId: "a", voiceSessionId: `v${index}`, context: index });
     }
@@ -122,7 +110,7 @@ describe("client voice mutation digest owner", () => {
     expect(attempts.map((attempt) => attempt.id)).toEqual(
       Array.from({ length: 64 }, (_, index) => `v${index + 1}`),
     );
-    expect(maxActive).toBe(2);
+    expect(maxActive()).toBe(2);
     expect(warn.mock.calls).toEqual([
       ["voice mutation digest retry owner is full"],
       ["voice mutation digest retry owner is full"],
@@ -147,62 +135,56 @@ describe("client voice mutation digest owner", () => {
     },
   );
 
-  it("fences later lifecycle intents after an unknown outcome without retaining settlement", async () => {
-    const releases: Array<ReturnType<typeof vi.fn>> = [];
-    const attempt = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockRejectedValueOnce(new SqliteWorkerError("lost acknowledgment", "outcome-unknown"))
-      .mockResolvedValue(true);
-    const owner = makeOwner<number>({ attempt, captureAttempt: () => capture(releases) });
-    owner.record({ ...identity, context: 1 });
-    await flushMicrotasks();
-    owner.retry(identity);
-    await flushMicrotasks();
-    expect(releases).toHaveLength(2);
-    for (const release of releases) {
-      expect(release).toHaveBeenCalledOnce();
-    }
-    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
-    owner.retry(identity);
-    owner.retryAgent("a", 2);
-    owner.record({ ...identity, context: 3 });
-    await flushMicrotasks();
-    expect(attempt).toHaveBeenCalledTimes(2);
-    expect(releases).toHaveLength(2);
-    record(owner, 1, "v2");
-    await flushMicrotasks();
-    expect(attempt).toHaveBeenCalledTimes(3);
-    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
-    owner.clear();
-  });
-
-  it("retains a confirmed-delivery fence after marker retry expiry", async () => {
-    const releases: Array<ReturnType<typeof vi.fn>> = [];
-    const attempt = vi.fn(async () => {
-      throw new Error("marker refused");
-    });
-    const owner = makeOwner<{ deliveredAt: number }>({
-      attempt,
-      deliveryState: () => "confirmed",
-      captureAttempt: () => capture(releases),
-    });
-    const context = { deliveredAt: 123 };
-    owner.record({ ...identity, context });
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
-    const attempts = attempt.mock.calls.length;
-    owner.record({ ...identity, context });
-    owner.retry(identity);
-    owner.retryAgent("a", context);
-    await flushMicrotasks();
-    expect(attempt).toHaveBeenCalledTimes(attempts);
-    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
-    for (const release of releases) {
-      expect(release).toHaveBeenCalledOnce();
-    }
-    owner.clear();
-  });
+  it.each(["unknown outcome", "confirmed delivery"] as const)(
+    "fences later lifecycle intents after %s without retaining settlement",
+    async (fence) => {
+      const confirmed = fence === "confirmed delivery";
+      const releases: Array<ReturnType<typeof vi.fn>> = [];
+      const attempt = vi.fn<() => Promise<boolean>>();
+      if (confirmed) {
+        attempt.mockRejectedValue(new Error("marker refused"));
+      } else {
+        attempt
+          .mockRejectedValueOnce(new Error("offline"))
+          .mockRejectedValueOnce(new SqliteWorkerError("lost acknowledgment", "outcome-unknown"))
+          .mockResolvedValue(true);
+      }
+      const owner = makeOwner<number>({
+        attempt,
+        captureAttempt: () => capture(releases),
+        ...(confirmed ? { deliveryState: () => "confirmed" as const } : {}),
+      });
+      record(owner, 1);
+      await flushMicrotasks();
+      if (!confirmed) {
+        owner.retry(identity);
+        await flushMicrotasks();
+        expect(releases).toHaveLength(2);
+        expectReleased(releases);
+      }
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      const expectedAttempts = confirmed ? attempt.mock.calls.length : 2;
+      if (confirmed) {
+        record(owner, 1);
+      }
+      owner.retry(identity);
+      owner.retryAgent("a", confirmed ? 1 : 2);
+      if (!confirmed) {
+        record(owner, 3);
+      }
+      await flushMicrotasks();
+      expect(attempt).toHaveBeenCalledTimes(expectedAttempts);
+      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+      expectReleased(releases);
+      if (!confirmed) {
+        expect(releases).toHaveLength(2);
+        owner.record({ agentId: "a", voiceSessionId: "v2", context: 1 });
+        await flushMicrotasks();
+        expect(attempt).toHaveBeenCalledTimes(3);
+        expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+      }
+    },
+  );
 
   it("keeps an ignored abort request active until its real promise settles", async () => {
     const { owner, attempts } = pendingOwner();
@@ -286,31 +268,27 @@ describe("client voice mutation digest owner", () => {
   });
 
   it("suspends failure expiry while a legitimate defer owns the retry", async () => {
-    try {
-      let outcome: "fail" | "defer" | "succeed" = "fail";
-      const attempt = vi.fn(async () => {
-        if (outcome === "fail") {
-          throw new Error("offline");
-        }
-        return outcome === "succeed";
-      });
-      const owner = makeOwner<number>({ attempt });
-      record(owner, 1);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
-      outcome = "defer";
-      owner.retry(identity);
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(300_001);
-      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
-      outcome = "succeed";
-      owner.retry(identity);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(owner.snapshot().retained).toBe(0);
-      expect(attempt).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.clearAllTimers();
-    }
+    let outcome: "fail" | "defer" | "succeed" = "fail";
+    const attempt = vi.fn(async () => {
+      if (outcome === "fail") {
+        throw new Error("offline");
+      }
+      return outcome === "succeed";
+    });
+    const owner = makeOwner<number>({ attempt });
+    record(owner, 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+    outcome = "defer";
+    owner.retry(identity);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(300_001);
+    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
+    outcome = "succeed";
+    owner.retry(identity);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(owner.snapshot().retained).toBe(0);
+    expect(attempt).toHaveBeenCalledTimes(3);
   });
 
   it("ignores settlement from an attempt owned by a cleared generation", async () => {

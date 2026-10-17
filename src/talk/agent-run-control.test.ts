@@ -95,17 +95,13 @@ describe("classifyRealtimeVoiceAgentControlText", () => {
   });
 
   it("parses semantic realtime control tool calls", () => {
-    expect(parseArgs({ text: "revísalo en español", mode: "steer" })).toStrictEqual({
-      text: "revísalo en español",
-      mode: "steer",
-    });
+    const expectedSteer = { text: "revísalo en español", mode: "steer" };
+    expect(parseArgs({ ...expectedSteer })).toStrictEqual(expectedSteer);
     expect(parseArgs({ message: "status?" })).toStrictEqual({
       text: "status?",
       mode: "status",
     });
-    expect(parseArgs(JSON.stringify({ text: "revísalo en español", mode: "steer" }))).toStrictEqual(
-      { text: "revísalo en español", mode: "steer" },
-    );
+    expect(parseArgs(JSON.stringify(expectedSteer))).toStrictEqual(expectedSteer);
   });
 });
 
@@ -277,56 +273,46 @@ describe("controlRealtimeVoiceAgentRun", () => {
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
 
-  it("answers status from diagnostic run activity when Talk events are absent", async () => {
-    const deps = createDeps({
-      activity: {
-        activeWorkKind: "tool_call",
-        hasActiveEmbeddedRun: true,
-        activeToolName: "exec_command",
+  it.each([
+    {
+      name: "diagnostic run activity without Talk events",
+      options: {
+        activity: {
+          activeWorkKind: "tool_call",
+          hasActiveEmbeddedRun: true,
+          activeToolName: "exec_command",
+        },
       },
-    });
-
-    await expect(
-      control({ sessionKey: "agent:main:discord:channel:1001", text: "what are you doing" }, deps),
-    ).resolves.toMatchObject({
-      ok: true,
-      mode: "status",
+      params: { sessionKey: "agent:main:discord:channel:1001", text: "what are you doing" },
       active: true,
       message: "OpenClaw is running exec_command.",
-    });
-    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
-  });
-
-  it("does not report stale control tool progress after the active run ends", async () => {
-    const deps = createDeps({});
-    await expect(
-      control({ recentEvents: [progress("openclaw_agent_control", "status")] }, deps),
-    ).resolves.toMatchObject({
-      ok: true,
-      mode: "status",
+    },
+    {
+      name: "ended run ignoring stale control progress",
+      options: {},
+      params: { recentEvents: [progress("openclaw_agent_control", "status")] },
       active: false,
       message: "I'm not working on an active request right now.",
-    });
-    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
-  });
-
-  it("skips control tool progress when reporting active run status", async () => {
-    const deps = createDeps({ activeSessionId: "session-active" });
-    await expect(
-      control(
-        {
-          recentEvents: [
-            progress("exec_command", "running"),
-            progress("openclaw_agent_control", "status", 2),
-          ],
-        },
-        deps,
-      ),
-    ).resolves.toMatchObject({
-      ok: true,
-      mode: "status",
+    },
+    {
+      name: "active run ignoring control progress",
+      options: { activeSessionId: "session-active" },
+      params: {
+        recentEvents: [
+          progress("exec_command", "running"),
+          progress("openclaw_agent_control", "status", 2),
+        ],
+      },
       active: true,
       message: "OpenClaw is working in exec_command (running).",
+    },
+  ] as const)("reports $name", async ({ options, params, active, message }) => {
+    const deps = createDeps(options);
+    await expect(control(params, deps)).resolves.toMatchObject({
+      ok: true,
+      mode: "status",
+      active,
+      message,
     });
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
