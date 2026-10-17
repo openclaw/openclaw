@@ -32,7 +32,11 @@ function deferred<T>() {
 }
 
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-function createElement(request: Request, advertised = true) {
+function createElement(
+  request: Request,
+  advertised = true,
+  initialAgentId: string | null = "main",
+) {
   const container = document.createElement("div");
   document.body.append(container);
   let lifetime: AbortController;
@@ -77,7 +81,7 @@ function createElement(request: Request, advertised = true) {
     view = memoriesView.mount(container, context);
     flush();
   }
-  mount("main");
+  mount(initialAgentId);
   disposers.push(() => {
     lifetime.abort();
     view.dispose();
@@ -180,8 +184,7 @@ describe("Memory Core indexed-search presentation", () => {
 
   it("keeps search disabled when no agent is available", async () => {
     const request = vi.fn(() => Promise.resolve({}));
-    const element = createElement(request);
-    element.setAgentId(null);
+    const element = createElement(request, true, null);
     typeQuery(element, "Ada");
     expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
     submit(element);
