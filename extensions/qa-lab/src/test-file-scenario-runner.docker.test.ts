@@ -25,6 +25,77 @@ import {
 
 const harness = createScenarioRunnerTestHarness();
 const makeTempRepo = (prefix: string) => harness.makeTempRepo(prefix);
+type RunOptions = Parameters<typeof runQaTestFileScenarios>[0];
+type PrepareOptions = Parameters<typeof prepareDockerE2eEnvironment>[0];
+
+function candidateManifest(repoRoot?: string, registry = false, packageName = "candidate.tgz") {
+  return {
+    schema: "openclaw.qa-docker-candidate/v1",
+    schemaVersion: 1,
+    sourceSha: "a".repeat(40),
+    candidate: repoRoot
+      ? {
+          package: {
+            path: path.join(repoRoot, packageName),
+            name: "openclaw",
+            version: "2026.8.1",
+            sha256: "b".repeat(64),
+          },
+          registry: registry
+            ? {
+                dir: path.join(repoRoot, "registry"),
+                candidateVersion: "2026.8.1",
+                manifestSha256: "c".repeat(64),
+              }
+            : null,
+        }
+      : null,
+  };
+}
+
+function prepare(
+  repoRoot: string,
+  options: Partial<PrepareOptions> & Pick<PrepareOptions, "scenarios">,
+) {
+  return prepareDockerE2eEnvironment({
+    repoRoot,
+    outputDir: path.join(repoRoot, "prep"),
+    env: {},
+    runCommand: (command) => writeDockerCandidateManifest(command, candidateManifest()),
+    ...options,
+  });
+}
+
+function run(repoRoot: string, options: Partial<RunOptions> & Pick<RunOptions, "scenarios">) {
+  return runQaTestFileScenarios({
+    repoRoot,
+    outputDir: path.join(repoRoot, "run"),
+    ...QA_TEST_RUNNER_DEFAULTS,
+    ...options,
+  });
+}
+
+async function writeSummary(
+  command: QaScenarioCommandExecution,
+  lanes = [{ elapsedSeconds: 1, name: "gateway-network", status: 0 }],
+  createDir = true,
+) {
+  const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
+  if (!logDir) {
+    throw new Error("missing Docker scheduler log dir");
+  }
+  if (createDir) {
+    await fs.mkdir(logDir, { recursive: true });
+  }
+  await fs.writeFile(
+    path.join(logDir, "summary.json"),
+    JSON.stringify({
+      failures: lanes.filter((lane) => lane.status !== 0),
+      lanes,
+      selectedLanes: lanes.map((lane) => lane.name),
+    }),
+  );
+}
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -63,24 +134,10 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
     expect(command.env).not.toHaveProperty("OPENCLAW_DOCKER_ALL_BUILD");
     expect(command.env).not.toHaveProperty("OPENCLAW_CURRENT_PACKAGE_TGZ");
     expect(command.env).not.toHaveProperty("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
-    return await writeDockerCandidateManifest(command, {
-      schema: "openclaw.qa-docker-candidate/v1",
-      schemaVersion: 1,
-      sourceSha: "a".repeat(40),
-      candidate: {
-        package: {
-          path: packagePath,
-          name: "openclaw",
-          version: "2026.8.1",
-          sha256: "b".repeat(64),
-        },
-        registry: {
-          dir: registryDir,
-          candidateVersion: "2026.8.1",
-          manifestSha256: "c".repeat(64),
-        },
-      },
-    });
+    return await writeDockerCandidateManifest(
+      command,
+      candidateManifest(repoRoot, true, "openclaw.tgz"),
+    );
   });
   const env = await prepareDockerE2eEnvironment({
     env: {
@@ -122,41 +179,21 @@ it("retains immutable prepared Docker receipts without claiming installed or run
   const repoRoot = await makeTempRepo("qa-docker-prepared-evidence-");
   const scenario = makeDockerE2eScenario("one", "gateway-network");
   const captured: QaPreparedDockerEvidence[] = [];
-  const prepare = async () =>
-    prepareDockerE2eEnvironment({
-      env: {},
-      repoRoot,
-      outputDir: path.join(repoRoot, "prep"),
+  const prepareCandidate = () =>
+    prepare(repoRoot, {
       scenarios: [scenario],
       onPrepared: (evidence) => captured.push(evidence),
-      runCommand: (command) =>
-        writeDockerCandidateManifest(command, {
-          schema: "openclaw.qa-docker-candidate/v1",
-          schemaVersion: 1,
-          sourceSha: "a".repeat(40),
-          candidate: {
-            package: {
-              path: path.join(repoRoot, "candidate.tgz"),
-              name: "openclaw",
-              version: "2026.8.1",
-              sha256: "b".repeat(64),
-            },
-            registry: null,
-          },
-        }),
+      runCommand: (command) => writeDockerCandidateManifest(command, candidateManifest(repoRoot)),
     });
-  const env = await prepare();
+  const env = await prepareCandidate();
   const first = captured[0]!;
   const firstPath = resolveQaArtifactPath(repoRoot, repoRoot, first.receipt.artifact.path);
   const original = await fs.readFile(firstPath);
-  await prepare();
+  await prepareCandidate();
   expect(captured[1]?.receipt.artifact.path).not.toBe(first.receipt.artifact.path);
   expect(await fs.readFile(firstPath)).toEqual(original);
   expect(createHash("sha256").update(original).digest("hex")).toBe(first.receipt.artifact.sha256);
-  const result = await runQaTestFileScenarios({
-    ...QA_TEST_RUNNER_DEFAULTS,
-    repoRoot,
-    outputDir: path.join(repoRoot, "run"),
+  const result = await run(repoRoot, {
     env,
     envMode: "replace",
     preparedDockerEvidence: first,
@@ -204,9 +241,7 @@ it("retains immutable prepared Docker receipts without claiming installed or run
       },
     });
     await expect(
-      runQaTestFileScenarios({
-        ...QA_TEST_RUNNER_DEFAULTS,
-        repoRoot,
+      run(repoRoot, {
         outputDir: path.join(repoRoot, mismatch),
         env: {
           ...env,
@@ -240,25 +275,15 @@ describe("qa test file scenario runner", () => {
       makeDockerE2eScenario(lastId, "gateway-network"),
     ];
     const prepareCommand = vi.fn((command: QaScenarioCommandExecution) =>
-      writeDockerCandidateManifest(command, {
-        schema: "openclaw.qa-docker-candidate/v1",
-        schemaVersion: 1,
-        sourceSha: "a".repeat(40),
-        candidate: null,
-      }),
+      writeDockerCandidateManifest(command, candidateManifest()),
     );
-    const env = await prepareDockerE2eEnvironment({
-      env: {},
-      repoRoot,
-      outputDir: path.join(repoRoot, "prep"),
+    const env = await prepare(repoRoot, {
       scenarios,
       runCommand: prepareCommand,
     });
     const commands: QaScenarioCommandExecution[] = [];
-    const result = await runQaTestFileScenarios({
-      repoRoot,
+    const result = await run(repoRoot, {
       outputDir: path.join(repoRoot, "out"),
-      ...QA_TEST_RUNNER_DEFAULTS,
       env,
       envMode: "replace",
       scenarios,
@@ -266,18 +291,14 @@ describe("qa test file scenario runner", () => {
         commands.push(command);
         const failed = commands.length === 1;
         const names = command.env.OPENCLAW_DOCKER_ALL_LANES!.split(",");
-        const lanes = names.map((name) => ({
-          name,
-          elapsedSeconds: 1,
-          status: failed ? 1 : 0,
-        }));
-        await fs.writeFile(
-          path.join(command.env.OPENCLAW_DOCKER_ALL_LOG_DIR!, "summary.json"),
-          JSON.stringify({
-            selectedLanes: names,
-            lanes,
-            failures: lanes.filter((lane) => lane.status !== 0),
-          }),
+        await writeSummary(
+          command,
+          names.map((name) => ({
+            name,
+            elapsedSeconds: 1,
+            status: failed ? 1 : 0,
+          })),
+          false,
         );
         return {
           exitCode: failed ? 1 : 0,
@@ -311,44 +332,23 @@ describe("qa test file scenario runner", () => {
     vi.stubEnv("OPENCLAW_DOCKER_ALL_POISON", "hostile");
     vi.stubEnv("OPENCLAW_CURRENT_PACKAGE_TGZ", "/hostile.tgz");
     vi.stubEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR", "/hostile-registry");
-    const prepared = await prepareDockerE2eEnvironment({
+    const prepared = await prepare(repoRoot, {
       env: { ...process.env, KEEP_ME: "yes" },
-      outputDir: path.join(repoRoot, "prep"),
-      repoRoot,
-      runCommand: (command) =>
-        writeDockerCandidateManifest(command, {
-          schema: "openclaw.qa-docker-candidate/v1",
-          schemaVersion: 1,
-          sourceSha: "a".repeat(40),
-          candidate: null,
-        }),
       scenarios: [makeDockerE2eScenario("one", "gateway-network")],
     });
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(prepared).toHaveProperty("KEEP_ME", "yes");
 
-    await runQaTestFileScenarios({
+    await run(repoRoot, {
       env: prepared,
       envMode: "replace",
-      outputDir: path.join(repoRoot, "run"),
-      ...QA_TEST_RUNNER_DEFAULTS,
-      repoRoot,
       scenarios: [makeDockerE2eScenario("one", "gateway-network")],
       runCommand: async (command) => {
         expect(command.env.OPENCLAW_DOCKER_ALL_POISON).toBeUndefined();
         expect(command.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR).toBeUndefined();
         expect(command.env.OPENCLAW_CURRENT_PACKAGE_TGZ).toBe(undefined);
         expect(command.env.OPENCLAW_DOCKER_E2E_REPO_ROOT).toBe(repoRoot);
-        const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR!;
-        await fs.mkdir(logDir, { recursive: true });
-        await fs.writeFile(
-          path.join(logDir, "summary.json"),
-          JSON.stringify({
-            failures: [],
-            lanes: [{ elapsedSeconds: 1, name: "gateway-network", status: 0 }],
-            selectedLanes: ["gateway-network"],
-          }),
-        );
+        await writeSummary(command);
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     });
@@ -385,10 +385,8 @@ describe("qa test file scenario runner", () => {
     let activeCommands = 0;
     let maximumActiveCommands = 0;
 
-    const result = await runQaTestFileScenarios({
-      repoRoot,
+    const result = await run(repoRoot, {
       outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
       scenarios,
       onCommandOutput: (stream, chunk) => output.push(`${stream}:${chunk.toString("utf8")}`),
       progress: (message) => progress.push(message),
@@ -411,19 +409,7 @@ describe("qa test file scenario runner", () => {
         try {
           command.onOutput?.("stdout", Buffer.from(scenarioId));
           if (isDocker) {
-            const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
-            if (!logDir) {
-              throw new Error("missing Docker scheduler log dir");
-            }
-            await fs.mkdir(logDir, { recursive: true });
-            await fs.writeFile(
-              path.join(logDir, "summary.json"),
-              JSON.stringify({
-                failures: [],
-                lanes: [{ elapsedSeconds: 1, name: "gateway-network", status: 0 }],
-                selectedLanes: ["gateway-network"],
-              }),
-            );
+            await writeSummary(command);
           } else {
             await writeScriptProducerEvidence({
               outputDir: resolveScriptAttemptOutputDir(command),
@@ -473,41 +459,20 @@ describe("qa test file scenario runner", () => {
       makeDockerE2eScenario("prefix-lane", "gateway"),
       makeDockerE2eScenario("failing-lane", "gateway-network"),
     ];
-    const result = await runQaTestFileScenarios({
-      repoRoot,
+    const result = await run(repoRoot, {
       outputDir,
-      ...QA_TEST_RUNNER_DEFAULTS,
       scenarios,
       runCommand: async (command) => {
         commands.push(command);
         expect(await fs.readFile(staleSummaryPath, "utf8")).toBe('{"status":"passed"}\n');
-        const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
-        if (!logDir) {
-          throw new Error("missing Docker scheduler log dir");
-        }
-        await fs.mkdir(logDir, { recursive: true });
         const failedLane = { elapsedSeconds: 2, name: "gateway-network", status: 1 };
-        await fs.writeFile(
-          path.join(logDir, "summary.json"),
-          `${JSON.stringify({
-            failures: [failedLane],
-            lanes: [
-              { elapsedSeconds: 4, name: "openai-chat-tools", status: 0 },
-              { elapsedSeconds: 7, name: "bundled-plugin-install-uninstall-0", status: 0 },
-              { elapsedSeconds: 6, name: "bundled-plugin-install-uninstall-1", status: 0 },
-              { elapsedSeconds: 1, name: "gateway", status: 0 },
-              failedLane,
-            ],
-            selectedLanes: [
-              "openai-chat-tools",
-              "bundled-plugin-install-uninstall-0",
-              "bundled-plugin-install-uninstall-1",
-              "gateway",
-              "gateway-network",
-            ],
-          })}\n`,
-          "utf8",
-        );
+        await writeSummary(command, [
+          { elapsedSeconds: 4, name: "openai-chat-tools", status: 0 },
+          { elapsedSeconds: 7, name: "bundled-plugin-install-uninstall-0", status: 0 },
+          { elapsedSeconds: 6, name: "bundled-plugin-install-uninstall-1", status: 0 },
+          { elapsedSeconds: 1, name: "gateway", status: 0 },
+          failedLane,
+        ]);
         return { exitCode: 1, stdout: "", stderr: "scheduler failed\n" };
       },
     });

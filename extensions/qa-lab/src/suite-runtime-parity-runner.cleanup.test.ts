@@ -19,6 +19,11 @@ import * as suite from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
+const runtimeOptions = {
+  providerMode: "mock-openai" as const,
+  primaryModel: "mock-openai/test-model",
+  alternateModel: "mock-openai/test-model-alt",
+};
 
 const mocks = vi.hoisted(() => ({
   captureRuntimeParityCell: vi.fn(
@@ -140,7 +145,7 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-function createCleanupTestLab(): QaLabServerHandle {
+function createCleanupTestLab(overrides: Partial<QaLabServerHandle> = {}): QaLabServerHandle {
   return {
     baseUrl: "http://127.0.0.1:43123",
     listenUrl: "http://127.0.0.1:43123",
@@ -150,6 +155,7 @@ function createCleanupTestLab(): QaLabServerHandle {
     setLatestReport: vi.fn(),
     runSelfCheck: vi.fn(),
     stop: vi.fn(async () => {}),
+    ...overrides,
   };
 }
 
@@ -205,10 +211,8 @@ async function runCleanupTestSuite(params: {
     repoRoot,
     outputDir: path.join(repoRoot, "output"),
     startedAt: new Date("2026-08-04T00:00:00.000Z"),
-    providerMode: "mock-openai",
+    ...runtimeOptions,
     transportId: "qa-channel",
-    primaryModel: "mock-openai/test-model",
-    alternateModel: "mock-openai/test-model-alt",
     fastMode: true,
     concurrency: 1,
     selectedScenarios: [makeQaSuiteTestScenario("runtime-cleanup")],
@@ -273,12 +277,10 @@ describe("runtime parity suite transport cleanup", () => {
       repoRoot,
       outputDir: path.join(repoRoot, "output"),
       scenarioIds: ["first", "second", "first"],
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/test-model",
-      alternateModel: "mock-openai/test-model-alt",
+      ...runtimeOptions,
+      concurrency: 1,
       lab,
       startLab: async () => lab,
-      concurrency: 1,
     });
     const evidence = result.evidence as QaEvidenceSummaryV3Json;
     expect(observed).toEqual(["first", "second", "first"]);
@@ -304,39 +306,33 @@ describe("runtime parity suite transport cleanup", () => {
     const stopLab = vi.fn<QaLabServerHandle["stop"]>(async () => {
       throw cleanupError;
     });
-    const lab = createCleanupTestLab();
-    lab.setLatestReport = setLatestReport;
-    lab.stop = stopLab;
+    const lab = createCleanupTestLab({ setLatestReport, stop: stopLab });
     const cleanup = vi.fn(async () => {});
     const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const runChild = createCleanupTestChild(lab);
 
-    try {
-      const thrown = await runCleanupTestSuite({
-        factory,
-        lab,
-        progressEnabled: true,
-        runChild,
-      }).catch((error: unknown) => error);
+    const thrown = await runCleanupTestSuite({
+      factory,
+      lab,
+      progressEnabled: true,
+      runChild,
+    }).catch((error: unknown) => error);
 
-      expect(cleanup).toHaveBeenCalledOnce();
-      expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
-      expect(setLatestReport).not.toHaveBeenCalled();
-      expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
-        expect.objectContaining({ status: "completed" }),
-      );
-      expect((thrown as Error).message.split("\n")[0]).toBe(
-        "QA scenarios passed, but cleanup failed",
-      );
-      expect((thrown as Error).message).toContain(
-        "failed cleanup phases: lab stop: owned lab shutdown reset",
-      );
-      expect((thrown as Error).cause).toBe(cleanupError);
-      expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
-    } finally {
-      stderrWrite.mockRestore();
-    }
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+    expect(setLatestReport).not.toHaveBeenCalled();
+    expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect((thrown as Error).message.split("\n")[0]).toBe(
+      "QA scenarios passed, but cleanup failed",
+    );
+    expect((thrown as Error).message).toContain(
+      "failed cleanup phases: lab stop: owned lab shutdown reset",
+    );
+    expect((thrown as Error).cause).toBe(cleanupError);
+    expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
   });
 
   it("reports a parity scenario only after a nested producer starts it", async () => {
@@ -355,10 +351,9 @@ describe("runtime parity suite transport cleanup", () => {
     "preserves runtime preparation publication ownership with parity=%s",
     async (parity) => {
       vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
-      mocks.writeQaSuiteArtifacts.mockClear();
       const repoRoot = await tempDirs.makeTempDir("qa-runtime-publication-");
       const scenario = makeQaSuiteTestScenario("runtime-cleanup");
-      const labs = Array.from({ length: parity ? 3 : 1 }, createCleanupTestLab);
+      const labs = Array.from({ length: parity ? 3 : 1 }, () => createCleanupTestLab());
       const startLab = vi.fn<() => Promise<QaLabServerHandle>>();
       for (const lab of labs) {
         startLab.mockResolvedValueOnce(lab);
@@ -374,63 +369,58 @@ describe("runtime parity suite transport cleanup", () => {
       vi.spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime").mockImplementation(runScenario);
       const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-      try {
-        const result = await runQaFlowSuiteFromRuntime({
-          repoRoot,
-          outputDir: path.join(repoRoot, "output"),
-          providerMode: "mock-openai",
-          transportId: "qa-channel",
-          channelId: "telegram",
-          channelDriver: "crabline",
-          primaryModel: "mock-openai/test-model",
-          alternateModel: "mock-openai/test-model-alt",
-          fastMode: true,
-          concurrency: 1,
-          scenarioIds: [scenario.id],
-          startLab,
-          ...(parity ? { runtimePair: ["openclaw", "codex"] } : {}),
-        });
+      const result = await runQaFlowSuiteFromRuntime({
+        repoRoot,
+        outputDir: path.join(repoRoot, "output"),
+        ...runtimeOptions,
+        transportId: "qa-channel",
+        fastMode: true,
+        concurrency: 1,
+        channelId: "telegram",
+        channelDriver: "crabline",
+        scenarioIds: [scenario.id],
+        startLab,
+        ...(parity ? { runtimePair: ["openclaw", "codex"] } : {}),
+      });
 
-        const completionLines = stderrWrite.mock.calls
-          .flat()
-          .join("")
-          .split("\n")
-          .filter((line) => line.startsWith("[qa-suite] run complete"));
-        expect(result.scenarios).toEqual([expect.objectContaining({ status: "pass" })]);
-        expect(completionLines).toEqual([
-          parity
-            ? "[qa-suite] run complete"
-            : "[qa-suite] run complete: passed=1 failed=0 skipped=0 total=1",
-        ]);
-        expect(runScenario).toHaveBeenCalledTimes(parity ? 2 : 1);
-        expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(labs.length);
-        for (const [childArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
-          expect(childArtifacts.transportArtifacts).toBeUndefined();
-        }
-        expect(mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0]).toMatchObject({
-          channel: "telegram",
-          channelDriver: "crabline",
-          transportArtifacts: {
-            artifacts: [{ kind: "channel-driver-smoke", path: "/qa-output/driver-smoke.json" }],
-          },
-        });
-        for (const lab of labs) {
-          expect(lab.stop).toHaveBeenCalledOnce();
-        }
-      } finally {
-        stderrWrite.mockRestore();
+      const completionLines = stderrWrite.mock.calls
+        .flat()
+        .join("")
+        .split("\n")
+        .filter((line) => line.startsWith("[qa-suite] run complete"));
+      expect(result.scenarios).toEqual([expect.objectContaining({ status: "pass" })]);
+      expect(completionLines).toEqual([
+        parity
+          ? "[qa-suite] run complete"
+          : "[qa-suite] run complete: passed=1 failed=0 skipped=0 total=1",
+      ]);
+      expect(runScenario).toHaveBeenCalledTimes(parity ? 2 : 1);
+      expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(labs.length);
+      for (const [childArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
+        expect(childArtifacts.transportArtifacts).toBeUndefined();
+      }
+      expect(mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0]).toMatchObject({
+        channel: "telegram",
+        channelDriver: "crabline",
+        transportArtifacts: {
+          artifacts: [{ kind: "channel-driver-smoke", path: "/qa-output/driver-smoke.json" }],
+        },
+      });
+      for (const lab of labs) {
+        expect(lab.stop).toHaveBeenCalledOnce();
       }
     },
   );
 
   it("releases an exclusive parent lease before its first runtime child acquires it", async () => {
-    const lab = createCleanupTestLab();
     const events: string[] = [];
     const childError = new Error("first runtime child completed");
     let activeOwner: "parent" | "child" | undefined;
     let leaseCount = 0;
-    lab.stop = vi.fn(async () => {
-      events.push("lab:stop");
+    const lab = createCleanupTestLab({
+      stop: vi.fn(async () => {
+        events.push("lab:stop");
+      }),
     });
     const factory = createCleanupTestFactory(lab, () => {
       if (activeOwner) {
@@ -478,26 +468,23 @@ describe("runtime parity suite transport cleanup", () => {
     expect(activeOwner).toBeUndefined();
   });
 
-  it.each(["cleanupAfterGatewayStop"] as const)(
-    "retains failed parent %s without replaying cleanup before stopping its owned lab",
-    async (cleanupPhase) => {
-      const lab = createCleanupTestLab();
-      const cleanupError = new Error("credential release failed");
-      const cleanup = vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(cleanupError)
-        .mockResolvedValueOnce(undefined);
-      const factory = createCleanupTestFactory(lab, () => ({ [cleanupPhase]: cleanup }));
-      const runChild = vi.fn<QaSuiteRunner>();
+  it("retains failed parent cleanupAfterGatewayStop without replaying cleanup before stopping its owned lab", async () => {
+    const lab = createCleanupTestLab();
+    const cleanupError = new Error("credential release failed");
+    const cleanup = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(cleanupError)
+      .mockResolvedValueOnce(undefined);
+    const factory = createCleanupTestFactory(lab, () => ({ cleanupAfterGatewayStop: cleanup }));
+    const runChild = vi.fn<QaSuiteRunner>();
 
-      await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toMatchObject({
-        cause: cleanupError,
-        errors: [cleanupError, cleanupError],
-      });
+    await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toMatchObject({
+      cause: cleanupError,
+      errors: [cleanupError, cleanupError],
+    });
 
-      expect(cleanup).toHaveBeenCalledOnce();
-      expect(runChild).not.toHaveBeenCalled();
-      expect(lab.stop).toHaveBeenCalledOnce();
-    },
-  );
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(runChild).not.toHaveBeenCalled();
+    expect(lab.stop).toHaveBeenCalledOnce();
+  });
 });

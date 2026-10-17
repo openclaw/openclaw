@@ -12,14 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
-const actualSpawn = vi.hoisted(
-  () =>
-    ({
-      value: undefined,
-    }) as {
-      value: typeof import("node:child_process").spawn | undefined;
-    },
-);
+const actualSpawn = vi.hoisted((): { value?: typeof import("node:child_process").spawn } => ({}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -43,6 +36,24 @@ type ParentHandler = (() => void) | ((signal: ParentSignal) => void);
 
 function spyOnProcessKill() {
   return vi.spyOn(process, "kill");
+}
+
+function spawnReal(...args: Parameters<NonNullable<typeof actualSpawn.value>>) {
+  if (!actualSpawn.value) {
+    throw new Error("real spawn unavailable");
+  }
+  return actualSpawn.value(...args);
+}
+
+function runScript(root: string, script: string, onOutput?: Parameters<typeof runCommand>[1]) {
+  return runQaScenarioCommandLifecycle({
+    command: process.execPath,
+    args: ["-e", script],
+    cwd: root,
+    env: process.env,
+    timeoutMs: 5_000,
+    onOutput,
+  });
 }
 
 function createChild(pid = 42) {
@@ -99,10 +110,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
     onTestFinished(cleanup);
     let stdout = "";
     spawnMock.mockImplementation((...args: Parameters<NonNullable<typeof actualSpawn.value>>) => {
-      if (!actualSpawn.value) {
-        throw new Error("real spawn unavailable");
-      }
-      commandChild = actualSpawn.value(...args);
+      commandChild = spawnReal(...args);
       return commandChild;
     });
     setQaScenarioCommandCleanupTimings({ killGraceMs: 100, forceSettleMs: 100 });
@@ -121,20 +129,13 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         "child.unref();",
       ].join("\n");
 
-      pending = runQaScenarioCommandLifecycle({
-        command: process.execPath,
-        args: ["-e", leaderScript],
-        cwd: root,
-        env: process.env,
-        timeoutMs: 5_000,
-        onOutput: (stream, chunk) => {
-          if (stream === "stdout") {
-            stdout += chunk.toString();
-            if (stdout.includes("Docker scheduling finished\n")) {
-              ready.resolve();
-            }
+      pending = runScript(root, leaderScript, (stream, chunk) => {
+        if (stream === "stdout") {
+          stdout += chunk.toString();
+          if (stdout.includes("Docker scheduling finished\n")) {
+            ready.resolve();
           }
-        },
+        }
       });
       await withinTest(
         awaitGateBeforeSettlement(
@@ -174,12 +175,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-setsid-escape-"));
     const descendantPidPath = path.join(root, "descendant.pid");
     let descendantPid: number | undefined;
-    spawnMock.mockImplementation((...args: Parameters<NonNullable<typeof actualSpawn.value>>) => {
-      if (!actualSpawn.value) {
-        throw new Error("real spawn unavailable");
-      }
-      return actualSpawn.value(...args);
-    });
+    spawnMock.mockImplementation(spawnReal);
     try {
       const descendantScript = [
         "const { writeFileSync } = require('node:fs');",
@@ -193,18 +189,11 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         "process.exit(0);",
       ].join("\n");
 
-      const result = await runQaScenarioCommandLifecycle({
-        command: process.execPath,
-        args: ["-e", leaderScript],
-        cwd: root,
-        env: process.env,
-        timeoutMs: 5_000,
-      });
+      const result = await runScript(root, leaderScript);
 
       // The fixture writes its PID before stdout, which the settled result retains.
       descendantPid = Number.parseInt(await readFile(descendantPidPath, "utf8"), 10);
-      expect(result.exitCode).toBe(1);
-      expect(result.failureMessage).toBe("stdio-drain-timeout");
+      expect(result).toMatchObject({ exitCode: 1, failureMessage: "stdio-drain-timeout" });
       expect(result.stdout).toContain("escaped descendant output");
       expect(isProcessAlive(descendantPid)).toBe(true);
     } finally {
@@ -243,9 +232,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       tsconfig: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
     });
     const moduleUrl = pathToFileURL(bundlePath).href;
-    if (!actualSpawn.value) {
-      throw new Error("real spawn unavailable");
-    }
     let descendant: Socket | undefined;
     const server = createServer((socket) => {
       descendant = socket;
@@ -275,7 +261,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       "  timeoutMs: 5000,",
       "});",
     ].join("\n");
-    const controller = actualSpawn.value(
+    const controller = spawnReal(
       process.execPath,
       ["--input-type=module", "-e", controllerScript],
       { cwd: process.cwd(), env: process.env, stdio: "ignore" },
@@ -293,8 +279,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       controller.kill("SIGTERM");
       const [[exitCode, signal]] = await Promise.all([controllerClosed, descendantClosed]);
 
-      expect(exitCode).toBeNull();
-      expect(signal).toBe("SIGTERM");
+      expect([exitCode, signal]).toEqual([null, "SIGTERM"]);
     } finally {
       if (controller.exitCode === null && controller.signalCode === null) {
         controller.kill("SIGKILL");
@@ -310,20 +295,36 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
 
 describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", () => {
   const parentHandlers = new Map<ParentSignal | "exit", ParentHandler>();
+  const timeoutResult = {
+    exitCode: 1,
+    failureMessage: "scenario-command timed out after 100ms",
+    signal: null,
+  };
   let processKill: ReturnType<typeof spyOnProcessKill>;
+
+  function keepProcessGroupAliveUntilKill() {
+    let alive = true;
+    processKill.mockImplementation((pid, signal) => {
+      if (pid === -42 && signal === "SIGKILL") {
+        alive = false;
+      }
+      if (pid === -42 && signal === 0 && !alive) {
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    });
+  }
 
   beforeEach(() => {
     vi.useFakeTimers();
     spawnMock.mockReset();
     spawnSyncMock.mockReset();
-    vi.spyOn(process, "once").mockImplementation((event, listener) => {
-      parentHandlers.set(event as ParentSignal | "exit", listener as ParentHandler);
-      return process;
-    });
-    vi.spyOn(process, "on").mockImplementation((event, listener) => {
-      parentHandlers.set(event as ParentSignal | "exit", listener as ParentHandler);
-      return process;
-    });
+    for (const method of ["once", "on"] as const) {
+      vi.spyOn(process, method).mockImplementation((event, listener) => {
+        parentHandlers.set(event as ParentSignal | "exit", listener as ParentHandler);
+        return process;
+      });
+    }
     vi.spyOn(process, "removeListener").mockImplementation((event, listener) => {
       if (parentHandlers.get(event as ParentSignal | "exit") === listener) {
         parentHandlers.delete(event as ParentSignal | "exit");
@@ -391,11 +392,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
       const resultPromise = runCommand(100);
       await vi.advanceTimersByTimeAsync(130);
 
-      await expect(resultPromise).resolves.toMatchObject({
-        exitCode: 1,
-        failureMessage: "scenario-command timed out after 100ms",
-        signal: null,
-      });
+      await expect(resultPromise).resolves.toMatchObject(timeoutResult);
       expect(spawnSyncMock).toHaveBeenCalledTimes(2);
       expect(spawnSyncMock.mock.calls.map((call) => call[1])).toEqual([
         ["/PID", "12345", "/T"],
@@ -414,30 +411,18 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
   });
 
   it("escalates timed-out commands and preserves the timeout result", async () => {
-    createChild();
+    const child = createChild();
     setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
-    let processGroupAlive = true;
-    processKill.mockImplementation((pid, signal) => {
-      if (pid === -42 && signal === "SIGKILL") {
-        processGroupAlive = false;
-      }
-      if (pid === -42 && signal === 0 && !processGroupAlive) {
-        throw Object.assign(new Error("gone"), { code: "ESRCH" });
-      }
-      return true;
-    });
+    keepProcessGroupAliveUntilKill();
 
     const resultPromise = runCommand(100);
     await vi.advanceTimersByTimeAsync(120);
-    const child = spawnMock.mock.results[0]?.value as ChildProcess;
     child.emit("exit", null, "SIGKILL");
     child.emit("close", null, "SIGKILL");
     await vi.advanceTimersByTimeAsync(10);
 
     await expect(resultPromise).resolves.toEqual({
-      exitCode: 1,
-      failureMessage: "scenario-command timed out after 100ms",
-      signal: null,
+      ...timeoutResult,
       stdout: "",
       stderr: "",
     });
@@ -456,29 +441,13 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
       },
     },
     { phase: "exited", result: { exitCode: 7, signal: null } },
-    {
-      phase: "timed out",
-      result: {
-        exitCode: 1,
-        failureMessage: "scenario-command timed out after 100ms",
-        signal: null,
-      },
-    },
+    { phase: "timed out", result: timeoutResult },
   ])(
     "re-raises a parent signal when the command is $phase without changing its outcome",
     async ({ phase, result }) => {
       const child = createChild();
       setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
-      let processGroupAlive = true;
-      processKill.mockImplementation((pid, signal) => {
-        if (pid === -42 && signal === "SIGKILL") {
-          processGroupAlive = false;
-        }
-        if (pid === -42 && signal === 0 && !processGroupAlive) {
-          throw Object.assign(new Error("gone"), { code: "ESRCH" });
-        }
-        return true;
-      });
+      keepProcessGroupAliveUntilKill();
 
       const resultPromise = runCommand(100);
       if (phase === "exited") {
