@@ -322,16 +322,9 @@ describe("agent provider inventories", () => {
       ...["*", undefined].map((id) => route("feishu", id)),
     ];
     expect(summarizeBindings({}, bindings, displayMetadata)).toEqual([
-      "Telegram default",
-      "Telegram alpha",
-      "Telegram *",
-      "Telegram absent",
-      "iMessage *",
-      "iMessage alpha",
-      "signal *",
-      "signal default",
-      "Feishu *",
-      "Feishu default",
+      ...["default", "alpha", "*", "absent"].map((id) => `Telegram ${id}`),
+      ...["*", "alpha"].map((id) => `iMessage ${id}`),
+      ...["signal", "Feishu"].flatMap((label) => ["*", "default"].map((id) => `${label} ${id}`)),
     ]);
     expect(listDisplayProviders(bindings)).toEqual([
       "telegram default (Default): not configured",

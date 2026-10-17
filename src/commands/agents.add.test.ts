@@ -3,7 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
@@ -136,6 +139,8 @@ const { persistAuthProfileBatch } = await vi.importActual<
 const runtime = createTestRuntime();
 const apiKey = (key: string) => createApiKeyCredential("openai", key);
 const keyProfile = (profileId: string, key: string) => ({ profileId, credential: apiKey(key) });
+const add = (options: Parameters<typeof agentsAddCommand>[0] = {}, hasAutomationFlags?: boolean) =>
+  agentsAddCommand(options, runtime, { hasAutomationFlags });
 function expectUnused(...mocks: Array<{ mock: { calls: unknown[] } }>) {
   for (const mock of mocks) {
     expect(mock).not.toHaveBeenCalled();
@@ -145,9 +150,7 @@ function expectUnused(...mocks: Array<{ mock: { calls: unknown[] } }>) {
 describe("agents add command", () => {
   const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agents-add-" });
 
-  beforeAll(async () => {
-    await suiteTempDirs.setup();
-  });
+  beforeAll(() => suiteTempDirs.setup());
 
   afterAll(async () => {
     closeOpenClawAgentDatabasesForTest();
@@ -227,6 +230,11 @@ describe("agents add command", () => {
     }));
   }
 
+  function existingAgentWizard() {
+    setConfigSnapshot({ agents: { entries: { work: {} } } });
+    return useWizard(["/tmp/workspace-work"], [true, false]);
+  }
+
   function stageChannelPostWriteHook(run: ChannelOnboardingPostWriteHook["run"]): void {
     setupChannels.mockImplementationOnce(async (config, _runtime, _prompter, options) => {
       options?.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run });
@@ -248,55 +256,49 @@ describe("agents add command", () => {
     {
       name: "a missing workspace with automation flags",
       options: { name: "Work" },
-      flags: { hasAutomationFlags: true },
       message: `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
     },
     {
       name: "a missing name after a valid workspace",
       options: { workspace: "/tmp/work" },
-      flags: { hasAutomationFlags: true },
       message: `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
     },
     {
       name: "an unrepresentable non-interactive name",
       options: { name: "агент✨", workspace: "/tmp/work" },
-      flags: { hasAutomationFlags: true },
       message:
         'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
     },
     {
       name: "reserved system-agent id openclaw",
       options: { name: "openclaw", workspace: "/tmp/reserved" },
-      flags: { hasAutomationFlags: true },
       message: `"openclaw" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
     },
   ])("rejects $name through the root failure owner before mutation", async (testCase) => {
     readConfig.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await expectRootFailure(
-      agentsAddCommand(testCase.options, runtime, testCase.flags),
-      testCase.message,
-    );
+    await expectRootFailure(add(testCase.options, true), testCase.message);
     expect(createAgent).not.toHaveBeenCalled();
   });
 
-  it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
-    const prompter = useWizard();
-
-    await agentsAddCommand({ name: "агент✨" }, runtime);
-
-    expect(prompter.outro).toHaveBeenCalledWith(
+  it.each([
+    [
+      "агент✨",
       'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
-    );
-    expectUnused(prompter.confirm, prompter.note, creationGate, createAgent, writeConfig);
-  });
-
-  it("rejects a reserved system-agent id from an interactive positional argument", async () => {
-    readConfig.mockResolvedValue({ ...baseConfigSnapshot });
+    ],
+    ["openclaw", '"openclaw" is reserved. Choose another name.'],
+  ])("rejects invalid interactive positional name %s before mutation", async (name, message) => {
     const prompter = useWizard();
-    await agentsAddCommand({ name: "openclaw" }, runtime);
-    expect(prompter.outro).toHaveBeenCalledWith('"openclaw" is reserved. Choose another name.');
-    expectUnused(prompter.text, writeConfig);
+    await add({ name });
+    expect(prompter.outro).toHaveBeenCalledWith(message);
+    expectUnused(
+      prompter.text,
+      prompter.confirm,
+      prompter.note,
+      creationGate,
+      createAgent,
+      writeConfig,
+    );
   });
 
   it("refuses the interactive JSON wizard without a usable terminal", async () => {
@@ -305,15 +307,13 @@ describe("agents add command", () => {
 
     const message =
       "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.";
-    await expectRootFailure(agentsAddCommand({ json: true }, runtime), message);
+    await expectRootFailure(add({ json: true }), message);
     expect(hasTerminal).toHaveBeenCalledWith(process.stderr);
     expectUnused(runtime.log, readConfig, createPrompter, createAgent);
   });
 
   it("keeps guided JSON stdout isolated while wizard logs and UI use stderr", async () => {
-    const config = { agents: { entries: { work: {} } } };
-    setConfigSnapshot(config);
-    useWizard(["/tmp/workspace-work"], [true, false]);
+    existingAgentWizard();
     setupChannels.mockImplementationOnce(async (nextConfig, wizardRuntime, _prompter, options) => {
       wizardRuntime.log("channel log");
       options?.onPostWriteHook?.({
@@ -331,7 +331,7 @@ describe("agents add command", () => {
       return { bootstrapPending: false };
     });
 
-    await agentsAddCommand({ name: "work", json: true }, runtime);
+    await add({ name: "work", json: true });
 
     expect(ensureWorkspace.mock.invocationCallOrder[0]).toBeLessThan(
       commitConfig.mock.invocationCallOrder[0]!,
@@ -362,7 +362,7 @@ describe("agents add command", () => {
       message: "Run openclaw doctor --fix, then retry.",
     });
 
-    await agentsAddCommand({ name: "main" }, runtime);
+    await add({ name: "main" });
 
     expect(creationGate).toHaveBeenCalledWith("main");
     expect(prompter.outro).toHaveBeenCalledWith("Run openclaw doctor --fix, then retry.");
@@ -375,21 +375,14 @@ describe("agents add command", () => {
         version: AUTH_STORE_VERSION,
         profiles: {
           "openai:api-key": apiKey("sk-test"),
-          "openai:oauth": {
-            type: "oauth",
-            provider: "openai",
-            access: "codex-copy-access-token",
-            refresh: "codex-copy-refresh-token",
-            expires: Date.now() + 60_000,
-            copyToAgents: true,
-          },
+          "openai:oauth": createOAuthRefreshCredential({ copyToAgents: true }),
         },
       };
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       saveAuthProfileStore(sourceStore);
       const wizard = useWizard(["work", workspaceDir], [true, false]);
 
-      await agentsAddCommand({}, runtime);
+      await add();
 
       expect(Object.keys(loadPersistedAuthProfileStore(agentDir)?.profiles ?? {})).toEqual([
         "openai:api-key",
@@ -414,7 +407,7 @@ describe("agents add command", () => {
       });
       const wizard = useWizard(["work", workspaceDir], [true, false], ["ops"]);
 
-      await agentsAddCommand({}, runtime);
+      await add();
 
       expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
       const copied = loadPersistedAuthProfileStore(agentDir);
@@ -439,7 +432,7 @@ describe("agents add command", () => {
       database.close();
       const wizard = useWizard(["work", workspaceDir]);
 
-      await expect(agentsAddCommand({}, runtime)).rejects.toThrow(
+      await expect(add()).rejects.toThrow(
         /auth profile store .* is unreadable; run .*doctor --fix/i,
       );
 
@@ -457,7 +450,7 @@ describe("agents add command", () => {
       stageGuidedAuth();
       warnModel.mockRejectedValueOnce(new WizardCancelledError());
 
-      await agentsAddCommand({}, runtime);
+      await add();
 
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
       expectUnused(persistAuth, createAgent);
@@ -488,7 +481,7 @@ describe("agents add command", () => {
         expect(persistAuth).not.toHaveBeenCalled();
         return await create(params);
       });
-      await agentsAddCommand({}, runtime);
+      await add();
       expect(persistAuth).toHaveBeenCalledOnce();
       expect(warnModel).toHaveBeenCalledWith(
         expect.any(Object),
@@ -501,12 +494,14 @@ describe("agents add command", () => {
         }),
       );
       const persisted = loadPersistedAuthProfileStore(agentDir);
-      expect(persisted?.profiles).toMatchObject({
-        "openai:api-key": { key: "guided-wins" },
-        "openai:portable": { key: "portable-retained" },
-        "openai:guided": { key: "guided-retained" },
+      expect(persisted).toMatchObject({
+        profiles: {
+          "openai:api-key": { key: "guided-wins" },
+          "openai:portable": { key: "portable-retained" },
+          "openai:guided": { key: "guided-retained" },
+        },
+        order: { openai: ["openai:api-key", "openai:portable"] },
       });
-      expect(persisted?.order?.openai).toEqual(["openai:api-key", "openai:portable"]);
       expect(wizard.note).toHaveBeenCalledWith(
         'Copied 2 portable auth profiles from "main".',
         "Auth profiles",
@@ -523,9 +518,7 @@ describe("agents add command", () => {
       stageGuidedAuth(profiles);
       persistAuth.mockRejectedValueOnce(new Error("injected auth batch persistence failure"));
 
-      await expect(agentsAddCommand({}, runtime)).rejects.toThrow(
-        "injected auth batch persistence failure",
-      );
+      await expect(add()).rejects.toThrow("injected auth batch persistence failure");
 
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
       expect(createAgent).toHaveBeenCalledOnce();
@@ -544,7 +537,7 @@ describe("agents add command", () => {
         stageGuidedAuth();
         const published = failurePoint === "later output";
         (published ? wizard.outro : commitConfig).mockRejectedValueOnce(new Error(failurePoint));
-        await expect(agentsAddCommand({ name: "work" }, runtime)).rejects.toThrow(failurePoint);
+        await expect(add({ name: "work" })).rejects.toThrow(failurePoint);
         const persisted = loadPersistedAuthProfileStore(agentDir);
         if (published) {
           expect(persisted?.profiles["openai:primary"]).toMatchObject({ key: "sk-primary" });
@@ -580,7 +573,7 @@ describe("agents add command", () => {
       configPath: configFiles.write(persistedConfig).path,
     });
 
-    await agentsAddCommand({}, runtime);
+    await add();
 
     expect(hook).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cfg: persistedConfig }));
     expect(createAgent.mock.invocationCallOrder[0]!).toBeLessThan(
@@ -599,18 +592,16 @@ describe("agents add command", () => {
       message: "controlled create failure",
     });
 
-    await agentsAddCommand({}, runtime);
+    await add();
 
     expect(hook).not.toHaveBeenCalled();
   });
 
   it("does not commit an existing-agent update when workspace provisioning fails", async () => {
-    const config = { agents: { entries: { work: {} } } };
-    setConfigSnapshot(config);
-    useWizard(["/tmp/workspace-work"], [true, false]);
+    existingAgentWizard();
     ensureWorkspace.mockRejectedValueOnce(new Error("controlled mkdir failure"));
 
-    await expect(agentsAddCommand({ name: "work" }, runtime)).rejects.toThrow(
+    await expect(add({ name: "work" })).rejects.toThrow(
       /workspace provisioning.*agent "work".*controlled mkdir failure/i,
     );
 
