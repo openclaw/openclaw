@@ -33,8 +33,12 @@ function source(
     channel,
     cfg: {},
     actionParams: { target, message: "answer" },
-    toolContext: { currentChannelProvider: channel, currentChannelId: target },
     ...overrides,
+    toolContext: {
+      currentChannelProvider: channel,
+      currentChannelId: target,
+      ...overrides.toolContext,
+    },
     sessionKey: overrides.sessionKey ?? `agent:main:${channel}:direct:${target}`,
   };
 }
@@ -104,77 +108,44 @@ beforeEach(() => {
 describe("source reply receipts", () => {
   it.each([
     ...[
-      { name: "explicit failure", payload: { ok: false, status: "failed" } },
-      { name: "error with attempt ID", payload: { error: "send failed", messageId: "attempt-id" } },
-      { name: "negative success flag", payload: { success: false, messageId: "attempt-id" } },
-      {
-        name: "JSON-text failure",
-        payload: {
+      ["explicit failure", { ok: false, status: "failed" }],
+      ["error with attempt ID", { error: "send failed", messageId: "attempt-id" }],
+      ["negative success flag", { success: false, messageId: "attempt-id" }],
+      [
+        "JSON-text failure",
+        {
           content: [{ type: "text", text: JSON.stringify({ ok: false, messageId: "attempt-id" }) }],
         },
-      },
-      {
-        name: "wrapped send failure",
-        payload: { sendResult: { ok: false, messageId: "attempt-id" } },
-      },
-    ].map(({ name, payload }) => ({
-      name,
-      payload,
-      outcome: "not-delivered",
-      delivered: false,
-      mirror: direct,
-    })),
+      ],
+      ["wrapped send failure", { sendResult: { ok: false, messageId: "attempt-id" } }],
+    ].map(([name, payload]) => [name, payload, "not-delivered", direct] as const),
     ...[false, true].map((wrapped) => {
       const partial = { ok: false, sentBeforeError: true, messageId: "partial-receipt" };
-      return {
-        name: `partial delivery (wrapped=${wrapped})`,
-        payload: wrapped ? { sendResult: partial } : partial,
-        outcome: "delivered",
-        delivered: true,
-        mirror: direct,
-      };
+      return [
+        `partial delivery (wrapped=${wrapped})`,
+        wrapped ? { sendResult: partial } : partial,
+        "delivered",
+        direct,
+      ] as const;
     }),
-    {
-      name: "earlier ambiguous Gateway attempt",
-      payload: { ok: false, status: "failed" },
-      outcome: "pending",
-      preservePendingOnExplicitFailure: true,
-      mirror: direct,
-    },
-    {
-      name: "another recipient",
-      payload: { ok: true, messageId: "sent-elsewhere", channelId: "other-chat" },
-      outcome: "not-source",
-      delivered: false,
-      mirror: direct,
-    },
-    {
-      name: "bare chat ID with canonical topic (#157277)",
-      payload: topicDelivery,
-      outcome: "delivered",
-      delivered: true,
-      mirror: topic,
-    },
-    {
-      name: "another chat",
-      payload: { ...topicDelivery, chatId: "-100999" },
-      outcome: "not-source",
-      delivered: false,
-      mirror: topic,
-    },
-    {
-      name: "another topic",
-      payload: { ...topicDelivery, receipt: { ...topicDelivery.receipt, threadId: "78" } },
-      outcome: "not-source",
-      delivered: false,
-      mirror: topic,
-    },
-    {
-      name: "contradictory multipart topic receipt",
-      outcome: "not-source",
-      delivered: false,
-      mirror: topic,
-      payload: {
+    ["earlier ambiguous Gateway attempt", { ok: false, status: "failed" }, "pending", direct],
+    [
+      "another recipient",
+      { ok: true, messageId: "sent-elsewhere", channelId: "other-chat" },
+      "not-source",
+      direct,
+    ],
+    ["bare chat ID with canonical topic (#157277)", topicDelivery, "delivered", topic],
+    ["another chat", { ...topicDelivery, chatId: "-100999" }, "not-source", topic],
+    [
+      "another topic",
+      { ...topicDelivery, receipt: { ...topicDelivery.receipt, threadId: "78" } },
+      "not-source",
+      topic,
+    ],
+    [
+      "contradictory multipart topic receipt",
+      {
         messageId: "4",
         chatId: "-100123",
         receipt: {
@@ -187,8 +158,10 @@ describe("source reply receipts", () => {
           ],
         },
       },
-    },
-  ])("reconciles $name", async ({ payload, outcome, delivered, mirror, ...options }) => {
+      "not-source",
+      topic,
+    ],
+  ] as const)("reconciles %s", async (_name, payload, outcome, mirror) => {
     if (mirror === topic) {
       installTelegramTopicPlugin();
     }
@@ -203,7 +176,7 @@ describe("source reply receipts", () => {
           toolCallId: terminal.toolCallId,
         },
         receipt,
-        ...options,
+        preservePendingOnExplicitFailure: outcome === "pending",
       }),
     ).resolves.toBe(outcome);
     if (outcome === "delivered") {
@@ -216,9 +189,9 @@ describe("source reply receipts", () => {
     } else {
       expect(receiptMocks.cancel).not.toHaveBeenCalled();
     }
-    if (delivered !== undefined) {
+    if (outcome !== "pending") {
       expect(isDeliveredCurrentSourceReply({ ...mirror, deliveredPayload: payload })).toBe(
-        delivered,
+        outcome === "delivered",
       );
     }
     if (mirror === direct && outcome !== "pending") {
@@ -238,8 +211,6 @@ describe("source reply receipts", () => {
         actionParams: { target: "C123", messageId: "1" },
         sessionKey: "agent:main:slack:channel:C123",
         toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "C123",
           currentMessageId: "1",
         },
         deliveredPayload: {
@@ -259,8 +230,6 @@ describe("source reply receipts", () => {
       params: source("googlechat", "spaces/AAA", {
         sessionKey: "agent:main:googlechat:channel:spaces/AAA",
         toolContext: {
-          currentChannelProvider: "googlechat",
-          currentChannelId: "spaces/AAA",
           currentThreadTs: "spaces/AAA/threads/canonical",
         },
         deliveredPayload: { receipt: { threadId } },
@@ -272,8 +241,6 @@ describe("source reply receipts", () => {
       params: source("feishu", "oc_group", {
         sessionKey: "agent:main:feishu:group:oc_group:topic:om_root",
         toolContext: {
-          currentChannelProvider: "feishu",
-          currentChannelId: "oc_group",
           currentThreadTs: "om_root",
           currentMessageId: "om_inbound",
         },
@@ -297,8 +264,6 @@ describe("source reply receipts", () => {
         actionParams: { to: "oc_group", messageId: "om_inbound", message: "visible thread reply" },
         sessionKey: "agent:main:testchat:group:oc_group",
         toolContext: {
-          currentChannelProvider: "testchat",
-          currentChannelId: "oc_group",
           currentThreadTs: "om_root",
           currentMessageId: "om_inbound",
         },
@@ -330,8 +295,6 @@ describe("source reply receipts", () => {
         sourceReplyFinal: true,
         toolCallId: "call-1",
         toolContext: {
-          currentChannelProvider: "testchat",
-          currentChannelId: "direct:user-1",
           currentSourceTurnId: "source-turn-1",
         },
         deliveredPayload: { ok: true },

@@ -30,6 +30,28 @@ import { readSessionBindingSelectionCurrent, testing } from "./session-binding-s
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const stateKey = Symbol("binding-routing-worker-proof");
+function mainRoute(channel: string): ResolvedAgentRoute {
+  return {
+    agentId: "main",
+    channel,
+    accountId: "default",
+    sessionKey: "agent:main:main",
+    mainSessionKey: "agent:main:main",
+    lastRoutePolicy: "main",
+    matchedBy: "default",
+  };
+}
+function accountManager(channel: string) {
+  return createAccountScopedConversationBindingManager({
+    channel,
+    accountId: "default",
+    stateKey,
+    cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
+    toStoredTargetKind: (targetKind) => targetKind,
+    toSessionBindingTargetKind: (targetKind) => targetKind,
+  });
+}
+
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-binding-route-worker-"));
   testing.resetSessionBindingAdaptersForTests();
@@ -48,15 +70,6 @@ describe("awaited conversation routing storage ownership", () => {
       const channel = kind === "generic" ? "webchat" : "imessage";
       const conversation = { channel, accountId: "default", conversationId: "worker-route" };
       const service = getSessionBindingService();
-      const route: ResolvedAgentRoute = {
-        agentId: "main",
-        channel,
-        accountId: "default",
-        sessionKey: "agent:main:main",
-        mainSessionKey: "agent:main:main",
-        lastRoutePolicy: "main",
-        matchedBy: "default",
-      };
       const observer = observeParentSqlite();
       let manager: ReturnType<typeof createAccountScopedConversationBindingManager> | undefined;
       try {
@@ -73,14 +86,7 @@ describe("awaited conversation routing storage ownership", () => {
         }
         observer.reset();
         if (kind === "account") {
-          manager = createAccountScopedConversationBindingManager({
-            channel,
-            accountId: "default",
-            cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
-            stateKey,
-            toStoredTargetKind: (targetKind) => targetKind,
-            toSessionBindingTargetKind: (targetKind) => targetKind,
-          });
+          manager = accountManager(channel);
         }
         const binding = await service.bind({
           conversation,
@@ -88,7 +94,10 @@ describe("awaited conversation routing storage ownership", () => {
           targetKind: "session",
         });
         observer.reset();
-        const result = await resolveRuntimeConversationBindingRouteAsync({ route, conversation });
+        const result = await resolveRuntimeConversationBindingRouteAsync({
+          route: mainRoute(channel),
+          conversation,
+        });
         expect(result.bindingRecord?.bindingId).toBe(binding.bindingId);
         expect(result.route.sessionKey).toBe(binding.targetSessionKey);
         expect(result.bindingOwnerAvailable).toBe(true);
@@ -139,17 +148,7 @@ it.each(
         },
       },
     ]);
-  const manager =
-    kind === "account"
-      ? createAccountScopedConversationBindingManager({
-          channel,
-          accountId: conversation.accountId,
-          cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
-          stateKey,
-          toStoredTargetKind: (targetKind) => targetKind,
-          toSessionBindingTargetKind: (targetKind) => targetKind,
-        })
-      : undefined;
+  const manager = kind === "account" ? accountManager(channel) : undefined;
   try {
     if (kind === "generic") {
       setActivePluginRegistry(supportedRegistry());
@@ -161,15 +160,7 @@ it.each(
     });
     const resolved = await resolveRuntimeConversationBindingRouteAsync({
       conversation,
-      route: {
-        agentId: "main",
-        channel,
-        accountId: conversation.accountId,
-        sessionKey: "agent:main:main",
-        mainSessionKey: "agent:main:main",
-        lastRoutePolicy: "main",
-        matchedBy: "default",
-      },
+      route: mainRoute(channel),
     });
     const ctx = buildChannelInboundEventContext({
       channel,
