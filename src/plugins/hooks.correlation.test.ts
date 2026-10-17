@@ -24,6 +24,36 @@ function timedHook(
   return { runner, logger };
 }
 
+function heldHook(reject = false) {
+  const finish = createDeferredCore();
+  const finished = createDeferredCore();
+  const state = { calls: 0, settled: false };
+  const { runner, logger } = timedHook(
+    "before_compaction",
+    "held-hook",
+    async () => {
+      state.calls++;
+      try {
+        await finish.promise;
+        if (reject) {
+          throw new Error("fixture late hook failure");
+        }
+      } finally {
+        state.settled = true;
+        finished.resolve();
+      }
+    },
+    5,
+  );
+  return {
+    finish,
+    finished,
+    state,
+    logger,
+    run: () => runner.runBeforeCompaction({ messageCount: 3 }, TEST_PLUGIN_AGENT_CTX),
+  };
+}
+
 describe("hook timeouts", () => {
   let child: { status: number | null; stderr: string; stdout: string };
   beforeAll(() => {
@@ -99,26 +129,14 @@ describe("timed hook work", () => {
     "joins a raw handler after its timeout with an %s owner",
     async (phase) => {
       const owner = new AsyncWorkScope();
-      const finish = createDeferredCore();
-      let settled = false;
-      const { runner, logger } = timedHook(
-        "before_compaction",
-        "held-hook",
-        async () => {
-          await finish.promise;
-          settled = true;
-        },
-        5,
-      );
+      const { finish, state, logger, run } = heldHook();
       let drain: Promise<void> | undefined;
       try {
         if (phase === "closing") {
           owner.beginClose();
         }
-        await owner.run(() =>
-          runner.runBeforeCompaction({ messageCount: 3 }, TEST_PLUGIN_AGENT_CTX),
-        );
-        expect(settled).toBe(false);
+        await owner.run(run);
+        expect(state.settled).toBe(false);
         expect(logger.error).toHaveBeenCalledWith(
           "[hooks] before_compaction handler from held-hook failed: timed out after 5ms",
         );
@@ -130,7 +148,7 @@ describe("timed hook work", () => {
         expect(drained).toBe(false);
         finish.resolve();
         await drain;
-        expect(settled).toBe(true);
+        expect(state.settled).toBe(true);
       } finally {
         finish.resolve();
         await (drain ?? owner.drain());
@@ -146,30 +164,10 @@ describe("timed hook work", () => {
     const owner = new AsyncWorkScope();
     const context = owner.run(() => AsyncLocalStorage.snapshot());
     await owner.drain();
-    const finish = createDeferredCore();
-    const settled = createDeferredCore();
-    const failure = new Error("fixture late hook failure");
-    let calls = 0;
-    const { runner, logger } = timedHook(
-      "before_compaction",
-      "held-hook",
-      async () => {
-        calls++;
-        try {
-          await finish.promise;
-          if (outcome === "late rejection") {
-            throw failure;
-          }
-        } finally {
-          settled.resolve();
-        }
-      },
-      5,
-    );
-    const run = () => runner.runBeforeCompaction({ messageCount: 3 }, TEST_PLUGIN_AGENT_CTX);
+    const { finish, finished, state, logger, run } = heldHook(outcome === "late rejection");
     const result = phase === "closed" ? context(run) : run();
     try {
-      expect(calls).toBe(1);
+      expect(state.calls).toBe(1);
       if (outcome === "success") {
         finish.resolve();
       }
@@ -184,7 +182,7 @@ describe("timed hook work", () => {
       }
     } finally {
       finish.resolve();
-      await settled.promise;
+      await finished.promise;
       await result;
     }
   });

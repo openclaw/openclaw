@@ -25,6 +25,11 @@ function toolRunner(hooks: ToolHook[], options?: Parameters<typeof createHookRun
 }
 const runParams = (handler: Handler, params: Record<string, unknown>, catchErrors?: boolean) =>
   toolRunner([{ handler }], { catchErrors }).runBeforeToolCall({ toolName: "bash", params }, ctx);
+const isolationError = "before_tool_call mutable input isolation failed";
+const mockRunner = (
+  hooks: Parameters<typeof createMockPluginRegistry>[0],
+  options?: Parameters<typeof createHookRunner>[1],
+) => createHookRunner(createMockPluginRegistry(hooks), options);
 
 describe("before_tool_call isolation and approval", () => {
   it("binds the first approval to its owner and snapshot while allowing a later block", async () => {
@@ -50,11 +55,7 @@ describe("before_tool_call isolation and approval", () => {
       {
         handler: (value) => {
           expect(value.params).toEqual({ command: "safe" });
-          return {
-            block: true,
-            blockReason: "blocked",
-            params: { command: "blocked override" },
-          };
+          return { block: true, blockReason: "blocked", params: { command: "bad" } };
         },
       },
       { handler: skipped },
@@ -90,9 +91,7 @@ describe("before_tool_call isolation and approval", () => {
     },
   ])("fails closed before invoking a handler for $name", async ({ params }) => {
     const handler = vi.fn<Handler>(() => ({}));
-    await expect(runParams(handler, params, true)).rejects.toThrow(
-      "before_tool_call mutable input isolation failed",
-    );
+    await expect(runParams(handler, params, true)).rejects.toThrow(isolationError);
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -154,7 +153,7 @@ describe("before_tool_call isolation and approval", () => {
       ],
       { catchErrors: true },
     ).runBeforeToolCall(event, ctx);
-    await expect(run).rejects.toThrow("before_tool_call mutable input isolation failed");
+    await expect(run).rejects.toThrow(isolationError);
     expect(skipped).not.toHaveBeenCalled();
   });
 });
@@ -170,6 +169,13 @@ describe("before_tool_call receipts", () => {
     });
   });
   afterEach(() => clear());
+  const expectReceipt = (outcome: string, reasonCode: string, coverageState: string) => {
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      decision: { outcome, reasonCode },
+      enforcement: { coverageState },
+    });
+  };
   const admission = (assertAuthority: () => boolean | void = () => true) => ({
     token: createExecutionIdentityAdmissionToken("run-hook", {
       contextId: "context-hook",
@@ -192,11 +198,9 @@ describe("before_tool_call receipts", () => {
       { ...ctx, toolName: "secret-tool-name" },
       admission(),
     );
-    expect(receipts).toHaveLength(1);
+    expectReceipt(outcome, reason, "enforced");
     expect(receipts[0]).toMatchObject({
       action: { family: "plugin", operation: "before_tool_call" },
-      decision: { outcome, reasonCode: reason },
-      enforcement: { coverageState: "enforced" },
       source: { owner: "plugin-hook" },
     });
     expect(JSON.stringify(receipts)).not.toContain("secret-plugin-id");
@@ -223,21 +227,16 @@ describe("before_tool_call receipts", () => {
       const run = runner.runBeforeToolCall({ toolName: "bash", params }, ctx, admission());
       if (closed) {
         await expect(run).rejects.toThrow(
-          sharedMemory
-            ? "before_tool_call mutable input isolation failed"
-            : "before_tool_call handler from failing-plugin failed",
+          sharedMemory ? isolationError : "before_tool_call handler from failing-plugin failed",
         );
       } else {
         await expect(run).resolves.toBeUndefined();
       }
-      expect(receipts).toHaveLength(1);
-      expect(receipts[0]).toMatchObject({
-        decision: {
-          outcome: closed ? "denied" : "unknown",
-          reasonCode: closed ? "plugin_hook_failed_closed" : "plugin_hook_failed_open",
-        },
-        enforcement: { coverageState: closed ? "enforced" : "unknown" },
-      });
+      expectReceipt(
+        closed ? "denied" : "unknown",
+        closed ? "plugin_hook_failed_closed" : "plugin_hook_failed_open",
+        closed ? "enforced" : "unknown",
+      );
       expect(JSON.stringify(receipts)).not.toContain("must-not-leak");
       expect(handler).toHaveBeenCalledTimes(sharedMemory ? 0 : 1);
     },
@@ -302,15 +301,15 @@ describe("tool matcher scoping", () => {
 describe("hook security", () => {
   it("sanitizes caught hook error logs", async () => {
     const logger = { error: vi.fn(), warn: vi.fn() };
-    const runner = createHookRunner(
-      createMockPluginRegistry([
+    const runner = mockRunner(
+      [
         {
           hookName: "message_received",
           handler: () => {
             throw new Error("boom\nforged\tsecret sk-test1234567890");
           },
         },
-      ]),
+      ],
       { logger },
     );
     await runner.runMessageReceived({ from: "user-1", content: "hi" }, { channelId: "whatsapp" });
@@ -323,14 +322,12 @@ describe("hook security", () => {
 
   it("retains accumulated message content when a later hook cancels and skips successors", async () => {
     const skipped = vi.fn(() => ({ cancel: false, content: "injected" }));
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        { hookName: "message_sending", handler: () => ({ content: "first", cancel: false }) },
-        { hookName: "message_sending", handler: () => ({ content: "second", cancel: false }) },
-        { hookName: "message_sending", handler: () => ({ cancel: true }) },
-        { hookName: "message_sending", handler: skipped },
-      ]),
-    );
+    const runner = mockRunner([
+      { hookName: "message_sending", handler: () => ({ content: "first", cancel: false }) },
+      { hookName: "message_sending", handler: () => ({ content: "second", cancel: false }) },
+      { hookName: "message_sending", handler: () => ({ cancel: true }) },
+      { hookName: "message_sending", handler: skipped },
+    ]);
     await expect(
       runner.runMessageSending({ to: "user-1", content: "hello" }, { channelId: "forum" }),
     ).resolves.toEqual({ content: "second", cancel: true });

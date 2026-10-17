@@ -21,6 +21,7 @@ const runCommandWithTimeoutMock = vi.fn();
 const installPluginFromInstalledPackageDirMock = vi.fn();
 const preflightPluginGitInstallPolicyMock = vi.fn();
 const demoSpec = "git:github.com/acme/demo";
+const clonePrefix = ["git", "clone", "--no-hardlinks"];
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -60,17 +61,10 @@ function expectedGitRepoDir(gitDir: string, normalizedSpec: string): string {
 }
 
 function expectParsedGitSpec(spec: string) {
-  const parsed = parseGitPluginSpec(spec);
-  if (!parsed) {
-    throw new Error(`Expected ${spec} to parse as a git plugin spec`);
-  }
-  return parsed;
+  return expectDefined(parseGitPluginSpec(spec), `git plugin spec: ${spec}`);
 }
 function commandArgvAt(index: number): string[] {
-  const call = runCommandWithTimeoutMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected command run #${index + 1}`);
-  }
+  const call = expectDefined(runCommandWithTimeoutMock.mock.calls[index], `command #${index + 1}`);
   return call[0] as string[];
 }
 
@@ -237,9 +231,7 @@ describe("installPluginFromGitSpec", () => {
       });
       const cloneArgv = commandArgvAt(0);
       expect(cloneArgv.slice(0, 5)).toEqual([
-        "git",
-        "clone",
-        "--no-hardlinks",
+        ...clonePrefix,
         "--",
         "https://github.com/acme/demo.git",
       ]);
@@ -302,78 +294,60 @@ describe("installPluginFromGitSpec", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("runs install policy preflight before npm installs git dependencies", async () => {
-    mockGitCommands("", "abc123\n");
-    preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({
-      blocked: {
-        reason: "blocked by install policy: git installs disabled",
-        code: "security_scan_blocked",
-      },
-    });
-    const { result, events } = await installWithSecurityEvents({
+  it.each([
+    {
+      code: "security_scan_blocked",
+      reason: "blocked by install policy: git installs disabled",
       spec: demoSpec,
       expectedPluginId: "demo",
-    });
-
-    expectFailure(result, "git installs disabled");
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-    expect(commandArgvAt(0).slice(0, 7)).toEqual([
-      "git",
-      "clone",
-      "--no-hardlinks",
-      "--depth",
-      "1",
-      "--",
-      "https://github.com/acme/demo.git",
-    ]);
-    expect(commandArgvAt(1)).toEqual(["git", "rev-parse", "HEAD"]);
-    expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginId: "demo",
-        requestedSpecifier: "git:github.com/acme/demo",
-        source: { kind: "git", authority: "third-party", mutable: true, network: true },
-        sourcePath: expect.stringContaining("/.openclaw-install-stage-"),
-      }),
-    );
-    expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      action: "plugin.audit.failed",
       outcome: "denied",
-      target: { kind: "plugin", name: "demo" },
-      attributes: {
-        source_family: "git",
-        mode: "install",
-      },
-    });
-  });
-
-  it("emits git audit errors when install policy preflight fails", async () => {
-    mockGitCommands("", "abc123\n");
-    preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({
-      blocked: {
-        reason: "install policy unavailable",
-        code: "security_scan_failed",
-      },
-    });
-    const { result, events } = await installWithSecurityEvents({
+    },
+    {
+      code: "security_scan_failed",
+      reason: "install policy unavailable",
       spec: "git:file:///Users/example/private-plugin",
-    });
-
-    expectFailure(result, "install policy unavailable");
-    expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      action: "plugin.audit.failed",
+      expectedPluginId: undefined,
       outcome: "error",
-      target: { kind: "plugin" },
-      attributes: {
-        source_family: "git",
-        mode: "install",
-      },
-    });
-    expect(events[0]?.target).not.toHaveProperty("name");
-  });
+    },
+  ])(
+    "reports $outcome preflight without installing dependencies",
+    async ({ code, reason, spec, expectedPluginId, outcome }) => {
+      mockGitCommands("", "abc123\n");
+      preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({ blocked: { reason, code } });
+      const { result, events } = await installWithSecurityEvents({ spec, expectedPluginId });
+      expectFailure(result, reason);
+      if (expectedPluginId) {
+        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+        expect(commandArgvAt(0).slice(0, 7)).toEqual([
+          ...clonePrefix,
+          "--depth",
+          "1",
+          "--",
+          "https://github.com/acme/demo.git",
+        ]);
+        expect(commandArgvAt(1)).toEqual(["git", "rev-parse", "HEAD"]);
+        expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            pluginId: "demo",
+            requestedSpecifier: demoSpec,
+            source: { kind: "git", authority: "third-party", mutable: true, network: true },
+            sourcePath: expect.stringContaining("/.openclaw-install-stage-"),
+          }),
+        );
+      }
+      expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        action: "plugin.audit.failed",
+        outcome,
+        target: { kind: "plugin", ...(expectedPluginId ? { name: expectedPluginId } : {}) },
+        attributes: { source_family: "git", mode: "install" },
+      });
+      if (!expectedPluginId) {
+        expect(events[0]?.target).not.toHaveProperty("name");
+      }
+    },
+  );
 
   it("reports full commit refs as immutable to install policy", async () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
@@ -394,27 +368,34 @@ describe("installPluginFromGitSpec", () => {
     );
   });
 
-  it("stages the clone beside the managed repo so replacement stays on one filesystem (#99885)", async () => {
-    const gitDir = trackedTempDirs.make("openclaw-git-install-stage-");
-    mockGitCommands("", "abc123\n", "");
-    mockSuccessfulPackageInstall();
+  it.each(["git:github.com/acme/demo", "git:https://token@github.com/acme/demo.git"])(
+    "uses credential-free same-filesystem staging for %s (#99885)",
+    async (spec) => {
+      const gitDir = trackedTempDirs.make("openclaw-git-install-stage-");
+      mockGitCommands("", "abc123\n", "");
+      mockSuccessfulPackageInstall();
 
-    const result = await installPluginFromGitSpec({
-      spec: demoSpec,
-      gitDir,
-    });
-    expectSuccess(result);
+      const result = await installPluginFromGitSpec({
+        spec,
+        gitDir,
+      });
+      expectSuccess(result);
 
-    const cloneArgv = commandArgvAt(0);
-    const cloneDest = expectDefined(
-      cloneArgv[cloneArgv.length - 1],
-      "cloneArgv[cloneArgv.length - 1] test invariant",
-    );
-    const persistentRepoDir = expectedGitRepoDir(gitDir, "git:https://github.com/acme/demo.git");
-    const cloneParent = await fs.realpath(path.dirname(path.resolve(cloneDest)));
-    const targetParent = await fs.realpath(path.dirname(persistentRepoDir));
-    expect(cloneParent).toBe(targetParent);
-  });
+      const cloneArgv = commandArgvAt(0);
+      const cloneDest = expectDefined(
+        cloneArgv[cloneArgv.length - 1],
+        "cloneArgv[cloneArgv.length - 1] test invariant",
+      );
+      const normalizedSpec = spec === demoSpec ? "git:https://github.com/acme/demo.git" : spec;
+      const persistentRepoDir = expectedGitRepoDir(gitDir, normalizedSpec);
+      const cloneParent = await fs.realpath(path.dirname(path.resolve(cloneDest)));
+      const targetParent = await fs.realpath(path.dirname(persistentRepoDir));
+      expect(cloneParent).toBe(targetParent);
+      expect(result.targetDir).toBe(persistentRepoDir);
+      expect(result.targetDir).not.toContain("token");
+      expect(result.targetDir).not.toContain("github.com");
+    },
+  );
 
   it("reviews the final prepared artifact before publishing a deferred git install", async () => {
     const gitDir = trackedTempDirs.make("openclaw-git-consent-stage-");
@@ -501,24 +482,6 @@ describe("installPluginFromGitSpec", () => {
     await expect(fs.access(gitDir)).rejects.toThrow();
   });
 
-  it("uses a credential-free managed repo path for authenticated git URLs", async () => {
-    const gitDir = trackedTempDirs.make("openclaw-git-install-path-");
-    mockGitCommands("", "abc123\n", "");
-    mockSuccessfulPackageInstall();
-
-    const result = await installPluginFromGitSpec({
-      spec: "git:https://token@github.com/acme/demo.git",
-      gitDir,
-    });
-
-    expectSuccess(result);
-    expect(result.targetDir).toBe(
-      expectedGitRepoDir(gitDir, "git:https://token@github.com/acme/demo.git"),
-    );
-    expect(result.targetDir).not.toContain("token");
-    expect(result.targetDir).not.toContain("github.com");
-  });
-
   it("redacts authenticated git URLs from command failure details", async () => {
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
@@ -552,20 +515,9 @@ describe("installPluginFromGitSpec", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(commandArgvAt(1)).toEqual([
-      "git",
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      "--ignore-skip-worktree-bits^{commit}",
-    ]);
-    expect(commandArgvAt(2)).toEqual([
-      "git",
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      "origin/--ignore-skip-worktree-bits^{commit}",
-    ]);
+    const refProbe = ["git", "rev-parse", "--verify", "--quiet"];
+    expect(commandArgvAt(1)).toEqual([...refProbe, "--ignore-skip-worktree-bits^{commit}"]);
+    expect(commandArgvAt(2)).toEqual([...refProbe, "origin/--ignore-skip-worktree-bits^{commit}"]);
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
 
