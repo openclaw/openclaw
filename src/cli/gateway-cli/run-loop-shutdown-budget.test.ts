@@ -22,7 +22,16 @@ vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
   execLaunchctl,
 }));
 
+const info = vi.fn();
+const warn = vi.fn();
+const resolveBudget = (
+  supervisor: string | null = "external",
+  refresh?: Parameters<typeof resolveGatewayShutdownBudget>[2],
+) => resolveGatewayShutdownBudget(supervisor, { info, warn }, refresh);
+
 beforeEach(() => {
+  info.mockClear();
+  warn.mockClear();
   vi.stubGlobal("process", { ...process, platform: "linux", getuid: () => 1000, env: {} });
   readFile.mockReset().mockResolvedValue("0::/system.slice/openclaw-gateway.service\n");
   execUser.mockReset().mockResolvedValue({ code: 1, stdout: "", stderr: "No user bus" });
@@ -80,8 +89,7 @@ describe("Gateway stop deadline independent of restart ownership", () => {
   it("clamps an external system unit running as a service user", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     process.env.INVOCATION_ID = "own";
-    const info = vi.fn();
-    const budget = await resolveGatewayShutdownBudget("external", { info, warn: vi.fn() });
+    const budget = await resolveBudget();
     budget.log("startup");
     expect(info).toHaveBeenCalledWith(
       "shutdown budget at startup: drain=75000ms shutdown=85000ms reserve=10000ms exitMargin=5000ms; source=systemd system openclaw-gateway.service TimeoutStopUSec=90000ms",
@@ -95,8 +103,7 @@ describe("Gateway stop deadline independent of restart ownership", () => {
   it("warns before using a conservative fallback when inspection fails", async () => {
     process.env.INVOCATION_ID = "own";
     execSystem.mockResolvedValue({ code: 1, stdout: "", stderr: "permission denied" });
-    const warn = vi.fn();
-    const budget = await resolveGatewayShutdownBudget("external", { info: vi.fn(), warn });
+    const budget = await resolveBudget();
     expect(budget.timeoutMs).toBe(85_000);
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(
@@ -110,8 +117,7 @@ describe("Gateway stop deadline independent of restart ownership", () => {
     readFile.mockResolvedValue(
       "0::/user.slice/user-1000.slice/user@1000.service/app.slice/terminal.scope\n",
     );
-    const warn = vi.fn();
-    const budget = await resolveGatewayShutdownBudget(null, { info: vi.fn(), warn });
+    const budget = await resolveBudget(null);
     expect(budget.timeoutMs).toBe(325_000);
     expect(budget.nativeStopBudget).toBe(false);
     expect(warn).not.toHaveBeenCalled();
@@ -151,12 +157,7 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
 
   it("keeps the full drain when launchd did not initiate the stop", async () => {
     execLaunchctl.mockResolvedValue(printed("running", "\texit timeout = 5\n\tpid = 4242\n"));
-    const info = vi.fn();
-    const budget = await resolveGatewayShutdownBudget(
-      "external",
-      { info, warn: vi.fn() },
-      stoppingNow,
-    );
+    const budget = await resolveBudget("external", stoppingNow);
     budget.log("shutdown");
     expect(info).toHaveBeenCalledWith(
       "shutdown budget at shutdown: drain=315000ms shutdown=325000ms reserve=10000ms exitMargin=5000ms; source=Gateway stop policy=330000ms",
@@ -176,12 +177,7 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
       execLaunchctl.mockResolvedValue(
         printed("SIGTERMed", `\tminimum runtime = 10\n\texit timeout = ${seconds}\n\tpid = 4242\n`),
       );
-      const info = vi.fn();
-      const budget = await resolveGatewayShutdownBudget(
-        "external",
-        { info, warn: vi.fn() },
-        stoppingNow,
-      );
+      const budget = await resolveBudget("external", stoppingNow);
       budget.log("shutdown");
       expect(budget.timeoutMs).toBe(timeoutMs);
       expect(budget.reserveMs).toBe(reserveMs);
@@ -202,14 +198,10 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
       execLaunchctl.mockResolvedValue(printed("SIGTERMed", "\texit timeout = 20\n\tpid = 4242\n"));
       const nowMs = performance.now();
       vi.spyOn(performance, "now").mockReturnValue(nowMs);
-      const budget = await resolveGatewayShutdownBudget(
-        "external",
-        { info: vi.fn(), warn: vi.fn() },
-        {
-          previous: stoppingNow.previous,
-          acceptedAtMs: nowMs - elapsed,
-        },
-      );
+      const budget = await resolveBudget("external", {
+        previous: stoppingNow.previous,
+        acceptedAtMs: nowMs - elapsed,
+      });
       expect(budget.timeoutMs).toBe(timeoutMs);
       expect(budget.reserveMs).toBe(reserveMs);
       expect(budget.timeoutMs - budget.reserveMs).toBe(drainMs);
@@ -232,12 +224,7 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
           ? unavailable
           : printed("SIGTERMed", `\texit timeout = ${seconds}\n\tpid = 4242\n`),
       );
-      const warn = vi.fn();
-      const budget = await resolveGatewayShutdownBudget(
-        supervisor,
-        { info: vi.fn(), warn },
-        stoppingNow,
-      );
+      const budget = await resolveBudget(supervisor, stoppingNow);
       expect(budget.nativeStopBudget).toBe(seconds === 47);
       const drain = resolveGatewayShutdownDrainBudget({
         budget,
@@ -289,15 +276,10 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     async ({ result, warnings, timeoutMs }) => {
       delete process.env.OPENCLAW_SUPERVISOR_MODE;
       execLaunchctl.mockResolvedValue(result);
-      const warn = vi.fn();
-      const budget = await resolveGatewayShutdownBudget(
-        "launchd",
-        { info: vi.fn(), warn },
-        {
-          previous: { timeoutMs: 15_000, nativeStopBudget: true },
-          acceptedAtMs: Number.MAX_SAFE_INTEGER,
-        },
-      );
+      const budget = await resolveBudget("launchd", {
+        previous: { timeoutMs: 15_000, nativeStopBudget: true },
+        acceptedAtMs: Number.MAX_SAFE_INTEGER,
+      });
       expect(budget.timeoutMs).toBe(timeoutMs);
       expect(budget.nativeStopBudget).toBe(true);
       expect(warn.mock.calls).toEqual(warnings.map((message) => [message]));
@@ -310,11 +292,8 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
       if (phase === "unmanaged stop") {
         process.env = {};
       }
-      const info = vi.fn();
-      const warn = vi.fn();
-      const budget = await resolveGatewayShutdownBudget(
+      const budget = await resolveBudget(
         phase === "startup" ? "external" : null,
-        { info, warn },
         phase === "startup" ? undefined : stoppingNow,
       );
       expect(execLaunchctl).not.toHaveBeenCalled();

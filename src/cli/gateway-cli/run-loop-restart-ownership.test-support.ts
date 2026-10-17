@@ -5,13 +5,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
   createCloseMock,
-  createRuntimeWithExitSignal,
-  createSignaledStart,
   createUpdateRespawnChild,
   setPlatform,
-  waitForStart,
   withIsolatedSignals,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
@@ -23,10 +21,10 @@ export function registerGatewayRestartOwnershipTests({
   rollbackGatewayRestartSignalAdmission,
   isGatewayWorkAdmissionClosed,
   createSignaledLoopHarness,
+  withRunningGateway,
   readCgroup,
   systemctl,
   consumeGatewayRestartIntent,
-  runLoopWithStart,
   acquireGatewayLock,
   gatewayLog,
   managedUpdateSuccessorOwner,
@@ -46,8 +44,7 @@ export function registerGatewayRestartOwnershipTests({
       new Error("lifecycle module corrupted"),
     );
 
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, exited } = await createSignaledLoopHarness();
+    await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
       const restartSignal = captureSignal("SIGUSR2");
       const sigterm = captureSignal("SIGTERM");
 
@@ -97,8 +94,7 @@ export function registerGatewayRestartOwnershipTests({
         );
       });
     try {
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { close, start, exited } = await createSignaledLoopHarness();
+      await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
         const onLost = vi.fn(() => captureSignal("SIGUSR2")());
         const heartbeat = startGatewayStateOwnerHeartbeat(
           new Set([
@@ -157,10 +153,9 @@ export function registerGatewayRestartOwnershipTests({
       await withIsolatedSignals(async ({ captureSignal }) => {
         const cleanup = createDeferredCore();
         const close = createCloseMock().mockImplementationOnce(() => cleanup.promise);
-        const { start, started } = createSignaledStart(close);
-        const { runtime, exited } = createRuntimeWithExitSignal();
-        await runLoopWithStart({ start, runtime });
-        await waitForStart(started);
+        const { start, runtime, exited } = await createSignaledLoopHarness(undefined, false, {
+          close,
+        });
         const stop = captureSignal("SIGINT");
         vi.useFakeTimers();
         try {
@@ -226,10 +221,9 @@ export function registerGatewayRestartOwnershipTests({
             }
           });
         });
-        const { start, started } = createSignaledStart(close);
-        const { runtime, exited } = createRuntimeWithExitSignal();
-        await runLoopWithStart({ start, runtime });
-        await waitForStart(started);
+        const { start, runtime, exited } = await createSignaledLoopHarness(undefined, false, {
+          close,
+        });
         const { getProcessCleanupBudget } =
           await import("../../process/supervisor/cleanup-budget.js");
         vi.useFakeTimers();
@@ -278,109 +272,98 @@ export function registerGatewayRestartOwnershipTests({
       });
       await withIsolatedSignals(async ({ captureSignal }) => {
         const close = createCloseMock().mockImplementationOnce(() => closing.promise);
-        const { start, started } = createSignaledStart(close);
-        const { runtime, exited } = createRuntimeWithExitSignal();
         const completeBoot = vi.fn();
-        await runLoopWithStart({ start, runtime, lockPort: 18789, completeBoot });
-        await waitForStart(started);
-        const failures: unknown[] = [];
+        const { start, runtime, exited } = await createSignaledLoopHarness(undefined, false, {
+          close,
+          lockPort: 18789,
+          completeBoot,
+        });
         vi.useFakeTimers();
         const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-        try {
-          captureSignal("SIGUSR2")();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledExactlyOnceWith(
-            managedUpdateSuccessorOwner,
-          );
-          expect(close).toHaveBeenCalledOnce();
-          expect(acquireGatewayLock).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ listenerMode: "foreground", supervisor: null }),
-          );
-          await vi.advanceTimersByTimeAsync(11_000);
-          expect(runtime.exit).not.toHaveBeenCalled();
-          expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-          expect(completeBoot).not.toHaveBeenCalled();
-          expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
-          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-          if (outcome === "completed") {
-            closing.resolve();
+        await withRunLoopCleanup(
+          async () => {
+            captureSignal("SIGUSR2")();
             await vi.advanceTimersByTimeAsync(0);
-            expect(completeForegroundUpdateHandoffAfterClose).toHaveBeenCalledExactlyOnceWith(
+            expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledExactlyOnceWith(
               managedUpdateSuccessorOwner,
             );
-            expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-            expect(runtime.exit).not.toHaveBeenCalled();
-            settlement.resolve({ respawn: true });
-            await vi.advanceTimersByTimeAsync(0);
-            expect(respawnGatewayProcessForUpdate).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({
-                decision: expect.objectContaining({ mode: "disabled", reason: "unmanaged" }),
-              }),
+            expect(close).toHaveBeenCalledOnce();
+            expect(acquireGatewayLock).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({ listenerMode: "foreground", supervisor: null }),
             );
-            expect(waitForGatewayHealthyRestart).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ child, port: 18789 }),
-            );
-            expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-            expect(child.kill).not.toHaveBeenCalled();
-          } else {
-            await vi.advanceTimersByTimeAsync(73_999);
+            await vi.advanceTimersByTimeAsync(11_000);
             expect(runtime.exit).not.toHaveBeenCalled();
             expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-            await vi.advanceTimersByTimeAsync(1);
-            expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
-              managedUpdateSuccessorOwner,
-            );
+            expect(completeBoot).not.toHaveBeenCalled();
             expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
             expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-            expect(runtime.exit).not.toHaveBeenCalled();
-            closing.resolve();
-            await vi.advanceTimersByTimeAsync(0);
-          }
-          const exitCode = outcome === "completed" ? 0 : 1;
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
-          await expect(exited).resolves.toBe(exitCode);
-          expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              outcome: outcome === "completed" ? "planned_restart" : "forced_stop",
-            }),
-          );
-          expect(start).toHaveBeenCalledOnce();
-          expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
-          expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          closing.resolve();
-          settlement.resolve({ respawn: false });
-          await vi.advanceTimersByTimeAsync(0);
-          if (!runtime.exit.mock.calls.length) {
-            captureSignal("SIGINT")();
-          }
-          child.exitCode = 0;
-          child.emit("exit", 0, null);
-          child.emit("close", 0, null);
-          await vi.advanceTimersByTimeAsync(0);
-          expect(runtime.exit).toHaveBeenCalledOnce();
-          await exited;
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          clock.mockRestore();
-          vi.useRealTimers();
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(
-            failures,
-            "Foreground cleanup budget assertion and cleanup failed",
-            {
-              cause: failures[0],
-            },
-          );
-        }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
+            if (outcome === "completed") {
+              closing.resolve();
+              await vi.advanceTimersByTimeAsync(0);
+              expect(completeForegroundUpdateHandoffAfterClose).toHaveBeenCalledExactlyOnceWith(
+                managedUpdateSuccessorOwner,
+              );
+              expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+              expect(runtime.exit).not.toHaveBeenCalled();
+              settlement.resolve({ respawn: true });
+              await vi.advanceTimersByTimeAsync(0);
+              expect(respawnGatewayProcessForUpdate).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({
+                  decision: expect.objectContaining({ mode: "disabled", reason: "unmanaged" }),
+                }),
+              );
+              expect(waitForGatewayHealthyRestart).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({ child, port: 18789 }),
+              );
+              expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+              expect(child.kill).not.toHaveBeenCalled();
+            } else {
+              await vi.advanceTimersByTimeAsync(73_999);
+              expect(runtime.exit).not.toHaveBeenCalled();
+              expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+              await vi.advanceTimersByTimeAsync(1);
+              expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
+                managedUpdateSuccessorOwner,
+              );
+              expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
+              expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+              expect(runtime.exit).not.toHaveBeenCalled();
+              closing.resolve();
+              await vi.advanceTimersByTimeAsync(0);
+            }
+            const exitCode = outcome === "completed" ? 0 : 1;
+            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
+            await expect(exited).resolves.toBe(exitCode);
+            expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({
+                outcome: outcome === "completed" ? "planned_restart" : "forced_stop",
+              }),
+            );
+            expect(start).toHaveBeenCalledOnce();
+            expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+            expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+          },
+          async () => {
+            try {
+              closing.resolve();
+              settlement.resolve({ respawn: false });
+              await vi.advanceTimersByTimeAsync(0);
+              if (!runtime.exit.mock.calls.length) {
+                captureSignal("SIGINT")();
+              }
+              child.exitCode = 0;
+              child.emit("exit", 0, null);
+              child.emit("close", 0, null);
+              await vi.advanceTimersByTimeAsync(0);
+              expect(runtime.exit).toHaveBeenCalledOnce();
+              await exited;
+            } finally {
+              clock.mockRestore();
+              vi.useRealTimers();
+            }
+          },
+          "Foreground cleanup budget assertion and cleanup failed",
+        );
       });
     },
   );

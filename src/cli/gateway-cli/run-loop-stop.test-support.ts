@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
+import { withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
   createActiveWorkSnapshot,
   createUpdateRespawnChild,
@@ -26,10 +27,6 @@ export function registerForegroundUpdateStopTests({
   withIsolatedSignals,
   createSignaledLoopHarness,
   waitForLoopCondition,
-  createSignaledStart,
-  createRuntimeWithExitSignal,
-  runLoopWithStart,
-  waitForStart,
   consumeGatewayRestartIntentPayload,
   commitManagedServiceUpdateHandoff,
   flushLogger,
@@ -48,11 +45,7 @@ export function registerForegroundUpdateStopTests({
   }
 
   async function startStopLoop(close = vi.fn(async () => {}), lockPort?: number) {
-    const { start, started } = createSignaledStart(close);
-    const { runtime, exited } = createRuntimeWithExitSignal();
-    await runLoopWithStart({ start, runtime, lockPort });
-    await waitForStart(started);
-    return { close, start, runtime, exited };
+    return createSignaledLoopHarness(undefined, false, { close, lockPort });
   }
 
   it.each(["pending-completion", "reject"] as const)(
@@ -78,80 +71,70 @@ export function registerForegroundUpdateStopTests({
           undefined,
           pendingCompletion ? 18789 : undefined,
         );
-        const failures: unknown[] = [];
-        try {
-          captureSignal(pendingCompletion ? "SIGUSR2" : "SIGINT")();
-          await waitForLoopCondition(
-            () => settle.mock.calls.length === 1,
-            "first Stop did not join the captured owner",
-          );
-          if (pendingCompletion) {
-            expect(releaseLock).toHaveBeenCalledOnce();
-            expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
-              managedUpdateSuccessorOwner,
+        await withRunLoopCleanup(
+          async () => {
+            captureSignal(pendingCompletion ? "SIGUSR2" : "SIGINT")();
+            await waitForLoopCondition(
+              () => settle.mock.calls.length === 1,
+              "first Stop did not join the captured owner",
             );
-          } else {
+            if (pendingCompletion) {
+              expect(releaseLock).toHaveBeenCalledOnce();
+              expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
+                managedUpdateSuccessorOwner,
+              );
+            } else {
+              captureSignal("SIGINT")();
+              expect(settle).toHaveBeenCalledOnce();
+              expect(isGatewayWorkAdmissionClosed()).toBe(true);
+            }
+            expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
+            expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+            if (outcome === "reject") {
+              first.reject(new Error("fixture ownership inspection unavailable"));
+            } else {
+              first.resolve(false);
+            }
+            await setImmediate();
+            expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
+            expect(runtime.exit).not.toHaveBeenCalled();
             captureSignal("SIGINT")();
-            expect(settle).toHaveBeenCalledOnce();
-            expect(isGatewayWorkAdmissionClosed()).toBe(true);
-          }
-          expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
-          expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
-          expect(runtime.exit).not.toHaveBeenCalled();
-          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-          if (outcome === "reject") {
-            first.reject(new Error("fixture ownership inspection unavailable"));
-          } else {
-            first.resolve(false);
-          }
-          await setImmediate();
-          expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
-          expect(runtime.exit).not.toHaveBeenCalled();
-          captureSignal("SIGINT")();
-          await waitForLoopCondition(
-            () => settle.mock.calls.length === 2,
-            "explicit Stop did not retry its captured owner",
-          );
-          expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
-          expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
-          expect(runtime.exit).not.toHaveBeenCalled();
-          retry.resolve(true);
-          const exitCode = pendingCompletion ? 1 : 0;
-          await expect(withTimeout(exited, 4000)).resolves.toBe(exitCode);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
-          expect(close).toHaveBeenCalledOnce();
-          expect(start).toHaveBeenCalledOnce();
-          expect(acquireGatewayLock).toHaveBeenCalledOnce();
-          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-          expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledTimes(
-            pendingCompletion ? 1 : 0,
-          );
-          if (pendingCompletion) {
-            expect(completeForegroundUpdateHandoffAfterClose).toHaveBeenCalledExactlyOnceWith(
-              managedUpdateSuccessorOwner,
+            await waitForLoopCondition(
+              () => settle.mock.calls.length === 2,
+              "explicit Stop did not retry its captured owner",
             );
-          }
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          first.resolve(true);
-          retry.resolve(true);
-          if (!runtime.exit.mock.calls.length && settle.mock.calls.length < 2) {
-            captureSignal("SIGINT")();
-          }
-          await withTimeout(exited, 4000);
-        } catch (error) {
-          failures.push(error);
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "Stop settlement assertion and cleanup failed", {
-            cause: failures[0],
-          });
-        }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
+            expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
+            expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            retry.resolve(true);
+            const exitCode = pendingCompletion ? 1 : 0;
+            await expect(withTimeout(exited, 4000)).resolves.toBe(exitCode);
+            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
+            expect(close).toHaveBeenCalledOnce();
+            expect(start).toHaveBeenCalledOnce();
+            expect(acquireGatewayLock).toHaveBeenCalledOnce();
+            expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+            expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledTimes(
+              pendingCompletion ? 1 : 0,
+            );
+            if (pendingCompletion) {
+              expect(completeForegroundUpdateHandoffAfterClose).toHaveBeenCalledExactlyOnceWith(
+                managedUpdateSuccessorOwner,
+              );
+            }
+          },
+          async () => {
+            first.resolve(true);
+            retry.resolve(true);
+            if (!runtime.exit.mock.calls.length && settle.mock.calls.length < 2) {
+              captureSignal("SIGINT")();
+            }
+            await withTimeout(exited, 4000);
+          },
+          "Stop settlement assertion and cleanup failed",
+        );
       });
     },
   );

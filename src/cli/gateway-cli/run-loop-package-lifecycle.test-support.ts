@@ -62,6 +62,8 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
       let preserveArtifacts = false;
       const root = path.join(home, "prefix", "lib", "node_modules", "openclaw");
       const control = path.join(home, "control");
+      const readControl = (name: string) => fs.readFile(path.join(control, name), "utf8");
+      const controlExists = (name: string) => fsSync.existsSync(path.join(control, name));
       const configPath = path.join(home, "openclaw.json");
       const releasePath = path.join(control, "release-script");
       await fs.mkdir(path.join(root, "dist", "cli"), { recursive: true });
@@ -230,6 +232,8 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                 let competingScripts = 0;
                 let failure: { error: unknown } | undefined;
                 const cleanupErrors: unknown[] = [];
+                const join = (pending: Promise<unknown> | undefined) =>
+                  pending && withTimeout(pending, 15000);
                 const settle = async (operation: () => unknown) => {
                   try {
                     await operation();
@@ -300,7 +304,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     expect(fixtures.spawnProcess).toHaveBeenCalledTimes(spawnedBeforeStart);
                     expect(store.read(root).kind).toBe("absent");
                     expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-                    expect(fsSync.existsSync(path.join(control, "script-entered"))).toBe(false);
+                    expect(controlExists("script-entered")).toBe(false);
                     return;
                   }
                   const prepared = await starting;
@@ -329,7 +333,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     expect(await withTimeout(exited, 15000)).toBe(0);
                     expect(store.read(root).kind).toBe("absent");
                     expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-                    expect(fsSync.existsSync(path.join(control, "script-entered"))).toBe(false);
+                    expect(controlExists("script-entered")).toBe(false);
                     return;
                   }
                   expect(await handoff.transferManagedServiceUpdateHandoff(identity)).toBe(true);
@@ -339,18 +343,17 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     Promise.race([
                       receipts.waitFor(control, "script-entered"),
                       helper.waitForClose().then(() => {
-                        expect(fsSync.existsSync(path.join(control, "script-entered"))).toBe(true);
+                        expect(controlExists("script-entered")).toBe(true);
                       }),
                     ]),
                     context.signal,
                   );
-                  lifecycleScriptPid = Number(
-                    await fs.readFile(path.join(control, "script-entered"), "utf8"),
-                  );
-                  expect(fsSync.existsSync(path.join(control, "before-activate"))).toBe(false);
-                  const stage = JSON.parse(
-                    await fs.readFile(path.join(control, "stage.json"), "utf8"),
-                  ) as { prefix: string; packageRoot: string };
+                  lifecycleScriptPid = Number(await readControl("script-entered"));
+                  expect(controlExists("before-activate")).toBe(false);
+                  const stage = JSON.parse(await readControl("stage.json")) as {
+                    prefix: string;
+                    packageRoot: string;
+                  };
                   context.signal.throwIfAborted();
                   competing = runPackageUpdateLifecycle({
                     packageRoot: stage.packageRoot,
@@ -439,7 +442,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   expect(store.read(root).kind).toBe("current");
                   expect(competingScripts).toBe(0);
                   expect(fsSync.existsSync(stage.packageRoot)).toBe(true);
-                  expect(fsSync.existsSync(path.join(control, "script-settled"))).toBe(false);
+                  expect(controlExists("script-settled")).toBe(false);
                   if (uncertain) {
                     await fs.writeFile(
                       path.join(stage.packageRoot, ".openclaw-lifecycle-lock"),
@@ -457,11 +460,11 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     expect(fixtures.cancelManagedServiceUpdateHandoff).toHaveBeenCalledWith(
                       identity,
                     );
-                    expect(fsSync.existsSync(path.join(control, "before-activate"))).toBe(true);
+                    expect(controlExists("before-activate")).toBe(true);
                     await withinTest(helper.waitForClose(), context.signal);
                   } else {
                     await withTimeout(exited, handoffParams.timeoutMs!);
-                    expect(fsSync.existsSync(path.join(control, "outcome.json"))).toBe(true);
+                    expect(controlExists("outcome.json")).toBe(true);
                   }
                   await competing;
                   await expect.poll(() => store.read(root).kind, { timeout: 15000 }).toBe("absent");
@@ -470,15 +473,13 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   expect(prepared.pid !== undefined && isPidAlive(prepared.pid)).toBe(false);
                   expect(isPidAlive(lifecycleScriptPid)).toBe(false);
                   expect(competingScripts).toBe(0);
-                  expect(fsSync.existsSync(path.join(control, "script-settled"))).toBe(true);
-                  expect(await fs.readFile(path.join(control, "script-calls"), "utf8")).toBe(
+                  expect(controlExists("script-settled")).toBe(true);
+                  expect(await readControl("script-calls")).toBe(
                     uncertain ? "preinstall\n" : "preinstall\npostinstall\n",
                   );
                   expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
                   if (uncertain) {
-                    const outcome = JSON.parse(
-                      await fs.readFile(path.join(control, "outcome.json"), "utf8"),
-                    );
+                    const outcome = JSON.parse(await readControl("outcome.json"));
                     expect(outcome.failedStep?.stderrTail).toContain("ownership is uncertain");
                     expect(
                       await fs.readFile(
@@ -497,9 +498,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     .poll(() => runtime.exit.mock.calls.length, { timeout: 15000 })
                     .toBe(1);
                   if (phase === "completion") {
-                    const outcome = JSON.parse(
-                      await fs.readFile(path.join(control, "outcome.json"), "utf8"),
-                    );
+                    const outcome = JSON.parse(await readControl("outcome.json"));
                     expect(outcome).toMatchObject({ failedStep: null, afterVersion: "2.0.0" });
                   }
                   expect(runtime.exit).toHaveBeenCalledWith(closeFailure ? 1 : 0);
@@ -533,14 +532,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   preparing?.release();
                   await settle(() => abortRelease);
                   await settle(() => fs.writeFile(releasePath, "fixture cleanup"));
-                  await settle(async () => {
-                    if (starting) {
-                      await withTimeout(
-                        starting.catch(() => undefined),
-                        15000,
-                      );
-                    }
-                  });
+                  await settle(() => join(starting?.catch(() => undefined)));
                   await settle(async () => {
                     if (lifecycleScriptPid === undefined) {
                       return;
@@ -550,22 +542,14 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       .poll(() => isPidAlive(lifecycleScriptPid!), { timeout: 15000 })
                       .toBe(false);
                   });
-                  await settle(async () => {
-                    if (competing) {
-                      await withTimeout(competing, 15000);
-                    }
-                  });
+                  await settle(() => join(competing));
                   await settle(async () => {
                     // False cancellation is not settlement. The captured child and exact
                     // lease are joined below even after readiness or claim failed.
                     await handoff.cancelManagedServiceUpdateHandoff(identity);
                   });
                   await settle(() => helper.close());
-                  await settle(async () => {
-                    if (competing) {
-                      await withTimeout(competing, 15000);
-                    }
-                  });
+                  await settle(() => join(competing));
                   await settle(() => {
                     const remaining = store.read(root);
                     if (remaining.kind !== "absent") {
@@ -604,7 +588,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   const diagnostics = await Promise.all(
                     ["handoff.log", "handoff.stderr.log"].map(
                       async (name) =>
-                        `${name}:\n${await fs.readFile(path.join(control, name), "utf8").catch(() => "<not captured>")}`,
+                        `${name}:\n${await readControl(name).catch(() => "<not captured>")}`,
                     ),
                   );
                   throw new Error(`Fixture failed; preserved ${home}\n${diagnostics.join("\n")}`, {

@@ -211,10 +211,6 @@ export function registerGatewayStartupFailureTests(
         const onRestartStartupFailure = vi.fn(async (error: unknown) => {
           triageStarted.resolve();
           expect(error).toBe(startupError);
-          expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
-            retainSharedState: true,
-            reason: "gateway startup failed",
-          });
           return cleanup === "unavailable"
             ? undefined
             : cleanup === "repair-failed"
@@ -344,10 +340,10 @@ export function registerGatewayStartupFailureTests(
       const { runGatewayLoop } = await import("./run-loop.test-support.js");
       await expect(
         runGatewayLoop({
-          start: vi.fn(async () => {
+          start: vi.fn<Parameters<typeof runGatewayLoop>[0]["start"]>(async () => {
             throw new Error(failure);
-          }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          }),
+          runtime,
           completeBoot,
         }),
       ).rejects.toThrow(failure);

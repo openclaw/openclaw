@@ -16,8 +16,6 @@ import {
 
 const shutdownBudgetCases: {
   signal: "SIGTERM" | "SIGUSR2";
-  honorsAbort: boolean;
-  supervisor: "systemd" | "external-systemd" | "foreground";
   waitMs?: number;
   installedStopMs?: number;
   shutdownStopMs?: number | "unavailable";
@@ -25,13 +23,11 @@ const shutdownBudgetCases: {
 }[] = [
   ...([330_000, 30_000, "unavailable"] as const).map((shutdownStopMs) => ({
     signal: "SIGTERM" as const,
-    honorsAbort: false,
-    supervisor: "systemd" as const,
     installedStopMs: shutdownStopMs === 30_000 ? 330_000 : 30_000,
     shutdownStopMs,
     inspectionMs: 500,
   })),
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 0 },
+  { signal: "SIGUSR2", waitMs: 0 },
 ];
 
 export function registerShutdownBudgetTests({
@@ -44,16 +40,8 @@ export function registerShutdownBudgetTests({
   writeDiagnosticStabilityBundleForFailureSync,
 }: UpdateRespawnFixtures) {
   it.each(shutdownBudgetCases)(
-    "bounds $supervisor $signal cleanup when a long provider call honors abort=$honorsAbort (wait=$waitMs, installedStop=$installedStopMs, shutdownStop=$shutdownStopMs)",
-    async ({
-      signal,
-      honorsAbort,
-      supervisor,
-      waitMs,
-      installedStopMs,
-      shutdownStopMs,
-      inspectionMs = 0,
-    }) => {
+    "bounds systemd $signal cleanup for an uninterruptible provider (wait=$waitMs, installedStop=$installedStopMs, shutdownStop=$shutdownStopMs)",
+    async ({ signal, waitMs, installedStopMs, shutdownStopMs, inspectionMs = 0 }) => {
       const unit = buildSystemdUnit({ programArguments: ["openclaw", "gateway", "run"] });
       const stopTimeoutMs =
         (typeof shutdownStopMs === "number" ? shutdownStopMs : installedStopMs) ??
@@ -62,13 +50,8 @@ export function registerShutdownBudgetTests({
         .match(/^SuccessExitStatus=(.+)$/m)?.[1]
         ?.split(" ")
         .map(Number);
-      if (supervisor === "systemd" || supervisor === "external-systemd") {
-        process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
-        if (supervisor === "external-systemd") {
-          process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-        }
-        setPlatform("linux");
-      }
+      process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+      setPlatform("linux");
       if (installedStopMs !== undefined) {
         systemctl.mockResolvedValue({
           code: 0,
@@ -83,11 +66,6 @@ export function registerShutdownBudgetTests({
         const provider = createDeferredCore();
         const connectionWork = new GatewayConnectionWork();
         void connectionWork.track(() => provider.promise);
-        connectionWork.signal.addEventListener("abort", () => {
-          if (honorsAbort) {
-            provider.resolve();
-          }
-        });
         const close = vi.fn<GatewayServer["close"]>(async () => {
           // The run-loop fixture reloads its module generation before every invocation.
           const { runGatewayCloseSteps } = await import("../../gateway/server-shutdown.js");
@@ -172,40 +150,28 @@ export function registerShutdownBudgetTests({
               );
             }
           }
-          const deadlineMs =
-            signal === "SIGTERM" || waitMs !== undefined
-              ? stopTimeoutMs - 5_000
-              : Math.min(310_000, stopTimeoutMs - 5_000);
+          const deadlineMs = stopTimeoutMs - 5_000;
           await vi.advanceTimersByTimeAsync(deadlineMs - inspectionMs - 1);
           expect(connectionWork.signal.aborted).toBe(true);
-          if (!honorsAbort) {
-            expect(runtime.exit).not.toHaveBeenCalled();
-          }
+          expect(runtime.exit).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
-          if (!honorsAbort) {
-            expect(runtime.exit).not.toHaveBeenCalled();
-            provider.resolve();
-            await vi.advanceTimersByTimeAsync(0);
-          }
-          const expectedExit = supervisor === "foreground" && !honorsAbort ? 1 : 0;
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(expectedExit);
-          if (supervisor !== "foreground") {
-            expect(successStatuses).toContain(runtime.exit.mock.calls[0]?.[0]);
-          }
+          expect(runtime.exit).not.toHaveBeenCalled();
+          provider.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+          expect(successStatuses).toContain(runtime.exit.mock.calls[0]?.[0]);
           expect(start).toHaveBeenCalledOnce();
-          if (!honorsAbort) {
-            expect(gatewayLog.warn).toHaveBeenCalledWith(
-              expect.stringMatching(
-                /shutdown deadline reached; waiting for unfinished cleanup and active work.*embeddedRuns=1.*pending owners: 1 active gateway request\(s\): heartbeat:wake.*pending close steps: shutdown.received-connection-work=\d+ms/,
-              ),
-            );
-            expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
-              signal === "SIGTERM"
-                ? "gateway.stop_shutdown_timeout"
-                : "gateway.restart_shutdown_timeout",
-              undefined,
-            );
-          }
+          expect(gatewayLog.warn).toHaveBeenCalledWith(
+            expect.stringMatching(
+              /shutdown deadline reached; waiting for unfinished cleanup and active work.*embeddedRuns=1.*pending owners: 1 active gateway request\(s\): heartbeat:wake.*pending close steps: shutdown.received-connection-work=\d+ms/,
+            ),
+          );
+          expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+            signal === "SIGTERM"
+              ? "gateway.stop_shutdown_timeout"
+              : "gateway.restart_shutdown_timeout",
+            undefined,
+          );
         } finally {
           provider.resolve();
           await vi.advanceTimersByTimeAsync(0);
