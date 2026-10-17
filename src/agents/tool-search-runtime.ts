@@ -75,8 +75,16 @@ type ToolSearchExactCallOptions = Pick<
 /** Untrusted MCP initialize guidance attached to one discovery response, keyed by server. */
 export type ToolSearchMcpServerInstructions = Record<string, string>;
 
-export const MCP_SERVER_INSTRUCTIONS_OMITTED =
-  "[omitted: no room for the whole text in this response; tool_describe on one of this server's tools returns it]";
+/** Marks server text that no Tool Search response, including tool_describe, can carry whole. */
+export const MCP_SERVER_INSTRUCTIONS_TOO_LARGE =
+  "[omitted: longer than a Tool Search response can carry, including tool_describe]";
+
+/** Marks server text that did not fit this response but fits tool_describe on `id`. */
+export function mcpServerInstructionsDescribeMarker(id: string): string {
+  return `[omitted to fit this response; tool_describe with id "${id}" returns the whole text]`;
+}
+
+type McpServerGuidance = { server: string; text: string; entry: ToolSearchCatalogEntry };
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
@@ -330,18 +338,80 @@ export class ToolSearchRuntime {
     );
   };
 
+  /** True when an MCP server behind these catalog ids publishes guidance. */
+  hasMcpServerInstructions = (ids: readonly string[]): boolean =>
+    this.collectMcpServerGuidance(ids).length > 0;
+
   /**
    * Server guidance for one discovery response that returns these catalog ids.
    * Deferred MCP tools keep initialize instructions out of the system prompt, so
    * the response that names a server carries its whole text once, after the
-   * callable entries. A text that would push the protected response past its
-   * bound becomes a pointer instead of being cut, so it never displaces identity.
+   * callable entries. Text is never cut: when the protected response bound, or
+   * `maxChars` for the whole rendered response, leaves no room, a server gets a
+   * marker instead (pointing to tool_describe only when that response can carry
+   * the text), and a server whose marker does not fit either is omitted and
+   * reported through `omitted`. Every server gets a marker before any gets its
+   * whole text, so one long text cannot crowd out the others.
    */
   mcpServerInstructionsFor = (
     payload: object,
     ids: readonly string[],
-    options: { parentToolCallId?: string; undeliveredOnly?: boolean; omitted?: string } = {},
-  ): ToolSearchMcpServerInstructions | undefined => {
+    options: { parentToolCallId?: string; undeliveredOnly?: boolean; maxChars?: number } = {},
+  ): { instructions?: ToolSearchMcpServerInstructions; omitted: boolean } => {
+    const guidance = this.collectMcpServerGuidance(ids, options.undeliveredOnly);
+    if (guidance.length === 0) {
+      return { omitted: false };
+    }
+    const networkContent = this.hasNetworkContent(options.parentToolCallId);
+    const instructions: ToolSearchMcpServerInstructions = {};
+    const fits = () => {
+      const rendered = renderToolSearchControlText(
+        serializeToolSearchControlResult({ ...payload, mcpServerInstructions: instructions }),
+        networkContent,
+      );
+      return (
+        !rendered.truncated &&
+        (options.maxChars === undefined || rendered.text.length <= options.maxChars)
+      );
+    };
+    for (const { server, text } of guidance) {
+      instructions[server] = text;
+    }
+    if (!fits()) {
+      for (const { server } of guidance) {
+        delete instructions[server];
+      }
+      for (const item of guidance) {
+        instructions[item.server] = this.describeCarries(item)
+          ? mcpServerInstructionsDescribeMarker(item.entry.id)
+          : MCP_SERVER_INSTRUCTIONS_TOO_LARGE;
+        if (!fits()) {
+          delete instructions[item.server];
+        }
+      }
+      for (const { server, text } of guidance) {
+        const marker = instructions[server];
+        if (Object.hasOwn(instructions, server) && marker !== undefined) {
+          instructions[server] = text;
+          if (!fits()) {
+            instructions[server] = marker;
+          }
+        }
+      }
+    }
+    for (const { server, text } of guidance) {
+      if (instructions[server] === text) {
+        this.deliveredServerInstructions.add(server);
+      }
+    }
+    const omitted = guidance.some(({ server }) => !Object.hasOwn(instructions, server));
+    return Object.keys(instructions).length > 0 ? { instructions, omitted } : { omitted };
+  };
+
+  private collectMcpServerGuidance(
+    ids: readonly string[],
+    undeliveredOnly = false,
+  ): McpServerGuidance[] {
     const wanted = new Set(ids);
     const entries = new Map<string, ToolSearchCatalogEntry>();
     for (const entry of resolveCatalog(this.ctx).entries) {
@@ -349,49 +419,37 @@ export class ToolSearchRuntime {
         entries.set(entry.id, entry);
       }
     }
-    const guidance = new Map<string, string>();
+    const guidance = new Map<string, McpServerGuidance>();
     for (const id of ids) {
-      const mcp = entries.get(id)?.mcp;
+      const entry = entries.get(id);
+      const mcp = entry?.mcp;
       if (
+        entry &&
         mcp?.serverInstructions &&
         !guidance.has(mcp.serverName) &&
-        !(options.undeliveredOnly && this.deliveredServerInstructions.has(mcp.serverName))
+        !(undeliveredOnly && this.deliveredServerInstructions.has(mcp.serverName))
       ) {
-        guidance.set(mcp.serverName, mcp.serverInstructions);
+        guidance.set(mcp.serverName, {
+          server: mcp.serverName,
+          text: mcp.serverInstructions,
+          entry,
+        });
       }
     }
-    if (guidance.size === 0) {
-      return undefined;
-    }
-    const instructions: ToolSearchMcpServerInstructions = Object.fromEntries(guidance);
-    const omitted = options.omitted ?? MCP_SERVER_INSTRUCTIONS_OMITTED;
-    const networkContent = this.hasNetworkContent(options.parentToolCallId);
-    const fits = () =>
-      !renderToolSearchControlText(
-        serializeToolSearchControlResult({ ...payload, mcpServerInstructions: instructions }),
-        networkContent,
-      ).truncated;
-    while (!fits()) {
-      let largest: string | undefined;
-      let largestLength = 0;
-      for (const [server, text] of guidance) {
-        if (instructions[server] === text && text.length > largestLength) {
-          largest = server;
-          largestLength = text.length;
-        }
-      }
-      if (!largest) {
-        break;
-      }
-      instructions[largest] = omitted;
-    }
-    for (const [server, text] of guidance) {
-      if (instructions[server] === text) {
-        this.deliveredServerInstructions.add(server);
-      }
-    }
-    return instructions;
-  };
+    return [...guidance.values()];
+  }
+
+  /** Whether tool_describe on this entry would carry its server's whole text. */
+  private describeCarries({ server, text, entry }: McpServerGuidance): boolean {
+    // Describing a remote entry always marks the response as network content.
+    return !renderToolSearchControlText(
+      serializeToolSearchControlResult({
+        ...describeEntry(entry),
+        mcpServerInstructions: { [server]: text },
+      }),
+      true,
+    ).truncated;
+  }
 
   observeNetworkContent(parentToolCallId: string): void {
     const state = this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false };

@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { mcpTool } from "./code-mode.test-support.js";
-import { MCP_SERVER_INSTRUCTIONS_OMITTED } from "./tool-search-runtime.js";
+import {
+  MCP_SERVER_INSTRUCTIONS_TOO_LARGE,
+  mcpServerInstructionsDescribeMarker,
+} from "./tool-search-runtime.js";
+import { MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS } from "./tool-search-types.js";
 import {
   createToolSearchCatalogRef,
   createToolSearchTools,
@@ -119,40 +123,14 @@ describe("Tool Search MCP server instructions", () => {
     expect(result.details).toEqual([expect.objectContaining({ id: "mcp:plain:plain__ping" })]);
   });
 
-  it("adds whole guidance once per server to a batch response", async () => {
-    const { tool } = setup();
+  it("adds whole guidance once per server to a batch response that has room", async () => {
+    const shortGuidance =
+      "RESEARCH_GUIDANCE: rank binding precedents first.\nRESEARCH_TAIL: never retry.";
+    const { tool } = setup({ researchGuidance: shortGuidance });
     const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("guidance-batch", {
       queries: [
         { query: "research__search", limit: 1 },
         { query: "research__fetch", limit: 1 },
-        { query: "calc__run", limit: 1 },
-      ],
-    });
-    const details = result.details as {
-      results: Array<{ candidates: Array<{ id: string }>; truncated?: true }>;
-      mcpServerInstructions: Record<string, string>;
-    };
-    const text = modelText(result);
-
-    expect(details.results.map((group) => group.candidates.map((entry) => entry.id))).toEqual([
-      ["mcp:research:research__search"],
-      ["mcp:research:research__fetch"],
-      ["mcp:calc:calc__run"],
-    ]);
-    expect(details.mcpServerInstructions).toEqual({
-      research: researchGuidance,
-      calc: calcGuidance,
-    });
-    expect(occurrences(text, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
-    expect(occurrences(text, calcGuidance)).toBe(1);
-  });
-
-  it("never evicts batch candidates or cuts guidance that exceeds the response bound", async () => {
-    const oversized = `OVERSIZED_GUIDANCE ${"x".repeat(40_000)} OVERSIZED_TAIL`;
-    const { tool } = setup({ researchGuidance: oversized });
-    const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("oversized-batch", {
-      queries: [
-        { query: "research__search", limit: 1 },
         { query: "calc__run", limit: 1 },
       ],
     });
@@ -163,19 +141,123 @@ describe("Tool Search MCP server instructions", () => {
     };
     const text = modelText(result);
 
+    expect(details.results.map((group) => group.candidates.map((entry) => entry.id))).toEqual([
+      ["mcp:research:research__search"],
+      ["mcp:research:research__fetch"],
+      ["mcp:calc:calc__run"],
+    ]);
+    expect(details.truncated).toBeUndefined();
+    expect(details.mcpServerInstructions).toEqual({ research: shortGuidance, calc: calcGuidance });
+    expect(occurrences(text, "RESEARCH_TAIL: never retry.")).toBe(1);
+    expect(occurrences(text, calcGuidance)).toBe(1);
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
+  });
+
+  it("keeps a batch within its budget and points to tool_describe for guidance that fits there", async () => {
+    const guidance = `MID_GUIDANCE ${"y".repeat(10_000)} MID_TAIL`;
+    const { tool } = setup({ researchGuidance: guidance });
+    const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("mid-batch", {
+      queries: [
+        { query: "research__search", limit: 1 },
+        { query: "research__fetch", limit: 1 },
+        { query: "calc__run", limit: 1 },
+      ],
+    });
+    const details = result.details as {
+      results: Array<{ candidates: Array<{ id: string }>; truncated?: true }>;
+      truncated?: true;
+      mcpServerInstructions: Record<string, string>;
+    };
+    const text = modelText(result);
+
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
     expect(details.truncated).toBeUndefined();
     expect(details.results.map((group) => group.candidates.map((entry) => entry.id))).toEqual([
       ["mcp:research:research__search"],
+      ["mcp:research:research__fetch"],
       ["mcp:calc:calc__run"],
     ]);
-    // Whole text or an explicit pointer, never a prefix of the server's text.
+    // Whole text or an accurate marker, never a prefix of the server's text.
     expect(details.mcpServerInstructions).toEqual({
-      research: MCP_SERVER_INSTRUCTIONS_OMITTED,
+      research: mcpServerInstructionsDescribeMarker("mcp:research:research__search"),
       calc: calcGuidance,
     });
-    expect(text).not.toContain("OVERSIZED_GUIDANCE");
-    expect(text).not.toContain("[truncated]");
-    expect(text).toContain(calcGuidance);
+    expect(text).not.toContain("MID_GUIDANCE");
+
+    const described = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("mid-describe", {
+      id: "mcp:research:research__search",
+    });
+    expect(described.details).toMatchObject({ mcpServerInstructions: { research: guidance } });
+    expect(occurrences(modelText(described), "MID_TAIL")).toBe(1);
+  });
+
+  it("bounds every batch size and reports guidance that cannot fit even as a marker", async () => {
+    const guidance = `MID_GUIDANCE ${"y".repeat(10_000)} MID_TAIL`;
+    const { tool } = setup({ researchGuidance: guidance });
+    for (let count = 1; count <= 16; count++) {
+      const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute(`sized-batch-${count}`, {
+        queries: Array.from({ length: count }, (_, index) => ({
+          query: index % 2 === 0 ? "court decisions" : "research__fetch",
+          limit: 3,
+        })),
+      });
+      const details = result.details as {
+        results: Array<{ candidates: Array<{ id: string }> }>;
+        truncated?: true;
+        mcpServerInstructions?: Record<string, string>;
+      };
+      expect(modelText(result).length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
+      const servers = new Set(
+        details.results.flatMap((group) =>
+          group.candidates
+            .map((candidate) => candidate.id.split(":")[1])
+            .filter((server) => server === "research" || server === "calc"),
+        ),
+      );
+      for (const server of servers) {
+        // Every guided server gets its text or a marker, or the batch reports truncation.
+        expect(
+          details.mcpServerInstructions?.[server] !== undefined || details.truncated === true,
+        ).toBe(true);
+      }
+      expect(modelText(result)).not.toContain("MID_GUIDANCE");
+    }
+  });
+
+  it("never promises tool_describe for guidance longer than any response can carry", async () => {
+    const oversized = `OVERSIZED_GUIDANCE ${"x".repeat(25_000)} OVERSIZED_TAIL`;
+    const { tool } = setup({ researchGuidance: oversized });
+    const search = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("oversized-search", {
+      query: "research__search",
+      limit: 1,
+    });
+    const batch = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("oversized-batch", {
+      queries: [
+        { query: "research__search", limit: 1 },
+        { query: "calc__run", limit: 1 },
+      ],
+    });
+    const described = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("oversized-describe", {
+      id: "mcp:research:research__search",
+    });
+
+    for (const result of [search, batch, described]) {
+      const text = modelText(result);
+      expect(result.details).toMatchObject({
+        mcpServerInstructions: { research: MCP_SERVER_INSTRUCTIONS_TOO_LARGE },
+      });
+      expect(text).not.toContain("OVERSIZED_GUIDANCE");
+      expect(text).not.toContain("returns the whole text");
+      expect(text).not.toContain("[truncated]");
+    }
+    expect(batch.details).toMatchObject({
+      results: [
+        { candidates: [{ id: "mcp:research:research__search" }] },
+        { candidates: [{ id: "mcp:calc:calc__run" }] },
+      ],
+      mcpServerInstructions: { calc: calcGuidance },
+    });
+    expect(modelText(batch).length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
   });
 
   it("adds the whole guidance after the schema in tool_describe", async () => {

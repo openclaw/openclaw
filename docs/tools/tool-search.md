@@ -302,7 +302,9 @@ query uses the same effective catalog, ranking, filtering, and per-query limit
 as an ordinary search; a candidate may appear in more than one result group.
 Descriptions are compacted before output. If the complete batch would exceed
 the 4,000-character response budget, lower-ranked candidates are removed and
-the response includes `truncated: true`. A result group that lost candidates
+the response includes `truncated: true`; it is also set when MCP server
+instructions had to be left out (see
+[MCP server instructions](#mcp-server-instructions)). A result group that lost candidates
 also includes `truncated: true`, so an empty truncated group cannot be mistaken
 for a query that had no matches.
 Omitted per-query limits use `searchDefaultLimit`. The effective limits in one
@@ -328,11 +330,20 @@ of the response:
   response in the run delivered it, for example when the id came from an
   earlier turn.
 
-Instructions are never truncated. Candidates and results are fitted first, so
-server text cannot evict a callable entry from a batch. When a server's text
-would push a response past its protected-content bound, that server gets an
-explicit omission marker, pointing to `tool_describe` where that can help,
-instead of a partial text.
+Instructions are never truncated. Candidates and results keep priority, so
+server text cannot evict a callable entry. A batch keeps its 4,000-character
+total: guidance shares only the room the fitted candidates leave. Any response
+also stays within its protected-content bound. A server whose whole text does
+not fit gets a marker instead of a partial text:
+
+- `[omitted to fit this response; tool_describe with id "<id>" returns the whole text]`
+  when that `tool_describe` response can carry it.
+- `[omitted: longer than a Tool Search response can carry, including tool_describe]`
+  otherwise.
+
+When a batch has no room even for a server's marker, the server is left out of
+`mcpServerInstructions` and the batch reports `truncated: true`; `tool_describe`
+on one of that server's candidates returns its guidance.
 
 ### Directory mode
 
