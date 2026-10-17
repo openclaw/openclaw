@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -359,12 +360,14 @@ async function executePreparedReplyAgentRunWithCompletion(
       },
     },
     () =>
-      traceAgentPhase("reply.run_agent_turn", () =>
-        executeAgentTurn({
-          ...context,
-          resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
-          replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        }),
+      withCurrentUserTurnInput(followupRun.userTurnTranscriptRecorder, () =>
+        traceAgentPhase("reply.run_agent_turn", () =>
+          executeAgentTurn({
+            ...context,
+            resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
+            replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+          }),
+        ),
       ),
   );
   const operationSuperseded = isReplyOperationSuperseded(replyOperation);

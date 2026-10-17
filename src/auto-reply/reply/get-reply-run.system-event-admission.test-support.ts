@@ -1,8 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../../infra/system-events.js";
-import type { runReplyAgent } from "./agent-runner-run.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import { createInboundBody, createSessionBody } from "./get-reply-run.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
 
@@ -15,6 +17,34 @@ export function registerSystemEventAdmissionCases({
   ) => ReturnType<typeof runPreparedReply>;
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
 }): void {
+  it("hands the occurrence-keyed event input to custody before dispatch", async () => {
+    const prepareInput = vi.fn(async (recorder: UserTurnTranscriptRecorder) => {
+      expect(runReplyAgent).not.toHaveBeenCalled();
+      expect(await recorder.resolveMessage()).toMatchObject({
+        idempotencyKey: "event-occurrence",
+        provenance: { kind: "internal_system", sourceTool: "restart" },
+      });
+    });
+    await runPrepared({
+      opts: { internalEventExecution: { prepareInput, onStarted() {}, onTerminal() {} } },
+      ctx: {
+        ...createInboundBody("Resume the queued event"),
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system", sourceTool: "restart" },
+      },
+      sessionCtx: {
+        ...createSessionBody("Resume the queued event"),
+        InternalTurnSource: "event",
+        InputProvenance: { kind: "internal_system", sourceTool: "restart" },
+        MessageSid: "event-occurrence",
+      },
+    });
+    expect(prepareInput).toHaveBeenCalledOnce();
+    expect(requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder).toBe(
+      prepareInput.mock.calls[0]?.[0],
+    );
+  });
+
   it("keeps delivery-owned restart occurrences queued through production reply admission", async () => {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
       "./session-system-events.js",

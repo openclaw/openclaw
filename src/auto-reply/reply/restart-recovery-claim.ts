@@ -286,7 +286,12 @@ export function createReplyRestartRecoveryClaimController(params: {
     storePath: string;
   }): Promise<SessionEntry> => {
     const expectedSessionState = buildRestartRecoveryExpectedState(options.entry);
-    if (options.recorder && !options.recorder.hasPersisted()) {
+    // A staged event remains durable while waiting for the execution lane. Promoting
+    // it here would let an earlier completion mistake the queued input for an orphan.
+    const pendingInternalInput =
+      params.inputProvenance?.kind === "internal_system" &&
+      options.recorder?.getPendingInputMessage?.() !== undefined;
+    if (options.recorder && !options.recorder.hasPersisted() && !pendingInternalInput) {
       bindUserTurnInputActor(options.recorder, {
         phase: "adoptRun",
         acquire: async () => {
