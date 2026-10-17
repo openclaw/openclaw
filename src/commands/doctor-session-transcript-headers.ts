@@ -124,6 +124,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  integrityCheck?: "quick" | "full";
 }): Promise<{ found: number; repaired: number }> {
   const env = params.env ?? process.env;
   let found = 0;
@@ -211,7 +212,10 @@ export async function noteSessionTranscriptHeaderHealth(params: {
             );
           },
           databaseOptions,
-          { operationLabel: "doctor.session-transcript-headers" },
+          {
+            operationLabel: "doctor.session-transcript-headers",
+            repairAdmission: { integrityCheck: params.integrityCheck ?? "quick" },
+          },
         );
         repaired += 1;
       } catch (error) {

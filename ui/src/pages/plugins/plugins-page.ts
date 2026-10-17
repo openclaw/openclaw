@@ -21,13 +21,13 @@ import {
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { PluginCredentialEditorProps } from "./credential-editor.tsx";
 import { installedPluginDetailTabFromHash, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { createPluginDiscovery } from "./plugin-discovery.ts";
 import { createPluginHelp } from "./plugin-help.ts";
 import { createPluginMcpLogin } from "./plugin-mcp-login.ts";
 import { focusHeadingAfterRemoval } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
-import { createPluginSettings } from "./plugin-settings.ts";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
 import { loadInstalledPluginDetail, loadPluginCatalogDetail } from "./plugins-detail-loader.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
@@ -41,6 +41,7 @@ import {
   type PluginsPageDetail,
 } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
 
@@ -138,17 +139,58 @@ export function createPluginsPage(options: {
     },
     publish,
   );
-  const settings = createPluginSettings({
-    gateway,
-    getContext: () => context,
-    getDetail: () => state.detail,
-    canInspect: () => hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
-    canEdit: canEditConfig,
-    onEdit: () => {
-      pluginConfigEditPending = true;
-    },
-    isSettings: () => state.installedDetailTab === "configuration",
-  });
+  let write: Promise<boolean> | undefined;
+  const patch = (path: Array<string | number>, value: unknown): boolean => {
+    if (!canEditConfig()) {
+      return false;
+    }
+    pluginConfigEditPending = true;
+    const runtime = context.runtimeConfig;
+    if (value === undefined) {
+      runtime.removeFormValue(path);
+    } else {
+      runtime.patchForm(path, value);
+    }
+    if (state.detail && state.installedDetailTab === "configuration") {
+      write = runtime.flushFormChanges();
+    }
+    return true;
+  };
+
+  const resolveCredential = (
+    field: PluginSettingsField,
+  ): PluginCredentialEditorProps | undefined => {
+    const detail = state.detail;
+    const descriptor = detail?.inspection?.credentials?.find(
+      (entry) =>
+        entry.path.length === field.path.length &&
+        entry.path.every((segment, index) => segment === field.path[index]),
+    );
+    if (!detail || !descriptor) {
+      return undefined;
+    }
+    const runtime = context.runtimeConfig;
+    return {
+      field,
+      descriptor,
+      context: {
+        pluginId: detail.pluginId,
+        baseHash: runtime.state.configSnapshot?.hash ?? null,
+        gateway,
+        canInspect: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+        saveError: runtime.state.lastError,
+        onDiscard: () => runtime.discardFormValue(field.path),
+        onCommit: async (path, value) => {
+          const previous = write;
+          const accepted = field.onPatch(path, value);
+          // Nested drafts may accept an edit without publishing a complete value.
+          // Only the flush captured by this edit can acknowledge its persistence.
+          return accepted !== false && write && write !== previous ? write : false;
+        },
+      },
+    };
+  };
+  const settings = { patch, resolveCredential };
 
   const consent = createPluginsConsent({
     gateway,

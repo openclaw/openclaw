@@ -145,6 +145,71 @@ describe("isSwarmEnabledInConfig", () => {
 });
 
 describe("SwarmRosterHydrator", () => {
+  it("does not re-describe collectors when their child providers finish", async () => {
+    vi.useFakeTimers();
+    const children: GatewaySessionRow[] = Array.from({ length: 16 }, (_, index) => ({
+      ...row(index),
+      status: "running",
+    }));
+    // Provider completion does not settle the collector's recorded result.
+    const parent = swarmParent(children);
+    const described = vi.fn(async () => ({ session: parent }));
+    const gateway = createGatewayHarness(
+      createTestGatewayClient(async (method, params) => {
+        if (method === "sessions.describe") {
+          return described();
+        }
+        if (method === "sessions.list") {
+          const rows = isRecord(params) && params.spawnedBy ? children : [parent];
+          return result(rows, 0, rows.length);
+        }
+        return { subscribed: true };
+      }),
+    );
+    const sessions = createTestSessionCapability(gateway.gateway);
+    const hydrator = new SwarmRosterHydrator();
+    try {
+      hydrator.update({
+        sessions,
+        parentKey: parent.key,
+        sourceEpoch: 1,
+        currentRows: () => [],
+        readParent: (refresh) =>
+          sessions.describe({ key: parent.key }, { refresh }).then((response) => response.session!),
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(described).toHaveBeenCalledTimes(1);
+      for (let index = 0; index < children.length; index++) {
+        children[index] = { ...children[index]!, status: "done", updatedAt: 100 + index };
+        gateway.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            agentId: "worker",
+            reason: "lifecycle",
+            session: children[index],
+            ancestorSessions: [
+              {
+                ...parent,
+                snapshotAt: 100 + index,
+                swarm: {
+                  ...parent.swarm!,
+                  groups: parent.swarm!.groups.map(({ children: _children, ...group }) => group),
+                },
+              },
+            ],
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(hydrator.rows.filter((entry) => entry.status === "done")).toHaveLength(16);
+      expect(hydrator.rows.find((entry) => entry.key === parent.key)?.swarm).toEqual(parent.swarm);
+      expect(described).toHaveBeenCalledTimes(1);
+    } finally {
+      hydrator.dispose();
+    }
+  });
+
   it.each(["older group", "bounded members", "new member", "warm new member"] as const)(
     "reconciles the initial %s child roster with the shared boot descriptor",
     async (window) => {

@@ -115,7 +115,7 @@ describe("Control UI controller guard", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     const target = path.join(root, "ui/src/new.ts");
-    fs.writeFileSync(target, "class NewController { hostDisconnected() {} requestUpdate() {} }\n");
+    fs.writeFileSync(target, "class NewController { hostDisconnected() {} }\n");
     expect(main(root, ["--base", "HEAD"])).toBe(0);
 
     fs.writeFileSync(path.join(root, "ui/src/view.ts"), "// class OldController {}\n");
@@ -132,6 +132,31 @@ describe("Control UI controller guard", () => {
       fs.writeFileSync(target, source);
       expect(main(root, ["--base", "HEAD"]), source).toBe(1);
     }
+  });
+
+  it("rejects redraw contracts in production and tests independently of controller retirement", () => {
+    const root = fixture("class OldController { hostConnected() {} }\n");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const name of ["new.tsx", "new.test.tsx"]) {
+      const target = path.join(root, "ui/src", name);
+      for (const source of [
+        "interface Host { requestUpdate(): void }",
+        "host.requestUpdate?.();",
+        'host["requestUpdate"]();',
+        'vi.spyOn(host, "requestUpdate");',
+      ]) {
+        errors.mockClear();
+        fs.writeFileSync(target, source);
+        expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+        expect(errors.mock.calls.flat().join("\n")).toContain(`ui/src/${name}`);
+      }
+      fs.writeFileSync(
+        target,
+        '// requestUpdate() is retired.\nconst text = "Use signals instead of requestUpdate.";\n',
+      );
+    }
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
   });
 
   it("preserves staged and explicit base scope through the full lint entry point", () => {

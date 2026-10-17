@@ -98,7 +98,6 @@ export type OpenClawSharedToolsOptions = {
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   inboundEventKind?: InboundEventKind;
-  /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;

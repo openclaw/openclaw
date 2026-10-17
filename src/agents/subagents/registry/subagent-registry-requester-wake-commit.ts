@@ -5,6 +5,7 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
@@ -236,16 +237,19 @@ export function commitRequesterInitialTransfer(
 function deferWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
+  error?: unknown,
 ): void {
   pending.failures += 1;
   if (
     pending.failures >= REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES &&
     !pending.sustainedFailureReported
   ) {
-    // Explain why per-attempt reporting will go quiet while retries continue.
+    // Explain why per-attempt reporting will go quiet while retries continue. The error tells a
+    // persisted owner divergence apart from a storage outage (#154252).
     pending.sustainedFailureReported = true;
     context.options.warn("requester settle wake commit still failing; retries continue", {
       failures: pending.failures,
+      ...(error === undefined ? {} : { error: buildSafeLifecycleErrorMeta(error) }),
       retryIntervalMs: REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS,
       suppressingIdenticalFailures: true,
       runIds: pending.entries.map((entry) => entry.runId),
@@ -353,7 +357,7 @@ function runPendingWakeCommit(
     const shouldRetain =
       typeof retainOnFailure === "function" ? retainOnFailure(error, pending) : retainOnFailure;
     if (shouldRetain) {
-      deferWakeCommit(context, pending);
+      deferWakeCommit(context, pending, error);
     } else {
       clearPendingWakeCommit(context, pending);
     }

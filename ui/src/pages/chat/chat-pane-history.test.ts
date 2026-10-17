@@ -412,9 +412,11 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
   }));
   const { pane, state } = testPane(request);
   const key = "catalog:claude:gateway%3Alocal:thread-1";
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   state.sessionKey = key;
   pane.sessionKey = key;
   pane.history.catalogCursor = "final-page";
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   appendChatThread(pane);
   vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
   const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");

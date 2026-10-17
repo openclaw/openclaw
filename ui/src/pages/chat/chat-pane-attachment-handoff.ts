@@ -21,6 +21,7 @@ import {
   loadChatComposerState,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
+import { publishQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { visiblePanesOf } from "./split-layout.ts";
 
@@ -224,6 +225,8 @@ export class ChatPaneComposerHandoff {
     target.custody = this.custody;
     target.scope = target.currentScope();
     target.host.resume();
+    publishQueuedMessageEdit(sourceState);
+    publishQueuedMessageEdit(targetState);
     sourceState.composerDraftChanged?.();
     targetState.composerDraftChanged?.();
   }

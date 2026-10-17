@@ -733,7 +733,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     state.handleChatDraftChange(command.endsWith(" ") ? command : `${command} `);
-    state.requestUpdate?.();
   };
 
   protected announceCommandPaletteTarget(

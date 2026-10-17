@@ -2022,6 +2022,7 @@ src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/schema-migration-backup-scope.ts
 src/state/schema-migration-backup-tables.ts
+src/state/schema-migration-integrity-tables.ts
 src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
@@ -2029,7 +2030,6 @@ src/state/openclaw-state-read-operation-registry.ts
 src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
-src/state/openclaw-state-read-snapshot.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts

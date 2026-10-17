@@ -447,6 +447,15 @@ reconnect behavior. List/describe replies
 do not establish event baselines or overwrite the decoder's held rows. Projection
 detach/attach also resets the server baselines.
 
+The Control UI's swarm roster consumes the reconstructed nested rows, including
+their authorized `swarm.groups[].children`. The outer event envelope can contain
+only aggregate swarm counts; it is not the source for member details. A complete
+nested row updates the roster without another `sessions.describe`. Summary-only
+rows and unknown ancestry still require detail reads. Explicit placement and
+goal recovery reads also remain fresh because they validate current state before
+continuing an operation. Shared descriptor reads retain their existing
+connection-scoped reuse, event invalidation, and explicit refresh behavior.
+
 ## Node helper methods
 
 Nodes may call `skills.bins` to fetch the current list of skill executables

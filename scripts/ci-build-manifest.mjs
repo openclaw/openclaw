@@ -1035,6 +1035,8 @@ const postgresConformancePaths = [
   "packages/memory-host-sdk/src/memory-entry-origins.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
+  "scripts/lib/weighted-test-shards.mts",
+  "config/postgres-conformance-timings.json",
 ];
 const runPostgresConformance =
   existsSync("scripts/test-database-conformance.mjs") &&
@@ -1894,7 +1896,7 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
-    "postgres-conformance": count(manifest.run_postgres_conformance, 2),
+    "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),

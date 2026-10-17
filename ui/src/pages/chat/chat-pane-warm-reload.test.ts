@@ -37,17 +37,16 @@ describe("chat pane warm reload", () => {
   afterEach(resetTranscriptTestDom);
 
   it.each([
-    { name: "current nonempty", priorProjection: false, empty: false, networkEmpty: false },
-    { name: "current empty", priorProjection: false, empty: true, networkEmpty: true },
+    { name: "current nonempty", priorProjection: false, empty: false },
+    { name: "current empty", priorProjection: false, empty: true },
     {
       name: "prior reply projection with a valid cursor",
       priorProjection: true,
       empty: false,
-      networkEmpty: false,
     },
   ])(
     "restores $name through its admitted projection and cursor",
-    async ({ priorProjection, empty, networkEmpty }) => {
+    async ({ priorProjection, empty }) => {
       installTranscriptDomMocks();
       vi.stubGlobal("indexedDB", new IDBFactory());
       const sessionKey = "agent:main:warm-reload";
@@ -71,7 +70,7 @@ describe("chat pane warm reload", () => {
         },
       };
       const messages = empty ? [] : [priorProjection ? reply : remembered];
-      const currentMessages = networkEmpty
+      const currentMessages = empty
         ? []
         : [
             priorProjection ? currentReply : remembered,
@@ -84,13 +83,11 @@ describe("chat pane warm reload", () => {
         pagination: { hasMore: false, completeSnapshot: true } as const,
         sessionId: "warm-reload-session",
       };
-      writer.write(
-        resolveChatSnapshotKey(
-          { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
-          { sessionKey },
-        ),
-        snapshot,
+      const snapshotKey = resolveChatSnapshotKey(
+        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+        { sessionKey },
       );
+      writer.write(snapshotKey, snapshot);
       await writer.flush();
       if (priorProjection) {
         const database = await openSessionSnapshotDatabase();
@@ -103,10 +100,7 @@ describe("chat pane warm reload", () => {
           cursorMatchesSnapshot: true,
           savedAt: Date.now(),
           sessionId: snapshot.sessionId,
-          sessionKey: resolveChatSnapshotKey(
-            { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
-            { sessionKey },
-          ),
+          sessionKey: snapshotKey,
           snapshot,
         });
         await completed;
@@ -140,7 +134,7 @@ describe("chat pane warm reload", () => {
       const sessionInfo = {
         key: sessionKey,
         kind: "direct",
-        sessionId: "warm-reload-session",
+        sessionId: snapshot.sessionId,
         updatedAt: 1,
       };
       const request = createGatewayRequestMock(async (_method, params) =>
@@ -176,15 +170,13 @@ describe("chat pane warm reload", () => {
           expect(container.textContent).toContain("The browser remembers this conversation.");
         }
         await store.flush();
-        pane.state.client = client;
-        pane.state.connected = true;
-        pane.state.connectionEpoch = 1;
+        Object.assign(pane.state, { client, connected: true, connectionEpoch: 1 });
         await resumePendingChatHistoryLoad(pane.state);
 
         expect(pane.state.chatMessages).toEqual(priorProjection ? currentMessages : messages);
         view.update(threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages));
         transcript.update();
-        if (priorProjection && !networkEmpty) {
+        if (priorProjection && !empty) {
           expect(container.textContent).toContain("A newer turn is present on the Gateway.");
         }
         expect(request).toHaveBeenCalledExactlyOnceWith(

@@ -292,7 +292,10 @@ export function initializeNativeOpenClawStateDatabase(
 
 /** Open existing shared state without creating, migrating, chmodding, or configuring it. */
 export async function openExistingOpenClawStateDatabaseReadOnly(
-  options: OpenClawStateDatabaseOptions & { requireCanonicalSchema?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & {
+    requireCanonicalSchema?: boolean;
+    integrityCheck?: "quick" | "full";
+  } = {},
 ): Promise<OpenClawStateDatabase | undefined> {
   const pathname = resolveDatabasePath(options);
   isExistingOpenClawStateSchema(pathname);
@@ -310,7 +313,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
       assertExistingOpenClawStateRuntimeSchema(db, pathname);
     } else {
       assertSupportedStateSchemaVersion(db, pathname);
-      assertSqliteIntegrity(db, pathname);
+      assertSqliteIntegrity(db, pathname, { check: options.integrityCheck });
       if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
       }

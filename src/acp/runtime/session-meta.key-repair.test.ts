@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withDoctorSqliteMaintenanceLock } from "../../commands/doctor-sqlite-maintenance-lock.js";
 import {
   loadExactSessionEntry,
@@ -38,6 +39,33 @@ const meta = {
   state: "idle" as const,
   lastActivityAt: 100,
 };
+
+it.each([undefined, "full"] as const)(
+  "Doctor ACP inspection honors integrity mode %s",
+  async (integrityCheck) => {
+    await withOpenClawTestState({ scenario: "empty" }, async ({ env }) => {
+      stateDatabase.openOpenClawStateDatabase({ env });
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        const report = await repairAcpSessionMetaKeysForDoctor({
+          cfg,
+          env,
+          apply: false,
+          integrityCheck,
+        });
+        expect(report.warnings).toEqual([]);
+        expect(reads.queries).toContain(
+          integrityCheck === "full" ? "PRAGMA integrity_check;" : "PRAGMA quick_check;",
+        );
+        expect(reads.queries).not.toContain(
+          integrityCheck === "full" ? "PRAGMA quick_check;" : "PRAGMA integrity_check;",
+        );
+      } finally {
+        reads.restore();
+      }
+    });
+  },
+);
 
 it.each([
   { source: key, binding: entry.lifecycleRevision, conflicting: true },

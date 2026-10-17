@@ -76,7 +76,7 @@ export function createSessionBootSnapshot(
     }
     listen(retirement.signal, "abort", () => resolve(), { once: true });
     void readSidebarBootSnapshot(gateway)
-      .then((snapshot) => {
+      .then(async (snapshot) => {
         if (!snapshot || retirement.signal.aborted || !current()) {
           return;
         }
@@ -90,6 +90,21 @@ export function createSessionBootSnapshot(
           host.readState().result === null
         ) {
           host.publish({ ...host.readState(), ...roster, resultCached: true });
+          // Let the restored sidebar commit before routing mounts the conversation pane.
+          await new Promise<void>((release) => {
+            const channel = new MessageChannel();
+            channel.port1.addEventListener(
+              "message",
+              () => {
+                channel.port1.close();
+                channel.port2.close();
+                release();
+              },
+              { once: true },
+            );
+            channel.port1.start();
+            channel.port2.postMessage(null);
+          });
         }
       })
       .then(resolve, resolve);

@@ -361,7 +361,7 @@ private func runtimeTestDependencies(
 {
     let live = TalkModeRuntime.Dependencies.live
     return .init(
-        permissions: .init(supported: { true }, granted: { true }, ensure: { _ in true }),
+        permissions: .init(granted: { true }, ensure: { _ in true }),
         audioCapture: audioCapture,
         pcmPlayer: { RuntimeTestPCMPlayer() },
         selectedSession: live.selectedSession,
@@ -783,7 +783,7 @@ struct TalkModeRuntimeSpeechTests {
         let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
             throw RuntimeRelayStartError.failed
         }, dependencies: .init(
-            permissions: .init(supported: { true }, granted: { true }, ensure: { _ in true }),
+            permissions: .init(granted: { true }, ensure: { _ in true }),
             audioCapture: { RuntimeTestAudioCapture() },
             pcmPlayer: { RuntimeTestPCMPlayer() },
             selectedSession: { nil },

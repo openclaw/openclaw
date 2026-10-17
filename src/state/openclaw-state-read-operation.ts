@@ -11,11 +11,9 @@ import type {
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
 } from "../infra/sqlite-readonly-location.types.js";
-import { runScopedSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
-  withSqliteSnapshotWorker,
 } from "../infra/sqlite-snapshot-source.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
@@ -25,10 +23,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
-import {
-  captureOpenClawStateReadSource,
-  decodeOpenClawStateReadReply,
-} from "./openclaw-state-read-worker.js";
+import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadCommand,
@@ -271,46 +266,16 @@ export function startOpenClawStateReadOperation(
       );
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
       const sourceIdentity = { key: context.admission.identity.key };
-      if (
-        selection.snapshotPreparation === "awaited" &&
-        command.type === "plugins.metadata.read" &&
-        context.maintenanceScope?.ownsSchemaMaintenance !== true &&
-        !getStateDatabaseSchemaLease(pathname)
-      ) {
-        receipt.phase = "unobserved";
-        const reply = await withSqliteSnapshotWorker(signal, (worker, stagingRoot) => {
-          authority.assertCurrent();
-          return runScopedSqliteReadOnlyOperation(
-            worker,
-            pathname,
-            {
-              type: "stateSnapshot.read",
-              input: {
-                stagingRoot,
-                expectedSourceIdentity: sourceIdentity,
-                command,
-                context: {
-                  environment: context.environment,
-                  existingSchemaPath: context.existingSchemaPath,
-                },
-              },
-            },
-            {
-              source: "canonical",
-              expectedIdentity: sourceIdentity.key,
-              env: context.environment,
-              signal,
-            },
-          );
-        });
-        return consume(decodeOpenClawStateReadReply(reply));
-      }
       const validation = selectedTransport.startValidateFresh(context, authority);
       await validation.result;
       if (selection.snapshotPreparation === "awaited") {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,
           expectedSourceIdentity: sourceIdentity,
+          allowLiveOwner:
+            command.type === "plugins.metadata.read" &&
+            context.maintenanceScope?.ownsSchemaMaintenance !== true &&
+            !getStateDatabaseSchemaLease(pathname),
         });
       } else {
         preparation = startSqliteReadOnlyLocationAsync(pathname, {

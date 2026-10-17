@@ -54,10 +54,7 @@ type RfbConstructor = new (
   options?: { credentials?: { username?: string; password?: string } },
 ) => RfbClient;
 
-type RfbLoader = () => Promise<RfbConstructor>;
-type WebSocketFactory = (url: string) => WebSocket;
-
-const loadDefaultRfb: RfbLoader = async () => {
+const loadDefaultRfb = async () => {
   // @novnc/novnc 1.7 exports RFB from the package root; keeping this import
   // here ensures the substantial client stays in the lazy desktop chunk.
   const module = (await import("@novnc/novnc")) as { default: RfbConstructor };
@@ -66,20 +63,14 @@ const loadDefaultRfb: RfbLoader = async () => {
 
 /** Thin owner for one noVNC RFB lifecycle. */
 export class DesktopClient {
-  constructor(
-    private readonly rfbConstructor?: RfbConstructor,
-    private readonly createWebSocket: WebSocketFactory = (url) => new WebSocket(url),
-    private readonly loadRfb: RfbLoader = loadDefaultRfb,
-  ) {}
-
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
-    const Rfb = this.rfbConstructor ?? (await this.loadRfb());
+    const Rfb = await loadDefaultRfb();
     const wsUrl = resolveGatewayWebSocketUrl(options.wsUrl, options.gatewayUrl);
     // The socket claims control before RFB authentication; canceled lazy loads must not open it.
     if (!options.isCurrent()) {
       throw new DOMException("Desktop connection is no longer current", "AbortError");
     }
-    const socket = this.createWebSocket(wsUrl);
+    const socket = new WebSocket(wsUrl);
     let closeDetail: Pick<CloseEvent, "code" | "reason"> | undefined;
     socket.addEventListener("close", (event) => {
       closeDetail = { code: event.code, reason: event.reason };

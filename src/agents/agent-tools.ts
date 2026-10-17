@@ -427,7 +427,6 @@ function* assembleOpenClawCodingTools(
   });
   const assembledTools: AnyAgentTool[] = [
     ...scheduledCoreTools,
-    // Include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools
       ? mergeAgentRingZeroTools(
