@@ -29,10 +29,30 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import type { SessionEntry } from "./types.js";
 
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+function retainSharing(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  sessionKey: string,
+  entry: SessionEntry,
+  member = "member",
+) {
+  const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+  if (typeof identity !== "string") {
+    throw new Error("Expected durable fixture");
+  }
+  const sharing = retainPreparedSessionSharingFacts({
+    databaseIdentity: `file:${identity}`,
+    sessionKey,
+    entry: projectSessionSharingEntry(entry),
+    membership: new Set([member]),
+  });
+  return { identity, sharing };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -172,16 +192,7 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
         { agentId: "main", storePath: database.path, sessionKey },
         { identityId: "member", addedBy: "owner", addedAt: 1 },
       );
-      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-      if (typeof identity !== "string") {
-        throw new Error("Expected durable fixture");
-      }
-      const sharing = retainPreparedSessionSharingFacts({
-        databaseIdentity: `file:${identity}`,
-        sessionKey,
-        entry: projectSessionSharingEntry(original),
-        membership: new Set(["member"]),
-      });
+      const { identity, sharing } = retainSharing(database, sessionKey, original);
       const generation = await prepareSessionDeliveryGeneration({
         agentId: "main",
         storePath: database.path,
@@ -335,16 +346,7 @@ it.each(["alias membership", "metadata only"] as const)(
         visibility: "shared" as const,
       };
       writeSessionEntry(database, sessionKey, entry);
-      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-      if (typeof identity !== "string") {
-        throw new Error("Expected durable fixture");
-      }
-      const sharing = retainPreparedSessionSharingFacts({
-        databaseIdentity: `file:${identity}`,
-        sessionKey,
-        entry: projectSessionSharingEntry(entry),
-        membership: new Set(["previous-member"]),
-      });
+      const { identity, sharing } = retainSharing(database, sessionKey, entry, "previous-member");
       const publication = retainSessionEntryWorkerPublication({
         agentId: "main",
         storePath: database.path,
@@ -402,16 +404,7 @@ it("refreshes inline maintenance rows", async () => {
       visibility: "shared" as const,
     };
     writeSessionEntry(database, archivedKey, original);
-    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof identity !== "string") {
-      throw new Error("Expected durable fixture");
-    }
-    const sharing = retainPreparedSessionSharingFacts({
-      databaseIdentity: `file:${identity}`,
-      sessionKey: archivedKey,
-      entry: projectSessionSharingEntry(original),
-      membership: new Set(["member"]),
-    });
+    const { sharing } = retainSharing(database, archivedKey, original);
     const config = {
       session: {
         maintenance: { mode: "enforce" as const, maxEntries: 1, pruneAfter: "1000000d" },
