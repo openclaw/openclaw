@@ -16,6 +16,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
+import { publicationRowDefaults } from "./github-publication-fixtures.test-support.js";
 import { githubPublicationReceipts } from "./github-publication-receipts.js";
 import { prepareGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import {
@@ -75,41 +76,13 @@ describe("retained publication lifecycle authority", () => {
 
   function personalRow(requestId: string): PersonalGitHubPublicationRow {
     const row: PersonalGitHubPublicationRow = {
-      request_id: requestId,
+      ...publicationRowDefaults(requestId),
       owner_profile_id: profileId,
       connection_generation: connectionGeneration,
-      idempotency_key: requestId,
-      request_digest: "",
-      session_id: requestId,
-      session_key: `agent:main:${requestId}`,
-      agent_id: "main",
       worktree_id: "fixture-worktree",
       repository_fingerprint: "fixture-fingerprint",
       identity_source: "personal",
       identity_profile_id: profileId,
-      identity_account_id: 42,
-      identity_login: "fixture-bot",
-      title: null,
-      body: null,
-      status: "requested",
-      gateway_instance_id: null,
-      execution_id: null,
-      push_repository: "example/repository",
-      repository: "example/repository",
-      branch: "openclaw/worker-proof",
-      base_branch: "main",
-      source_head_commit: "b".repeat(40),
-      source_index_tree: "c".repeat(40),
-      workspace_tree: "c".repeat(40),
-      head_commit: null,
-      pull_request_url: null,
-      error_code: null,
-      next_action: null,
-      last_effect: null,
-      effect_state: null,
-      created_at_ms: 1000,
-      updated_at_ms: 1000,
-      reported_at_ms: null,
     };
     row.request_digest = personalGitHubRequestDigest(row);
     return row;
@@ -142,6 +115,21 @@ describe("retained publication lifecycle authority", () => {
       { publicationKind: "personal", requestId },
       openOpenClawStateDatabase().db,
     );
+  }
+  function expectSelectedRows(kind: "requests" | "lifecycles", requestIds: string[]) {
+    const table =
+      kind === "requests"
+        ? "github_personal_publication_requests"
+        : "github_publication_session_lifecycles";
+    const personal = kind === "lifecycles" ? "publication_kind = 'personal' AND" : "";
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare(
+          `SELECT request_id FROM ${table} WHERE ${personal}
+       request_id LIKE '00000000-0000-4000-8000-%' ORDER BY request_id`,
+        )
+        .all(),
+    ).toEqual(requestIds.map((request_id) => ({ request_id })));
   }
 
   beforeAll(async () => {
@@ -332,20 +320,9 @@ describe("retained publication lifecycle authority", () => {
       receiptFault.disable();
       expect(installed.size).toBe(0);
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      const { db } = openOpenClawStateDatabase();
-      expect(
-        db
-          .prepare(`SELECT request_id FROM github_personal_publication_requests
-          WHERE request_id LIKE '00000000-0000-4000-8000-%' ORDER BY request_id`)
-          .all(),
-      ).toEqual(selected.map((row) => ({ request_id: row.request_id })));
-      expect(
-        db
-          .prepare(`SELECT request_id FROM github_publication_session_lifecycles
-          WHERE publication_kind = 'personal' AND request_id LIKE '00000000-0000-4000-8000-%'
-          ORDER BY request_id`)
-          .all(),
-      ).toEqual(selected.map((row) => ({ request_id: row.request_id })));
+      const selectedIds = selected.map((row) => row.request_id);
+      expectSelectedRows("requests", selectedIds);
+      expectSelectedRows("lifecycles", selectedIds);
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       lifecycleContext = captureOpenClawStateWorkerContext();
       const retry = await preparePersonalGitHubSessionReceiptDeletion({
@@ -361,18 +338,8 @@ describe("retained publication lifecycle authority", () => {
       expect(installed).toEqual(expected);
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       const reopened = openOpenClawStateDatabase().db;
-      expect(
-        reopened
-          .prepare(`SELECT count(*) AS count FROM github_personal_publication_requests
-          WHERE request_id LIKE '00000000-0000-4000-8000-%'`)
-          .get(),
-      ).toEqual({ count: 0 });
-      expect(
-        reopened
-          .prepare(`SELECT count(*) AS count FROM github_publication_session_lifecycles
-          WHERE publication_kind = 'personal' AND request_id LIKE '00000000-0000-4000-8000-%'`)
-          .get(),
-      ).toEqual({ count: 0 });
+      expectSelectedRows("requests", []);
+      expectSelectedRows("lifecycles", []);
       expect(
         reopened
           .prepare(

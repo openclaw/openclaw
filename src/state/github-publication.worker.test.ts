@@ -33,6 +33,7 @@ import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
+import { publicationRowDefaults } from "./github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow as RepositoryPublicationRow } from "./github-publication-read.types.js";
 import {
   captureGitHubPublicationLifecycle,
@@ -76,6 +77,7 @@ import { ensureProfileForEmail } from "./user-profiles.js";
 let context: OpenClawStateWorkerContext;
 let root: string;
 const scopes = new Set<ReturnType<typeof createGitHubPublicationWorkerScope>>();
+const sources = new Set<Awaited<ReturnType<typeof prepareGitHubPublicationSource>>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeOpenClawAgentDatabasesAsync();
@@ -97,6 +99,10 @@ beforeEach(() => {
 });
 afterEach(async () => {
   releaseHeldGitHubPublicationMessages();
+  for (const source of sources) {
+    await source.release();
+  }
+  sources.clear();
   vi.restoreAllMocks();
   await Promise.all([...scopes].map((scope) => scope.close()));
   scopes.clear();
@@ -177,27 +183,16 @@ function waitForGate(
 
 function repositoryRow(requestId: string): RepositoryPublicationRow {
   const row: RepositoryPublicationRow = {
-    request_id: requestId,
-    idempotency_key: requestId,
-    request_digest: "",
+    ...publicationRowDefaults(requestId),
     requester_authority_json: null,
     session_id: "publication-worker-session",
     session_lifecycle_revision: null,
     session_key: "agent:main:publication-worker",
-    agent_id: "main",
     workspace_id: "publication-worker-workspace",
     owner_profile_id: null,
     connection_generation: null,
     identity_source: "system-configured",
     identity_profile_id: "fixture-profile",
-    identity_account_id: 42,
-    identity_login: "fixture-bot",
-    title: null,
-    body: null,
-    push_repository: "example/repository",
-    repository: "example/repository",
-    base_branch: "main",
-    branch: "openclaw/worker-proof",
     previous_head_commit: null,
     claim_id: null,
     run_id: null,
@@ -206,22 +201,7 @@ function repositoryRow(requestId: string): RepositoryPublicationRow {
     placement_generation: null,
     checkpoint_ref: "refs/openclaw/worker-results/fixture",
     checkpoint_digest: `sha256:${"a".repeat(64)}`,
-    source_head_commit: "b".repeat(40),
-    source_index_tree: "c".repeat(40),
-    workspace_tree: "c".repeat(40),
-    status: "requested",
-    execution_id: null,
-    gateway_instance_id: null,
-    head_commit: null,
     pushed_head_commit: null,
-    pull_request_url: null,
-    last_effect: null,
-    effect_state: null,
-    error_code: null,
-    next_action: null,
-    created_at_ms: 1_000,
-    updated_at_ms: 1_000,
-    reported_at_ms: null,
   };
   row.request_digest = repositoryGitHubPublicationDigest(row);
   return row;
@@ -274,6 +254,7 @@ async function sourceFixture(
     signal: new AbortController().signal,
     assertCurrent,
   });
+  sources.add(source);
   return { row, source };
 }
 
@@ -448,48 +429,44 @@ it("revokes personal source authority at commit before reply delivery without re
   }
   const connection = await prepareUserGitHubConnection(owner);
   const { row, source } = await sourceFixture("source-connection-revocation", () => {}, owner);
+  expect(() =>
+    runOpenClawStateWriteTransaction(() => {
+      updateUserGitHubConnection(owner, disconnectedUserGitHubConnection, () => {});
+      throw new Error("rollback connection");
+    }),
+  ).toThrow("rollback connection");
+  expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+  expect(() => connection.read()).not.toThrow();
+  const receipt = holdNextReceipt();
+  const reply = holdNextReply("userGitHubConnections.mutate");
+  const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
   try {
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        updateUserGitHubConnection(owner, disconnectedUserGitHubConnection, () => {});
-        throw new Error("rollback connection");
-      }),
-    ).toThrow("rollback connection");
-    expect(() => bindGitHubPublicationSource(source)).not.toThrow();
-    expect(() => connection.read()).not.toThrow();
-    const receipt = holdNextReceipt();
-    const reply = holdNextReply("userGitHubConnections.mutate");
-    const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
-    try {
-      await waitForGate(
-        Promise.all([receipt.ready, reply.ready]),
-        disconnected,
-        "connection receipt and reply were not held",
-        signal,
-      );
-      // Receipt and reply use separate ports; deliver the real commit facts before asserting.
-      receipt.release();
-      expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
-      expect(() => connection.read()).toThrow("My GitHub connection changed");
-    } finally {
-      receipt.release();
-      reply.release();
-      await disconnected;
-    }
-    updateUserGitHubConnection(
-      owner,
-      () => original,
-      () => {},
+    await waitForGate(
+      Promise.all([receipt.ready, reply.ready]),
+      disconnected,
+      "connection receipt and reply were not held",
+      signal,
     );
+    // Receipt and reply use separate ports; deliver the real commit facts before asserting.
+    receipt.release();
+    expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
     expect(() => connection.read()).toThrow("My GitHub connection changed");
-    expect((await prepareUserGitHubConnection(owner)).read()).toEqual(original);
-    await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
-      "source authority changed",
-    );
-    expectRows(row, []);
   } finally {
-    await source.release();
+    receipt.release();
+    reply.release();
+    await disconnected;
   }
+  updateUserGitHubConnection(
+    owner,
+    () => original,
+    () => {},
+  );
+  expect(() => connection.read()).toThrow("My GitHub connection changed");
+  expect((await prepareUserGitHubConnection(owner)).read()).toEqual(original);
+  await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
+    "source authority changed",
+  );
+  expectRows(row, []);
 });
 
 it("rejects a cold personal connection read overtaken by disconnect", async ({ signal }) => {
@@ -563,7 +540,6 @@ it("revokes cached personal authority when a committed disconnect loses its rece
   } finally {
     receipt.release();
     reply.release();
-    await source.release();
   }
 });
 
@@ -583,59 +559,46 @@ it("runs policy writes before source reservation and refuses the changed source"
       },
       { path: context.admission.databasePath },
     );
-  try {
-    await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
-      "source authority changed",
-    );
-    expectRows(row, []);
-  } finally {
-    await source.release();
-  }
+  await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
+    "source authority changed",
+  );
+  expectRows(row, []);
 });
 
 it("rejects a requested branch that does not belong to the captured source", async () => {
   const { row, source } = await sourceFixture("source-row-mismatch");
   row.branch = "openclaw/unrelated-branch";
   row.request_digest = repositoryGitHubPublicationDigest(row);
-  try {
-    await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
-      "requested repository changed",
-    );
-    expectRows(row, []);
-  } finally {
-    await source.release();
-  }
+  await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
+    "requested repository changed",
+  );
+  expectRows(row, []);
 });
 
 it("does not use one session's source authority for another session's publication", async () => {
   const first = await sourceFixture("source-session-a");
   const second = await sourceFixture("source-session-b");
   const scope = createScope();
-  try {
-    await insertRepositoryGitHubPublicationAsync(second.row, second.source);
-    await expect(
-      scope.mutate(
-        command({
-          operation: "checkpoint",
-          row: second.row,
-          checkpoint: {
-            checkpoint_ref: second.row.checkpoint_ref,
-            checkpoint_digest: second.row.checkpoint_digest,
-            source_head_commit: second.row.source_head_commit,
-            source_index_tree: second.row.source_index_tree,
-            workspace_tree: second.row.workspace_tree,
-          },
-        }),
-        context.admission.assertCurrent,
-        () => {},
-        first.source,
-      ),
-    ).rejects.toThrow("source");
-    expectRows(second.row, [{ last_effect: null }]);
-  } finally {
-    await first.source.release();
-    await second.source.release();
-  }
+  await insertRepositoryGitHubPublicationAsync(second.row, second.source);
+  await expect(
+    scope.mutate(
+      command({
+        operation: "checkpoint",
+        row: second.row,
+        checkpoint: {
+          checkpoint_ref: second.row.checkpoint_ref,
+          checkpoint_digest: second.row.checkpoint_digest,
+          source_head_commit: second.row.source_head_commit,
+          source_index_tree: second.row.source_index_tree,
+          workspace_tree: second.row.workspace_tree,
+        },
+      }),
+      context.admission.assertCurrent,
+      () => {},
+      first.source,
+    ),
+  ).rejects.toThrow("source");
+  expectRows(second.row, [{ last_effect: null }]);
 });
 
 it("publishes a committed receipt before a delayed ordinary worker reply", async ({ signal }) => {
@@ -795,65 +758,60 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
   signal,
 }) => {
   const { row, source } = await sourceFixture("source-receipt-deletion");
-  try {
-    runOpenClawStateWriteTransaction((database) =>
-      insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
-    );
-    const remove = await preparePersonalGitHubSessionReceiptDeletion({
-      agentId: row.agent_id,
-      generations: [
-        {
-          sessionKey: row.session_key,
-          sessionId: row.session_id,
-          lifecycleRevision: row.session_lifecycle_revision,
-        },
-      ],
-    });
-    expect(() => bindGitHubPublicationSource(source)).not.toThrow();
-    const installed = createDeferredCore();
-    onTestFinished(
-      githubPublicationReceipts.subscribeFacts((change) => {
-        if (
-          change.kind === "committed" &&
-          change.receipt.source.identity === context.admission.identity.key &&
-          change.receipt.facts.get(JSON.stringify(["repository", row.request_id]))?.kind ===
-            "absent"
-        ) {
-          installed.resolve();
-        }
-      }),
-    );
-    const reply = holdNextReply("githubPublication.deleteSessionReceipts");
-    let checkedBeforeCommit = false;
-    sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "commit") {
-        checkedBeforeCommit = true;
-        expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
+  runOpenClawStateWriteTransaction((database) =>
+    insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
+  );
+  const remove = await preparePersonalGitHubSessionReceiptDeletion({
+    agentId: row.agent_id,
+    generations: [
+      {
+        sessionKey: row.session_key,
+        sessionId: row.session_id,
+        lifecycleRevision: row.session_lifecycle_revision,
+      },
+    ],
+  });
+  expect(() => bindGitHubPublicationSource(source)).not.toThrow();
+  const installed = createDeferredCore();
+  onTestFinished(
+    githubPublicationReceipts.subscribeFacts((change) => {
+      if (
+        change.kind === "committed" &&
+        change.receipt.source.identity === context.admission.identity.key &&
+        change.receipt.facts.get(JSON.stringify(["repository", row.request_id]))?.kind === "absent"
+      ) {
+        installed.resolve();
       }
-      admit(request, grant);
-    });
-    const deletion = remove();
-    try {
-      await waitForGate(
-        Promise.all([reply.ready, installed.promise]),
-        deletion,
-        "deletion receipt was not installed before its reply",
-        signal,
-      );
-      expect(checkedBeforeCommit).toBe(true);
+    }),
+  );
+  const reply = holdNextReply("githubPublication.deleteSessionReceipts");
+  let checkedBeforeCommit = false;
+  sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      checkedBeforeCommit = true;
       expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
-    } finally {
-      reply.release();
-      await deletion;
     }
-    expectRows(row, []);
-    runOpenClawStateWriteTransaction((database) =>
-      insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
+    admit(request, grant);
+  });
+  const deletion = remove();
+  try {
+    await waitForGate(
+      Promise.all([reply.ready, installed.promise]),
+      deletion,
+      "deletion receipt was not installed before its reply",
+      signal,
     );
+    expect(checkedBeforeCommit).toBe(true);
     expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
   } finally {
-    await source.release();
+    reply.release();
+    await deletion;
   }
+  expectRows(row, []);
+  runOpenClawStateWriteTransaction((database) =>
+    insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
+  );
+  expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
 });
 
 it("settles execution bookkeeping without source authority while distinguishing observed effects", async () => {

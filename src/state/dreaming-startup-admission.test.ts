@@ -94,8 +94,7 @@ function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginA
     api,
     bindGateway() {
       const gateway = createGatewayRequestContext(makeContextParams());
-      const resolveGateway = () => gateway;
-      bindGatewayContextResolver(runtime, resolveGateway);
+      bindGatewayContextResolver(runtime, () => gateway);
     },
     dispose: () => getPluginInstance(record)!.dispose(),
   };
@@ -310,31 +309,26 @@ it("does not wait for unrelated pending agents when the selected agent is prepar
   });
 });
 
-it("surfaces failed startup preparation through normal cleanup admission", async () => {
-  await withState("cleanup-failed-preparation", async (state) => {
-    await withPendingPreparation(state, async (_admission, activate) => {
-      const cleanup = cleanupSessionLifecycleArtifacts(cleanupParams);
-      const outcome = expect(cleanup).rejects.toThrow("synthetic preparation failure");
-      activate(() => {
-        throw new Error("synthetic preparation failure");
-      });
-      await outcome;
-    });
-  });
-});
-
-it("cancels pending cleanup when the startup admission owner stops", async () => {
-  await withState("cleanup-startup-stop", async (state) => {
+it.each(["failed", "stopped"] as const)("rejects cleanup when startup is %s", async (outcome) => {
+  await withState("cleanup-startup-rejection", async (state) => {
     await withPendingPreparation(state, async (admission, activate) => {
-      const outcome = expect(cleanupSessionLifecycleArtifacts(cleanupParams)).rejects.toMatchObject(
-        {
-          name: "AbortError",
-          cause: { message: "Gateway stopped during agent database inspection" },
-        },
+      const cleanup = cleanupSessionLifecycleArtifacts(cleanupParams);
+      const rejected =
+        outcome === "failed"
+          ? expect(cleanup).rejects.toThrow("synthetic preparation failure")
+          : expect(cleanup).rejects.toMatchObject({
+              name: "AbortError",
+              cause: { message: "Gateway stopped during agent database inspection" },
+            });
+      const stopping = outcome === "stopped" ? admission.stop() : undefined;
+      activate(
+        outcome === "failed"
+          ? () => {
+              throw new Error("synthetic preparation failure");
+            }
+          : undefined,
       );
-      const stopping = admission.stop();
-      activate();
-      await outcome;
+      await rejected;
       await stopping;
     });
   });
