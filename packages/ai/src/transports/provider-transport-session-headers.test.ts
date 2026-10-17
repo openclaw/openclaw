@@ -161,81 +161,36 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
     },
   );
 
-  it.each(["openai-completions", "openai-responses"] as const)(
-    "applies provider turn fallback through sessionless %s requests",
-    async (api) => {
+  it.each([
+    ["openai-completions", false],
+    ["openai-responses", false],
+    ["openai-completions", true],
+    ["openai-responses", true],
+  ] as const)(
+    "applies sessionless %s turn fallback (simple completion: %s)",
+    async (api, simple) => {
       const { requests, captureFetch } = captureRequests();
       configureAiTransportHost({
         ...initialHost,
         buildModelFetch: () => captureFetch,
+        ...(simple ? { requiresManagedTransport: () => false } : {}),
         plugin: {
           ...initialHost.plugin,
-          resolveTransportTurnState: ({ context }) => ({
-            headers: { "x-opencode-session": context.turnId, "x-provider-route": "route-a" },
-          }),
-        },
-      });
-      const baseModel = makeModel({
-        api,
-        provider: "opencode-go",
-        baseUrl: "https://opencode.ai/zen/go/v1",
-      });
-
-      for (const testCase of [
-        { expected: "generated" },
-        { modelHeaders: { "X-OpenCode-Session": "model-session" }, expected: "model-session" },
-        { headers: { "x-opencode-session": "stream-session" }, expected: "stream-session" },
-      ] as const) {
-        const model = {
-          ...baseModel,
-          headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
-        };
-        const streamFn = createBoundaryAwareStreamFnForModel(model);
-        if (!streamFn) {
-          throw new Error(`No managed transport for ${api}`);
-        }
-        requests.length = 0;
-        const stream = await streamFn(model, makeContext(), {
-          apiKey: "test-key",
-          headers: "headers" in testCase ? testCase.headers : undefined,
-        });
-        await stream.result();
-        expect(requests).toHaveLength(1);
-        const sessionHeader = requests[0]?.headers.get("x-opencode-session");
-        if (testCase.expected === "generated") {
-          expect(sessionHeader).toBeTruthy();
-        } else {
-          expect(sessionHeader).toBe(testCase.expected);
-        }
-        expect(requests[0]?.headers.get("x-provider-route")).toBe("route-a");
-      }
-    },
-  );
-
-  it.each(["openai-completions", "openai-responses"] as const)(
-    "applies provider turn fallback through the sessionless simple-completion %s adapter",
-    async (api) => {
-      const { requests, captureFetch } = captureRequests();
-      configureAiTransportHost({
-        ...initialHost,
-        buildModelFetch: () => captureFetch,
-        requiresManagedTransport: () => false,
-        plugin: {
-          ...initialHost.plugin,
-          resolveProviderStream: () => undefined,
+          ...(simple ? { resolveProviderStream: () => undefined } : {}),
           resolveTransportTurnState: ({ context }) => ({
             headers: { "x-opencode-session": context.turnId, "x-provider-route": "route-a" },
           }),
         },
       });
       const apiRegistry = createApiRegistry();
-      registerBuiltInApiProviders(apiRegistry);
+      if (simple) {
+        registerBuiltInApiProviders(apiRegistry);
+      }
       const baseModel = makeModel({
         api,
         provider: "opencode-go",
         baseUrl: "https://opencode.ai/zen/go/v1",
       });
-
       for (const testCase of [
         { expected: "generated" },
         { modelHeaders: { "X-OpenCode-Session": "model-session" }, expected: "model-session" },
@@ -245,19 +200,24 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
           ...baseModel,
           headers: "modelHeaders" in testCase ? testCase.modelHeaders : undefined,
         };
-        const model = prepareModelForSimpleCompletion({ apiRegistry, model: sourceModel });
-        expect(model.api).toBe(api);
-        const provider = apiRegistry.getApiProvider(model.api);
-        if (!provider) {
-          throw new Error(`No provider registered for ${api}`);
+        const model = simple
+          ? prepareModelForSimpleCompletion({ apiRegistry, model: sourceModel })
+          : sourceModel;
+        if (simple) {
+          expect(model.api).toBe(api);
+        }
+        const streamFn = simple
+          ? apiRegistry.getApiProvider(model.api)?.streamSimple
+          : createBoundaryAwareStreamFnForModel(model);
+        if (!streamFn) {
+          throw new Error("No transport for " + api);
         }
         requests.length = 0;
-        const stream = provider.streamSimple(model, makeContext(), {
+        const stream = await streamFn(model, makeContext(), {
           apiKey: "test-key",
           headers: "headers" in testCase ? testCase.headers : undefined,
         });
         await stream.result();
-
         expect(requests).toHaveLength(1);
         const sessionHeader = requests[0]?.headers.get("x-opencode-session");
         if (testCase.expected === "generated") {
@@ -336,7 +296,7 @@ describe("managed OpenAI Responses session headers at fetch egress", () => {
           model: Model,
           context: Parameters<StreamFn>[1],
           options?: Parameters<StreamFn>[2],
-        ) => requireSynchronousStream(streamFn(model, makeContext(), options));
+        ) => requireSynchronousStream(streamFn(model, context, options));
         registry.registerApiProvider({
           api,
           stream: registeredStream,

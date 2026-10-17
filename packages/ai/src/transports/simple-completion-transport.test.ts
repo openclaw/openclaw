@@ -37,13 +37,9 @@ function makeModel<T extends Api>(
 function makeChatGPTModel(baseUrl: string) {
   return makeModel({
     id: "gpt-5.5",
-    name: "GPT-5.5",
     api: "openai-chatgpt-responses",
     provider: "openai",
     baseUrl,
-    reasoning: true,
-    contextWindow: 200000,
-    maxTokens: 8192,
   });
 }
 
@@ -57,7 +53,6 @@ vi.mock("./provider-transport-stream.js", () => ({
 
 let prepareImpl: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 let apiRegistry: ApiRegistry;
-const SIMPLE_COMPLETION_SOURCE_ID = "test:simple-completion-transport";
 
 function requireSynchronousStream(
   stream: ReturnType<StreamFn>,
@@ -88,7 +83,7 @@ describe("prepareModelForSimpleCompletion", () => {
 
   beforeEach(() => {
     apiRegistry = createApiRegistry();
-    vertexStream.mockReset();
+    vertexStream.mockReset().mockReturnValue("vertex-stream");
     registerApi.mockReset();
     registerApi.mockImplementation((registry: ApiRegistry, api: Api, _streamFn: StreamFn) => {
       if (registry.getApiProvider(api)) {
@@ -98,18 +93,15 @@ describe("prepareModelForSimpleCompletion", () => {
       registry.registerApiProvider({ api, stream, streamSimple: stream });
       return true;
     });
-    resolveStream.mockReset();
+    resolveStream.mockReset().mockReturnValue(pluginStreamFn);
     pluginStreamFn.mockClear();
     wrapStream.mockReset();
     buildStream.mockReset();
     createStream.mockReset();
     createTransportStream.mockReset();
-    prepareTransportModel.mockReset();
+    prepareTransportModel.mockReset().mockImplementation((model) => model);
     resolveTransportApi.mockReset();
     inheritManagedTransport.mockClear();
-    vertexStream.mockReturnValue("vertex-stream");
-    resolveStream.mockReturnValue(pluginStreamFn);
-    prepareTransportModel.mockImplementation((model) => model);
     configureAiTransportHost({
       plugin: {
         resolveProviderStream: resolveStream,
@@ -123,9 +115,7 @@ describe("prepareModelForSimpleCompletion", () => {
     });
   });
 
-  afterAll(() => {
-    configureAiTransportHost(initialHost);
-  });
+  afterAll(() => configureAiTransportHost(initialHost));
 
   it("keeps each selected auth and agent policy when completions share a model registry", () => {
     registerApi.mockImplementation((registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
@@ -192,7 +182,6 @@ describe("prepareModelForSimpleCompletion", () => {
     const sentinel = TEST_SECRET_SENTINEL;
     const model = makeModel<"ollama">({
       id: "llama3",
-      name: "Llama 3",
       api: "ollama",
       provider: "ollama",
       baseUrl: "http://localhost:11434",
@@ -235,16 +224,13 @@ describe("prepareModelForSimpleCompletion", () => {
     const builtInStream = vi.fn(() => createAssistantMessageEventStream());
     apiRegistry.registerApiProvider(
       { api: "openai-completions", stream: builtInStream, streamSimple: builtInStream },
-      SIMPLE_COMPLETION_SOURCE_ID,
+      "test:simple-completion-transport",
     );
     const model = makeModel<"openai-completions">({
       id: "qwen3-0.6b",
-      name: "Qwen3 0.6B",
       api: "openai-completions",
       provider: "llama-cpp",
       baseUrl: "local://llama-cpp",
-      contextWindow: 32768,
-      maxTokens: 2048,
       headers: { Authorization: null } as never,
     });
 
@@ -269,64 +255,43 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(pluginStreamFn).toHaveBeenCalledExactlyOnceWith(model, { messages: [] }, {});
   });
 
-  it("uses a custom api alias for Anthropic Vertex simple completions", () => {
-    const model = makeModel<"anthropic-messages">({
-      id: "claude-sonnet",
-      name: "Claude Sonnet",
-      api: "anthropic-messages",
-      provider: "anthropic-vertex",
-      baseUrl: "https://us-central1-aiplatform.googleapis.com",
-      reasoning: true,
-      contextWindow: 200000,
-      maxTokens: 8192,
-    });
-
+  it.each(["vertex", "transport"] as const)("registers the %s simple-completion alias", (kind) => {
+    const vertex = kind === "vertex";
+    const model = makeModel(
+      vertex
+        ? {
+            api: "anthropic-messages",
+            provider: "anthropic-vertex",
+            baseUrl: "https://us-central1-aiplatform.googleapis.com",
+          }
+        : {
+            api: "openai-responses",
+            provider: "openai",
+            baseUrl: "https://api.openai.com/v1",
+          },
+    );
+    const api = vertex
+      ? "openclaw-anthropic-vertex-simple:https%3A%2F%2Fus-central1-aiplatform.googleapis.com"
+      : "openclaw-openai-responses-transport";
     resolveStream.mockReturnValueOnce(undefined);
-
+    if (!vertex) {
+      buildStream.mockReturnValueOnce("transport-stream");
+      prepareTransportModel.mockReturnValueOnce({ ...model, api });
+    }
     const result = prepare({ model });
-
-    expect(vertexStream).toHaveBeenCalledWith(model);
     expect(registerApi).toHaveBeenCalledWith(
       apiRegistry,
-      "openclaw-anthropic-vertex-simple:https%3A%2F%2Fus-central1-aiplatform.googleapis.com",
-      "vertex-stream",
+      api,
+      vertex ? "vertex-stream" : "transport-stream",
     );
-    expect(result).toEqual({
-      ...model,
-      api: "openclaw-anthropic-vertex-simple:https%3A%2F%2Fus-central1-aiplatform.googleapis.com",
-    });
-    expect(inheritManagedTransport).toHaveBeenCalledWith(model, result);
-  });
-
-  it("uses a transport-aware custom api alias when llm request transport overrides are present", () => {
-    const model = makeModel<"openai-responses">({
-      id: "gpt-5",
-      name: "GPT-5",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      contextWindow: 200000,
-      maxTokens: 8192,
-    });
-
-    resolveStream.mockReturnValueOnce(undefined);
-    buildStream.mockReturnValueOnce("transport-stream");
-    prepareTransportModel.mockReturnValueOnce({
-      ...model,
-      api: "openclaw-openai-responses-transport",
-    });
-
-    const result = prepare({ model });
-
-    expect(prepareTransportModel).toHaveBeenCalledWith(model, { cfg: undefined });
-    expect(buildStream).toHaveBeenCalledWith(model, { cfg: undefined });
-    expect(registerApi).toHaveBeenCalledWith(
-      apiRegistry,
-      "openclaw-openai-responses-transport",
-      "transport-stream",
-    );
-    expect(result).toEqual({ ...model, api: "openclaw-openai-responses-transport" });
+    expect(result).toEqual({ ...model, api });
+    if (vertex) {
+      expect(vertexStream).toHaveBeenCalledWith(model);
+      expect(inheritManagedTransport).toHaveBeenCalledWith(model, result);
+    } else {
+      expect(prepareTransportModel).toHaveBeenCalledWith(model, { cfg: undefined });
+      expect(buildStream).toHaveBeenCalledWith(model, { cfg: undefined });
+    }
   });
 
   it("normalizes Codex-response proxy URLs before transport dispatch", () => {
@@ -358,8 +323,7 @@ describe("prepareModelForSimpleCompletion", () => {
   });
 
   it("rejects Codex proxy base URLs with fragments", () => {
-    const baseUrl = "https://proxy.example.test/openai#route";
-    const model = makeChatGPTModel(baseUrl);
+    const model = makeChatGPTModel("https://proxy.example.test/openai#route");
     resolveStream.mockReturnValueOnce(undefined);
 
     expect(() => prepare({ model })).toThrow(
