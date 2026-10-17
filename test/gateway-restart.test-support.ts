@@ -1,10 +1,48 @@
-import type { ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
-import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+
+export const restartEnv = {
+  OPENAI_API_KEY: undefined,
+  OPENAI_BASE_URL: undefined,
+  OPENAI_API_BASE: undefined,
+  OPENCLAW_SKIP_PROVIDERS: undefined,
+  OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+};
+
+export function restartProviderServer(
+  failed: { reject(error: unknown): void },
+  handle: (
+    request: IncomingMessage,
+    response: ServerResponse,
+    body: Record<string, unknown>,
+  ) => Promise<void>,
+) {
+  return createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      await handle(request, response, asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
+    })().catch((error: unknown) => {
+      failed.reject(error);
+      response.destroy(error instanceof Error ? error : undefined);
+    });
+  });
+}
+
+export function restartToolNames(body: Record<string, unknown>) {
+  return Array.isArray(body.tools)
+    ? body.tools.flatMap((tool) =>
+        isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
+      )
+    : [];
+}
 
 export function writeRestartToolCall(
   response: ServerResponse,
@@ -63,14 +101,18 @@ export function writeRestartTitle(response: ServerResponse, text: string) {
 }
 
 export function readRestartSession(agentDir: string, sessionKey: string) {
-  const database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"), {
-    readOnly: true,
-  });
+  const row = readRestartRow(
+    path.join(agentDir, "openclaw-agent.sqlite"),
+    "SELECT entry_json FROM session_nodes WHERE session_key = ?",
+    sessionKey,
+  );
+  return typeof row?.entry_json === "string" ? asRecord(JSON.parse(row.entry_json)) : undefined;
+}
+
+export function readRestartRow(databasePath: string, sql: string, key: string) {
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
   try {
-    const row = database
-      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-      .get(sessionKey);
-    return typeof row?.entry_json === "string" ? asRecord(JSON.parse(row.entry_json)) : undefined;
+    return database.prepare(sql).get(key);
   } finally {
     database.close();
   }

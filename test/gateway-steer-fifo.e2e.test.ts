@@ -23,30 +23,13 @@ import { createDeferred } from "./helpers/promise.js";
 
 type FirstResponseKind = "final" | "sequential-tools" | "tool";
 type ModelRequest = { body: Record<string, unknown> };
-type MockModelServer = {
-  baseUrl: string;
-  releaseFirst: (kind: FirstResponseKind) => void;
-  releaseSecond: () => void;
-  requests: ModelRequest[];
-  stop: () => Promise<void>;
-};
+type MockModelServer = Awaited<ReturnType<typeof startMockModelServer>>;
 type AgentEvent = {
   runId?: string;
   stream?: string;
   data?: { phase?: string };
 };
-type GatewayFixture = {
-  client: GatewayChatClient;
-  diagnosticsClient: GatewayClient;
-  instance: OpenClawTestInstance;
-  modelServer: MockModelServer;
-  events: AgentEvent[];
-  chatErrors: Array<{ errorMessage?: string; runId?: string; state: "error" }>;
-  chatFinalRunIds: string[];
-  sessionKey: string;
-  steeringTools?: SteeringToolsFixture;
-  steeringAdmission?: SteeringAdmissionFixture;
-};
+type GatewayFixture = Awaited<ReturnType<typeof createGatewayFixture>>;
 
 type SteeringAdmissionFixture = {
   pluginDir: string;
@@ -163,7 +146,7 @@ function writeToolsResponse(res: ServerResponse, id: string, tools: [string, str
   ]);
 }
 
-async function startMockModelServer(holdSecondResponse = false): Promise<MockModelServer> {
+async function startMockModelServer(holdSecondResponse = false) {
   const requests: ModelRequest[] = [];
   const firstResponse = createDeferred();
   const secondResponse = createDeferred();
@@ -222,7 +205,7 @@ async function startMockModelServer(holdSecondResponse = false): Promise<MockMod
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
-    releaseFirst: (kind) => {
+    releaseFirst: (kind: FirstResponseKind) => {
       firstResponseKind = kind;
       firstResponse.resolve();
     },
@@ -249,25 +232,6 @@ async function writeSteeringToolsPlugin(
   const pluginDir = path.join(fixtureDir, "steering-tools-plugin");
   const releasePath = path.join(fixtureDir, "steering-gate.release");
   const tracePath = path.join(fixtureDir, "steering-tools.trace");
-  const preflightLines =
-    gateMode === "preflight"
-      ? [
-          '    api.on("before_tool_call", async (event) => {',
-          `      if (event.toolName !== ${JSON.stringify(STEERING_GATE_TOOL)}) return;`,
-          `      await appendFile(${JSON.stringify(tracePath)}, "preflight-start\\n", "utf8");`,
-          "      await waitForRelease();",
-          `      await appendFile(${JSON.stringify(tracePath)}, "preflight-end\\n", "utf8");`,
-          "    });",
-        ]
-      : [];
-  const gateExecutionLines =
-    gateMode === "execute"
-      ? [
-          `        await appendFile(${JSON.stringify(tracePath)}, "gate-execute-start\\n", "utf8");`,
-          "        await waitForRelease();",
-          `        await appendFile(${JSON.stringify(tracePath)}, "gate-execute-end\\n", "utf8");`,
-        ]
-      : [`        await appendFile(${JSON.stringify(tracePath)}, "gate-executed\\n", "utf8");`];
   await mkdir(pluginDir, { recursive: true });
   await Promise.all([
     writeFile(
@@ -283,52 +247,54 @@ async function writeSteeringToolsPlugin(
     ),
     writeFile(
       path.join(pluginDir, "index.mjs"),
-      [
-        'import { access, appendFile } from "node:fs/promises";',
-        "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
-        "async function waitForRelease() {",
-        "  const deadline = Date.now() + 15_000;",
-        "  while (Date.now() < deadline) {",
-        "    try {",
-        `      await access(${JSON.stringify(releasePath)});`,
-        "      return;",
-        "    } catch (error) {",
-        '      if (error?.code !== "ENOENT") throw error;',
-        "    }",
-        "    await sleep(20);",
-        "  }",
-        '  throw new Error("steering gate release timed out");',
-        "}",
-        "export default {",
-        `  id: ${JSON.stringify(STEERING_PLUGIN_ID)},`,
-        "  register(api) {",
-        ...preflightLines,
-        "    api.registerTool({",
-        `      name: ${JSON.stringify(STEERING_GATE_TOOL)},`,
-        '      label: "Steering Gate",',
-        '      description: "Wait for the steering gateway test release file.",',
-        '      parameters: { type: "object", properties: {}, additionalProperties: false },',
-        '      executionMode: "sequential",',
-        "      async execute() {",
-        ...gateExecutionLines,
-        '        return { content: [{ type: "text", text: "steering gate completed" }], details: {} };',
-        "      },",
-        "    });",
-        "    api.registerTool({",
-        `      name: ${JSON.stringify(STEERING_TAIL_TOOL)},`,
-        '      label: "Steering Tail",',
-        '      description: "Record if the steering tail executes unexpectedly.",',
-        '      parameters: { type: "object", properties: {}, additionalProperties: false },',
-        '      executionMode: "sequential",',
-        "      async execute() {",
-        `        await appendFile(${JSON.stringify(tracePath)}, "tail-executed\\n", "utf8");`,
-        '        return { content: [{ type: "text", text: "steering tail executed" }], details: {} };',
-        "      },",
-        "    });",
-        "  },",
-        "};",
-        "",
-      ].join("\n"),
+      `import { access, appendFile } from "node:fs/promises";
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const trace = (event) => appendFile(${JSON.stringify(tracePath)}, event + "\\n", "utf8");
+async function waitForRelease() {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      await access(${JSON.stringify(releasePath)});
+      return;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await sleep(20);
+  }
+  throw new Error("steering gate release timed out");
+}
+const result = (text) => ({ content: [{ type: "text", text }], details: {} });
+export default {
+  id: ${JSON.stringify(STEERING_PLUGIN_ID)},
+  register(api) {
+    const preflight = ${JSON.stringify(gateMode === "preflight")};
+    if (preflight) api.on("before_tool_call", async (event) => {
+      if (event.toolName !== ${JSON.stringify(STEERING_GATE_TOOL)}) return;
+      await trace("preflight-start");
+      await waitForRelease();
+      await trace("preflight-end");
+    });
+    const tool = (name, label, description, execute) => api.registerTool({
+      name, label, description, execute,
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      executionMode: "sequential",
+    });
+    tool(${JSON.stringify(STEERING_GATE_TOOL)}, "Steering Gate", "Wait for the steering gateway test release file.", async () => {
+      if (preflight) await trace("gate-executed");
+      else {
+        await trace("gate-execute-start");
+        await waitForRelease();
+        await trace("gate-execute-end");
+      }
+      return result("steering gate completed");
+    });
+    tool(${JSON.stringify(STEERING_TAIL_TOOL)}, "Steering Tail", "Record if the steering tail executes unexpectedly.", async () => {
+      await trace("tail-executed");
+      return result("steering tail executed");
+    });
+  },
+};
+`,
       "utf8",
     ),
   ]);
@@ -465,12 +431,7 @@ async function connectDiagnosticsClient(
   cliMode = false,
   onEvent?: GatewayClientOptions["onEvent"],
 ): Promise<GatewayClient> {
-  let resolveHello!: () => void;
-  let rejectHello!: (error: Error) => void;
-  const hello = new Promise<void>((resolve, reject) => {
-    resolveHello = resolve;
-    rejectHello = reject;
-  });
+  const hello = createDeferred();
   const gatewayUrl = new URL(instance.url);
   gatewayUrl.protocol = gatewayUrl.protocol === "wss:" ? "https:" : "http:";
   // UI diagnostics share the TUI identity; CLI requests own a separate connection.
@@ -492,15 +453,15 @@ async function connectDiagnosticsClient(
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     ],
     requestTimeoutMs: 30_000,
-    onHelloOk: resolveHello,
-    onConnectError: rejectHello,
-    onClose: (code, reason) => rejectHello(new Error(`Gateway closed ${code}: ${reason}`)),
+    onHelloOk: () => hello.resolve(),
+    onConnectError: (error) => hello.reject(error),
+    onClose: (code, reason) => hello.reject(new Error(`Gateway closed ${code}: ${reason}`)),
     onEvent,
   };
   const client = new GatewayClient(options);
   diagnosticsClients.push(client);
   client.start();
-  await hello;
+  await hello.promise;
   return client;
 }
 
@@ -513,7 +474,7 @@ async function createGatewayFixture(
     holdSecondResponse?: boolean;
     observeSteering?: string;
   } = {},
-): Promise<GatewayFixture> {
+) {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
   cleanupDirs.push(fixtureDir);
   const steeringTools = options.withSteeringTools

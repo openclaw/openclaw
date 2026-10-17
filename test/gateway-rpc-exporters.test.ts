@@ -198,26 +198,29 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         const firstTraceId = "11111111111111111111111111111111";
         const firstTraceparent = `00-${firstTraceId}-1111111111111111-01`;
         const secondTraceId = "22222222222222222222222222222222";
-        const rpcSpans = () =>
-          receiver.capturedSpans.filter((span) => span.name.startsWith("openclaw.gateway.rpc."));
-        const scrape = async () => {
-          const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
-            headers: { Authorization: `Bearer ${token}` },
+        const rpcSpans = (traceId?: string) =>
+          receiver.capturedSpans.filter(
+            (span) =>
+              span.name.startsWith("openclaw.gateway.rpc.") &&
+              (!traceId || span.traceId === traceId),
+          );
+        const tracePhase = (traceId: string, phase: string) =>
+          events.find((event) => event.trace?.traceId === traceId && event.phase === phase);
+        const unknownDispatches = () =>
+          events.filter((event) => event.method === "other" && event.phase === "dispatch");
+        const waitFor = (assertion: () => unknown) => vi.waitFor(assertion, { timeout: 10_000 });
+        const fetchGateway = (route: string, authenticated = true) =>
+          fetch(`http://127.0.0.1:${port}${route}`, {
+            headers: authenticated ? { Authorization: `Bearer ${token}` } : undefined,
             signal: AbortSignal.timeout(10_000),
           });
+        const scrape = async () => {
+          const response = await fetchGateway("/api/diagnostics/prometheus");
           expect(response.status).toBe(200);
           return await response.text();
         };
         const waitForDispatch = async (traceId: string) => {
-          await vi.waitFor(
-            () =>
-              expect(
-                events.some(
-                  (event) => event.phase === "dispatch" && event.trace?.traceId === traceId,
-                ),
-              ).toBe(true),
-            { timeout: 10_000 },
-          );
+          await waitFor(() => expect(tracePhase(traceId, "dispatch")).toBeDefined());
           await waitForDiagnosticEventsDrained();
         };
         setTestPluginRegistry(registry);
@@ -232,9 +235,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         trackConnectChallengeNonce(ws);
         await once(ws, "open", { signal: AbortSignal.timeout(10_000) });
         await connectOk(ws, { token, traceparent: firstTraceparent });
-        const denied = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
-          signal: AbortSignal.timeout(10_000),
-        });
+        const denied = await fetchGateway("/api/diagnostics/prometheus", false);
         expect(denied.status).toBe(401);
         await denied.arrayBuffer();
 
@@ -258,23 +259,16 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         expect(acknowledged).toContain(rpcMetric("requests_total", 1));
         expect(acknowledged).toContain(rpcMetric("first_response_seconds_count", 1));
         expect(acknowledged).not.toContain(rpcMetric("handler_seconds_count"));
-        await vi.waitFor(
-          () =>
-            expect(
-              rpcSpans()
-                .filter((span) => span.traceId === firstTraceId)
-                .map((span) => span.name),
-            ).toEqual(["openclaw.gateway.rpc.response"]),
-          { timeout: 10_000 },
+        await waitFor(() =>
+          expect(rpcSpans(firstTraceId).map((span) => span.name)).toEqual([
+            "openclaw.gateway.rpc.response",
+          ]),
         );
 
         // The real readiness reader completes the existing monitor's window while
         // the acknowledged RPC remains held; no synthetic diagnostic event is injected.
         await delay(1_100);
-        const readiness = await fetch(`http://127.0.0.1:${port}/readyz`, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(10_000),
-        });
+        const readiness = await fetchGateway("/readyz");
         expect(readiness.status).toBe(200);
         const health = (await readiness.json()) as {
           eventLoop?: { intervalMs: number; delayMaxMs: number };
@@ -305,11 +299,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           ),
         ).toMatchObject({ ok: true });
         await waitForDispatch(secondTraceId);
-        expect(
-          events.some(
-            (event) => event.phase === "handler" && event.trace?.traceId === firstTraceId,
-          ),
-        ).toBe(false);
+        expect(tracePhase(firstTraceId, "handler")).toBeUndefined();
         releaseHandler.resolve();
         await waitForDispatch(firstTraceId);
         const settled = await scrape();
@@ -342,9 +332,8 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           );
         }
         for (const traceId of [firstTraceId, secondTraceId]) {
-          const observations = events.filter((event) => event.trace?.traceId === traceId);
-          const handler = observations.find((event) => event.phase === "handler");
-          const response = observations.find((event) => event.phase === "response");
+          const handler = tracePhase(traceId, "handler");
+          const response = tracePhase(traceId, "response");
           if (handler?.phase !== "handler" || response?.phase !== "response") {
             throw new Error("missing real request timing observations");
           }
@@ -360,13 +349,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         // Arbitrary method names share one bucket; this exercises retention through real ingress.
         // The exporter unit test separately saturates the hard 2048-series cap and verifies drops.
         expect(await rpcReq(ws, "private-rpc-proof-0", {})).toMatchObject({ ok: false });
-        await vi.waitFor(
-          () =>
-            expect(
-              events.filter((event) => event.method === "other" && event.phase === "dispatch"),
-            ).toHaveLength(1),
-          { timeout: 10_000 },
-        );
+        await waitFor(() => expect(unknownDispatches()).toHaveLength(1));
         await waitForDiagnosticEventsDrained();
         const unknownSeries = (body: string) =>
           body
@@ -380,13 +363,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         for (let index = 1; index <= 64; index++) {
           expect(await rpcReq(ws, `private-rpc-proof-${index}`, {})).toMatchObject({ ok: false });
         }
-        await vi.waitFor(
-          () =>
-            expect(
-              events.filter((event) => event.method === "other" && event.phase === "dispatch"),
-            ).toHaveLength(65),
-          { timeout: 10_000 },
-        );
+        await waitFor(() => expect(unknownDispatches()).toHaveLength(65));
         await waitForDiagnosticEventsDrained();
         const flooded = await scrape();
         const retainedWindows = windowMetrics(flooded);
@@ -403,7 +380,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           [firstTraceId, "1111111111111111"],
           [secondTraceId, "2222222222222222"],
         ]) {
-          const spans = rpcSpans().filter((span) => span.traceId === traceId);
+          const spans = rpcSpans(traceId);
           expect(spans.map((span) => span.name).toSorted()).toEqual([
             "openclaw.gateway.rpc.dispatch",
             "openclaw.gateway.rpc.handler",

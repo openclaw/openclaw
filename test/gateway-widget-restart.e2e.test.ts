@@ -1,7 +1,6 @@
 // Real process replacement and a local provider prove the durable recovery boundary.
 import { once } from "node:events";
 import { access, readFile, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -19,6 +18,9 @@ import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import {
   readRestartSession,
+  restartEnv,
+  restartProviderServer,
+  restartToolNames,
   restartModelConfig,
   writeRestartTitle,
   writeRestartToolCall,
@@ -35,10 +37,6 @@ const FINAL_MARKER = "WIDGET-RESTART-COMPLETE";
 const PROGRESS_MARKER = "Widget recovery is still working.";
 const FINAL_HTML = "<h1>Recovered chart</h1><p>Recovery completed.</p>";
 
-function writeToolCall(response: ServerResponse, name: string, args: unknown, ordinal: number) {
-  writeRestartToolCall(response, "widget", name, args, ordinal);
-}
-
 async function startWidgetProvider(signal: AbortSignal) {
   const recovered = createDeferred();
   const releaseRecovery = createDeferred();
@@ -54,111 +52,74 @@ async function startWidgetProvider(signal: AbortSignal) {
     offsets: [0],
     signal,
     createListener: () =>
-      createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
-          if (tools.length === 0) {
-            if (body.stream === false) {
-              writeRestartTitle(response, "Synthetic widget recovery session");
-              return;
-            }
-            writeOpenAiResponsesText(response, {
-              text: "Synthetic widget recovery session",
-              messageId: "msg_title",
-              responseId: "resp_title",
-            });
+      restartProviderServer(failed, async (request, response, body) => {
+        const tools = restartToolNames(body);
+        if (tools.length === 0) {
+          if (body.stream === false) {
+            writeRestartTitle(response, "Synthetic widget recovery session");
             return;
           }
-          expect(request.url).toBe("/v1/responses");
-          calls.push({ recovering, tools, input: body.input });
-          expect(tools.some((name) => name === "show_widget" || name === "dispatch_action")).toBe(
-            true,
-          );
-          const widgetName = tools.includes("show_widget") ? "show_widget" : "dispatch_action";
-          const widgetArgs = (args: unknown) =>
-            widgetName === "dispatch_action" ? { id: "show_widget", args } : args;
-          if (!recovering) {
-            initialCalls += 1;
-            if (initialCalls === 1) {
-              writeToolCall(
-                response,
-                widgetName,
-                widgetArgs({
-                  title: "Restart chart",
-                  name: WIDGET_NAME,
-                  pin: true,
-                  widget_code: "<p>Waiting for restart checkpoint</p>",
-                }),
-                calls.length,
-              );
-            } else if (initialCalls === 2) {
-              writeToolCall(
-                response,
-                "exec",
-                {
-                  command:
-                    "touch checkpoint-ready; while [ ! -f checkpoint-resume ]; do sleep 0.1; done",
-                  yieldMs: 10000,
-                  timeoutSeconds: 120,
-                },
-                calls.length,
-              );
-            }
-            // A subsequent model request remains pending until its owned Gateway dies.
-            return;
-          }
-          recoveryCalls += 1;
-          if (recoveryCalls === 1) {
-            recovered.resolve();
-            const name = tools.includes("message") ? "message" : "dispatch_action";
-            const args = { action: "send", message: PROGRESS_MARKER, final: false };
-            writeToolCall(
-              response,
-              name,
-              name === "message" ? args : { id: "message", args },
-              calls.length,
-            );
-            return;
-          }
-          if (recoveryCalls === 2) {
-            // The next real provider request proves that the progress tool settled.
-            progressPersisted.resolve();
-            return;
-          }
-          if (recoveryCalls === 3) {
-            progressResumed.resolve();
-            await withinTest(releaseRecovery.promise, signal);
-            writeToolCall(
-              response,
-              widgetName,
-              widgetArgs({
-                title: "Restart chart",
-                name: WIDGET_NAME,
-                pin: true,
-                widget_code: FINAL_HTML,
-              }),
-              calls.length,
-            );
-            return;
-          }
-          expect(recoveryCalls).toBe(4);
           writeOpenAiResponsesText(response, {
-            text: FINAL_MARKER,
-            messageId: "msg_recovered_final",
-            responseId: "resp_recovered_final",
+            text: "Synthetic widget recovery session",
+            messageId: "msg_title",
+            responseId: "resp_title",
           });
-        })().catch((error: unknown) => {
-          failed.reject(error);
-          response.destroy(error instanceof Error ? error : undefined);
+          return;
+        }
+        expect(request.url).toBe("/v1/responses");
+        calls.push({ recovering, tools, input: body.input });
+        expect(tools.some((name) => name === "show_widget" || name === "dispatch_action")).toBe(
+          true,
+        );
+        const widgetName = tools.includes("show_widget") ? "show_widget" : "dispatch_action";
+        const widgetArgs = (args: unknown) =>
+          widgetName === "dispatch_action" ? { id: "show_widget", args } : args;
+        const tool = (name: string, args: unknown) =>
+          writeRestartToolCall(response, "widget", name, args, calls.length);
+        const widget = (widget_code: string) =>
+          tool(
+            widgetName,
+            widgetArgs({ title: "Restart chart", name: WIDGET_NAME, pin: true, widget_code }),
+          );
+        if (!recovering) {
+          initialCalls += 1;
+          if (initialCalls === 1) {
+            widget("<p>Waiting for restart checkpoint</p>");
+          } else if (initialCalls === 2) {
+            tool("exec", {
+              command:
+                "touch checkpoint-ready; while [ ! -f checkpoint-resume ]; do sleep 0.1; done",
+              yieldMs: 10000,
+              timeoutSeconds: 120,
+            });
+          }
+          // A subsequent model request remains pending until its owned Gateway dies.
+          return;
+        }
+        recoveryCalls += 1;
+        if (recoveryCalls === 1) {
+          recovered.resolve();
+          const name = tools.includes("message") ? "message" : "dispatch_action";
+          const args = { action: "send", message: PROGRESS_MARKER, final: false };
+          tool(name, name === "message" ? args : { id: "message", args });
+          return;
+        }
+        if (recoveryCalls === 2) {
+          // The next real provider request proves that the progress tool settled.
+          progressPersisted.resolve();
+          return;
+        }
+        if (recoveryCalls === 3) {
+          progressResumed.resolve();
+          await withinTest(releaseRecovery.promise, signal);
+          widget(FINAL_HTML);
+          return;
+        }
+        expect(recoveryCalls).toBe(4);
+        writeOpenAiResponsesText(response, {
+          text: FINAL_MARKER,
+          messageId: "msg_recovered_final",
+          responseId: "resp_recovered_final",
         });
       }),
   });
@@ -190,6 +151,8 @@ it.skipIf(process.platform === "win32")(
   { timeout: 180_000 },
   async ({ signal }) => {
     const provider = await startWidgetProvider(signal);
+    const wait = <T>(promise: Promise<T>, waitSignal = signal) =>
+      withinTest(Promise.race([promise, provider.failed]), waitSignal);
     await runQaGatewayFixture(
       async () => {
         const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
@@ -197,11 +160,7 @@ it.skipIf(process.platform === "win32")(
           name: "gateway-widget-restart",
           signal,
           env: {
-            OPENAI_API_KEY: undefined,
-            OPENAI_BASE_URL: undefined,
-            OPENAI_API_BASE: undefined,
-            OPENCLAW_SKIP_PROVIDERS: undefined,
-            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            ...restartEnv,
             OPENCLAW_SKIP_CANVAS_HOST: "0",
             // The synthetic provider is fixture-owned loopback, never an external service.
             NO_PROXY: "127.0.0.1,localhost",
@@ -339,11 +298,11 @@ it.skipIf(process.platform === "win32")(
               await instance.startGateway();
               expect(instance.child?.pid).not.toBe(original.pid);
               client = await connect(false);
-              await withinTest(
-                Promise.race([provider.recovered, provider.failed]),
+              await wait(
+                provider.recovered,
                 AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
               );
-              await withinTest(Promise.race([provider.progressPersisted, provider.failed]), signal);
+              await wait(provider.progressPersisted);
               const progressHistory = await client.request("chat.history", {
                 sessionKey: SESSION_KEY,
               });
@@ -362,7 +321,7 @@ it.skipIf(process.platform === "win32")(
               client = await connect(false);
               await client.request("sessions.subscribe", { agentId: "main" });
               // Socket readiness precedes admission of the new recovery lifecycle.
-              await withinTest(Promise.race([provider.progressResumed, provider.failed]), signal);
+              await wait(provider.progressResumed);
               const recoveryRunId = persisted()?.lifecycleRunId;
               expect(typeof recoveryRunId).toBe("string");
               const settled = client.request("agent.wait", {
@@ -371,17 +330,12 @@ it.skipIf(process.platform === "win32")(
               });
               void settled.catch(() => {});
               provider.release();
-              expect(
-                await withinTest(Promise.race([settled, provider.failed]), signal),
-              ).toMatchObject({
+              expect(await wait(settled)).toMatchObject({
                 status: "ok",
                 endedAt: expect.any(Number),
               });
               // The terminal publication follows the owning SQLite write, unlike model EOF.
-              const published = await withinTest(
-                Promise.race([terminalPublished.promise, provider.failed]),
-                signal,
-              );
+              const published = await wait(terminalPublished.promise);
               const durable = persisted();
               const rows = await client.request<SessionsListResult>("sessions.list", {
                 agentId: "main",
@@ -418,31 +372,8 @@ it.skipIf(process.platform === "win32")(
               expect(instance.logs()).not.toContain("Session transcript keyed user is outside");
               expect(instance.logs()).toContain("startup-orphaned main session(s)");
             } catch (cause) {
-              let entry: unknown;
-              try {
-                const full = persisted();
-                entry = Object.fromEntries(
-                  [
-                    "status",
-                    "abortedLastRun",
-                    "startedAt",
-                    "endedAt",
-                    "activeWriterRunId",
-                    "lifecycleRunId",
-                    "lastRunId",
-                    "restartRecoveryRuns",
-                    "mainRestartRecovery",
-                    "restartRecoveryDeliveryRunId",
-                    "restartRecoveryDeliverySourceRunId",
-                    "restartRecoverySourceIngress",
-                  ].map((key) => [key, full?.[key]]),
-                );
-              } catch {
-                entry = "unavailable";
-              }
               const diagnostics = JSON.stringify({
                 calls: provider.calls.map(({ recovering, tools }) => ({ recovering, tools })),
-                entry,
                 logs: instance.logs(),
               });
               throw new Error(
