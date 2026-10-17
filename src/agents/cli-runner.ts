@@ -29,7 +29,6 @@ import {
   type CliRecoveryOptions,
 } from "./cli-runner/cli-run-recovery.js";
 import {
-  assertCliRuntimeBinding,
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
   buildCliRunResult,
@@ -536,9 +535,6 @@ async function runPreparedCliAgentOwned(
       let completed: EmbeddedAgentRunResult | undefined;
       try {
         const terminalInterruption = output.terminalInterruption;
-        if (!terminalInterruption) {
-          await assertCliRuntimeBinding(context);
-        }
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         // Native continuity must be resolved before the final transcript commit.
         const bindingFlushOk = sessionBindingDisabled

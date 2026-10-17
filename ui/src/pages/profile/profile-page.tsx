@@ -36,6 +36,7 @@ import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import "../../styles/profile.css";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
@@ -319,37 +320,36 @@ function accessSummary(scopes: readonly string[] | null) {
 
 export function ProfilePage() {
   const context = useApplication();
+  const agents = projectOwner(context.agents, (source) => source.state.agentsList);
+  const identities = projectOwner(context.agentIdentity, (source) => source);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ProfileState(context, () => setRevision((value) => value + 1));
   const view = () => {
     revision();
     return state;
   };
-  const stops = [
-    context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot)),
-    context.agents.subscribe(state.publish),
-    context.agentIdentity.subscribe(state.publish),
-    context.gateway.subscribeEvents((event) => {
-      if (
-        !state.identityBusy &&
-        event.event === "sessions.changed" &&
-        asOptionalRecord(event.payload)?.reason === "profile-identity"
-      ) {
-        state.identityRequestId += 1;
-        state.identityLoading = false;
-        void state.loadIdentity();
-      }
-    }),
-  ];
+  // Retire identity requests synchronously when connection authority changes.
+  const stopGateway = context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot));
+  const stopEvents = context.gateway.subscribeEvents((event) => {
+    if (
+      !state.identityBusy &&
+      event.event === "sessions.changed" &&
+      asOptionalRecord(event.payload)?.reason === "profile-identity"
+    ) {
+      state.identityRequestId += 1;
+      state.identityLoading = false;
+      void state.loadIdentity();
+    }
+  });
   state.applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
-    stops.forEach((stop) => stop());
+    stopGateway();
+    stopEvents();
     state.dispose();
   });
   const connected = () => view().connected && view().client !== null;
   const agent = () => {
-    revision();
-    const list = context.agents.state.agentsList;
+    const list = agents.read();
     const id = list?.defaultId ?? "main";
     return list?.agents.find((row) => row.id === id) ?? { id };
   };
@@ -408,7 +408,7 @@ export function ProfilePage() {
             <ProfileHero
               row={agent()}
               user={view().selfUser}
-              identity={context.agentIdentity.get(agent().id)}
+              identity={identities.read().get(agent().id)}
             />
             <div id="settings-profile-access">
               <SettingsSection title={t("profilePage.access.title")}>

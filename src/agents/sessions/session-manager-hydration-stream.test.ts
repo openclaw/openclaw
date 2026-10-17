@@ -17,10 +17,8 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../../state/openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -117,14 +115,12 @@ it("rejects a persisted quarantine through the history worker without retargetin
     await waitForSessionTranscriptProjection(target);
     await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     const reason = "synthetic persisted hydration quarantine";
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        kind: "agent",
-        path: target.storePath,
-        env: state.env,
-        reason,
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      kind: "agent",
+      path: target.storePath,
+      env: state.env,
+      reason,
+    });
     const manager = SessionManager.inMemory("/retained");
     manager.appendMessage(makeUserMessage("keep the original view", 2));
     const before = manager.getPersistedEntries();

@@ -9,6 +9,7 @@ import {
   WebSocket,
   WebSocketServer,
 } from "../../../../packages/gateway-client/src/websocket.test-support.js";
+import { writeConfigFile } from "../../../config/config.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
@@ -30,12 +31,16 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-async function openOperatorSocket(port: number, token: string): Promise<WebSocket> {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+async function openOperatorSocket(
+  port: number,
+  token: string,
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
   trackConnectChallengeNonce(socket);
   await once(socket, "open");
   try {
-    await connectOk(socket, { token });
+    await connectOk(socket, { token, prePairDevice: headers !== undefined });
     return socket;
   } catch (error) {
     socket.terminate();
@@ -114,6 +119,7 @@ describe("authenticated operator request starts", () => {
   });
 
   it("starts a coalesced authenticated operator burst before an immediate while completions overlap", async () => {
+    await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
     const ids = Array.from({ length: 33 }, (_, index) => `burst-${index}`);
     const starts: string[] = [];
     const completed: string[] = [];
@@ -158,7 +164,9 @@ describe("authenticated operator request starts", () => {
         controlUiEnabled: false,
       });
       capture = captureGatewayConnection(portClaim.port);
-      ws = await openOperatorSocket(portClaim.port, token);
+      ws = await openOperatorSocket(portClaim.port, token, {
+        "x-forwarded-for": "198.51.100.10",
+      });
       await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
       const { stream } = capture.get();
       expect(ws.extensions).toContain("permessage-deflate");
@@ -424,7 +432,8 @@ describe("authenticated operator request starts", () => {
     },
   );
 
-  it("compresses large frames both ways without stalling on ws zlib streams", async () => {
+  it("keeps local frames raw and compresses remote frames both ways without stalling", async () => {
+    await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
     const registry = createEmptyPluginRegistry();
     registry.gatewayHandlers["test.echo"] = async ({ req, respond }) => {
       respond(true, { echoed: (req.params as { text: string }).text });
@@ -459,9 +468,17 @@ describe("authenticated operator request starts", () => {
         controlUiEnabled: false,
       });
       capture = captureGatewayConnection(portClaim.port);
+      const local = new WebSocket(`ws://127.0.0.1:${portClaim.port}`);
+      ws = local;
+      await once(local, "open");
+      expect(local.extensions).toBe("");
+      const localClosed = once(local, "close");
+      local.close();
+      await localClosed;
       // Peers may cap the server window; its inflater rejects farther back-references.
       const socket = new WebSocket(`ws://127.0.0.1:${portClaim.port}`, {
         perMessageDeflate: { serverMaxWindowBits: 10 },
+        headers: { "x-forwarded-for": "198.51.100.10" },
       });
       ws = socket;
       trackConnectChallengeNonce(socket);
@@ -472,7 +489,7 @@ describe("authenticated operator request starts", () => {
       const { stream } = capture.get();
       // Device tokens ride in hello; secrets never share a compressed frame.
       const beforeHello = stream.bytesWritten;
-      const hello = JSON.stringify(await connectOk(socket, { token }));
+      const hello = JSON.stringify(await connectOk(socket, { token, prePairDevice: true }));
       expect(hello.length).toBeGreaterThan(16 * 1024);
       expect(stream.bytesWritten - beforeHello).toBeGreaterThan(hello.length);
       const echo = async (id: string, text: string, send = () => {}) => {

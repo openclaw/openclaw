@@ -444,13 +444,8 @@
   height: 20px;
 }
 
-/* Keep the native menu owner; the phone surface is a viewport-anchored sheet. */
+/* Phones keep the shared trigger anchor; only the surface's size budget changes. */
 .chat-panel-layout-menu.chat-panel-layout-menu--mobile > .oc-menu[data-placement] {
-  position: fixed;
-  position-area: none;
-  position-try-fallbacks: none;
-  inset: auto 8px calc(8px + env(safe-area-inset-bottom));
-  margin: 0;
   width: min(264px, calc(100dvw - 24px));
   max-height: min(
     var(--oc-overlay-max-height, 420px),

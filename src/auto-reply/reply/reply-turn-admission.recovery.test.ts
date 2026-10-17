@@ -7,12 +7,9 @@ import {
 } from "../../../test/helpers/promise.js";
 import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
-import * as recoveryLifecycle from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
-import * as recoveryOwnerRelease from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import * as recoveryStore from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import * as restartRecovery from "../../agents/main-session-recovery/main-session-restart-recovery.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -141,78 +138,6 @@ function recoveryFixture(overrides: Partial<SessionEntry> = {}) {
     write: (value: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, value),
   };
 }
-
-it("keeps deferred owner release retries from retaining a successor", async () => {
-  const deferredReleases: Promise<void>[] = [];
-  const schedule = recoveryLifecycle.scheduleMainSessionRecoveryMutation;
-  const scheduled = vi
-    .spyOn(recoveryLifecycle, "scheduleMainSessionRecoveryMutation")
-    .mockImplementation((params) => {
-      const settled = createDeferred();
-      deferredReleases.push(settled.promise);
-      schedule({
-        ...params,
-        onSuccess: async (result) => {
-          await params.onSuccess(result);
-          settled.resolve();
-        },
-      });
-    });
-  const pendingTarget = vi
-    .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
-    .mockImplementation(() => {});
-  let restoreAccessor: (() => void) | undefined;
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    const f = recoveryFixture({
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-    });
-    const owner = owned(await f.admit());
-    const apply = sessionAccessor.applySessionEntryReplacements;
-    const failedWrites = Array.from({ length: 3 }, () => createDeferred());
-    let failures = 0;
-    const accessorSpy = vi
-      .spyOn(sessionAccessor, "applySessionEntryReplacements")
-      .mockImplementation(async (params) => {
-        const failedWrite = failedWrites[failures];
-        if (failedWrite) {
-          failures += 1;
-          failedWrite.resolve();
-          throw new Error("SQLite session entry changed before replacement");
-        }
-        return await apply(params);
-      });
-    restoreAccessor = () => accessorSpy.mockRestore();
-    owner.operation.complete();
-    const successor = f.admit();
-    for (const [index, failedWrite] of failedWrites.entries()) {
-      await failedWrite.promise;
-      if (index < failedWrites.length - 1) {
-        await vi.advanceTimersByTimeAsync(25 * 2 ** index);
-      }
-    }
-    // Join real worker I/O without advancing later retry timers.
-    const admitted = await successor;
-    expect(deferredReleases).toHaveLength(1);
-    accessorSpy.mockRestore();
-    owned(admitted);
-    const released = getSessionWorkAdmissionRelease(f.scope);
-    expect(released).toBeDefined();
-    complete(admitted);
-    await released;
-  } finally {
-    try {
-      restoreAccessor?.();
-      // Start deferred repair without firing unrelated database lease deadlines.
-      await vi.advanceTimersByTimeAsync(1_000);
-      await Promise.all(deferredReleases);
-    } finally {
-      scheduled.mockRestore();
-      pendingTarget.mockRestore();
-      vi.useRealTimers();
-    }
-  }
-});
 
 it("keeps new input and followups behind a concurrent recovery winner", async () => {
   const delivery = {

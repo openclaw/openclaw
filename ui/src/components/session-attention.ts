@@ -60,6 +60,7 @@ export function createSessionAttention(
   let agentStatusExpiryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let agentStatusExpiryAt = Infinity;
   let snoozeWakeTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let snoozeWakeAt: number | null = null;
   const invalidateDeadline = () => {
     if (host.isConnected) {
       setClock((revision) => revision + 1);
@@ -124,11 +125,18 @@ export function createSessionAttention(
   function scheduleSessionSnoozeWake(
     rows: Iterable<Pick<GatewaySessionRow, "snoozedUntil">>,
   ): void {
+    const wakeAt = host.isConnected ? nextSessionSnoozeWakeAt(rows, Date.now()) : null;
+    if (wakeAt === snoozeWakeAt) {
+      return;
+    }
     globalThis.clearTimeout(snoozeWakeTimer);
-    const wakeAt = nextSessionSnoozeWakeAt(rows, Date.now());
-    if (host.isConnected && wakeAt !== null) {
+    snoozeWakeAt = wakeAt;
+    if (wakeAt !== null) {
       snoozeWakeTimer = globalThis.setTimeout(
-        invalidateDeadline,
+        () => {
+          snoozeWakeAt = null;
+          invalidateDeadline();
+        },
         Math.min(2_147_483_647, Math.max(0, wakeAt - Date.now() + 1)),
       );
     }

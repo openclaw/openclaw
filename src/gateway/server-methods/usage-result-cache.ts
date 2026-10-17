@@ -15,7 +15,10 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { getActiveRemoteModelCatalog } from "../../model-catalog/remote-overlay.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
+import {
+  readSessionRowChangeRevision,
+  readWithSessionStoreTopology,
+} from "../../sessions/session-row-changes.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
@@ -112,7 +115,7 @@ export async function loadCostUsageSummaryCached(params: {
     cache: costUsageCache,
     cacheKey,
     configRef: params.config,
-    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}`,
+    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}:${readSessionRowChangeRevision()}`,
     load: () =>
       allAgents
         ? loadAllAgentCostUsageSummary(params)
@@ -130,47 +133,49 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  // Same agent universe as discoverAllSessionsForUsage: enumerating configured
-  // ids only would list system-agent sessions whose cost never reaches totals.
-  const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
-    normalizeAgentId(agent.id),
-  );
-  const summaries = await runUsageAgentTasks(
-    agentIds.map(
-      (agentId) => () =>
-        loadCostUsageSummaryFromCache({
-          ...params,
-          agentId,
-          requestRefresh: true,
-        }),
-    ),
-  );
-  const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
-  const totals = createEmptyCostUsageTotals();
-  let cacheStatus: UsageCacheStatus | undefined;
-  let updatedAt = 0;
-  let days = 0;
-  for (const summary of summaries) {
-    updatedAt = Math.max(updatedAt, summary.updatedAt);
-    days = Math.max(days, summary.days);
-    addCostUsageTotals(totals, summary.totals);
-    if (summary.cacheStatus) {
-      cacheStatus = mergeUsageCacheStatus(cacheStatus, summary.cacheStatus);
+  return readWithSessionStoreTopology(async () => {
+    // Same agent universe as discoverAllSessionsForUsage: enumerating configured
+    // ids only would list system-agent sessions whose cost never reaches totals.
+    const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
+      normalizeAgentId(agent.id),
+    );
+    const summaries = await runUsageAgentTasks(
+      agentIds.map(
+        (agentId) => () =>
+          loadCostUsageSummaryFromCache({
+            ...params,
+            agentId,
+            requestRefresh: true,
+          }),
+      ),
+    );
+    const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
+    const totals = createEmptyCostUsageTotals();
+    let cacheStatus: UsageCacheStatus | undefined;
+    let updatedAt = 0;
+    let days = 0;
+    for (const summary of summaries) {
+      updatedAt = Math.max(updatedAt, summary.updatedAt);
+      days = Math.max(days, summary.days);
+      addCostUsageTotals(totals, summary.totals);
+      if (summary.cacheStatus) {
+        cacheStatus = mergeUsageCacheStatus(cacheStatus, summary.cacheStatus);
+      }
+      for (const day of summary.daily) {
+        const entry = dailyByDate.get(day.date) ?? {
+          date: day.date,
+          ...createEmptyCostUsageTotals(),
+        };
+        addCostUsageTotals(entry, day);
+        dailyByDate.set(day.date, entry);
+      }
     }
-    for (const day of summary.daily) {
-      const entry = dailyByDate.get(day.date) ?? {
-        date: day.date,
-        ...createEmptyCostUsageTotals(),
-      };
-      addCostUsageTotals(entry, day);
-      dailyByDate.set(day.date, entry);
-    }
-  }
-  return {
-    updatedAt,
-    days,
-    daily: Array.from(dailyByDate.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
-    totals,
-    ...(cacheStatus ? { cacheStatus } : {}),
-  };
+    return {
+      updatedAt,
+      days,
+      daily: Array.from(dailyByDate.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+      totals,
+      ...(cacheStatus ? { cacheStatus } : {}),
+    };
+  });
 }

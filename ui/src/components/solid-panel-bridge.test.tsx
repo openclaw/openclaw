@@ -3,10 +3,10 @@ import { expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { definePanelBridge } from "./solid-panel-bridge.tsx";
-import { SolidPanelController, usePanelController } from "./solid-panel-controller.ts";
+import { SolidPanelOwner, usePanelOwner } from "./solid-panel-owner.ts";
 
 type Inputs = { value: number };
-class CounterPanel extends SolidPanelController {
+class CounterPanel extends SolidPanelOwner {
   value = 0;
   connections = 0;
   connectedInDocument = false;
@@ -35,7 +35,7 @@ function fixture() {
       return controller;
     },
     (controller) => {
-      usePanelController(controller);
+      usePanelOwner(controller);
       return <output>{controller.read().value}</output>;
     },
     { properties: { value: { default: 0, type: Number } }, methods: ["increment"] },

@@ -8,6 +8,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
@@ -422,47 +423,39 @@ describe("agent command restart recovery ownership", () => {
     });
   });
 
-  it("keeps retrying admitted recovery restoration after immediate store failures", async () => {
-    vi.useFakeTimers();
+  it("preserves admitted recovery and warns when one-shot restoration fails", async () => {
+    const target = createTarget();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await write(target, runningRecovery(lifecycleGeneration));
+    const restoreAdmittedRecovery = vi.fn(async () => {
+      throw new Error("transient session-store failure");
+    });
+    const run = vi.fn();
+    const logs = createWarnLogCapture("openclaw-command-recovery-restore");
     try {
-      const target = createTarget();
-      const restoredTarget = {
-        sessionId: target.sessionId,
-        sessionKey,
-        storePath: target.storePath,
-      };
-      let failures = 0;
-      const restoreAdmittedRecovery = vi.fn(async () => {
-        if (failures < 3) {
-          failures += 1;
-          throw new Error("transient session-store failure");
-        }
-        return restoredTarget;
-      });
-      const recovery = execute(target, {
-        opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
-        prepare: async () => {
-          throw new Error("model preparation failed");
-        },
-        restoreAdmittedRecovery,
-        run: vi.fn(),
-      });
-      const rejected = expect(recovery).rejects.toThrow("model preparation failed");
+      await expect(
+        execute(target, {
+          lifecycleGeneration,
+          opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
+          prepare: async () => {
+            throw new Error("model preparation failed");
+          },
+          restoreAdmittedRecovery,
+          run,
+        }),
+      ).rejects.toThrow("model preparation failed");
 
-      await vi.advanceTimersByTimeAsync(100);
-      await rejected;
-      expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(3);
+      expect(restoreAdmittedRecovery).toHaveBeenCalledOnce();
+      expect(run).not.toHaveBeenCalled();
+      expect(read(target)).toMatchObject(runningRecovery(lifecycleGeneration));
       expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
         undefined,
       );
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(4);
-      expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
-        restoredTarget,
-      );
+      await expect(
+        logs.findText("failed to restore admitted recovery after command preparation"),
+      ).resolves.toContain("transient session-store failure");
     } finally {
-      vi.useRealTimers();
+      logs.cleanup();
     }
   });
 

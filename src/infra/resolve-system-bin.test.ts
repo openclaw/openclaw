@@ -1,4 +1,5 @@
 // Covers trusted system binary resolution across platform install roots.
+import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -31,24 +32,6 @@ let freshResolveSystemBinId = 0;
 
 let executables: Set<string>;
 
-vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:fs")>("node:fs"),
-    {
-      accessSync: (candidate: import("node:fs").PathLike) => {
-        const candidatePath = String(candidate);
-        if (!executables.has(path.resolve(candidatePath))) {
-          throw Object.assign(new Error(`missing executable: ${candidatePath}`), {
-            code: "ENOENT",
-          });
-        }
-      },
-    },
-    { mirrorToDefault: true },
-  );
-});
-
 function addExecutables(...paths: string[]): void {
   for (const candidate of paths) {
     executables.add(candidate);
@@ -62,6 +45,14 @@ afterEach(() => {
 
 beforeEach(async () => {
   executables = new Set<string>();
+  vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
+    const candidatePath = String(candidate);
+    if (!executables.has(path.resolve(candidatePath))) {
+      throw Object.assign(new Error(`missing executable: ${candidatePath}`), {
+        code: "ENOENT",
+      });
+    }
+  });
   windowsRoots.systemRoot = "C:\\Windows";
   windowsRoots.programFilesRoots = ["C:\\Program Files", "C:\\Program Files (x86)"];
   ({ resolveSystemBin } = await importFreshModule<typeof import("./resolve-system-bin.js")>(

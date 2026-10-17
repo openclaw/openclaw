@@ -5,7 +5,7 @@ import {
   getPluginToolSideEffectOwnerKey,
 } from "../../../plugins/tool-metadata.js";
 import {
-  createClientToolNameConflictError,
+  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   findClientToolNameConflicts,
   toClientToolDefinitions,
   toToolDefinitions,
@@ -150,7 +150,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
     });
     if (clientToolNameConflicts.length > 0) {
-      throw createClientToolNameConflictError(clientToolNameConflicts);
+      throw new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${clientToolNameConflicts.join(", ")}`);
     }
 
     let clientToolDefs = sourceClientToolDefs.map((definition) =>

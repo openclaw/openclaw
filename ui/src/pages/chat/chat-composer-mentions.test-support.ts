@@ -11,7 +11,7 @@ import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
-} from "../new-session/composer-controller.ts";
+} from "../new-session/composer-textarea.ts";
 import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -109,7 +109,6 @@ export function composerFixture(
         mentionDirectory: unsupported ? undefined : directory,
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
-        onRequestUpdate: renderCurrent,
         onSlashCommand: slashCommand,
         canAbort: true,
         onAbort: abort,

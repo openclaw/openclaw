@@ -114,7 +114,8 @@ Gateway retain that ownership for their entire process lifetime; waiting for
 readiness does not release the lock. A non-Gateway holder, such as a CLI
 command or embedded agent run, gets time to finish first (up to 20 minutes by
 default, less on a host whose Doctor runs slowly); Doctor prints its PID and
-progress while it waits.
+progress while it waits. The same applies to a process that only has an agent
+database open ("An agent database is in use").
 
 Maintenance admission refusals finish the update with a recorded warning when
 no data is at risk, including contention from an unknown or non-serving holder.
