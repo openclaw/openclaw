@@ -244,6 +244,14 @@ export function sanitizeMessageToolVisiblePayload(
   };
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "interactive");
+  if (isRecord(params.clawhub)) {
+    // Clone before sanitizing so the original tool-call event remains immutable.
+    const clawHubRequest = { ...params.clawhub };
+    if (typeof clawHubRequest.intro === "string") {
+      clawHubRequest.intro = sanitizeText(clawHubRequest.intro);
+    }
+    params.clawhub = clawHubRequest;
+  }
   for (const field of [
     "text",
     "content",
