@@ -5,6 +5,7 @@ import {
   type HarnessRuntimeParityCell,
   type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
+import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
 type HarnessVariant = Parameters<typeof buildHarnessParityCell>[0]["variant"];
 type CellOverrides = Partial<HarnessRuntimeParityCell>;
@@ -31,7 +32,9 @@ const BASE_PROMPT_REPORT = {
         name: "read",
         summaryChars: 8,
         summaryHash: "summary-a",
+        schemaChars: 20,
         schemaHash: "schema-a",
+        propertiesCount: 1,
       },
     ],
   },
@@ -51,11 +54,16 @@ function makeCell(overrides: CellOverrides = {}): HarnessRuntimeParityCell {
   };
 }
 
-function classify(left: CellOverrides, right: CellOverrides) {
+function classify(
+  left: CellOverrides,
+  right: CellOverrides,
+  comparisonMode?: RuntimeParityComparisonMode,
+) {
   return buildHarnessParityResult({
     scenarioId: "scenario",
     left: liveCell(LEFT, makeCell(left)),
     right: liveCell(RIGHT, makeCell(right)),
+    ...(comparisonMode ? { comparisonMode } : {}),
   }).drift;
 }
 
@@ -260,8 +268,7 @@ describe("harness parity", () => {
       left: leftCell,
       right: rightCell,
       drift,
-      driftDetails: details,
-      firstDriftTurn: 1,
+      ...(drift === "none" ? {} : { driftDetails: details, firstDriftTurn: 1 }),
       promptDelta: {
         systemPromptChars: 0,
         projectContextChars: 0,
