@@ -13,6 +13,7 @@ import {
 } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
+  chatMessage,
   chatThreadDistanceFromBottom,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
@@ -130,19 +131,13 @@ suite.define(() => {
               SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
               checksMethod,
             ],
-            historyMessages: Array.from({ length: 30 }, (_, index) => ({
-              role: index % 2 ? "user" : "assistant",
-              content: [
-                {
-                  type: "text",
-                  text:
-                    "Project verification " +
-                    index +
-                    ".\n\nThe workspace has been reviewed and the checks are complete.",
-                },
-              ],
-              timestamp: index + 1,
-            })),
+            historyMessages: Array.from({ length: 30 }, (_, index) =>
+              chatMessage(
+                index % 2 ? "user" : "assistant",
+                `Project verification ${index}.\n\nThe workspace has been reviewed and the checks are complete.`,
+                { timestamp: index + 1 },
+              ),
+            ),
             sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
             inFlightRun: { runId, text: "Checking one more detail." },
             methodResponses: {

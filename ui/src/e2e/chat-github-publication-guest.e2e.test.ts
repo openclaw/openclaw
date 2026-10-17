@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type {
@@ -8,7 +6,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/session-github-publication.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import type { GitHubPublicationOptions } from "../lib/sessions/github-publication-owner.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -16,6 +13,10 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
+import {
+  publicationAction,
+  publicationScreenshot,
+} from "./chat-github-publication-accounts.test-support.ts";
 import { publicationMethods } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -92,23 +93,14 @@ async function installGuestGateway(
 }
 
 async function screenshot(page: Page, filename: string) {
-  if (captureUiProof) {
-    await writeFile(
-      path.join(suite.artifactDir, filename),
-      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-        page.getByText(historyText, { exact: true }),
-      ]),
-    );
-  }
+  await publicationScreenshot(suite, page, filename, [
+    page.getByText(historyText, { exact: true }),
+  ]);
 }
 
 async function expectNoPersonalActions(page: Page) {
-  expect(await page.getByRole("button", { name: "Publication account", exact: true }).count()).toBe(
-    0,
-  );
-  expect(
-    await page.getByRole("button", { name: "Confirm original publication", exact: true }).count(),
-  ).toBe(0);
+  expect(await publicationAction(page, "Publication account").count()).toBe(0);
+  expect(await publicationAction(page, "Confirm original publication").count()).toBe(0);
 }
 
 suite.define(() => {
@@ -140,7 +132,7 @@ suite.define(() => {
       const discovered = await gateway.waitForRequest("sessions.github.options");
       expect(discovered.params).toEqual({ sessionKey, agentId: "main" });
       await openDetailsPullRequests(page);
-      const publish = page.getByRole("button", { name: "Publish PR", exact: true });
+      const publish = publicationAction(page, "Publish PR");
       try {
         await expect.poll(() => publish.count()).toBe(1);
         await expect.poll(() => publish.isEnabled()).toBe(true);
@@ -167,7 +159,7 @@ suite.define(() => {
         ...options,
         latestShared: receipt,
       });
-      await page.getByRole("button", { name: "Check publication", exact: true }).click();
+      await publicationAction(page, "Check publication").click();
       const status = await gateway.waitForRequest("sessions.github.status");
       expect(status.params).toEqual({ sessionKey, agentId: "main", requestId });
       const openPr = page.getByRole("link", { name: "Open PR", exact: true });
@@ -206,7 +198,7 @@ suite.define(() => {
         await expect
           .poll(() => details.locator('[data-details-group="pull-requests"]').count())
           .toBe(0);
-        expect(await page.getByRole("button", { name: "Publish PR", exact: true }).count()).toBe(0);
+        expect(await publicationAction(page, "Publish PR").count()).toBe(0);
         await expectNoPersonalActions(page);
         expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
@@ -217,9 +209,7 @@ suite.define(() => {
           await reconnectMockGateway(page, gateway);
           await gateway.waitForRequest("sessions.github.options", { after: previousOptions });
           await openDetailsPullRequests(page);
-          await expect
-            .poll(() => page.getByRole("button", { name: "Publish PR", exact: true }).count())
-            .toBe(1);
+          await expect.poll(() => publicationAction(page, "Publish PR").count()).toBe(1);
           expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
         }
       });

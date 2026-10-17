@@ -13,49 +13,42 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const outbound = "/home/node/.openclaw/media/outbound";
 
 suite.define(() => {
   it.each([
-    {
-      kind: "audio",
-      source: "/home/node/.openclaw/media/outbound/bootstrap-voice.mp3",
-      ticket: "ticket-bootstrap-audio",
-    },
-    {
-      kind: "image",
-      source: "/home/node/.openclaw/media/outbound/bootstrap-image.png",
-      ticket: "ticket-bootstrap-image",
-    },
-    {
-      kind: "image",
-      source: "/projects/chat-worktree/.openclaw/tmp/review/preview.png",
-      ticket: "ticket-project-image",
-      revalidatePolicy: true,
-    },
-    {
-      kind: "image",
-      source: "FILE:///home/node/.openclaw/media/outbound/bootstrap-uppercase-image.png",
-      ticket: "ticket-bootstrap-uppercase-image",
-    },
-    {
-      kind: "image",
-      source: "file:/home/node/.openclaw/media/outbound/bootstrap-authorityless-image.png",
-      ticket: "ticket-bootstrap-authorityless-image",
-    },
-    {
-      kind: "audio",
-      source: "bootstrap-structured-audio.mp3",
-      ticket: "ticket-bootstrap-structured-audio",
-      structured: true,
-    },
+    ["audio", `${outbound}/bootstrap-voice.mp3`, "ticket-bootstrap-audio"],
+    ["image", `${outbound}/bootstrap-image.png`, "ticket-bootstrap-image"],
+    [
+      "image",
+      "/projects/chat-worktree/.openclaw/tmp/review/preview.png",
+      "ticket-project-image",
+      { revalidatePolicy: true },
+    ],
+    [
+      "image",
+      `FILE://${outbound}/bootstrap-uppercase-image.png`,
+      "ticket-bootstrap-uppercase-image",
+    ],
+    [
+      "image",
+      `file:${outbound}/bootstrap-authorityless-image.png`,
+      "ticket-bootstrap-authorityless-image",
+    ],
+    [
+      "audio",
+      "bootstrap-structured-audio.mp3",
+      "ticket-bootstrap-structured-audio",
+      { structured: true },
+    ],
     ...[
       "~/media/report-voice.mp3",
       "/workspace/project/../media/report-voice.mp3",
       "C:\\workspace\\project\\..\\media\\report-voice.mp3",
-    ].map((source) => ({ kind: "audio", source, ticket: "ticket-dollar-home", attachment: true })),
+    ].map((source) => ["audio", source, "ticket-dollar-home", { attachment: true }] as const),
   ] as const)(
-    "renders local assistant $kind through server metadata",
-    async ({ kind, source: fixtureSource, ticket, ...options }) => {
+    "renders local assistant %s through server metadata (%s)",
+    async (kind, fixtureSource, ticket, options = {}) => {
       const source =
         "structured" in options
           ? `FILE:${path.join(mediaTempDirs.make("control-ui-audio-"), fixtureSource)}`
@@ -110,35 +103,30 @@ suite.define(() => {
 
       const gateway = await installMockGateway(page, {
         historyMessages: [
-          kind === "image"
-            ? {
-                id: "assistant-bootstrap-local-image",
-                role: "assistant",
-                content: [{ type: "image", url: source, alt: "Local bootstrap image" }],
-                timestamp: Date.now(),
-              }
-            : {
-                id: "assistant-bootstrap-local-audio",
-                role: "assistant",
-                content:
-                  "attachment" in options
-                    ? [
-                        { type: "text", text: "Your recording" },
-                        {
-                          type: "attachment",
-                          attachment: {
-                            kind: "audio",
-                            label: "report-voice.mp3",
-                            mimeType: "audio/mpeg",
-                            url: source,
-                          },
+          {
+            id: `assistant-bootstrap-local-${kind}`,
+            role: "assistant",
+            timestamp: Date.now(),
+            content:
+              kind === "image"
+                ? [{ type: "image", url: source, alt: "Local bootstrap image" }]
+                : "attachment" in options
+                  ? [
+                      { type: "text", text: "Your recording" },
+                      {
+                        type: "attachment",
+                        attachment: {
+                          kind: "audio",
+                          label: "report-voice.mp3",
+                          mimeType: "audio/mpeg",
+                          url: source,
                         },
-                      ]
-                    : "structured" in options
-                      ? (await buildLocalWebchatAudioMessage(source)).content
-                      : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
-                timestamp: Date.now(),
-              },
+                      },
+                    ]
+                  : "structured" in options
+                    ? (await buildLocalWebchatAudioMessage(source)).content
+                    : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
+          },
         ],
       });
 

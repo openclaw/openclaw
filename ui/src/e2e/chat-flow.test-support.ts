@@ -327,32 +327,19 @@ export async function readOutboxPayloadAttachments(page: Page, key: string) {
     type StoredPayload = {
       attachments: Array<{ blob: Blob; fileName?: string; mimeType: string }>;
     };
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openclaw-control-ui");
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener(
-        "error",
-        () => reject(request.error ?? new Error("IDB open failed")),
-        { once: true },
-      );
-    });
-    try {
-      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
-        const request = database
-          .transaction("outboxPayloads")
-          .objectStore("outboxPayloads")
-          .get(payloadKey);
-        request.addEventListener(
-          "success",
-          () => resolve(request.result as StoredPayload | undefined),
-          { once: true },
-        );
-        request.addEventListener(
-          "error",
-          () => reject(request.error ?? new Error("IDB read failed")),
-          { once: true },
-        );
+    const result = <T>(request: IDBRequest<T>, message: string) =>
+      new Promise<T>((resolve, reject) => {
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener("error", () => reject(request.error ?? new Error(message)), {
+          once: true,
+        });
       });
+    const database = await result(indexedDB.open("openclaw-control-ui"), "IDB open failed");
+    try {
+      const payload = await result<StoredPayload | undefined>(
+        database.transaction("outboxPayloads").objectStore("outboxPayloads").get(payloadKey),
+        "IDB read failed",
+      );
       return payload
         ? Promise.all(
             payload.attachments.map(async ({ blob, fileName, mimeType }) => {
