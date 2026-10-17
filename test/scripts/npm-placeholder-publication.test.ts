@@ -24,16 +24,9 @@ function packageJson(name: string) {
   return {
     name,
     openclaw: {
-      install: {
-        npmSpec: name,
-      },
-      build: {
-        bundledDist: false,
-      },
-      release: {
-        publishToClawHub: true,
-        publishToNpm: true,
-      },
+      install: { npmSpec: name },
+      build: { bundledDist: false },
+      release: { publishToClawHub: true, publishToNpm: true },
     },
   };
 }
@@ -79,6 +72,51 @@ function identity(packageName: string) {
     integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
     shasum: createHash("sha1").update(tarball).digest("hex"),
   };
+}
+
+function planPublication(
+  options: Omit<Parameters<typeof createPlaceholderPublication>[0], "targetSha" | "workflowSha">,
+) {
+  return createPlaceholderPublication({ targetSha: SHA, workflowSha: WORKFLOW_SHA, ...options });
+}
+
+function publishArtifact(
+  options: Omit<
+    Parameters<typeof publishPlaceholders>[0],
+    "npmToken" | "targetSha" | "workflowSha"
+  >,
+) {
+  return publishPlaceholders({
+    npmToken: "test-token",
+    targetSha: SHA,
+    workflowSha: WORKFLOW_SHA,
+    fetchImpl: async () => registryResponse(),
+    registryAttempts: 1,
+    sleep: async () => undefined,
+    ...options,
+  });
+}
+
+async function artifact(packageName: string, packument?: Record<string, unknown>) {
+  const repoRoot = createRepo([{ dir: "fixture", manifest: packageJson(packageName) }]);
+  const outputDir = join(tempDirs.make("npm-placeholder-parent-"), "artifact");
+  await planPublication({
+    repoRoot,
+    outputDir,
+    packages: packageName,
+    fetchImpl: async () => registryResponse(packument),
+  });
+  return outputDir;
+}
+
+function classify(packageName: string, packument: Record<string, unknown>) {
+  const expected = identity(packageName);
+  return classifyRegistryState({
+    expectedIntegrity: expected.integrity,
+    expectedShasum: expected.shasum,
+    packageName,
+    registry: { status: 200, packument },
+  });
 }
 
 describe("npm placeholder publication", () => {
@@ -128,12 +166,10 @@ describe("npm placeholder publication", () => {
     ];
 
     await expect(
-      createPlaceholderPublication({
+      planPublication({
         repoRoot: root,
         outputDir: join(tempDirs.make("npm-placeholder-unstable-parent-"), "publication"),
         packages: packageName,
-        targetSha: SHA,
-        workflowSha: WORKFLOW_SHA,
         fetchImpl: async () => responses.shift() ?? registryResponse(),
       }),
     ).rejects.toThrow("npm registry state changed during placeholder planning");
@@ -141,35 +177,18 @@ describe("npm placeholder publication", () => {
 
   it("rejects mismatched 0.0.0 bytes and conflicting placeholder tags", () => {
     const packageName = "@openclaw/duckduckgo-plugin";
-    const expected = identity(packageName);
     expect(() =>
-      classifyRegistryState({
-        expectedIntegrity: expected.integrity,
-        expectedShasum: expected.shasum,
-        packageName,
-        registry: {
-          status: 200,
-          packument: {
-            "dist-tags": { placeholder: "0.0.0" },
-            versions: {
-              "0.0.0": { dist: { integrity: "sha512-different", shasum: "different" } },
-            },
-          },
+      classify(packageName, {
+        "dist-tags": { placeholder: "0.0.0" },
+        versions: {
+          "0.0.0": { dist: { integrity: "sha512-different", shasum: "different" } },
         },
       }),
     ).toThrow("npm registry tarball bytes differ");
     expect(() =>
-      classifyRegistryState({
-        expectedIntegrity: expected.integrity,
-        expectedShasum: expected.shasum,
-        packageName,
-        registry: {
-          status: 200,
-          packument: {
-            "dist-tags": { placeholder: "1.2.3" },
-            versions: {},
-          },
-        },
+      classify(packageName, {
+        "dist-tags": { placeholder: "1.2.3" },
+        versions: {},
       }),
     ).toThrow("placeholder dist-tag points to 1.2.3");
   });
@@ -185,12 +204,10 @@ describe("npm placeholder publication", () => {
       "dist-tags": { latest: "2026.7.2", beta: "2026.7.2-beta.7" },
       versions: { "2026.7.2": {} },
     });
-    const manifest = await createPlaceholderPublication({
+    const manifest = await planPublication({
       repoRoot: root,
       outputDir: artifactDir,
       packages: names.join(","),
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
       fetchImpl: async (input) =>
         (typeof input === "string"
           ? input
@@ -232,15 +249,10 @@ describe("npm placeholder publication", () => {
     ];
     const calls: string[][] = [];
     const tempRoot = tempDirs.make("npm-placeholder-token-success-");
-    const result = await publishPlaceholders({
+    const result = await publishArtifact({
       artifactDir,
-      npmToken: "test-token",
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
       fetchImpl: async () => publishResponses.shift() ?? registryResponse(),
       npmRunner: (args) => calls.push(args),
-      registryAttempts: 1,
-      sleep: async () => undefined,
       tempRoot,
     });
 
@@ -322,60 +334,28 @@ describe("npm placeholder publication", () => {
 
   it("rejects manifest state combinations that could lie about registry creation", async () => {
     const packageName = "@openclaw/comfy-provider";
-    const root = createRepo([{ dir: "comfy", manifest: packageJson(packageName) }]);
-    const artifactDir = join(tempDirs.make("npm-placeholder-invalid-parent-"), "artifact");
-    await createPlaceholderPublication({
-      repoRoot: root,
-      outputDir: artifactDir,
-      packages: packageName,
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
-      fetchImpl: async () => registryResponse(),
-    });
+    const artifactDir = await artifact(packageName);
     const manifestPath = join(artifactDir, "npm-placeholder-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.packages[0].action = "skip";
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-    await expect(
-      publishPlaceholders({
-        artifactDir,
-        npmToken: "test-token",
-        targetSha: SHA,
-        workflowSha: WORKFLOW_SHA,
-        fetchImpl: async () => registryResponse(),
-        registryAttempts: 1,
-        sleep: async () => undefined,
-      }),
-    ).rejects.toThrow("dist-tag snapshot is not canonical");
+    await expect(publishArtifact({ artifactDir })).rejects.toThrow(
+      "dist-tag snapshot is not canonical",
+    );
   });
 
   it("removes token-bearing npm config after mutation and readback failure", async () => {
     const packageName = "@openclaw/comfy-provider";
-    const root = createRepo([{ dir: "comfy", manifest: packageJson(packageName) }]);
-    const artifactDir = join(tempDirs.make("npm-placeholder-failure-parent-"), "artifact");
-    await createPlaceholderPublication({
-      repoRoot: root,
-      outputDir: artifactDir,
-      packages: packageName,
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
-      fetchImpl: async () => registryResponse(),
-    });
+    const artifactDir = await artifact(packageName);
     const tempRoot = tempDirs.make("npm-placeholder-token-failure-");
 
     await expect(
-      publishPlaceholders({
+      publishArtifact({
         artifactDir,
-        npmToken: "test-token",
-        targetSha: SHA,
-        workflowSha: WORKFLOW_SHA,
-        fetchImpl: async () => registryResponse(),
         npmRunner: () => {
           throw new Error("ambiguous npm failure");
         },
-        registryAttempts: 1,
-        sleep: async () => undefined,
         tempRoot,
       }),
     ).rejects.toThrow("mutation failed and exact registry readback did not converge");
@@ -384,21 +364,12 @@ describe("npm placeholder publication", () => {
 
   it("repairs a missing placeholder tag and accepts exact readback after an ambiguous error", async () => {
     const packageName = "@openclaw/meta-provider";
-    const root = createRepo([{ dir: "meta", manifest: packageJson(packageName) }]);
     const expected = identity(packageName);
     const before = {
       "dist-tags": { latest: "2026.7.2" },
       versions: { "0.0.0": { dist: expected } },
     };
-    const artifactDir = join(tempDirs.make("npm-placeholder-tag-parent-"), "artifact");
-    await createPlaceholderPublication({
-      repoRoot: root,
-      outputDir: artifactDir,
-      packages: packageName,
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
-      fetchImpl: async () => registryResponse(before),
-    });
+    const artifactDir = await artifact(packageName, before);
     const responses = [
       registryResponse(before),
       registryResponse({
@@ -409,18 +380,13 @@ describe("npm placeholder publication", () => {
     const calls: string[][] = [];
     const tempRoot = tempDirs.make("npm-placeholder-tag-token-");
 
-    const result = await publishPlaceholders({
+    const result = await publishArtifact({
       artifactDir,
-      npmToken: "test-token",
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
       fetchImpl: async () => responses.shift() ?? registryResponse(),
       npmRunner: (args) => {
         calls.push(args);
         throw new Error("ambiguous npm failure");
       },
-      registryAttempts: 1,
-      sleep: async () => undefined,
       tempRoot,
     });
 
@@ -437,17 +403,9 @@ describe("npm placeholder publication", () => {
     );
 
     expect(
-      classifyRegistryState({
-        expectedIntegrity: expected.integrity,
-        expectedShasum: expected.shasum,
-        packageName,
-        registry: {
-          status: 200,
-          packument: {
-            "dist-tags": distTags,
-            versions: { "0.0.0": { dist: expected } },
-          },
-        },
+      classify(packageName, {
+        "dist-tags": distTags,
+        versions: { "0.0.0": { dist: expected } },
       }),
     ).toEqual({
       action: "skip",

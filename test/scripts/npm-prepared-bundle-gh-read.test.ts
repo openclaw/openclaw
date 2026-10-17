@@ -26,16 +26,9 @@ beforeAll(() => {
   git("init", "--quiet");
   git("add", "package.json");
   git(
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "--quiet",
-    "-m",
-    "fixture",
+    ..."-c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit --quiet -m fixture".split(
+      " ",
+    ),
   );
   sourceSha = git("rev-parse", "HEAD");
   evidenceDir = join(directory, "evidence");
@@ -88,22 +81,16 @@ function runProof(failures: Failure[], job: Record<string, unknown> = {}) {
       preload,
       join(process.cwd(), "scripts/npm-prepared-bundle.mjs"),
       "proof",
-      "--proof-kind",
-      "sdk",
-      "--source-dir",
-      directory,
-      "--input-dir",
-      evidenceDir,
-      "--release-ref",
-      sourceSha,
-      "--npm-dist-tag",
-      "beta",
-      "--artifact-id",
-      "78",
-      "--artifact-name",
-      "openclaw-npm-sdk-proof-12-2",
-      "--artifact-digest",
-      "b".repeat(64),
+      ...Object.entries({
+        "proof-kind": "sdk",
+        "source-dir": directory,
+        "input-dir": evidenceDir,
+        "release-ref": sourceSha,
+        "npm-dist-tag": "beta",
+        "artifact-id": "78",
+        "artifact-name": "openclaw-npm-sdk-proof-12-2",
+        "artifact-digest": "b".repeat(64),
+      }).flatMap(([key, value]) => [`--${key}`, value]),
     ],
     {
       encoding: "utf8",
@@ -139,6 +126,15 @@ function runProof(failures: Failure[], job: Record<string, unknown> = {}) {
     waits: events.flatMap((event) => (event.wait === undefined ? [] : [event.wait])),
     requests: events.flatMap((event) => (event.args === undefined ? [] : [event.args])),
   };
+}
+
+function expectFailure(proof: ReturnType<typeof runProof>, waits: number[], requests?: number) {
+  expect(proof.result.status).toBe(1);
+  expect(proof.waits).toEqual(waits);
+  if (requests !== undefined) {
+    expect(proof.requests).toHaveLength(requests);
+  }
+  expect(existsSync(proof.output)).toBe(false);
 }
 
 describe("npm current-producer metadata recovery", () => {
@@ -198,36 +194,25 @@ describe("npm current-producer metadata recovery", () => {
     { status: 500, message: "Internal Server Error" },
   ])("does not retry HTTP $status permission/non-throttle failures", (failure) => {
     const proof = runProof([failure]);
-    expect(proof.result.status).toBe(1);
-    expect(proof.waits).toEqual([]);
-    expect(proof.requests).toHaveLength(1);
-    expect(existsSync(proof.output)).toBe(false);
+    expectFailure(proof, [], 1);
   });
 
   it("bounds repeated throttle recovery and never emits evidence on exhaustion", () => {
     const proof = runProof(Array.from({ length: 4 }, () => ({ status: 403 })));
-    expect(proof.result.status).toBe(1);
-    expect(proof.waits).toEqual([60_000, 120_000, 240_000]);
-    expect(proof.requests).toHaveLength(4);
-    expect(existsSync(proof.output)).toBe(false);
+    expectFailure(proof, [60_000, 120_000, 240_000], 4);
   });
 
   it("refuses a server delay outside the recovery budget without retrying early", () => {
     const proof = runProof([{ status: 429, headers: { "retry-after": "3900" } }]);
-    expect(proof.result.status).toBe(1);
-    expect(proof.waits).toEqual([]);
-    expect(proof.requests).toHaveLength(1);
-    expect(existsSync(proof.output)).toBe(false);
+    expectFailure(proof, [], 1);
   });
 
   it.each([{ run_attempt: 3 }, { head_sha: "c".repeat(40) }, { status: "completed" }])(
     "rejects changed producer identity after waiting: %j",
     (job) => {
       const proof = runProof([{ status: 403 }], job);
-      expect(proof.result.status).toBe(1);
+      expectFailure(proof, [60_000]);
       expect(proof.result.stderr).toContain("Current npm producer job identity mismatch");
-      expect(proof.waits).toEqual([60_000]);
-      expect(existsSync(proof.output)).toBe(false);
     },
   );
 });

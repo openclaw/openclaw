@@ -43,31 +43,23 @@ function fixture() {
   const { root, writePackage } = sourceFixture();
   writePackage(".", { name: "openclaw", dependencies: { fixture: "1.0.0" } });
   // Reverse creation order ensures discovery, not fixture order, owns sorting.
-  writePackage("packages/zulu", {
-    name: "@openclaw/zulu",
-    optionalDependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true, bundleRuntimeDependencies: true } },
-  });
-  writePackage("extensions/beta", {
-    name: "@openclaw/beta",
-    dependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true } },
-  });
-  writePackage("extensions/acpx", {
-    name: "@openclaw/acpx",
-    dependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true, bundleRuntimeDependencies: false } },
-  });
-  writePackage("extensions/empty", {
-    name: "@openclaw/empty",
-    devDependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: true } },
-  });
-  writePackage("extensions/private", {
-    name: "@openclaw/private",
-    dependencies: { fixture: "1.0.0" },
-    openclaw: { release: { publishToNpm: false } },
-  });
+  for (const [dir, dependencyKind, release] of [
+    [
+      "packages/zulu",
+      "optionalDependencies",
+      { publishToNpm: true, bundleRuntimeDependencies: true },
+    ],
+    ["extensions/beta", "dependencies", { publishToNpm: true }],
+    ["extensions/acpx", "dependencies", { publishToNpm: true, bundleRuntimeDependencies: false }],
+    ["extensions/empty", "devDependencies", { publishToNpm: true }],
+    ["extensions/private", "dependencies", { publishToNpm: false }],
+  ] as const) {
+    writePackage(dir, {
+      name: `@openclaw/${path.basename(dir)}`,
+      [dependencyKind]: { fixture: "1.0.0" },
+      openclaw: { release },
+    });
+  }
   return root;
 }
 
@@ -102,12 +94,16 @@ function bundledLockFor(packageDir: string) {
   return { ...lock, packages };
 }
 
+function mockLocks(build: (dir: string) => unknown) {
+  vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
+    packageDirs.map((dir) => JSON.stringify(build(dir))),
+  );
+}
+
 describe("npm package-lock release report", () => {
   beforeEach(() => {
     vi.mocked(execFileSync).mockClear();
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => JSON.stringify(lockFor(dir))),
-    );
+    mockLocks(lockFor);
   });
 
   it("binds the exact schema, sorted runtime package coverage and hashes to the source root", async () => {
@@ -176,15 +172,12 @@ describe("npm package-lock release report", () => {
       dependencies: { "@openclaw/gateway-protocol": "workspace:*", fixture: "1.0.0" },
       openclaw: { release: { publishToNpm: true } },
     });
-    const locklessPlugins = ["acpx"];
-    for (const plugin of locklessPlugins) {
-      writePackage(`extensions/${plugin}`, {
-        name: `@openclaw/${plugin}`,
-        dependencies: { fixture: "1.0.0" },
-        devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
-        openclaw: { release: { publishToNpm: true, bundleRuntimeDependencies: false } },
-      });
-    }
+    writePackage("extensions/acpx", {
+      name: "@openclaw/acpx",
+      dependencies: { fixture: "1.0.0" },
+      devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
+      openclaw: { release: { publishToNpm: true, bundleRuntimeDependencies: false } },
+    });
     const report = await generateNpmPackageLocksReport({ rootDir: root });
     expect(report.packageVersion).toBe("2026.9.1");
     expect(report.packagesWithOmittedWorkspaceDependencies).toBe(2);
@@ -209,12 +202,7 @@ describe("npm package-lock release report", () => {
           name: entry.name,
           omittedWorkspaceDependencies: entry.omittedWorkspaceDependencies,
         })),
-    ).toEqual(
-      locklessPlugins.map((plugin) => ({
-        name: `@openclaw/${plugin}`,
-        omittedWorkspaceDependencies: [],
-      })),
-    );
+    ).toEqual([{ name: "@openclaw/acpx", omittedWorkspaceDependencies: [] }]);
   });
 
   it("sorts and deduplicates runtime omissions without including dev or peer references", async () => {
@@ -234,13 +222,11 @@ describe("npm package-lock release report", () => {
   it("rejects an omission claim when the generated lock resolves that workspace package", async () => {
     const { root, writePackage } = sourceFixture();
     writePackage(".", { name: "openclaw", dependencies: { "@openclaw/ai": "workspace:*" } });
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = lockFor(dir);
-        Object.assign(lock.packages, { "node_modules/@openclaw/ai": dependency });
-        return JSON.stringify(lock);
-      }),
-    );
+    mockLocks((dir) => {
+      const lock = lockFor(dir);
+      Object.assign(lock.packages, { "node_modules/@openclaw/ai": dependency });
+      return lock;
+    });
     await expect(generateNpmPackageLocksReport({ rootDir: root })).rejects.toThrow(
       ".: npm lock contains omitted workspace dependency @openclaw/ai",
     );
@@ -256,25 +242,15 @@ describe("npm package-lock release report", () => {
     const report = await generateNpmPackageLocksReport({ rootDir: root });
     expect(report.packages[0]).toMatchObject({
       bundledDependencies: [
-        {
-          path: "node_modules/npm/node_modules/@gar/promise-retry",
-          name: "@gar/promise-retry",
-          version: "1.0.3",
-          parent: "node_modules/npm",
-        },
-        {
-          path: "node_modules/npm/node_modules/foo",
-          name: "foo",
-          version: "1.0.0",
-          parent: "node_modules/npm",
-        },
-        {
-          path: "node_modules/npm/node_modules/foo/node_modules/bar",
-          name: "bar",
-          version: "2.0.0",
-          parent: "node_modules/npm",
-        },
-      ],
+        ["@gar/promise-retry", "@gar/promise-retry", "1.0.3"],
+        ["foo", "foo", "1.0.0"],
+        ["foo/node_modules/bar", "bar", "2.0.0"],
+      ].map(([suffix, name, version]) => ({
+        path: `node_modules/npm/node_modules/${suffix}`,
+        name,
+        version,
+        parent: "node_modules/npm",
+      })),
       lockSha256: hash(lockBytes),
     });
     expect(`${JSON.stringify(report.packages[0]!.lock, null, 2)}\n`).toBe(lockBytes);
@@ -371,13 +347,11 @@ describe("npm package-lock release report", () => {
       }),
     ),
   ])("rejects $label", async ({ bundled, change, error }) => {
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = bundled ? bundledLockFor(dir) : lockFor(dir);
-        change(lock);
-        return JSON.stringify(lock);
-      }),
-    );
+    mockLocks((dir) => {
+      const lock = bundled ? bundledLockFor(dir) : lockFor(dir);
+      change(lock);
+      return lock;
+    });
     await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(error);
   });
 });
