@@ -30,7 +30,7 @@ export function createLegacyFocusEscape(close: () => void): (label: string) => H
       button = document.createElement("button");
       button.className = "btn btn--ghost";
       button.type = "button";
-      button.addEventListener("click", close);
+      button.onclick = close;
     }
     button.textContent = label;
     return button;

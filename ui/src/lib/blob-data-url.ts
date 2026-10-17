@@ -10,18 +10,13 @@ export function readBlobAsDataUrl(
   const error = (message: ReadErrorMessage) =>
     new Error(typeof message === "function" ? message() : message);
   return new Promise((resolve, reject) => {
+    // This private reader performs one read; its callbacks share that operation's lifetime.
     const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? error(readError)), {
-      once: true,
-    });
-    reader.addEventListener(
-      "load",
-      () =>
-        typeof reader.result === "string"
-          ? resolve(reader.result)
-          : reject(error(invalidResultError)),
-      { once: true },
-    );
+    reader.onerror = () => reject(reader.error ?? error(readError));
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(error(invalidResultError));
     reader.readAsDataURL(blob);
   });
 }
