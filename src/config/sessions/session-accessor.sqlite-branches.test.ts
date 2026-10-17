@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
@@ -72,27 +74,13 @@ function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
 
 function trackBranchSummaryReads(): () => number {
   let reads = 0;
-  const postMessage: unknown = Object.getOwnPropertyDescriptor(
-    Worker.prototype,
-    "postMessage",
-  )?.value;
-  if (typeof postMessage !== "function") {
-    throw new Error("expected Worker.postMessage to be an own method");
-  }
+  const postMessage = Worker.prototype.postMessage;
   vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
     this: Worker,
     ...args: Parameters<Worker["postMessage"]>
   ) {
     const [message] = args;
-    if (
-      message &&
-      typeof message === "object" &&
-      "input" in message &&
-      message.input &&
-      typeof message.input === "object" &&
-      "kind" in message.input &&
-      message.input.kind === "branch-summaries"
-    ) {
+    if (isRecord(message) && isRecord(message.input) && message.input.kind === "branch-summaries") {
       reads++;
     }
     Reflect.apply(postMessage, this, args);
@@ -101,24 +89,28 @@ function trackBranchSummaryReads(): () => number {
 }
 
 const summary = (branches: Partial<SessionBranchSummary>[]) => ({ status: "ok", branches });
+const makeBranch = (leafEntryId: string, headline: string, messageCount: number) => ({
+  active: true,
+  leafEntryId,
+  headline,
+  messageCount,
+});
 function expectBranch(
   result: unknown,
   leafEntryId: string,
   headline: string,
   messageCount?: number,
 ) {
-  expect(result).toMatchObject(
-    summary(
-      expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId,
-          headline,
-          ...(messageCount === undefined ? {} : { messageCount }),
-        }),
-      ]),
-    ),
-  );
+  const expected = {
+    active: true,
+    leafEntryId,
+    headline,
+    ...(messageCount === undefined ? {} : { messageCount }),
+  };
+  expect(result).toMatchObject({
+    status: "ok",
+    branches: expect.arrayContaining([expect.objectContaining(expected)]),
+  });
 }
 const message = (
   id: string,
@@ -130,9 +122,7 @@ const message = (
 
 function activeBranch(result: Awaited<ReturnType<typeof listSessionBranches>>) {
   expect(result.status).toBe("ok");
-  if (result.status !== "ok") {
-    throw new Error("expected branch list result");
-  }
+  assert.ok(result.status === "ok", "expected branch list result");
   return result.branches.find((branch) => branch.active);
 }
 
@@ -146,9 +136,7 @@ describe("SQLite session branches", () => {
     expect(results[1]).toEqual(results[0]);
     expect(results[2]).toEqual(results[0]);
     const second = results[1];
-    if (second?.status !== "ok" || !second.branches[0]) {
-      throw new Error("expected shared branch summaries");
-    }
+    assert.ok(second?.status === "ok" && second.branches[0], "expected shared branch summaries");
     second.branches[0].headline = "caller mutation";
     expect(results[2]).toEqual(results[0]);
     await expect(listSessionBranches(scope)).resolves.toEqual(results[0]);
@@ -195,9 +183,7 @@ describe("SQLite session branches", () => {
     const rawLoads = () => counters.reduce((total, counter) => total + counter.loads, 0);
     const first = readSessionBranchSummariesInWorker(request);
     expectBranch(first, "assistant-2", "second answer", 4);
-    if (first.status !== "ok" || !first.branches[0]) {
-      throw new Error("expected worker branch summaries");
-    }
+    assert.ok(first.status === "ok" && first.branches[0], "expected worker branch summaries");
     request.previous = structuredClone(first);
     // A replacement worker has no isolate-local summary cache.
     invalidateSessionBranchCache(database.path, [scope.sessionId]);
@@ -257,14 +243,7 @@ describe("SQLite session branches", () => {
       sessionKey: fixture.scope.sessionKey,
     };
     const first = readSessionBranchSummariesInWorker(request);
-    const expected = summary([
-      {
-        active: true,
-        leafEntryId: "history-assistant",
-        headline: "Preserved response",
-        messageCount: 2,
-      },
-    ]);
+    const expected = summary([makeBranch("history-assistant", "Preserved response", 2)]);
     expect(first).toMatchObject(expected);
     await expect(
       coldStorage.runSessionColdStorageMaintenance({ config: maintenanceConfig(storePath) }),
@@ -292,28 +271,24 @@ describe("SQLite session branches", () => {
     const branchReads = trackBranchSummaryReads();
     for (let round = 0; round < 2; round++) {
       for (const scope of scopes) {
-        await expect(listSessionBranches(scope)).resolves.toEqual({
-          status: "ok",
-          branches: [
+        await expect(listSessionBranches(scope)).resolves.toEqual(
+          summary([
             {
-              active: true,
-              leafEntryId: `${scope.sessionId}-user`,
-              headline: scope.headline,
-              messageCount: 1,
+              ...makeBranch(`${scope.sessionId}-user`, scope.headline, 1),
               updatedAt: "2026-07-18T01:00:01.000Z",
             },
-          ],
-        });
+          ]),
+        );
       }
       expect(branchReads()).toBe(scopes.length);
     }
   });
 
   it("recomputes summaries after physical database replacement with identical watermarks", async () => {
-    const { env } = await createSession();
+    const { env, scope } = await createSession();
     const database = openOpenClawAgentDatabase({ agentId, env });
     const branchReads = trackBranchSummaryReads();
-    const first = await listSessionBranches({ agentId, env, sessionKey });
+    const first = await listSessionBranches(scope);
     expect(first.status).toBe("ok");
     expect(branchReads()).toBe(1);
 
@@ -323,9 +298,9 @@ describe("SQLite session branches", () => {
     fs.copyFileSync(database.path, replacement);
     fs.renameSync(replacement, database.path);
 
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
+    await expect(listSessionBranches(scope)).resolves.toEqual(first);
     expect(branchReads()).toBe(2);
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
+    await expect(listSessionBranches(scope)).resolves.toEqual(first);
     // Without a host write receipt, a newly admitted read-only database stays uncached.
     expect(branchReads()).toBe(3);
     expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
@@ -392,9 +367,7 @@ describe("SQLite session branches", () => {
       const aliasKey = `${sessionKey}:alias`;
       const targetKey = `${sessionKey}:fork`;
       const sourceEntry = loadSessionEntry(scope);
-      if (!sourceEntry) {
-        throw new Error("expected source session entry");
-      }
+      assert.ok(sourceEntry, "expected source session entry");
       await upsertSessionEntryCore({ agentId, env, sessionKey: aliasKey }, sourceEntry);
       const branchReads = trackBranchSummaryReads();
       await listSessionBranches({ agentId, env, sessionKey });
@@ -402,23 +375,17 @@ describe("SQLite session branches", () => {
       const result =
         mode === "rewind"
           ? await rewindSessionToMessage({
-              agentId,
-              env,
+              ...scope,
               entryId: "user-2",
-              sessionKey,
             })
           : mode === "switch"
             ? await switchSessionBranch({
-                agentId,
-                env,
+                ...scope,
                 leafEntryId: "off-path-user",
-                sessionKey,
               })
             : await forkSessionAtMessage({
-                agentId,
-                env,
+                ...scope,
                 entryId: "user-2",
-                sessionKey,
                 targetKey,
               });
       expect(result.status).toBe("created");
@@ -484,12 +451,9 @@ describe("SQLite session branches", () => {
     const fullTranscriptLoads = trackFullTranscriptLoads(env);
     const branchReads = trackBranchSummaryReads();
 
-    await expect(listSessionBranches(scope)).resolves.toEqual({
-      status: "ok",
-      branches: [
-        { active: true, headline: `${"🦞".repeat(119)}…`, leafEntryId: "tool-7", messageCount: 10 },
-      ],
-    });
+    await expect(listSessionBranches(scope)).resolves.toEqual(
+      summary([makeBranch("tool-7", `${"🦞".repeat(119)}…`, 10)]),
+    );
     expect(fullTranscriptLoads()).toBe(0);
     expect(branchReads()).toBe(1);
 
@@ -526,21 +490,18 @@ describe("SQLite session branches", () => {
       { assertCurrent() {}, assertReadable() {} },
     );
     try {
-      expect(
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: {
-              entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
-              transcriptEvents: [
-                message("user-2", null, "user", "second prompt"),
-                message("assistant-2", "user-2", "assistant", "second answer"),
-              ],
-            },
-          },
-          { assertCurrent() {}, authorize() {} },
-        ),
-      ).toMatchObject({ kind: "committed" });
+      const input = {
+        entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
+        transcriptEvents: [
+          message("user-2", null, "user", "second prompt"),
+          message("assistant-2", "user-2", "assistant", "second answer"),
+        ],
+      };
+      const result = await actor.storage!.mutate(
+        { type: "session.entry.create", input },
+        { assertCurrent() {}, authorize() {} },
+      );
+      expect(result).toMatchObject({ kind: "committed" });
     } finally {
       await actor.release();
     }
@@ -584,12 +545,7 @@ describe("SQLite session branches", () => {
     openOpenClawAgentDatabase({ agentId, env });
     await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches: [] });
     const events: Parameters<typeof replaceTranscriptEvents>[1] = [
-      {
-        type: "session",
-        id: sessionId,
-        version: 3,
-        timestamp: "2026-08-30T00:00:00.000Z",
-      },
+      { type: "session", id: sessionId, version: 3 },
       message("orphan-user", "missing-ancestor", "user", "orphan prompt", {
         timestamp: "2026-08-30T00:00:01.000Z",
       }),
@@ -604,9 +560,6 @@ describe("SQLite session branches", () => {
           index === 1 ? null : `main-${index - 1}`,
           index % 2 === 0 ? "assistant" : "user",
           `main ${index}`,
-          {
-            timestamp: new Date(Date.UTC(2026, 7, 30, 0, 0, index)).toISOString(),
-          },
         ),
       );
     }
@@ -614,7 +567,6 @@ describe("SQLite session branches", () => {
       events.push(
         message(`side-${index}`, "main-5376", "assistant", `side ${index}`, {
           appendMode: "side",
-          timestamp: new Date(Date.UTC(2026, 7, 30, 1, 0, index)).toISOString(),
         }),
       );
     }
@@ -623,7 +575,6 @@ describe("SQLite session branches", () => {
       id: "active-leaf",
       parentId: "main-12554",
       targetId: "main-12554",
-      timestamp: "2026-08-30T02:00:02.000Z",
     });
     await replaceTranscriptEvents(scope, events);
 
@@ -631,9 +582,7 @@ describe("SQLite session branches", () => {
     const result = await listSessionBranches({ agentId, env, sessionKey });
     const elapsedMs = performance.now() - startedAt;
     expect(result.status).toBe("ok");
-    if (result.status !== "ok") {
-      throw new Error("expected branch list result");
-    }
+    assert.ok(result.status === "ok", "expected branch list result");
     expect(elapsedMs).toBeLessThan(1_000);
     expect(result.branches).toHaveLength(1_362);
     expect(result.branches.find((branch) => branch.leafEntryId === "orphan-assistant")).toEqual({

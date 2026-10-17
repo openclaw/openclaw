@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -17,23 +18,12 @@ import {
   withTranscriptWriteLock,
 } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import type { ReplySessionInitializationCommitResult } from "./session-accessor.types.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
   getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
-
-type ChildResult =
-  | {
-      ok: true;
-      sessionEntry: { sessionFile?: string; sessionId?: string; updatedAt?: number };
-    }
-  | {
-      currentEntry?: { sessionId?: string; updatedAt?: number };
-      ok: false;
-      reason: string;
-      revision: string;
-    };
 
 type TranscriptRewriteChildResult = { ok: true } | { message: string; name: string; ok: false };
 
@@ -50,17 +40,15 @@ type ConcurrencyWorkerRequest =
       storePath: string;
     };
 
-type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
-  kind: "reply-init";
-}
-  ? { currentEntry?: unknown; revision: string }
-  : { eventCount: number };
+type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> =
+  TRequest["kind"] extends "reply-init"
+    ? { currentEntry?: unknown; revision: string }
+    : { eventCount: number };
 
-type ConcurrencyWorkerResult<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
-  kind: "reply-init";
-}
-  ? ChildResult
-  : TranscriptRewriteChildResult;
+type ConcurrencyWorkerResult<TRequest extends ConcurrencyWorkerRequest> =
+  TRequest["kind"] extends "reply-init"
+    ? ReplySessionInitializationCommitResult
+    : TranscriptRewriteChildResult;
 
 type ConcurrencyWorkerMessage =
   | { phase: "booted" }
@@ -74,8 +62,6 @@ const SCENARIO_TIMEOUT_MS = 10_000;
 const SESSION_KEY = "agent:main:main";
 const AGENT_ID = "main";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-reply-init-");
-// Preserve one OS-process boundary per file.
-// Every request still uses an isolated store path.
 let concurrencyWorker: ReturnType<typeof spawn> | undefined;
 let nextRequestId = 0;
 
@@ -133,7 +119,6 @@ async function runReplyInit(request) {
 }
 
 async function runTranscriptRewrite(request) {
-  let result;
   try {
     await withTranscriptWriteLock(
       {
@@ -158,41 +143,23 @@ async function runTranscriptRewrite(request) {
         }
         const events = await transcript.readEvents();
         await ready(request, { eventCount: events.length });
-        const rewrittenEvents = events.map((event) => {
-          if (
-            typeof event !== "object" ||
-            event === null ||
-            Array.isArray(event) ||
-            event.id !== "rewrite-target"
-          ) {
-            return event;
-          }
-          return {
-            ...event,
-            message: {
-              ...event.message,
-              content: "rewritten content",
-            },
-          };
-        });
+        const rewrittenEvents = events.map((event) => event.id === "rewrite-target"
+          ? { ...event, message: { ...event.message, content: "rewritten content" } }
+          : event);
         await transcript.replaceEvents(rewrittenEvents);
       },
     );
-    result = { ok: true };
+    return { ok: true };
   } catch (error) {
-    result = {
+    return {
       ok: false,
       name: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
     };
   }
-  return result;
 }
 
 process.on("message", (request) => {
-  if (!request || typeof request !== "object") {
-    return;
-  }
   if (request.kind === "shutdown") {
     process.exit(0);
   }
@@ -200,9 +167,6 @@ process.on("message", (request) => {
     const resolve = proceedResolvers.get(request.requestId);
     proceedResolvers.delete(request.requestId);
     resolve?.();
-    return;
-  }
-  if (!Number.isInteger(request.requestId)) {
     return;
   }
   void (async () => {
@@ -384,14 +348,6 @@ async function fixture(sessionId: string) {
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
   return { tempDir, storePath, scope };
 }
-function expectConflict(result: TranscriptRewriteChildResult, sessionId: string) {
-  expect(result).toMatchObject({
-    ok: false,
-    name: "SqliteTranscriptMutationConflictError",
-    message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
-  });
-}
-
 async function waitForChild(child: ReturnType<typeof spawn>, label: string): Promise<void> {
   let childStdout = "";
   let childStderr = "";
@@ -404,8 +360,7 @@ async function waitForChild(child: ReturnType<typeof spawn>, label: string): Pro
     childStderr += String(chunk);
   });
 
-  // The child can exit immediately before this waiter attaches. Honor an
-  // already-observed exit or the test will wait forever for a spent event.
+  // Honor an already-observed exit instead of waiting for a spent event.
   const childExit =
     child.exitCode !== null || child.signalCode !== null
       ? { code: child.exitCode, signal: child.signalCode }
@@ -454,18 +409,12 @@ describe("session accessor cross-process concurrency", () => {
   it("commits after same-session activity from another process", async () => {
     const { storePath, scope } = await fixture("existing-session");
     const initialUpdatedAt = loadSessionEntry({ ...scope, readConsistency: "latest" })?.updatedAt;
-    if (typeof initialUpdatedAt !== "number") {
-      throw new Error("initial session timestamp was not persisted");
-    }
+    assert.ok(typeof initialUpdatedAt === "number", "initial session timestamp was not persisted");
     const activeTurnUpdatedAt = initialUpdatedAt + 20;
     const preparedUpdatedAt = initialUpdatedAt + 30;
 
     const result = await runConcurrencyScenario(
-      {
-        kind: "reply-init",
-        preparedUpdatedAt,
-        storePath,
-      },
+      { kind: "reply-init", preparedUpdatedAt, storePath },
       async (snapshot) => {
         expect(snapshot.revision).toBe(JSON.stringify({ sessionId: "existing-session" }));
         await updateSessionEntry(scope, () => ({ updatedAt: activeTurnUpdatedAt }), {
@@ -473,90 +422,55 @@ describe("session accessor cross-process concurrency", () => {
         });
       },
     );
-    expect(result).toMatchObject({
-      ok: true,
-      sessionEntry: {
-        sessionId: "existing-session",
-        updatedAt: preparedUpdatedAt,
-      },
-    });
-    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+    const expected = {
       sessionId: "existing-session",
       updatedAt: preparedUpdatedAt,
-    });
+    };
+    expect(result).toMatchObject({ ok: true, sessionEntry: expected });
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject(expected);
   }, 15_000);
 
-  it("rejects a transcript rewrite after another process commits an append", async () => {
-    const sessionId = "cross-process-transcript";
-    const { tempDir, storePath, scope } = await fixture(sessionId);
-    await replaceTranscriptEvents(scope, transcriptEvents(sessionId));
-
-    const result = await runConcurrencyScenario(
-      {
-        kind: "transcript-rewrite",
-        rewriteMode: "read-then-replace",
-        sessionId,
-        storePath,
-      },
-      async (ready) => {
-        expect(ready).toEqual({ eventCount: 2 });
-        await appendTranscriptMessage(scope, {
-          cwd: tempDir,
-          message: {
-            role: "user",
-            content: "committed concurrent append",
-            timestamp: Date.now(),
-          },
-        });
-      },
-    );
-    expectConflict(result, sessionId);
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      ...transcriptEvents(sessionId),
-      expect.objectContaining({
-        type: "message",
-        message: expect.objectContaining({
-          role: "user",
-          content: "committed concurrent append",
+  it.each(["read-then-replace", "replace-twice"] as const)(
+    "rejects %s after another process commits an append",
+    async (rewriteMode) => {
+      const sessionId = `cross-process-${rewriteMode}`;
+      const { tempDir, storePath, scope } = await fixture(sessionId);
+      const twice = rewriteMode === "replace-twice";
+      const initial = twice
+        ? transcriptEvents(sessionId, "first-replacement", "first replacement")
+        : transcriptEvents(sessionId);
+      if (!twice) {
+        await replaceTranscriptEvents(scope, initial);
+      }
+      const appended = twice ? { id: "concurrent-append", parentId: "first-replacement" } : {};
+      const content = twice ? "concurrent append" : "committed concurrent append";
+      const result = await runConcurrencyScenario(
+        { kind: "transcript-rewrite", rewriteMode, sessionId, storePath },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            ...(twice ? { eventId: appended.id, parentId: appended.parentId } : {}),
+            message: { role: "user", content, ...(!twice ? { timestamp: Date.now() } : {}) },
+          });
+        },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        name: "SqliteTranscriptMutationConflictError",
+        message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+      });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        ...initial,
+        expect.objectContaining({
+          type: "message",
+          ...appended,
+          message: expect.objectContaining({ role: "user", content }),
         }),
-      }),
-    ]);
-  }, 15_000);
-
-  it("guards a second replace after replacing without a prior read", async () => {
-    const sessionId = "double-replace-without-read";
-    const { tempDir, storePath, scope } = await fixture(sessionId);
-    const result = await runConcurrencyScenario(
-      {
-        kind: "transcript-rewrite",
-        rewriteMode: "replace-twice",
-        sessionId,
-        storePath,
-      },
-      async (ready) => {
-        expect(ready).toEqual({ eventCount: 2 });
-        await appendTranscriptMessage(scope, {
-          cwd: tempDir,
-          eventId: "concurrent-append",
-          message: { role: "user", content: "concurrent append" },
-          parentId: "first-replacement",
-        });
-      },
-    );
-    expectConflict(result, sessionId);
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-      ...transcriptEvents(sessionId, "first-replacement", "first replacement"),
-      expect.objectContaining({
-        type: "message",
-        id: "concurrent-append",
-        parentId: "first-replacement",
-        message: expect.objectContaining({
-          role: "user",
-          content: "concurrent append",
-        }),
-      }),
-    ]);
-  }, 15_000);
+      ]);
+    },
+    15_000,
+  );
 
   it("refreshes a read snapshot after an append in the same locked callback", async () => {
     const sessionId = "rewrite-after-own-append";
@@ -572,19 +486,17 @@ describe("session accessor cross-process concurrency", () => {
         parentId: "rewrite-target",
       });
       const currentEvents = await loadTranscriptEvents(scope);
-      const rewrittenEvents = currentEvents.map((event) => {
-        if (
-          typeof event !== "object" ||
-          event === null ||
-          Array.isArray(event) ||
-          (event as { id?: unknown }).id !== "rewrite-target"
-        ) {
-          return event;
-        }
-        return Object.assign({}, event, {
-          message: { role: "assistant", content: "rewritten content" },
-        });
-      });
+      const rewrittenEvents = currentEvents.map((event) =>
+        event &&
+        typeof event === "object" &&
+        !Array.isArray(event) &&
+        "id" in event &&
+        event.id === "rewrite-target"
+          ? Object.assign({}, event, {
+              message: { role: "assistant", content: "rewritten content" },
+            })
+          : event,
+      );
       await transcript.replaceEvents(rewrittenEvents);
     });
 
