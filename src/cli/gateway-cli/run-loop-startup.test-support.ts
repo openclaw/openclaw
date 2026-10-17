@@ -62,16 +62,12 @@ export function registerGatewayStartupFailureTests(
         if (phase !== "returned-handle-close") {
           throw phase === "wrapped-acquisition-cleanup" ? wrapped : retained;
         }
-        return createGatewayServer(async () => {
-          throw cleanupFailure;
-        }, Promise.reject(failure));
+        return createGatewayServer(() => Promise.reject(cleanupFailure), Promise.reject(failure));
       }
       if (phase === "deferred-startup") {
         return createGatewayServer(close, Promise.reject(failure));
       }
-      return await options!.startupOperation!(async () => {
-        throw failure;
-      });
+      return await options!.startupOperation!(() => Promise.reject(failure));
     });
     await withIsolatedSignals(async () => {
       const loop = runGatewayLoop({
@@ -134,8 +130,9 @@ export function registerGatewayStartupFailureTests(
     { cleanup: "unavailable", supervised: false, platform: "win32" },
     { cleanup: "unavailable", supervised: true, platform: "win32" },
   ] as const)(
-    "fences replacement after deferred startup with $cleanup cleanup (supervised=$supervised, platform=$platform)",
+    "$cleanup restart cleanup ($supervised supervised, $platform)",
     async ({ cleanup, supervised, platform }) => {
+      const repairFailed = cleanup === "unrepaired" || cleanup === "repair-failed";
       setPlatform(platform);
       vi.clearAllMocks();
       if (supervised) {
@@ -215,16 +212,12 @@ export function registerGatewayStartupFailureTests(
           if (cleanup === "clean") {
             expect(onRestartStartupFailure).toHaveBeenCalledOnce();
             expect(loopRejected).not.toHaveBeenCalled();
-            await withTestTimeout(
-              thirdStarted.promise,
-              1_000,
-              "expected settled triage to restart the Gateway without another signal",
-            );
+            await withTestTimeout(thirdStarted.promise, 1_000, "triage did not restart Gateway");
             expect(start).toHaveBeenCalledTimes(3);
             stop();
             await expect(exited).resolves.toBe(0);
-          } else if (supervised && (cleanup === "unrepaired" || cleanup === "repair-failed")) {
-            await withTestTimeout(loopSettled, 1_000, "expected terminal startup refusal");
+          } else if (supervised && repairFailed) {
+            await withTestTimeout(loopSettled, 1_000, "startup refusal did not settle");
             const error = cleanup === "unrepaired" ? retryError : startupError;
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(error);
             expect(onRestartStartupFailure).toHaveBeenCalledOnce();
@@ -233,15 +226,11 @@ export function registerGatewayStartupFailureTests(
               outcome: "startup_failed",
               reason: error.message,
             });
-          } else if (
-            cleanup === "unavailable" ||
-            cleanup === "unrepaired" ||
-            cleanup === "repair-failed"
-          ) {
+          } else if (cleanup === "unavailable" || repairFailed) {
             await withTestTimeout(
               Promise.race([manualRecovery.promise, loopSettled]),
               1_000,
-              "expected manual recovery guidance",
+              "missing recovery guidance",
             );
             expectCallCount(0, loopRejected, runtime.exit);
             expect(onRestartStartupFailure).toHaveBeenCalledOnce();
@@ -262,11 +251,7 @@ export function registerGatewayStartupFailureTests(
                 return createGatewayServer(closeThird);
               });
               restart();
-              await withTestTimeout(
-                recovered.promise,
-                1_000,
-                "expected operator reload to restart the Gateway",
-              );
+              await withTestTimeout(recovered.promise, 1_000, "operator reload did not restart");
             }
             stop();
             await expect(exited).resolves.toBe(0);
@@ -311,7 +296,7 @@ export function registerGatewayStartupFailureTests(
   );
 
   it.each(["stopped daemon", "message-only error", "failed cleanup", "truncated reason"] as const)(
-    "retains the startup failure classification for %s",
+    "classifies %s startup failure",
     async (kind) => {
       await withIsolatedSignals(async () => {
         const { TailscaleBackendStoppedError } =
@@ -331,9 +316,7 @@ export function registerGatewayStartupFailureTests(
           vi.fn<NonNullable<Parameters<typeof runGatewayLoop>[0]["completeBoot"]>>();
         await expect(
           runGatewayLoop({
-            start: vi.fn(async () => {
-              throw failure;
-            }),
+            start: vi.fn(() => Promise.reject(failure)),
             completeBoot,
           }),
         ).rejects.toBe(failure);

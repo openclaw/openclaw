@@ -83,6 +83,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     gatewayLog,
   } = fixtures;
   const idleActiveWorkSnapshot = createActiveWorkSnapshot();
+  const replacementReason = expect.stringContaining("gateway.installation_replaced");
   registerGatewayForcedRestartTests(fixtures);
   async function withReplacement(
     release: () => void,
@@ -112,7 +113,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
   }
 
   it.each(["SIGTERM", "SIGUSR2"] as const)(
-    "closes root admission before the %s listener returns",
+    "fences root admission before %s returns",
     async (signal) => {
       const consumed = createDeferredCore<null>();
       consumeIntent.mockReturnValueOnce(consumed.promise);
@@ -348,7 +349,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         vi.useRealTimers();
         await waitForLoopCondition(
           () => runtime.exit.mock.calls.length > 0,
-          "captured Stop fixture did not settle after releasing its owned work",
+          "Stop did not settle after release",
         );
         await exited;
       }
@@ -365,7 +366,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         signal("SIGINT")();
         await waitForLoopCondition(
           () => settle.mock.calls.length === 1,
-          "Stop did not join its foreground update owner",
+          "Stop did not join update owner",
         );
         replace("replaced runtime while updater is held");
         expect(admissionClosed()).toBe(true);
@@ -377,17 +378,14 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expectCallCount(0, restartProcess, respawnUpdate);
         expect(boot).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            outcome: "clean_stop",
-            reason: expect.stringContaining("gateway.installation_replaced"),
-          }),
+          expect.objectContaining({ outcome: "clean_stop", reason: replacementReason }),
         );
       },
     );
   });
 
   it.each(["settled", "rejected", "retired"] as const)(
-    "holds installation replacement behind its system-service helper (%s)",
+    "joins the system-service helper until %s",
     async (outcome) => {
       process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       restartProcess.mockReturnValue({ mode: "supervised" });
@@ -407,7 +405,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           replace("package replaced while updater is finalizing");
           expect(
             await Promise.race([helper.entered.then(() => "helper"), closing.promise]),
-            "Gateway closed before joining its system-service update helper",
+            "Gateway closed before helper joined",
           ).toBe("helper");
           expectCallCount(0, close, runtime.exit);
           expect(admissionClosed()).toBe(false);
@@ -438,29 +436,23 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             expect(runtime.exit).toHaveBeenCalledOnce();
           }
         },
-        createCloseMock().mockImplementation(async () => {
-          closing.resolve("closed");
-        }),
+        createCloseMock().mockImplementation(async () => closing.resolve("closed")),
       );
     },
   );
 
   it.each(["lock", "beginBoot"] as const)(
-    "does not resume a replaced runtime during %s with a pending Stop",
+    "fences replaced %s behind captured Stop",
     async (phase) => {
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { start, started } = createSignaledStart(createCloseMock());
         const { runtime, exited } = createRuntimeWithExitSignal();
         const completeBoot = vi.fn();
-        const reached = createDeferredCore();
-        const resume = createDeferredCore();
+        const startup = createLifecycleGate();
         const joined = createDeferredCore<boolean>();
         const settle = vi.fn(() => joined.promise);
         captureStop.mockReturnValueOnce({ settle, canPark: () => false });
-        const beginBoot = vi.fn(async () => {
-          reached.resolve();
-          await resume.promise;
-        });
+        const beginBoot = vi.fn(startup.wait);
         await runLoop({
           start,
           runtime,
@@ -472,8 +464,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         }
         if (phase === "lock") {
           acquireGatewayLock.mockImplementationOnce(async () => {
-            reached.resolve();
-            await resume.promise;
+            await startup.wait();
             return { release: vi.fn(async () => {}) };
           });
         }
@@ -482,23 +473,23 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             if (phase !== "beginBoot") {
               captureSignal("SIGUSR2")();
             }
-            await withTimeout(reached.promise, 4_000);
+            await withTimeout(startup.entered, 4_000);
             captureSignal("SIGINT")();
             await waitForLoopCondition(
               () => settle.mock.calls.length === 1,
-              "Stop did not capture the unsettled foreground update",
+              "Stop did not capture update",
             );
             const replaceInstallation = await loadInstallationReplacement();
             replaceInstallation("replaced runtime");
             expect(start).toHaveBeenCalledTimes(phase === "beginBoot" ? 0 : 1);
             expect(runtime.exit).not.toHaveBeenCalled();
-            resume.resolve();
+            startup.release();
             await waitForLoopCondition(
               () =>
                 gatewayLog.error.mock.calls.some(([message]) =>
                   String(message).includes("Cannot continue in this process"),
                 ),
-              "resumed continuation did not reach the installation-replacement fence",
+              "continuation missed replacement fence",
             );
             await setImmediate();
             expect(admissionClosed()).toBe(true);
@@ -512,14 +503,12 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             expect(beginBoot).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 0);
             expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({
-                reason: expect.stringContaining("gateway.installation_replaced"),
-              }),
+              expect.objectContaining({ reason: replacementReason }),
             );
             expect(respawnUpdate).not.toHaveBeenCalled();
           },
           async () => {
-            resume.resolve();
+            startup.release();
             joined.resolve(true);
             if (!runtime.exit.mock.calls.length) {
               captureSignal("SIGINT")();
@@ -532,20 +521,18 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
       });
     },
   );
-  it.each(["failed-handoff", "existing-restart", "managed-update", "failed-close"] as const)(
-    "settles an own-chunk failure before handing over a replaced installation (%s)",
-    async (mode) => {
-      const supervised = ["failed-handoff", "managed-update", "failed-close"].includes(mode);
+  it.each([
+    ["failed-handoff", true, { mode: "failed", detail: "handoff unavailable" }, 1],
+    ["existing-restart", false, { mode: "disabled", detail: "unmanaged" }, 1],
+    ["managed-update", true, { mode: "disabled", detail: "unmanaged" }, 0],
+    ["failed-close", true, { mode: "supervised", exitCode: 131071 }, 131071],
+  ] as const)(
+    "drains replaced installation before %s handoff",
+    async (mode, supervised, restart, exitCode) => {
       if (supervised) {
         process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       }
-      restartProcess.mockReturnValue(
-        mode === "failed-close"
-          ? { mode: "supervised", exitCode: 131071 }
-          : mode === "failed-handoff"
-            ? { mode: "failed", detail: "handoff unavailable" }
-            : { mode: "disabled", detail: "unmanaged" },
-      );
+      restartProcess.mockReturnValue(restart);
       const drain = deferredCall<{ drained: boolean; snapshot: GatewayActiveWorkSnapshot }>();
       waitActive.mockImplementationOnce(drain.call);
       const close = createCloseMock();
@@ -569,14 +556,12 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           expect(admissionClosed()).toBe(true);
           expectCallCount(0, close, runtime.exit);
           drain.resolve({ drained: true, snapshot: idleActiveWorkSnapshot });
-          await expect(exited).resolves.toBe(
-            mode === "failed-close" ? 131071 : mode === "managed-update" ? 0 : 1,
-          );
+          await expect(exited).resolves.toBe(exitCode);
           expectCallCount(1, close, start);
           expect(boot).toHaveBeenCalledWith(
             expect.objectContaining({
               outcome: mode === "failed-close" ? "forced_stop" : "planned_restart",
-              reason: expect.stringContaining("gateway.installation_replaced"),
+              reason: replacementReason,
             }),
           );
           if (!supervised) {

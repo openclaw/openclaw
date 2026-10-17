@@ -448,13 +448,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   await fs.writeFile(releasePath, "finish writer");
                   if (closeFailure) {
                     await expect
-                      .poll(() => fixtures.cancelManagedServiceUpdateHandoff.mock.calls.length, {
+                      .poll(() => fixtures.cancelManagedServiceUpdateHandoff.mock.calls, {
                         timeout: 15000,
                       })
-                      .toBe(1);
-                    expect(fixtures.cancelManagedServiceUpdateHandoff).toHaveBeenCalledWith(
-                      identity,
-                    );
+                      .toEqual([[identity]]);
                     expect(controlExists("before-activate")).toBe(true);
                     await withinTest(helper.waitForClose(), context.signal);
                   } else {
@@ -483,13 +480,12 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     expect(ledger.getUpdateRun(run.runId)?.status).toBe("failed");
                   }
                   await expect
-                    .poll(() => runtime.exit.mock.calls.length, { timeout: 15000 })
-                    .toBe(1);
+                    .poll(() => runtime.exit.mock.calls, { timeout: 15000 })
+                    .toEqual([[closeFailure ? 1 : 0]]);
                   if (phase === "completion") {
                     const outcome = JSON.parse(await readControl("outcome.json"));
                     expect(outcome).toMatchObject({ failedStep: null, afterVersion: "2.0.0" });
                   }
-                  expect(runtime.exit).toHaveBeenCalledWith(closeFailure ? 1 : 0);
                   expect(close).toHaveBeenCalledOnce();
                   expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
                   if (hosted) {

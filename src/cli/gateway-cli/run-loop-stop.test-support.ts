@@ -66,12 +66,15 @@ export function registerForegroundUpdateStopTests({
   function expectNoSuccessor() {
     expectCallCount(0, completeUpdate, respawnUpdate);
   }
-  async function waitForClosedWitness() {
-    await waitForLoopCondition(
-      () => completeUpdate.mock.calls.length === 1,
-      "foreground updater did not receive its closed witness",
-    );
+  async function waitForCalls(
+    mock: { mock: { calls: readonly unknown[] } },
+    count: number,
+    message: string,
+  ) {
+    await waitForLoopCondition(() => mock.mock.calls.length === count, message);
   }
+  const waitForClosedWitness = () =>
+    waitForCalls(completeUpdate, 1, "foreground updater did not receive its closed witness");
 
   it.each(["pending-completion", "reject"] as const)(
     "retries the captured foreground Stop operation after %s settlement",
@@ -94,10 +97,7 @@ export function registerForegroundUpdateStopTests({
         await withRunLoopCleanup(
           async () => {
             captureSignal(pendingCompletion ? "SIGUSR2" : "SIGINT")();
-            await waitForLoopCondition(
-              () => settle.mock.calls.length === 1,
-              "first Stop did not join the captured owner",
-            );
+            await waitForCalls(settle, 1, "first Stop did not join the captured owner");
             if (pendingCompletion) {
               expect(releaseLock).toHaveBeenCalledOnce();
               expect(cancelUpdate).toHaveBeenCalledExactlyOnceWith(updateOwner);
@@ -118,10 +118,7 @@ export function registerForegroundUpdateStopTests({
             expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
             expect(runtime.exit).not.toHaveBeenCalled();
             captureSignal("SIGINT")();
-            await waitForLoopCondition(
-              () => settle.mock.calls.length === 2,
-              "explicit Stop did not retry its captured owner",
-            );
+            await waitForCalls(settle, 2, "explicit Stop did not retry its captured owner");
             expect(captureStop).toHaveBeenCalledOnce();
             expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
             expect(runtime.exit).not.toHaveBeenCalled();
@@ -129,8 +126,7 @@ export function registerForegroundUpdateStopTests({
             const exitCode = pendingCompletion ? 1 : 0;
             await expect(withTimeout(exited, 4000)).resolves.toBe(exitCode);
             expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
-            expect(close).toHaveBeenCalledOnce();
-            expectCallCount(1, start, acquireLock);
+            expectCallCount(1, close, start, acquireLock);
             expect(respawnUpdate).not.toHaveBeenCalled();
             expect(cancelUpdate).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
             if (pendingCompletion) {
@@ -200,8 +196,7 @@ export function registerForegroundUpdateStopTests({
           if (scenario === "close-failure-uncertain") {
             cancellation.resolve(false);
             first.resolve(false);
-            await vi.advanceTimersByTimeAsync(0);
-            expect(runtime.exit).not.toHaveBeenCalled();
+            await advanceWithoutCalls(0, runtime.exit);
             captureSignal("SIGINT")();
             await vi.advanceTimersByTimeAsync(0);
             expect(settle).toHaveBeenCalledTimes(2);
@@ -210,8 +205,7 @@ export function registerForegroundUpdateStopTests({
             retry.resolve(true);
           } else if (scenario === "close-failure-confirmed-first") {
             first.resolve(true);
-            await vi.advanceTimersByTimeAsync(0);
-            expect(runtime.exit).not.toHaveBeenCalled();
+            await advanceWithoutCalls(0, runtime.exit);
             expect(settle).toHaveBeenCalledOnce();
             cancellation.resolve(false);
           } else {
@@ -256,10 +250,7 @@ export function registerForegroundUpdateStopTests({
         .mockImplementation(actual.rollbackGatewayRestartSignalAdmission);
       try {
         captureSignal("SIGINT")();
-        await waitForLoopCondition(
-          () => settle.mock.calls.length === 1,
-          "Stop did not capture its pending owner",
-        );
+        await waitForCalls(settle, 1, "Stop did not capture its pending owner");
         const reads = consumeIntent.mock.calls.length;
         consumeIntent.mockRejectedValueOnce(new Error("fixture restart intent unavailable"));
         captureSignal("SIGUSR2")();
@@ -418,8 +409,9 @@ export function registerForegroundUpdateStopTests({
         const stoppingUpdater = phase === "updater" || phase === "unsafe-updater";
         if (!stoppingUpdater) {
           updater.resolve({ respawn: true });
-          await waitForLoopCondition(
-            () => waitForHealthy.mock.calls.length === 1,
+          await waitForCalls(
+            waitForHealthy,
+            1,
             "fresh Gateway readiness observation did not start",
           );
           if (phase === "log-flush") {

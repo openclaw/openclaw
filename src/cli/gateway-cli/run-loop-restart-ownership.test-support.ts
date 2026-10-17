@@ -78,8 +78,7 @@ export function registerGatewayRestartOwnershipTests({
     const workerCpu = await import("../../infra/worker-cpu.js");
     const { startGatewayStateOwnerHeartbeat } =
       await import("../../infra/gateway-state-owner-heartbeat.js");
-    const root = tempDirs.make("openclaw-run-loop-owner-loss-");
-    const lockPath = path.join(root, "owner.lock");
+    const lockPath = path.join(tempDirs.make("openclaw-run-loop-owner-loss-"), "owner.lock");
     fs.writeFileSync(lockPath, "owner");
     let lastBeat: BigInt64Array | undefined;
     const createWorker = workerCpu.createCpuTrackedWorker;
@@ -293,8 +292,7 @@ export function registerGatewayRestartOwnershipTests({
                 await advanceWithoutCalls(73_999, runtime.exit, cancelUpdate);
                 await vi.advanceTimersByTimeAsync(1);
                 expect(cancelUpdate).toHaveBeenCalledExactlyOnceWith(updateOwner);
-                expectCallCount(0, completeUpdate, respawnUpdate);
-                expectCallCount(0, runtime.exit);
+                expectCallCount(0, completeUpdate, respawnUpdate, runtime.exit);
                 closing.resolve();
                 await vi.advanceTimersByTimeAsync(0);
               }
@@ -307,8 +305,7 @@ export function registerGatewayRestartOwnershipTests({
                 }),
               );
               expect(start).toHaveBeenCalledOnce();
-              expect(restartProcess).not.toHaveBeenCalled();
-              expect(commitUpdate).not.toHaveBeenCalled();
+              expectCallCount(0, restartProcess, commitUpdate);
             },
             async () => {
               closing.resolve();

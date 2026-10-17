@@ -274,7 +274,7 @@ export async function writePackageLifecycleFixture(
           const handoff = await import(${sourceUrl("handoff")});
           const { readControlPlaneUpdateSentinelMeta } = await import(${sourceUrl("sentinel")});
           const { runGlobalPackageUpdateSteps } = await import(${sourceUrl("packageSteps")});
-          const { createNpmTarget, createRootRunner } = await import(${sourceUrl("packageFixture")});
+          const { createNpmUpdateOptions } = await import(${sourceUrl("packageFixture")});
           const { writePackageDistInventory } = await import(${sourceUrl("inventory")});
           const { runCommandWithTimeout } = await import(${sourceUrl("exec")});
           const meta = await readControlPlaneUpdateSentinelMeta();
@@ -282,9 +282,7 @@ export async function writePackageLifecycleFixture(
           let outcome;
           try {
             outcome = await runGlobalPackageUpdateSteps({
-              installTarget: createNpmTarget(path.dirname(root)), installSpec: "openclaw@2.0.0",
-              packageName: "openclaw", packageRoot: root, timeoutMs: 30000,
-              runCommand: createRootRunner(path.dirname(root)),
+              ...createNpmUpdateOptions(path.dirname(root)), packageRoot: root, timeoutMs: 30000,
               validateCandidate: async () => [],
               beforeActivate: async () => {
                 await fs.writeFile(path.join(control, "before-activate"), "lifecycle settled");
