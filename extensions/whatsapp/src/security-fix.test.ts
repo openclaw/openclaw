@@ -46,6 +46,40 @@ describe("applyWhatsAppSecurityConfigFixes", () => {
     expect(result.config.channels?.whatsapp?.accounts?.disabled?.groupAllowFrom).toBeUndefined();
   });
 
+  it("seeds each account from its own pairing store", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          accounts: {
+            default: { groupPolicy: "open" },
+            work: { groupPolicy: "open" },
+            empty: { groupPolicy: "open" },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    readChannelAllowFromStoreMock.mockImplementation(async (...args: unknown[]) => {
+      if (args[2] === "work") {
+        return ["+15550000002"];
+      }
+      return args[2] === "default" ? ["+15550000001"] : [];
+    });
+
+    const result = await applyWhatsAppSecurityConfigFixes({ cfg, env: process.env });
+
+    expect(result.changes).toEqual([
+      "channels.whatsapp.accounts.default.groupAllowFrom=pairing-store",
+      "channels.whatsapp.accounts.work.groupAllowFrom=pairing-store",
+    ]);
+    expect(result.config.channels?.whatsapp?.accounts?.default?.groupAllowFrom).toEqual([
+      "+15550000001",
+    ]);
+    expect(result.config.channels?.whatsapp?.accounts?.work?.groupAllowFrom).toEqual([
+      "+15550000002",
+    ]);
+    expect(result.config.channels?.whatsapp?.accounts?.empty?.groupAllowFrom).toBeUndefined();
+  });
+
   it("does not modify an existing empty allowlist", async () => {
     const cfg = {
       channels: {
