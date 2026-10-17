@@ -2,6 +2,7 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getCoreToolDeclaration, type CoreToolDeclaration } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   resolveConversationCapabilityProfile,
@@ -61,13 +62,15 @@ export function createEmbeddedMessageInvocationPolicy(params: {
       additionalPolicyAllow: params.toolSearchControlAllowlist,
     });
   const policies = resolvePolicies(params.capabilityProfile);
-  const filter = (
-    currentProfile = params.capabilityProfile,
-    onFilter?: (event: ToolPolicyFilterEvent) => void,
-  ): AnyAgentTool[] => {
+  const filterCatalog = <T extends CoreToolDeclaration>(
+    currentProfile: ResolvedConversationCapabilityProfile,
+    tools: T[],
+    ownerOnlyCoreToolPolicy: ToolPolicyLike | undefined,
+    onFilter?: (event: ToolPolicyFilterEvent<T>) => void,
+  ): T[] => {
     const currentPolicies =
       currentProfile === params.capabilityProfile ? policies : resolvePolicies(currentProfile);
-    const { tools, declaredToolAllowlist, unavailableCoreToolReason } = params.catalog();
+    const { declaredToolAllowlist, unavailableCoreToolReason } = params.catalog();
     return applyToolPolicyPipeline({
       tools,
       toolMeta: (tool) => getPluginToolMeta(tool),
@@ -86,7 +89,7 @@ export function createEmbeddedMessageInvocationPolicy(params: {
         },
         additionalStepsAfterSandbox: [
           {
-            policy: params.ownerOnlyCoreToolPolicy,
+            policy: ownerOnlyCoreToolPolicy,
             source: { kind: "session" },
             label: "gateway sender owner-only tools",
             unavailableCoreToolReason,
@@ -99,8 +102,21 @@ export function createEmbeddedMessageInvocationPolicy(params: {
       onFilter,
     });
   };
+  const filter = (
+    currentProfile = params.capabilityProfile,
+    onFilter?: (event: ToolPolicyFilterEvent) => void,
+  ) =>
+    filterCatalog(currentProfile, params.catalog().tools, params.ownerOnlyCoreToolPolicy, onFilter);
   return {
     filter,
+    // Only literal, producer-identified core definitions omit transient owner
+    // selection. Every persistent, inherited, sender and sandbox policy remains.
+    coreDeclarationSources: (declaredOnly: CoreToolDeclaration[] = []) =>
+      filterCatalog<CoreToolDeclaration>(
+        params.capabilityProfile,
+        [...params.catalog().tools, ...declaredOnly],
+        undefined,
+      ).filter((tool) => getCoreToolDeclaration(tool) !== undefined),
     admit: createScheduledMessageInvocationAdmission({
       config: params.config,
       isAllowed: (config) => {

@@ -1,13 +1,12 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { resolveNativeWebSearchRoute } from "./native-web-search.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import type { WebSearchToolPolicyParams } from "./web-search-tool-policy.js";
 
-export function applyModelProviderToolPolicy(
-  toolsInput: AnyAgentTool[],
+export function applyModelProviderToolPolicy<T extends { name: string }>(
+  toolsInput: T[],
   params?: {
     config?: OpenClawConfig;
     modelProvider?: string;
@@ -24,7 +23,7 @@ export function applyModelProviderToolPolicy(
     preparedRequesterPolicy?: WebSearchToolPolicyParams["preparedRequesterPolicy"];
     localModelLeanPreserveToolNames?: string[];
   },
-): AnyAgentTool[] {
+): T[] {
   const tools = filterLocalModelLeanTools({
     tools: toolsInput,
     config: params?.config,

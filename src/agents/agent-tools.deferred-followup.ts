@@ -1,5 +1,9 @@
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
-import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import {
+  copyAgentToolMetadata,
+  getCoreToolDeclaration,
+  type CoreToolDeclaration,
+} from "./agent-tool-metadata.js";
 /** Adjusts cross-tool guidance from the final authorized tool set. */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
@@ -55,7 +59,21 @@ const TOOL_FOLLOWUPS = [
   ],
 ] as const;
 
-function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<string>): string {
+export function describeAvailableTool(
+  tool: Pick<AnyAgentTool, "name" | "description">,
+  availableTools: ReadonlySet<string>,
+  declaredTools: ReadonlySet<string> = availableTools,
+): string {
+  if (tool.name === "exec" || tool.name === "process") {
+    const hasCronTool = [...declaredTools].some(isAutomationsToolName);
+    return tool.name === "exec"
+      ? describeExecTool({
+          hasCronTool,
+          hasProcessTool: availableTools.has("process"),
+          autoReview: tool.description.includes(EXEC_AUTO_REVIEW_GUIDANCE),
+        })
+      : describeProcessTool({ hasCronTool });
+  }
   let description = tool.description;
   // Preserve byte-stable default prompt placement while gating every named sibling.
   for (const [sourceTool, requiredTool, original, expanded] of TOOL_FOLLOWUPS) {
@@ -100,33 +118,30 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
 }
 
 /** Return tools with cross-tool guidance adjusted for the tools that survived filtering. */
-export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAgentTool[] {
+export function applyToolAvailabilityDescriptions(
+  tools: AnyAgentTool[],
+  coreDeclarations?: readonly CoreToolDeclaration[],
+): AnyAgentTool[] {
   finalizeAgentToolAvailability(tools);
   const availableTools = new Set(tools.map((tool) => tool.name));
-  const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
-  const hasProcessTool = availableTools.has("process");
+  const declaredTools = coreDeclarations
+    ? new Set(coreDeclarations.map((tool) => tool.name))
+    : availableTools;
   const hasSessionsSpawnTool = availableTools.has("sessions_spawn");
   return tools.map((tool) => {
-    if (tool.name === "exec") {
-      return replaceDescription(
-        tool,
-        describeExecTool({
-          hasCronTool,
-          hasProcessTool,
-          autoReview: tool.description.includes(EXEC_AUTO_REVIEW_GUIDANCE),
-        }),
-      );
-    }
-    if (tool.name === "process") {
-      return replaceDescription(tool, describeProcessTool({ hasCronTool }));
-    }
     if (tool.name === "agents_list") {
       return replaceDescription(tool, describeAgentsListTool(hasSessionsSpawnTool));
     }
     if (tool.name === "agents_wait") {
       return replaceDescription(tool, describeAgentsWaitTool(hasSessionsSpawnTool));
     }
-    const description = describeAvailableTool(tool, availableTools);
+    // Prepared shell definitions also win at harness registration. Their reminder
+    // guidance follows persistent declarations; process capability stays turn-local.
+    const description = describeAvailableTool(
+      tool,
+      availableTools,
+      getCoreToolDeclaration(tool) ? declaredTools : availableTools,
+    );
     return description === tool.description ? tool : replaceDescription(tool, description);
   });
 }

@@ -9,6 +9,7 @@ import {
 } from "../skills/workspace-skill-read-path.js";
 import {
   bindAgentToolActionDescriptor,
+  bindCoreToolDeclaration,
   type AgentToolActionDescriptor,
 } from "./agent-tool-metadata.js";
 import { getToolParamsRecord, normalizeFileToolPathParam } from "./agent-tools.params.js";
@@ -436,7 +437,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             }
           : undefined,
       }),
-      createLazyProcessTool(options.processDefaults),
+      bindCoreToolDeclaration(createLazyProcessTool(options.processDefaults)),
     );
   }
   options.recordToolPrepStage?.("shell-tools");

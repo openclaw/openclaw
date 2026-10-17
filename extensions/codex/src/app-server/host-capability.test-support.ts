@@ -39,6 +39,9 @@ export function createCodexTestHostCapabilities(
       release: () => {},
     }),
     bindToolSurface: (tools) => tools,
+    // Synthetic factories are not core producers. Real core projection tests
+    // must use createAdmittedHostCapabilityTestFixture instead.
+    readCoreToolDeclarations: () => [],
     createToolSurfaceAsync: async (options, bindingOptions) =>
       host.bindToolSurface(
         (toolFactories.get(host) ?? createOpenClawCodingTools)(options),

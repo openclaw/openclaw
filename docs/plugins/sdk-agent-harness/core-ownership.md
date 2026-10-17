@@ -39,6 +39,52 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+### Stable core declarations
+
+`hostCapabilities.readCoreToolDeclarations(tools)` is an optional, read-only
+addition to the existing host contract. Pass the exact array just returned by
+that host's `createToolSurfaceAsync`. The result contains only `name`,
+`description`, `parameters`, and optional `catalogMode` for the participating
+built-in core tools: `automations`, `computer`, `conversations_list`,
+`conversations_send`, `conversations_turn`, `exec`, `gateway`, `mobile_ui`, `nodes`,
+`openclaw`, `plugins`, `portal`, `process`, `screen`, `sessions`, `sessions_send`, and `terminal`.
+Direct-only declarations retain their namespace and loading semantics.
+
+These definitions share the executable core producers' literal metadata and
+cross-tool guidance. They omit transient owner-only catalog selection, while
+retaining configured, sender, sandbox, runtime, and inherited policy restrictions.
+The sessions declaration describes the full management schema unless the sandbox
+requires rename-only access; the executable still exposes and enforces the actual
+sender's actions. Portal likewise publishes its canonical global declaration
+without constructing an owner executor: private turns have no portal executor
+without an attached worker, or retain a session-scoped executor that rejects
+other environments. A declaration is not an execution grant.
+
+Declaration availability still follows the actual core producer's embedded,
+sandbox, client and model capability restrictions, followed by the same persistent
+policy selection. For example, `screen` still requires the requesting client's
+UI capability, and `computer` requires a compatible model and transport. The
+`openclaw` description uses the actual prepared execution policy, so genuine
+policy changes still invalidate the catalog.
+Shell reminder guidance follows persistent declaration availability, while exec's
+background affordances still require the current executable process tool.
+
+Build a fresh surface for each attempt. This operation does not read a previous
+thread catalog, retain admission, or provide plugin declarations. Foreign arrays,
+closed hosts, and revoked admissions are rejected. Construction checks authority
+again after asynchronous preparation. Plugin factories continue to receive the
+actual sender, and plugin replacements are not classified as core by name.
+Sender-dependent plugin definitions, including bundled plugins' owner-gated
+factories, can therefore still change a native thread's catalog. This core-only
+operation does not add a plugin descriptor API. Prepared executable definitions
+keep their existing precedence.
+
+Codex uses this projection only for registration, alongside current-turn plugin
+definitions. Dispatch still uses current-turn executors. Genuine schema,
+description, and configuration changes retain the existing thread rotation and
+active-work protections. Other SDK consumers may continue using the existing
+tool-surface methods without adopting this optional operation.
+
 ### Prepared local execution environment
 
 `hostCapabilities.preparedEnvironment()` returns captured identity and execution facts for the admitted attempt. Its optional `localGitConfigParameters` is an append fragment, not a replacement for `GIT_CONFIG_PARAMETERS`. Apply it only to local child processes owned by the harness. Preserve unrelated inherited or explicitly configured Git parameters and the runtime's environment filters; an explicit native value, including an empty string, replaces its inherited base before the host fragment is appended. Keep inherited credentials in the child environment rather than copying them into tool request overrides or persisted native thread configuration. Remote, sandbox, and externally started peers retain their existing environment owners.

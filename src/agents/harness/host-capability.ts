@@ -27,10 +27,7 @@ import {
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import {
-  createOpenClawCodingToolsInternal,
-  createOpenClawCodingToolsInternalAsync,
-} from "../agent-tools.js";
+import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -67,7 +64,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
 import { buildHarnessHostRequester } from "./host-requester.js";
-import { bindHostSkillCatalog, prepareHostSkillLibraryResources } from "./host-skills.js";
+import { bindHostSkillCatalog } from "./host-skills.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 import {
   bindHarnessHostSourceAuthority,
@@ -75,6 +72,7 @@ import {
   bindHarnessNativeSpawnAuthority,
   retainHarnessSource,
 } from "./host-source-authority.js";
+import { bindHostToolDeclarations } from "./host-tool-declarations.js";
 import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
@@ -132,6 +130,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
   const coreTtsToolResults = new WeakSet<object>();
+
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
@@ -457,6 +456,14 @@ export function createAgentHarnessHostCapabilities(params: {
     withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
       withInstallationTarget(installationTarget, run),
     );
+  const declarations = bindHostToolDeclarations({
+    assertActive,
+    signal: bindAbortSignal(attemptSignal),
+    skillResourceSnapshot,
+    toolConstructionInputs,
+    withToolConstructionScope,
+    bindCreatedTools,
+  });
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -520,30 +527,8 @@ export function createAgentHarnessHostCapabilities(params: {
         bindingOptions,
       );
     },
-    createToolSurfaceAsync: async (options, bindingOptions) => {
-      const librarySelections = skillResourceSnapshot(options)?.librarySelections ?? [];
-      const library = librarySelections.length
-        ? await prepareHostSkillLibraryResources(librarySelections, assertActive)
-        : undefined;
-      const inputs = toolConstructionInputs(
-        options,
-        library?.entries ?? [],
-        library?.assertCurrent,
-      );
-      const sourceTools = await withToolConstructionScope(() =>
-        createOpenClawCodingToolsInternalAsync(
-          inputs.options,
-          inputs.skillReadResources,
-          undefined,
-          undefined,
-          {
-            assertCurrent: library?.assertCurrent ?? assertActive,
-            signal: bindAbortSignal(attemptSignal),
-          },
-        ),
-      );
-      return bindCreatedTools(sourceTools, bindingOptions);
-    },
+    createToolSurfaceAsync: declarations.createToolSurfaceAsync,
+    readCoreToolDeclarations: declarations.readCoreToolDeclarations,
     prepareMutableFileApproval: async (request) => {
       assertActive();
       const prepared = await prepareSystemRunMutableFileApproval(request);

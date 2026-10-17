@@ -19,6 +19,7 @@ import {
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
+import { buildDynamicToolDeclarations } from "./dynamic-tool-declarations.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForRuntime,
@@ -334,7 +335,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     });
     const registeredTools = nativeSpecs
       ? []
-      : await buildDynamicTools({
+      : await buildDynamicToolDeclarations({
           ...commonToolParams,
           forceHeartbeatTool: true,
           ignoreDisableMessageTool: true,

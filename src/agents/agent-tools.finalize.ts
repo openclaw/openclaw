@@ -2,6 +2,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import type { CoreToolDeclaration } from "./agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import {
@@ -16,6 +17,7 @@ import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata
 
 type FinalizeAgentToolsOptions = {
   tools: AnyAgentTool[];
+  coreDeclarations?: readonly CoreToolDeclaration[];
   config?: OpenClawConfig;
   preparedModelRuntime?: { metadataSnapshot: PluginMetadataSnapshot };
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
@@ -72,8 +74,8 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, abortSignal))
     : withHooks;
   options.recordToolPrepStage?.("abort-wrappers");
-  const finalized = applyToolAvailabilityDescriptions(withAbort).map((tool, index) =>
-    descriptors.bind(tool, index),
+  const finalized = applyToolAvailabilityDescriptions(withAbort, options.coreDeclarations).map(
+    (tool, index) => descriptors.bind(tool, index),
   );
   options.recordToolPrepStage?.("deferred-followup-descriptions");
   descriptors.settle(sources, normalizedSchemas, finalized, options.registerRunCleanup);

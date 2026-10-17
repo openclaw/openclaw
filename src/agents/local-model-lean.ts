@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -84,13 +83,13 @@ export function isLocalModelLeanEnabled(params: {
 }
 
 /** Filters tools for local-model lean mode while preserving required delivery tools. */
-export function filterLocalModelLeanTools(params: {
-  tools: AnyAgentTool[];
+export function filterLocalModelLeanTools<T extends { name: string }>(params: {
+  tools: T[];
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   preserveToolNames?: Iterable<string>;
-}): AnyAgentTool[] {
+}): T[] {
   if (!isLocalModelLeanEnabled(params)) {
     return params.tools;
   }

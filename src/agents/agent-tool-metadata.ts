@@ -29,25 +29,31 @@ export type AgentToolExecutionLocation =
       timeout?: WorkerToolSurface["tools"][number]["timeout"];
     };
 
+export type CoreToolDeclaration = Pick<
+  AnyAgentTool,
+  "name" | "description" | "parameters" | "catalogMode"
+>;
+
 type ToolActionState = Readonly<{
   descriptor?: AgentToolActionDescriptor;
   executionLocation?: AgentToolExecutionLocation;
+  coreDeclaration?: CoreToolDeclaration;
 }>;
 
 // Rebuilt tools retain prepared classification without adding weak-table edges.
 class ToolActionMetadata extends PluginHostObject {
   #state: ToolActionState;
 
-  constructor(tool: AnyAgentTool, state: ToolActionState) {
+  constructor(tool: object, state: ToolActionState) {
     super(tool);
     this.#state = state;
   }
 
-  static get(tool: AnyAgentTool): ToolActionState | undefined {
+  static get(tool: object): ToolActionState | undefined {
     return #state in tool ? tool.#state : undefined;
   }
 
-  static set(tool: AnyAgentTool, state: ToolActionState): void {
+  static set(tool: object, state: ToolActionState): void {
     if (#state in tool) {
       tool.#state = { ...tool.#state, ...state };
     } else {
@@ -64,6 +70,23 @@ const openclawAction: AgentToolActionDescriptor = Object.freeze({
   family: "tool",
   operation: "openclaw",
 });
+
+/** Only the concrete core producer may opt its literal metadata into declaration projection. */
+export function bindCoreToolDeclaration<T extends CoreToolDeclaration>(
+  tool: T,
+  declaration: CoreToolDeclaration = tool,
+): T {
+  const { name, description, parameters, catalogMode } = declaration;
+  ToolActionMetadata.set(tool, {
+    coreDeclaration: { name, description, parameters, ...(catalogMode ? { catalogMode } : {}) },
+  });
+  return tool;
+}
+
+export function getCoreToolDeclaration(tool: CoreToolDeclaration) {
+  // A plugin replacement must never inherit core classification from its name.
+  return getPluginToolMeta(tool) ? undefined : ToolActionMetadata.get(tool)?.coreDeclaration;
+}
 
 export function bindAgentToolExecutionLocation(
   tool: AnyAgentTool,
