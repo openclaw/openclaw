@@ -186,6 +186,10 @@ describe("usage route", () => {
         startDate: data?.query.startDate,
         endDate: data?.query.endDate,
         agentId: "main",
+        groupBy: "family",
+        mode: "specific",
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        includeContextWeight: false,
       });
     },
   );

@@ -565,6 +565,14 @@ describe("UsagePage detail requests", () => {
     expect(page.querySelector(".usage-export-menu > button")?.getAttribute("aria-busy")).toBe(
       "true",
     );
+    const exported = request.mock.calls.find(([, params]) => params?.includeContextWeight)!;
+    expect(exported[1]).toMatchObject({
+      query: "label:Included",
+      limit: Number.MAX_SAFE_INTEGER,
+      includeContextWeight: true,
+    });
+    expect(exported[1]).not.toHaveProperty("projection");
+    expect(exported[1]).not.toHaveProperty("offset");
     const full = {
       ...result,
       sessions: sessions.map((session) =>
