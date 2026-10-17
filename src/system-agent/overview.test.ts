@@ -1,7 +1,8 @@
 // OpenClaw overview tests cover summary output for rescue diagnostics.
 import { describe, expect, it } from "vitest";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   formatSystemAgentOverview,
@@ -12,22 +13,8 @@ import {
 } from "./overview.js";
 import { withSystemAgentOverviewSources } from "./overview.test-support.js";
 
-function createConfigSnapshot(runtimeConfig: OpenClawConfig): ConfigFileSnapshot {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: "{}",
-    parsed: runtimeConfig,
-    sourceConfig: runtimeConfig,
-    resolved: runtimeConfig,
-    valid: true,
-    runtimeConfig,
-    config: runtimeConfig,
-    hash: "test-hash",
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+function createConfigSnapshot(config: OpenClawConfig) {
+  return { ...createSnapshot({ sourceConfig: config, hash: "test-hash" }), raw: "{}" };
 }
 
 function createOverview(defaultModel?: string): SystemAgentOverview {
