@@ -113,12 +113,7 @@ describe("agent DB conversation migration", () => {
         )
         .run(...values, "session-a", "conversation-a");
     const route = (writeId: string) =>
-      JSON.stringify({
-        version: 1,
-        writeId,
-        observedAt: 1,
-        context: { guildId: "guild-a" },
-      });
+      JSON.stringify({ version: 1, writeId, observedAt: 1, context: { guildId: "guild-a" } });
     const currentRoute = route("current-write");
     update("route_context_json = ?", route("candidate-write"));
     update("route_context_json = ?, last_seen_at = ?", currentRoute, 1);
@@ -155,18 +150,13 @@ describe("agent DB conversation migration", () => {
     insertEntry(
       "agent:main:main",
       "shared",
-      {
-        groupId: "shared-ops",
-        deliveryContext: deliveryContext("discord", "channel:shared-ops"),
-      },
+      { groupId: "shared-ops", deliveryContext: deliveryContext("discord", "channel:shared-ops") },
       50,
     );
     insertEntry(
       "agent:main:reef:direct:peer-a",
       "shared",
-      {
-        deliveryContext: deliveryContext("reef", "reef:peer-a"),
-      },
+      { deliveryContext: deliveryContext("reef", "reef:peer-a") },
       100,
     );
     insertSession.run("dedicated", "agent:main:reef:direct:peer-b", "conversation", "direct");
@@ -175,11 +165,7 @@ describe("agent DB conversation migration", () => {
       "dedicated",
       {
         chatType: "direct",
-        origin: {
-          provider: "reef",
-          nativeDirectUserId: "stale-peer",
-          from: "reef:stale-peer",
-        },
+        origin: { provider: "reef", nativeDirectUserId: "stale-peer", from: "reef:stale-peer" },
         deliveryContext: deliveryContext("reef", "reef:peer-b"),
       },
       200,
@@ -198,20 +184,14 @@ describe("agent DB conversation migration", () => {
     insertEntry(
       "agent:main:legacy-room",
       "channel-case",
-      {
-        groupId: "ops-room",
-        deliveryContext: deliveryContext("discord", "channel:ops-room"),
-      },
+      { groupId: "ops-room", deliveryContext: deliveryContext("discord", "channel:ops-room") },
       400,
     );
     insertSession.run("group-case", "agent:main:legacy-group", "channel", null);
     insertEntry(
       "agent:main:legacy-group",
       "group-case",
-      {
-        groupId: "crew-room",
-        deliveryContext: deliveryContext("telegram", "-100123"),
-      },
+      { groupId: "crew-room", deliveryContext: deliveryContext("telegram", "-100123") },
       500,
     );
     insertSession.run("thread-case", "agent:main:discord:channel:ops-room:thread", "channel", null);

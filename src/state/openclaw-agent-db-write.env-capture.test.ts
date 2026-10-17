@@ -77,9 +77,7 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   agentDatabaseLifecycle: boundary.cache,
   retainAgentDatabase: vi.fn(() => vi.fn()),
 }));
-vi.mock("./agent-database-admission.js", () => ({
-  assertAgentDatabaseAdmitted: vi.fn(),
-}));
+vi.mock("./agent-database-admission.js", () => ({ assertAgentDatabaseAdmitted: vi.fn() }));
 vi.mock("./agent-deletion-cleanup.js", () => ({
   assertAgentDeletionDatabaseCleanupAccess: vi.fn(),
   getAgentDeletionDatabaseCleanup: () => undefined,
@@ -91,9 +89,7 @@ vi.mock("./openclaw-state-db-async-lifecycle.js", () => ({
 vi.mock("../infra/sqlite-integrity-worker.js", () => ({
   assertSqliteIntegrityInWorker: boundary.integrity,
 }));
-vi.mock("../infra/sqlite-integrity.js", () => ({
-  runSqliteIntegrityCheckSync: vi.fn(),
-}));
+vi.mock("../infra/sqlite-integrity.js", () => ({ runSqliteIntegrityCheckSync: vi.fn() }));
 // mock-isolation: Exercise the admission owner without native database initialization.
 vi.mock("./openclaw-agent-db.js", async () => {
   const { DatabaseSync } = await import("node:sqlite");
