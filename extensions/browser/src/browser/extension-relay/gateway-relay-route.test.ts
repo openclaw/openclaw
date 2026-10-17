@@ -79,7 +79,7 @@ const ROTATED_TOKEN = "b".repeat(64);
 const RELAY_PATH = "/browser/extension";
 const PROFILE = { name: "chrome", driver: "extension", cdpPort: 18799 };
 
-async function upgrade(request: IncomingMessage, head = Buffer.alloc(0)) {
+async function upgrade(request: IncomingMessage, head: Buffer = Buffer.alloc(0)) {
   const writes: string[] = [];
   let destroyed = false;
   const socket = Object.assign(new EventEmitter(), {

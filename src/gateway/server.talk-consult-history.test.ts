@@ -345,7 +345,7 @@ function expectNoGeneratedInput(messages: unknown[], surface: string) {
   for (const [label, text] of [
     [surface, JSON.stringify(messages)],
     [`${surface} Markdown`, buildChatMarkdown(messages, "Voice test assistant")],
-  ]) {
+  ] as const) {
     expect
       .soft(
         syntheticMarkers.filter((marker) => text?.includes(marker)),

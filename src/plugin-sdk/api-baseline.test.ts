@@ -24,7 +24,6 @@ import {
 } from "./api-diff.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { objectContaining, stringContaining, arrayContaining } = expect;
 const fixtureSource = { path: "src/plugin-sdk/fixture.ts" };
 const tsOptions = { module: "NodeNext", moduleResolution: "NodeNext", target: "ESNext" };
 
@@ -37,7 +36,7 @@ function writeFiles(root: string, files: Readonly<Record<string, string>>) {
 }
 
 function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
-  expect(actual).toEqual(expected.map((item) => objectContaining(item)));
+  expect(actual).toEqual(expected.map((item) => expect.objectContaining(item)));
 }
 
 async function renderSourceFixture(
@@ -262,16 +261,16 @@ it("reads added and removed entrypoints from each revision's own inventory", asy
   ]);
   expectItems(addedDiff.exports, {
     change: "added",
-    declarationChanges: arrayContaining([
-      objectContaining({ after: stringContaining("value: number") }),
+    declarationChanges: expect.arrayContaining([
+      expect.objectContaining({ after: expect.stringContaining("value: number") }),
     ]),
     entrypoint: "added",
     exportName: "createAdded",
   });
   expect(removedDiff.exports[0]).toMatchObject({
     change: "removed",
-    declarationChanges: arrayContaining([
-      objectContaining({ before: stringContaining("value: number") }),
+    declarationChanges: expect.arrayContaining([
+      expect.objectContaining({ before: expect.stringContaining("value: number") }),
     ]),
   });
   expect(addedDiff.digest).not.toBe(diffApi(before, sameNamesDifferentContents).digest);
@@ -314,12 +313,12 @@ it("stores shared declaration detail once while retaining every affected export"
     [changed, "accountId"],
   ] as const) {
     expect(surface.declarationSections.map(({ name, text }) => [name, text])).toEqual([
-      ["PoolOptions", stringContaining("value: number;")],
-      ["PoolOptions", stringContaining("value: string;")],
-      ["SharedOptions", stringContaining(`${field}: string;`)],
-      ["fixed", stringContaining("function fixed(options: PoolOptions): void;")],
-      ["preview", stringContaining("function preview(options: SharedOptions): void;")],
-      ["send", stringContaining("function send(options: SharedOptions): void;")],
+      ["PoolOptions", expect.stringContaining("value: number;")],
+      ["PoolOptions", expect.stringContaining("value: string;")],
+      ["SharedOptions", expect.stringContaining(`${field}: string;`)],
+      ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
+      ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
+      ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
     ]);
     const references = surface.modules.flatMap(({ entrypoint, exports }) =>
       exports.map(({ exportName, closureSectionIds }) => [
@@ -342,9 +341,9 @@ it("stores shared declaration detail once while retaining every affected export"
     { change: "reachable", exportName: "send" },
   ]);
   expectItems(diff.exports[0]?.declarationChanges, {
-    after: stringContaining("accountId: string"),
-    before: stringContaining("text: string"),
-    name: stringContaining("SharedOptions"),
+    after: expect.stringContaining("accountId: string"),
+    before: expect.stringContaining("text: string"),
+    name: expect.stringContaining("SharedOptions"),
   });
   expect(diff.exports[1]?.declarationChanges).toEqual([]);
   expect(JSON.stringify(diff).match(/type SharedOptions/gu)).toHaveLength(2);
@@ -430,7 +429,8 @@ it.skipIf(process.platform === "win32")(
           });
           if (compilerPids.length > 0) {
             const processes = ps("-ww", "-p", compilerPids.join(","), "-o", "args=");
-            expect(processes).toMatchObject({ error: undefined, stderr: "" });
+            expect(processes.error).toBeUndefined();
+            expect(processes.stderr).toBe("");
             expect([0, 1]).toContain(processes.status);
             if (processes.status === 1) {
               expect(processes.stdout).toBe("");
@@ -463,12 +463,12 @@ it("renders a checkout reached through a symlinked alias", async () => {
   );
 
   expect(baseline.modules).toEqual([
-    objectContaining({
+    expect.objectContaining({
       source: fixtureSource,
       exports: [
-        objectContaining({
+        expect.objectContaining({
           exportName: "measure",
-          declaration: stringContaining("export function measure(value: string): number;"),
+          declaration: expect.stringContaining("export function measure(value: string): number;"),
         }),
       ],
     }),
@@ -630,13 +630,23 @@ it("captures private shape changes while ignoring documentation and implementati
   const declaration = baseline.modules[0]?.exports[0];
 
   expect(declaration).toEqual(
-    objectContaining({ exportName: "createFixture", kind: "function", source: fixtureSource }),
+    expect.objectContaining({
+      exportName: "createFixture",
+      kind: "function",
+      source: fixtureSource,
+    }),
   );
   expect(declaration?.closureHash).toMatch(/^[a-f0-9]{64}$/u);
   expect(declaration?.closureSectionIds?.map((id) => baseline.declarationSections[id])).toEqual(
-    arrayContaining([
-      objectContaining({ name: "FixtureOptionLeaf", text: stringContaining("required: string") }),
-      objectContaining({ name: "FixtureResult", text: stringContaining("FixtureResultLeaf") }),
+    expect.arrayContaining([
+      expect.objectContaining({
+        name: "FixtureOptionLeaf",
+        text: expect.stringContaining("required: string"),
+      }),
+      expect.objectContaining({
+        name: "FixtureResult",
+        text: expect.stringContaining("FixtureResultLeaf"),
+      }),
     ]),
   );
   expect(declaration?.declaration).toContain("FixtureOptions");
@@ -664,7 +674,7 @@ it("captures private shape changes while ignoring documentation and implementati
     combinedDiff.exports.flatMap((change) =>
       change.declarationChanges.map((section) => section.name),
     ),
-  ).toEqual(arrayContaining(["FixtureOptionLeaf", "FixtureResultLeaf"]));
+  ).toEqual(expect.arrayContaining(["FixtureOptionLeaf", "FixtureResultLeaf"]));
   expect(hasChanges(combinedDiff)).toBe(true);
   expect(acknowledgement(combinedDiff)).toMatch(/^[a-f0-9]{8}$/u);
   expect(report(combinedDiff)).toContain("Reachable declarations changed");

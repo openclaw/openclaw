@@ -1,5 +1,5 @@
+// API-provider auth-choice tests cover built-in provider config, API keys, and provider plugin setup.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
@@ -8,6 +8,7 @@ import { prepareAuthChoice } from "./auth-choice.apply.js";
 const resolvePluginProviders = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders>(),
 );
+const resolvePluginSetupProvider = vi.hoisted(() => vi.fn(() => undefined));
 const prepareAuthChoiceLoadedPluginProvider = vi.hoisted(() =>
   vi.fn<
     typeof import("../plugins/provider-auth-choice.js").prepareAuthChoiceLoadedPluginProvider
@@ -21,6 +22,7 @@ const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders,
+  resolvePluginSetupProvider,
 }));
 vi.mock("../plugins/provider-auth-choice.js", () => ({
   prepareAuthChoiceLoadedPluginProvider,
@@ -29,36 +31,28 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveDeprecatedProviderInstallCatalogEntry,
 }));
 
-function createProvider(
-  id: string,
-  kind: ProviderPlugin["auth"][number]["kind"],
-  choiceId: string,
-  aliases?: string[],
-): ProviderPlugin {
+function createProvider(params: {
+  id: string;
+  aliases?: string[];
+  auth: Array<{
+    id: string;
+    kind: ProviderPlugin["auth"][number]["kind"];
+    choiceId?: string;
+  }>;
+}): ProviderPlugin {
   return {
-    id,
-    label: id,
-    aliases,
-    auth: [
-      {
-        id: choiceId,
-        label: choiceId,
-        kind,
-        wizard: { choiceId },
-        run: vi.fn(async () => ({ profiles: [] })),
-      },
-    ],
+    id: params.id,
+    label: params.id,
+    ...(params.aliases ? { aliases: params.aliases } : {}),
+    auth: params.auth.map((method) => ({
+      id: method.id,
+      label: method.id,
+      kind: method.kind,
+      ...(method.choiceId ? { wizard: { choiceId: method.choiceId } } : {}),
+      run: vi.fn(async () => ({ profiles: [] })),
+    })),
   };
 }
-
-const workspaceDir = "/tmp/selected-agent-workspace";
-const setupParams = {
-  config: {},
-  workspaceDir,
-  prompter: {} as never,
-  runtime: {} as never,
-  setDefaultModel: false,
-};
 
 describe("normalizeApiKeyTokenProviderAuthChoice", () => {
   afterEach(() => {
@@ -68,18 +62,53 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    [createProvider("anthropic", "token", "setup-token"), "token", " anthropic ", "setup-token"],
-    [
-      createProvider("google", "api_key", "gemini-api-key", ["gemini"]),
-      "apiKey",
-      " GeMiNi ",
-      "gemini-api-key",
-    ],
-    [createProvider("openai", "api_key", "openai-api-key"), "token", "openai", "token"],
-  ] as const)("normalizes %j for %s/%s to %s", (provider, authChoice, tokenProvider, expected) => {
-    resolvePluginProviders.mockReturnValue([provider]);
-    expect(normalizeApiKeyTokenProviderAuthChoice({ authChoice, tokenProvider })).toBe(expected);
+  it("maps token provider auth through plugin token methods", () => {
+    resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "anthropic",
+        auth: [{ id: "setup-token", kind: "token", choiceId: "setup-token" }],
+      }),
+    ]);
+
+    expect(
+      normalizeApiKeyTokenProviderAuthChoice({
+        authChoice: "token",
+        tokenProvider: " anthropic ",
+      }),
+    ).toBe("setup-token");
+  });
+
+  it("maps apiKey provider auth through plugin api key methods and aliases", () => {
+    resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "google",
+        aliases: ["gemini"],
+        auth: [{ id: "api-key", kind: "api_key", choiceId: "gemini-api-key" }],
+      }),
+    ]);
+
+    expect(
+      normalizeApiKeyTokenProviderAuthChoice({
+        authChoice: "apiKey",
+        tokenProvider: " GeMiNi ",
+      }),
+    ).toBe("gemini-api-key");
+  });
+
+  it("leaves the auth choice unchanged when no matching provider method exists", () => {
+    resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "openai",
+        auth: [{ id: "api-key", kind: "api_key", choiceId: "openai-api-key" }],
+      }),
+    ]);
+
+    expect(
+      normalizeApiKeyTokenProviderAuthChoice({
+        authChoice: "token",
+        tokenProvider: "openai",
+      }),
+    ).toBe("token");
   });
 
   it.each([
@@ -89,13 +118,11 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
   ] as const)(
     "resolves workspace-only $authChoice providers through interactive setup",
     async (choice) => {
-      const provider = createProvider("workspace-provider", choice.kind, "workspace-provider-auth");
-      const authProfiles = [
-        {
-          profileId: "workspace-provider:default",
-          credential: createApiKeyCredential(provider.id, "fixture-workspace-key"),
-        },
-      ];
+      const workspaceDir = "/tmp/selected-agent-workspace";
+      const provider = createProvider({
+        id: "workspace-provider",
+        auth: [{ id: "workspace-auth", kind: choice.kind, choiceId: "workspace-provider-auth" }],
+      });
       resolvePluginProviders.mockImplementation((params) =>
         params?.workspaceDir === workspaceDir ? [provider] : [],
       );
@@ -104,7 +131,16 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
           params.authChoice === "workspace-provider-auth"
             ? {
                 config: params.config,
-                authProfiles: structuredClone(authProfiles),
+                authProfiles: [
+                  {
+                    profileId: "workspace-provider:default",
+                    credential: {
+                      type: "api_key",
+                      provider: "workspace-provider",
+                      key: "fixture-workspace-key",
+                    },
+                  },
+                ],
                 persistAuthProfiles: async () => {},
               }
             : null,
@@ -112,18 +148,32 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
       );
 
       const prepared = await prepareAuthChoice({
-        ...setupParams,
         authChoice: choice.authChoice,
+        config: {},
+        workspaceDir,
+        prompter: {} as never,
+        runtime: {} as never,
+        setDefaultModel: false,
         opts: { tokenProvider: provider.id },
       });
 
-      expect(prepared.authProfiles).toEqual(authProfiles);
+      expect(prepared.authProfiles).toEqual([
+        {
+          profileId: "workspace-provider:default",
+          credential: {
+            type: "api_key",
+            provider: "workspace-provider",
+            key: "fixture-workspace-key",
+          },
+        },
+      ]);
     },
   );
 
   it.each(["manifest", "install catalog"] as const)(
     "resolves workspace-only deprecated auth choices from the %s",
     async (source) => {
+      const workspaceDir = "/tmp/selected-agent-workspace";
       prepareAuthChoiceLoadedPluginProvider.mockImplementation(async (_params, consume) =>
         consume(null),
       );
@@ -145,8 +195,12 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
 
       await expect(
         prepareAuthChoice({
-          ...setupParams,
           authChoice: "workspace-legacy-auth",
+          config: {},
+          workspaceDir,
+          prompter: {} as never,
+          runtime: {} as never,
+          setDefaultModel: false,
         }),
       ).rejects.toThrow('Use "workspace-modern-auth" instead');
     },

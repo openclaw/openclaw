@@ -15,23 +15,27 @@ const runSecretsApplyMock = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
 
 vi.mock("@clack/prompts", () => ({
-  confirm: confirmMock,
-  select: selectMock,
+  confirm: (...args: unknown[]) => confirmMock(...args),
+  select: (...args: unknown[]) => selectMock(...args),
   text: vi.fn(),
-  log: { warn: logMock },
+  log: { warn: (...args: unknown[]) => logMock(...args) },
 }));
 
-vi.mock("./config-io.js", () => ({ createSecretsConfigIO: createSecretsConfigIOMock }));
+vi.mock("./config-io.js", () => ({
+  createSecretsConfigIO: (...args: unknown[]) => createSecretsConfigIOMock(...args),
+}));
 
 vi.mock("../agents/auth-profiles/persisted.js", () => ({
-  loadPersistedAuthProfileStore: loadPersistedAuthProfileStoreMock,
+  loadPersistedAuthProfileStore: (...args: unknown[]) => loadPersistedAuthProfileStoreMock(...args),
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
+  loadPluginManifestRegistryCore: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
 }));
 
-vi.mock("./apply.js", () => ({ runSecretsApply: runSecretsApplyMock }));
+vi.mock("./apply.js", () => ({
+  runSecretsApply: (...args: unknown[]) => runSecretsApplyMock(...args),
+}));
 
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
@@ -48,7 +52,13 @@ function makeTempDir(): string {
   return dir;
 }
 
-// Write the canonical raw row so plaintext beside keyRef survives normalization.
+/**
+ * Writes the canonical shared auth-profile store payload into the state
+ * database (`authProfiles.store` row of `config_machine_state`) and marks the
+ * ownership as `state-db` so `readPersistedSharedAuthProfileStoreRaw` resolves
+ * the same row configure reads at runtime. Uses the raw row (no normalization)
+ * so a stored `key` survives even when a sibling `keyRef` is present.
+ */
 function writeSharedAuthProfileStoreRaw(env: NodeJS.ProcessEnv, payload: unknown): void {
   noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
   const { db } = openOpenClawStateDatabase({ env });
@@ -61,23 +71,6 @@ function writeSharedAuthProfileStoreRaw(env: NodeJS.ProcessEnv, payload: unknown
   }
 }
 
-function profile(fields: Record<string, unknown>) {
-  return { type: "api_key", provider: "openai", ...fields };
-}
-
-async function configureEmptyAgent(profiles?: Record<string, unknown>): Promise<void> {
-  const env = { OPENCLAW_STATE_DIR: makeTempDir() };
-  if (profiles) {
-    writeSharedAuthProfileStoreRaw(env, createAuthProfileStoreFixture(profiles));
-  }
-  loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
-  await expect(
-    runSecretsConfigureInteractive({ providersOnly: false, skipProviderSetup: true, env }),
-  ).rejects.toThrow("No configurable secret-bearing fields found for this agent scope.");
-}
-
-const keyRef = { source: "env", provider: "default", id: "OPENAI_API_KEY" };
-
 describe("runSecretsConfigureInteractive", () => {
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
@@ -86,19 +79,29 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   beforeEach(() => {
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: true,
+      configurable: true,
+    });
 
     confirmMock.mockReset();
     selectMock.mockReset();
-    createSecretsConfigIOMock.mockReset().mockReturnValue({
+    createSecretsConfigIOMock.mockReset();
+    createSecretsConfigIOMock.mockReturnValue({
       readConfigFileSnapshotForWrite: async () => ({
-        snapshot: { valid: true, config: {}, resolved: {} },
+        snapshot: {
+          valid: true,
+          config: {},
+          resolved: {},
+        },
       }),
     });
     loadPersistedAuthProfileStoreMock.mockReset();
     logMock.mockReset();
-    loadPluginManifestRegistryMock.mockReset().mockReturnValue({ diagnostics: [], plugins: [] });
-    runSecretsApplyMock.mockReset().mockResolvedValue({
+    loadPluginManifestRegistryMock.mockReset();
+    loadPluginManifestRegistryMock.mockReturnValue({ diagnostics: [], plugins: [] });
+    runSecretsApplyMock.mockReset();
+    runSecretsApplyMock.mockResolvedValue({
       changed: true,
       changedFiles: [],
       warningCount: 0,
@@ -147,17 +150,25 @@ describe("runSecretsConfigureInteractive", () => {
       ],
     });
 
-    const vault = {
-      source: "exec",
-      pluginIntegration: { pluginId: "vault", integrationId: "vault" },
-    };
-    const result = await runSecretsConfigureInteractive({ providersOnly: true, env: {} });
+    const result = await runSecretsConfigureInteractive({
+      providersOnly: true,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
     expect(result.plan.targets).toEqual([]);
-    expect(result.plan.providerUpserts?.vault).toEqual(vault);
+    expect(result.plan.providerUpserts?.vault).toEqual({
+      source: "exec",
+      pluginIntegration: {
+        pluginId: "vault",
+        integrationId: "vault",
+      },
+    });
     expect(runSecretsApplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         plan: expect.objectContaining({
-          providerUpserts: expect.objectContaining({ vault }),
+          providerUpserts: expect.objectContaining({
+            vault: expect.objectContaining({ source: "exec" }),
+          }),
         }),
         write: false,
         allowExec: false,
@@ -167,14 +178,40 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   it("warns when the shared auth-profile store carries plaintext credentials", async () => {
-    // Warn before the empty-candidate guard, including raw plaintext beside keyRef.
-    await configureEmptyAgent({
-      "openai:shared": profile({ key: "sk-shared-plaintext" }), // pragma: allowlist secret
-      "openai:plaintext-with-ref": profile({
-        key: "sk-leftover-plaintext", // pragma: allowlist secret
-        keyRef,
+    // Shared store carries plaintext `key` values. The first profile is pure
+    // plaintext; the second carries `key` AND a sibling `keyRef`, which the
+    // normalized loader drops — reading the raw row (as `secrets audit` does)
+    // is required to still see that plaintext. `secrets configure` only edits
+    // the selected agent's local store, so neither is migratable here.
+    const stateDir = makeTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+    writeSharedAuthProfileStoreRaw(
+      env,
+      createAuthProfileStoreFixture({
+        "openai:shared": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-shared-plaintext", // pragma: allowlist secret
+        },
+        "openai:plaintext-with-ref": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-leftover-plaintext", // pragma: allowlist secret
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
       }),
-    });
+    );
+    // Agent store empty + no config secret targets → no configurable candidates.
+    // The shared-plaintext warning fires before the empty-candidate guard.
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
+
+    await expect(
+      runSecretsConfigureInteractive({
+        providersOnly: false,
+        skipProviderSetup: true,
+        env,
+      }),
+    ).rejects.toThrow("No configurable secret-bearing fields found for this agent scope.");
 
     expect(logMock).toHaveBeenCalledTimes(1);
     const message = String(logMock.mock.calls[0]?.[0] ?? "");
@@ -184,16 +221,59 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   it("does not warn when shared profiles only carry SecretRef values", async () => {
-    await configureEmptyAgent({
-      "openai:ref": profile({ keyRef }),
-      "openai:dollar": profile({ key: "$OPENAI_API_KEY" }), // pragma: allowlist secret
-      "openai:braced": profile({ key: "${OPENAI_API_KEY}" }), // pragma: allowlist secret
-    });
+    // Shared store profiles are all references, not plaintext: an explicit
+    // `keyRef` object, a `$ENV` shorthand, and a `${ENV}` template. The latter
+    // two have no `keyRef`; without sharing audit's `coerceSecretRef` check the
+    // counter would miscount them as plaintext.
+    const stateDir = makeTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+    writeSharedAuthProfileStoreRaw(
+      env,
+      createAuthProfileStoreFixture({
+        "openai:ref": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+        "openai:dollar": {
+          type: "api_key",
+          provider: "openai",
+          key: "$OPENAI_API_KEY", // pragma: allowlist secret
+        },
+        "openai:braced": {
+          type: "api_key",
+          provider: "openai",
+          key: "${OPENAI_API_KEY}", // pragma: allowlist secret
+        },
+      }),
+    );
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
+
+    await expect(
+      runSecretsConfigureInteractive({
+        providersOnly: false,
+        skipProviderSetup: true,
+        env,
+      }),
+    ).rejects.toThrow("No configurable secret-bearing fields found for this agent scope.");
+
     expect(logMock).not.toHaveBeenCalled();
   });
 
   it("does not warn when the shared auth-profile store is missing", async () => {
-    await configureEmptyAgent();
+    // No shared store row committed → no plaintext to report.
+    const stateDir = makeTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
+
+    await expect(
+      runSecretsConfigureInteractive({
+        providersOnly: false,
+        skipProviderSetup: true,
+        env,
+      }),
+    ).rejects.toThrow("No configurable secret-bearing fields found for this agent scope.");
+
     expect(logMock).not.toHaveBeenCalled();
   });
 });

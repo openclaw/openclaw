@@ -30,30 +30,20 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { QuestionManager } from "./question-manager.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
-const { state, assertCurrent, loadSession } = vi.hoisted(() => {
-  const fixtureState = { root: "", current: true, uploads: true, apps: true };
-  return {
-    state: fixtureState,
-    assertCurrent: () => {
-      if (!fixtureState.current) {
-        throw new Error("revoked");
-      }
-    },
-    loadSession: (params: { sessionKey: string; agentId?: string }, cfg: OpenClawConfig) => ({
-      canonicalKey: params.sessionKey,
-      agentId: params.agentId ?? "main",
-      storePath: fixtureState.root,
-      cfg,
-      entry: { sessionId: "session-1", updatedAt: 0 },
-    }),
-  };
-});
+const state = vi.hoisted(() => ({ root: "", current: true, uploads: true, apps: true }));
 vi.mock("./operator-role-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./operator-role-policy.js")>()),
   resolveGatewayOperatorRoleActor: () => undefined,
 }));
 vi.mock("./server-methods/session-scoped-read.js", () => ({
-  retainSessionScopedRead: () => ({ assertCurrent, release() {} }),
+  retainSessionScopedRead: () => ({
+    assertCurrent: () => {
+      if (!state.current) {
+        throw new Error("revoked");
+      }
+    },
+    release() {},
+  }),
 }));
 vi.mock("./question-session-access.js", () => ({
   prepareQuestionAuthorization: () => ({ target: {}, authorize: () => null }),
@@ -74,10 +64,26 @@ vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
     params: { sessionKey: string; agentId?: string },
     cfg: OpenClawConfig,
     consume: (
-      loaded: ReturnType<typeof loadSession>,
+      loaded: {
+        canonicalKey: string;
+        agentId: string;
+        storePath: string;
+        cfg: OpenClawConfig;
+        entry: { sessionId: string; updatedAt: number };
+      },
       assertCurrent: () => void,
     ) => Promise<unknown>,
-  ) => consume(loadSession(params, cfg), () => {}),
+  ) =>
+    consume(
+      {
+        canonicalKey: params.sessionKey,
+        agentId: params.agentId ?? "main",
+        storePath: state.root,
+        cfg,
+        entry: { sessionId: "session-1", updatedAt: 0 },
+      },
+      () => {},
+    ),
 }));
 vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
@@ -106,9 +112,13 @@ import { mcpAppHandlers } from "./server-methods/mcp-app.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:form";
-const session = { sessionKey, agentId: "main" };
 const cleanups: Array<() => void> = [];
 let manager: QuestionManager;
+const assertCurrent = () => {
+  if (!state.current) {
+    throw new Error("revoked");
+  }
+};
 beforeEach(() => {
   state.root = dirs.make("mcp-form-");
   state.current = true;
@@ -149,37 +159,6 @@ function requestOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
-function questionCreator(assertActive = assertCurrent) {
-  return {
-    sessionKey,
-    requesterProfileId: "alice",
-    fingerprint: "creator",
-    project: () => "creator",
-    assertActive,
-  };
-}
-function pendingQuestion(
-  questions: Parameters<typeof buildAgentQuestionRequestQuestions>[0],
-  id = "pending-gateway-id",
-) {
-  return manager.request({
-    id,
-    ...session,
-    timeoutMs: 120000,
-    questions: buildAgentQuestionRequestQuestions(questions),
-  });
-}
-function upload(name = "part.stl", extra: Record<string, unknown> = {}) {
-  return { action: "upload", files: [{ name, mimeType: "model/stl", content: "AA==" }], ...extra };
-}
-function workspaceUploads() {
-  return createMcpAppWorkspaceUploadProvider({
-    workspaceDir: state.root,
-    ...session,
-    assertCurrent,
-  });
-}
-
 async function fixture(
   params: {
     target?: "resource_link" | "mcp_app_tool";
@@ -211,6 +190,9 @@ async function fixture(
     callTool,
     markUsed() {},
     getCatalog: async () => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {},
       tools: [
         {
           serverName: "origin",
@@ -225,13 +207,6 @@ async function fixture(
     params.target === "mcp_app_tool"
       ? { type: "mcp_app_tool", name: "inspect", arguments: { id: "declared" } }
       : { type: "resource_link", uri: "parts://declared", name: "Part" };
-  const resourceInput = {
-    type: "resource",
-    options: [
-      { uri: "parts://choice", name: "Part", _meta: { "openai/preview": { target: preview } } },
-    ],
-    ...(params.kind ? { userOptions: { kind: params.kind, accept: [".stl"] } } : {}),
-  };
   const snapshot = {
     mode: "openai/form",
     message: "Pick resources",
@@ -241,21 +216,41 @@ async function fixture(
         files: {
           type: "array",
           items: { type: "string", format: "uri" },
-          "x-openai-input": resourceInput,
+          "x-openai-input": {
+            type: "resource",
+            options: [
+              {
+                uri: "parts://choice",
+                name: "Part",
+                _meta: { "openai/preview": { target: preview } },
+              },
+            ],
+            ...(params.kind ? { userOptions: { kind: params.kind, accept: [".stl"] } } : {}),
+          },
         },
       },
     },
   };
-  const uploadResources = params.upload ?? (params.kind ? workspaceUploads() : undefined);
-  const origin = {
-    runtime,
-    serverName: "origin",
-    ...session,
-    requesterId: params.requesterId === null ? undefined : (params.requesterId ?? "alice"),
-    assertCurrent,
-  };
+  const uploadResources =
+    params.upload ??
+    (params.kind
+      ? createMcpAppWorkspaceUploadProvider({
+          workspaceDir: state.root,
+          agentId: "main",
+          sessionKey,
+          assertCurrent,
+        })
+      : undefined);
   const form = await createMcpAppFormResourceContext({
-    origin: { ...origin, prepareToolCall },
+    origin: {
+      runtime,
+      serverName: "origin",
+      sessionKey,
+      agentId: "main",
+      requesterId: params.requesterId === null ? undefined : (params.requesterId ?? "alice"),
+      assertCurrent,
+      prepareToolCall,
+    },
     snapshot,
     signal: controller.signal,
     uploadResources,
@@ -282,15 +277,23 @@ async function fixture(
       ? { dispose() {} }
       : registerPendingAgentQuestion({
           questionId: requestId,
-          ...session,
+          sessionKey,
+          agentId: "main",
           questions,
         });
   cleanups.push(claim.dispose);
   if (params.register !== false) {
-    pendingQuestion(questions, requestId);
+    manager.request({
+      id: requestId,
+      sessionKey,
+      agentId: "main",
+      timeoutMs: 120000,
+      questions: buildAgentQuestionRequestQuestions(questions),
+    });
   }
   const base = {
-    ...session,
+    sessionKey,
+    agentId: "main",
     viewId: form.context.viewId,
     requestId,
     questionId: questions[0]!.id,
@@ -304,16 +307,13 @@ async function fixture(
   return {
     form,
     invoke,
-    preview: (action: Record<string, unknown> = {}, requester = "alice") =>
-      invoke({ action: "preview", optionIndex: 0, ...action }, requester),
     base,
     readResource,
     callTool,
     prepareToolCall,
     runtime,
-    origin,
     controller,
-    fields: compiled.plan.fields,
+    compiled,
     questions,
     claim,
     snapshot,
@@ -324,23 +324,39 @@ async function fixture(
 describe("registered MCP form resource route", () => {
   it("binds model-created resources to the existing question creator profile and its live authority", async () => {
     let creatorCurrent = true;
-    const creator = questionCreator(() => {
-      if (!creatorCurrent) {
-        throw new Error("question creator revoked");
-      }
-    });
+    const creator = {
+      sessionKey,
+      requesterProfileId: "alice",
+      fingerprint: "creator",
+      project: () => "creator",
+      assertActive: () => {
+        if (!creatorCurrent) {
+          throw new Error("question creator revoked");
+        }
+      },
+    };
     const f = await withAgentQuestionAnswerAuthority(
       createAgentQuestionAnswerAuthority(creator),
       () => fixture({ kind: "file", requesterId: null }),
     );
-    expect((await f.invoke(upload(), "bob"))[0]).toBe(false);
-    expect((await f.invoke(upload(), "alice"))[0]).toBe(true);
+    const upload = {
+      action: "upload",
+      files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
+    };
+    expect((await f.invoke(upload, "bob"))[0]).toBe(false);
+    expect((await f.invoke(upload, "alice"))[0]).toBe(true);
     creatorCurrent = false;
-    expect((await f.preview())[0]).toBe(false);
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }, "alice"))[0]).toBe(false);
     expect(f.readResource).not.toHaveBeenCalled();
   });
   it("refuses origin metadata that conflicts with the admitted question creator", async () => {
-    const authority = createAgentQuestionAnswerAuthority(questionCreator());
+    const authority = createAgentQuestionAnswerAuthority({
+      sessionKey,
+      requesterProfileId: "alice",
+      fingerprint: "creator",
+      project: () => "creator",
+      assertActive: assertCurrent,
+    });
     await expect(
       withAgentQuestionAnswerAuthority(authority, () => fixture({ requesterId: "bob" })),
     ).rejects.toThrow("does not match its question creator");
@@ -371,9 +387,10 @@ describe("registered MCP form resource route", () => {
         "question.waitAnswer": async (request: GatewayRequestHandlerOptions) => {
           expect(request.client).toBe(options.client);
           const reply = await f.invoke({
-            ...upload(),
             requestId: pendingId,
             viewId: pendingViewId,
+            action: "upload",
+            files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
           });
           expect(reply[0]).toBe(true);
           request.respond(true, {
@@ -407,7 +424,14 @@ describe("registered MCP form resource route", () => {
       }));
       const result = await callMcpAppToolWithElicitation({
         options,
-        origin: f.origin,
+        origin: {
+          runtime: f.runtime,
+          serverName: "origin",
+          agentId: "main",
+          sessionKey,
+          requesterId: "alice",
+          assertCurrent,
+        },
         toolName: "pick",
         input: {},
         assertCurrent,
@@ -418,7 +442,16 @@ describe("registered MCP form resource route", () => {
         content: { files: [expect.stringMatching(/^file:/)] },
       });
       expect(manager.get(pendingId)?.status).toBe("cancelled");
-      expect((await f.preview({ requestId: pendingId, viewId: pendingViewId }))[0]).toBe(false);
+      expect(
+        (
+          await f.invoke({
+            requestId: pendingId,
+            viewId: pendingViewId,
+            action: "preview",
+            optionIndex: 0,
+          })
+        )[0],
+      ).toBe(false);
     } finally {
       await client.close();
       await server.close();
@@ -427,50 +460,79 @@ describe("registered MCP form resource route", () => {
 
   it("reads only the originating server’s declared preview using the pending Gateway question id", async () => {
     const f = await fixture();
-    const reply = await f.preview();
+    const reply = await f.invoke({ action: "preview", optionIndex: 0 });
     expect(reply[0]).toBe(true);
     expect(reply[1]).toEqual({ preview: { contents: [{ text: "private-preview" }] } });
     expect(f.readResource).toHaveBeenCalledWith("origin", "parts://declared");
-    expect((await f.preview({ requestId: "upstream-id" }))[0]).toBe(false);
-    expect((await f.preview({ target: { type: "resource_link", uri: "parts://secret" } }))[0]).toBe(
-      false,
-    );
-    expect((await f.preview({ optionIndex: 1 }))[0]).toBe(false);
+    expect(
+      (await f.invoke({ action: "preview", optionIndex: 0, requestId: "upstream-id" }))[0],
+    ).toBe(false);
+    expect(
+      (
+        await f.invoke({
+          action: "preview",
+          optionIndex: 0,
+          target: { type: "resource_link", uri: "parts://secret" },
+        })
+      )[0],
+    ).toBe(false);
+    expect((await f.invoke({ action: "preview", optionIndex: 1 }))[0]).toBe(false);
     expect(f.readResource).toHaveBeenCalledTimes(1);
   });
 
   it("rejects other requesters, sessions and forged pending records even when viewId was copied", async () => {
     const f = await fixture();
-    expect((await f.preview({}, "bob"))[0]).toBe(false);
-    expect((await f.preview({ sessionKey: "agent:main:other" }))[0]).toBe(false);
-    pendingQuestion(f.questions, "forged");
-    expect((await f.preview({ requestId: "forged" }))[0]).toBe(false);
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }, "bob"))[0]).toBe(false);
+    expect(
+      (await f.invoke({ action: "preview", optionIndex: 0, sessionKey: "agent:main:other" }))[0],
+    ).toBe(false);
+    manager.request({
+      id: "forged",
+      sessionKey,
+      agentId: "main",
+      timeoutMs: 120000,
+      questions: buildAgentQuestionRequestQuestions(f.questions),
+    });
+    expect((await f.invoke({ action: "preview", optionIndex: 0, requestId: "forged" }))[0]).toBe(
+      false,
+    );
     expect(f.readResource).not.toHaveBeenCalled();
   });
 
-  it.each(["replacement manager entry", "retired question owner"])(
-    "refuses previews for a %s",
-    async (reason) => {
-      const f = await fixture();
-      if (reason === "retired question owner") {
-        f.claim.dispose();
-      } else {
-        manager.close();
-        await manager.drain();
-        manager = new QuestionManager(createTestGatewayScheduler());
-        pendingQuestion(f.questions, f.base.requestId);
-      }
-      expect((await f.preview())[0]).toBe(false);
-      expect(f.readResource).not.toHaveBeenCalled();
-    },
-  );
+  it("does not rebind an identical public question ID to a replacement manager entry", async () => {
+    const f = await fixture();
+    manager.close();
+    await manager.drain();
+    manager = new QuestionManager(createTestGatewayScheduler());
+    manager.request({
+      id: f.base.requestId,
+      sessionKey,
+      agentId: "main",
+      timeoutMs: 120000,
+      questions: buildAgentQuestionRequestQuestions(f.questions),
+    });
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(false);
+    expect(f.readResource).not.toHaveBeenCalled();
+  });
+
+  it("releases form authority when the actual pending question owner retires", async () => {
+    const f = await fixture();
+    f.claim.dispose();
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(false);
+    expect(f.readResource).not.toHaveBeenCalled();
+  });
 
   it.each(["origin", "upload policy", "apps disabled"])(
     "rechecks %s after await before writing uploads",
     async (reason) => {
       const gate = createDeferred();
       const entered = createDeferred();
-      const provider = workspaceUploads();
+      const provider = createMcpAppWorkspaceUploadProvider({
+        workspaceDir: state.root,
+        sessionKey,
+        agentId: "main",
+        assertCurrent,
+      });
       const f = await fixture({
         kind: "file",
         upload: async (request) => {
@@ -479,7 +541,10 @@ describe("registered MCP form resource route", () => {
           return provider(request);
         },
       });
-      const pending = f.invoke(upload());
+      const pending = f.invoke({
+        action: "upload",
+        files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
+      });
       await entered.promise;
       if (reason === "origin") {
         state.current = false;
@@ -502,7 +567,7 @@ describe("registered MCP form resource route", () => {
       entered.resolve();
       return gate.promise;
     });
-    const pending = f.preview();
+    const pending = f.invoke({ action: "preview", optionIndex: 0 });
     await entered.promise;
     manager.cancel(f.base.requestId);
     gate.resolve({ contents: [{ uri: "parts://declared", text: "must-not-leak" }] });
@@ -517,14 +582,14 @@ describe("registered MCP form resource route", () => {
       throw new Error("approval policy changed");
     });
     f.prepareToolCall.mockResolvedValueOnce(guard);
-    expect((await f.preview())[0]).toBe(false);
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(false);
     expect(guard).toHaveBeenCalled();
     expect(f.callTool).not.toHaveBeenCalled();
   });
 
   it("prepares App previews with CURRENT request options and disposes their sandbox leases", async () => {
     const f = await fixture({ target: "mcp_app_tool" });
-    const reply = await f.preview();
+    const reply = await f.invoke({ action: "preview", optionIndex: 0 });
     expect(reply[0]).toBe(true);
     expect(f.prepareToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -569,7 +634,9 @@ describe("registered MCP form resource route", () => {
       expect(await readFile(file, "utf8")).toBe("solid part");
       expect(f.form.context.isUploadedResource("files", resource.uri)).toBe(true);
       expect(f.form.context.isUploadedResource("other", resource.uri)).toBe(false);
-      expect(f.fields[0]!.decode([resource.uri]).kind).toBe("present");
+      if (f.compiled.kind === "ready" && f.compiled.plan.kind === "form") {
+        expect(f.compiled.plan.fields[0]!.decode([resource.uri]).kind).toBe("present");
+      }
       f.form.dispose();
       expect(await readFile(file, "utf8")).toBe("solid part");
     },
@@ -577,12 +644,41 @@ describe("registered MCP form resource route", () => {
 
   it("derives upload restrictions from the live question and never accepts arbitrary URI text", async () => {
     const f = await fixture({ kind: "file" });
-    expect((await f.invoke(upload("evil.exe")))[0]).toBe(false);
-    expect((await f.invoke(upload("../part.stl")))[0]).toBe(false);
-    expect((await f.invoke(upload("part.stl", { accept: ["*"] })))[0]).toBe(false);
+    expect(
+      (
+        await f.invoke({
+          action: "upload",
+          files: [{ name: "evil.exe", mimeType: "model/stl", content: "AA==" }],
+        })
+      )[0],
+    ).toBe(false);
+    expect(
+      (
+        await f.invoke({
+          action: "upload",
+          files: [{ name: "../part.stl", mimeType: "model/stl", content: "AA==" }],
+        })
+      )[0],
+    ).toBe(false);
+    expect(
+      (
+        await f.invoke({
+          action: "upload",
+          files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
+          accept: ["*"],
+        })
+      )[0],
+    ).toBe(false);
     expect(f.form.context.isUploadedResource("files", "file:///arbitrary.stl")).toBe(false);
     state.uploads = false;
-    expect((await f.invoke(upload()))[0]).toBe(false);
+    expect(
+      (
+        await f.invoke({
+          action: "upload",
+          files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
+        })
+      )[0],
+    ).toBe(false);
     expect(await readdir(state.root)).toEqual([]);
   });
 });

@@ -50,7 +50,7 @@ function setupNodeInvokeMock(options: {
       }
       if (method === "node.invoke") {
         return options.onInvoke
-          ? await options.onInvoke(params)
+          ? options.onInvoke(params)
           : { payload: options.invokePayload !== undefined ? options.invokePayload : {} };
       }
       throw new Error(`unexpected method: ${method}`);

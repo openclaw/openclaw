@@ -84,7 +84,7 @@ const session = { sessionKey, agentId: "main" };
 const fileTarget = { ...session, path: "part.stl" };
 const tool = { serverName: "demo", toolName: "edit", uiResourceUri: "ui://demo/editor" };
 const filePath = () => path.join(state.root, "part.stl");
-const fileContents = (encoding?: "utf8") => readFile(filePath(), encoding);
+const fileContents = (encoding?: "utf8") => readFile(filePath(), encoding ?? null);
 let viewId: string;
 let uri: string;
 let allowed: boolean;

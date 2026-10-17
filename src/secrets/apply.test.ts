@@ -903,4 +903,3 @@ describe("secrets apply", () => {
     await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe("UNRELATED=value\n");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
@@ -158,7 +159,7 @@ describe("MCP App sandbox HTTP origin", () => {
       }
       expect(versions.size).toBe(paths.length);
 
-      const altered = new URL(paths[1], origin);
+      const altered = new URL(expectDefined(paths[1], "sandbox policy path"), origin);
       altered.searchParams.delete("csp");
       const response = await fetch(altered);
       expect(response.headers.get("cache-control")).toBe("no-store");

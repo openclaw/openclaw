@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
+// Verifies OpenClaw tool registration, availability, and construction policy.
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -40,30 +40,45 @@ type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTo
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
-const withDefaultRoster = (config: OpenClawConfig | undefined): OpenClawConfig => ({
-  ...config,
-  agents: config?.agents ?? { entries: { main: {} } },
-});
+function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
+  return {
+    ...config,
+    agents: config?.agents ?? { entries: { main: {} } },
+  };
+}
 
-const toolNames = (tools: ReturnType<typeof createOpenClawTools>) => tools.map((tool) => tool.name);
+function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
+  return tools.map((tool) => tool.name);
+}
 
 function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
+  // Disable unrelated dynamic surfaces so registration assertions stay deterministic.
   return toolNames(
-    createOpenClawTools({
+    createTestOpenClawTools({
       disableMessageTool: true,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
       ...options,
-      config: withDefaultRoster(options.config),
     }),
   );
 }
 
-function expectToolNamed(tools: ReturnType<typeof createOpenClawTools>, name: string) {
-  return expectDefined(
-    tools.find((candidate) => candidate.name === name),
-    `Expected tool ${name}`,
-  );
+function createTestOpenClawTools(options: CreateOpenClawToolsOptions = {}) {
+  return createOpenClawTools({
+    ...options,
+    config: withDefaultRoster(options.config),
+  });
+}
+
+function expectToolNamed(
+  tools: ReturnType<typeof createOpenClawTools>,
+  name: string,
+): ReturnType<typeof createOpenClawTools>[number] {
+  const tool = tools.find((candidate) => candidate.name === name);
+  if (!tool) {
+    throw new Error(`Expected tool ${name} to be registered`);
+  }
+  return tool;
 }
 
 it("keeps top-level tool argument names distinct from the required schema keyword", () => {
@@ -76,9 +91,11 @@ it("keeps top-level tool argument names distinct from the required schema keywor
     sessionKey: "agent:main:main",
     wrapBeforeToolCallHook: false,
     toolConstructionPlan: {
-      ...openClawOnlyPlan,
       includeBaseCodingTools: true,
       includeShellTools: true,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
     },
   });
   const codeModeTools = createCodeModeTools({ config, agentId: "main" });
@@ -103,16 +120,23 @@ it("keeps top-level tool argument names distinct from the required schema keywor
 });
 
 describe("openclaw-tools progress_card gating", () => {
-  afterEach(() => setEmbeddedMode(false));
+  afterEach(() => {
+    setEmbeddedMode(false);
+  });
 
   it.each([false, true])(
     "keeps progress-card policy with the admitted sandbox owner (allowed: %s)",
     async (allowed) => {
-      const policy = (denied: boolean) => ({ tools: { deny: denied ? ["progress_card"] : [] } });
-      const entries = { main: policy(!allowed), work: policy(allowed) };
       const available = await withPreparedSessionCapabilityRead(() =>
         shouldIncludeProgressCardToolForOpenClawTools({
-          config: { agents: { entries } },
+          config: {
+            agents: {
+              entries: {
+                main: { tools: { deny: allowed ? [] : ["progress_card"] } },
+                work: { tools: { deny: allowed ? ["progress_card"] : [] } },
+              },
+            },
+          },
           agentId: "work",
           sandboxAgentId: "main",
           agentSessionKey: "agent:main:policy",
@@ -153,8 +177,6 @@ describe("openclaw-tools progress_card gating", () => {
   );
 
   it("keeps human-question tools on permitted primary sessions", async () => {
-    const questionTools = (options: CreateOpenClawToolsOptions) =>
-      createFastToolNames({ ...options, questionInputMode: "native" });
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
         shouldIncludePrimarySessionToolForOpenClawTools(toolName, {
@@ -174,17 +196,28 @@ describe("openclaw-tools progress_card gating", () => {
     ).toBe(false);
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
-    expect(questionTools({ runSessionKey: "agent:main:non-embedded" })).toEqual(
-      expect.arrayContaining(["ask_user", "secrets"]),
-    );
+    expect(
+      createFastToolNames({
+        runSessionKey: "agent:main:non-embedded",
+        questionInputMode: "native",
+      }),
+    ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
     setEmbeddedMode(true);
 
     expect(
       await withPreparedSessionCapabilityRead(() =>
-        questionTools({ agentSessionKey: "agent:main:subagent:worker" }),
+        createFastToolNames({
+          agentSessionKey: "agent:main:subagent:worker",
+          questionInputMode: "native",
+        }),
       ),
     ).not.toContain("ask_user");
-    expect(questionTools({ runSessionKey: "agent:main:run" })).toContain("ask_user");
+    expect(
+      createFastToolNames({
+        runSessionKey: "agent:main:run",
+        questionInputMode: "native",
+      }),
+    ).toContain("ask_user");
   });
 
   it("keeps message tool in embedded message-tool-only completions", () => {
@@ -199,39 +232,52 @@ describe("openclaw-tools progress_card gating", () => {
   });
 
   it("exposes delegation only to regular unsandboxed gateway agents", () => {
-    const exposed = (options: CreateOpenClawToolsOptions) =>
-      createFastToolNames(options).includes("openclaw");
-    expect(exposed({ agentSessionKey: "agent:main:main" })).toBe(true);
-    expect(exposed({ agentSessionKey: "agent:main:main", sandboxed: true })).toBe(false);
-    expect(exposed({ agentSessionKey: "agent:openclaw:main" })).toBe(false);
+    const regular = createFastToolNames({
+      agentSessionKey: "agent:main:main",
+    });
+    const sandboxed = createFastToolNames({
+      agentSessionKey: "agent:main:main",
+      sandboxed: true,
+    });
+    const system = createFastToolNames({
+      agentSessionKey: "agent:openclaw:main",
+    });
     setEmbeddedMode(true);
-    expect(exposed({ agentSessionKey: "agent:main:main" })).toBe(false);
+    const embedded = createFastToolNames({
+      agentSessionKey: "agent:main:main",
+    });
+
+    expect(regular).toContain("openclaw");
+    expect(sandboxed).not.toContain("openclaw");
+    expect(system).not.toContain("openclaw");
+    expect(embedded).not.toContain("openclaw");
   });
 
   it("registers transcripts for an active local operator with an explicit global opt-out", () => {
     const capability = createCronCreatorAuthorityCapability("run-local", { kind: "local" })!;
-    runWithCronCreatorAuthorityCapability(capability, () => {
-      expect(createFastToolNames({ runId: "run-local" })).toContain("transcripts");
-      expect(
-        createFastToolNames({
+    const { defaultTools, disabledTools } = runWithCronCreatorAuthorityCapability(
+      capability,
+      () => ({
+        defaultTools: createFastToolNames({
+          runId: "run-local",
+        }),
+        disabledTools: createFastToolNames({
           config: { transcripts: { enabled: false } } as OpenClawConfig,
           runId: "run-local",
         }),
-      ).not.toContain("transcripts");
-    });
+      }),
+    );
+
+    expect(defaultTools).toContain("transcripts");
+    expect(disabledTools).not.toContain("transcripts");
   });
 
   it("registers task suggestions only for sessions with an actionable gateway sink", () => {
-    const expectNoTasks = (options: CreateOpenClawToolsOptions) => {
-      const names = createFastToolNames(options);
-      expect(names).not.toContain("suggest_task");
-      expect(names).not.toContain("dismiss_task");
-    };
-    expectNoTasks({
+    const withoutSession = createFastToolNames({
       cwd: "/repo",
       taskSuggestionDeliveryMode: "gateway",
     });
-    expectNoTasks({
+    const withoutSink = createFastToolNames({
       agentSessionKey: "agent:main:main",
       cwd: "/repo",
     });
@@ -241,25 +287,35 @@ describe("openclaw-tools progress_card gating", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
 
+    expect(withoutSession).not.toContain("suggest_task");
+    expect(withoutSession).not.toContain("dismiss_task");
+    expect(withoutSink).not.toContain("suggest_task");
+    expect(withoutSink).not.toContain("dismiss_task");
     expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
   });
 
   it("keeps explicitly allowed message tool in embedded completions", () => {
     setEmbeddedMode(true);
-    const messageTools = (options: CreateOpenClawToolsOptions) =>
-      createFastToolNames({ ...options, disableMessageTool: false });
-    expect(messageTools({ pluginToolAllowlist: ["message"] })).toContain("message");
-    expect(
-      messageTools({
-        config: { tools: { profile: "minimal", alsoAllow: ["message"] } } as OpenClawConfig,
-      }),
-    ).toContain("message");
-    expect(
-      messageTools({
-        pluginToolAllowlist: ["message"],
-        pluginToolDenylist: ["message"],
-      }),
-    ).not.toContain("message");
+    const fromRuntimeAllowlist = createTestOpenClawTools({
+      disablePluginTools: true,
+      pluginToolAllowlist: ["message"],
+      wrapBeforeToolCallHook: false,
+    });
+    const fromGlobalAlsoAllow = createTestOpenClawTools({
+      config: { tools: { profile: "minimal", alsoAllow: ["message"] } } as OpenClawConfig,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+    const denied = createTestOpenClawTools({
+      disablePluginTools: true,
+      pluginToolAllowlist: ["message"],
+      pluginToolDenylist: ["message"],
+      wrapBeforeToolCallHook: false,
+    });
+
+    expect(toolNames(fromRuntimeAllowlist)).toContain("message");
+    expect(toolNames(fromGlobalAlsoAllow)).toContain("message");
+    expect(toolNames(denied)).not.toContain("message");
   });
 
   it("lets an explicit updatePlan false override an allowlist that includes the tool", () => {
@@ -273,33 +329,6 @@ describe("openclaw-tools progress_card gating", () => {
 
 function hasTool(tools: readonly { name: string }[], name: string): boolean {
   return tools.some((tool) => tool.name === name);
-}
-
-function expectRegistered(options: CreateOpenClawToolsOptions, name: string, expected = true) {
-  expect(hasTool(createOpenClawTools(options), name)).toBe(expected);
-}
-
-const openClawOnlyPlan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: true,
-  includePluginTools: false,
-};
-
-function sandboxOptions(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
-  return {
-    config,
-    sessionKey,
-    sandbox: createAgentToolsSandboxContext({
-      workspaceDir,
-      sessionKey,
-      tools: resolveSandboxToolPolicyForAgent(config, "main"),
-    }),
-    senderIsOwner: false,
-    wrapBeforeToolCallHook: false,
-    toolConstructionPlan: openClawOnlyPlan,
-  };
 }
 
 type ChannelPresenter = Extract<WidgetPresenter, { target: "current_channel" }>;
@@ -331,11 +360,6 @@ function registerPresenters(...presenters: WidgetPresenter[]) {
 }
 
 describe("gateway client capability tool filtering", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    resetPluginRuntimeStateForTest();
-  });
-
   it("exposes one core widget tool for a matching current-channel presenter", async () => {
     const present = vi.fn(async () => ({
       ok: true as const,
@@ -351,88 +375,169 @@ describe("gateway client capability tool filtering", () => {
     }));
     registerPresenters(widgetPresenter({ present }));
 
-    const tools = createOpenClawTools({
-      agentChannel: "discord",
-      agentAccountId: "configured",
-      nativeChannelId: "channel-1",
-      agentSessionKey: "agent:main:discord",
-    });
-    const widgetTools = tools.filter((tool) => tool.name === "show_widget");
+    try {
+      const tools = createOpenClawTools({
+        agentChannel: "discord",
+        agentAccountId: "configured",
+        nativeChannelId: "channel-1",
+        agentSessionKey: "agent:main:discord",
+      });
+      const widgetTools = tools.filter((tool) => tool.name === "show_widget");
 
-    expect(widgetTools).toHaveLength(1);
-    expect(widgetTools[0]?.requiredClientCaps).toBeUndefined();
-    const result = await widgetTools[0]?.execute("discord-widget", {
-      title: "Status",
-      widget_code: "<p>ready</p>",
-    });
-    expect(result?.details).toMatchObject({
-      kind: "widget",
-      presentation: {
-        target: "current_channel",
-        receipt: { primaryPlatformMessageId: "discord-message-1" },
-      },
-    });
-    expect(present).toHaveBeenCalledOnce();
+      expect(widgetTools).toHaveLength(1);
+      expect(widgetTools[0]?.requiredClientCaps).toBeUndefined();
+      const result = await widgetTools[0]?.execute("discord-widget", {
+        title: "Status",
+        widget_code: "<p>ready</p>",
+      });
+      expect(result?.details).toMatchObject({
+        kind: "widget",
+        presentation: {
+          target: "current_channel",
+          receipt: { primaryPlatformMessageId: "discord-message-1" },
+        },
+      });
+      expect(present).toHaveBeenCalledOnce();
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("hides current-channel widgets when no presenter matches the trusted run facts", () => {
     registerPresenters(widgetPresenter());
 
-    expectRegistered(
-      { agentChannel: "discord", agentAccountId: "unconfigured" },
-      "show_widget",
-      false,
-    );
-    expectRegistered({ agentChannel: "slack" }, "show_widget", false);
+    try {
+      expect(
+        hasTool(
+          createOpenClawTools({ agentChannel: "discord", agentAccountId: "unconfigured" }),
+          "show_widget",
+        ),
+      ).toBe(false);
+      expect(hasTool(createOpenClawTools({ agentChannel: "slack" }), "show_widget")).toBe(false);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("fails closed when current-channel presenter matching is ambiguous", () => {
     const match: WidgetPresenter["match"] = (context) => context.messageChannel === "discord";
     registerPresenters(widgetPresenter({ match }), widgetPresenter({ match }));
 
-    expectRegistered({ agentChannel: "discord" }, "show_widget", false);
+    try {
+      expect(hasTool(createOpenClawTools({ agentChannel: "discord" }), "show_widget")).toBe(false);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("retains the requesting browser through coding tool assembly", async () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
     const targets: unknown[] = [];
-    vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockImplementation(async () => {
-      targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
-      return { ok: true } as never;
-    });
-    const tools = createOpenClawCodingTools({
-      config: withDefaultRoster(undefined),
-      sessionKey: "agent:main:main",
-      clientCaps: ["ui-commands"],
-      gatewayUiCommandTarget,
-    });
-    await expectToolNamed(tools, "screen").execute("select", {
-      action: "navigate",
-      sessionKey: "agent:main:other",
-    });
-    expect(targets).toEqual([gatewayUiCommandTarget]);
+    const call = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(async () => {
+        targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
+        return { ok: true } as never;
+      });
+    try {
+      const tools = createOpenClawCodingTools({
+        config: withDefaultRoster(undefined),
+        sessionKey: "agent:main:main",
+        clientCaps: ["ui-commands"],
+        gatewayUiCommandTarget,
+      });
+      await expectToolNamed(tools, "screen").execute("select", {
+        action: "navigate",
+        sessionKey: "agent:main:other",
+      });
+      expect(targets).toEqual([gatewayUiCommandTarget]);
+    } finally {
+      call.mockRestore();
+    }
   });
 
   it("exposes GitHub publication only from a prepared session capability", () => {
-    expectRegistered({}, "github_publish", false);
-    expectRegistered({}, "github_identity_status", false);
-    expectRegistered({ githubPublicationAvailable: false }, "github_publish", false);
-    expectRegistered({ githubPublicationAvailable: false }, "github_identity_status");
-    expectRegistered({ githubPublicationAvailable: true }, "github_publish");
+    expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
+    expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
+    ).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
+    ).toBe(true);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
+    ).toBe(true);
   });
 
   it.each([
-    ["operator.sessions.write", false, false, true, false, false],
-    ["operator.write", false, false, true, true, true],
-    ["operator.admin", false, false, true, true, true],
-    ["operator.write", false, true, true, false, false],
-    ["operator.write", false, false, false, false, false],
-    ["operator.sessions.write", true, false, true, true, false],
-    ["operator.write", true, false, true, true, true],
-    ["operator.admin", true, false, true, true, true],
-  ] as const)(
-    "projects PR actions for %s, publishing=%s, deny=%s, managed=%s",
-    async (scope, publishing, deny, managed, expected, actions) => {
+    {
+      scope: "operator.sessions.write",
+      publishing: false,
+      deny: false,
+      managed: true,
+      expected: false,
+      actions: false,
+    },
+    {
+      scope: "operator.write",
+      publishing: false,
+      deny: false,
+      managed: true,
+      expected: true,
+      actions: true,
+    },
+    {
+      scope: "operator.admin",
+      publishing: false,
+      deny: false,
+      managed: true,
+      expected: true,
+      actions: true,
+    },
+    {
+      scope: "operator.write",
+      publishing: false,
+      deny: true,
+      managed: true,
+      expected: false,
+      actions: false,
+    },
+    {
+      scope: "operator.write",
+      publishing: false,
+      deny: false,
+      managed: false,
+      expected: false,
+      actions: false,
+    },
+    {
+      scope: "operator.sessions.write",
+      publishing: true,
+      deny: false,
+      managed: true,
+      expected: true,
+      actions: false,
+    },
+    {
+      scope: "operator.write",
+      publishing: true,
+      deny: false,
+      managed: true,
+      expected: true,
+      actions: true,
+    },
+    {
+      scope: "operator.admin",
+      publishing: true,
+      deny: false,
+      managed: true,
+      expected: true,
+      actions: true,
+    },
+  ])(
+    "projects PR actions for $scope, publishing=$publishing, deny=$deny, managed=$managed",
+    async ({ scope, publishing, deny, managed, expected, actions }) => {
       const cfg = withDefaultRoster(deny ? { tools: { deny: ["github_publish"] } } : {});
       const sessionKey = "agent:main:nonpublishing-parent";
       const inheritedPublicationToolRef: {
@@ -450,9 +555,24 @@ describe("gateway client capability tool filtering", () => {
         },
         () =>
           createOpenClawCodingToolsInternal({
-            ...sandboxOptions(cfg, sessionKey, "/tmp/nonpublishing-parent"),
+            config: cfg,
+            sessionKey,
+            sandbox: createAgentToolsSandboxContext({
+              workspaceDir: "/tmp/nonpublishing-parent",
+              sessionKey,
+              tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
+            }),
             githubPublicationAvailable: managed ? publishing : undefined,
             inheritedPublicationToolRef,
+            senderIsOwner: false,
+            wrapBeforeToolCallHook: false,
+            toolConstructionPlan: {
+              includeBaseCodingTools: false,
+              includeShellTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: true,
+              includePluginTools: false,
+            },
           }),
       );
       expect(Boolean(inheritedPublicationToolRef.current)).toBe(managed && !publishing && !deny);
@@ -493,28 +613,47 @@ describe("gateway client capability tool filtering", () => {
     },
   );
 
-  it.each<[string, OpenClawConfig, boolean | undefined, boolean]>([
-    ["default policy", {}, true, true],
-    ["sandbox deny", { tools: { sandbox: { tools: { deny: ["github_publish"] } } } }, true, false],
-    [
-      "restrictive sandbox allow",
-      { tools: { sandbox: { tools: { allow: ["read"] } } } },
-      true,
-      false,
-    ],
-    ["global deny", { tools: { deny: ["github_publish"] } }, true, false],
-    [
-      "restrictive agent allow",
-      { agents: { entries: { main: { tools: { allow: ["read"] } } } } },
-      true,
-      false,
-    ],
-    ["unavailable publication", {}, false, false],
-    ["unprepared publication", {}, undefined, false],
-  ])("filters sandbox GitHub publication with %s", async (_name, config, available, expected) => {
+  it.each([
+    { name: "default policy", config: {}, available: true, expected: true },
+    {
+      name: "sandbox deny",
+      config: { tools: { sandbox: { tools: { deny: ["github_publish"] } } } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "restrictive sandbox allow",
+      config: { tools: { sandbox: { tools: { allow: ["read"] } } } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "global deny",
+      config: { tools: { deny: ["github_publish"] } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "restrictive agent allow",
+      config: { agents: { entries: { main: { tools: { allow: ["read"] } } } } },
+      available: true,
+      expected: false,
+    },
+    { name: "unavailable publication", config: {}, available: false, expected: false },
+    { name: "unprepared publication", config: {}, available: undefined, expected: false },
+  ] satisfies {
+    name: string;
+    config: OpenClawConfig;
+    available: boolean | undefined;
+    expected: boolean;
+  }[])("filters sandbox GitHub publication with $name", async ({ config, available, expected }) => {
     const cfg = withDefaultRoster(config);
     const sessionKey = "agent:main:sandbox-publisher";
-    const options = sandboxOptions(cfg, sessionKey, "/tmp/sandbox-publisher");
+    const sandbox = createAgentToolsSandboxContext({
+      workspaceDir: "/tmp/sandbox-publisher",
+      sessionKey,
+      tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
+    });
     const callers: unknown[] = [];
     const call = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
@@ -522,32 +661,60 @@ describe("gateway client capability tool filtering", () => {
         callers.push(getGatewayToolCallerIdentity()?.sessionKey);
         return { requestId: "publication-1", status: "requested" } as never;
       });
-    const tools = createOpenClawCodingTools({
-      ...options,
-      githubPublicationAvailable: available,
-    });
-    expect(hasTool(tools, "github_publish")).toBe(expected);
-    if (expected) {
-      await expectToolNamed(tools, "github_publish").execute("publish-1", {
-        title: "Publish fix",
-      });
-      expect(call).toHaveBeenCalledWith("sessions.github.publish", {
+    try {
+      const tools = createOpenClawCodingTools({
+        config: cfg,
         sessionKey,
-        idempotencyKey: "publish-1",
-        title: "Publish fix",
+        sandbox,
+        githubPublicationAvailable: available,
+        senderIsOwner: false,
+        wrapBeforeToolCallHook: false,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
       });
-      expect(callers).toEqual([sessionKey]);
-    } else {
-      expect(call).not.toHaveBeenCalled();
+      expect(hasTool(tools, "github_publish")).toBe(expected);
+      if (expected) {
+        await expectToolNamed(tools, "github_publish").execute("publish-1", {
+          title: "Publish fix",
+        });
+        expect(call).toHaveBeenCalledWith("sessions.github.publish", {
+          sessionKey,
+          idempotencyKey: "publish-1",
+          title: "Publish fix",
+        });
+        expect(callers).toEqual([sessionKey]);
+      } else {
+        expect(call).not.toHaveBeenCalled();
+      }
+    } finally {
+      call.mockRestore();
     }
   });
 
   it("omits host UI runtime tools for sandboxed agents", () => {
-    const agentSessionKey = "agent:main:main";
-    expectRegistered({ agentSessionKey }, "terminal");
-    expectRegistered({ agentSessionKey }, "portal");
-    expectRegistered({ agentSessionKey, sandboxed: true }, "terminal", false);
-    expectRegistered({ agentSessionKey, sandboxed: true }, "portal", false);
+    expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "terminal")).toBe(
+      true,
+    );
+    expect(hasTool(createOpenClawTools({ agentSessionKey: "agent:main:main" }), "portal")).toBe(
+      true,
+    );
+    expect(
+      hasTool(
+        createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
+        "terminal",
+      ),
+    ).toBe(false);
+    expect(
+      hasTool(
+        createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true }),
+        "portal",
+      ),
+    ).toBe(false);
   });
 
   it("does not let tools.allow resurrect a gated tool for a channel run", () => {
@@ -555,27 +722,48 @@ describe("gateway client capability tool filtering", () => {
       messageProvider: "telegram",
       disableMessageTool: true,
       config: { tools: { allow: ["show_widget"] } },
-      toolConstructionPlan: { ...openClawOnlyPlan, includePluginTools: true },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
     });
 
     expect(hasTool(tools, "show_widget")).toBe(false);
   });
 
   it("does not add the core widget tool to plugin-only construction plans", () => {
-    const expectAbsent = (messageProvider: string, name: string, clientCaps?: string[]) => {
-      const tools = createOpenClawCodingTools({
-        messageProvider,
-        clientCaps,
-        toolConstructionPlan: {
-          ...openClawOnlyPlan,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
-      });
-      expect(hasTool(tools, name)).toBe(false);
+    const plan = {
+      includeBaseCodingTools: false,
+      includeShellTools: false,
+      includeChannelTools: false,
+      includeOpenClawTools: false,
+      includePluginTools: true,
     };
-    expectAbsent("telegram", "show_widget");
-    expectAbsent("webchat", "show_widget", ["inline-widgets"]);
-    expectAbsent("webchat", "progress_card");
+
+    expect(
+      hasTool(
+        createOpenClawCodingTools({ messageProvider: "telegram", toolConstructionPlan: plan }),
+        "show_widget",
+      ),
+    ).toBe(false);
+    expect(
+      hasTool(
+        createOpenClawCodingTools({
+          messageProvider: "webchat",
+          clientCaps: ["inline-widgets"],
+          toolConstructionPlan: plan,
+        }),
+        "show_widget",
+      ),
+    ).toBe(false);
+    expect(
+      hasTool(
+        createOpenClawCodingTools({ messageProvider: "webchat", toolConstructionPlan: plan }),
+        "progress_card",
+      ),
+    ).toBe(false);
   });
 });
