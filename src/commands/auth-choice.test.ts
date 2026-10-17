@@ -29,45 +29,18 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
-  resolvePluginProviders,
-  resolvePluginSetupProvider: () => undefined,
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
-}));
-
-vi.mock("./auth-choice.apply.api-providers.js", () => {
-  const normalizeProviderIdLocal = (value: string) => value.trim().toLowerCase();
-  const resolveChoiceByKind = (params: {
-    authChoice: string;
-    kind: ProviderAuthMethod["kind"];
-    tokenProvider?: string;
-  }) => {
-    const providerId = normalizeProviderIdLocal(params.tokenProvider ?? "");
-    if (!providerId) {
-      return params.authChoice;
-    }
-    const provider = resolvePluginProviders().find(
-      (entry) => normalizeProviderIdLocal(entry.id) === providerId,
-    );
-    return (
-      provider?.auth.find((method) => method.kind === params.kind)?.wizard?.choiceId ??
-      params.authChoice
-    );
-  };
+vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
+  const { resolveProviderPluginChoiceCore } = await import("../plugins/provider-wizard.js");
   return {
-    normalizeApiKeyTokenProviderAuthChoice: (params: {
-      authChoice: string;
-      tokenProvider?: string;
-    }) => {
-      if (params.authChoice === "token" || params.authChoice === "setup-token") {
-        return resolveChoiceByKind({ ...params, kind: "token" });
-      }
-      if (params.authChoice === "apiKey") {
-        return resolveChoiceByKind({ ...params, kind: "api_key" });
-      }
-      return params.authChoice;
-    },
+    resolvePluginProviders,
+    resolvePluginSetupProvider: () => undefined,
+    // Application fixtures select supplied providers; manifest ownership is tested separately.
+    resolveProviderPluginChoice: ({
+      providers,
+      choice,
+    }: Parameters<typeof resolveProviderPluginChoiceCore>[0]) =>
+      resolveProviderPluginChoiceCore({ providers, choice }),
+    runProviderModelSelectedHook,
   };
 });
 
@@ -98,33 +71,6 @@ vi.mock("../infra/remote-env.js", () => ({
 
 vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: vi.fn(),
-}));
-
-vi.mock("../plugins/provider-auth-helpers.js", () => ({
-  applyAuthProfileConfig: (
-    cfg: OpenClawConfig,
-    params: {
-      profileId: string;
-      provider: string;
-      mode: "api_key" | "aws-sdk" | "oauth" | "token";
-      email?: string;
-      displayName?: string;
-    },
-  ): OpenClawConfig => ({
-    ...cfg,
-    auth: {
-      ...cfg.auth,
-      profiles: {
-        ...cfg.auth?.profiles,
-        [params.profileId]: {
-          provider: params.provider,
-          mode: params.mode,
-          ...(params.email ? { email: params.email } : {}),
-          ...(params.displayName ? { displayName: params.displayName } : {}),
-        },
-      },
-    },
-  }),
 }));
 
 type StoredAuthProfile = {
@@ -184,64 +130,15 @@ vi.mock("../agents/auth-profiles.js", () => ({
     }
     return { rollback() {} };
   },
-  upsertAuthProfile: (params: {
-    profileId: string;
-    credential: StoredAuthProfile;
-    agentDir?: string;
-  }) => {
-    seedTestAuthProfile(params);
-  },
-  upsertAuthProfileWithLock: async (params: {
-    profileId: string;
-    credential: StoredAuthProfile;
-    agentDir?: string;
-  }) => {
+  upsertAuthProfile: seedTestAuthProfile,
+  upsertAuthProfileWithLock: async (params: Parameters<typeof seedTestAuthProfile>[0]) => {
     seedTestAuthProfile(params);
     return { version: 1, profiles: readTestAuthProfileStore(params.agentDir).profiles };
   },
-  upsertAuthProfileWithLockOrThrow: async (params: {
-    profileId: string;
-    credential: StoredAuthProfile;
-    agentDir?: string;
-  }) => {
+  upsertAuthProfileWithLockOrThrow: async (params: Parameters<typeof seedTestAuthProfile>[0]) => {
     seedTestAuthProfile(params);
   },
 }));
-
-function normalizeProviderId(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function resolveProviderPluginChoice(params: { providers: ProviderPlugin[]; choice: string }) {
-  const choice = params.choice.trim();
-  if (!choice) {
-    return null;
-  }
-  if (choice.startsWith("provider-plugin:")) {
-    const payload = choice.slice("provider-plugin:".length);
-    const separator = payload.indexOf(":");
-    const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
-    const methodId = separator >= 0 ? payload.slice(separator + 1) : undefined;
-    const provider = params.providers.find(
-      (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
-    );
-    const method = methodId
-      ? provider?.auth.find((entry) => entry.id === methodId)
-      : provider?.auth[0];
-    return provider && method ? { provider, method } : null;
-  }
-  for (const provider of params.providers) {
-    for (const method of provider.auth) {
-      if (method.wizard?.choiceId === choice) {
-        return { provider, method, wizard: method.wizard };
-      }
-    }
-    if (normalizeProviderId(provider.id) === normalizeProviderId(choice) && provider.auth[0]) {
-      return { provider, method: provider.auth[0] };
-    }
-  }
-  return null;
-}
 
 function createOpenAiProvider(): ProviderPlugin {
   return {
@@ -330,52 +227,15 @@ describe("applyAuthChoice", () => {
   function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
     return createWizardPrompter(overrides, { defaultSelect: "" });
   }
-  function createSelectFirstOption(): WizardPrompter["select"] {
-    return vi.fn(async (params) => params.options[0]?.value as never);
-  }
-  function createNoopMultiselect(): WizardPrompter["multiselect"] {
-    return vi.fn(async () => []);
-  }
-  function createApiKeyPromptHarness(
-    overrides: Partial<Pick<WizardPrompter, "select" | "multiselect" | "text" | "confirm">> = {},
-  ): {
-    select: WizardPrompter["select"];
-    multiselect: WizardPrompter["multiselect"];
-    prompter: WizardPrompter;
-    runtime: ReturnType<typeof createExitThrowingRuntime>;
-  } {
-    const select = overrides.select ?? createSelectFirstOption();
-    const multiselect = overrides.multiselect ?? createNoopMultiselect();
-    return {
-      select,
-      multiselect,
-      prompter: createPrompter({ ...overrides, select, multiselect }),
-      runtime: createExitThrowingRuntime(),
-    };
-  }
-  async function readAuthProfiles() {
-    return readTestAuthProfileStore(resolveAgentDir({} as OpenClawConfig, "main"));
-  }
   async function readAuthProfile(profileId: string) {
-    return (await readAuthProfiles()).profiles?.[profileId];
+    return readTestAuthProfileStore(resolveAgentDir({}, "main")).profiles[profileId];
   }
   function expectAuthProfileConfig(
     result: { config: OpenClawConfig },
     profileId: string,
     expected: { provider: string; mode: string },
   ) {
-    const profile = result.config.auth?.profiles?.[profileId];
-    expect(profile?.provider).toBe(expected.provider);
-    expect(profile?.mode).toBe(expected.mode);
-  }
-  function promptMessages(mock: { mock: { calls: unknown[][] } }): string[] {
-    return mock.mock.calls.map((call) => {
-      const message = (call[0] as { message?: unknown }).message;
-      return typeof message === "string" ? message : "";
-    });
-  }
-  function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
-    expect(promptMessages(mock).join("\n")).toContain(expected);
+    expect(result.config.auth?.profiles?.[profileId]).toMatchObject(expected);
   }
   function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
     const call = mock.mock.calls[0];
@@ -516,7 +376,8 @@ describe("applyAuthChoice", () => {
     const env = { OPENAI_API_KEY: "sk-openai-explicit" } as NodeJS.ProcessEnv; // pragma: allowlist secret
     const text = vi.fn().mockResolvedValue("should-not-be-used");
     const confirm = vi.fn(async () => true);
-    const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
+    const prompter = createPrompter({ text, confirm });
+    const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoice({
       authChoice: "openai-api-key",
@@ -533,7 +394,9 @@ describe("applyAuthChoice", () => {
     };
     expect(providerResolveInput.env).toBe(env);
     expect(providerResolveInput.mode).toBe("setup");
-    expectPromptMessageContaining(confirm, "OPENAI_API_KEY");
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("OPENAI_API_KEY") }),
+    );
     expect(text).not.toHaveBeenCalled();
     expectAuthProfileConfig(result, "openai:api-key", {
       provider: "openai",

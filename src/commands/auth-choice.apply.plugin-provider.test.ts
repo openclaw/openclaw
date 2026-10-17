@@ -12,7 +12,7 @@ import {
   runProviderPluginAuthMethod,
 } from "../plugins/provider-auth-choice.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import type { ProviderPlugin, ProviderAuthMethod } from "../plugins/types.js";
+import type { ProviderPlugin, ProviderAuthResult } from "../plugins/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   LOCAL_PROVIDER_ID,
@@ -35,10 +35,6 @@ type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type ResolvePluginSetupProvider =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
-type ModelSelectionRuntimePluginsResult =
-  | { ok: true; cfg: ApplyAuthChoiceParams["config"]; codexInstalled: boolean }
-  | { ok: false; message: string };
-
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolvePluginSetupProvider = vi.hoisted(() =>
   vi.fn<ResolvePluginSetupProvider>(() => undefined),
@@ -76,38 +72,35 @@ vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   loadAuthProfileStoreWithoutExternalProfilesAsync,
 }));
 
-const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
-const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
-const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: () => "default",
+  resolveAgentDir: () => "/tmp/agent",
+  resolveAgentWorkspaceDir: () => "/tmp/workspace",
 }));
 
-const resolveDefaultAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 vi.mock("../agents/workspace.js", () => ({
-  resolveDefaultAgentWorkspaceDir,
+  resolveDefaultAgentWorkspaceDir: () => "/tmp/workspace",
 }));
 
-const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
+const applyAuthProfileConfig = vi.hoisted(() =>
+  vi.fn<typeof import("../plugins/provider-auth-helpers.js").applyAuthProfileConfig>(
+    (config) => config,
+  ),
+);
 vi.mock("../plugins/provider-auth-helpers.js", () => ({
   applyAuthProfileConfig,
 }));
 
-const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
-const openUrl = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../infra/browser-open.js", () => ({
-  openUrl,
+  openUrl: vi.fn(async () => {}),
 }));
 
 vi.mock("../infra/remote-env.js", () => ({
-  isRemoteEnvironment,
+  isRemoteEnvironment: () => false,
 }));
 
-const createVpsAwareOAuthHandlers = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/provider-oauth-flow.js", () => ({
-  createVpsAwareOAuthHandlers,
+  createVpsAwareOAuthHandlers: vi.fn(),
 }));
 
 const resolveProviderInstallCatalogEntry = vi.hoisted(() =>
@@ -117,30 +110,13 @@ vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntry,
 }));
 
-const ensureOnboardingPluginInstalled = vi.hoisted(() =>
-  vi.fn<EnsureOnboardingPluginInstalled>(async ({ cfg, entry }) => ({
-    cfg,
-    installed: false,
-    pluginId: entry?.pluginId ?? "missing-plugin",
-    status: "skipped",
-  })),
-);
+const ensureOnboardingPluginInstalled = vi.hoisted(() => vi.fn<EnsureOnboardingPluginInstalled>());
 vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
 
 const ensureModelSelectionRuntimePlugins = vi.hoisted(() =>
-  vi.fn(
-    async ({
-      cfg,
-    }: {
-      cfg: ApplyAuthChoiceParams["config"];
-    }): Promise<ModelSelectionRuntimePluginsResult> => ({
-      ok: true,
-      cfg,
-      codexInstalled: false,
-    }),
-  ),
+  vi.fn<typeof import("./runtime-plugin-install.js").ensureModelSelectionRuntimePlugins>(),
 );
 vi.mock("../commands/runtime-plugin-install.js", () => ({
   CODEX_RUNTIME_PLUGIN_ID: "codex",
@@ -148,13 +124,18 @@ vi.mock("../commands/runtime-plugin-install.js", () => ({
 }));
 
 const offerPostInstallMigrations = vi.hoisted(() =>
-  vi.fn(async ({ config }: { config: ApplyAuthChoiceParams["config"] }) => ({ config })),
+  vi.fn<typeof import("../wizard/setup.post-install-migration.js").offerPostInstallMigrations>(),
 );
 vi.mock("../wizard/setup.post-install-migration.js", () => ({
   offerPostInstallMigrations,
 }));
 
 const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0";
+const localCredential = {
+  type: "api_key",
+  provider: LOCAL_PROVIDER_ID,
+  key: LOCAL_API_KEY,
+} as const;
 
 function expectPersistedProfile(profileId: string, credential: AuthProfileCredential): void {
   expect(persistAuthProfileBatch).toHaveBeenCalledWith(
@@ -175,6 +156,41 @@ function buildParams(overrides: Partial<ApplyAuthChoiceParams> = {}): ApplyAuthC
     runtime: {} as ApplyAuthChoiceParams["runtime"],
     setDefaultModel: true,
     ...overrides,
+  };
+}
+
+function selectProvider(provider = buildProvider()) {
+  resolvePluginProviders.mockReturnValue([provider]);
+  resolveProviderPluginChoice.mockReturnValue({
+    provider,
+    method: expectDefined(provider.auth[0], "provider auth method"),
+  });
+  return provider;
+}
+
+function runAuthResult(
+  result: ProviderAuthResult,
+  overrides: Partial<Parameters<typeof runProviderPluginAuthMethod>[0]> = {},
+) {
+  return runProviderPluginAuthMethod({
+    ...buildParams(),
+    providerId: LOCAL_PROVIDER_ID,
+    method: { id: "local", label: "Local", kind: "custom", run: async () => result },
+    ...overrides,
+  });
+}
+
+function modelDefaults(provider: string) {
+  return {
+    model: {
+      primary: `${provider}/claude-sonnet-4-6`,
+      fallbacks: [`${provider}/claude-opus-4-6`, "openai/gpt-5.2"],
+    },
+    models: {
+      [`${provider}/claude-sonnet-4-6`]: { alias: "Sonnet" },
+      [`${provider}/claude-opus-4-6`]: { alias: "Opus" },
+      "openai/gpt-5.2": {},
+    },
   };
 }
 
@@ -268,7 +284,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("offers only the selected provider's saved profiles during onboarding", async () => {
-    const provider = buildProvider();
+    const provider = selectProvider();
     const credential = {
       type: "api_key",
       provider: provider.id,
@@ -282,8 +298,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
     });
     const run = vi.spyOn(provider.auth[0]!, "run");
-    resolvePluginProviders.mockReturnValue([provider]);
-    resolveProviderPluginChoice.mockReturnValue({ provider, method: provider.auth[0]! });
 
     await prepareAuthChoiceLoadedPluginProvider(buildParams(), (result) => result);
 
@@ -294,23 +308,14 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("stages provider profiles until the caller commits them", async () => {
-    const provider = buildProvider();
-    resolvePluginProviders.mockReturnValue([provider]);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider,
-      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
-    });
+    selectProvider();
 
     const prepared = await prepareAuthChoiceLoadedPluginProvider(buildParams(), (result) => result);
 
     expect(prepared?.authProfiles).toEqual([
       {
         profileId: LOCAL_PROFILE_ID,
-        credential: {
-          type: "api_key",
-          provider: LOCAL_PROVIDER_ID,
-          key: LOCAL_API_KEY,
-        },
+        credential: localCredential,
       },
     ]);
     expect(persistAuthProfileBatch).not.toHaveBeenCalled();
@@ -318,21 +323,13 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     await prepared?.persistAuthProfiles([
       {
         profileId: LOCAL_PROFILE_ID,
-        credential: {
-          type: "api_key",
-          provider: LOCAL_PROVIDER_ID,
-          key: "test-key",
-        },
+        credential: { ...localCredential, key: "test-key" },
       },
     ]);
     await prepared?.persistAuthProfiles();
 
     expect(persistAuthProfileBatch).toHaveBeenCalledOnce();
-    expectPersistedProfile(LOCAL_PROFILE_ID, {
-      type: "api_key",
-      provider: LOCAL_PROVIDER_ID,
-      key: "test-key",
-    });
+    expectPersistedProfile(LOCAL_PROFILE_ID, { ...localCredential, key: "test-key" });
   });
 
   it("restores the exact entry config after provider install and auth staging", async () => {
@@ -377,12 +374,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("keeps an existing default when provider auth patches its own primary model", async () => {
-    const provider = buildProviderWithDefaultModelPatch();
-    resolvePluginProviders.mockReturnValue([provider]);
-    resolveProviderPluginChoice.mockReturnValue({
-      provider,
-      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
-    });
+    selectProvider(buildProviderWithDefaultModelPatch());
     const note = vi.fn(async () => {});
 
     const result = await applyAuthChoiceLoadedPluginProvider(
@@ -397,9 +389,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
             },
           },
         },
-        prompter: {
-          note,
-        } as unknown as ApplyAuthChoiceParams["prompter"],
+        prompter: { ...buildParams().prompter, note },
         preserveExistingDefaultModel: true,
       }),
     );
@@ -495,87 +485,54 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("merges provider config patches and emits provider notes", async () => {
-    applyAuthProfileConfig.mockImplementation(((
-      config: {
-        auth?: {
-          profiles?: Record<string, { provider: string; mode: string }>;
-        };
-      },
-      profile: { profileId: string; provider: string; mode: string },
-    ) => ({
-      ...config,
-      auth: {
-        profiles: {
-          ...config.auth?.profiles,
-          [profile.profileId]: {
-            provider: profile.provider,
-            mode: profile.mode,
-          },
-        },
-      },
-    })) as never);
+    applyAuthProfileConfig.mockImplementation(
+      (
+        await vi.importActual<typeof import("../plugins/provider-auth-helpers.js")>(
+          "../plugins/provider-auth-helpers.js",
+        )
+      ).applyAuthProfileConfig,
+    );
 
     const events: string[] = [];
     const note = vi.fn(async () => {
       events.push("note");
     });
-    const method: ProviderAuthMethod = {
-      id: "local",
-      label: "Local",
-      kind: "custom",
-      run: async () => ({
-        profiles: [
-          {
-            profileId: LOCAL_PROFILE_ID,
-            credential: {
-              type: "api_key",
-              provider: LOCAL_PROVIDER_ID,
-              key: LOCAL_API_KEY,
-            },
-          },
-        ],
+    const providerConfig = {
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:4000/v1",
+      models: [],
+    } as const;
+    const result = await runAuthResult(
+      {
+        profiles: [{ profileId: LOCAL_PROFILE_ID, credential: localCredential }],
         configPatch: {
           models: {
             providers: {
-              [LOCAL_PROVIDER_ID]: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:4000/v1",
-                models: [],
-              },
+              [LOCAL_PROVIDER_ID]: { ...providerConfig, models: [] },
             },
           },
         },
         defaultModel: LOCAL_DEFAULT_MODEL,
         notes: ["Detected local provider runtime.", "Pulled model metadata."],
-      }),
-    };
-
-    const result = await runProviderPluginAuthMethod({
-      providerId: LOCAL_PROVIDER_ID,
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-6" },
+      },
+      {
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+            },
           },
         },
+        env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+        prompter: { ...buildParams().prompter, note },
+        beforePersistentEffect: () => {
+          events.push("lock");
+        },
       },
-      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
-      runtime: {} as ApplyAuthChoiceParams["runtime"],
-      prompter: {
-        note,
-      } as unknown as ApplyAuthChoiceParams["prompter"],
-      method,
-      beforePersistentEffect: () => {
-        events.push("lock");
-      },
-    });
+    );
 
     expect(result.defaultModel).toBe(LOCAL_DEFAULT_MODEL);
-    expect(result.config.models?.providers?.[LOCAL_PROVIDER_ID]).toEqual({
-      api: "openai-completions",
-      baseUrl: "http://127.0.0.1:4000/v1",
-      models: [],
-    });
+    expect(result.config.models?.providers?.[LOCAL_PROVIDER_ID]).toEqual(providerConfig);
     expect(result.config.auth?.profiles?.[LOCAL_PROFILE_ID]).toEqual({
       provider: LOCAL_PROVIDER_ID,
       mode: "api_key",
@@ -591,88 +548,27 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("normalizes retired Google Gemini default models returned by auth methods", async () => {
-    const method: ProviderAuthMethod = {
-      id: "google",
-      label: "Google",
-      kind: "custom",
-      run: async () => ({
-        profiles: [],
-        defaultModel: "google/gemini-3-pro-preview",
-      }),
-    };
-
-    const result = await runProviderPluginAuthMethod({
-      providerId: "google",
-      config: {},
-      runtime: {} as ApplyAuthChoiceParams["runtime"],
-      prompter: {
-        note: vi.fn(async () => {}),
-      } as unknown as ApplyAuthChoiceParams["prompter"],
-      method,
-    });
+    const result = await runAuthResult(
+      { profiles: [], defaultModel: "google/gemini-3-pro-preview" },
+      { providerId: "google" },
+    );
 
     expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
   });
 
   it("replaces provider-owned default model maps during auth migrations", async () => {
-    const method: ProviderAuthMethod = {
-      id: "local",
-      label: "Local",
-      kind: "custom",
-      run: async () => ({
+    const migrated = modelDefaults("claude-cli");
+    const result = await runAuthResult(
+      {
         profiles: [],
-        configPatch: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "claude-cli/claude-sonnet-4-6",
-                fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
-              },
-              models: {
-                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
-                "claude-cli/claude-opus-4-6": { alias: "Opus" },
-                "openai/gpt-5.2": {},
-              },
-            },
-          },
-        },
+        configPatch: { agents: { defaults: structuredClone(migrated) } },
         replaceDefaultModels: true,
         defaultModel: "claude-cli/claude-sonnet-4-6",
-      }),
-    };
-
-    const result = await runProviderPluginAuthMethod({
-      providerId: LOCAL_PROVIDER_ID,
-      config: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
-            },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-              "anthropic/claude-opus-4-6": { alias: "Opus" },
-              "openai/gpt-5.2": {},
-            },
-          },
-        },
       },
-      runtime: {} as ApplyAuthChoiceParams["runtime"],
-      prompter: {
-        note: vi.fn(async () => {}),
-      } as unknown as ApplyAuthChoiceParams["prompter"],
-      method,
-    });
+      { config: { agents: { defaults: modelDefaults("anthropic") } } },
+    );
 
-    expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "claude-cli/claude-sonnet-4-6",
-      fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
-    });
-    expect(result.config.agents?.defaults?.models).toEqual({
-      "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
-      "claude-cli/claude-opus-4-6": { alias: "Opus" },
-      "openai/gpt-5.2": {},
-    });
+    expect(result.config.agents?.defaults?.model).toEqual(migrated.model);
+    expect(result.config.agents?.defaults?.models).toEqual(migrated.models);
   });
 });

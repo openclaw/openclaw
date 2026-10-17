@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { auditListCommand } from "./audit.js";
+import { auditListCommand, type AuditListCommandOptions } from "./audit.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -19,47 +19,56 @@ const runtime: RuntimeEnv = {
   exit: vi.fn(),
 };
 
-function unknownActivityMethodError() {
-  return Object.assign(new Error("unknown method: audit.activity.list"), {
+const list = (options: AuditListCommandOptions) => auditListCommand(options, runtime);
+
+function gatewayError(message: string) {
+  return Object.assign(new Error(message), {
     name: "GatewayClientRequestError",
     gatewayCode: "INVALID_REQUEST",
   });
 }
 
-function unknownRunInspectMethodError() {
-  return Object.assign(new Error("unknown method: audit.run.inspect"), {
-    name: "GatewayClientRequestError",
-    gatewayCode: "INVALID_REQUEST",
-  });
+function expectRequests(...requests: Array<[string, object]>) {
+  expect(callGateway.mock.calls).toEqual(requests.map(([method, params]) => [{ method, params }]));
 }
 
-function oldGatewayUnknownMethodScopeError() {
-  return Object.assign(new Error("missing scope: operator.admin"), {
-    name: "GatewayClientRequestError",
-    gatewayCode: "INVALID_REQUEST",
-  });
+function unknownInspection(missing = "identity.context") {
+  return {
+    schemaVersion: 1,
+    run: { runId: "run-1", executionId: "execution-1", status: "unknown" },
+    identity: {
+      state: "unknown",
+      reasonCode: "execution_not_found",
+      missingEvidence: [missing],
+      remediation: [],
+    },
+    decisionDisplays: [],
+    coverage: { state: "unknown", missingEvidence: [missing] },
+  };
 }
+
+const output = () => vi.mocked(runtime.log).mock.calls.flat().join("\n");
+
+beforeEach(() => {
+  callGateway.mockReset();
+  callGateway.mockResolvedValue({ events: [] });
+  for (const writer of [runtime.log, runtime.error, runtime.exit]) {
+    vi.mocked(writer).mockClear();
+  }
+});
 
 describe("audit command parsing", () => {
-  beforeEach(() => {
-    callGateway.mockReset();
-    callGateway.mockResolvedValue({ events: [] });
-    vi.mocked(runtime.log).mockClear();
-    vi.mocked(runtime.error).mockClear();
-    vi.mocked(runtime.exit).mockClear();
-  });
-
   it("converts ISO and millisecond timestamps before querying the Gateway", async () => {
-    await auditListCommand({ after: "1234", before: "2024-02-29T00:00:00Z" }, runtime);
+    await list({ after: "1234", before: "2024-02-29T00:00:00Z" });
 
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "audit.activity.list",
-      params: {
+    expectRequests([
+      "audit.activity.list",
+      {
         limit: 100,
         after: 1234,
         before: Date.parse("2024-02-29T00:00:00Z"),
       },
-    });
+    ]);
   });
 
   it.each([
@@ -67,7 +76,7 @@ describe("audit command parsing", () => {
     { flag: "--before", options: { before: "July 1, 2026" } },
     { flag: "--after", options: { after: "" } },
   ])("rejects invalid $flag before calling the Gateway", async ({ flag, options }) => {
-    await expect(auditListCommand(options, runtime)).rejects.toThrow(flag);
+    await expect(list(options)).rejects.toThrow(flag);
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -86,32 +95,26 @@ describe("audit command parsing", () => {
     });
 
     try {
-      await auditListCommand({ after: input }, runtime);
-      expect(callGateway).toHaveBeenCalledWith({
-        method: "audit.activity.list",
-        params: { limit: 100, after: localMs },
-      });
+      await list({ after: input });
+      expectRequests(["audit.activity.list", { limit: 100, after: localMs }]);
     } finally {
       parse.mockRestore();
     }
   });
 
   it("enforces the list export bound before querying the Gateway", async () => {
-    await auditListCommand({ limit: "500" }, runtime);
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "audit.activity.list",
-      params: { limit: 500 },
-    });
+    await list({ limit: "500" });
+    expectRequests(["audit.activity.list", { limit: 500 }]);
 
     callGateway.mockClear();
-    await expect(auditListCommand({ limit: "501" }, runtime)).rejects.toThrow("1 and 500");
+    await expect(list({ limit: "501" })).rejects.toThrow("1 and 500");
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("rejects an explicit empty list limit", async () => {
     const limit = "";
 
-    await expect(auditListCommand({ limit }, runtime)).rejects.toThrow("1 and 500");
+    await expect(list({ limit })).rejects.toThrow("1 and 500");
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -129,9 +132,7 @@ describe("audit command parsing", () => {
       message: "--direction cannot be combined with --session.",
     },
   ])("rejects invalid audit filters before querying the Gateway", async ({ options, message }) => {
-    await runCommandWithRuntime(runtime, () =>
-      auditListCommand({ ...options, limit: "10" }, runtime),
-    );
+    await runCommandWithRuntime(runtime, () => list({ ...options, limit: "10" }));
     expect(runtime.error).toHaveBeenCalledWith(message);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(callGateway).not.toHaveBeenCalled();
@@ -167,7 +168,7 @@ describe("audit command parsing", () => {
       ],
     });
 
-    await auditListCommand({}, runtime);
+    await list({});
     const [header, unsafeRow, messageRow, truncatedRow] = vi
       .mocked(runtime.log)
       .mock.calls.map(([line]) => line);
@@ -184,35 +185,25 @@ describe("audit command parsing", () => {
 });
 
 describe("audit command gateway compatibility", () => {
-  beforeEach(() => {
-    callGateway.mockReset();
-    callGateway.mockResolvedValue({ events: [] });
-    vi.mocked(runtime.error).mockClear();
-    vi.mocked(runtime.exit).mockClear();
-  });
-
   it("forwards valid filters unchanged and keeps an empty page successful", async () => {
     await runCommandWithRuntime(runtime, () =>
-      auditListCommand(
-        {
-          agentId: "main",
-          kind: "message",
-          status: "failed",
-          direction: "inbound",
-          channel: "telegram",
-          after: "100",
-          before: "200",
-          cursor: "42",
-          limit: "25",
-        },
-        runtime,
-      ),
+      list({
+        agentId: "main",
+        kind: "message",
+        status: "failed",
+        direction: "inbound",
+        channel: "telegram",
+        after: "100",
+        before: "200",
+        cursor: "42",
+        limit: "25",
+      }),
     );
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "audit.activity.list",
-      params: {
+    expectRequests([
+      "audit.activity.list",
+      {
         limit: 25,
         agentId: "main",
         kind: "message",
@@ -223,74 +214,43 @@ describe("audit command gateway compatibility", () => {
         before: 200,
         cursor: "42",
       },
-    });
+    ]);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("falls back to audit.list only with legacy-compatible filters", async () => {
-    callGateway.mockRejectedValueOnce(unknownActivityMethodError()).mockResolvedValueOnce({
-      events: [],
-      nextCursor: "8",
-    });
+    callGateway
+      .mockRejectedValueOnce(gatewayError("unknown method: audit.activity.list"))
+      .mockResolvedValueOnce({
+        events: [],
+        nextCursor: "8",
+      });
 
-    await auditListCommand(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        runId: "run-1",
-        kind: "tool_action",
-        status: "failed",
-        after: "100",
-        before: "200",
-        cursor: "9",
-        limit: "25",
-      },
-      runtime,
-    );
-
-    expect(callGateway.mock.calls).toEqual([
-      [
-        {
-          method: "audit.activity.list",
-          params: {
-            limit: 25,
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            runId: "run-1",
-            kind: "tool_action",
-            status: "failed",
-            after: 100,
-            before: 200,
-            cursor: "9",
-          },
-        },
-      ],
-      [
-        {
-          method: "audit.list",
-          params: {
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            runId: "run-1",
-            kind: "tool_action",
-            status: "failed",
-            after: 100,
-            before: 200,
-            limit: 25,
-            cursor: "9",
-          },
-        },
-      ],
-    ]);
+    const options = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      runId: "run-1",
+      kind: "tool_action" as const,
+      status: "failed" as const,
+      after: "100",
+      before: "200",
+      cursor: "9",
+      limit: "25",
+    };
+    const params = { ...options, limit: 25, after: 100, before: 200 };
+    await list(options);
+    expectRequests(["audit.activity.list", params], ["audit.list", params]);
   });
 
   it("falls back when an old gateway authorizes an unknown method as admin", async () => {
-    callGateway.mockRejectedValueOnce(oldGatewayUnknownMethodScopeError()).mockResolvedValueOnce({
-      events: [],
-    });
+    callGateway
+      .mockRejectedValueOnce(gatewayError("missing scope: operator.admin"))
+      .mockResolvedValueOnce({
+        events: [],
+      });
 
-    await auditListCommand({ limit: "10" }, runtime);
+    await list({ limit: "10" });
 
     expect(callGateway).toHaveBeenNthCalledWith(2, {
       method: "audit.list",
@@ -299,22 +259,18 @@ describe("audit command gateway compatibility", () => {
   });
 
   it("fails clearly instead of dropping message-specific filters on old gateways", async () => {
-    callGateway.mockRejectedValueOnce(unknownActivityMethodError());
+    callGateway.mockRejectedValueOnce(gatewayError("unknown method: audit.activity.list"));
 
-    await expect(auditListCommand({ direction: "inbound", limit: "10" }, runtime)).rejects.toThrow(
+    await expect(list({ direction: "inbound", limit: "10" })).rejects.toThrow(
       "does not support message audit filters",
     );
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("renders other request errors without the Gateway error class name", async () => {
-    const error = Object.assign(new Error("invalid audit activity params"), {
-      name: "GatewayClientRequestError",
-      gatewayCode: "INVALID_REQUEST",
-    });
-    callGateway.mockRejectedValueOnce(error);
+    callGateway.mockRejectedValueOnce(gatewayError("invalid audit activity params"));
 
-    await runCommandWithRuntime(runtime, () => auditListCommand({ limit: "10" }, runtime));
+    await runCommandWithRuntime(runtime, () => list({ limit: "10" }));
 
     expect(runtime.error).toHaveBeenCalledWith("invalid audit activity params");
     expect(String(vi.mocked(runtime.error).mock.calls[0]?.[0])).not.toContain(
@@ -325,14 +281,9 @@ describe("audit command gateway compatibility", () => {
   });
 
   it("turns an opaque cursor rejection into an operator recovery step", async () => {
-    callGateway.mockRejectedValueOnce(
-      Object.assign(new Error("invalid audit.activity.list range or cursor"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-      }),
-    );
+    callGateway.mockRejectedValueOnce(gatewayError("invalid audit.activity.list range or cursor"));
 
-    await runCommandWithRuntime(runtime, () => auditListCommand({ cursor: "abc" }, runtime));
+    await runCommandWithRuntime(runtime, () => list({ cursor: "abc" }));
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--cursor must be a continuation token returned by a previous audit result.",
@@ -345,86 +296,50 @@ describe("audit command gateway compatibility", () => {
 });
 
 describe("audit run explanation", () => {
-  beforeEach(() => {
-    callGateway.mockReset();
-    vi.mocked(runtime.log).mockClear();
-  });
-
   it("rejects --execution without --explain before querying the Gateway", async () => {
-    await expect(auditListCommand({ executionId: "execution-1" }, runtime)).rejects.toThrow(
+    await expect(list({ executionId: "execution-1" })).rejects.toThrow(
       "--execution requires --explain",
     );
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("requires one exact run without activity-list filters", async () => {
-    await expect(auditListCommand({ explain: true }, runtime)).rejects.toThrow(
+    await expect(list({ explain: true })).rejects.toThrow(
       "exactly one of --run <id> or --execution <id>",
     );
     await expect(
-      auditListCommand({ explain: true, runId: "run-1", executionId: "execution-1" }, runtime),
+      list({ explain: true, runId: "run-1", executionId: "execution-1" }),
     ).rejects.toThrow("exactly one");
-    await expect(
-      auditListCommand({ explain: true, runId: "run-1", agentId: "main" }, runtime),
-    ).rejects.toThrow("remove activity-list filters");
+    await expect(list({ explain: true, runId: "run-1", agentId: "main" })).rejects.toThrow(
+      "remove activity-list filters",
+    );
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps decision and run discovery queries bounded", async () => {
-    callGateway.mockResolvedValue({
-      schemaVersion: 1,
-      run: { runId: "run-1", status: "unknown" },
-      identity: {
-        state: "unknown",
-        reasonCode: "run_not_found",
-        missingEvidence: ["run.record"],
-        remediation: [],
-      },
-      decisionDisplays: [],
-      coverage: { state: "unknown", missingEvidence: ["run.record"] },
-    });
+    callGateway.mockResolvedValue(unknownInspection("run.record"));
 
-    await auditListCommand({ explain: true, runId: "run-1", json: true }, runtime);
-    await auditListCommand(
-      { explain: true, executionId: "execution-1", limit: "100", json: true },
-      runtime,
+    await list({ explain: true, runId: "run-1", json: true });
+    await list({ explain: true, executionId: "execution-1", limit: "100", json: true });
+    await list({ explain: true, runId: "run-1", limit: "100", json: true });
+
+    expectRequests(
+      ["audit.run.inspect", { runId: "run-1", executionLimit: 50, decisionLimit: 50 }],
+      ["audit.run.inspect", { executionId: "execution-1", decisionLimit: 100 }],
+      ["audit.run.inspect", { runId: "run-1", executionLimit: 50, decisionLimit: 100 }],
     );
-    await auditListCommand({ explain: true, runId: "run-1", limit: "100", json: true }, runtime);
-
-    expect(callGateway.mock.calls).toEqual([
-      [
-        {
-          method: "audit.run.inspect",
-          params: { runId: "run-1", executionLimit: 50, decisionLimit: 50 },
-        },
-      ],
-      [
-        {
-          method: "audit.run.inspect",
-          params: { executionId: "execution-1", decisionLimit: 100 },
-        },
-      ],
-      [
-        {
-          method: "audit.run.inspect",
-          params: { runId: "run-1", executionLimit: 50, decisionLimit: 100 },
-        },
-      ],
-    ]);
 
     callGateway.mockClear();
-    await expect(
-      auditListCommand({ explain: true, executionId: "execution-1", limit: "101" }, runtime),
-    ).rejects.toThrow("with --explain");
+    await expect(list({ explain: true, executionId: "execution-1", limit: "101" })).rejects.toThrow(
+      "with --explain",
+    );
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("rejects an explicit empty decision limit", async () => {
     const limit = "";
 
-    await expect(
-      auditListCommand({ explain: true, runId: "run-1", limit }, runtime),
-    ).rejects.toThrow("with --explain");
+    await expect(list({ explain: true, runId: "run-1", limit })).rejects.toThrow("with --explain");
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -530,19 +445,19 @@ describe("audit run explanation", () => {
       coverage: { state: "enforced", missingEvidence: ["invoker.principal"] },
     });
 
-    await auditListCommand({ explain: true, runId: "run-1", cursor: "1", limit: "25" }, runtime);
+    await list({ explain: true, runId: "run-1", cursor: "1", limit: "25" });
 
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "audit.run.inspect",
-      params: {
+    expectRequests([
+      "audit.run.inspect",
+      {
         runId: "run-1",
         executionCursor: "1",
         executionLimit: 25,
         decisionCursor: "1",
         decisionLimit: 25,
       },
-    });
-    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    ]);
+    const text = output();
     for (const label of [
       "Trust domain [present]",
       "Invoker [absent]",
@@ -561,22 +476,26 @@ describe("audit run explanation", () => {
       "Delegation [present]",
       "Depth [present]",
     ]) {
-      expect(output).toContain(label);
+      expect(text).toContain(label);
     }
-    expect(output).toContain("not-applicable");
-    expect(output).toContain("run_admission_identity_not_evaluated");
-    expect(output).toContain("operator_approval_denied_by_reviewer");
-    expect(output).toContain("authoritative owner-native SQLite record; retained 30 days");
-    expect(output).toContain("admission provenance only; no enforcement decision");
-    expect(output).not.toContain("named authoritative decision source");
-    expect(output).toContain("Policy refs: 1");
-    expect(output).toContain("Policy refs: 0");
-    expect(output).toContain("Grant refs: 0");
-    expect(output).toContain("Context used: contextId, executionId, runId");
-    expect(output).toContain("producer display contract unverified; receipt prose omitted");
+    for (const label of [
+      "not-applicable",
+      "run_admission_identity_not_evaluated",
+      "operator_approval_denied_by_reviewer",
+      "authoritative owner-native SQLite record; retained 30 days",
+      "admission provenance only; no enforcement decision",
+      "Policy refs: 1",
+      "Policy refs: 0",
+      "Grant refs: 0",
+      "Context used: contextId, executionId, runId",
+      "producer display contract unverified; receipt prose omitted",
+    ]) {
+      expect(text).toContain(label);
+    }
+    expect(text).not.toContain("named authoritative decision source");
     vi.mocked(runtime.log).mockClear();
-    await auditListCommand({ explain: true, runId: "run-1", json: true }, runtime);
-    const jsonOutput = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    await list({ explain: true, runId: "run-1", json: true });
+    const jsonOutput = output();
     expect(jsonOutput).toContain('"decisionDisplays"');
     expect(jsonOutput).not.toContain('"decisions"');
     for (const rawKey of ["receiptId", "resolutionRef", "eventId"]) {
@@ -607,44 +526,18 @@ describe("audit run explanation", () => {
       coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
     });
 
-    await auditListCommand({ explain: true, runId: "session-run" }, runtime);
-    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
-    expect(output).toContain("Candidate: execution-1");
-    expect(output).toContain("--execution <id> --explain");
+    await list({ explain: true, runId: "session-run" });
+    expect(output()).toContain("Candidate: execution-1");
+    expect(output()).toContain("--execution <id> --explain");
 
     callGateway.mockReset();
-    callGateway.mockResolvedValue({
-      schemaVersion: 1,
-      run: { runId: "session-run", executionId: "execution-2", status: "unknown" },
-      identity: {
-        state: "unknown",
-        reasonCode: "execution_not_found",
-        missingEvidence: ["identity.context"],
-        remediation: [{ code: "verify_execution_id", text: "Verify the exact execution id." }],
-      },
-      decisionDisplays: [],
-      coverage: { state: "unknown", missingEvidence: ["identity.context"] },
-    });
-    await auditListCommand({ explain: true, executionId: "execution-2", json: true }, runtime);
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "audit.run.inspect",
-      params: { executionId: "execution-2", decisionLimit: 50 },
-    });
+    callGateway.mockResolvedValue(unknownInspection());
+    await list({ explain: true, executionId: "execution-2", json: true });
+    expectRequests(["audit.run.inspect", { executionId: "execution-2", decisionLimit: 50 }]);
   });
 
   it("routes the shared explain cursor by selector and grammar", async () => {
-    callGateway.mockResolvedValue({
-      schemaVersion: 1,
-      run: { runId: "run-1", executionId: "execution-1", status: "known" },
-      identity: {
-        state: "unknown",
-        reasonCode: "execution_not_found",
-        missingEvidence: ["identity.context"],
-        remediation: [],
-      },
-      decisionDisplays: [],
-      coverage: { state: "unknown", missingEvidence: ["identity.context"] },
-    });
+    callGateway.mockResolvedValue(unknownInspection());
 
     for (const [options, params] of [
       [
@@ -671,20 +564,19 @@ describe("audit run explanation", () => {
       ],
     ] as const) {
       callGateway.mockClear();
-      await auditListCommand(options, runtime);
+      await list(options);
       expect(callGateway).toHaveBeenCalledWith({ method: "audit.run.inspect", params });
     }
   });
 
   it("returns an explicit upgrade state from an older Gateway", async () => {
-    callGateway.mockRejectedValue(unknownRunInspectMethodError());
+    callGateway.mockRejectedValue(gatewayError("unknown method: audit.run.inspect"));
 
-    await auditListCommand({ explain: true, runId: "old-run", json: true }, runtime);
+    await list({ explain: true, runId: "old-run", json: true });
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
-    expect(output).toContain('"state": "unsupported"');
-    expect(output).toContain("gateway_upgrade_required");
-    expect(output).toContain("upgrade_gateway");
+    expect(output()).toContain('"state": "unsupported"');
+    expect(output()).toContain("gateway_upgrade_required");
+    expect(output()).toContain("upgrade_gateway");
   });
 });
