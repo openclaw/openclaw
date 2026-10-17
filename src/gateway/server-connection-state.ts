@@ -35,6 +35,7 @@ export function createGatewayConnectionState(params: {
   let ancestorReferences = new WeakMap<GatewayClient, SessionAncestorReferences>();
   const clients = new GatewayClientRegistry(undefined, (client) => {
     ancestorReferences.delete(client);
+    client.presenceSnapshot = undefined;
   });
   const forgetConnectionAncestors = (connId: string) => {
     const client = clients.getByConnectionId(connId);

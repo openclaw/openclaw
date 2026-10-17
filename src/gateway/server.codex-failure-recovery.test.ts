@@ -527,12 +527,12 @@ function holdNativeExit(
   };
   child.on("newListener", onListener);
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
-    closing = true;
-    // Receipt-controlled cases hold the deadline for binding reads and chat.abort.
-    // Unconfirmed exit must run the native staged deadlines before agent.wait settles.
-    if (!withholdExitConfirmation) {
+    // Pause only controls that release the child explicitly. Missing-exit proof
+    // needs real deadlines across asynchronous native containment.
+    if (!closing && !withholdExitConfirmation) {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     }
+    closing = true;
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);
@@ -596,9 +596,7 @@ function holdNativeExit(
         return;
       }
       released = true;
-      if (!withholdExitConfirmation) {
-        vi.useRealTimers();
-      }
+      vi.useRealTimers();
       child.off("newListener", onListener);
       restoreExitConfirmation();
       end.mockRestore();

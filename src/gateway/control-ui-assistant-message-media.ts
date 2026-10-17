@@ -126,8 +126,11 @@ export async function prepareAssistantMessageMedia(
   };
   if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
     const inputId = messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length);
+    // Attachment association needs visibility and media, not forwarded sender labels.
     const project = (input: Awaited<ReturnType<typeof readSessionPendingInput>>) =>
-      input ? projectPendingInputMessage(input, MAX_PAYLOAD_BYTES) : undefined;
+      input
+        ? projectPendingInputMessage(input, MAX_PAYLOAD_BYTES, undefined, () => undefined)
+        : undefined;
     assertAssociation(project(await readSessionPendingInput(scope, inputId)));
     return async (publish) => {
       let published = false;

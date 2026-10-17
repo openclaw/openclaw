@@ -6,12 +6,17 @@ import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqli
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
+import { createApiKeyCredential as apiKey } from "./credential-fixtures.test-support.js";
 import { createRuntimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { deleteAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { readAuthProfileRows } from "./sqlite-json.js";
 import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const profileStore = (key = "fixture"): AuthProfileStore => ({
+  version: 1,
+  profiles: { "example:key": apiKey("example", key) },
+});
 
 function emptyRows(): AuthProfileRowRead {
   return {
@@ -110,27 +115,15 @@ it("serves a committed postimage without rereading or freezing its publisher", a
   const resolve = () =>
     cache.prepare(databasePath, { identity: "fixture", read, assertCurrent() {} }).read();
   await resolve();
-  const committed: AuthProfileStore = {
-    version: 1,
-    profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture-new" } },
-    lastGood: { example: "example:key" },
-  };
+  const committed = { ...profileStore("fixture-new"), lastGood: { example: "example:key" } };
   revision = "2";
   cache.recordSource(databasePath, "fixture", committed);
   committed.profiles = {};
   committed.lastGood!.example = "caller-edit";
   const rows = await resolve();
-  expect(rows.store).toMatchObject({
-    status: "readable",
-    raw: {
-      profiles: {
-        "example:key": { key: "fixture-new" },
-      },
-    },
-  });
-  expect(rows.state).toMatchObject({
-    status: "readable",
-    raw: { lastGood: { example: "example:key" } },
+  expect(rows).toMatchObject({
+    store: { status: "readable", raw: { profiles: { "example:key": { key: "fixture-new" } } } },
+    state: { status: "readable", raw: { lastGood: { example: "example:key" } } },
   });
   expect(read).toHaveBeenCalledOnce();
   cache.recordSource(databasePath, "fixture", null);
@@ -142,10 +135,7 @@ it("retains private lifetimes across runtime publication and reloads incomplete 
   const databasePath = path.join(tempDirs.make("auth-row-lifetimes-"), "auth.sqlite");
   let revision = "1";
   const cache = createRuntimeAuthProfileRowsCache(() => revision);
-  const store: AuthProfileStore = {
-    version: 1,
-    profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture" } },
-  };
+  const store = profileStore();
   const rows = {
     ...emptyRows(),
     store: {
@@ -186,10 +176,7 @@ it.each(["agent", "shared-state"] as const)(
     admitSqliteSchema(database);
     const transact = (write: () => void) => runSqliteImmediateTransactionSync(database, write);
     transact(() => {
-      writeAuthProfileJsonCell(database, "store", kind, {
-        version: 1,
-        profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture" } },
-      });
+      writeAuthProfileJsonCell(database, "store", kind, profileStore());
       writeAuthProfileJsonCell(database, "state", kind, { lastGood: {} });
     });
     const cache = createRuntimeAuthProfileRowsCache(() => "1");
@@ -213,15 +200,21 @@ it.each(["agent", "shared-state"] as const)(
     expect(await resolve()).toBe(afterRollback);
     expect(read).toHaveBeenCalledTimes(2);
 
-    transact(() =>
-      writeAuthProfileJsonCell(database, "state", kind, {
-        lastGood: { example: "example:key" },
-      }),
-    );
-    expect((await resolve()).state).toEqual({
-      status: "readable",
-      raw: { lastGood: { example: "example:key" } },
-    });
+    const updatedState = { lastGood: { example: "example:key" } };
+    transact(() => writeAuthProfileJsonCell(database, "state", kind, updatedState));
+    if (kind === "shared-state") {
+      const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        expect(readAuthProfileRows(database, databasePath, kind)).toMatchObject({
+          store: { status: "readable", raw: profileStore() },
+          state: { status: "readable", raw: updatedState },
+        });
+        expect(observation.queries).toHaveLength(1);
+      } finally {
+        observation.restore();
+      }
+    }
+    expect((await resolve()).state).toEqual({ status: "readable", raw: updatedState });
     expect(read).toHaveBeenCalledTimes(3);
     transact(() => {
       deleteAuthProfileJsonCell(database, "state", kind);
@@ -234,32 +227,6 @@ it.each(["agent", "shared-state"] as const)(
     expect(read).toHaveBeenCalledTimes(4);
   },
 );
-
-it("reads shared credentials and health together after an in-process write", () => {
-  const databasePath = path.join(tempDirs.make("shared-auth-rows-"), "state.sqlite");
-  using database = openNodeSqliteDatabase(databasePath);
-  database.exec(`
-    CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT);
-    INSERT INTO config_machine_state VALUES ('authProfiles.store', '{"version":1,"profiles":{}}');
-    INSERT INTO config_machine_state VALUES ('authProfiles.state', '{"lastGood":{}}');
-  `);
-  admitSqliteSchema(database);
-  readAuthProfileRows(database, databasePath, "shared-state");
-  database.exec(`
-    UPDATE config_machine_state SET value_json='{"lastGood":{"example":"example:key"}}'
-    WHERE state_key='authProfiles.state';
-  `);
-  const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    expect(readAuthProfileRows(database, databasePath, "shared-state")).toMatchObject({
-      store: { status: "readable", raw: { version: 1, profiles: {} } },
-      state: { status: "readable", raw: { lastGood: { example: "example:key" } } },
-    });
-    expect(observation.queries).toHaveLength(1);
-  } finally {
-    observation.restore();
-  }
-});
 
 it("keeps an independently absent credential row when the legacy health table is malformed", () => {
   const databasePath = path.join(tempDirs.make("legacy-auth-rows-"), "auth.sqlite");

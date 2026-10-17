@@ -84,7 +84,7 @@ function clearPostResetBranchPrecondition(
   }
   // Reset can leave old branch metadata visible after the transcript becomes
   // empty. The first post-reset send must establish the new branch itself.
-  delete state.chatDisplayedLeafEntryId;
+  state.chatDisplayedLeafEntryId = undefined;
 }
 
 export async function clearChatHistory(

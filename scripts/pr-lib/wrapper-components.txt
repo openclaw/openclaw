@@ -1905,6 +1905,7 @@ src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-schema.ts
+src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
