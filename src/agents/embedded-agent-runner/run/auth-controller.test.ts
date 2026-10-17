@@ -363,6 +363,21 @@ describe("createEmbeddedRunAuthController", () => {
       "refreshed-runtime-api-key",
     );
     expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
+
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({
+      apiKey: "twice-refreshed-runtime-api-key",
+    });
+    await expect(
+      controller.maybeRefreshRuntimeAuthForAuthError("401 invalid api key", false),
+    ).resolves.toBe(true);
+    expectProtectedRuntimeValue(
+      harness.runtimeAuthState?.apiKey,
+      "twice-refreshed-runtime-api-key",
+    );
+    expectProtectedRuntimeValue(
+      setRuntimeApiKey.mock.calls.at(-1)?.[1],
+      "twice-refreshed-runtime-api-key",
+    );
   });
 
   it("does not rotate profiles after an explicit SecretRef owner becomes unavailable", async () => {
@@ -995,7 +1010,6 @@ describe("createEmbeddedRunAuthController", () => {
         const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
         harness.runtimeAuthState = {
-          generation: 1,
           sourceApiKey: "__aws_sdk_auth__",
           apiKey: "__aws_sdk_auth__",
           authMode: "aws-sdk",

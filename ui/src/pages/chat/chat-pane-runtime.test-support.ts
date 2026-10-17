@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { ChatPaneRuntimeView } from "./chat-pane-runtime-view.tsx";
+import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
 import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import type { ChatPaneProps } from "./chat-pane.tsx";
 
@@ -52,7 +52,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
               createComponent(ApplicationProvider, {
                 value: context,
                 get children() {
-                  return createComponent(ChatPaneRuntimeView, { runtime });
+                  return createChatPaneView(runtime);
                 },
               }),
             this,

@@ -190,7 +190,7 @@ export function updateCronJobsFilter(
     >
   >,
 ) {
-  if (typeof patch.cronJobsQuery === "string") {
+  if (patch.cronJobsQuery !== undefined) {
     state.cronJobsQuery = patch.cronJobsQuery;
   }
   state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter ?? state.cronJobsEnabledFilter;

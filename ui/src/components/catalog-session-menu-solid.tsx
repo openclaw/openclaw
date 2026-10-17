@@ -5,7 +5,7 @@ import { Icon, type IconName } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
 
-export type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
+type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
 type Props = {
   x: number;
   y: number;

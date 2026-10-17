@@ -12,21 +12,6 @@ type InternalExecutionControl = {
   dispose: () => void;
 };
 
-function createControl(): InternalExecutionControl {
-  const ready = createDeferredCore<unknown>();
-  const decision = createDeferredCore<{ launch: boolean; start?: () => void }>();
-  return {
-    [INTERNAL_EXECUTION_CONTROL]: true,
-    ready: ready.promise,
-    pause: (args) => {
-      ready.resolve(args);
-      return decision.promise;
-    },
-    launch: (start) => decision.resolve({ launch: true, start }),
-    dispose: () => decision.resolve({ launch: false }),
-  };
-}
-
 export function readInternalExecutionControl(value: unknown): InternalExecutionControl | undefined {
   return value &&
     typeof value === "object" &&
@@ -42,7 +27,18 @@ export function createInternalExecutionPreparer(
   ) => Promise<AgentToolResult<unknown>>,
 ): InternalToolExecutionPreparer {
   return async (params) => {
-    const control = createControl();
+    const ready = createDeferredCore<unknown>();
+    const decision = createDeferredCore<{ launch: boolean; start?: () => void }>();
+    const control: InternalExecutionControl = {
+      [INTERNAL_EXECUTION_CONTROL]: true,
+      ready: ready.promise,
+      pause: (args) => {
+        ready.resolve(args);
+        return decision.promise;
+      },
+      launch: (start) => decision.resolve({ launch: true, start }),
+      dispose: () => decision.resolve({ launch: false }),
+    };
     const execution = startExecution(params, control);
     const settled = await Promise.race([
       control.ready.then((args) => ({ kind: "ready" as const, args })),

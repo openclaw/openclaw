@@ -66,20 +66,27 @@ describe("Control UI build chunking", () => {
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content.ts");
+    const devices = modulePath("../pages/devices/devices-page.tsx");
+    const sharedUi = modulePath("../components/select-picker-view.tsx");
     const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; export class Chat {} export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class Chat { label = label; } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
-      [newSession, `import ${JSON.stringify(sidebarStyle)}; export class NewSession {}`],
+      [
+        newSession,
+        `import ${JSON.stringify(sidebarStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+      ],
       [optional, 'export const panel = "optional-panel";'],
+      [devices, 'export const page = "devices-page";'],
+      [sharedUi, 'export const label = "shared-ui";'],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
     ]);
@@ -101,7 +108,18 @@ describe("Control UI build chunking", () => {
         rolldownOptions: {
           input: entry,
           preserveEntrySignatures: "allow-extension",
-          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+          output: {
+            codeSplitting: {
+              ...controlUiCodeSplitting,
+              // A stale capture must not pull a lazy page into the shared boot chunk.
+              groups: controlUiCodeSplitting.groups.map((group) =>
+                group.name === "control-ui-boot-shared"
+                  ? { ...group, test: (id: string) => id === devices || group.test(id) }
+                  : group,
+              ),
+            },
+            strictExecutionOrder: true,
+          },
         },
       },
     });
@@ -128,6 +146,9 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const devicesChunk = chunks.find((chunk) => devices in chunk.modules)!;
+    expect(staticImports(chatChunk.fileName)).not.toContain(devicesChunk.fileName);
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(devicesChunk.fileName);
     const deferred = chunks.find((chunk) => optional in chunk.modules)!;
     expect(deferred).toBeDefined();
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);

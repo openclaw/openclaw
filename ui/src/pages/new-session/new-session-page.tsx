@@ -6,6 +6,7 @@ import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
@@ -121,6 +122,9 @@ function DraftBlock(props: {
         agentSelect={
           <Show when={place().agents().length > 1}>
             <AgentSelect
+              ref={(node) => {
+                props.page().agentPicker = node;
+              }}
               params={{
                 agents: place().agents(),
                 agentId: place().agentId,
@@ -215,18 +219,18 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
         ].map((source) => source.subscribe(notify))
       : [];
     const document = host.ownerDocument;
-    const window = document.defaultView!;
-    const dismiss = installChatComposerPickerDismissal(document);
-    const keydown = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(host, event);
-    document.addEventListener("keydown", keydown, true);
-    window.addEventListener("beforeunload", owner.flushDraft);
+    stops.push(
+      installChatComposerPickerDismissal(document),
+      listen(
+        document,
+        "keydown",
+        (event) => focusChatComposerFromPrintableKeydown(host, event),
+        true,
+      ),
+      listen(document.defaultView!, "beforeunload", owner.flushDraft),
+    );
     notify();
-    return () => {
-      stops.forEach((stop) => stop());
-      dismiss();
-      document.removeEventListener("keydown", keydown, true);
-      window.removeEventListener("beforeunload", owner.flushDraft);
-    };
+    return () => stops.forEach((stop) => stop());
   });
   const visibilityControl = {
     get visibility() {

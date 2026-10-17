@@ -23,6 +23,10 @@ import {
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import {
+  upgradeMemoryIndexProviderKey,
+  writeMemoryIndexMetadata,
+} from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
 import type {
   MemoryEmbeddingCacheEntry,
@@ -31,11 +35,7 @@ import type {
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import {
-  MEMORY_INDEX_META_KEY,
-  readMemoryDatabaseFacts,
-  type MemoryDatabaseFacts,
-} from "./manager-retrieval-read.js";
+import { readMemoryDatabaseFacts, type MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
 import {
   MemorySourceIndexKernel,
@@ -226,14 +226,6 @@ export function bindPostgresMemoryPublication(
     rebuilding!.hasIndexedChunks ||= hasRows;
     rebuilding!.hasSemanticChunks ||= hasRows && source.model !== "fts-only";
   };
-  const writeMeta = (meta: MemoryIndexMeta) =>
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<{ memory_index_meta: { key: string; value: string } }>(db)
-        .insertInto("memory_index_meta")
-        .values({ key: MEMORY_INDEX_META_KEY, value: JSON.stringify(meta) })
-        .onConflict((oc) => oc.column("key").doUpdateSet({ value: JSON.stringify(meta) })),
-    );
   const execute: Parameters<
     typeof bindSqliteWorkerDatabase<MemoryPublicationOperations>
   >[1]["execute"] = (command) => {
@@ -374,7 +366,7 @@ export function bindPostgresMemoryPublication(
             fts: { enabled: true, available: true },
           }).replaceRows(source, decode<MemorySourceIndexRow>(fragments()));
         }
-        writeMeta(metadata);
+        writeMemoryIndexMetadata(db, metadata);
         if (command.input.vectorIndexComplete) {
           markMemoryVectorIndexClean(db);
         }
@@ -420,6 +412,11 @@ export function bindPostgresMemoryPublication(
       stageKind = undefined;
       return undefined;
     }
+    if (command.type === "index.upgradeProviderKey") {
+      return rebuilding
+        ? { ok: true, value: false }
+        : write(() => upgradeMemoryIndexProviderKey(db, command.input));
+    }
     if (command.type === "index.writeMetadata") {
       return write(() => {
         if (rebuilding) {
@@ -427,7 +424,7 @@ export function bindPostgresMemoryPublication(
           rebuilding.meta = metadata;
           rebuilding.serialized = JSON.stringify(metadata);
         } else {
-          writeMeta(command.input);
+          writeMemoryIndexMetadata(db, command.input);
         }
       });
     }

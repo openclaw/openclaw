@@ -367,7 +367,6 @@ export async function getExecuteAgentTurnForTest() {
         fallbackModel: outcome.resolved.model,
         ...(outcome.fallback.exhausted ? { fallbackExhausted: true as const } : {}),
         fallbackAttempts: outcome.fallback.attempts,
-        didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
         autoCompactionCount: outcome.autoCompactionCount,
         hasDirectlySentBlockReply: outcome.hasDirectlySentBlockReply,
         directBlockDeliveries: outcome.directBlockDeliveries,

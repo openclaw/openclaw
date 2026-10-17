@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { authorizeHttpGatewayConnect, resolveGatewayAuth } from "../gateway/auth.js";
 import { isTrustedProxyAddress } from "../gateway/net.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
 const mocks = vi.hoisted(() => ({
@@ -65,8 +64,6 @@ vi.mock("./onboard-helpers.js", async (importActual) => {
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
 
-const makeRuntime = (): RuntimeEnv => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
-
 async function runGatewayPrompt(params: {
   selectQueue: string[];
   textQueue: Array<string | undefined>;
@@ -87,7 +84,7 @@ async function runGatewayPrompt(params: {
   mocks.password.mockImplementation(async () => params.textQueue.shift());
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockImplementation(async (input) => params.confirmResult ?? input.initialValue);
-  return promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
+  return promptGatewayConfig(params.baseConfig ?? {});
 }
 
 async function runTrustedProxyPrompt(params: {
@@ -404,15 +401,12 @@ const configPathLabel = shortenHomePath(CONFIG_PATH);
 async function removeChannelConfig(channel: string) {
   select.mockResolvedValueOnce(channelChoice(channel)).mockResolvedValueOnce(doneChoice);
 
-  return removeChannelConfigWizard(
-    {
-      channels: {
-        [channel]: { token: "secret" },
-        telegram: { token: "secret" },
-      },
-    } as never,
-    {} as never,
-  );
+  return removeChannelConfigWizard({
+    channels: {
+      [channel]: { token: "secret" },
+      telegram: { token: "secret" },
+    },
+  } as never);
 }
 
 function expectOption(value: unknown, label: string) {

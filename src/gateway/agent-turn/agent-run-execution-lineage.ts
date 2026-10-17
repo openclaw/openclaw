@@ -1,4 +1,4 @@
-import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
+import type { AgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
 import { executionIdentitySpawnAdmission } from "../../audit/execution-identity-spawn-admission.js";
 import {
   consumeAgentRuntimeExecutionLineage,
@@ -6,17 +6,10 @@ import {
 } from "../agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 
-type ExecutionIdentitySpawnFacts = Pick<
-  ExecutionIdentityAdmissionFacts,
-  "applicableGrants" | "assurance" | "ingress" | "invoker"
-> & {
-  spawnAdmission: string;
-};
-
 /** Consume authenticated spawn provenance once, at the child admission owner. */
 export function resolveExecutionIdentitySpawnFacts(
   identity: AgentRuntimeIdentity | undefined,
-): ExecutionIdentitySpawnFacts | undefined {
+): AgentCommandExecutionIdentitySpawnFacts | undefined {
   const lineage = readAgentRuntimeExecutionLineage(identity?.sessionSpawnContext);
   if (!identity || !lineage || !consumeAgentRuntimeExecutionLineage(identity)) {
     return undefined;

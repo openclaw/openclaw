@@ -76,12 +76,7 @@ async function handleRequest(request: BridgeRequest) {
         );
         reply = { id: request.id, generation };
       } else {
-        const values = request.parameters.map((value) =>
-          ArrayBuffer.isView(value)
-            ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
-            : value,
-        );
-        const results = await client.query(request.sql, values);
+        const results = await client.query(request.sql, [...request.parameters]);
         const result: QueryResult | undefined = Array.isArray(results) ? results.at(-1) : results;
         if (!result) {
           throw new Error("PostgreSQL returned no query result");

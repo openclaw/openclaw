@@ -26,9 +26,12 @@ import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
 
-export function AgentSelect(props: { params: AgentSelectOptions }) {
+export function AgentSelect(props: {
+  params: AgentSelectOptions;
+  ref?: (node: HTMLSpanElement) => void;
+}) {
   return (
-    <span class="new-session-page__select new-session-page__select--agent">
+    <span class="new-session-page__select new-session-page__select--agent" ref={props.ref}>
       <openclaw-agent-select
         prop:variant={props.params.variant ?? "compact"}
         prop:options={props.params.agents.map((agent) => ({
@@ -336,7 +339,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
               />
             </label>
           ) : (
-            <ProjectChip params={projectParams()} />
+            <ProjectChip params={projectParams()} focus={view().browser.projectFocus} />
           )}
           {props.params.place.deviceFolder ? (
             <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">

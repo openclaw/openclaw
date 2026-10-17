@@ -13,7 +13,10 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
-import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
+import {
+  prepareTerminalWithSettledTurnFinalization,
+  requestSettledTurnFinalizationContext,
+} from "./settled-turn-finalization.js";
 import {
   createSettledFinalizationTestInput,
   createSettledProviderFailureAttempt,
@@ -138,6 +141,49 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     admission.close();
     vi.useRealTimers();
   });
+
+  it.each(["delivered", "pending", "missing"] as const)(
+    "requests settled context only when source delivery is missing (%s)",
+    async (delivery) => {
+      const attempt = settledSuccessfulAttempt();
+      const context = attempt.settledTurnFinalizationContext;
+      attempt.settledTurnFinalizationContext = { source: "unavailable" };
+      const input = finalizationInput(attempt);
+      input.terminalBase.runParams.resolveReplyDelivery = async () => delivery;
+      const capture = vi.fn(async () => context);
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "The tools completed successfully." }],
+      });
+      backendMocks.runSettledFinalization.mockResolvedValue({
+        outcome: "answered",
+        result: {
+          assistant,
+          assistantTranscriptOwned: true,
+          preparedTerminalReply: prepareAgentRunTerminalReply({
+            rawText: "The tools completed successfully.",
+          }),
+        },
+      });
+      await requestSettledTurnFinalizationContext(
+        { ...input.terminalBase, ...input.initial, lastRunPromptUsage: input.lastRunPromptUsage },
+        input.finalization,
+        capture,
+      );
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+      if (delivery === "missing") {
+        expect(capture).toHaveBeenCalledOnce();
+        expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+        expect(backendMocks.runSettledFinalization.mock.calls[0]?.[1]).toBe(attempt);
+        expect(attempt.settledTurnFinalizationContext).toBe(context);
+        expect(result.finalizationOutcome).toBe("answered");
+        expect(result.attempt.assistantTexts).toEqual(["The tools completed successfully."]);
+      } else {
+        expect(capture).not.toHaveBeenCalled();
+        expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();
+        expect(result.finalizationOutcome).toBe("not-attempted");
+      }
+    },
+  );
 
   it("does not finalize an empty post-tool turn when media was delivered", async () => {
     const assistant = buildEmbeddedRunnerAssistant({ content: [] });

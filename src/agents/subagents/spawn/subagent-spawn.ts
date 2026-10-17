@@ -509,7 +509,6 @@ export async function spawnSubagentDirect(
             isCleanupCurrent,
             isAbortCurrent,
             cleanupOwner,
-            retainAdmission: params.collect ? undefined : admissionReservation?.retain,
           });
         }
         if (!isCleanupCurrent()) {

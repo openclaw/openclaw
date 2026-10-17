@@ -38,9 +38,9 @@ function invocationRow(row: GatewaySessionRow): GatewaySessionRow {
     sharingRole: row.sharingRole,
     visibility: row.visibility,
     archived: row.archived,
-    worktree: row.worktree ? { ...row.worktree } : undefined,
+    worktree: row.worktree,
     repositoryWorkspaceId: row.repositoryWorkspaceId,
-    repository: row.repository ? { ...row.repository } : undefined,
+    repository: row.repository,
   };
 }
 
@@ -75,11 +75,7 @@ export function createSessionGitHubPublication(host: Host) {
     current: () => boolean;
   };
   const keyFor = (row: Pick<GatewaySessionRow, "key" | "agentId">, agentId?: string | null) => {
-    const owner = resolveUiConversationIdentity(
-      host.snapshot(),
-      row.key,
-      row.agentId ?? agentId ?? undefined,
-    );
+    const owner = resolveUiConversationIdentity(host.snapshot(), row.key, row.agentId ?? agentId);
     return `${owner.agentId ?? ""}\0${owner.sessionKey}`;
   };
   const retire = (key: string, entry: Entry) => {
@@ -204,7 +200,7 @@ export function createSessionGitHubPublication(host: Host) {
       if (!event || (isUiGlobalSessionKey(event.key) && !event.agentId)) {
         return;
       }
-      const key = keyFor({ key: event.key, agentId: event.agentId ?? undefined });
+      const key = keyFor({ key: event.key }, event.agentId);
       reconcile((row, retainedKey) =>
         retainedKey === key
           ? reconcileSessionChanged(snapshotFor(row), payload, {

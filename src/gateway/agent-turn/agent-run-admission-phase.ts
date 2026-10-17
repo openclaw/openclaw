@@ -319,7 +319,6 @@ export async function prepareAgentRunDispatch(
         if (restoreAdmittedRestartRecoveryInterrupted) {
           pendingRecovery = await repairMainSessionRecoveryMutation({
             mutation: restoreAdmittedRestartRecoveryInterrupted,
-            onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
             onError: (error) =>
               params.context.logGateway.warn(
                 `failed to restore unaccepted restart recovery: ${formatForLog(error)}`,

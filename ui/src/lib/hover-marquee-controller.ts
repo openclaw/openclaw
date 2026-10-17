@@ -1,5 +1,6 @@
 import { createEffect, onCleanup } from "solid-js";
 import { cancelLayout, scheduleLayout } from "./layout-frame.ts";
+import { listen } from "./reactive/listener.ts";
 
 const MARQUEE_SPEED_PX_PER_SEC = 40;
 const MARQUEE_HOVER_DELAY_MS = 500;
@@ -23,6 +24,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
   let options: MarqueeOptions & { className?: string } = {};
   let shift = 0;
   let disposed = false;
+  const stopListeners: Array<() => void> = [];
 
   const schedule = () => {
     if (!disposed) {
@@ -69,10 +71,10 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
         return undefined;
       }
       for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-        host.addEventListener(event, schedule);
+        stopListeners.push(listen(host, event, schedule));
       }
       motion = matchMedia("(prefers-reduced-motion: reduce)");
-      motion.addEventListener("change", schedule);
+      stopListeners.push(listen(motion, "change", schedule));
       // Transforms do not resize text, so scrolling cannot invalidate its measurement.
       observer = new ResizeObserver(schedule);
       observer.observe(label);
@@ -154,6 +156,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     };
   };
 
+  // Synchronize the measured DOM animation with its reactive options.
   createEffect(input, (next) => {
     if (
       !host ||
@@ -173,10 +176,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     observer?.disconnect();
     contentObserver?.disconnect();
     visibilityObserver?.disconnect();
-    motion?.removeEventListener("change", schedule);
-    for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-      host?.removeEventListener(event, schedule);
-    }
+    stopListeners.forEach((release) => release());
   });
   return {
     labelRef: (element: HTMLElement) => (label = element),

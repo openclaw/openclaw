@@ -207,6 +207,34 @@ describe("managed Crabbox", () => {
     await expect(ensureManagedCrabboxBinary(test.options)).resolves.toEqual(test.installed);
   });
 
+  it.each(["EACCES", "EIO"])(
+    "surfaces %s inspecting a managed executable without downloading or replacing it",
+    async (code) => {
+      const test = await fixture();
+      const destination = path.dirname(test.binary);
+      await fs.mkdir(destination, { recursive: true });
+      await fs.writeFile(test.binary, CRABBOX_MIN_VERSION);
+      await fs.writeFile(path.join(destination, "operator-note"), "preserve this");
+      await expect(ensureManagedCrabboxBinary(test.options)).resolves.toEqual(test.installed);
+      const failure = Object.assign(new Error(`managed executable inspection ${code}`), { code });
+      const lstat = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        if (String(args[0]) === test.binary) {
+          throw failure;
+        }
+        return await lstat(...args);
+      });
+
+      await expect(ensureManagedCrabboxBinary(test.options)).rejects.toBe(failure);
+      expect(test.fetch).not.toHaveBeenCalled();
+      expect(await fs.readFile(test.binary, "utf8")).toBe(CRABBOX_MIN_VERSION);
+      expect(await fs.readFile(path.join(destination, "operator-note"), "utf8")).toBe(
+        "preserve this",
+      );
+      expect(await fs.readdir(path.dirname(destination))).toEqual([path.basename(destination)]);
+    },
+  );
+
   it("rejects mismatched archive bytes without publication and permits a later retry", async () => {
     const test = await fixture();
     const params = test.options;

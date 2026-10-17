@@ -44,6 +44,41 @@ afterEach(async () => {
 });
 
 describe("memory host event journal helpers", () => {
+  it("limits matching event types before returning journal history", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-filtered-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const phase = {
+      type: "memory.dream.completed" as const,
+      timestamp: "2026-10-15T04:15:00.000Z",
+      phase: "deep" as const,
+      outcome: "completed" as const,
+      lineCount: 1,
+      storageMode: "separate" as const,
+    };
+    await appendMemoryHostEvent(workspaceDir, { ...phase, phase: "light" }, { env });
+    await appendMemoryHostEvent(workspaceDir, phase, { env });
+    await appendMemoryHostEvent(
+      workspaceDir,
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-10-15T04:16:00.000Z",
+        query: "newer unrelated event",
+        resultCount: 0,
+        results: [],
+      },
+      { env },
+    );
+
+    expect(
+      await readMemoryHostEventRecords({
+        workspaceDir,
+        env,
+        type: "memory.dream.completed",
+        limit: 1,
+      }),
+    ).toEqual([phase]);
+  });
+
   it("uses the retained tail when a cursor retires during a delayed append", async () => {
     const workspaceDir = await createTempDir("memory-host-events-retired-cursor-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };

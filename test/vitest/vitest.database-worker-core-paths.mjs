@@ -1182,6 +1182,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/flows/doctor-health.managed-settlement.test.ts",
   "src/flows/doctor-health.test.ts",
   "src/flows/doctor-health.readonly-config.test.ts",
+  "src/flows/doctor-memory-output.test.ts",
   "src/entry.memory-json.test.ts",
   "src/gateway/server-methods/memory-search.test.ts",
   "src/logging/diagnostic-session-context.test.ts",

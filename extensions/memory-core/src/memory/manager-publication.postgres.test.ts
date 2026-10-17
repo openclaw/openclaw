@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -8,7 +9,10 @@ import {
   withEngineStoreAdmission,
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeMemoryEmbedding,
+  isPostgresSqlConnection,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -324,6 +328,60 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(rows()).toHaveLength(1);
     }));
 
+  it("promotes legacy identity and cache atomically without replacing canonical vectors", () =>
+    admitted(() => {
+      const meta = { ...metadata, providerKey: "legacy" };
+      const command = {
+        type: "index.upgradeProviderKey",
+        input: { meta, providerKey: "canonical" },
+      } as const;
+      expect(backend.execute({ type: "index.writeMetadata", input: meta })).toMatchObject({
+        ok: true,
+      });
+      pg().runTransaction(() => {
+        const insert = pg().prepare(`INSERT INTO memory_embedding_cache
+          (provider, model, provider_key, hash, embedding, dims, updated_at)
+          VALUES ('fixture', 'fixture', ?, ?, ?, 2, ?)`);
+        insert.run("legacy", "move", encodeMemoryEmbedding([0.125, -0]), 100);
+        insert.run("legacy", "shared", encodeMemoryEmbedding([1, 0]), 101);
+        insert.run("canonical", "shared", encodeMemoryEmbedding([0, 1]), 102);
+      });
+      const cacheRows = () =>
+        pg().prepare("SELECT * FROM memory_embedding_cache ORDER BY hash, provider_key").all();
+      const before = cacheRows();
+      expect(
+        backend.execute({
+          ...command,
+          input: { ...command.input, meta: { ...meta, chunkTokens: 200 } },
+        }),
+      ).toMatchObject({ ok: true, value: false, facts: { meta } });
+      expect(cacheRows()).toEqual(before);
+
+      denyCommit = true;
+      expect(backend.execute(command)).toMatchObject({
+        ok: false,
+        entered: true,
+        committed: false,
+        error: { message: "publication authority revoked" },
+      });
+      expect(cacheRows()).toEqual(before);
+      expect(backend.execute({ type: "index.facts", input: undefined })).toMatchObject({ meta });
+
+      denyCommit = false;
+      const upgraded = { ...meta, providerKey: "canonical" };
+      expect(backend.execute(command)).toMatchObject({
+        ok: true,
+        value: true,
+        facts: { meta: upgraded },
+      });
+      expect(cacheRows()).toEqual([{ ...before[0], provider_key: "canonical" }, before[1]]);
+      expect(backend.execute(command)).toMatchObject({
+        ok: true,
+        value: false,
+        facts: { meta: upgraded },
+      });
+    }));
+
   it("retains a private full reindex across short bindings and rolls back a refused commit", () =>
     admitted(() => {
       expect(publishInline(replacement("old"))).toMatchObject({ ok: true });
@@ -458,8 +516,16 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       }));
       const batches = [...memoryEmbeddingCacheBatches(entries)];
       expect(batches.length).toBeGreaterThan(1);
-      const queries = vi.spyOn(pg(), "query");
-      let statements: string[];
+      const prepared = vi.spyOn(pg(), "prepare");
+      const statements: string[] = [];
+      const listener = (message: unknown) => {
+        const event = message as { engine: string; sql: string };
+        if (event.engine === "postgres") {
+          statements.push(event.sql);
+        }
+      };
+      const observations = channel("openclaw.database.statement");
+      observations.subscribe(listener);
       try {
         backend.execute({
           type: "cache.stage.start",
@@ -478,9 +544,16 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
           ok: true,
           value: true,
         });
+        const reads = prepared.mock.calls
+          .map(([sql]) => sql)
+          .filter((sql) => sql.includes("SELECT ordinal, header, json, last FROM memory_stage_"));
+        expect(reads.length).toBeGreaterThan(0);
+        expect(reads.every((sql) => sql.endsWith("ordinal > ? ORDER BY ordinal LIMIT 32"))).toBe(
+          true,
+        );
       } finally {
-        statements = queries.mock.calls.map(([sql]) => sql);
-        queries.mockRestore();
+        observations.unsubscribe(listener);
+        prepared.mockRestore();
       }
       expect(
         backend.execute({
@@ -495,9 +568,6 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
         sql.includes("SELECT ordinal, header, json, last FROM memory_stage_"),
       );
       expect(reads.length).toBeGreaterThan(1);
-      expect(reads.every((sql) => sql.endsWith("ordinal > ? ORDER BY ordinal LIMIT 32"))).toBe(
-        true,
-      );
       expect(statements.some((sql) => /\bATTACH\b|shadow/iu.test(sql))).toBe(false);
     }));
 });

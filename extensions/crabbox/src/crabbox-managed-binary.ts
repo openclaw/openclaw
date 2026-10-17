@@ -178,7 +178,13 @@ async function probeInstallation(
   runCommand: CrabboxCommandRunner,
   signal: AbortSignal | undefined,
 ): Promise<CrabboxBinary | undefined> {
-  const stat = await fs.lstat(binary).catch(() => undefined);
+  const stat = await fs.lstat(binary).catch(async (error: unknown) => {
+    const { extractErrorCode } = await import("openclaw/plugin-sdk/error-runtime");
+    if (extractErrorCode(error) === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
   if (!stat?.isFile()) {
     return undefined;
   }
