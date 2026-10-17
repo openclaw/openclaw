@@ -1,5 +1,5 @@
 // Msteams tests cover the generic channel-message-tool schema wiring for
-// Teams-specific actions, including the channel-info includeMembers flag
+// Teams-specific actions. The real core discovery suite covers includeMembers
 // (generic ChannelMessageToolSchemaContribution wiring shared by every
 // channel plugin; see openclaw/plugin-sdk/channel-contract).
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,24 +28,6 @@ function schemaFor(
 describe("describeMSTeamsMessageTool", () => {
   beforeEach(() => {
     mockState.resolveMSTeamsAccount.mockReset();
-  });
-
-  it("advertises channel-info with an optional includeMembers boolean when enabled", () => {
-    mockState.resolveMSTeamsAccount.mockReturnValue({
-      enabled: true,
-      configured: true,
-      tokenStatus: "available",
-    });
-
-    const discovery = describeMSTeamsMessageTool({
-      cfg: {} as OpenClawConfig,
-      accountId: undefined,
-    });
-
-    expect(discovery.actions).toContain("channel-info");
-    const channelInfoSchema = schemaFor(discovery, "channel-info");
-    expect(channelInfoSchema).toBeDefined();
-    expect(channelInfoSchema?.properties.includeMembers).toBeDefined();
   });
 
   it("still advertises the existing unpin pinnedMessageId schema (no regression)", () => {

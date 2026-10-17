@@ -200,7 +200,12 @@ describe("getChannelInfoMSTeams", () => {
       })
       .mockImplementationOnce(async () => {
         vi.setSystemTime(new Date("2026-01-01T10:01:00.000Z"));
-        return { value: [{ userId: "aad-bob", displayName: "Bob" }] };
+        return {
+          value: [
+            { userId: "aad-bob", displayName: "Bob" },
+            { userId: "aad-unexpected-guest", displayName: "Unexpected Guest" },
+          ],
+        };
       });
 
     const result = await getChannelInfoMSTeams({
@@ -214,6 +219,7 @@ describe("getChannelInfoMSTeams", () => {
     expect(result.members).toEqual([
       { userId: "aad-alice", displayName: "Alice" },
       { userId: "aad-bob", displayName: "Bob" },
+      { userId: "aad-unexpected-guest", displayName: "Unexpected Guest" },
     ]);
     expect(result.membersComplete).toBe(true);
     expect(result.membersFetchedAt).toBe("2026-01-01T10:00:00.000Z");
@@ -245,37 +251,6 @@ describe("getChannelInfoMSTeams", () => {
       expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("surfaces an unexpected extra member instead of silently matching only a known audience", async () => {
-    // The whole point of includeMembers is proving/disproving an exact
-    // audience. A roster lister that quietly dropped unrecognized members
-    // would defeat that purpose, so this asserts every returned member is
-    // present, not just the ones a caller might already expect.
-    mockState.fetchGraphJson
-      .mockResolvedValueOnce({ id: "ch-private", membershipType: "private" })
-      .mockResolvedValueOnce({
-        value: [
-          { userId: "aad-alice", displayName: "Alice" },
-          { userId: "aad-bob", displayName: "Bob" },
-          { userId: "aad-unexpected-guest", displayName: "Unexpected Guest" },
-        ],
-      });
-
-    const result = await getChannelInfoMSTeams({
-      cfg: {} as OpenClawConfig,
-      teamId: "team-abc",
-      channelId: "ch-private",
-      includeMembers: true,
-    });
-
-    expect(result.members).toHaveLength(3);
-    expect(result.members?.map((member) => member.userId)).toEqual([
-      "aad-alice",
-      "aad-bob",
-      "aad-unexpected-guest",
-    ]);
-    expect(result.membersComplete).toBe(true);
-  });
 
   it("rejects a roster when pagination does not finish within its bound", async () => {
     mockState.fetchGraphJson
