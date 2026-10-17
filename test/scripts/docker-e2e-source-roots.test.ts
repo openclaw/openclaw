@@ -40,6 +40,35 @@ function writeNodeCommand(bin: string, command: string, source: string) {
   chmodSync(file, 0o755);
 }
 
+function runBash(args: string[], env: NodeJS.ProcessEnv, cwd?: string, bin = "bash") {
+  return spawnSync(bin, args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, ...env },
+  });
+}
+
+const forwardResult = `
+if (result.error) throw result.error;
+process.stdout.write(result.stdout);
+process.stderr.write(result.stderr);
+process.exit(result.status ?? 1);
+`;
+
+function flagValues(args: string[], flag: string, missing: string) {
+  return args.flatMap((arg, index) => {
+    if (arg !== flag) {
+      return [];
+    }
+    const value = args[index + 1];
+    if (value === undefined) {
+      throw new Error(missing);
+    }
+    return [value];
+  });
+}
+
 async function runFixtureBash(
   args: string[],
   cwd: string,
@@ -118,10 +147,7 @@ if (args[0] !== "--kill-after=30s" || !/^\\d+s$/.test(args[1]) || args[2] !== "d
 const result = spawnSync(${JSON.stringify(path.join(bin, "docker"))}, args.slice(3), {
   env: process.env, encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
 });
-if (result.error) throw result.error;
-process.stdout.write(result.stdout);
-process.stderr.write(result.stderr);
-process.exit(result.status ?? 1);
+${forwardResult}
 `,
   );
   writeNodeCommand(
@@ -140,10 +166,7 @@ for (const arg of args) {
 const result = spawnSync("/bin/rm", args, {
   env: process.env, encoding: "utf8", timeout: 1_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024,
 });
-if (result.error) throw result.error;
-process.stdout.write(result.stdout);
-process.stderr.write(result.stderr);
-process.exit(result.status ?? 1);
+${forwardResult}
 `,
   );
 }
@@ -151,32 +174,16 @@ process.exit(result.status ?? 1);
 async function assertSourceBootstrapIsolation(args: string[], root: string) {
   expect(args.slice(-3, -1)).toEqual(["bash", "-lc"]);
   expect(args[args.indexOf("--user") + 1]).toBe("root");
-  const mounts = args.flatMap((arg, index) => {
-    if (arg !== "-v") {
-      return [];
-    }
-    const mount = args[index + 1];
-    if (mount === undefined) {
-      throw new Error("missing captured Docker mount");
-    }
-    return [mount];
-  });
+  const mounts = flagValues(args, "-v", "missing captured Docker mount");
   for (const destination of ["/tmp/openclaw-source.bundle:ro", "/tmp/source-proof.sh:ro"]) {
     const mount = mounts.find((value) => value.endsWith(`:${destination}`));
     expect(mount).toBeDefined();
     expect(path.dirname(mount!.slice(0, -destination.length - 1))).toBe(root);
   }
   const containerEnv = Object.fromEntries(
-    args.flatMap((arg, index) => {
-      if (arg !== "-e") {
-        return [];
-      }
-      const entry = args[index + 1];
-      if (entry === undefined) {
-        throw new Error("missing captured Docker environment entry");
-      }
+    flagValues(args, "-e", "missing captured Docker environment entry").map((entry) => {
       const separator = entry.indexOf("=");
-      return [[entry.slice(0, separator), entry.slice(separator + 1)]];
+      return [entry.slice(0, separator), entry.slice(separator + 1)];
     }),
   );
   expect(containerEnv).toEqual({
@@ -308,40 +315,28 @@ if (command === "apt-get") {
 }
 
 describe("Docker E2E source and harness inputs", () => {
-  posixIt.each<{
-    script: string;
-    dockerfiles?: string[];
-    harnessDockerfile?: boolean;
-    reuse?: boolean;
-  }>([
-    {
-      script: "docker-selected-plugins.sh",
-      dockerfiles: ["Dockerfile", "Dockerfile", "Dockerfile"],
-    },
-    {
-      script: "plugin-binding-command-escape-docker.sh",
-      dockerfiles: ["scripts/e2e/plugin-binding-command-escape.Dockerfile"],
-      harnessDockerfile: true,
-    },
-    {
-      script: "qr-import-docker.sh",
-      dockerfiles: ["scripts/e2e/Dockerfile.qr-import"],
-      harnessDockerfile: true,
-    },
-    { script: "agents-delete-shared-workspace-docker.sh", dockerfiles: ["Dockerfile"] },
-    {
-      script: "sandbox-browser-sidecar-docker.sh",
-      dockerfiles: [
-        "scripts/docker/sandbox/Dockerfile",
-        "scripts/docker/sandbox/Dockerfile.browser",
-      ],
-      reuse: true,
-    },
-    { script: "compose-setup.sh", reuse: true },
-    { script: "cli-installer-distribution-docker.sh", reuse: true },
+  posixIt.each<
+    [script: string, dockerfiles?: string[], harnessDockerfile?: boolean, reuse?: boolean]
+  >([
+    ["docker-selected-plugins.sh", ["Dockerfile", "Dockerfile", "Dockerfile"]],
+    [
+      "plugin-binding-command-escape-docker.sh",
+      ["scripts/e2e/plugin-binding-command-escape.Dockerfile"],
+      true,
+    ],
+    ["qr-import-docker.sh", ["scripts/e2e/Dockerfile.qr-import"], true],
+    ["agents-delete-shared-workspace-docker.sh", ["Dockerfile"]],
+    [
+      "sandbox-browser-sidecar-docker.sh",
+      ["scripts/docker/sandbox/Dockerfile", "scripts/docker/sandbox/Dockerfile.browser"],
+      false,
+      true,
+    ],
+    ["compose-setup.sh", undefined, false, true],
+    ["cli-installer-distribution-docker.sh", undefined, false, true],
   ])(
-    "keeps candidate product inputs for $script",
-    async ({ script, dockerfiles, harnessDockerfile, reuse }) => {
+    "keeps candidate product inputs for %s",
+    async (script, dockerfiles, harnessDockerfile, reuse) => {
       const root = tempDirs.make("e2e-src-");
       const target = path.join(root, "candidate source");
       const bin = path.join(root, "bin");
@@ -362,10 +357,10 @@ describe("Docker E2E source and harness inputs", () => {
         prepareSourceCaptureCommands(bin, root);
       }
       for (const command of ["docker", "git"]) {
-        const file = path.join(bin, command);
-        writeFileSync(
-          file,
-          `#!${process.execPath}
+        writeNodeCommand(
+          bin,
+          command,
+          `
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const installerMount = args.find((arg) => arg.endsWith(':/tmp/install.sh:ro'));
@@ -394,7 +389,6 @@ if (${JSON.stringify(command)} === 'git') {
 }
 `,
         );
-        chmodSync(file, 0o755);
       }
       const socketPath = path.join(root, "docker.sock");
       const socket = createServer();
@@ -422,12 +416,9 @@ if (${JSON.stringify(command)} === 'git') {
               sourceEnv,
               30_000,
             )
-          : spawnSync("bash", [path.join(harness, "scripts/e2e", script)], {
-              cwd: target,
-              encoding: "utf8",
-              timeout: 30_000,
-              env: {
-                ...process.env,
+          : runBash(
+              [path.join(harness, "scripts/e2e", script)],
+              {
                 PATH: `${bin}${path.delimiter}${process.env.PATH}`,
                 TMPDIR: root,
                 OPENCLAW_DOCKER_E2E_REPO_ROOT: target,
@@ -435,7 +426,8 @@ if (${JSON.stringify(command)} === 'git') {
                 OPENCLAW_SKIP_DOCKER_BUILD: reuse ? "1" : "0",
                 OPENCLAW_DOCKER_SOCKET: socketPath,
               },
-            });
+              target,
+            );
         expect(result.status).not.toBe(0);
         expect(result.stdout + result.stderr).toContain("fixture-stop at product input boundary");
         const calls = readCommandCalls(log);
@@ -581,31 +573,21 @@ esac
           "openclaw-package-bun-proof",
           "openclaw-package-musl-proof",
         ];
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        path.join(
-          harness,
-          "scripts/e2e",
-          cli ? "cli-installer-distribution-docker.sh" : "docker-package-install.sh",
-        ),
-      ],
+    const script = cli ? "cli-installer-distribution-docker.sh" : "docker-package-install.sh";
+    const result = runBash(
+      [path.join(harness, "scripts/e2e", script)],
       {
-        cwd: harness,
-        encoding: "utf8",
-        timeout: 30_000,
-        env: {
-          ...process.env,
-          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-          TMPDIR: root,
-          OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
-          OPENCLAW_SKIP_DOCKER_BUILD: "1",
-          OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH: path.join(root, "identity.json"),
-          PROOF_TRACE: log,
-          PROOF_STATE: root,
-          PROOF_MODE: mode,
-        },
+        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        TMPDIR: root,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH: path.join(root, "identity.json"),
+        PROOF_TRACE: log,
+        PROOF_STATE: root,
+        PROOF_MODE: mode,
       },
+      harness,
+      "/bin/bash",
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(exit);
@@ -678,8 +660,7 @@ fs.writeFileSync(output, 'candidate bytes');
 console.log(output);
 `,
     );
-    const result = spawnSync(
-      "bash",
+    const result = runBash(
       [
         "-c",
         `
@@ -694,16 +675,11 @@ docker_e2e_cleanup_package_tgz "$package"
 `,
       ],
       {
-        encoding: "utf8",
-        timeout: 30_000,
-        env: {
-          ...process.env,
-          ROOT_DIR: target,
-          TRUSTED: trusted,
-          TMPDIR: root,
-          OPENCLAW_DOCKER_E2E_REPO_ROOT: target,
-          OPENCLAW_CURRENT_PACKAGE_TGZ: "",
-        },
+        ROOT_DIR: target,
+        TRUSTED: trusted,
+        TMPDIR: root,
+        OPENCLAW_DOCKER_E2E_REPO_ROOT: target,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: "",
       },
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);

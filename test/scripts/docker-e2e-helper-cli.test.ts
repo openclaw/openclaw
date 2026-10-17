@@ -45,6 +45,25 @@ function runHelper(script: string, ...args: Array<string | Record<string, string
   });
 }
 
+function rerun(...args: Array<string | Record<string, string>>) {
+  return runHelper("scripts/docker-e2e-rerun.mts", ...args);
+}
+
+function writeFailures(overrides: Record<string, unknown> = {}) {
+  return writeArtifact("failures.json", {
+    lanes: [{ name: "gateway-network", status: 1 }],
+    status: "failed",
+    ...overrides,
+  });
+}
+
+function expectUsageError(result: ReturnType<typeof runHelper>, message: string) {
+  expect(result).toMatchObject({ status: 1, stdout: "" });
+  expect(result.stderr).toContain(message);
+  expect(result.stderr).not.toContain("Error:");
+  expect(result.stderr).not.toContain("at file:");
+}
+
 function mockGitHub(
   root: string,
   artifactNames: string[],
@@ -122,19 +141,14 @@ describe("Docker E2E helper CLIs", () => {
   it("prints scheduler helper help without throwing a stack trace", () => {
     const result = runHelper("scripts/docker-e2e.mjs", "--help");
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toContain("node scripts/docker-e2e.mjs github-outputs <plan.json>");
   });
 
   it("prints scheduler helper usage errors without a Node stack trace", () => {
     const result = runHelper("scripts/docker-e2e.mjs");
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("node scripts/docker-e2e.mjs github-outputs <plan.json>");
-    expect(result.stderr).not.toContain("Error:");
-    expect(result.stderr).not.toContain("at file:");
+    expectUsageError(result, "node scripts/docker-e2e.mjs github-outputs <plan.json>");
   });
 
   it("rejects oversized scheduler helper JSON artifacts without a Node stack trace", () => {
@@ -144,18 +158,13 @@ describe("Docker E2E helper CLIs", () => {
       OPENCLAW_DOCKER_E2E_JSON_ARTIFACT_MAX_BYTES: "64",
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("JSON artifact exceeded 64 bytes");
-    expect(result.stderr).not.toContain("Error:");
-    expect(result.stderr).not.toContain("at file:");
+    expectUsageError(result, "JSON artifact exceeded 64 bytes");
   });
 
   it("prints timings help without treating --help as an artifact path", () => {
     const result = runHelper("scripts/docker-e2e-timings.mts", "--help");
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toContain(
       "Usage: node --import tsx scripts/docker-e2e-timings.mts <summary.json|lane-timings.json>",
     );
@@ -164,15 +173,11 @@ describe("Docker E2E helper CLIs", () => {
   it("rejects unknown timings options without treating them as artifact paths", () => {
     const result = runHelper("scripts/docker-e2e-timings.mts", "--wat");
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("unknown argument: --wat");
+    expectUsageError(result, "unknown argument: --wat");
     expect(result.stderr).toContain(
       "Usage: node --import tsx scripts/docker-e2e-timings.mts <summary.json|lane-timings.json>",
     );
     expect(result.stderr).not.toContain("ENOENT");
-    expect(result.stderr).not.toContain("Error:");
-    expect(result.stderr).not.toContain("at file:");
   });
 
   it("rejects missing timings limits without a Node stack trace", () => {
@@ -180,65 +185,38 @@ describe("Docker E2E helper CLIs", () => {
       const args = ["scripts/docker-e2e-timings.mts", "summary.json", "--limit"];
       const result = runHelper(args[0]!, ...args.slice(1), ...(limit === undefined ? [] : [limit]));
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("--limit requires a value");
-      expect(result.stderr).not.toContain("Error:");
-      expect(result.stderr).not.toContain("at file:");
+      expectUsageError(result, "--limit requires a value");
     }
   });
 
   it("prints rerun help without detecting the GitHub repository", () => {
-    const result = runHelper("scripts/docker-e2e-rerun.mts", "--help");
+    const result = rerun("--help");
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toContain(
       "node --import tsx scripts/docker-e2e-rerun.mts <run-id|summary.json|failures.json>",
     );
   });
 
-  it.each(["failures.json"])(
-    "prints local cleanup reruns without synthesizing Docker lane reruns from %s",
-    (fileName) => {
-      const cleanupFailure = {
-        lane: "cleanup-smoke",
-        logFile: "cleanup-smoke.log",
-        name: "cleanup-smoke",
-        rerunCommand: "pnpm test:docker:cleanup",
-        status: 42,
-        targetable: false,
-      };
-      const payload =
-        fileName === "summary.json"
-          ? {
-              failures: [cleanupFailure],
-              lanes: [
-                {
-                  name: "gateway-network",
-                  status: 0,
-                },
-              ],
-              ref: "HEAD",
-              status: "failed",
-            }
-          : {
-              lanes: [cleanupFailure],
-              ref: "HEAD",
-              status: "failed",
-            };
-      const file = writeArtifact(fileName, payload);
+  it("prints local cleanup reruns without synthesizing Docker lane reruns from failures.json", () => {
+    const cleanupFailure = {
+      lane: "cleanup-smoke",
+      logFile: "cleanup-smoke.log",
+      name: "cleanup-smoke",
+      rerunCommand: "pnpm test:docker:cleanup",
+      status: 42,
+      targetable: false,
+    };
+    const file = writeFailures({ lanes: [cleanupFailure], ref: "HEAD" });
 
-      const result = runHelper("scripts/docker-e2e-rerun.mts", file);
+    const result = rerun(file);
 
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain("Failed Docker E2E entries: cleanup-smoke");
-      expect(result.stdout).toContain("No targetable failed Docker E2E lanes found.");
-      expect(result.stdout).toContain("- cleanup-smoke: pnpm test:docker:cleanup");
-      expect(result.stdout).not.toContain("docker_lanes='cleanup-smoke'");
-    },
-  );
+    expect(result).toMatchObject({ status: 0, stderr: "" });
+    expect(result.stdout).toContain("Failed Docker E2E entries: cleanup-smoke");
+    expect(result.stdout).toContain("No targetable failed Docker E2E lanes found.");
+    expect(result.stdout).toContain("- cleanup-smoke: pnpm test:docker:cleanup");
+    expect(result.stdout).not.toContain("docker_lanes='cleanup-smoke'");
+  });
 
   it("ignores artifact-provided GitHub rerun commands", () => {
     const file = writeArtifact("failures.json", {
@@ -252,51 +230,43 @@ describe("Docker E2E helper CLIs", () => {
       status: "failed",
     });
 
-    const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", EXACT_TARGET_REF);
+    const result = rerun(file, "--ref", EXACT_TARGET_REF);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toContain("docker_lanes='gateway-network'");
     expect(result.stdout).not.toContain("poisoned-command");
   });
 
-  it.each([
-    ["summary.json", (targetRef: string) => ({ github: { selectedSha: targetRef } })],
-  ] as const)(
-    "uses the exact artifact target from %s instead of the workflow head",
-    (name, refData) => {
-      const targetRef = "a".repeat(40);
-      const workflowHead = "b".repeat(40);
-      const file = writeArtifact(name, {
-        ...refData(targetRef),
-        failures: [{ name: "gateway-network", status: 1 }],
-        lanes: [{ name: "gateway-network", status: 1 }],
-        status: "failed",
-      });
+  it("uses the exact artifact target from summary.json instead of the workflow head", () => {
+    const targetRef = "a".repeat(40);
+    const workflowHead = "b".repeat(40);
+    const file = writeArtifact("summary.json", {
+      github: { selectedSha: targetRef },
+      failures: [{ name: "gateway-network", status: 1 }],
+      lanes: [{ name: "gateway-network", status: 1 }],
+      status: "failed",
+    });
 
-      const result = runHelper("scripts/docker-e2e-rerun.mts", file, {
-        GITHUB_SHA: workflowHead,
-      });
+    const result = rerun(file, {
+      GITHUB_SHA: workflowHead,
+    });
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain(`Ref: ${targetRef}`);
-      expect(result.stdout).toContain(`-f ref='${targetRef}'`);
-      expect(result.stdout).not.toContain(workflowHead);
-    },
-  );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(`Ref: ${targetRef}`);
+    expect(result.stdout).toContain(`-f ref='${targetRef}'`);
+    expect(result.stdout).not.toContain(workflowHead);
+  });
 
   it("lets an explicit target ref override artifact refs", () => {
     const artifactRef = "a".repeat(40);
     const explicitRef = "c".repeat(40);
-    const file = writeArtifact("failures.json", {
+    const file = writeFailures({
       images: { bare: "ghcr.io/openclaw/openclaw-bare:artifact-a" },
-      lanes: [{ name: "gateway-network", status: 1 }],
       ref: artifactRef,
-      status: "failed",
     });
 
-    const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", explicitRef);
+    const result = rerun(file, "--ref", explicitRef);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`Ref: ${explicitRef}`);
@@ -307,45 +277,32 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("requires an artifact target ref when no explicit ref is supplied", () => {
-    const file = writeArtifact("failures.json", {
-      lanes: [{ name: "gateway-network", status: 1 }],
-      status: "failed",
-    });
+    const file = writeFailures();
 
-    const result = runHelper("scripts/docker-e2e-rerun.mts", file);
+    const result = rerun(file);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     expect(result.stderr).toContain("missing an exact target ref");
     expect(result.stderr).toContain("pass --ref explicitly");
     expect(result.stderr).not.toContain("HEAD");
   });
 
   it("rejects a non-exact artifact target for a targetable rerun", () => {
-    const file = writeArtifact("failures.json", {
-      lanes: [{ name: "gateway-network", status: 1 }],
-      ref: "HEAD",
-      status: "failed",
-    });
+    const file = writeFailures({ ref: "HEAD" });
 
-    const result = runHelper("scripts/docker-e2e-rerun.mts", file);
+    const result = rerun(file);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     expect(result.stderr).toContain("invalid artifact target ref");
     expect(result.stderr).toContain("full commit SHA");
   });
 
   it.each(["abc123"])("rejects a non-exact explicit target ref: %s", (explicitRef) => {
-    const file = writeArtifact("failures.json", {
-      lanes: [{ name: "gateway-network", status: 1 }],
-      status: "failed",
-    });
+    const file = writeFailures();
 
-    const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", explicitRef);
+    const result = rerun(file, "--ref", explicitRef);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     expect(result.stderr).toContain("exact lowercase 40-character target SHA");
   });
 
@@ -363,10 +320,9 @@ describe("Docker E2E helper CLIs", () => {
       status: "failed",
     });
 
-    const result = runHelper("scripts/docker-e2e-rerun.mts", file, "--ref", EXACT_TARGET_REF);
+    const result = rerun(file, "--ref", EXACT_TARGET_REF);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     const combinedCommand = result.stdout.match(/Combined GitHub rerun:\n([^\n]+)/u)?.[1] ?? "";
     expect(combinedCommand).not.toContain("--ref 'full-release-validation-temp-deleted'");
     expect(combinedCommand).not.toContain("package_artifact_run_id=");
@@ -424,20 +380,8 @@ describe("Docker E2E helper CLIs", () => {
           workflowName: "OpenClaw Live and E2E Checks",
         },
       );
-      const first = runHelper(
-        "scripts/docker-e2e-rerun.mts",
-        "12345",
-        "--repo",
-        "openclaw/openclaw",
-        env,
-      );
-      const second = runHelper(
-        "scripts/docker-e2e-rerun.mts",
-        "12345",
-        "--repo",
-        "openclaw/openclaw",
-        env,
-      );
+      const first = rerun("12345", "--repo", "openclaw/openclaw", env);
+      const second = rerun("12345", "--repo", "openclaw/openclaw", env);
 
       expect(first.status, first.stderr).toBe(0);
       expect(second.status, second.stderr).toBe(0);
@@ -445,27 +389,21 @@ describe("Docker E2E helper CLIs", () => {
       const secondDir = downloadedDir(second.stdout);
       generatedDirs.push(firstDir, secondDir);
       expect(firstDir).not.toBe(secondDir);
-      expect(path.basename(firstDir)).toMatch(/^openclaw-docker-e2e-rerun-12345-/u);
-      expect(path.basename(secondDir)).toMatch(/^openclaw-docker-e2e-rerun-12345-/u);
-      const firstArtifactDir = readdirSync(firstDir, { withFileTypes: true }).find((entry) =>
-        entry.isDirectory(),
-      );
-      const secondArtifactDir = readdirSync(secondDir, { withFileTypes: true }).find((entry) =>
-        entry.isDirectory(),
-      );
-      expect(firstArtifactDir).toBeDefined();
-      expect(secondArtifactDir).toBeDefined();
-      expect(
-        existsSync(path.join(firstDir, firstArtifactDir?.name ?? "", "artifact", "failures.json")),
-      ).toBe(true);
-      expect(
-        existsSync(
-          path.join(secondDir, secondArtifactDir?.name ?? "", "artifact", "failures.json"),
-        ),
-      ).toBe(true);
-      expect(first.stdout).toContain(`-f ref='${"d".repeat(40)}'`);
+      for (const [dir, result] of [
+        [firstDir, first],
+        [secondDir, second],
+      ] as const) {
+        expect(path.basename(dir)).toMatch(/^openclaw-docker-e2e-rerun-12345-/u);
+        const artifactDir = readdirSync(dir, { withFileTypes: true }).find((entry) =>
+          entry.isDirectory(),
+        );
+        expect(artifactDir).toBeDefined();
+        expect(
+          existsSync(path.join(dir, artifactDir?.name ?? "", "artifact", "failures.json")),
+        ).toBe(true);
+        expect(result.stdout).toContain(`-f ref='${"d".repeat(40)}'`);
+      }
       expect(first.stdout).not.toContain("-f ref='abc123'");
-      expect(second.stdout).toContain(`-f ref='${"d".repeat(40)}'`);
     } finally {
       for (const dir of generatedDirs) {
         rmSync(dir, { force: true, recursive: true });
@@ -497,15 +435,7 @@ describe("Docker E2E helper CLIs", () => {
     );
     const outputDir = path.join(root, "artifacts");
 
-    const result = runHelper(
-      "scripts/docker-e2e-rerun.mts",
-      "12345",
-      "--repo",
-      "openclaw/openclaw",
-      "--dir",
-      outputDir,
-      env,
-    );
+    const result = rerun("12345", "--repo", "openclaw/openclaw", "--dir", outputDir, env);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("gateway-network");
@@ -538,25 +468,15 @@ describe("Docker E2E helper CLIs", () => {
     );
     const outputDir = path.join(root, "artifacts");
 
-    const result = runHelper(
-      "scripts/docker-e2e-rerun.mts",
-      "12345",
-      "--repo",
-      "openclaw/openclaw",
-      "--dir",
-      outputDir,
-      env,
-    );
+    const result = rerun("12345", "--repo", "openclaw/openclaw", "--dir", outputDir, env);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     expect(result.stderr).toContain("mixed target refs");
     expect(result.stderr).toContain("a".repeat(40));
     expect(result.stderr).toContain("b".repeat(40));
 
     const explicitRef = "c".repeat(40);
-    const override = runHelper(
-      "scripts/docker-e2e-rerun.mts",
+    const override = rerun(
       "12345",
       "--repo",
       "openclaw/openclaw",

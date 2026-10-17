@@ -29,18 +29,23 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const orderLanes = <T>(lanes: T[]) => lanes;
 
+function writeTargetFile(root: string, relative: string, contents: string) {
+  const file = join(root, relative);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, contents);
+  return file;
+}
+
 function writeFrozenScenarioContract(targetRoot: string, scenarios: string[]): string {
-  const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
-  mkdirSync(dirname(assertionsFile), { recursive: true });
-  writeFileSync(
-    assertionsFile,
+  return writeTargetFile(
+    targetRoot,
+    "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
     [
       `const scenarios = ${JSON.stringify(scenarios)};`,
       'if (process.argv[2] !== "list-scenarios") throw new Error("unknown command");',
       "process.stdout.write(`${JSON.stringify(scenarios)}\\n`);",
     ].join("\n"),
   );
-  return assertionsFile;
 }
 
 function copyCurrentScenarioMetadata(targetRoot: string) {
@@ -81,6 +86,30 @@ function planFor(
   }).plan;
 }
 
+function survivorPlan(
+  upgradeSurvivorTargetRoot: string,
+  overrides: Partial<Parameters<typeof planFor>[0]> = {},
+) {
+  return planFor({
+    selectedLaneNames: ["published-upgrade-survivor"],
+    upgradeSurvivorTargetRoot,
+    ...overrides,
+  });
+}
+
+function writeLegacyScenarioContract(root: string, scenarios: string[]) {
+  return writeTargetFile(
+    root,
+    "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+    [
+      "const SCENARIOS = new Set([",
+      ...scenarios.map((scenario) => `  "${scenario}",`),
+      "]);",
+      'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
+    ].join("\n"),
+  );
+}
+
 function requireFirstLane(plan: ReturnType<typeof planFor>) {
   const [lane] = plan.lanes;
   if (!lane) {
@@ -102,28 +131,15 @@ function summarizeLane(lane: ReturnType<typeof planFor>["lanes"][number]) {
   };
 }
 
-function trustedUpgradeSurvivorCommand(
-  envPrefix = "",
-  shellPrelude = "",
-  harnessDir = ".",
-): string {
-  const prefix = envPrefix ? `${envPrefix} ` : "";
-  const prelude = shellPrelude ? `${shellPrelude}; ` : "";
-  return `OPENCLAW_DOCKER_E2E_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" ${prefix}OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c '${prelude}harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${harnessDir}}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/upgrade-survivor-docker.sh"'`;
-}
+const trustedUpgradeSurvivorCommand = `OPENCLAW_DOCKER_E2E_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c 'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="\${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="\${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"; harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/e2e/upgrade-survivor-docker.sh"'`;
 
 function publishedUpgradeSurvivorLane(
   name: string,
   baselineSpec: string,
-  scenario?: string,
+  scenario: string,
 ): ReturnType<typeof summarizeLane> {
   return {
-    command: `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='${baselineSpec}' ${
-      scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='${scenario}' ` : ""
-    }${trustedUpgradeSurvivorCommand(
-      "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
-      'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
-    )}`,
+    command: `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='${baselineSpec}' OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='${scenario}' ${trustedUpgradeSurvivorCommand}`,
     imageKind: "bare",
     live: false,
     name,
@@ -132,6 +148,37 @@ function publishedUpgradeSurvivorLane(
     timeoutMs: 2_580_000,
     weight: 3,
   };
+}
+
+function expectOptInScenario(
+  baselines: string,
+  scenario: string,
+  supported = baselines.split(" "),
+) {
+  const options = {
+    selectedLaneNames: ["published-upgrade-survivor"],
+    upgradeSurvivorBaselines: baselines,
+  };
+  const plan = planFor({ ...options, upgradeSurvivorScenarios: scenario });
+  const expected = supported.map((baseline) =>
+    publishedUpgradeSurvivorLane(
+      `published-upgrade-survivor-${baseline}-${scenario}`,
+      `openclaw@${baseline}`,
+      scenario,
+    ),
+  );
+  expect(plan.lanes.map(summarizeLane)).toEqual(expected);
+  for (const alias of ["reported-issues", "far-reaching"]) {
+    const names = planFor({
+      ...options,
+      upgradeSurvivorBaselines: supported.join(" "),
+      upgradeSurvivorScenarios: alias,
+    }).lanes.map((lane) => lane.name);
+    for (const lane of expected) {
+      expect(names).not.toContain(lane.name);
+    }
+  }
+  return plan;
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
@@ -161,11 +208,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     copyCurrentScenarioMetadata(root);
     copyFileSync("package.json", join(root, "package.json"));
     const { sha } = commitTarget(root);
-    const plan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
+    const plan = survivorPlan(root, {
       upgradeSurvivorBaselines: "2026.9.2",
       upgradeSurvivorScenarios: "missing-configured-plugin-migration",
-      upgradeSurvivorTargetRoot: root,
       frozenTarget: { mode: "inert", source: createFrozenTargetSource(root, sha) },
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
@@ -199,11 +244,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
       if (mode === "committed") {
         writeFileSync(catalogFile, "uncommitted catalog must not be read\n");
       }
-      const plan = planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
+      const plan = survivorPlan(root, {
         upgradeSurvivorBaselines: "2026.9.4",
         upgradeSurvivorScenarios: "legacy-operator-state",
-        upgradeSurvivorTargetRoot: root,
         allowFrozenTargetScenarioOmissions: false,
         ...(mode === "committed" ? { frozenTarget: { mode: "inert" as const, source } } : {}),
       });
@@ -224,11 +267,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     writeFileSync(catalogFile, content);
     const { sha } = commitTarget(root);
     expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
+      survivorPlan(root, {
         upgradeSurvivorBaselines: "2026.9.4",
         upgradeSurvivorScenarios: "base",
-        upgradeSurvivorTargetRoot: root,
         frozenTarget: { mode: "inert", source: createFrozenTargetSource(root, sha) },
       }),
     ).toThrow(/inert scenario catalog/);
@@ -245,10 +286,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     );
     const { sha } = commitTarget(root);
     expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
+      survivorPlan(root, {
         upgradeSurvivorBaselines: "2026.6.11",
-        upgradeSurvivorTargetRoot: root,
         frozenTarget: { mode: "inert", source: createFrozenTargetSource(root, sha) },
       }),
     ).toThrow(/inert scenario catalog/);
@@ -289,27 +328,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       }
     },
   );
-
-  const literalFirstHopPostbuild = String.raw`const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
-  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
-  // Remove only after both source artifacts fall outside the supported upgrade window.
-  {
-    dest: "dist/shared-Y6bNiw2w.js",
-    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
-  },
-  {
-    dest: "dist/shared-DTaQo6Hi.js",
-    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
-  },
-  {
-    dest: "dist/memory-state-CcqRgDZU.js",
-    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
-  {
-    dest: "dist/memory-state-DwGdReW4.js",
-    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
-];`;
 
   it("omits only the first-hop sources a target's own inventory does not record", () => {
     const targetRoot = tempDirs.make("openclaw-partial-first-hop-target-");
@@ -377,31 +395,41 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(unsupported.omittedUnsupportedLanes).toEqual([UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE]);
   });
 
-  it.each([
-    ["unrelated", ""],
-    ["absent", ""],
-  ])(
-    "does not infer first-hop support from %s with missing or unrelated outputs %s",
-    (shape, missing) => {
-      const targetRoot = tempDirs.make("openclaw-missing-first-hop-target-");
-      mkdirSync(join(targetRoot, "scripts"));
-      if (shape !== "absent") {
-        const source = literalFirstHopPostbuild;
-        writeFileSync(
-          join(targetRoot, "scripts/runtime-postbuild.mts"),
-          shape === "unrelated"
-            ? source.replace("const LEGACY_CLI_EXIT_COMPAT_CHUNKS", "const UNRELATED_OUTPUTS")
-            : source.replaceAll(missing, "missing.js"),
-        );
-      }
-      const plan = planFor({
-        selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
-        upgradeSurvivorTargetRoot: targetRoot,
-      });
-      expect(plan.lanes).toEqual([]);
-      expect(plan.omittedUnsupportedLanes).toEqual(firstHopLaneNames);
-    },
-  );
+  it.each(["unrelated", "absent"])("does not infer first-hop support from %s outputs", (shape) => {
+    const targetRoot = tempDirs.make("openclaw-missing-first-hop-target-");
+    mkdirSync(join(targetRoot, "scripts"));
+    if (shape !== "absent") {
+      writeFileSync(
+        join(targetRoot, "scripts/runtime-postbuild.mts"),
+        String.raw`const UNRELATED_OUTPUTS = [
+  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
+  // Remove only after both source artifacts fall outside the supported upgrade window.
+  {
+    dest: "dist/shared-Y6bNiw2w.js",
+    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
+  },
+  {
+    dest: "dist/shared-DTaQo6Hi.js",
+    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
+  },
+  {
+    dest: "dist/memory-state-CcqRgDZU.js",
+    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
+  },
+  {
+    dest: "dist/memory-state-DwGdReW4.js",
+    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
+  },
+];`,
+      );
+    }
+    const plan = planFor({
+      selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual(firstHopLaneNames);
+  });
 
   it("omits corrupt-plugin update admission only for authorized targets without the owner", () => {
     const targetRoot = tempDirs.make("openclaw-corrupt-update-target-");
@@ -623,11 +651,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
   });
 
   it("keeps strict released readers in stable recovery coverage after latest advances", () => {
-    const plan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
+    const plan = survivorPlan(".", {
       upgradeSurvivorBaselines: "openclaw@2026.9.12",
       upgradeSurvivorScenarios: "reported-issues",
-      upgradeSurvivorTargetRoot: ".",
     });
     const recovery = plan.lanes.filter((lane) =>
       /package-(?:publication-recovery|verification-recovery|stranded-first-hop)/u.test(lane.name),
@@ -660,16 +686,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     { baseline: "2026.7.1-2", scenario: "prerelease-plugin-registry" },
     { baseline: "2026.7.1-2", scenario: "recovery-cleanup" },
   ])("plans $scenario only when explicitly requested", ({ baseline, scenario }) => {
-    const laneName = `published-upgrade-survivor-${baseline}-${scenario}`;
-    const explicitPlan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: baseline,
-      upgradeSurvivorScenarios: scenario,
-    });
-
-    expect(explicitPlan.lanes.map(summarizeLane)).toEqual([
-      publishedUpgradeSurvivorLane(laneName, `openclaw@${baseline}`, scenario),
-    ]);
+    const explicitPlan = expectOptInScenario(baseline, scenario);
     if (scenario === "abandoned-update") {
       expect(explicitPlan.requiredPrepublishPluginPackages).toEqual([]);
     }
@@ -680,42 +697,15 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "@openclaw/whatsapp",
       ]);
     }
-
-    for (const aggregateScenario of ["reported-issues", "far-reaching"]) {
-      const aggregateLaneNames = planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: baseline,
-        upgradeSurvivorScenarios: aggregateScenario,
-      }).lanes.map((lane) => lane.name);
-
-      expect(aggregateLaneNames).not.toContain(laneName);
-    }
   });
 
   it.each([
     ["workshop-doctor-recovery", "2026.9.4", "2026.9.3 2026.9.4 2026.9.5"],
     ["update-report-recovery", "2026.9.6", "2026.9.5 2026.9.6 2026.9.7"],
   ])("pins opt-in %s to published %s without credentials", (scenario, baseline, baselines) => {
-    const plan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: baselines,
-      upgradeSurvivorScenarios: scenario,
-    });
-    const name = `published-upgrade-survivor-${baseline}-${scenario}`;
-    expect(plan.lanes.map(summarizeLane)).toEqual([
-      publishedUpgradeSurvivorLane(name, `openclaw@${baseline}`, scenario),
-    ]);
+    const plan = expectOptInScenario(baselines, scenario, [baseline]);
     expect(plan.requiredPrepublishPluginPackages).toEqual([]);
     expect(plan.credentials).toEqual([]);
-    for (const alias of ["reported-issues", "far-reaching"]) {
-      expect(
-        planFor({
-          selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: baseline,
-          upgradeSurvivorScenarios: alias,
-        }).lanes.map((lane) => lane.name),
-      ).not.toContain(name);
-    }
   });
 
   it.each([
@@ -725,37 +715,18 @@ describe("scripts/lib/docker-e2e-plan", () => {
   ])(
     "plans $scenario only for its exact supported published writers without registry or credential fixtures",
     ({ scenario, baselines }) => {
-      const plan = planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5 2026.9.6 2026.9.7 latest",
-        upgradeSurvivorScenarios: scenario,
-      });
-      const expected = baselines.map((baseline) =>
-        publishedUpgradeSurvivorLane(
-          `published-upgrade-survivor-${baseline}-${scenario}`,
-          `openclaw@${baseline}`,
-          scenario,
-        ),
+      const plan = expectOptInScenario(
+        "2026.9.3 2026.9.4 2026.9.5 2026.9.6 2026.9.7 latest",
+        scenario,
+        baselines,
       );
-      expect(plan.lanes.map(summarizeLane)).toEqual(expected);
       expect(plan.requiredPrepublishPluginPackages).toEqual([]);
       expect(plan.credentials).toEqual([]);
-      for (const alias of ["reported-issues", "far-reaching"]) {
-        const aliasNames = planFor({
-          selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: baselines.join(" "),
-          upgradeSurvivorScenarios: alias,
-        }).lanes.map((lane) => lane.name);
-        for (const lane of expected) {
-          expect(aliasNames).not.toContain(lane.name);
-        }
-      }
     },
   );
 
   it("reads content-addressed scenario catalogs from pre-command frozen targets", () => {
     const targetRoot = tempDirs.make("openclaw-legacy-frozen-upgrade-harness-");
-    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     const legacyScenarios = [
       "base",
       "feishu-channel",
@@ -767,23 +738,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "tilde-log-path",
       "versioned-runtime-deps",
     ];
-    mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(
-      assertionsFile,
-      [
-        "const SCENARIOS = new Set([",
-        ...legacyScenarios.map((scenario) => `  "${scenario}",`),
-        "]);",
-        'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
-      ].join("\n"),
-    );
+    writeLegacyScenarioContract(targetRoot, legacyScenarios);
 
     const { sha } = commitTarget(targetRoot);
-    const plan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
+    const plan = survivorPlan(targetRoot, {
       upgradeSurvivorBaselines: "2026.6.11",
       upgradeSurvivorScenarios: "reported-issues",
-      upgradeSurvivorTargetRoot: targetRoot,
       frozenTarget: { mode: "inert", source: createFrozenTargetSource(targetRoot, sha) },
     });
 
@@ -801,11 +761,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     mkdirSync(dirname(catalogFile), { recursive: true });
     writeFileSync(catalogFile, "invalid current catalog");
     expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
+      survivorPlan(targetRoot, {
         upgradeSurvivorBaselines: "2026.6.11",
         upgradeSurvivorScenarios: "base",
-        upgradeSurvivorTargetRoot: targetRoot,
         allowFrozenTargetScenarioOmissions: false,
       }),
     ).toThrow(/unrecognized scenario contract/);
@@ -813,7 +771,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
   it("recognizes the frozen combined mobile and watch scenario catalog", () => {
     const targetRoot = tempDirs.make("openclaw-platform-survivors-frozen-harness-");
-    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
     const scenarios = [
       "base",
       "mobile-pairing-reconnect",
@@ -835,16 +792,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "auth-profile-v2026-7-2-beta-5",
       "watchos-direct-node",
     ];
-    mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(
-      assertionsFile,
-      [
-        "const SCENARIOS = new Set([",
-        ...scenarios.map((scenario) => `  "${scenario}",`),
-        "]);",
-        'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
-      ].join("\n"),
-    );
+    writeLegacyScenarioContract(targetRoot, scenarios);
 
     const plan = planFor({
       selectedLaneNames: ["update-migration"],
@@ -917,55 +865,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.omittedUnsupportedLanes).toEqual([selectedLane]);
   });
 
-  it("fails closed when an unknown legacy scenario catalog lacks the command", () => {
-    const targetRoot = tempDirs.make("openclaw-frozen-failed-scenario-harness-");
-    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
-    mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(
-      assertionsFile,
-      [
-        'const SCENARIOS = new Set(["base"]);',
-        'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
-      ].join("\n"),
-    );
-
-    expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorScenarios: "reported-issues",
-        upgradeSurvivorTargetRoot: targetRoot,
-      }),
-    ).toThrow("unknown upgrade-survivor assertion command: list-scenarios");
-  });
-
-  it("fails closed when a frozen target scenario command returns non-JSON output", () => {
-    const targetRoot = tempDirs.make("openclaw-frozen-non-json-scenario-harness-");
-    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
-    mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(assertionsFile, 'process.stdout.write("base");\n');
-
-    expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorScenarios: "reported-issues",
-        upgradeSurvivorTargetRoot: targetRoot,
-      }),
-    ).toThrow("list-scenarios did not return JSON");
-  });
-
-  it("fails closed when a frozen target scenario command returns an invalid catalog", () => {
+  it.each([
+    [
+      'const SCENARIOS = new Set(["base"]);\nthrow new Error("unknown upgrade-survivor assertion command: list-scenarios");',
+      "unknown upgrade-survivor assertion command: list-scenarios",
+    ],
+    ['process.stdout.write("base");\n', "list-scenarios did not return JSON"],
+    [
+      'process.stdout.write("[\\"base\\",\\"base\\"]");\n',
+      "list-scenarios returned an invalid catalog",
+    ],
+  ])("fails closed on frozen target command failure: %s", (source, message) => {
     const targetRoot = tempDirs.make("openclaw-frozen-invalid-scenario-harness-");
-    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
-    mkdirSync(dirname(assertionsFile), { recursive: true });
-    writeFileSync(assertionsFile, 'process.stdout.write("[\\"base\\",\\"base\\"]");\n');
+    writeTargetFile(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs", source);
 
     expect(() =>
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
+      survivorPlan(targetRoot, {
         upgradeSurvivorScenarios: "reported-issues",
-        upgradeSurvivorTargetRoot: targetRoot,
       }),
-    ).toThrow("list-scenarios returned an invalid catalog");
+    ).toThrow(message);
   });
 
   it("excludes Open WebUI from skip-live Docker all plans", () => {
