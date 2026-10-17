@@ -17,7 +17,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
@@ -68,13 +68,11 @@ const pendingMenuSyncs = new Set<Promise<void>>();
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
-  buildPreparedModelsProviderData: (...args: Parameters<typeof buildModelsProviderData>) =>
-    buildModelsProviderData(...args),
+  buildPreparedModelsProviderData: buildModelsProviderData,
 }));
 vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
-  prepareSkillCommandsForAgents: (...args: Parameters<typeof prepareSkillCommandsForAgents>) =>
-    prepareSkillCommandsForAgents(...args),
+  prepareSkillCommandsForAgents,
 }));
 vi.mock("./bot-native-command-menu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bot-native-command-menu.js")>();
@@ -99,14 +97,7 @@ async function settleUpdates(): Promise<void> {
   }
 }
 
-export const harness: {
-  readonly state: OpenClawTestState;
-  replySpy: Mock<ReplyResolver>;
-  transcribeFirstAudio: typeof transcribeFirstAudio;
-  settleUpdates: typeof settleUpdates;
-  prepareSkillCommandsForAgents: typeof prepareSkillCommandsForAgents;
-  buildModelsProviderData: typeof buildModelsProviderData;
-} = {
+export const harness = {
   get state() {
     return state;
   },

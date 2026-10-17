@@ -25,6 +25,13 @@ import { resolveStickerVisionSupportRuntime } from "./sticker-vision.runtime.js"
 vi.mock("./sticker-vision.runtime.js", { spy: true });
 
 const base = { date: 1736380800, from, chat };
+function mediaUpdate<T extends object>(media: T) {
+  const id = nextTelegramTestMessageId();
+  return { update_id: id, message: { ...base, message_id: id, ...media } };
+}
+
+const fileResponse = (file_path: string) =>
+  apiResponses.set("getFile", { ok: true, result: { file_path } });
 
 describe("registered Telegram stickers and local media", () => {
   it.each([
@@ -53,17 +60,13 @@ describe("registered Telegram stickers and local media", () => {
       file_name: "animation.mp4",
       mime_type: "video/mp4",
     };
-    const messageId = nextTelegramTestMessageId();
-    await bot.handleUpdate({
-      update_id: messageId,
-      message: {
-        ...base,
-        message_id: messageId,
+    await bot.handleUpdate(
+      mediaUpdate({
         animation,
         ...(companionDocument ? { document: animation } : {}),
         ...(caption ? { caption } : {}),
-      },
-    });
+      }),
+    );
     expect(harness.replySpy).toHaveBeenCalledOnce();
     const context = harness.replySpy.mock.calls[0]![0];
     expect(context.BodyForAgent).toBe(caption ?? "");
@@ -101,11 +104,7 @@ describe("registered Telegram stickers and local media", () => {
       emoji: "new",
       set_name: "NewSet",
     };
-    const stickerMessageId = nextTelegramTestMessageId();
-    await bot.handleUpdate({
-      update_id: stickerMessageId,
-      message: { ...base, message_id: stickerMessageId, sticker },
-    });
+    await bot.handleUpdate(mediaUpdate({ sticker }));
     expect(await getCachedSticker("stable-sticker")).toMatchObject({
       fileId: "current-file",
       emoji: "new",
@@ -120,20 +119,16 @@ describe("registered Telegram stickers and local media", () => {
       { is_animated: true, is_video: false },
       { is_animated: false, is_video: true },
     ].entries()) {
-      const messageId = nextTelegramTestMessageId();
-      await bot.handleUpdate({
-        update_id: messageId,
-        message: {
-          ...base,
-          message_id: messageId,
+      await bot.handleUpdate(
+        mediaUpdate({
           sticker: {
             ...sticker,
             ...variant,
             file_unique_id: `unsupported-${index}`,
             emoji: undefined,
           },
-        },
-      });
+        }),
+      );
       const unavailable = harness.replySpy.mock.calls[index + 1]![0];
       expect(unavailable.BodyForAgent).toBe("<media:sticker>");
       expect(unavailable.media!.every((media) => media.path === undefined)).toBe(true);
@@ -162,30 +157,19 @@ describe("registered Telegram stickers and local media", () => {
           },
         },
       });
-      apiResponses.set("getFile", {
-        ok: true,
-        result: { file_path: `/var/lib/telegram-bot-api/${token}/documents/file.txt` },
-      });
+      fileResponse(`/var/lib/telegram-bot-api/${token}/documents/file.txt`);
       const document = {
         file_id: "local-document",
         file_unique_id: "local-document-unique",
         file_name: "file.txt",
         mime_type: "text/plain",
       };
-      const allowedId = nextTelegramTestMessageId();
-      await bot.handleUpdate({
-        update_id: allowedId,
-        message: { ...base, message_id: allowedId, document },
-      });
+      await bot.handleUpdate(mediaUpdate({ document }));
       expect(await readFile(harness.replySpy.mock.calls[0]![0].media![0]!.path!, "utf8")).toBe(
         "trusted document bytes",
       );
-      apiResponses.set("getFile", { ok: true, result: { file_path: outside } });
-      const deniedId = nextTelegramTestMessageId();
-      await bot.handleUpdate({
-        update_id: deniedId,
-        message: { ...base, message_id: deniedId, document },
-      });
+      fileResponse(outside);
+      await bot.handleUpdate(mediaUpdate({ document }));
       expect(harness.replySpy.mock.calls[1]![0]).toMatchObject({
         BodyForAgent: "[media unavailable: download failed]",
         media: [{ kind: "document" }],
@@ -210,7 +194,7 @@ describe("registered Telegram media transport", () => {
     const apiRoot = `${cfg.channels!.telegram!.apiRoot}/custom-bot-api`;
     cfg.channels!.telegram!.apiRoot = apiRoot;
     const bot = await createBot(false, true, cfg);
-    apiResponses.set("getFile", { ok: true, result: { file_path: "photos/transport.png" } });
+    fileResponse("photos/transport.png");
     const actual = await vi.importActual<typeof TelegramMediaRuntime>(
       "openclaw/plugin-sdk/media-runtime",
     );
@@ -224,12 +208,7 @@ describe("registered Telegram media transport", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new Error("global fetch must not acquire media"),
     );
-    const messageId = nextTelegramTestMessageId();
-    const ctx = new Context(
-      { update_id: messageId, message: { ...base, chat, message_id: messageId, photo } },
-      bot.api,
-      bot.botInfo,
-    );
+    const ctx = new Context(mediaUpdate({ photo }), bot.api, bot.botInfo);
     if (!ctx.has("message")) {
       throw new Error("Expected Telegram media message");
     }

@@ -1,6 +1,4 @@
-import type { RequestListener } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -15,9 +13,8 @@ import {
   getSessionBindingService,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramBotCore } from "./bot-core.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { telegramPlugin } from "./channel.js";
@@ -29,6 +26,7 @@ import {
   resetTelegramSentMessageCacheForTest,
 } from "./runtime.test-support.js";
 import { resetTelegramClientOptionsCacheForTests } from "./send.js";
+import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import {
   TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
@@ -57,56 +55,13 @@ vi.mock("./bot-native-command-menu.js", async (importOriginal) => ({
 }));
 
 describe("Telegram startup with disabled thread bindings", () => {
+  const http = useTelegramHttpFixture();
+  const calls = http.requests;
   let state: OpenClawTestState;
-  let apiRoot: string;
-  let serverTask: Promise<void>;
-  const serverReady = createDeferred<string>();
-  const serverRelease = createDeferred<void>();
   const bots: Awaited<ReturnType<typeof createTelegramBotCore>>[] = [];
-  const calls: Array<{ method: string; fields: Record<string, unknown> }> = [];
   const errors = vi.fn();
   const replyResolver = vi.fn(async () => ({ text: "ordinary reply" }));
   let nextMessageId = 1000;
-
-  const handleApiRequest: RequestListener = (request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const body = Buffer.concat(chunks).toString("utf8");
-      const fields: Record<string, unknown> = body ? JSON.parse(body) : {};
-      const method = request.url?.split("/").at(-1) ?? "";
-      calls.push({ method, fields });
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({
-          ok: true,
-          result:
-            method === "getMe"
-              ? telegramBotInfoForTest
-              : method === "sendMessage"
-                ? { message_id: ++nextMessageId, date: 1736380800, chat, text: fields.text }
-                : true,
-        }),
-      );
-    })().catch((error: unknown) => {
-      response.destroy(error instanceof Error ? error : new Error(String(error)));
-    });
-  };
-
-  beforeAll(async () => {
-    serverTask = withServer(handleApiRequest, async (url) => {
-      serverReady.resolve(url);
-      await serverRelease.promise;
-    });
-    apiRoot = await Promise.race([
-      serverReady.promise,
-      serverTask.then(() => {
-        throw new Error("Telegram API fixture stopped before becoming ready");
-      }),
-    ]);
-  });
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "telegram-disabled-bindings" });
@@ -115,7 +70,12 @@ describe("Telegram startup with disabled thread bindings", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
     );
-    calls.length = 0;
+    http.responseFor = (method, fields) =>
+      method === "getMe"
+        ? telegramBotInfoForTest
+        : method === "sendMessage"
+          ? { message_id: ++nextMessageId, date: 1736380800, chat, text: fields.text }
+          : true;
     errors.mockClear();
     replyResolver.mockClear();
   });
@@ -141,11 +101,6 @@ describe("Telegram startup with disabled thread bindings", () => {
     }
   });
 
-  afterAll(async () => {
-    serverRelease.resolve();
-    await serverTask;
-  });
-
   function config(scope: DisabledScope | "enabled"): OpenClawConfig {
     return {
       agents: {
@@ -164,7 +119,7 @@ describe("Telegram startup with disabled thread bindings", () => {
       channels: {
         telegram: {
           botToken: token,
-          apiRoot,
+          apiRoot: http.cfg.channels.telegram.apiRoot,
           dmPolicy: "open",
           allowFrom: ["*"],
           streaming: { mode: "off" },
@@ -178,6 +133,7 @@ describe("Telegram startup with disabled thread bindings", () => {
   }
 
   async function createBot(cfg: OpenClawConfig, botToken = token) {
+    await state.writeConfig(cfg);
     readRuntimeConfig.mockReturnValue(cfg);
     const bot = await createTelegramBotCore({
       token: botToken,
@@ -234,7 +190,6 @@ describe("Telegram startup with disabled thread bindings", () => {
 
   it("answers an ordinary inbound message with account bindings disabled without persisting bindings", async () => {
     const cfg = config("account");
-    await state.writeConfig(cfg);
     const bot = await createBot(cfg);
     await bot.handleUpdate({
       update_id: 1001,
@@ -277,12 +232,8 @@ describe("Telegram startup with disabled thread bindings", () => {
   ] as const)(
     "keeps the $next owner after its $previous predecessor stops repeatedly",
     async ({ previous, next }) => {
-      const before = config(previous);
-      await state.writeConfig(before);
-      const predecessor = await createBot(before);
-      const after = config(next);
-      await state.writeConfig(after);
-      const current = await createBot(after);
+      const predecessor = await createBot(config(previous));
+      const current = await createBot(config(next));
       await predecessor.stop();
       await predecessor.stop();
       if (next === "enabled") {
@@ -302,7 +253,6 @@ describe("Telegram startup with disabled thread bindings", () => {
 
   it("does not retain an owner when the real bot constructor fails with enabled bindings", async () => {
     const cfg = config("enabled");
-    await state.writeConfig(cfg);
     await expect(createBot(cfg, "")).rejects.toThrow("Empty token!");
     await expectUnavailableOwner();
     expect(storedBindings()).toEqual([]);

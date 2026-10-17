@@ -2,7 +2,7 @@ import type { File as TelegramFile } from "grammy/types";
 import * as keyedAsyncQueue from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
   flushChannelPostMediaGroup,
@@ -62,9 +62,17 @@ const {
 } = await import("./bot-processing-outcome.js");
 const { MediaFetchError } = await import("openclaw/plugin-sdk/media-runtime");
 
-let createTelegramBot: (
-  opts: import("./bot.types.js").TelegramBotOptions,
-) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
+function createTelegramBot(opts: import("./bot.types.js").TelegramBotOptions) {
+  return createTelegramBotBase({
+    botInfo: telegramBotInfoForTest,
+    telegramTransport: {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close: async () => {},
+    },
+    ...opts,
+  });
+}
 
 const loadConfig = getLoadConfigMock();
 
@@ -189,11 +197,7 @@ async function dispatchTelegramGroupPhoto(params: {
     getFile: async () =>
       params.getFile
         ? await params.getFile(fileId)
-        : {
-            file_id: fileId,
-            file_unique_id: `unique-${fileId}`,
-            file_path: `photos/${params.messageId}.jpg`,
-          },
+        : mediaFile(fileId, `photos/${params.messageId}.jpg`),
   });
 }
 
@@ -202,17 +206,20 @@ function expectTelegramIngestHook(
   params: { content?: string; expectedCalls?: number } = {},
 ) {
   const expectedCalls = params.expectedCalls ?? 1;
-  const event = triggerInternalHookMock.mock.calls[0]?.[0] as
-    | { type: string; action: string; context: { content: string; media?: unknown[] } }
-    | undefined;
   expect(triggerInternalHookMock).toHaveBeenCalledTimes(expectedCalls);
-  expect(event?.type).toEqual(expectedCalls ? "message" : undefined);
-  expect(event?.action).toEqual(expectedCalls ? "received" : undefined);
-  expect(event?.context.content).toEqual(
-    expectedCalls ? (params.content ?? expect.stringMatching(/\S/u)) : undefined,
-  );
-  expect(event?.context.media).toEqual(
-    expectedCalls && messageIds.length
+  if (!expectedCalls) {
+    return;
+  }
+  const event = triggerInternalHookMock.mock.calls[0]?.[0] as {
+    context: { media?: unknown[] };
+  };
+  expect(event).toMatchObject({
+    type: "message",
+    action: "received",
+    context: { content: params.content ?? expect.stringMatching(/\S/u) },
+  });
+  expect(event.context.media).toEqual(
+    messageIds.length
       ? messageIds.map((messageId) =>
           expect.objectContaining({
             path: "/tmp/telegram-media.bin",
@@ -250,28 +257,11 @@ function expectTelegramDownloadWarning(messageId: number, warning?: string) {
   );
 }
 
-function rejectFirstTelegramAlbumDownloadWhen(partial: boolean) {
-  if (partial) {
-    saveRemoteMedia.mockRejectedValueOnce(
-      new MediaFetchError("fetch_failed", "Failed to fetch media"),
-    );
-  }
+function mediaFile(fileId: string, file_path: string): TelegramFile {
+  return { file_id: fileId, file_unique_id: `unique-${fileId}`, file_path };
 }
 
 describe("createTelegramBot channel_post media", () => {
-  beforeAll(() => {
-    createTelegramBot = (opts) =>
-      createTelegramBotBase({
-        botInfo: telegramBotInfoForTest,
-        telegramTransport: {
-          fetch: globalThis.fetch,
-          sourceFetch: globalThis.fetch,
-          close: async () => {},
-        },
-        ...opts,
-      });
-  });
-
   beforeEach(() => {
     setTelegramPluginStateRuntimeForTests();
     triggerInternalHookMock.mockClear();
@@ -417,11 +407,7 @@ describe("createTelegramBot channel_post media", () => {
         groups,
         groupAllowFrom: unauthorizedCommand ? ["999"] : undefined,
       });
-      const getFile = vi.fn(async (fileId: string) => ({
-        file_id: fileId,
-        file_unique_id: `unique-${fileId}`,
-        file_path: "photos/ingested.jpg",
-      }));
+      const getFile = vi.fn(async (fileId: string) => mediaFile(fileId, "photos/ingested.jpg"));
       const fetchSpy = createImageFetchSpy();
       try {
         await createTelegramBot({ token: "tok" });
@@ -476,7 +462,11 @@ describe("createTelegramBot channel_post media", () => {
       groupAllowFrom: unauthorizedCommand ? ["999"] : undefined,
       ...(testCase.deniedMention ? { providerPolicy: { mode: "deny" } } : {}),
     });
-    rejectFirstTelegramAlbumDownloadWhen(testCase.partial);
+    if (testCase.partial) {
+      saveRemoteMedia.mockRejectedValueOnce(
+        new MediaFetchError("fetch_failed", "Failed to fetch media"),
+      );
+    }
     const fetchSpy = createImageFetchSpy();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
@@ -487,11 +477,7 @@ describe("createTelegramBot channel_post media", () => {
           ? [result.value]
           : [],
       );
-    const getFile = vi.fn(async (fileId: string) => ({
-      file_id: fileId,
-      file_unique_id: `unique-${fileId}`,
-      file_path: "photos/ingested-album.jpg",
-    }));
+    const getFile = vi.fn(async (fileId: string) => mediaFile(fileId, "photos/ingested-album.jpg"));
     try {
       await createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
       // Admit both messages inside one window, including their awaited state writes.
