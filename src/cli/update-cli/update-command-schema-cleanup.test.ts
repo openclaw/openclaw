@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -37,6 +37,7 @@ const admittedSchemas = { packageSchemaPreflight: { incompatible: [], indetermin
 let root: string;
 let env: NodeJS.ProcessEnv;
 let source: string;
+let original: Buffer;
 let prepared: ReturnType<typeof adoptPreparedLocation>;
 let releaseReader: (() => void) | undefined;
 beforeEach(() => {
@@ -59,14 +60,11 @@ beforeEach(() => {
   const database = new DatabaseSync(source);
   database.exec("PRAGMA journal_mode = WAL; PRAGMA user_version = 1;");
   database.close();
+  original = fs.readFileSync(source);
   // An incomplete WAL family takes ordinary admission through private recovery.
   expect(fs.existsSync(`${source}-wal`)).toBe(false);
   expect(fs.existsSync(`${source}-shm`)).toBe(false);
-  const snapshot = path.join(root, "snapshot");
-  fs.mkdirSync(snapshot);
-  const location = path.join(snapshot, "state.sqlite");
-  fs.copyFileSync(source, location);
-  prepared = adoptPreparedLocation(location, snapshot, false, () => {});
+  prepared = makeSnapshot("snapshot", () => {});
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(async (pathname) => {
     expect(pathname).toBe(fs.realpathSync(source));
     expect(resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
@@ -78,6 +76,14 @@ beforeEach(() => {
     foreground: true,
   } as Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>>);
 });
+
+function makeSnapshot(name: string, onFailure?: Parameters<typeof adoptPreparedLocation>[3]) {
+  const directory = path.join(root, name);
+  fs.mkdirSync(directory);
+  const location = path.join(directory, "state.sqlite");
+  fs.copyFileSync(source, location);
+  return adoptPreparedLocation(location, directory, false, onFailure);
+}
 
 function runUpdate() {
   return preflightUpdateCommandSchemas({
@@ -96,10 +102,7 @@ function runUpdate() {
 }
 
 function expectPrimaryFailure(failure: unknown, primary: Error) {
-  expect(failure).toBeInstanceOf(AggregateError);
-  if (!(failure instanceof AggregateError)) {
-    throw failure;
-  }
+  assert.instanceOf(failure, AggregateError);
   expect(failure.cause).toBe(primary);
   expect(failure.errors[0]).toBe(primary);
   return failure;
@@ -128,16 +131,16 @@ it.each(["DELETE", "WAL"])(
 it.each(["reader", "removal", "rejection"] as const)(
   "refuses forward update admission after snapshot cleanup failure: %s",
   async (failureKind) => {
-    const original = fs.readFileSync(source);
+    if (failureKind === "rejection") {
+      const failure = new Error("snapshot owner could not retire");
+      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(failure);
+      await expect(runUpdate()).rejects.toBe(failure);
+      return;
+    }
     const remove = fs.promises.rm;
-    const failure =
-      failureKind === "rejection"
-        ? new Error("snapshot owner could not retire")
-        : Object.assign(new Error("owned scratch removal denied"), { code: "EACCES" });
+    const failure = Object.assign(new Error("owned scratch removal denied"), { code: "EACCES" });
     if (failureKind === "reader") {
       releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
-    } else if (failureKind === "rejection") {
-      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(failure);
     }
     const removal =
       failureKind === "removal"
@@ -148,22 +151,15 @@ it.each(["reader", "removal", "rejection"] as const)(
             return remove(target, options);
           })
         : undefined;
-    try {
-      if (failureKind === "rejection") {
-        await expect(runUpdate()).rejects.toBe(failure);
-        return;
-      }
-      await expect(runUpdate()).rejects.toThrow(/snapshot cleanup failed/i);
-      expect(fs.existsSync(prepared.location)).toBe(true);
-      expect(fs.readFileSync(source)).toEqual(original);
-      if (failureKind === "reader") {
-        expect(await prepared.cleanupAsync()).toBe(false);
-        expect(snapshots.prepareSqliteReadOnlyLocation).toHaveBeenCalledTimes(1);
-        return;
-      }
-    } finally {
-      removal?.mockRestore();
+    await expect(runUpdate()).rejects.toThrow(/snapshot cleanup failed/i);
+    expect(fs.existsSync(prepared.location)).toBe(true);
+    expect(fs.readFileSync(source)).toEqual(original);
+    if (failureKind === "reader") {
+      expect(await prepared.cleanupAsync()).toBe(false);
+      expect(snapshots.prepareSqliteReadOnlyLocation).toHaveBeenCalledTimes(1);
+      return;
     }
+    removal?.mockRestore();
     await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
     expect(fs.existsSync(prepared.location)).toBe(false);
     expect(fs.readFileSync(source)).toEqual(original);
@@ -171,12 +167,7 @@ it.each(["reader", "removal", "rejection"] as const)(
 );
 
 it("admits normal forward update only after snapshot cleanup has settled", async () => {
-  const unrelatedRoot = path.join(root, "unrelated-snapshot");
-  fs.mkdirSync(unrelatedRoot);
-  const unrelatedPath = path.join(unrelatedRoot, "state.sqlite");
-  fs.copyFileSync(source, unrelatedPath);
-  const unrelated = adoptPreparedLocation(unrelatedPath, unrelatedRoot);
-  const original = fs.readFileSync(source);
+  const unrelated = makeSnapshot("unrelated-snapshot");
   const release = createDeferred();
   const started = createDeferred();
   const cleanup = prepared.cleanupAsync;
@@ -197,7 +188,7 @@ it("admits normal forward update only after snapshot cleanup has settled", async
     release.resolve();
     await Promise.allSettled([update]);
     try {
-      expect(fs.readFileSync(unrelatedPath)).toEqual(original);
+      expect(fs.readFileSync(unrelated.location)).toEqual(original);
       expect(fs.readFileSync(source)).toEqual(original);
     } finally {
       expect(await unrelated.cleanupAsync()).toBe(true);

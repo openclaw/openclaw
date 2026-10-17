@@ -25,6 +25,12 @@ vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment:
 
 const { fixture } = installFreshUpdateFixture();
 const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+const lastJson = () => vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
+const matchingEntry = (shape: object) => expect.arrayContaining([expect.objectContaining(shape)]);
+function expectUnstaged() {
+  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+}
 beforeEach(() => {
   // This synthetic installation has no plugins to include in its recovery baseline.
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
@@ -138,7 +144,7 @@ it.each([
           message === "Warning: Debug HTTP capture is disabled during update dry runs.",
       );
     expect(captureNotices).toHaveLength(debugCapture ? 1 : 0);
-    const preview = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
+    const preview = lastJson();
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
     const replacement = !compatible && restart && owned && (!current || (running && refresh));
     if (!compatible && !replacement) {
@@ -164,15 +170,13 @@ it.each([
               reason: "node-runtime-preflight",
               message: expect.stringContaining(message),
               recoverySteps,
-              failureFacts: expect.arrayContaining([
-                expect.objectContaining({
-                  check: "node-runtime",
-                  code: "node-runtime-preflight",
-                  affectedKey: "engines.node",
-                  message:
-                    "Required: openclaw@2026.9.2 Node >=26.1.0; detected: Node 24.16.0 at [redacted-path]",
-                }),
-              ]),
+              failureFacts: matchingEntry({
+                check: "node-runtime",
+                code: "node-runtime-preflight",
+                affectedKey: "engines.node",
+                message:
+                  "Required: openclaw@2026.9.2 Node >=26.1.0; detected: Node 24.16.0 at [redacted-path]",
+              }),
             },
           ],
         });
@@ -190,8 +194,7 @@ it.each([
     if (json && (compatible || replacement)) {
       expect(preview).not.toHaveProperty("failures");
     }
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    expectUnstaged();
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
     if (!current) {
@@ -203,24 +206,18 @@ it.each([
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
         );
       } else {
-        expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            reason: "node-runtime-preflight",
-            steps: expect.arrayContaining([
-              expect.objectContaining({
-                stderrTail: expect.stringContaining(
-                  `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
-                ),
-                failureFacts: expect.arrayContaining([
-                  expect.objectContaining({
-                    code: "node-runtime-preflight",
-                    message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.1.0"),
-                  }),
-                ]),
-              }),
-            ]),
+        expect(lastJson()).toMatchObject({
+          reason: "node-runtime-preflight",
+          steps: matchingEntry({
+            stderrTail: expect.stringContaining(
+              `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
+            ),
+            failureFacts: matchingEntry({
+              code: "node-runtime-preflight",
+              message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.1.0"),
+            }),
           }),
-        );
+        });
         expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
       }
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
@@ -244,20 +241,17 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     fs.chmodSync(globalRoot, 0o555);
     try {
       await updateCommand({ dryRun: true, json: true, yes: true });
-      expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          dryRun: true,
-          failures: [
-            expect.objectContaining({
-              reason: "global-install-permission-denied",
-              message: expect.stringContaining(globalRoot),
-              failureFacts: [expect.objectContaining({ code: "global-install-permission-denied" })],
-            }),
-          ],
-        }),
-      );
-      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-      expect(fs.existsSync(fixture.databasePath)).toBe(false);
+      expect(lastJson()).toMatchObject({
+        dryRun: true,
+        failures: [
+          {
+            reason: "global-install-permission-denied",
+            message: expect.stringContaining(globalRoot),
+            failureFacts: [{ code: "global-install-permission-denied" }],
+          },
+        ],
+      });
+      expectUnstaged();
       expect(fs.readdirSync(globalRoot)).toEqual([]);
     } finally {
       fs.chmodSync(globalRoot, 0o755);

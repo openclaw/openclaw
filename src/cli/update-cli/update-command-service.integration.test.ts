@@ -187,13 +187,6 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => {
 });
 vi.mock("../../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../process/exec.js")>();
-  const nativeSuccess = {
-    code: 0,
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-  };
   const versionProbe = [
     "busctl",
     "--user",
@@ -210,16 +203,13 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
       const [argv, options] = args;
       if (argv[0] === "systemctl") {
         expect(argv).toEqual(["systemctl", "--user", "daemon-reload"]);
-        if (typeof options !== "object") {
-          throw new Error("Native reload requires its captured manager environment.");
-        }
-        expect(options.baseEnv?.HOME).toBe(root);
+        expect(options).toMatchObject({ baseEnv: { HOME: root } });
         expect(mocks.running).toBe(false);
         mocks.events.push("native daemon-reload");
-        return Promise.resolve({ ...nativeSuccess, stdout: "" });
+        return Promise.resolve(commandResult());
       }
       if (argv.length === versionProbe.length && versionProbe.every((arg, i) => argv[i] === arg)) {
-        return Promise.resolve({ ...nativeSuccess, stdout: 's "252.39"' });
+        return Promise.resolve(commandResult({ stdout: 's "252.39"' }));
       }
       return mocks.child(...args);
     },
@@ -295,13 +285,6 @@ const activate = (overrides: Partial<Parameters<typeof maybeRestartService>[0]>)
     timeoutMs: 1000,
     ...overrides,
   });
-const readCommand = async () => {
-  const command = await mocks.command(process.env);
-  if (!command) {
-    throw new Error("missing fixture command");
-  }
-  return command;
-};
 const expectUncalled = (...functions: Array<{ mock: { calls: unknown[][] } }>) => {
   for (const fn of functions) {
     expect(fn).not.toHaveBeenCalled();
@@ -369,9 +352,7 @@ beforeEach(async () => {
     sourcePath: "/etc/systemd/system/openclaw-gateway.service",
   });
   mocks.child.mockReset().mockImplementation(async (args) => {
-    if (!args.includes("restart")) {
-      throw new Error("Unexpected subprocess in activation fixture");
-    }
+    expect(args).toContain("restart");
     mocks.events.push("fresh CLI restart");
     mocks.running = true;
     return commandResult({
@@ -406,7 +387,7 @@ describe("preserved update activation with real version guards", () => {
         nowMs += ms;
       });
       mocks.command.mockResolvedValue({
-        ...(await readCommand()),
+        ...(await mocks.command(process.env)),
         environment: { HOME: root, MANAGED_VALUE: "revalidated" },
       });
       mocks.capability.mockResolvedValue({ kind: "writable" });
@@ -557,15 +538,13 @@ describe("preserved update activation with real version guards", () => {
       .spyOn(startRepair, "repairLoadedGatewayServiceForStart")
       .mockRejectedValue(new Error("automatic repair reached"));
     mocks.child.mockImplementation(async (args, options) => {
-      const snapshot = captureEnv([
+      const inheritedKeys = [
         "OPENCLAW_UPDATE_IN_PROGRESS",
         "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
-      ]);
+      ];
+      const snapshot = captureEnv(inheritedKeys);
       if (typeof options === "object") {
-        for (const key of [
-          "OPENCLAW_UPDATE_IN_PROGRESS",
-          "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
-        ]) {
+        for (const key of inheritedKeys) {
           const value = options.env?.[key];
           if (value !== undefined) {
             process.env[key] = value;
@@ -628,28 +607,25 @@ describe("preserved update activation with real version guards", () => {
       const before = await stopForUpdate();
       expect(before.stopped).toBe(true);
       expect(before.serviceEnv?.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
+      const profile = change === "profile" ? "second" : "default";
+      const stateDir = path.join(root, profile === "second" ? ".openclaw-second" : ".openclaw");
+      const unit =
+        change === "unit"
+          ? "openclaw-gateway-custom.service"
+          : profile === "second"
+            ? "openclaw-gateway-second.service"
+            : "openclaw-gateway.service";
       mocks.command.mockResolvedValue({
-        ...(await readCommand()),
+        ...(await mocks.command(process.env)),
         programArguments: gatewayArgs("19002"),
         environment: {
           HOME: root,
           OPENCLAW_GATEWAY_PORT: "19002",
-          ...(change === "profile"
-            ? {
-                OPENCLAW_PROFILE: "second",
-                OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-second.service",
-                OPENCLAW_STATE_DIR: path.join(root, ".openclaw-second"),
-                OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw-second", "openclaw.json"),
-              }
-            : {
-                OPENCLAW_PROFILE: "default",
-                OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-                OPENCLAW_STATE_DIR: path.join(root, ".openclaw"),
-                OPENCLAW_CONFIG_PATH: configPath,
-              }),
-          ...(change === "unit"
-            ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-custom.service" }
-            : {}),
+          OPENCLAW_PROFILE: profile,
+          OPENCLAW_SYSTEMD_UNIT: unit,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH:
+            profile === "second" ? path.join(stateDir, "openclaw.json") : configPath,
         },
       });
       const state = await readGatewayServiceState(resolveGatewayService(), {
@@ -663,11 +639,7 @@ describe("preserved update activation with real version guards", () => {
         preManagedServiceStop: before,
       });
       if (change !== "metadata") {
-        expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe(
-          change === "profile"
-            ? "openclaw-gateway-second.service"
-            : "openclaw-gateway-custom.service",
-        );
+        expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe(unit);
         await expect(revalidated).rejects.toThrow("manager identity changed");
       } else {
         await expect(revalidated).resolves.toMatchObject({
@@ -825,15 +797,13 @@ describe("preserved update activation with real version guards", () => {
             }),
             root,
           })
-        : scenario === "parent recovery refusal"
-          ? { kind: "owned" as const, root, fingerprint: "fixture", refreshDefinition: true }
-          : { kind: "unresolved" as const, root, fingerprint: "fixture" };
+        : { kind: "owned" as const, root, fingerprint: "fixture", refreshDefinition: true };
       if (lateDenial) {
         expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: true });
         mocks.child.mockResolvedValueOnce(
           commandResult({
             code: 1,
-            stderr: `SERVICE_DEFINITION_${scenario.endsWith("sealed") ? "SEALED" : "UNKNOWN"}: late denial`,
+            stderr: "SERVICE_DEFINITION_UNKNOWN: late denial",
           }),
         );
       }
@@ -868,7 +838,7 @@ describe("preserved update activation with real version guards", () => {
     expect(mocks.configSnapshot).toHaveBeenCalledTimes(
       scenario === "parent recovery refusal" ? 1 : 0,
     );
-    if (demandOnly || scenario === "unloaded") {
+    if (demandOnly) {
       const calls = mocks.launchctl.mock.calls.map(([args]) => args);
       const afterBootstrap = calls.slice(calls.findIndex((args) => args[0] === "bootstrap") + 1);
       const target = `gui/${process.getuid?.() ?? 501}/${label}`;

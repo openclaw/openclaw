@@ -33,6 +33,11 @@ import { GatewayServiceUpdateOwnershipError } from "./update-command-service-pla
 import { updateCommand } from "./update-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const unmask = "systemctl --user unmask openclaw-gateway.service";
+const maskedRefusal = {
+  reason: "masked" as const,
+  message: `Service masked; run \`${unmask}\`, then retry.`,
+};
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -54,10 +59,7 @@ it.each([
     const serviceRoot = path.join(home, "service-package");
     const callerState = path.join(home, ".openclaw-caller");
     const serviceState = path.join(home, ".openclaw-service");
-    await Promise.all([
-      writePackageRoot(callerRoot, "1.0.0"),
-      writePackageRoot(serviceRoot, "1.0.0"),
-    ]);
+    await Promise.all([callerRoot, serviceRoot].map((root) => writePackageRoot(root, "1.0.0")));
     await withEnvAsync(
       {
         HOME: home,
@@ -90,15 +92,7 @@ it.each([
                   status: "running",
                   systemd: {
                     managerUid: 2001,
-                    ...(outcome === "masked"
-                      ? {
-                          startRefusal: {
-                            reason: "masked" as const,
-                            message:
-                              "Service masked; run `systemctl --user unmask openclaw-gateway.service`, then retry.",
-                          },
-                        }
-                      : {}),
+                    ...(outcome === "masked" ? { startRefusal: maskedRefusal } : {}),
                   },
                 },
           readCommand: async () => ({
@@ -144,9 +138,7 @@ it.each([
           const { reportPath } = output.mock.calls[0]![0] as { reportPath: string };
           expect(path.dirname(path.dirname(reportPath))).toBe(temporaryRoot);
           if (outcome === "masked") {
-            expect(JSON.stringify(output.mock.calls)).toContain(
-              "systemctl --user unmask openclaw-gateway.service",
-            );
+            expect(JSON.stringify(output.mock.calls)).toContain(unmask);
           }
           expect(await fs.readFile(reportPath, "utf8")).toContain("Bounded diagnostic JSON:");
           await expect(fs.stat(callerState)).rejects.toMatchObject({ code: "ENOENT" });
