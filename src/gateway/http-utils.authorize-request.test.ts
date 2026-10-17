@@ -40,6 +40,14 @@ const ownerProfile = {
   hasAvatar: false,
   updatedAt: 2,
 };
+const expectedGuestProfile = { ...ownerProfile, profileId: "profile-guest", displayName: "Guest" };
+const expectedGitHubProfile = {
+  profileId: "profile-github-canonical",
+  displayName: "GitHub User",
+  avatarRevision: "3",
+  hasAvatar: true,
+  updatedAt: 3,
+};
 
 const readProfileSource = () => ({
   path: "/synthetic/openclaw.sqlite",
@@ -62,6 +70,25 @@ const authorityMethods = {
   revalidate: expect.any(Function),
 };
 const guestAuth = { ok: true, method: "trusted-proxy", user: "guest@example.test" } as const;
+const expectedGuestAuth = {
+  ...authorityMethods,
+  authMethod: "trusted-proxy",
+  user: guestAuth.user,
+  trustDeclaredOperatorScopes: true,
+};
+function expectedProfileAuth(profile: typeof ownerProfile, aliases = [profile.profileId]) {
+  return {
+    ...expectedGuestAuth,
+    operatorAccessAuthority: null,
+    authenticatedUserProfile: profile,
+    preparedSessionProfile: {
+      profileId: profile.profileId,
+      aliases: new Set(aliases),
+      role: null,
+      githubLogin: undefined,
+    },
+  };
+}
 const guestProfile = {
   id: "profile-guest",
   displayName: "Guest",
@@ -330,24 +357,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       await expect(
         authorize({ req: createReq({ authorization: "Bearer upstream-idp-token" }) }),
       ).resolves.toEqual({
-        ...authorityMethods,
-        authMethod: "trusted-proxy",
-        user: "guest@example.test",
-        trustDeclaredOperatorScopes: true,
-        operatorAccessAuthority: null,
-        authenticatedUserProfile: {
-          profileId: "profile-guest",
-          displayName: "Guest",
-          avatarRevision: "2",
-          hasAvatar: false,
-          updatedAt: 2,
-        },
-        preparedSessionProfile: {
-          profileId: "profile-guest",
-          aliases: new Set(["profile-guest"]),
-          role: null,
-          githubLogin: undefined,
-        },
+        ...expectedProfileAuth(expectedGuestProfile),
         ...(rolesConfigured ? { operatorRolePolicy: role } : {}),
       });
       expect(ensureProfile).toHaveBeenCalledWith("guest@example.test", {
@@ -386,12 +396,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
           reason: "user_profile_unavailable",
         });
       } else {
-        expect(result).toEqual({
-          ...authorityMethods,
-          authMethod: "trusted-proxy",
-          user: "guest@example.test",
-          trustDeclaredOperatorScopes: true,
-        });
+        expect(result).toEqual(expectedGuestAuth);
         expect(sendGatewayAuthFailure).not.toHaveBeenCalled();
       }
     },
@@ -415,45 +420,21 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     });
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue(guestAuth);
 
-    await expect(authorize()).resolves.toEqual({
-      ...authorityMethods,
-      authMethod: "trusted-proxy",
-      user: "guest@example.test",
-      trustDeclaredOperatorScopes: true,
-      operatorAccessAuthority: null,
-      authenticatedUserProfile: {
-        profileId: "profile-github-canonical",
-        displayName: "GitHub User",
-        avatarRevision: "3",
-        hasAvatar: true,
-        updatedAt: 3,
-      },
-      preparedSessionProfile: {
-        profileId: "profile-github-canonical",
-        aliases: new Set(["profile-github", "profile-github-canonical"]),
-        role: null,
-        githubLogin: undefined,
-      },
-    });
+    await expect(authorize()).resolves.toEqual(
+      expectedProfileAuth(expectedGitHubProfile, ["profile-github", "profile-github-canonical"]),
+    );
     expect(profileWrites.ensureCanonicalUserProfileForEmail).not.toHaveBeenCalled();
   });
 
-  it("rejects unbound device tokens when operator roles require durable identity", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole("view"));
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "device-token" });
-    const response = {} as ServerResponse;
-
-    await expect(authorize({ res: response, auth: tokenAuth })).resolves.toBeNull();
-    expect(sendGatewayAuthFailure).toHaveBeenCalledWith(response, {
-      ok: false,
-      reason: "user_profile_unavailable",
-    });
-  });
-
-  it.each(["trusted-proxy", "tailscale", "bootstrap-token"] as const)(
+  it.each([
+    ["device-token", "view"],
+    ["trusted-proxy", "none"],
+    ["tailscale", "none"],
+    ["bootstrap-token", "none"],
+  ] as const)(
     "rejects identity-less %s authentication when operator roles require durable identity",
-    async (method) => {
-      vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole("none"));
+    async (method, others) => {
+      vi.mocked(getRuntimeConfig).mockReturnValue(withGuestRole(others));
       vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method });
       const response = {} as ServerResponse;
 

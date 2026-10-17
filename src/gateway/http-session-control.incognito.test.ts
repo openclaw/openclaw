@@ -29,7 +29,6 @@ import { invokeGatewayTool } from "./tools-invoke-shared.js";
 const runtime = vi.hoisted(() => ({
   cfg: { agents: { entries: { main: {} } } } as OpenClawConfig,
   current: true,
-  beforeAuth: undefined as (() => Promise<void>) | undefined,
   beforeMedia: undefined as (() => Promise<void>) | undefined,
   beforeHook: undefined as (() => Promise<void>) | undefined,
   execute: vi.fn(async () => ({ content: [{ type: "text", text: "Tool receipt" }] })),
@@ -60,7 +59,6 @@ vi.mock("./http-utils.js", async (original) => {
       return { cfg: runtime.cfg, requestAuth: requestAuth(), operatorScopes: ["operator.admin"] };
     },
     checkGatewayHttpRequestAuth: async () => {
-      await runtime.beforeAuth?.();
       return { ok: true, requestAuth: requestAuth() };
     },
     authorizeGatewayHttpRequestOrReply: async () => requestAuth(),
@@ -125,14 +123,14 @@ const server = createServer((req, res) => {
       cfg: runtime.cfg,
       auth: { mode: "token" as const, token: "synthetic", allowTailscale: false },
     };
-    if (await handleSessionHistoryHttpRequest(req, res, options)) {
-      return;
-    }
-    if (await handleSessionKillHttpRequest(req, res, options)) {
-      return;
-    }
-    if (await handleChannelAvatarHttpRequest(req, res, options)) {
-      return;
+    for (const handler of [
+      handleSessionHistoryHttpRequest,
+      handleSessionKillHttpRequest,
+      handleChannelAvatarHttpRequest,
+    ]) {
+      if (await handler(req, res, options)) {
+        return;
+      }
     }
     res.writeHead(404).end();
   };
@@ -145,7 +143,6 @@ const server = createServer((req, res) => {
 });
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("http-incognito-authority-") };
-  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   location = {
     agentId: "main",
     path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
@@ -154,14 +151,12 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => {
     server.listen(portClaim.port, "127.0.0.1", resolve);
   });
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  baseUrl = `http://127.0.0.1:${portClaim.port}`;
 });
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   runtime.current = true;
-  runtime.beforeAuth = runtime.beforeMedia = runtime.beforeHook = undefined;
+  runtime.beforeMedia = runtime.beforeHook = undefined;
   runtime.execute.mockClear();
   runtime.kill.mockClear();
 });

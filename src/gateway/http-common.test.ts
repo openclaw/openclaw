@@ -23,9 +23,7 @@ import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.j
 
 const readJsonBodyMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./hooks.js", () => ({
-  readJsonBody: readJsonBodyMock,
-}));
+vi.mock("./hooks.js", () => ({ readJsonBody: readJsonBodyMock }));
 
 beforeEach(() => {
   readJsonBodyMock.mockReset();
@@ -34,6 +32,11 @@ beforeEach(() => {
 
 function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): void {
   expect(setHeader.mock.calls.map(([header]) => header)).not.toContain(name);
+}
+
+function expectJsonResponse(res: ServerResponse, statusCode: number, body: unknown) {
+  expect(res.statusCode).toBe(statusCode);
+  expect(res.end).toHaveBeenCalledWith(JSON.stringify(body));
 }
 
 function mockDisconnect(
@@ -47,91 +50,61 @@ function mockDisconnect(
   return { res, controller, onDisconnect, cleanup };
 }
 
-describe("setDefaultSecurityHeaders", () => {
-  it("sets the baseline security headers without enabling HSTS by default", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res);
-    expect(setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff");
-    expect(setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-    expect(setHeader).toHaveBeenCalledWith(
-      "Permissions-Policy",
-      "camera=(), microphone=(self), geolocation=()",
-    );
+it.each([
+  [undefined, undefined],
+  [" \t ", undefined],
+  [
+    "  max-age=63072000; includeSubDomains; preload  ",
+    "max-age=63072000; includeSubDomains; preload",
+  ],
+])("setDefaultSecurityHeaders sets baseline headers and normalizes HSTS %j", (input, expected) => {
+  const { res, setHeader } = makeMockHttpResponse();
+  setDefaultSecurityHeaders(
+    res,
+    input === undefined ? undefined : { strictTransportSecurity: input },
+  );
+  expect(Object.fromEntries(setHeader.mock.calls)).toMatchObject({
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
+  });
+  if (expected === undefined) {
     expectHeaderNotSet(setHeader, "Strict-Transport-Security");
-  });
+  } else {
+    expect(setHeader).toHaveBeenCalledWith("Strict-Transport-Security", expected);
+  }
+});
 
-  it("trims Strict-Transport-Security when provided", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res, {
-      strictTransportSecurity: "  max-age=63072000; includeSubDomains; preload  ",
-    });
-    expect(setHeader).toHaveBeenCalledWith(
-      "Strict-Transport-Security",
-      "max-age=63072000; includeSubDomains; preload",
-    );
-  });
-
-  it("does not set Strict-Transport-Security for a blank string", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res, { strictTransportSecurity: " \t " });
-    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
+it("sendMissingScopeForbidden preserves the legacy response without a concrete scope", () => {
+  const { res } = makeMockHttpResponse();
+  sendMissingScopeForbidden(res, undefined);
+  expectJsonResponse(res, 403, {
+    ok: false,
+    error: { type: "forbidden", message: "missing scope: undefined" },
   });
 });
 
-describe("sendMissingScopeForbidden", () => {
-  it("preserves the legacy response when no concrete scope is available", () => {
-    const { res, end } = makeMockHttpResponse();
-    sendMissingScopeForbidden(res, undefined);
-    expect(res.statusCode).toBe(403);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({
-        ok: false,
-        error: { type: "forbidden", message: "missing scope: undefined" },
-      }),
-    );
-  });
+it("sendMethodNotAllowed defaults the Allow header to POST and responds 405", () => {
+  const { res, setHeader, end } = makeMockHttpResponse();
+  sendMethodNotAllowed(res);
+  expect(setHeader).toHaveBeenCalledWith("Allow", "POST");
+  expect(res.statusCode).toBe(405);
+  expect(end).toHaveBeenCalledWith("Method Not Allowed");
 });
 
-describe("sendMethodNotAllowed", () => {
-  it("defaults the Allow header to POST and responds 405", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    sendMethodNotAllowed(res);
-    expect(setHeader).toHaveBeenCalledWith("Allow", "POST");
-    expect(res.statusCode).toBe(405);
-    expect(end).toHaveBeenCalledWith("Method Not Allowed");
-  });
-});
-
-describe("sendRateLimited", () => {
-  it("responds with 429 and no Retry-After when retryAfterMs is omitted", () => {
-    const { res, setHeader, end } = makeMockHttpResponse();
-    sendRateLimited(res);
-    expect(res.statusCode).toBe(429);
-    expectHeaderNotSet(setHeader, "Retry-After");
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({
-        error: {
-          message: "Too many failed authentication attempts. Please try again later.",
-          type: "rate_limited",
-        },
-      }),
-    );
+it("sendRateLimited responds with 429 and no Retry-After when retryAfterMs is omitted", () => {
+  const { res, setHeader } = makeMockHttpResponse();
+  sendRateLimited(res);
+  expectHeaderNotSet(setHeader, "Retry-After");
+  expectJsonResponse(res, 429, {
+    error: {
+      message: "Too many failed authentication attempts. Please try again later.",
+      type: "rate_limited",
+    },
   });
 });
 
 describe("readJsonBodyOrError", () => {
-  const makeRequest = (headers: Record<string, string> = {}) => {
-    const req = Object.assign(new EventEmitter(), {
-      destroyed: false,
-      headers,
-      destroy: vi.fn(() => {
-        req.destroyed = true;
-        return req;
-      }),
-    }) as IncomingMessage & { destroy: ReturnType<typeof vi.fn> };
-    return req;
-  };
-
   it.each([
     { error: "payload too large", status: 413, message: "Payload too large" },
     { error: "request body timeout", status: 408, message: "Request body timeout" },
@@ -186,158 +159,126 @@ describe("readJsonBodyOrError", () => {
 
   it("responds with 400 for other parse failures", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "bad json" });
-    const { res, end } = makeMockHttpResponse();
-    const req = makeRequest();
-    const result = await readJsonBodyOrError(req, res, 1024);
-    expect(result).toBeUndefined();
-    expect(res.statusCode).toBe(400);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "bad json", type: "invalid_request_error" } }),
-    );
-    res.emit("finish");
-    expect(req.destroy).not.toHaveBeenCalled();
-  });
-});
-
-describe("writeDone", () => {
-  it("writes the SSE termination sentinel to the response stream", () => {
     const { res } = makeMockHttpResponse();
-    const write = vi.spyOn(res, "write");
-    writeDone(res);
-    expect(write).toHaveBeenCalledWith("data: [DONE]\n\n");
+    const destroy = vi.spyOn(res.req, "destroy");
+    expect(await readJsonBodyOrError(res.req, res, 1024)).toBeUndefined();
+    expectJsonResponse(res, 400, { error: { message: "bad json", type: "invalid_request_error" } });
+    res.emit("finish");
+    expect(destroy).not.toHaveBeenCalled();
   });
 });
 
-describe("setSseHeaders", () => {
-  it("sets the SSE headers and calls flushHeaders when present", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    const flushHeaders = vi.fn();
-    (res as unknown as { flushHeaders: () => void }).flushHeaders = flushHeaders;
-    setSseHeaders(res);
-    expect(res.statusCode).toBe(200);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
-    expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-    expect(setHeader).toHaveBeenCalledWith("Connection", "keep-alive");
-    expect(flushHeaders).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips flushHeaders gracefully when the response does not expose one", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    expect((res as unknown as { flushHeaders?: () => void }).flushHeaders).toBeUndefined();
-    setSseHeaders(res);
-    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
-  });
+it("writeDone writes the SSE termination sentinel to the response stream", () => {
+  const { res } = makeMockHttpResponse();
+  const write = vi.spyOn(res, "write");
+  writeDone(res);
+  expect(write).toHaveBeenCalledWith("data: [DONE]\n\n");
 });
 
-describe("HTTP response root ownership", () => {
-  it("does not retain a response that disconnected during input preparation", async () => {
-    const before = getActiveGatewayRootWorkCount();
-    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
-    let release: (() => void) | undefined;
-    try {
-      await runWithGatewayRootWorkAdmissionForTest(async () => {
+it.each([true, false])("setSseHeaders supports flushHeaders available: %s", (available) => {
+  const { res, setHeader } = makeMockHttpResponse();
+  const flushHeaders = vi.fn();
+  if (available) {
+    Object.assign(res, { flushHeaders });
+  } else {
+    expect(res.flushHeaders).toBeUndefined();
+  }
+  setSseHeaders(res);
+  expect(res.statusCode).toBe(200);
+  expect(Object.fromEntries(setHeader.mock.calls)).toMatchObject({
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  expect(flushHeaders).toHaveBeenCalledTimes(available ? 1 : 0);
+});
+
+it.each(["destroyed", "buffered"])("retains only unfinished response work: %s", async (state) => {
+  const before = getActiveGatewayRootWorkCount();
+  const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+  let release: (() => void) | undefined;
+  try {
+    await runWithGatewayRootWorkAdmissionForTest(async () => {
+      if (state === "destroyed") {
         res.destroy();
         expect(res.destroyed).toBe(true);
-        release = retainGatewayHttpResponseWork(res);
-      });
-      expect(getActiveGatewayRootWorkCount()).toBe(before);
-    } finally {
-      release?.();
-    }
-  });
-
-  it("retains an ended response until its buffered final write finishes", async () => {
-    const before = getActiveGatewayRootWorkCount();
-    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
-    let release: (() => void) | undefined;
-    try {
-      await runWithGatewayRootWorkAdmissionForTest(async () => {
+      } else {
         res.end("final reply");
-        expect(res.writableEnded).toBe(true);
-        expect(res.writableFinished).toBe(false);
-        release = retainGatewayHttpResponseWork(res);
-      });
-      expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
-      res.emit("finish");
-      expect(getActiveGatewayRootWorkCount()).toBe(before);
-    } finally {
-      release?.();
-      res.destroy();
-    }
-  });
+        expect(res).toMatchObject({ writableEnded: true, writableFinished: false });
+      }
+      release = retainGatewayHttpResponseWork(res);
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(before + (state === "buffered" ? 1 : 0));
+    res.emit("finish");
+    expect(getActiveGatewayRootWorkCount()).toBe(before);
+  } finally {
+    release?.();
+    res.destroy();
+  }
 });
 
 describe("watchClientDisconnect", () => {
-  it("immediately aborts when the request socket was already destroyed", () => {
-    const socket = Object.assign(new EventEmitter(), { destroyed: true });
+  it.each(["destroyed socket", "response close"])("aborts for %s", (cause) => {
+    const socket = Object.assign(new EventEmitter(), { destroyed: cause === "destroyed socket" });
     const { res, controller, onDisconnect, cleanup } = mockDisconnect(socket);
-
+    if (cause === "response close") {
+      res.emit("close");
+    }
     expect(controller.signal.aborted).toBe(true);
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(socket.listenerCount("close")).toBe(0);
-    expect(res.listenerCount("error")).toBe(1);
+    expect(res.listenerCount("error")).toBe(cause === "destroyed socket" ? 1 : 0);
     cleanup();
     res.emit("close");
     expect(res.listenerCount("error")).toBe(0);
   });
 
-  it("aborts when the response closes before the socket close is observable", () => {
-    const socket = new EventEmitter();
-    const { res, controller, onDisconnect } = mockDisconnect(socket);
-
-    res.emit("close");
-
-    expect(controller.signal.aborted).toBe(true);
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-    expect(socket.listenerCount("close")).toBe(0);
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("keeps real response errors handled after cleanup until the response closes", async () => {
-    const socket = new EventEmitter();
-    const req = { socket } as IncomingMessage;
-    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
-    const controller = new AbortController();
-    const onDisconnect = vi.fn();
-    const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
-
-    expect(res.listenerCount("error")).toBeGreaterThan(0);
-    cleanup();
-    res.end();
-    res.write("late SSE frame");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    expect(controller.signal.aborted).toBe(true);
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-
-    res.emit("close");
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("keeps deferred errors handled when a real response was already destroyed", async () => {
-    const socket = new EventEmitter();
-    const req = { socket } as IncomingMessage;
-    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
-    const controller = new AbortController();
-    const deferredError = new Promise<void>((resolve) => {
-      process.nextTick(() => {
-        res.emit("error", new Error("destroyed response failed during cleanup"));
-        resolve();
-      });
-    });
-    res.destroy();
-
-    const cleanup = watchClientDisconnect(req, res, controller);
-    expect(controller.signal.aborted).toBe(true);
-    expect(res.listenerCount("error")).toBe(1);
-
-    await deferredError;
-    cleanup();
-    res.emit("close");
-    expect(res.listenerCount("error")).toBe(0);
-  });
+  it.each(["late write", "already destroyed"])(
+    "handles real response errors: %s",
+    async (cause) => {
+      const socket = new EventEmitter();
+      const req = { socket } as IncomingMessage;
+      const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+      const controller = new AbortController();
+      const onDisconnect = vi.fn();
+      const destroyed = cause === "already destroyed";
+      const deferredError = destroyed
+        ? new Promise<void>((resolve) => {
+            process.nextTick(() => {
+              res.emit("error", new Error("destroyed response failed during cleanup"));
+              resolve();
+            });
+          })
+        : undefined;
+      if (destroyed) {
+        res.destroy();
+      }
+      const cleanup = watchClientDisconnect(
+        req,
+        res,
+        controller,
+        destroyed ? undefined : onDisconnect,
+      );
+      if (destroyed) {
+        expect(controller.signal.aborted).toBe(true);
+        expect(res.listenerCount("error")).toBe(1);
+        await deferredError;
+      } else {
+        expect(res.listenerCount("error")).toBeGreaterThan(0);
+        cleanup();
+        res.end();
+        res.write("late SSE frame");
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+      }
+      expect(controller.signal.aborted).toBe(true);
+      cleanup();
+      res.emit("close");
+      expect(res.listenerCount("error")).toBe(0);
+    },
+  );
 
   it("does not double-abort when the controller is already aborted", () => {
     const socket = new EventEmitter();

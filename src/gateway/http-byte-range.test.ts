@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import http, { type IncomingMessage } from "node:http";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -17,31 +17,39 @@ const IMMUTABLE_FILE = { file: FILE, validators: createImmutableFileValidators(F
 const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
 const FULL = { kind: "full", statusCode: 200 };
 const NOT_MODIFIED = { kind: "not-modified", statusCode: 304 };
+const ETAG = IMMUTABLE_FILE.validators.etag;
 
-function createByteRequest(
-  headers: Record<string, string | string[] | undefined>,
-): Pick<IncomingMessage, "headers" | "headersDistinct"> {
-  const entries = Object.entries(headers).flatMap(([name, value]) =>
-    value === undefined ? [] : [[name, value] as const],
-  );
-  return {
-    headers: Object.fromEntries(
-      entries.map(([name, value]) => [name, Array.isArray(value) ? value.join(", ") : value]),
-    ),
-    headersDistinct: Object.fromEntries(
-      entries.map(([name, value]) => [name, Array.isArray(value) ? value : [value]]),
-    ),
+async function openMedia(body: string | Buffer) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-stream-"));
+  const filePath = path.join(directory, "media.bin");
+  await fs.writeFile(filePath, body);
+  const handle = await fs.open(filePath, "r");
+  const closeHandle = vi.spyOn(handle, "close");
+  const cleanup = async () => {
+    if (handle.fd >= 0) {
+      await handle.close();
+    }
+    await fs.rm(directory, { recursive: true, force: true });
   };
+  return { handle, closeHandle, cleanup };
 }
 
 function resolveImmutableResponse(
-  headers: Parameters<typeof createByteRequest>[0],
+  headers: Record<string, string | string[]>,
   overrides: Partial<Parameters<typeof resolveByteResponse>[0]> = {},
 ) {
+  const entries = Object.entries(headers);
   return resolveByteResponse({
     ...IMMUTABLE_FILE,
     method: "GET",
-    request: createByteRequest(headers),
+    request: {
+      headers: Object.fromEntries(
+        entries.map(([name, value]) => [name, Array.isArray(value) ? value.join(", ") : value]),
+      ),
+      headersDistinct: Object.fromEntries(
+        entries.map(([name, value]) => [name, Array.isArray(value) ? value : [value]]),
+      ),
+    },
     ...overrides,
   });
 }
@@ -52,12 +60,17 @@ describe("resolveByteResponse", () => {
     { header: "bytes=-3", start: 7, end: 9, contentLength: 3 },
     { header: "bytes=2-5", start: 2, end: 5, contentLength: 4 },
   ])("resolves range $header", ({ header, start, end, contentLength }) => {
-    expect(resolveImmutableResponse({ range: header })).toMatchObject({
+    const plan = resolveImmutableResponse({ range: header });
+    expect(plan).toMatchObject({
       kind: "partial",
       statusCode: 206,
       contentLength,
       range: { start, end },
     });
+    const { res, setHeader } = makeMockHttpResponse();
+    writeByteHeaders(res, plan);
+    expect(res.statusCode).toBe(206);
+    expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
   });
 
   it("returns 416 with the complete file size for an out-of-bounds range", () => {
@@ -99,12 +112,9 @@ describe("resolveByteResponse", () => {
 
   it("bounds the future Last-Modified validator on HEAD not-modified responses", () => {
     const nowMs = FILE.mtimeMs - 60_000;
-    const etag = IMMUTABLE_FILE.validators.etag;
-
-    expect(resolveImmutableResponse({ "if-none-match": etag }, { method: "HEAD", nowMs })).toEqual({
-      kind: "not-modified",
-      statusCode: 304,
-      etag,
+    expect(resolveImmutableResponse({ "if-none-match": ETAG }, { method: "HEAD", nowMs })).toEqual({
+      ...NOT_MODIFIED,
+      etag: ETAG,
       lastModified: new Date(nowMs).toUTCString(),
     });
   });
@@ -147,43 +157,30 @@ describe("resolveByteResponse", () => {
   });
 
   it.each([
-    { label: "wildcard", header: () => "*" },
-    { label: "list", header: (etag: string) => `"other", ${etag}` },
-    { label: "multiple headers", header: (etag: string) => ['"other"', `W/${etag}`] },
+    { label: "wildcard", header: "*" },
+    { label: "list", header: `"other", ${ETAG}` },
+    { label: "multiple headers", header: ['"other"', `W/${ETAG}`] },
   ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
-    const etag = IMMUTABLE_FILE.validators.etag;
-    const plan = resolveImmutableResponse({ "if-none-match": header(etag) });
-
-    expect(plan).toEqual({
-      ...NOT_MODIFIED,
-      etag,
-      lastModified: LAST_MODIFIED,
-    });
+    const plan = resolveImmutableResponse({ "if-none-match": header });
+    expect(plan).toEqual({ ...NOT_MODIFIED, etag: ETAG, lastModified: LAST_MODIFIED });
     const { res, setHeader } = makeMockHttpResponse();
     writeByteHeaders(res, plan);
     expect(res.statusCode).toBe(304);
-    expect(setHeader).toHaveBeenCalledWith("ETag", etag);
-    expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
+    expect(Object.fromEntries(setHeader.mock.calls)).toMatchObject({
+      ETag: ETAG,
+      "Last-Modified": LAST_MODIFIED,
+    });
     expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
   });
 
   it("keeps the requested range when If-None-Match does not match", () => {
-    const etag = IMMUTABLE_FILE.validators.etag;
-
     expect(
       resolveImmutableResponse({
         range: "bytes=1-2",
-        "if-range": etag,
+        "if-range": ETAG,
         "if-none-match": '"stale"',
       }),
     ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
-  });
-
-  it("emits the same Last-Modified validator on partial responses", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    writeByteHeaders(res, resolveImmutableResponse({ range: "bytes=1-2" }));
-    expect(res.statusCode).toBe(206);
-    expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
   });
 });
 
@@ -191,12 +188,8 @@ describe("Gateway byte response descriptor lifecycle", () => {
   it.each(["client disconnect", "read revocation"] as const)(
     "closes the actual stream and descriptor after %s",
     async (reason) => {
-      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-stream-"));
-      const filePath = path.join(directory, "media.bin");
-      const body = Buffer.alloc(8 * 1024 * 1024, 7);
-      await fs.writeFile(filePath, body);
-      const handle = await fs.open(filePath, "r");
-      const closeHandle = vi.spyOn(handle, "close");
+      const size = 8 * 1024 * 1024;
+      const { handle, closeHandle, cleanup } = await openMedia(Buffer.alloc(size, 7));
       const createReadStream = vi.spyOn(handle, "createReadStream");
       const { promise: responseClosed, resolve: resolveResponseClose } = createDeferred();
       const server = http.createServer((_request, response) => {
@@ -204,10 +197,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
           response.statusCode = 404;
           response.end("not found");
         });
-        const byteResponse = resolveByteResponse({
-          file: { size: body.byteLength },
-          method: "GET",
-        });
+        const byteResponse = resolveByteResponse({ file: { size }, method: "GET" });
         writeByteHeaders(response, byteResponse);
         let chunks = 0;
         void owner.pipe(
@@ -257,24 +247,19 @@ describe("Gateway byte response descriptor lifecycle", () => {
         });
 
         const streamedFile = createReadStream.mock.results[0]?.value;
-        expect(streamedFile?.destroyed).toBe(true);
-        expect(streamedFile?.readableEnded).toBe(false);
+        expect(streamedFile).toMatchObject({ destroyed: true, readableEnded: false });
       } finally {
         server.closeAllConnections();
         await new Promise<void>((resolve) => {
           server.close(() => resolve());
         });
-        await fs.rm(directory, { recursive: true, force: true });
+        await cleanup();
       }
     },
   );
 
   it("closes a newly opened descriptor when its response ended before streaming began", async () => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-ended-"));
-    const filePath = path.join(directory, "media.bin");
-    await fs.writeFile(filePath, "media");
-    const handle = await fs.open(filePath, "r");
-    const closeHandle = vi.spyOn(handle, "close");
+    const { handle, closeHandle, cleanup } = await openMedia("media");
     const response = new http.ServerResponse({ method: "GET" } as http.IncomingMessage);
     response.end();
     const owner = createGatewayByteStream(response, handle, () => {});
@@ -284,10 +269,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
       expect(closeHandle).toHaveBeenCalledOnce();
       expect(handle.fd).toBe(-1);
     } finally {
-      if (handle.fd >= 0) {
-        await handle.close();
-      }
-      await fs.rm(directory, { recursive: true, force: true });
+      await cleanup();
     }
   });
 });

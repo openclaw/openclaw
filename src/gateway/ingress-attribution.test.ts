@@ -29,9 +29,7 @@ function request(params?: {
   } as IncomingMessage;
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 const unattributableSource = (index: number) => ({
   kind: "unattributable-proxy" as const,
@@ -54,148 +52,94 @@ function warningFixture() {
   return { warn, report, attribution };
 }
 
+const source = (kind: string, clientIp: string) => ({
+  kind,
+  clientIp,
+  rateLimit: { subject: { key: clientIp }, resetOnSuccess: true },
+});
+const rejected = { kind: "unattributable-proxy", reason: "proxy_attribution_required" };
+const forwardedFor = "203.0.113.10";
+const login = "alice@example.com";
+const loopbackProxy = ["127.0.0.1"];
+const externalProxy = source("trusted-proxy", forwardedFor);
+
 describe("gateway ingress attribution", () => {
-  it("keeps clean headerless loopback on the ordinary listener local", async () => {
-    const attribution = prepareGatewayIngressAttribution({ req: request() });
-
-    expect(attribution).toMatchObject({
-      kind: "direct-local",
-      rateLimit: { subject: { key: "127.0.0.1" }, resetOnSuccess: true },
-    });
+  it.each<[string, Parameters<typeof request>[0], string[] | undefined, object]>([
+    ["clean headerless loopback stays local", {}, undefined, source("direct-local", "127.0.0.1")],
+    ["external Serve", { forwardedFor, login }, loopbackProxy, externalProxy],
+    [
+      "external Funnel",
+      { forwardedFor, funnel: true },
+      loopbackProxy,
+      { ...externalProxy, externalTailscaleExposure: "funnel" },
+    ],
+    ...["::ffff:10.0.0.0/104", "10.0.0.0/8"].map(
+      (cidr): [string, Parameters<typeof request>[0], string[], object] => [
+        `trusts proxy in ${cidr}`,
+        { remoteAddress: "10.1.2.3", forwardedFor: "203.0.113.9" },
+        [cidr],
+        source("trusted-proxy", "203.0.113.9"),
+      ],
+    ),
+    [
+      "rejects proxy outside mapped CIDR",
+      { remoteAddress: "11.1.2.3", forwardedFor: "203.0.113.9" },
+      ["::ffff:10.0.0.0/104"],
+      rejected,
+    ],
+    ["rejects missing forwarded client", { login }, loopbackProxy, rejected],
+    [
+      "rejects loopback forwarded client",
+      { login, forwardedFor: "127.0.0.1" },
+      loopbackProxy,
+      rejected,
+    ],
+  ])("%s", (_name, input, trustedProxies, expected) => {
+    expect(prepareGatewayIngressAttribution({ req: request(input), trustedProxies })).toMatchObject(
+      expected,
+    );
   });
-
-  it.each([
-    ["Serve identity", { login: "alice@example.com" }, {}],
-    ["Funnel marker", { funnel: true }, { externalTailscaleExposure: "funnel" }],
-  ])(
-    "attributes externally managed Tailscale %s as an ordinary trusted proxy",
-    async (_name, headers, expected) => {
-      const attribution = prepareGatewayIngressAttribution({
-        req: request({ forwardedFor: "203.0.113.10", ...headers }),
-        trustedProxies: ["127.0.0.1"],
-      });
-
-      expect(attribution).toMatchObject({
-        kind: "trusted-proxy",
-        clientIp: "203.0.113.10",
-        rateLimit: { subject: { key: "203.0.113.10" } },
-        ...expected,
-      });
-    },
-  );
-
-  it.each([
-    ["an IPv4-mapped CIDR", "::ffff:10.0.0.0/104"],
-    ["its equivalent plain IPv4 CIDR", "10.0.0.0/8"],
-  ])(
-    "attributes the forwarded client through a proxy trusted by %s",
-    async (_name, trustedProxy) => {
-      const attribution = prepareGatewayIngressAttribution({
-        req: request({ remoteAddress: "10.1.2.3", forwardedFor: "203.0.113.9" }),
-        trustedProxies: [trustedProxy],
-      });
-
-      expect(attribution).toMatchObject({
-        kind: "trusted-proxy",
-        clientIp: "203.0.113.9",
-        rateLimit: { subject: { key: "203.0.113.9" } },
-      });
-    },
-  );
-
-  it("rejects a proxy that falls outside an IPv4-mapped trusted range", async () => {
-    const attribution = prepareGatewayIngressAttribution({
-      req: request({ remoteAddress: "11.1.2.3", forwardedFor: "203.0.113.9" }),
-      trustedProxies: ["::ffff:10.0.0.0/104"],
-    });
-
-    expect(attribution).toMatchObject({
-      kind: "unattributable-proxy",
-      reason: "proxy_attribution_required",
-    });
-  });
-
-  it.each([
-    ["missing", undefined],
-    ["loopback", "127.0.0.1"],
-  ])(
-    "rejects trusted Tailscale headers with a %s forwarded client",
-    async (_name, forwardedFor) => {
-      const attribution = prepareGatewayIngressAttribution({
-        req: request({ forwardedFor, login: "alice@example.com" }),
-        trustedProxies: ["127.0.0.1"],
-      });
-
-      expect(attribution).toMatchObject({
-        kind: "unattributable-proxy",
-        reason: "proxy_attribution_required",
-      });
-    },
-  );
 
   it("attributes managed Serve by listener provenance and verifies its identity lazily", async () => {
-    const req = request({ forwardedFor: "100.64.0.10", login: "alice@example.com" });
+    const req = request({ forwardedFor: "100.64.0.10", login });
     markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "serve" });
-    const tailscaleWhois = vi.fn(async () => ({
-      login: "alice@example.com",
-      name: "Alice",
-    }));
+    const tailscaleWhois = vi.fn(async () => ({ login, name: "Alice" }));
 
     const attribution = prepareGatewayIngressAttribution({ req, tailscaleWhois });
 
-    expect(attribution).toMatchObject({
-      kind: "tailscale-serve",
-      clientIp: "100.64.0.10",
-      rateLimit: {
-        subject: { key: "100.64.0.10" },
-        resetOnSuccess: true,
-      },
-    });
+    expect(attribution).toMatchObject(source("tailscale-serve", "100.64.0.10"));
     expect(tailscaleWhois).not.toHaveBeenCalled();
     if (attribution.kind !== "tailscale-serve") {
       throw new Error("expected Serve attribution");
     }
-    await expect(attribution.verifyIdentity()).resolves.toMatchObject({
-      login: "alice@example.com",
-    });
+    await expect(attribution.verifyIdentity()).resolves.toMatchObject({ login });
     expect(tailscaleWhois).toHaveBeenCalledWith("100.64.0.10");
   });
 
-  it("gives managed Funnel clients separate validated source buckets", async () => {
-    const first = request({ forwardedFor: "203.0.113.10", funnel: true });
-    const second = request({ forwardedFor: "203.0.113.11", funnel: true });
-    markGatewayIngressTransport(first, { kind: "managed-tailscale", mode: "funnel" });
-    markGatewayIngressTransport(second, { kind: "managed-tailscale", mode: "funnel" });
-
-    const [firstAttribution, secondAttribution] = [
-      prepareGatewayIngressAttribution({ req: first }),
-      prepareGatewayIngressAttribution({ req: second }),
-    ];
-
-    expect([firstAttribution, secondAttribution]).toMatchObject([
-      { kind: "tailscale-funnel", rateLimit: { subject: { key: "203.0.113.10" } } },
-      { kind: "tailscale-funnel", rateLimit: { subject: { key: "203.0.113.11" } } },
-    ]);
-  });
-
-  it("attributes unmarked tailnet traffic to the managed Funnel policy", async () => {
-    const req = request({ forwardedFor: "100.64.0.10", login: "alice@example.com" });
+  it.each<[string, Parameters<typeof request>[0], object, string?]>([
+    [
+      "first source bucket",
+      { forwardedFor, funnel: true },
+      source("tailscale-funnel", forwardedFor),
+    ],
+    [
+      "distinct source bucket",
+      { forwardedFor: "203.0.113.11", funnel: true },
+      source("tailscale-funnel", "203.0.113.11"),
+    ],
+    [
+      "unmarked tailnet source",
+      { forwardedFor: "100.64.0.10", login },
+      source("tailscale-funnel", "100.64.0.10"),
+    ],
+    ["invalid marker", { forwardedFor }, rejected, "?0"],
+  ])("managed Funnel: %s", (_name, input, expected, marker) => {
+    const req = request(input);
+    if (marker) {
+      req.headers["tailscale-funnel-request"] = marker;
+    }
     markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
-
-    expect(prepareGatewayIngressAttribution({ req })).toMatchObject({
-      kind: "tailscale-funnel",
-      clientIp: "100.64.0.10",
-    });
-  });
-
-  it("rejects an invalid marker on the managed Funnel listener", async () => {
-    const req = request({ forwardedFor: "203.0.113.10" });
-    req.headers["tailscale-funnel-request"] = "?0";
-    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
-
-    expect(prepareGatewayIngressAttribution({ req })).toMatchObject({
-      kind: "unattributable-proxy",
-    });
+    expect(prepareGatewayIngressAttribution({ req })).toMatchObject(expected);
   });
 
   it("does not let continued traffic keep a source suppressed forever", async () => {

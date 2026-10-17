@@ -148,13 +148,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
           },
         }),
     );
-  let restorePromotionAdmission: (() => void) | undefined;
-  const removePromotionFault = () => {
-    restorePromotionAdmission?.();
-    restorePromotionAdmission = undefined;
-  };
   return {
-    state,
     scope,
     entry,
     records,
@@ -165,23 +159,6 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     failNextDrain: () => {
       failDrain = true;
     },
-    failSecondPromotion: () => {
-      let promotions = 0;
-      const spy = probe.admission(operationAdmission, (request, grant, admit) => {
-        // Refuse the second native commit, retaining the real update and rollback.
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          request.facts.type === "managedImages.attach" &&
-          ++promotions === 2
-        ) {
-          throw new Error("second media promotion failed");
-        }
-        admit(request, grant);
-      });
-      restorePromotionAdmission = () => spy.mockRestore();
-    },
-    removePromotionFault,
     holdWrites: async () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -196,7 +173,6 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     },
     dispose: async () => {
       unsubscribe();
-      removePromotionFault();
       try {
         await readDownloads();
       } finally {
@@ -207,40 +183,55 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
 }
 
 type Fixture = Awaited<ReturnType<typeof createSourceReplyFixture>>;
+type Records = Awaited<ReturnType<Fixture["records"]>>;
 
-async function expectOriginalBytes(fixture: Fixture) {
-  for (const { record } of await fixture.records()) {
+async function expectOriginalBytes(records: Records) {
+  for (const {
+    record: { original },
+  } of records) {
     await expect(
-      fs.readFile(
-        path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId),
-      ),
+      fs.readFile(path.join(original.mediaRoot, original.mediaSubdir, original.mediaId)),
     ).resolves.toEqual(Buffer.from(TINY_PNG_BASE64, "base64"));
   }
 }
 
 async function createPartialPromotion(fixture: Fixture) {
-  fixture.failSecondPromotion();
-  await expect(fixture.persist()).rejects.toThrow("second media promotion failed");
-  const events = await fixture.events();
-  const assistants = events.filter(
-    (event) => readTranscriptEventMessage(event)?.role === "assistant",
-  );
-  expect(assistants).toHaveLength(1);
-  const messageId = readTranscriptEventId(assistants[0]);
-  expect(messageId).toBeTruthy();
-  expect(await fixture.records()).toHaveLength(2);
-  expect(
-    (await fixture.records()).find(({ record }) => record.original.filename === "first.png")
-      ?.record,
-  ).toMatchObject({ messageId, retentionClass: "history" });
-  expect(
-    (await fixture.records()).find(({ record }) => record.original.filename === "second.png")
-      ?.record,
-  ).toMatchObject({ messageId: null, retentionClass: "transient" });
-  expect(fixture.updates).toEqual([]);
-  await expectOriginalBytes(fixture);
-  fixture.removePromotionFault();
-  return { events, messageId };
+  let promotions = 0;
+  // Refuse the second native commit, retaining the real update and rollback.
+  const fault = probe.admission(operationAdmission, (request, grant, admit) => {
+    if (
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      request.facts.type === "managedImages.attach" &&
+      ++promotions === 2
+    ) {
+      throw new Error("second media promotion failed");
+    }
+    admit(request, grant);
+  });
+  try {
+    await expect(fixture.persist()).rejects.toThrow("second media promotion failed");
+    const events = await fixture.events();
+    const assistants = events.filter(
+      (event) => readTranscriptEventMessage(event)?.role === "assistant",
+    );
+    expect(assistants).toHaveLength(1);
+    const messageId = readTranscriptEventId(assistants[0]);
+    expect(messageId).toBeTruthy();
+    const records = await fixture.records();
+    expect(records).toHaveLength(2);
+    const first = records.find(({ record }) => record.original.filename === "first.png")?.record;
+    const second = records.find(({ record }) => record.original.filename === "second.png")?.record;
+    expect({ first, second }).toMatchObject({
+      first: { messageId, retentionClass: "history" },
+      second: { messageId: null, retentionClass: "transient" },
+    });
+    expect(fixture.updates).toEqual([]);
+    await expectOriginalBytes(records);
+    return { events, messageId };
+  } finally {
+    fault.mockRestore();
+  }
 }
 
 describe("internal source reply persistence", () => {
@@ -290,20 +281,21 @@ describe("internal source reply persistence", () => {
               }),
             ).resolves.toBeUndefined();
             expect(await fixture.events()).toEqual(events);
-            expect(
-              (await fixture.records()).map(({ record }) => record.attachmentId).toSorted(),
-            ).toEqual(originalIds);
+            const records = await fixture.records();
+            expect(records.map(({ record }) => record.attachmentId).toSorted()).toEqual(
+              originalIds,
+            );
             expect(fixture.updates).toHaveLength(beforeUpdates + 1);
             expect(fixture.updates.at(-1)?.message).toBeUndefined();
             expect(fixture.updates.filter((update) => update.message !== undefined)).toHaveLength(
               beforeUpdates,
             );
-            expect(await fixture.records()).toHaveLength(mode === "text-only" ? 0 : 2);
-            for (const { record, cleanupPending } of await fixture.records()) {
+            expect(records).toHaveLength(mode === "text-only" ? 0 : 2);
+            for (const { record, cleanupPending } of records) {
               expect(cleanupPending).toBe(false);
               expect(record).toMatchObject({ messageId, retentionClass: "history" });
             }
-            await expectOriginalBytes(fixture);
+            await expectOriginalBytes(records);
             const downloads = await fixture.downloads();
             expect(downloads).toHaveLength(fixture.updates.length * (mode === "text-only" ? 0 : 2));
             for (const download of downloads) {
@@ -402,9 +394,10 @@ describe("internal source reply persistence", () => {
             );
             await held.done;
             expect(await fixture.events()).toEqual(beforeEvents);
-            expect(await fixture.records()).toEqual(beforeRecords);
+            const records = await fixture.records();
+            expect(records).toEqual(beforeRecords);
             expect(fixture.updates).toEqual([]);
-            await expectOriginalBytes(fixture);
+            await expectOriginalBytes(records);
           } finally {
             held?.release();
             await held?.done;
