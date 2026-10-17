@@ -116,6 +116,18 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
+  it.each([
+    { flags: ["--root", "alternate"] },
+    { flags: ["-r", "alternate"] },
+    { flags: ["-r=alternate"] },
+  ])("preserves native Gateway discovery for root override $flags", ({ flags }) => {
+    const config = "test/vitest/vitest.gateway-server.config.ts";
+    const specs = createVitestRunSpecs([config, "--", ...flags], { baseEnv: {} });
+    expect(specs.map((spec) => spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("--config")))).toEqual([
+      ["--config", config, ...flags],
+    ]);
+  });
+
   it.each([{ filters: [] }, { filters: ["server.chat-fixture"] }])(
     "bounds the CI Gateway include selection with filters $filters inside its original timing envelope",
     async ({ filters }) => {
@@ -162,7 +174,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       );
       expect(code).toBe(1);
       expect(envelopes).toEqual(["original-key"]);
-      expect(launched.map((chunk) => chunk.length)).toEqual([25, 24, 24]);
+      expect(launched.map((chunk) => chunk.length)).toEqual([15, 15, 15, 14, 14]);
       expect(launched.flat()).toEqual(included);
     },
   );

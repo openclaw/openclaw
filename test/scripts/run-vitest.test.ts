@@ -476,7 +476,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
     const invocations = resolveBoundedVitestInvocations(argv, { env: { CI: "1" } });
     const targets = invocations.map((args) => args.slice(argv.length));
 
-    expect(targets.every((files) => files.length > 0 && files.length <= 36)).toBe(true);
+    expect(targets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
     expect(targets.flat()).toEqual(
       listGitTrackedFiles({ pathspecs: "src/gateway" })
         ?.filter(isGatewayServerTestFile)

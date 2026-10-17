@@ -7,8 +7,8 @@ import { isGatewayServerTestFile } from "../../test/vitest/vitest.gateway-server
 import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
 import { hasNonRunVitestSubcommand, resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
 
-// Three 36-file processes peaked at 10.05 GiB under a 16 GB, four-CPU limit.
-const GATEWAY_SERVER_TEST_FILE_LIMIT = 36;
+// Two workers with at most 16 files per process peaked at 10.94 GiB on four CPUs.
+const GATEWAY_SERVER_TEST_FILE_LIMIT = 16;
 
 function normalizePath(value: string): string {
   return value.replaceAll("\\", "/");
@@ -80,7 +80,7 @@ export function createGatewayServerTestTargetChunks(
     resolveExplicitVitestMode(args) === "watch" ||
     args.some(
       (arg, index) =>
-        /^--(?:shard|changed|bail|coverage|mergeReports|outputFile|project|root|dir|no-run)(?:[.=]|$)/u.test(
+        /^(?:-r|--(?:shard|changed|bail|coverage|mergeReports|outputFile|project|root|dir|no-run))(?:[.=]|$)/u.test(
           arg,
         ) ||
         arg === "--run=false" ||
