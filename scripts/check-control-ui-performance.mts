@@ -55,8 +55,9 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   // Optimized chat/new captures use 30/27 requests; retain two above the larger route.
   routeBootJsRequests: 32,
-  chatBootJsGzipBytes: 1_650_000,
-  newBootJsGzipBytes: 1_340_000,
+  // d649dbab56a measured 1,587,382 / 1,284,658 B; retain under 1.2% headroom.
+  chatBootJsGzipBytes: 1_600_000,
+  newBootJsGzipBytes: 1_300_000,
   startupCssRequests: 1,
   startupJsGzipBytes: 342_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
