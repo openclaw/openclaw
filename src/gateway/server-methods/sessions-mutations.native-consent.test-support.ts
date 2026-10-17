@@ -49,12 +49,6 @@ export function registerSessionNativeRuntimeConsentTests(support: {
 }): void {
   const { catalogSnapshot, client, context, patchSession, queueRuntimeSelection } = support;
   const selectModel = { model: `${nativeModel.provider}/${nativeModel.id}` };
-  const expectPatched = async (
-    params: Record<string, unknown>,
-    requestContext: GatewayRequestContext,
-  ) => {
-    expect((await patchSession(params, ["operator.admin"], requestContext))[0]).toBe(true);
-  };
   const harness = nativeHarness;
   let nextConsentSession = 0;
   const nativeContext = () => {
@@ -131,7 +125,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     return { before, scope, requestContext, patch, run, accept, read, claim };
   }
 
-  it("persists the exact-runtime grant only in this chat with agent selection defaults", async () => {
+  it("grants consent only to this chat with agent defaults", async () => {
     const fixture = await prepareConsent();
     support.getConfig().agents!.defaults!.modelSelectionScope = "agent";
     const siblingScope = {
@@ -161,7 +155,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
   });
 
   it.each([{ permissionMode: null }, { sandboxMode: null }])(
-    "revokes native consent when strengthening or resetting settings %j",
+    "revokes consent when settings reset: %j",
     async (settings) => {
       const fixture = await prepareConsent();
       await fixture.accept(fixture.patch);
@@ -216,109 +210,102 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     expect(support.configMutationRequested()).toBe(false);
   });
 
-  it.each(["explicit", "model-only", "create"] as const)(
-    "refuses a remembered native permission promotion during an active run (%s)",
-    async (kind) => {
-      const fixture = await prepareConsent();
-      const cfg = support.getConfig();
-      cfg.agents!.entries = { main: { nativeRuntimeConsent: [harness.id] } };
-      const runId = `remembered-native-${kind}`;
-      const claim = fixture.claim(runId);
-      try {
-        const response =
-          kind === "create"
-            ? await createNative(fixture.scope.sessionKey, fixture.requestContext, {
-                requestingOperatorScopes: ["operator.admin"],
-                allowExistingModelSelection: true,
-              })
-            : await fixture.run(kind === "explicit" ? fixture.patch : selectModel);
+  it.each([
+    { kind: "explicit", phase: "active" },
+    { kind: "model-only", phase: "active" },
+    { kind: "create", phase: "active" },
+    { kind: "explicit", phase: "run-started" },
+    { kind: "explicit", phase: "admin-revoked" },
+  ])("rejects native promotion: $kind/$phase", async ({ kind, phase }) => {
+    const late = phase !== "active";
+    const fullAccess = { permissionMode: "full", sandboxMode: "off" } as const;
+    const fixture = await prepareConsent(late ? fullAccess : {});
+    const requestClient = client(["operator.admin"]);
+    const runId = `native-consent-${kind}-${phase}`;
+    let claim: string | undefined;
+    const revoke = () => {
+      if (phase === "admin-revoked") {
+        requestClient.connect.scopes = ["operator.write"];
+      } else {
+        claim = fixture.claim(runId);
+      }
+    };
+    if (late) {
+      support.prepareRuntime.mockImplementation(async () => {
+        revoke();
+        return { kind: "ready", runtimeId: harness.id, harness, validate: () => undefined };
+      });
+    } else {
+      support.getConfig().agents!.entries = { main: { nativeRuntimeConsent: [harness.id] } };
+      revoke();
+    }
+    try {
+      const response =
+        kind === "create"
+          ? await createNative(fixture.scope.sessionKey, fixture.requestContext, {
+              requestingOperatorScopes: ["operator.admin"],
+              allowExistingModelSelection: true,
+            })
+          : await fixture.run(
+              kind === "model-only"
+                ? selectModel
+                : {
+                    ...fixture.patch,
+                    ...(late ? { expectedPermissionMode: "full", expectedSandboxMode: "off" } : {}),
+                  },
+              ["operator.admin"],
+              requestClient,
+            );
+      expect(Array.isArray(response) ? response[0] : response.ok).toBe(false);
+      if (!late) {
         const error = Array.isArray(response)
           ? response[2]
           : response.ok
             ? undefined
             : response.error;
-        expect(Array.isArray(response) ? response[0] : response.ok).toBe(false);
         expect(error).toMatchObject({
           message: "Stop the active run before changing this session's execution permissions.",
         });
-        expect(fixture.read()).toEqual(fixture.before);
-      } finally {
-        if (claim) {
-          releaseAgentRunContext(runId, claim);
-        }
       }
-    },
-  );
+      expect(fixture.read()).toEqual(fixture.before);
+    } finally {
+      if (claim) {
+        releaseAgentRunContext(runId, claim);
+      }
+    }
+  });
 
-  it.each(["run-started", "admin-revoked"] as const)(
-    "rechecks %s after runtime preparation even when sandbox mode is already off",
-    async (change) => {
-      const fixture = await prepareConsent({ permissionMode: "full", sandboxMode: "off" });
-      const requestClient = client(["operator.admin"]);
-      let claim: string | undefined;
-      const runId = "native-consent-active-run";
-      support.prepareRuntime.mockImplementation(async () => {
-        if (change === "admin-revoked") {
-          requestClient.connect.scopes = ["operator.write"];
-        } else {
-          claim = fixture.claim(runId);
-        }
-        return { kind: "ready", runtimeId: harness.id, harness, validate: () => undefined };
+  it.each([false, true])("requires a current native owner on create (stale=%s)", async (stale) => {
+    support.getConfig().tools = { deny: ["browser"] };
+    const sessionKey = `agent:main:model-only-${stale}`;
+    const requestContext = nativeContext();
+    support.prepareRuntime.mockResolvedValue({
+      kind: "ready",
+      runtimeId: "claude-cli",
+      harness: nativeHarness,
+      validate: vi
+        .fn<() => string | undefined>()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(stale ? "Native owner replaced" : undefined),
+    });
+    const create = createNative(sessionKey, requestContext);
+    if (stale) {
+      await expect(create).rejects.toThrow("Native owner replaced");
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+    } else {
+      await expect(create).resolves.toMatchObject({ ok: true });
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        agentRuntimeOverride: "claude-cli",
       });
-      try {
-        const response = await fixture.run(
-          {
-            ...fixture.patch,
-            expectedPermissionMode: "full",
-            expectedSandboxMode: "off",
-          },
-          ["operator.admin"],
-          requestClient,
-        );
-        expect(response[0]).toBe(false);
-        expect(fixture.read()).toEqual(fixture.before);
-      } finally {
-        if (claim) {
-          releaseAgentRunContext(runId, claim);
-        }
-      }
-    },
-  );
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey })?.nativeRuntimeConsent,
+      ).toBeUndefined();
+    }
+  });
 
-  it.each([false, true])(
-    "commits model-only native creation only while its owner is current (stale=%s)",
-    async (stale) => {
-      support.getConfig().tools = { deny: ["browser"] };
-      const sessionKey = `agent:main:model-only-${stale}`;
-      const requestContext = nativeContext();
-      support.prepareRuntime.mockResolvedValue({
-        kind: "ready",
-        runtimeId: "claude-cli",
-        harness: nativeHarness,
-        validate: vi
-          .fn<() => string | undefined>()
-          .mockReturnValueOnce(undefined)
-          .mockReturnValue(stale ? "Native owner replaced" : undefined),
-      });
-      const create = createNative(sessionKey, requestContext);
-      if (stale) {
-        await expect(create).rejects.toThrow("Native owner replaced");
-        expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
-      } else {
-        await expect(create).resolves.toMatchObject({ ok: true });
-        expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-          agentRuntimeOverride: "claude-cli",
-        });
-        expect(
-          loadSessionEntry({ agentId: "main", sessionKey })?.nativeRuntimeConsent,
-        ).toBeUndefined();
-      }
-    },
-  );
-
-  it("retargets queued work and its stored runtime when only a native model is selected", async () => {
+  it("retargets queued work on native model selection", async () => {
     const sessionKey = "agent:main:model-only-patch";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
@@ -337,7 +324,12 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     });
     const queued = queueRuntimeSelection(sessionKey);
     try {
-      await expectPatched({ key: sessionKey, ...selectModel }, requestContext);
+      const response = await patchSession(
+        { key: sessionKey, ...selectModel },
+        ["operator.admin"],
+        requestContext,
+      );
+      expect(response[0]).toBe(true);
       expect(queued).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
         providerOverride: "anthropic",

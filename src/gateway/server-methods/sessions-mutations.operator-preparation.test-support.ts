@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
@@ -180,6 +179,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
             return prepared;
           });
         const selectedTarget = createDeferredCore();
+        const recordTarget = async <T>(read: Promise<T>) => {
+          const selected = await read;
+          selectedTarget.resolve();
+          return selected;
+        };
         const readTarget = creationTarget.readRequestedSessionCreateTarget;
         const discoverTargets = patchDiscovery.discoverSessionPatchTargets;
         const targetReadSpy =
@@ -188,18 +192,10 @@ export function registerSessionOperatorPreparationTests(fixture: {
             : method === "sessions.create"
               ? vi
                   .spyOn(creationTarget, "readRequestedSessionCreateTarget")
-                  .mockImplementation(async (...args) => {
-                    const selected = await readTarget(...args);
-                    selectedTarget.resolve();
-                    return selected;
-                  })
+                  .mockImplementation((...args) => recordTarget(readTarget(...args)))
               : vi
                   .spyOn(patchDiscovery, "discoverSessionPatchTargets")
-                  .mockImplementation(async (...args) => {
-                    const selected = await discoverTargets(...args);
-                    selectedTarget.resolve();
-                    return selected;
-                  });
+                  .mockImplementation((...args) => recordTarget(discoverTargets(...args)));
         const request = startRequest(method, params, caller, context, key);
         const { responses } = request;
         const running = request.running.then(
@@ -240,18 +236,18 @@ export function registerSessionOperatorPreparationTests(fixture: {
           }
           resume.resolve();
           const error = await running;
-          if (change === "durable") {
+          if (change === "durable" || change === "incognito" || change === "explicit-incognito") {
             expect(error).toBeUndefined();
-            expect(responses[0]?.[0]).toBe(true);
-            expect(responses[0]?.[1]).toMatchObject({
-              key: expect.stringMatching(/^agent:main:dashboard:(?!incognito-)/),
-            });
-            expect(responses[0]?.[1]).not.toHaveProperty("entry.incognito", true);
             expect(entry(key)).toEqual(before);
-          } else if (change === "incognito" || change === "explicit-incognito") {
-            expect(error).toBeUndefined();
-            expect(responses[0]).toMatchObject(incognitoResponse);
-            expect(entry(key)).toEqual(before);
+            if (change === "durable") {
+              expect(responses[0]?.[0]).toBe(true);
+              expect(responses[0]?.[1]).toMatchObject({
+                key: expect.stringMatching(/^agent:main:dashboard:(?!incognito-)/),
+              });
+              expect(responses[0]?.[1]).not.toHaveProperty("entry.incognito", true);
+            } else {
+              expect(responses[0]).toMatchObject(incognitoResponse);
+            }
           } else if (change === "params") {
             expect(error).toBeUndefined();
             expect(responses[0]?.[0]).toBe(true);
@@ -286,8 +282,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
       },
     );
     it("creates a logical secondary agent session in the main agent's missing exact shared store", async () => {
-      const root = sessionDirs.make();
-      const storePath = path.join(root, "shared.sqlite");
+      const storePath = path.join(sessionDirs.make(), "shared.sqlite");
       try {
         const caller = operator();
         const context = contextFor(caller);
@@ -310,16 +305,12 @@ export function registerSessionOperatorPreparationTests(fixture: {
           key,
           entry: { providerOverride: "openai", modelOverride: "gpt-5.6-sol" },
         });
-        const created = loadSessionEntry({ agentId: "work", sessionKey: key, storePath });
+        const stored = { agentId: "work", sessionKey: key, storePath };
+        const created = loadSessionEntry(stored);
         expect(created).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-5.6-sol" });
-        expect(
-          loadTranscriptEventsSync({
-            agentId: "work",
-            sessionKey: key,
-            sessionId: created!.sessionId,
-            storePath,
-          }),
-        ).toEqual(sessionHeader);
+        expect(loadTranscriptEventsSync({ ...stored, sessionId: created!.sessionId })).toEqual(
+          sessionHeader,
+        );
         expect(openOpenClawAgentDatabase({ agentId: "main", path: storePath }).agentId).toBe(
           "main",
         );
@@ -328,66 +319,62 @@ export function registerSessionOperatorPreparationTests(fixture: {
       }
     });
     it("preserves creation provenance when a stored project reenters its captured existing-schema scope", async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-creation-schema-project-"));
-      try {
-        const repoRoot = await initializeRepository(root, "project");
-        const project = await registerProjectRegistry({ path: repoRoot });
-        const caller = operator();
-        const context = contextFor(caller);
-        const key = "agent:main:dashboard:captured-project-creation";
-        const statePath = resolveOpenClawStateSqlitePath();
-        const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-        const closeDatabases = async () => {
+      const root = sessionDirs.make();
+      const repoRoot = await initializeRepository(root, "project");
+      const project = await registerProjectRegistry({ path: repoRoot });
+      const caller = operator();
+      const context = contextFor(caller);
+      const key = "agent:main:dashboard:captured-project-creation";
+      const statePath = resolveOpenClawStateSqlitePath();
+      const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const closeDatabases = async () => {
+        try {
+          await closeOpenClawAgentDatabaseByPathAsync(agentPath, "main");
+        } finally {
+          await closeOpenClawStateDatabaseByPathAsync(statePath);
+        }
+      };
+      // Retire normal-scope actors before acquiring the existing-schema policy.
+      await closeDatabases();
+      await withExistingOpenClawStateSchema({ path: statePath }, async () => {
+        const preparation = captureGatewayOperatorRunAuthority({ client: caller, context });
+        void preparation.catch(() => {});
+        try {
+          const result = await createGatewaySession({
+            ...operatorOptions(caller, context),
+            key,
+            operatorAuthority: preparation,
+            prepareLifecycle: async () => {
+              const selected = await selectStoredProjectRegistry(project.id);
+              if (!selected) {
+                throw new Error("Prepared project disappeared");
+              }
+              return {
+                ok: true,
+                value: {
+                  sessionRoot: repoRoot,
+                  spawnedCwd: repoRoot,
+                  withCommit: (run) =>
+                    selected.withCurrent(({ assertCurrent }) => run(assertCurrent)),
+                },
+              };
+            },
+          });
+          expect(result).toMatchObject({ ok: true, key });
+          const created = entry(key);
+          expect(created).toMatchObject({ sessionRoot: repoRoot, spawnedCwd: repoRoot });
+          expect(
+            loadTranscriptEventsSync({ ...scope(key), sessionId: created!.sessionId }),
+          ).toEqual(sessionHeader);
+        } finally {
           try {
-            await closeOpenClawAgentDatabaseByPathAsync(agentPath, "main");
+            (await preparation.catch(() => undefined))?.release();
           } finally {
-            await closeOpenClawStateDatabaseByPathAsync(statePath);
+            // Captured worker contexts must drain before their schema scope retires.
+            await closeDatabases();
           }
-        };
-        // Retire normal-scope actors before acquiring the existing-schema policy.
-        await closeDatabases();
-        await withExistingOpenClawStateSchema({ path: statePath }, async () => {
-          const preparation = captureGatewayOperatorRunAuthority({ client: caller, context });
-          void preparation.catch(() => {});
-          try {
-            const result = await createGatewaySession({
-              ...operatorOptions(caller, context),
-              key,
-              operatorAuthority: preparation,
-              prepareLifecycle: async () => {
-                const selected = await selectStoredProjectRegistry(project.id);
-                if (!selected) {
-                  throw new Error("Prepared project disappeared");
-                }
-                return {
-                  ok: true,
-                  value: {
-                    sessionRoot: repoRoot,
-                    spawnedCwd: repoRoot,
-                    withCommit: (run) =>
-                      selected.withCurrent(({ assertCurrent }) => run(assertCurrent)),
-                  },
-                };
-              },
-            });
-            expect(result).toMatchObject({ ok: true, key });
-            const created = entry(key);
-            expect(created).toMatchObject({ sessionRoot: repoRoot, spawnedCwd: repoRoot });
-            expect(
-              loadTranscriptEventsSync({ ...scope(key), sessionId: created!.sessionId }),
-            ).toEqual(sessionHeader);
-          } finally {
-            try {
-              (await preparation.catch(() => undefined))?.release();
-            } finally {
-              // Captured worker contexts must drain before their schema scope retires.
-              await closeDatabases();
-            }
-          }
-        });
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+        }
+      });
     });
     it("preserves fresh System incognito creation", async () => {
       const caller = operator();
@@ -565,7 +552,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
           } else {
             expect(outcome.result.ok).toBe(false);
           }
-          expect(entry(childKey)).toBeUndefined();
           const rejectedKey = childKey;
           await assertNoForkState(rejectedKey, childSessionId!);
           if (ending === "parent-replaced") {

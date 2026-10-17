@@ -5,6 +5,7 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -24,26 +25,12 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
-
-const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
-
-vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db.js")>();
-  const runOpenClawAgentWriteTransaction: typeof actual.runOpenClawAgentWriteTransaction = (
-    operation,
-    options,
-    transactionOptions,
-  ) => {
-    sqliteTransactionLabels.push(transactionOptions?.operationLabel ?? "agent.write");
-    return actual.runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
-  };
-  return { ...actual, runOpenClawAgentWriteTransaction };
-});
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -58,12 +45,10 @@ function humanClient(): GatewayClient {
 }
 
 function mutationContext(
-  overrides: {
-    cron?: Pick<
-      GatewayRequestContext["cron"],
-      "list" | "updateWithPrecondition" | "getDefaultAgentId"
-    >;
-  } = {},
+  cron?: Pick<
+    GatewayRequestContext["cron"],
+    "list" | "updateWithPrecondition" | "getDefaultAgentId"
+  >,
 ): GatewayRequestContext {
   return {
     getRuntimeConfig: () => ({}),
@@ -73,12 +58,37 @@ function mutationContext(
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
-    ...overrides,
+    ...(cron ? { cron } : {}),
   } as unknown as GatewayRequestContext;
 }
 
 const archivedBy = { type: "human", id: "perf-reviewer", label: "Performance Reviewer" };
 const normalizeSql = (sql: string) => sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
+const sessionScope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+const seedSession = (key: string, sessionId: string, entry: Partial<SessionEntry>) =>
+  upsertSessionEntryCore(sessionScope(key), { sessionId, ...entry });
+
+function trackReads(database: ReturnType<typeof openOpenClawAgentDatabase>) {
+  return trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["whole-store-projection", "transcript-full-hydration"] as const,
+    (sql) => {
+      const normalized = normalizeSql(sql);
+      if (isWholeSessionStoreProjection(normalized)) {
+        return "whole-store-projection";
+      }
+      const fromIndex = normalized.indexOf(" from ");
+      const columns = fromIndex > 0 ? normalized.slice("select ".length, fromIndex) : "";
+      return normalized.startsWith("select ") &&
+        /\b(?:from|join) "transcript_events"(?: |$)/.test(normalized) &&
+        (columns.includes("event_json") || /(?:^|, )(?:(?:"[^"]+"\.)?\*)/.test(columns)) &&
+        !normalized.includes(" limit ") &&
+        !/(?:"[^"]+"\.)?"(?:event_id|seq)" = (?:\?|\$\d+)/.test(normalized)
+        ? "transcript-full-hydration"
+        : null;
+    },
+  );
+}
 
 function isWholeSessionStoreProjection(normalizedSql: string): boolean {
   const source = ' from "session_nodes" order by "session_key"';
@@ -111,10 +121,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           tools: { listChars: 0, schemaChars: 0, entries: [] },
         },
       };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: targetKey },
-        { sessionId: "session-single-patch-target", updatedAt: 1, ...snapshots },
-      );
+      await seedSession(targetKey, "session-single-patch-target", { updatedAt: 1, ...snapshots });
       await upsertAcpSessionMeta({
         cfg: {},
         agentId: "main",
@@ -129,26 +136,18 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         }),
       });
       for (let index = 0; index < 20; index += 1) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:single-patch-unrelated-${index}` },
-          {
-            sessionId: `session-single-patch-unrelated-${index}`,
-            updatedAt: index + 2,
-            ...(index === 0 ? { label: "Taken" } : {}),
-          },
-        );
+        const id = `single-patch-unrelated-${index}`;
+        await seedSession(`agent:main:${id}`, `session-${id}`, {
+          updatedAt: index + 2,
+          ...(index === 0 ? { label: "Taken" } : {}),
+        });
       }
 
       await rotateDatabaseWorkers(historyLane);
       const historySequence = historyLane.nativeSequence;
       expect(historySequence).toBe(historyLane.retiredSequence);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const statements = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(database.db),
-        ["whole-store-projection"] as const,
-        (sql) =>
-          isWholeSessionStoreProjection(normalizeSql(sql)) ? "whole-store-projection" : null,
-      );
+      const statements = trackReads(database);
       const respond = vi.fn();
       const hostSql = observeHostDataSql();
       try {
@@ -168,7 +167,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       expect(respond.mock.calls[0]?.[0]).toBe(!labelConflict);
       expect(statements.counts["whole-store-projection"]).toBe(0);
       expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
-      const target = loadSessionEntry({ agentId: "main", sessionKey: targetKey });
+      const target = loadSessionEntry(sessionScope(targetKey));
       expect(target).toMatchObject(snapshots);
       if (labelConflict) {
         expect(respond.mock.calls[0]?.[2]).toHaveProperty("message", "label already in use: Taken");
@@ -183,7 +182,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         expect(target).toHaveProperty("label" in patch ? "label" : "pinnedAt");
       }
       expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:single-patch-unrelated-0" }),
+        loadSessionEntry(sessionScope("agent:main:single-patch-unrelated-0")),
       ).not.toHaveProperty("pinnedAt");
     });
   },
@@ -196,13 +195,14 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       key: `agent:main:archive-perf-${index}`,
       expectedSessionId: `session-archive-perf-${index}`,
     }));
+    const scopeFor = (target: (typeof targets)[number]) => ({
+      agentId: "main",
+      sessionId: target.expectedSessionId,
+      sessionKey: target.key,
+    });
     for (const [index, target] of targets.entries()) {
-      const sessionId = `session-archive-perf-${index}`;
-      const scope = { agentId: "main", sessionId, sessionKey: target.key };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: target.key },
-        { sessionId, updatedAt: index + 1 },
-      );
+      const scope = scopeFor(target);
+      await seedSession(target.key, target.expectedSessionId, { updatedAt: index + 1 });
       const root = await appendTranscriptMessage(scope, {
         message: { role: "user", content: `history root ${index}`, timestamp: 1 },
         now: 1,
@@ -215,38 +215,14 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     }
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const statements = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["whole-store-projection", "transcript-full-hydration"] as const,
-      (sql) => {
-        const normalized = normalizeSql(sql);
-        if (isWholeSessionStoreProjection(normalized)) {
-          return "whole-store-projection";
-        }
-        const fromIndex = normalized.indexOf(" from ");
-        const selectedColumns = fromIndex > 0 ? normalized.slice("select ".length, fromIndex) : "";
-        const readsTranscriptPayload =
-          normalized.startsWith("select ") &&
-          /\b(?:from|join) "transcript_events"(?: |$)/.test(normalized) &&
-          (selectedColumns.includes("event_json") ||
-            /(?:^|, )(?:(?:"[^"]+"\.)?\*)/.test(selectedColumns));
-        const boundedPayloadLookup =
-          normalized.includes(" limit ") ||
-          /(?:"[^"]+"\.)?"(?:event_id|seq)" = (?:\?|\$\d+)/.test(normalized);
-        return readsTranscriptPayload && !boundedPayloadLookup ? "transcript-full-hydration" : null;
-      },
-    );
+    const statements = trackReads(database);
     // Calibrate the host SQL observer through the synchronous compatibility reader.
-    loadTranscriptEventsSync({
-      agentId: "main",
-      sessionId: "session-archive-perf-0",
-      sessionKey: targets[0]!.key,
-    });
+    loadTranscriptEventsSync(scopeFor(targets[0]!));
     expect(statements.counts["transcript-full-hydration"]).toBe(1);
     statements.counts["transcript-full-hydration"] = 0;
-    sqliteTransactionLabels.length = 0;
+    const writeSpy = vi.spyOn(agentDatabase, "runOpenClawAgentWriteTransaction");
     const originalExec = database.db.exec.bind(database.db);
-    const transactionCounts = { begin: 0, commit: 0 };
+    const hostTransactions: string[] = [];
     const workerGrants: string[] = [];
     const admissionSpy = probe.admission(admission, (request, grant, callback) => {
       callback(request, () => {
@@ -259,10 +235,8 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     });
     const execSpy = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
       const normalized = sql.trim().toUpperCase();
-      if (normalized === "BEGIN IMMEDIATE") {
-        transactionCounts.begin += 1;
-      } else if (normalized === "COMMIT") {
-        transactionCounts.commit += 1;
+      if (["BEGIN IMMEDIATE", "COMMIT"].includes(normalized)) {
+        hostTransactions.push(normalized);
       }
       return originalExec(sql);
     });
@@ -281,7 +255,6 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       );
       const cronList = vi.fn(async () => [...cronJobs.values()]);
       type CronPrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;
-      const cronUpdateResults: Array<{ enabled: boolean; id: string }> = [];
       const cronUpdate = vi.fn(
         async (id: string, patch: Partial<CronJob>, precondition: CronPrecondition) => {
           const current = cronJobs.get(id);
@@ -292,52 +265,41 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           if (patch.enabled !== undefined) {
             current.enabled = patch.enabled;
           }
-          const result = { enabled: current.enabled, id };
-          cronUpdateResults.push(result);
           return current;
         },
       );
-      const context = mutationContext({
-        cron: {
-          list: cronList,
-          updateWithPrecondition: cronUpdate,
-          getDefaultAgentId: () => "main",
-        },
-      });
-
       await sessionMutationHandlers["sessions.patchMany"]!({
         params: { targets, patch: { archived: true } },
         respond,
-        context,
+        context: mutationContext({
+          list: cronList,
+          updateWithPrecondition: cronUpdate,
+          getDefaultAgentId: () => "main",
+        }),
         client: humanClient(),
       } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: targets.map((target) => ({ ok: true, key: target.key })),
-        },
-        undefined,
-      );
-      // Guard batch cost with operation counts, independent of shared-runner contention.
+      const outcomes = targets.map(({ key }) => ({ ok: true, key }));
+      expect(respond).toHaveBeenCalledWith(true, { outcomes }, undefined);
       expect(statements.counts).toEqual({
         "whole-store-projection": 0,
         "transcript-full-hydration": 0,
       });
       // One admitted worker transaction owns the batch; the caller never waits in SQLite.
-      expect(transactionCounts).toEqual({ begin: 0, commit: 0 });
+      expect(hostTransactions).toEqual([]);
       expect(workerGrants).toEqual(["transaction", "commit"]);
       expect(
-        sqliteTransactionLabels.filter((label) =>
-          ["session.entry-replacements", "agent.write"].includes(label),
+        writeSpy.mock.calls.some((args) =>
+          ["session.entry-replacements", "agent.write"].includes(
+            args[2]?.operationLabel ?? "agent.write",
+          ),
         ),
-      ).toEqual([]);
+      ).toBe(false);
       expect(cronList).toHaveBeenCalledOnce();
       const disabledIds = ["bound-first", "bound-shared", "bound-last"];
       const disabledJobs = disabledIds.map((id) => ({ id, enabled: false }));
       expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual(
         disabledIds.map((id) => [id, { enabled: false }]),
       );
-      expect(cronUpdateResults).toEqual(disabledJobs);
       expect([...cronJobs.values()].map(({ enabled, id }) => ({ enabled, id }))).toEqual([
         { enabled: true, id: "unrelated" },
         ...disabledJobs,
@@ -346,24 +308,19 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     } finally {
       admissionSpy.mockRestore();
       execSpy.mockRestore();
+      writeSpy.mockRestore();
       statements.restore();
     }
-    for (const [index, target] of targets.entries()) {
-      const scope = {
-        agentId: "main",
-        sessionId: `session-archive-perf-${index}`,
-        sessionKey: target.key,
-      };
-      expect(loadSessionEntry({ agentId: "main", sessionKey: target.key })).toMatchObject({
+    for (const target of targets) {
+      const scope = scopeFor(target);
+      expect(loadSessionEntry(sessionScope(target.key))).toMatchObject({
         archivedAt: expect.any(Number),
         archivedBy,
       });
-      expect(await loadTranscriptEvents(scope)).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            message: expect.objectContaining({ customType: "openclaw.system-note" }),
-          }),
-        ]),
+      expect(await loadTranscriptEvents(scope)).not.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ customType: "openclaw.system-note" }),
+        }),
       );
     }
   });

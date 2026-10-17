@@ -29,19 +29,14 @@ export function registerSessionSandboxMutationTests({
   context: (cfg: OpenClawConfig) => GatewayRequestContext;
   withState: (run: (state: OpenClawTestState) => Promise<void>) => Promise<void>;
 }) {
-  const scopeFor = (state: OpenClawTestState, sessionKey: string) => ({
-    agentId: "main",
-    env: state.env,
-    sessionKey,
-  });
   const withSession = (
     name: string,
     entry: Partial<SessionEntry>,
-    run: (key: string, scope: ReturnType<typeof scopeFor>) => Promise<void>,
+    run: (key: string, scope: Parameters<typeof loadSessionEntry>[0]) => Promise<void>,
   ) =>
     withState(async (state) => {
       const key = `agent:main:${name}`;
-      const scope = scopeFor(state, key);
+      const scope = { agentId: "main", env: state.env, sessionKey: key };
       await upsertSessionEntryCore(scope, { sessionId: name, updatedAt: 1, ...entry });
       await run(key, scope);
     });
@@ -86,19 +81,16 @@ export function registerSessionSandboxMutationTests({
     { method: "sessions.patch", sandboxMode: null },
     { method: "sessions.patchMany", sandboxMode: "off" },
     { method: "sessions.patchMany", sandboxMode: null },
-  ] as const)(
-    "$method refuses non-admin sandboxMode=$sandboxMode even when invoked directly",
-    async ({ method, sandboxMode }) => {
-      const before = sandboxMode === null ? "off" : undefined;
-      await withSession("sandbox-authority", { sandboxMode: before }, async (key, scope) => {
-        const respond = await invoke(method, targetParams(method, key, { sandboxMode }), client());
-        expectRefused(respond, "operator.admin");
-        expect(loadSessionEntry(scope)?.sandboxMode).toBe(before);
-      });
-    },
-  );
+  ] as const)("$method rejects non-admin sandbox=$sandboxMode", async ({ method, sandboxMode }) => {
+    const before = sandboxMode === null ? "off" : undefined;
+    await withSession("sandbox-authority", { sandboxMode: before }, async (key, scope) => {
+      const respond = await invoke(method, targetParams(method, key, { sandboxMode }), client());
+      expectRefused(respond, "operator.admin");
+      expect(loadSessionEntry(scope)?.sandboxMode).toBe(before);
+    });
+  });
 
-  it("persists only the selected chat's opt-out and restores inheritance with CAS", () =>
+  it("keeps opt-out local and restores inheritance with CAS", () =>
     withSession("sandbox-choice", { lifecycleRevision: "generation" }, async (key, scope) => {
       const sibling = "agent:main:sandbox-sibling";
       const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
@@ -139,7 +131,7 @@ export function registerSessionSandboxMutationTests({
     }));
 
   it.each(["sessions.patch", "sessions.patchMany"] as const)(
-    "%s cannot remove mandatory containment even for an admin",
+    "%s enforces mandatory containment for admins",
     (method) =>
       withSession(
         "required-sandbox",
@@ -168,7 +160,7 @@ export function registerSessionSandboxMutationTests({
       ),
   );
 
-  it("batch opt-out and reset honor each target's current sandbox expectation", () =>
+  it("batch reset uses per-target sandbox expectations", () =>
     withState(async (state) => {
       const keys = ["agent:main:batch-sandbox-one", "agent:main:batch-sandbox-two"];
       const scope = (sessionKey: string) => ({ agentId: "main", env: state.env, sessionKey });
@@ -221,7 +213,7 @@ export function registerSessionSandboxMutationTests({
     }));
 
   it.each([{ expectedSessionId: "replaced" }, { expectedLifecycleRevision: "replaced" }])(
-    "refuses stale sandbox recovery identity %j",
+    "rejects stale recovery identity %j",
     (expectation) =>
       withSession(
         "sandbox-replaced",
@@ -240,7 +232,7 @@ export function registerSessionSandboxMutationTests({
   );
 
   it.each(["off", null] as const)(
-    "refuses sandbox transition to %s while an embedded run is active",
+    "rejects sandbox=%s during embedded runs",
     async (sandboxMode) => {
       const before = sandboxMode === null ? "off" : undefined;
       await withSession("sandbox-active", { sandboxMode: before }, async (key, scope) => {

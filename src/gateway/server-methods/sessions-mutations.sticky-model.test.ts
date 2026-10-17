@@ -102,9 +102,15 @@ const modelCatalog: ModelCatalogEntry[] = [
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
 const sessionScope = (sessionKey: string) => ({ agentId: "main", sessionKey });
 const readSession = (key: string) => loadSessionEntry(sessionScope(key));
-const seedSession = (key: string, entry: Partial<SessionEntry> = {}) =>
-  upsertSessionEntryCore(sessionScope(key), { sessionId: key, updatedAt: 1, ...entry });
+const seedSession = (key: string, entry: Partial<SessionEntry> = {}, agentId = "main") =>
+  upsertSessionEntryCore({ agentId, sessionKey: key }, { sessionId: key, updatedAt: 1, ...entry });
 const selectedModel = { providerOverride: "openai", modelOverride: "gpt-5.6-sol" };
+const runtimeSelection = { model: "openai/gpt-5.6-sol", agentRuntime: "codex" };
+const personalPin = () => ({
+  ...selectedModel,
+  authProfileOverride: personalAuthProfileId,
+  authProfileOverrideSource: "user" as const,
+});
 
 function catalogSnapshot(entries = modelCatalog) {
   return {
@@ -187,20 +193,19 @@ async function personalSession(
       requestContext,
       caller,
     );
-  return { before, caller, connections, requestContext, patch };
+  const expectUnchanged = (response: Parameters<RespondFn>) => {
+    expect(response[0]).toBe(false);
+    expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(readSession(key)).toEqual(before);
+  };
+  return { before, caller, connections, requestContext, patch, expectUnchanged };
 }
-
-const expectForbidden = (response: Parameters<RespondFn>) => {
-  expect(response[0]).toBe(false);
-  expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
-};
 
 function runtimeOptions(key: string) {
   return {
     cfg,
     key,
-    model: "openai/gpt-5.6-sol",
-    agentRuntime: "codex",
+    ...runtimeSelection,
     commandSource: "test",
     operatorRoleActor: { kind: "system" as const },
     loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
@@ -310,10 +315,7 @@ describe("sessions.patch sticky model persistence", () => {
     async ({ scope, agentId, model }) => {
       cfg.agents!.defaults!.modelSelectionScope = scope;
       const sessionKey = `agent:${agentId}:dm:scope-current-${scope}`;
-      await upsertSessionEntryCore(
-        { agentId, sessionKey },
-        { sessionId: `session-scope-current-${scope}`, updatedAt: 1 },
-      );
+      await seedSession(sessionKey, { sessionId: `session-scope-current-${scope}` }, agentId);
 
       expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
       const entry = loadSessionEntry({ agentId, sessionKey });
@@ -343,26 +345,21 @@ describe("sessions.patch sticky model persistence", () => {
       getSessionEventSubscriberConnIds: () => new Set(["conn-groups"]),
     };
 
-    const first = await patchSession(
-      { key: sessionKey, category: "Fresh Category" },
-      ["operator.admin"],
-      subscribedContext,
-    );
-    expect(first[0]).toBe(true);
+    const assignCategory = () =>
+      patchSession(
+        { key: sessionKey, category: "Fresh Category" },
+        ["operator.admin"],
+        subscribedContext,
+      );
+    expect((await assignCategory())[0]).toBe(true);
     const groupsEvents = () =>
       broadcast.mock.calls.filter(
         ([event, payload]) => event === "sessions.changed" && payload.reason === "groups",
       );
     expect(groupsEvents()).toHaveLength(1);
 
-    // Re-assigning an already-registered category is not a catalog mutation.
     broadcast.mockClear();
-    const second = await patchSession(
-      { key: sessionKey, category: "Fresh Category" },
-      ["operator.admin"],
-      subscribedContext,
-    );
-    expect(second[0]).toBe(true);
+    expect((await assignCategory())[0]).toBe(true);
     expect(groupsEvents()).toHaveLength(0);
   });
 
@@ -383,33 +380,25 @@ describe("sessions.patch sticky model persistence", () => {
     },
   );
 
-  it.each([
-    {
-      field: "model",
-      key: "agent:main:dm:no-sticky-cleared",
-      entry: {
-        sessionId: "session-cleared",
-        ...selectedModel,
-        modelOverrideSource: "user",
-        modelOverrideRouteResolution: "resolved",
-      },
-    },
-    {
-      field: "agentRuntime",
-      key: "agent:main:runtime-clear",
-      entry: {
-        ...selectedModel,
-        agentRuntimeOverride: "openclaw",
-        authProfileOverrideSource: "user-link",
-        contextTokens: 1000,
-      },
-    },
-  ] as const)(
-    "clears the $field pin and invalidates the catalog without changing other pins",
-    async ({ field, entry, key: sessionKey }) => {
+  it.each(["model", "agentRuntime"] as const)(
+    "clears the %s pin and invalidates the catalog without changing other pins",
+    async (field) => {
+      const sessionKey =
+        field === "model" ? "agent:main:dm:no-sticky-cleared" : "agent:main:runtime-clear";
       await seedSession(sessionKey, {
-        ...entry,
-        ...(field === "agentRuntime" ? { authProfileOverride: personalAuthProfileId } : {}),
+        ...selectedModel,
+        ...(field === "model"
+          ? {
+              sessionId: "session-cleared",
+              modelOverrideSource: "user",
+              modelOverrideRouteResolution: "resolved",
+            }
+          : {
+              agentRuntimeOverride: "openclaw",
+              authProfileOverrideSource: "user-link",
+              contextTokens: 1000,
+              authProfileOverride: personalAuthProfileId,
+            }),
       });
       const requestContext = {
         ...context(),
@@ -448,14 +437,8 @@ describe("sessions.patch personal model-account ownership", () => {
   it("lets the connected human select a saved personal account for this session", async () => {
     const sessionKey = "agent:main:dm:personal-selection-owner";
     const { patch } = await personalSession(sessionKey, { sessionId: "personal-selection-owner" });
-    const response = await patch();
-
-    expect(response[0]).toBe(true);
-    expect(readSession(sessionKey)).toMatchObject({
-      ...selectedModel,
-      authProfileOverride: personalAuthProfileId,
-      authProfileOverrideSource: "user",
-    });
+    expect((await patch())[0]).toBe(true);
+    expect(readSession(sessionKey)).toMatchObject(personalPin());
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
@@ -469,7 +452,7 @@ describe("sessions.patch personal model-account ownership", () => {
           : kind === "unidentified admin"
             ? client(["operator.admin"])
             : personClient(accountOwnerId, ["operator.admin"]);
-      const { before, requestContext, patch } = await personalSession(
+      const { expectUnchanged, requestContext, patch } = await personalSession(
         sessionKey,
         { label: "Original" },
         caller,
@@ -481,10 +464,9 @@ describe("sessions.patch personal model-account ownership", () => {
         };
       }
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
-      expectForbidden(await patch({ label: "Must not commit" }));
+      expectUnchanged(await patch({ label: "Must not commit" }));
       expect(requestContext.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       expect(readCredential).not.toHaveBeenCalled();
-      expect(readSession(sessionKey)).toEqual(before);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
@@ -493,7 +475,7 @@ describe("sessions.patch personal model-account ownership", () => {
     "rejects a personal selection %s while the model catalog is loading",
     async (loss) => {
       const sessionKey = `agent:main:dm:personal-selection-lost-${loss.replaceAll(" ", "-")}`;
-      const { before, caller, connections, requestContext, patch } = await personalSession(
+      const { expectUnchanged, caller, connections, requestContext, patch } = await personalSession(
         sessionKey,
         { label: "Before catalog" },
       );
@@ -528,21 +510,16 @@ describe("sessions.patch personal model-account ownership", () => {
       } finally {
         catalog.resolve(catalogSnapshot());
       }
-      const response = await pending;
-
-      expectForbidden(response);
+      expectUnchanged(await pending);
       expect(readCredential).not.toHaveBeenCalled();
-      expect(readSession(sessionKey)).toEqual(before);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
 
   it("reports lost personal authority during archive drain as forbidden", async () => {
     const sessionKey = "agent:main:dm:personal-selection-archive-drain";
-    const { before, caller, connections, requestContext, patch } = await personalSession(
-      sessionKey,
-      { sessionId: "personal-selection-archive-drain" },
-    );
+    const { before, expectUnchanged, caller, connections, requestContext, patch } =
+      await personalSession(sessionKey, { sessionId: "personal-selection-archive-drain" });
     const release = vi.fn();
     const terminalSessions = new TerminalSessionManager({ emit: vi.fn() });
     vi.spyOn(terminalSessions, "beginAgentSessionDrain").mockImplementation(() => {
@@ -552,12 +529,12 @@ describe("sessions.patch personal model-account ownership", () => {
     requestContext.terminalSessions = terminalSessions;
     requestContext.chatQueuedTurns = new Map();
     requestContext.dedupe = new Map();
-    const response = await patch({
-      archived: true,
-      expectedSessionId: before!.sessionId,
-    });
-    expectForbidden(response);
-    expect(readSession(sessionKey)).toEqual(before);
+    expectUnchanged(
+      await patch({
+        archived: true,
+        expectedSessionId: before!.sessionId,
+      }),
+    );
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -565,9 +542,7 @@ describe("sessions.patch personal model-account ownership", () => {
     const sessionKey = "agent:main:dm:personal-selection-inherited";
     await seedSession(sessionKey, {
       sessionId: "personal-selection-inherited",
-      ...selectedModel,
-      authProfileOverride: personalAuthProfileId,
-      authProfileOverrideSource: "user",
+      ...personalPin(),
       createdActor: { type: "human", id: accountOwnerId, source: "profile" },
     });
     const caller = client(["operator.write"]);
@@ -583,9 +558,7 @@ describe("sessions.patch personal model-account ownership", () => {
     expect(response[0]).toBe(true);
     expect(readSession(sessionKey)).toMatchObject({
       label: "Renamed by the session agent",
-      authProfileOverride: personalAuthProfileId,
-      authProfileOverrideSource: "user",
-      ...selectedModel,
+      ...personalPin(),
     });
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });
@@ -618,8 +591,7 @@ describe("explicit session model runtimes", () => {
     const response = await patchSession({
       key: sessionKey,
       label: "Wrong",
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
+      ...runtimeSelection,
     });
     expect(response[0]).toBe(false);
     expect(response[2]?.message).toContain("no longer available");
@@ -641,8 +613,7 @@ describe("explicit session model runtimes", () => {
     const pending = patchSession({
       key: sessionKey,
       expectedSessionId: "original",
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
+      ...runtimeSelection,
     });
     await Promise.race([entered.promise, pending]);
     try {
@@ -663,33 +634,23 @@ describe("explicit session model runtimes", () => {
     const result = await createGatewaySession(options);
     expect(result).toMatchObject({
       ok: true,
-      entry: {
-        agentRuntimeOverride: "codex",
-        modelOverride: "gpt-5.6-sol",
-      },
+      entry: { agentRuntimeOverride: "codex", modelOverride: "gpt-5.6-sol" },
     });
     expect(result).not.toHaveProperty("entry.modelSelectionLocked");
     expect(result).not.toHaveProperty("entry.liveModelSwitchPending");
-    expect(
-      await createGatewaySession({
-        ...options,
-        agentRuntime: "openclaw",
-        allowExistingModelSelection: false,
-      }),
-    ).toMatchObject({
+    const adopt = (allowExistingModelSelection: boolean) =>
+      createGatewaySession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
+    expect(await adopt(false)).toMatchObject({
       ok: false,
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
     });
     expect(readSession(sessionKey)?.agentRuntimeOverride).toBe("codex");
     const queued = queueRuntimeSelection(sessionKey);
     try {
-      expect(
-        await createGatewaySession({
-          ...options,
-          agentRuntime: "openclaw",
-          allowExistingModelSelection: true,
-        }),
-      ).toMatchObject({ ok: true, entry: { agentRuntimeOverride: "openclaw" } });
+      expect(await adopt(true)).toMatchObject({
+        ok: true,
+        entry: { agentRuntimeOverride: "openclaw" },
+      });
       expect(queued).toMatchObject({
         provider: "openai",
         model: "gpt-5.6-sol",
