@@ -25,6 +25,9 @@ const theme = {
 let replies: NativeReply[];
 let diagram: HTMLElement;
 
+const render = (id: string, source: string, widthCssPx = 320) =>
+  window.renderMermaid({ id, source, widthCssPx, theme });
+
 beforeEach(() => {
   replies = [];
   diagram = document.createElement("div");
@@ -48,18 +51,8 @@ afterEach(() => {
 describe("native Mermaid document", () => {
   it("delivers ordered passive images at the requested viewport width", async () => {
     await Promise.all([
-      window.renderMermaid({
-        id: "first",
-        source: "flowchart LR\nA[First] --> B[Diagram]",
-        widthCssPx: 512,
-        theme,
-      }),
-      window.renderMermaid({
-        id: "second",
-        source: "sequenceDiagram\nAlice->>Bob: Ready",
-        widthCssPx: 384,
-        theme,
-      }),
+      render("first", "flowchart LR\nA[First] --> B[Diagram]", 512),
+      render("second", "sequenceDiagram\nAlice->>Bob: Ready", 384),
     ]);
     expect(replies.map((reply) => [reply.id, reply.success, reply.widthCssPx])).toEqual([
       ["first", true, 512],
@@ -80,19 +73,14 @@ describe("native Mermaid document", () => {
 
   it("keeps syntax and raster-limit failures permanent and renders the next request", async () => {
     const source = "flowchart TB\nA[One] --> B[Two] --> C[Three]";
-    await window.renderMermaid({ id: "oversized", source, widthCssPx: 4_096, theme });
+    await render("oversized", source, 4_096);
     expect(replies).toEqual([
       { id: "oversized", success: false, error: "Diagram image is too large.", retryable: false },
     ]);
     expect(diagram.querySelector("img")).toBeNull();
-    await window.renderMermaid({
-      id: "invalid",
-      source: "flowchart LR\nA -->",
-      widthCssPx: 320,
-      theme,
-    });
+    await render("invalid", "flowchart LR\nA -->");
     expect(replies[1]).toMatchObject({ id: "invalid", success: false, retryable: false });
-    await window.renderMermaid({ id: "recovered", source, widthCssPx: 320, theme });
+    await render("recovered", source);
     expect(replies[2]).toMatchObject({ id: "recovered", success: true, widthCssPx: 320 });
     expect(diagram.querySelector("img")?.complete).toBe(true);
   });
@@ -137,11 +125,9 @@ describe("native Mermaid document", () => {
       let pending: Promise<void> | undefined;
       let settled = false;
       try {
-        pending = window
-          .renderMermaid({ id: "timeout", source, widthCssPx: 320, theme })
-          .finally(() => {
-            settled = true;
-          });
+        pending = render("timeout", source).finally(() => {
+          settled = true;
+        });
         // Load/decode arm their watchdog after the intercepted call returns.
         // Awaiting the stall lets that synchronous registration finish.
         await stalled.promise;
@@ -169,7 +155,7 @@ describe("native Mermaid document", () => {
           vi.useRealTimers();
         }
       }
-      await window.renderMermaid({ id: "recovered", source, widthCssPx: 320, theme });
+      await render("recovered", source);
       expect(replies[1]).toMatchObject({ id: "recovered", success: true });
       expect(diagram.querySelector("img")?.complete).toBe(true);
     },
@@ -180,11 +166,11 @@ describe("native Mermaid document", () => {
     vi.spyOn(HTMLImageElement.prototype, "decode").mockRejectedValueOnce(
       new DOMException("Image decoder unavailable", "EncodingError"),
     );
-    const job = { id: "decode", source: "flowchart LR\nA --> B", widthCssPx: 320, theme };
-    await window.renderMermaid(job);
+    const source = "flowchart LR\nA --> B";
+    await render("decode", source);
     expect(replies[0]).toMatchObject({ id: "decode", success: false, retryable: true });
     expect(diagram.querySelector("img")).toBeNull();
-    await window.renderMermaid({ ...job, id: "recovered" });
+    await render("recovered", source);
     expect(replies[1]).toMatchObject({ id: "recovered", success: true });
   });
 
@@ -192,12 +178,7 @@ describe("native Mermaid document", () => {
     const prefix = "x".repeat(999);
     vi.spyOn(HTMLImageElement.prototype, "decode").mockRejectedValueOnce(new Error(`${prefix}🤖`));
 
-    await window.renderMermaid({
-      id: "unicode-error",
-      source: "flowchart LR\nA --> B",
-      widthCssPx: 320,
-      theme,
-    });
+    await render("unicode-error", "flowchart LR\nA --> B");
 
     expect(replies[0]).toMatchObject({
       id: "unicode-error",
