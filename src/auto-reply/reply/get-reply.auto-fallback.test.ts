@@ -1,4 +1,3 @@
-// Tests get-reply behavior while probing an auto-fallback primary model.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -12,12 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { ThinkLevel } from "../thinking.js";
 import { emptyAliasIndex, withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
-import {
-  buildGetReplyCtx,
-  createGetReplyContinueDirectivesResult,
-  createGetReplySessionState,
-  registerGetReplyRuntimeOverrides,
-} from "./get-reply.test-fixtures.js";
+import * as fixtures from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
@@ -27,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   initSessionState: vi.fn(),
 }));
 
-registerGetReplyRuntimeOverrides(mocks);
+fixtures.registerGetReplyRuntimeOverrides(mocks);
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
@@ -54,6 +48,17 @@ function makeTestModel(id: string, name: string, reasoning: boolean): ModelDefin
     contextWindow: 128_000,
     maxTokens: 8192,
   };
+}
+
+const heartbeat = { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" };
+
+function reply(cfg = makeReasoningModelConfig(), opts?: Parameters<typeof getReplyFromConfig>[1]) {
+  return getReplyFromConfig(fixtures.buildGetReplyCtx(), opts, cfg);
+}
+
+function expectRun(expected: object) {
+  expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+  expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).toMatchObject(expected);
 }
 
 function makeReasoningModelConfig(
@@ -85,7 +90,14 @@ function makeReasoningModelConfig(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}) {
+function setupFallback(
+  params: {
+    modelSelectionLocked?: boolean;
+    resolvedReasoningLevel?: "off" | "on";
+    provider?: string;
+    model?: string;
+  } = {},
+) {
   const sessionKey = "agent:main:telegram:123";
   const sessionEntry: SessionEntry = {
     sessionId: "fallback-session",
@@ -101,7 +113,7 @@ function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}
   const storePath = path.join(tempDirs.make("auto-fallback-store"), "sessions.json");
   replaceSessionEntrySync({ storePath, sessionKey }, sessionEntry);
   mocks.initSessionState.mockResolvedValue(
-    createGetReplySessionState({
+    fixtures.createGetReplySessionState({
       sessionKey,
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
@@ -110,20 +122,10 @@ function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}
       bodyStripped: "hello",
     }),
   );
-  return { sessionKey, storePath };
-}
-
-function mockFallbackDirectiveResult(params: {
-  sessionKey: string;
-  resolvedThinkLevel?: ThinkLevel;
-  resolvedReasoningLevel?: "off" | "on";
-  provider?: string;
-  model?: string;
-}) {
   mocks.resolveReplyDirectives.mockImplementation(async () =>
-    createGetReplyContinueDirectivesResult({
+    fixtures.createGetReplyContinueDirectivesResult({
       body: "hello",
-      abortKey: params.sessionKey,
+      abortKey: sessionKey,
       from: "telegram:user:42",
       to: "telegram:123",
       senderId: "telegram:user:42",
@@ -132,10 +134,10 @@ function mockFallbackDirectiveResult(params: {
       resetHookTriggered: false,
       provider: params.provider ?? "anthropic",
       model: params.model ?? "claude-fallback",
-      resolvedThinkLevel: params.resolvedThinkLevel,
       resolvedReasoningLevel: params.resolvedReasoningLevel,
     }),
   );
+  return { sessionKey, storePath };
 }
 
 async function expectPrimaryProbe(
@@ -143,9 +145,8 @@ async function expectPrimaryProbe(
   thinking: ThinkLevel,
   opts?: Parameters<typeof getReplyFromConfig>[1],
 ) {
-  await expect(getReplyFromConfig(buildGetReplyCtx(), opts, cfg)).resolves.toEqual({ text: "ok" });
-  expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-  expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).toMatchObject({
+  await expect(reply(cfg, opts)).resolves.toEqual({ text: "ok" });
+  expectRun({
     provider: "openai",
     model: "gpt-5.5",
     resolvedThinkLevel: thinking,
@@ -188,8 +189,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
   });
 
   it("does not start a primary probe after cancellation while its thinking catalog is pending", async () => {
-    const { sessionKey } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+    setupFallback();
     const catalog = createDeferred<never[]>();
     const started = createDeferred();
     const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
@@ -200,7 +200,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     const controller = new AbortController();
     const cfg = makeReasoningModelConfig();
     delete cfg.models;
-    const pending = getReplyFromConfig(buildGetReplyCtx(), { abortSignal: controller.signal }, cfg);
+    const pending = reply(cfg, { abortSignal: controller.signal });
     await Promise.race([
       started.promise,
       pending.then(() => {
@@ -215,16 +215,9 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
   });
 
   it("suppresses heartbeat model overrides for a model-locked session", async () => {
-    const { sessionKey } = mockAutoFallbackSession({ modelSelectionLocked: true });
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+    setupFallback({ modelSelectionLocked: true });
 
-    await expect(
-      getReplyFromConfig(
-        buildGetReplyCtx(),
-        { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" },
-        makeReasoningModelConfig(),
-      ),
-    ).resolves.toEqual({ text: "ok" });
+    await expect(reply(undefined, heartbeat)).resolves.toEqual({ text: "ok" });
 
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
@@ -236,8 +229,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       "configuredProfileId",
       "openai:metered",
     );
-    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).toMatchObject({
+    expectRun({
       provider: "anthropic",
       model: "claude-fallback",
       autoFallbackPrimaryProbe: undefined,
@@ -245,49 +237,37 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
   });
 
   it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
-    const { sessionKey, storePath } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({ sessionKey, provider: "openai", model: "gpt-5.5" });
+    const { sessionKey, storePath } = setupFallback({ provider: "openai", model: "gpt-5.5" });
     const cfg = makeReasoningModelConfig();
-    await getReplyFromConfig(
-      buildGetReplyCtx(),
-      {
-        isHeartbeat: true,
-        heartbeatModelOverride: "openai/gpt-5.5@openai:metered",
-      },
-      cfg,
-    );
+    await reply(cfg, heartbeat);
     expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).toMatchObject({
       provider: "openai",
       model: "gpt-5.5",
       configuredProfileId: "openai:metered",
     });
     expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, cfg);
+    await reply(cfg);
     expect(vi.mocked(runPreparedReplyMock).mock.calls[1]?.[0]).not.toHaveProperty(
       "configuredProfileId",
       "openai:metered",
     );
   });
 
-  it("does not re-enable default reasoning for explicit thinking-off primary probes", async () => {
-    const { sessionKey } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
-
-    await expectPrimaryProbe(makeReasoningModelConfig(), "off", { thinkingLevelOverride: "off" });
-  });
-
-  it("uses primary model thinking defaults for invalid thinking override primary probes", async () => {
-    const { sessionKey } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
-
-    await expectPrimaryProbe(makeReasoningModelConfig(), "medium", {
-      thinkingLevelOverride: "not-a-level",
-    });
-  });
+  it.each([
+    { override: "off", thinking: "off" },
+    { override: "not-a-level", thinking: "medium" },
+  ] as const)(
+    "resolves thinking override $override to $thinking on primary probes",
+    async ({ override, thinking }) => {
+      setupFallback();
+      await expectPrimaryProbe(makeReasoningModelConfig(), thinking, {
+        thinkingLevelOverride: override,
+      });
+    },
+  );
 
   it("uses the policy-selected model defaults when the primary probe is filtered out", async () => {
-    const { sessionKey } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+    setupFallback();
     const cfg = makeReasoningModelConfig({
       defaults: {
         models: { "openai/gpt-5.5": { params: { thinking: "high" } } },
@@ -304,17 +284,9 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       routeVariants: catalog,
       authoritative: true,
     });
-    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
-      text: "ok",
-    });
-
-    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
-    expect(runParams?.modelState).toMatchObject({
-      provider: "anthropic",
-      model: "claude-fallback",
-    });
-    expect(runParams).toMatchObject({
+    await expect(reply(cfg)).resolves.toEqual({ text: "ok" });
+    expectRun({
+      modelState: { provider: "anthropic", model: "claude-fallback" },
       provider: "openai",
       model: "gpt-5.5",
       resolvedThinkLevel: "off",
@@ -322,29 +294,15 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     });
   });
 
-  it("does not re-enable default reasoning for per-agent thinking-off primary probes", async () => {
-    const { sessionKey } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
-
-    await expectPrimaryProbe(
-      makeReasoningModelConfig({ entries: { main: { thinkingDefault: "off" } } }),
-      "off",
-    );
-  });
-
-  it("clears stale fallback reasoning for per-model thinking-off primary probes", async () => {
-    const { sessionKey } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({
-      sessionKey,
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "on",
-    });
-
-    await expectPrimaryProbe(
-      makeReasoningModelConfig({
-        defaults: { models: { "openai/gpt-5.5": { params: { thinking: false } } } },
-      }),
-      "off",
-    );
-  });
+  it.each(["agent", "model"] as const)(
+    "honors per-%s thinking-off defaults and clears fallback reasoning",
+    async (source) => {
+      setupFallback({ resolvedReasoningLevel: source === "model" ? "on" : "off" });
+      const agents: NonNullable<OpenClawConfig["agents"]> =
+        source === "agent"
+          ? { entries: { main: { thinkingDefault: "off" } } }
+          : { defaults: { models: { "openai/gpt-5.5": { params: { thinking: false } } } } };
+      await expectPrimaryProbe(makeReasoningModelConfig(agents), "off");
+    },
+  );
 });

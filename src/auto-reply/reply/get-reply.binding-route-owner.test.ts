@@ -189,25 +189,16 @@ it.each([
     conversation,
     metadata: { agentId: "work" },
   };
-  let childBinding: SessionBindingRecord | null = null;
-  let current: SessionBindingRecord | null =
-    duringTouch || childChange
-      ? {
-          ...binding,
-          bindingId: childChange ? "existing-base" : binding.bindingId,
-          metadata: { agentId: "main" },
-        }
-      : null;
-  const lookup = (ref: ConversationRef) => {
-    if (childChange) {
-      return ref.conversationId === "child"
-        ? childBinding
-        : ref.conversationId === "room"
-          ? current
-          : null;
-    }
-    return current;
-  };
+  const bindings = new Map<string, SessionBindingRecord>();
+  if (duringTouch || childChange) {
+    bindings.set("room", {
+      ...binding,
+      bindingId: childChange ? "existing-base" : binding.bindingId,
+      metadata: { agentId: "main" },
+    });
+  }
+  const lookup = (ref: ConversationRef) =>
+    bindings.get(childChange ? ref.conversationId : "room") ?? null;
   const entered = createDeferred();
   const release = createDeferred();
   let pending = false;
@@ -220,7 +211,6 @@ it.each([
     return lookup(ref);
   };
   registerAdapter(lookup, {
-    listBySession: () => (current ? [current] : []),
     resolveByConversationAsync: read,
     inspectByConversationAsync: read,
     touchAsync: async () => {
@@ -232,14 +222,20 @@ it.each([
     },
     ...(childChange
       ? {
-          bind: async (input: Parameters<NonNullable<SessionBindingAdapter["bind"]>>[0]) => {
-            childBinding = {
+          bind: async ({
+            targetSessionKey,
+            targetKind,
+            conversation: boundConversation,
+            metadata,
+          }: Parameters<NonNullable<SessionBindingAdapter["bind"]>>[0]) => {
+            const childBinding = {
               ...binding,
-              targetSessionKey: input.targetSessionKey,
-              targetKind: input.targetKind,
-              conversation: input.conversation,
-              metadata: input.metadata,
+              targetSessionKey,
+              targetKind,
+              conversation: boundConversation,
+              metadata,
             };
+            bindings.set("child", childBinding);
             return childBinding;
           },
         }
@@ -299,7 +295,7 @@ it.each([
       metadata: { agentId: "work" },
     });
   } else {
-    current = binding;
+    bindings.set("room", binding);
   }
   release.resolve();
   expect(await settled, `reply events: ${observed.events.join(", ")}`).toMatchObject({
@@ -308,8 +304,9 @@ it.each([
   expect(runEmbeddedAgent).not.toHaveBeenCalled();
   expect(observed.events).not.toContain("adopted");
   expect(observed.events).not.toContain("delivered");
-  expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: "global" })).toBeUndefined();
-  expect(loadSessionEntryReadOnly({ agentId: "work", sessionKey: "global" })).toBeUndefined();
+  expect(
+    ["main", "work"].map((agentId) => loadSessionEntryReadOnly({ agentId, sessionKey: "global" })),
+  ).toEqual([undefined, undefined]);
   if (childChange) {
     expect(existsSync(state.path("main-workspace"))).toBe(false);
   }

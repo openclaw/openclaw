@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -8,26 +8,9 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  TURN_MODEL_CHANNEL_REF,
-  TURN_MODEL_DEFAULT_REF,
-  TURN_MODEL_DIFFERENTIAL_FIXTURES,
-  TURN_MODEL_LIVE_CHANNEL_REF,
-  TURN_MODEL_OVERRIDE_REF,
-  createTurnModelEntry,
-  turnModelRefLabel,
-  turnModelVerdict,
-  type TurnModelDifferentialFixture,
-  type TurnModelSelectionVerdict,
-} from "../../test-utils/turn-model-selection-differential.js";
+import * as turn from "../../test-utils/turn-model-selection-differential.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
-import {
-  buildGetReplyCtx,
-  createGetReplyContinueDirectivesResult,
-  createGetReplySessionState,
-  registerGetReplyBaselineBypass,
-  registerGetReplyRuntimeOverrides,
-} from "./get-reply.test-fixtures.js";
+import * as replyFixtures from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
@@ -37,8 +20,8 @@ const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
 }));
 
-registerGetReplyBaselineBypass();
-registerGetReplyRuntimeOverrides(mocks);
+replyFixtures.registerGetReplyBaselineBypass();
+replyFixtures.registerGetReplyRuntimeOverrides(mocks);
 
 let state: OpenClawTestState;
 
@@ -49,36 +32,29 @@ let resolveChannelModelOverrideMock: typeof import("../../channels/model-overrid
 let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.js").resolveModelRefFromString;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
-async function seedFixtureStore(
-  storePath: string,
-  sessionKey: string,
-  fixture: Pick<TurnModelDifferentialFixture, "child" | "parent">,
-): Promise<Record<string, SessionEntry>> {
-  const sqliteTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-  expect(isPathInside(state.root, sqliteTarget.path)).toBe(true);
-  const store: Record<string, SessionEntry> = { [sessionKey]: fixture.child };
-  replaceSessionEntrySync({ storePath, sessionKey }, fixture.child);
-  if (fixture.parent) {
-    store[fixture.parent.key] = fixture.parent.entry;
-    replaceSessionEntrySync({ storePath, sessionKey: fixture.parent.key }, fixture.parent.entry);
-  }
-  return store;
-}
-
 async function observeReplySelection(
   fixture: Pick<
-    TurnModelDifferentialFixture,
+    turn.TurnModelDifferentialFixture,
     "name" | "ctx" | "child" | "parent" | "heartbeat" | "locked" | "modelByChannel"
   >,
   sessionKey: string,
-): Promise<TurnModelSelectionVerdict> {
+): Promise<turn.TurnModelSelectionVerdict> {
   const storePath = path.join(state.sessionsDir("main"), "sessions.json");
-  const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);
+  expect(
+    isPathInside(state.root, resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path),
+  ).toBe(true);
+  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: fixture.child };
+  if (fixture.parent) {
+    sessionStore[fixture.parent.key] = fixture.parent.entry;
+  }
+  for (const [key, entry] of Object.entries(sessionStore)) {
+    replaceSessionEntrySync({ storePath, sessionKey: key }, entry);
+  }
   const cfg = markCompleteReplyConfig({
     session: { store: storePath },
     agents: {
       defaults: {
-        model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) },
+        model: { primary: turn.turnModelRefLabel(turn.TURN_MODEL_DEFAULT_REF) },
         modelPolicy: { allow: ["*/*"] },
         workspace: state.workspaceDir,
       },
@@ -86,7 +62,7 @@ async function observeReplySelection(
     channels: fixture.modelByChannel ? { modelByChannel: fixture.modelByChannel } : undefined,
   });
   mocks.initSessionState.mockResolvedValue(
-    createGetReplySessionState({
+    replyFixtures.createGetReplySessionState({
       sessionCtx: fixture.ctx,
       sessionEntry: fixture.child,
       sessionStore,
@@ -103,14 +79,13 @@ async function observeReplySelection(
     }),
   );
   vi.mocked(runPreparedReplyMock).mockClear();
-  // Use the same module as getReply so a shared resolver override cannot escape this fixture.
   expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
   await getReplyFromConfig(
-    buildGetReplyCtx({ SessionKey: sessionKey, ...fixture.ctx }),
+    replyFixtures.buildGetReplyCtx({ SessionKey: sessionKey, ...fixture.ctx }),
     fixture.heartbeat
       ? {
           isHeartbeat: true,
-          heartbeatModelOverride: turnModelRefLabel(TURN_MODEL_OVERRIDE_REF),
+          heartbeatModelOverride: turn.turnModelRefLabel(turn.TURN_MODEL_OVERRIDE_REF),
         }
       : undefined,
     cfg,
@@ -119,7 +94,7 @@ async function observeReplySelection(
   if (!selected) {
     throw new Error(`reply path did not prepare a run for ${fixture.name}`);
   }
-  return turnModelVerdict(
+  return turn.turnModelVerdict(
     { provider: selected.provider, model: selected.model },
     fixture.locked ? "locked" : undefined,
   );
@@ -156,11 +131,11 @@ beforeEach(async () => {
     actualModelSelection.resolveModelRefFromString,
   );
   vi.mocked(resolveDefaultModelMock).mockReturnValue({
-    defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
-    defaultModel: TURN_MODEL_DEFAULT_REF.model,
+    defaultProvider: turn.TURN_MODEL_DEFAULT_REF.provider,
+    defaultModel: turn.TURN_MODEL_DEFAULT_REF.model,
     aliasIndex: actualModelSelection.buildModelAliasIndex({
       cfg: {},
-      defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
+      defaultProvider: turn.TURN_MODEL_DEFAULT_REF.provider,
     }),
   });
   mocks.resolveReplyDirectives.mockImplementation(
@@ -169,8 +144,8 @@ beforeEach(async () => {
       model: string;
       sessionKey: string;
       triggerBodyNormalized: string;
-    }) => {
-      return createGetReplyContinueDirectivesResult({
+    }) =>
+      replyFixtures.createGetReplyContinueDirectivesResult({
         body: params.triggerBodyNormalized,
         abortKey: params.sessionKey,
         from: "sender",
@@ -181,8 +156,7 @@ beforeEach(async () => {
         resetHookTriggered: false,
         provider: params.provider,
         model: params.model,
-      });
-    },
+      }),
   );
   mocks.handleInlineActions.mockImplementation(
     async (params: { directives?: unknown; cleanedBody?: string }) => ({
@@ -195,48 +169,37 @@ beforeEach(async () => {
   vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
 });
 
-afterEach(async () => {
-  await state.cleanup();
-});
+afterEach(() => state.cleanup());
 
-describe("getReplyFromConfig channel model input boundary", () => {
-  it("selects the live channel exact conversation", async () => {
-    const child = createTurnModelEntry({
-      chatType: "group",
-      groupId: "room",
-    });
-    const fixture = {
-      name: "live channel exact conversation",
-      ctx: {
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        ChatType: "group",
-        SenderId: "live-peer",
+it("selects the live channel exact conversation", async () => {
+  const fixture = {
+    name: "live channel exact conversation",
+    ctx: {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      SenderId: "live-peer",
+    },
+    child: turn.createTurnModelEntry({ chatType: "group", groupId: "room" }),
+    modelByChannel: {
+      telegram: {
+        room: turn.turnModelRefLabel(turn.TURN_MODEL_LIVE_CHANNEL_REF),
+        "*": turn.turnModelRefLabel(turn.TURN_MODEL_CHANNEL_REF),
       },
-      child,
-      modelByChannel: {
-        telegram: {
-          room: turnModelRefLabel(TURN_MODEL_LIVE_CHANNEL_REF),
-          "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF),
-        },
-      },
-    };
-    await expect(observeReplySelection(fixture, "agent:main:telegram:group:room")).resolves.toEqual(
-      turnModelVerdict(TURN_MODEL_LIVE_CHANNEL_REF),
-    );
-  });
-});
-
-describe("turn model selection reply-path differential", () => {
-  const fixtures = TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
-    ({ name }) =>
-      name === "heartbeat or explicit turn override" ||
-      name === "explicit default rejects stale child and parent overrides",
+    },
+  };
+  await expect(observeReplySelection(fixture, "agent:main:telegram:group:room")).resolves.toEqual(
+    turn.turnModelVerdict(turn.TURN_MODEL_LIVE_CHANNEL_REF),
   );
-  it.each(fixtures)("pins observed $name behavior", async (fixture) => {
-    await expect(
-      observeReplySelection(fixture, "agent:main:telegram:group:selection"),
-    ).resolves.toEqual(fixture.expected.reply);
-  });
+});
+const fixtures = turn.TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
+  ({ name }) =>
+    name === "heartbeat or explicit turn override" ||
+    name === "explicit default rejects stale child and parent overrides",
+);
+it.each(fixtures)("pins observed $name behavior", async (fixture) => {
+  await expect(
+    observeReplySelection(fixture, "agent:main:telegram:group:selection"),
+  ).resolves.toEqual(fixture.expected.reply);
 });

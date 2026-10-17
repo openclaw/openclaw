@@ -1,4 +1,3 @@
-/** Tests configured directives through parser, reply-routing, and delivery boundaries. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import {
@@ -8,7 +7,6 @@ import {
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
@@ -16,21 +14,21 @@ import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thin
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { createSessionEntry } from "./directive-handling.mixed-inline.test-helpers.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import {
+  makeTypingController,
+  replyDirectiveParams,
+} from "./get-reply-directives.target-session.test-helpers.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
-import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
-const directiveApplyMocks = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
   apply: vi.fn(),
-}));
-const textRoutingMocks = vi.hoisted(() => ({
   shouldHandle: vi.fn(),
-}));
-const skillCommandMocks = vi.hoisted(() => ({
   listForWorkspace: vi.fn(),
 }));
 
@@ -70,14 +68,13 @@ prepareModelCatalogThinkingPolicies({
 });
 
 vi.mock("./get-reply-directives-apply.js", () => ({
-  applyInlineDirectiveOverrides: (...args: unknown[]) => directiveApplyMocks.apply(...args),
+  applyInlineDirectiveOverrides: (...args: unknown[]) => mocks.apply(...args),
 }));
 vi.mock("../commands-text-routing.js", () => ({
-  shouldHandleTextCommands: (...args: unknown[]) => textRoutingMocks.shouldHandle(...args),
+  shouldHandleTextCommands: (...args: unknown[]) => mocks.shouldHandle(...args),
 }));
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
-  prepareSkillCommandsForWorkspace: (...args: unknown[]) =>
-    skillCommandMocks.listForWorkspace(...args),
+  prepareSkillCommandsForWorkspace: (...args: unknown[]) => mocks.listForWorkspace(...args),
 }));
 
 type DirectiveApplyParams = Parameters<
@@ -108,23 +105,6 @@ function continued(result: Awaited<ReturnType<typeof resolveReplyDirectives>>) {
   return result.result;
 }
 
-function createSessionEntry(): SessionEntry {
-  return { sessionId: "session-1", updatedAt: 1 };
-}
-
-function makeTypingController() {
-  return {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
-}
-
 async function resolveModelDirective(params: {
   body: string;
   agentText?: string;
@@ -133,7 +113,6 @@ async function resolveModelDirective(params: {
   surface?: string;
   agentCfg?: Parameters<typeof resolveReplyDirectives>[0]["agentCfg"];
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
-  preparedModelCatalog?: ModelCatalogSnapshot;
 }) {
   const authorized = params.authorized ?? true;
   const { body } = params;
@@ -169,39 +148,33 @@ async function resolveModelDirective(params: {
     const result = await withPluginMetadataSnapshotScope(
       directiveMetadata,
       () =>
-        resolveReplyDirectives({
-          ctx: buildTestCtx({
-            Body: agentText,
-            CommandBody: body,
-            CommandAuthorized: authorized,
-            Provider: surface,
-            Surface: surface,
+        resolveReplyDirectives(
+          replyDirectiveParams({
+            ctx: buildTestCtx({
+              Body: agentText,
+              CommandBody: body,
+              CommandAuthorized: authorized,
+              Provider: surface,
+              Surface: surface,
+            }),
+            cfg,
+            agentCfg: params.agentCfg ?? {},
+            opts: params.opts,
+            sessionCtx,
+            sessionEntry,
+            sessionStore: { [sessionKey]: sessionEntry },
+            sessionKey,
+            storePath: undefined,
+            triggerBodyNormalized: body,
+            commandAuthorized: authorized,
+            defaultProvider: "anthropic",
+            defaultModel: "claude-opus-4-6",
+            aliasIndex: createAliasIndex(),
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            preparedModelCatalog: preparedDirectiveCatalog,
           }),
-          cfg,
-          agentId: "main",
-          agentDir: "/tmp/main-agent",
-          workspaceDir: "/tmp",
-          agentCfg: params.agentCfg ?? {},
-          opts: params.opts,
-          sessionCtx,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
-          sessionScope: "per-sender",
-          conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
-          isGroup: false,
-          triggerBodyNormalized: body,
-          resetTriggered: false,
-          commandAuthorized: authorized,
-          defaultProvider: "anthropic",
-          defaultModel: "claude-opus-4-6",
-          aliasIndex: createAliasIndex(),
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          hasResolvedHeartbeatModelOverride: false,
-          preparedModelCatalog: params.preparedModelCatalog ?? preparedDirectiveCatalog,
-          typing: makeTypingController(),
-        }),
+        ),
       { config: cfg, trustConfigIdentity: true },
     );
     return { result, sessionEntry, sessionCtx };
@@ -214,11 +187,11 @@ describe("reply directive resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    textRoutingMocks.shouldHandle.mockImplementation(
+    mocks.shouldHandle.mockImplementation(
       (params: { cfg: OpenClawConfig }) => params.cfg.commands?.text !== false,
     );
-    skillCommandMocks.listForWorkspace.mockReturnValue([]);
-    directiveApplyMocks.apply.mockImplementation(async (params: DirectiveApplyParams) => ({
+    mocks.listForWorkspace.mockReturnValue([]);
+    mocks.apply.mockImplementation(async (params: DirectiveApplyParams) => ({
       kind: "continue",
       directives: params.directives,
       provider: params.provider,
@@ -231,94 +204,82 @@ describe("reply directive resolution", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    { label: "captionless default off", agentCfg: {}, caption: "" },
-    {
-      label: "per-turn enabled despite configured off",
-      agentCfg: { blockStreamingDefault: "off", blockStreamingBreak: "text_end" },
-      opts: { disableBlockStreaming: false },
-      caption: "Attachment caption",
-      separateCaption: true,
-    },
-  ] satisfies Array<{
-    label: string;
-    agentCfg: Parameters<typeof resolveReplyDirectives>[0]["agentCfg"];
-    opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
-    caption: string;
-    separateCaption?: boolean;
-  }>)("preserves media caption ownership with $label", async (testCase) => {
-    const { result } = await resolveModelDirective({
-      body: "Please send the attachment",
-      agentCfg: testCase.agentCfg,
-      opts: "opts" in testCase ? testCase.opts : undefined,
-    });
-    const resolved = continued(result);
-    const delivered: ReplyPayload[] = [];
-    const onPartialReply = vi.fn();
-    const handleBlockReply = createBlockReplyDeliveryHandler({
-      onBlockReply: (payload) => {
-        delivered.push(payload);
-      },
-      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
-      applyReplyToMode: (payload) => payload,
-      typingSignals: createTypingSignaler({
-        typing: makeTypingController(),
-        mode: "never",
-        isHeartbeat: false,
-      }),
-      blockStreamingEnabled: resolved.blockStreamingEnabled,
-      blockReplyPipeline: null,
-      directBlockDeliveries: [],
-    });
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "media-caption-directives",
-      onBlockReply: handleBlockReply,
-      onPartialReply,
-      blockReplyBreak: resolved.resolvedBlockStreamingBreak,
-    });
-    const mediaUrl = "/tmp/attachment.txt";
-    const text = `${testCase.caption}\nMEDIA:${mediaUrl}`.trimStart();
-    const message = createOpenAiResponsesPartial({
-      text,
-      id: "media-caption",
-      signaturePhase: "final_answer",
-      partialPhase: "final_answer",
-    });
-    try {
-      emit({ type: "message_start", message });
-      for (const type of ["text_delta", "text_end"] as const) {
-        emit(
-          createOpenAiResponsesTextEvent({
-            type,
-            text,
-            partial: message,
-            messagePhase: "final_answer",
-          }),
-        );
+  it.each([false, true])(
+    "preserves media caption ownership with streaming=%s",
+    async (streaming) => {
+      const caption = streaming ? "Attachment caption" : "";
+      const { result } = await resolveModelDirective({
+        body: "Please send the attachment",
+        agentCfg: streaming
+          ? { blockStreamingDefault: "off", blockStreamingBreak: "text_end" }
+          : {},
+        opts: streaming ? { disableBlockStreaming: false } : undefined,
+      });
+      const resolved = continued(result);
+      const delivered: ReplyPayload[] = [];
+      const onPartialReply = vi.fn();
+      const handleBlockReply = createBlockReplyDeliveryHandler({
+        onBlockReply: (payload) => {
+          delivered.push(payload);
+        },
+        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+        applyReplyToMode: (payload) => payload,
+        typingSignals: createTypingSignaler({
+          typing: makeTypingController(),
+          mode: "never",
+          isHeartbeat: false,
+        }),
+        blockStreamingEnabled: resolved.blockStreamingEnabled,
+        blockReplyPipeline: null,
+        directBlockDeliveries: [],
+      });
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "media-caption-directives",
+        onBlockReply: handleBlockReply,
+        onPartialReply,
+        blockReplyBreak: resolved.resolvedBlockStreamingBreak,
+      });
+      const mediaUrl = "/tmp/attachment.txt";
+      const text = `${caption}\nMEDIA:${mediaUrl}`.trimStart();
+      const message = createOpenAiResponsesPartial({
+        text,
+        id: "media-caption",
+        signaturePhase: "final_answer",
+        partialPhase: "final_answer",
+      });
+      try {
+        emit({ type: "message_start", message });
+        for (const type of ["text_delta", "text_end"] as const) {
+          emit(
+            createOpenAiResponsesTextEvent({
+              type,
+              text,
+              partial: message,
+              messagePhase: "final_answer",
+            }),
+          );
+          await subscription.waitForPendingEvents();
+        }
+        emit({ type: "message_end", message });
         await subscription.waitForPendingEvents();
-      }
-      emit({ type: "message_end", message });
-      await subscription.waitForPendingEvents();
-      const separateCaption = "separateCaption" in testCase && testCase.separateCaption;
-      expect(
-        delivered.map((payload) => ({ text: payload.text ?? "", mediaUrl: payload.mediaUrl })),
-      ).toEqual(
-        separateCaption
-          ? [
-              { text: testCase.caption, mediaUrl: undefined },
-              { text: "", mediaUrl },
-            ]
-          : [{ text: testCase.caption, mediaUrl }],
-      );
-      if (testCase.caption) {
-        expect(onPartialReply).toHaveBeenCalledWith(
-          expect.objectContaining({ text: testCase.caption }),
+        expect(
+          delivered.map((payload) => ({ text: payload.text ?? "", mediaUrl: payload.mediaUrl })),
+        ).toEqual(
+          streaming
+            ? [
+                { text: caption, mediaUrl: undefined },
+                { text: "", mediaUrl },
+              ]
+            : [{ text: caption, mediaUrl }],
         );
+        if (caption) {
+          expect(onPartialReply).toHaveBeenCalledWith(expect.objectContaining({ text: caption }));
+        }
+      } finally {
+        subscription.unsubscribe();
       }
-    } finally {
-      subscription.unsubscribe();
-    }
-  });
+    },
+  );
 
   it("routes model scope at the full reply boundary: /think high/fable now", async () => {
     const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
@@ -352,38 +313,6 @@ describe("reply directive resolution", () => {
     expect(sessionCtx.Body).toBe("");
   });
 
-  it("preserves unauthorized mixed input exactly without exposing model state", async () => {
-    const body = "please /model anthropic/claude-opus-4-6@work --runtime codex -s now";
-    const agentText = "[wrapped]\nplease /model anthropic/claude-opus-4-6 now";
-    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
-      body,
-      agentText,
-      authorized: false,
-    });
-
-    const resolved = continued(result);
-    expect(resolved.directives).toEqual(clearInlineDirectives(body));
-    expect(resolved).toMatchObject({
-      cleanedBody: agentText,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-    });
-    expect(sessionCtx).toMatchObject({
-      agentText,
-      Body: agentText,
-      BodyForAgent: agentText,
-      BodyStripped: agentText,
-    });
-    expect(directiveApplyMocks.apply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        directives: expect.objectContaining({ hasModelDirective: false }),
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-      }),
-    );
-    expect(sessionEntry).toEqual(createSessionEntry());
-  });
-
   it("rejects invalid skill references before applying model directives", async () => {
     const skillCommands = Array.from({ length: 9 }, (_, index) => ({
       name: `skill_${index + 1}`,
@@ -392,7 +321,7 @@ describe("reply directive resolution", () => {
     }));
     const references = skillCommands.map((skill) => `$${skill.name}`).join(" ");
     const body = `${references} /model openai/gpt-5.6-luna`;
-    skillCommandMocks.listForWorkspace.mockReturnValue(skillCommands);
+    mocks.listForWorkspace.mockReturnValue(skillCommands);
 
     const { result, sessionEntry } = await resolveModelDirective({
       body,
@@ -406,7 +335,7 @@ describe("reply directive resolution", () => {
         text: "Too many skill references. Use at most 8 skills in one message.",
       },
     });
-    expect(directiveApplyMocks.apply).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
     expect(sessionEntry).toEqual(createSessionEntry());
   });
 
@@ -425,30 +354,42 @@ describe("reply directive resolution", () => {
     });
   });
 
-  it("keeps commands.text:false model syntax literal, including an empty agent projection", async () => {
-    const body = "please /fable --runtime codex -s now";
-    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
-      body,
+  it.each([
+    {
+      label: "unauthorized mixed input",
+      body: "please /model anthropic/claude-opus-4-6@work --runtime codex -s now",
+      agentText: "[wrapped]\nplease /model anthropic/claude-opus-4-6 now",
+      authorized: false,
+    },
+    {
+      label: "commands.text:false with an empty agent projection",
+      body: "please /fable --runtime codex -s now",
       agentText: "",
-      cfg: {
-        ...configWithModelAlias("fable"),
-        commands: { text: false },
-      } as OpenClawConfig,
+      cfg: { ...configWithModelAlias("fable"), commands: { text: false } },
       surface: "discord",
-    });
-
+    },
+  ])("keeps $label literal without exposing model state", async (params) => {
+    const { body, agentText } = params;
+    const { result, sessionEntry, sessionCtx } = await resolveModelDirective(params);
     const resolved = continued(result);
     expect(resolved.directives).toEqual(clearInlineDirectives(body));
-    expect(resolved.cleanedBody).toBe("");
-    expect(sessionCtx).toMatchObject({
-      agentText: "",
-      Body: "",
-      BodyForAgent: "",
-      BodyStripped: "",
+    expect(resolved).toMatchObject({
+      cleanedBody: agentText,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
     });
-    expect(directiveApplyMocks.apply).toHaveBeenCalledWith(
+    expect(sessionCtx).toMatchObject({
+      agentText,
+      Body: agentText,
+      BodyForAgent: agentText,
+      BodyStripped: agentText,
+    });
+    expect(mocks.apply).toHaveBeenCalledWith(
       expect.objectContaining({
-        directives: clearInlineDirectives(body),
+        directives:
+          params.authorized === false
+            ? expect.objectContaining({ hasModelDirective: false })
+            : clearInlineDirectives(body),
         provider: "anthropic",
         model: "claude-opus-4-6",
       }),

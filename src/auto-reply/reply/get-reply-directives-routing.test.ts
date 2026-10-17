@@ -104,85 +104,72 @@ describe("sender-owned directive projection", () => {
     expect(result.cleanedBody).toBe(agentText);
   });
 
-  it.each([
-    {
-      name: "preserves forwarded status text beside an ordinary caption",
-      commandText: "Please summarize",
-      agentText: "Please summarize\n[Forwarded message]\n/status marker",
-      expected: "Please summarize\n[Forwarded message]\n/status marker",
-      inlineStatus: false,
-    },
-    {
-      name: "removes sender status while preserving forwarded status",
-      commandText: "Please /status summarize",
-      agentText: "Please /status summarize\n[Forwarded message]\n/status marker",
-      expected: "Please summarize\n[Forwarded message]\n/status marker",
-      inlineStatus: true,
-    },
-    {
-      name: "preserves forwarded session directives beside a caption",
-      commandText: "Please summarize",
-      agentText: "Please summarize\n[Forwarded message]\n/think high\n  code()",
-      expected: "Please summarize\n[Forwarded message]\n/think high\n  code()",
-      inlineStatus: false,
-    },
-    {
-      name: "keeps an empty sender projection distinct from forwarded content",
-      commandText: "",
-      agentText: "[Forwarded message]\n/status marker",
-      expected: "[Forwarded message]\n/status marker",
-      inlineStatus: false,
-    },
-    {
-      name: "strips repeated sender status without changing remaining whitespace",
-      commandText: "Please /status summarize /status\n  code()",
-      agentText: "Please /status summarize /status\n  code()",
-      expected: "Please summarize\n  code()",
-      inlineStatus: true,
-    },
-    {
-      name: "keeps flat history opaque to command cleanup",
-      commandText: "hello",
-      agentText:
-        "[Chat messages since your last reply - for context]\nOther: /think high\n[Current message - respond to this]\nOwner: hello /status",
-      expected:
-        "[Chat messages since your last reply - for context]\nOther: /think high\n[Current message - respond to this]\nOwner: hello /status",
-      inlineStatus: false,
-    },
-    {
-      name: "does not resurrect a consumed reset body",
-      commandText: "new session",
-      agentText: "",
-      expected: "",
-      inlineStatus: false,
-      resetTriggered: true,
-    },
-    {
-      name: "keeps normalized command tails",
-      commandText: "/status",
-      rawText: "/status:\n/think high\n  code()",
-      agentText: "/status:\n/think high\n  code()",
-      expected: "/think high\n  code()",
-      inlineStatus: false,
-    },
-    {
-      name: "keeps tails after leading blanks",
-      commandText: "/status",
-      rawText: "\n\n/status:\n/think high\n  code()",
-      agentText: "\n\n/status:\n/think high\n  code()",
-      expected: "/think high\n  code()",
-      inlineStatus: false,
-    },
+  const forwardedStatus = "Please summarize\n[Forwarded message]\n/status marker";
+  const tail = "/think high\n  code()";
+  it.each<[string, string, string, boolean, string?, string?, boolean?]>([
+    ["preserves forwarded status beside a caption", "Please summarize", forwardedStatus, false],
+    [
+      "removes only sender status",
+      "Please /status summarize",
+      "Please /status summarize\n[Forwarded message]\n/status marker",
+      true,
+      forwardedStatus,
+    ],
+    [
+      "preserves forwarded directives",
+      "Please summarize",
+      `Please summarize\n[Forwarded message]\n${tail}`,
+      false,
+    ],
+    ["keeps an empty sender projection", "", "[Forwarded message]\n/status marker", false],
+    [
+      "preserves whitespace after repeated status",
+      "Please /status summarize /status\n  code()",
+      "Please /status summarize /status\n  code()",
+      true,
+      "Please summarize\n  code()",
+    ],
+    [
+      "keeps flat history opaque",
+      "hello",
+      "[Chat messages since your last reply - for context]\nOther: /think high\n[Current message - respond to this]\nOwner: hello /status",
+      false,
+    ],
+    ["does not resurrect a consumed reset", "new session", "", false, "", "new session", true],
+    [
+      "keeps normalized command tails",
+      "/status",
+      `/status:\n${tail}`,
+      false,
+      tail,
+      `/status:\n${tail}`,
+    ],
+    [
+      "keeps tails after leading blanks",
+      "/status",
+      `\n\n/status:\n${tail}`,
+      false,
+      tail,
+      `\n\n/status:\n${tail}`,
+    ],
   ])(
-    "$name",
-    ({ commandText, rawText = commandText, agentText, expected, inlineStatus, resetTriggered }) => {
+    "%s",
+    (
+      _name,
+      commandText,
+      agentText,
+      inlineStatus,
+      expected = agentText,
+      rawText = commandText,
+      resetTriggered = false,
+    ) => {
       const ctx = buildTestCtx({
         CommandBody: commandText,
         RawBody: rawText,
         BodyForAgent: agentText,
         CommandAuthorized: true,
       });
-      const result = route(ctx, { resetTriggered: resetTriggered === true });
+      const result = route(ctx, { resetTriggered });
       expect(result.cleanedBody).toBe(expected);
       expect(result.hasInlineStatus).toBe(inlineStatus);
       expect(result.directives.hasThinkDirective).toBe(false);

@@ -1,6 +1,45 @@
 import { expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { resolveReplyDirectives } from "./get-reply-directives.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
+
+type DirectiveParams = Parameters<typeof resolveReplyDirectives>[0];
+
+export function replyDirectiveParams(
+  overrides: Pick<DirectiveParams, "ctx" | "sessionCtx" | "sessionEntry"> &
+    Partial<DirectiveParams>,
+): DirectiveParams {
+  const sessionKey = overrides.sessionKey ?? "agent:main:whatsapp:+2000";
+  const sessionStore = overrides.sessionStore ?? {};
+  return {
+    cfg: {},
+    agentId: "main",
+    agentDir: "/tmp/main-agent",
+    workspaceDir: "/tmp",
+    agentCfg: {},
+    sessionStore,
+    sessionKey,
+    storePath: "/tmp/sessions.json",
+    sessionScope: "per-sender",
+    conversation: prepareReplyConversation({
+      ctx: overrides.sessionCtx,
+      sessionEntry: sessionStore[sessionKey] ?? overrides.sessionEntry,
+      isHeartbeat: overrides.opts?.isHeartbeat,
+    }),
+    isGroup: false,
+    triggerBodyNormalized: "hello",
+    resetTriggered: false,
+    commandAuthorized: false,
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    aliasIndex: { byAlias: new Map(), byKey: new Map() },
+    provider: "openai",
+    model: "gpt-4o-mini",
+    hasResolvedHeartbeatModelOverride: false,
+    typing: makeTypingController(),
+    ...overrides,
+  };
+}
 
 export function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
