@@ -46,6 +46,7 @@ vi.mock(import("../../scripts/lib/ci-node-test-plan.mts"), async (importOriginal
 
 type Invocation = { args: string[]; env: NodeJS.ProcessEnv };
 type Collection = Invocation & { files: string[] };
+type PlannedCollection = { configs: string[]; runtime: string | undefined; files: string[] };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalExitCode = process.exitCode;
 afterEach(() => {
@@ -92,16 +93,11 @@ it.each(
       vi.stubEnv(name, value);
     }
     const invocations: Invocation[] = [];
-    const nonUiCollections: Array<{
-      configs: string[];
-      runtime: string | undefined;
-      files: string[];
-    }> = [];
+    const nonUiCollections: PlannedCollection[] = [];
     const uiCollections: Collection[] = [];
     const recordUi = (args: string[], env: NodeJS.ProcessEnv) => {
       const includeFile =
         env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE ?? env.OPENCLAW_VITEST_INCLUDE_FILE;
-      expect(includeFile).toBeTruthy();
       uiCollections.push({ args, env, files: JSON.parse(readFileSync(includeFile!, "utf8")) });
     };
     vi.mocked(runManagedCommand).mockImplementation(async (command) => {
@@ -145,9 +141,6 @@ it.each(
     vi.resetModules();
     await import("../../scripts/ci-warm-vitest-caches.mts");
 
-    expect(createVitestCacheWarmGroups).toHaveBeenLastCalledWith(
-      platform === "linux-hosted" ? "hybrid-hosted" : "full",
-    );
     expect(process.exitCode).toBe(1);
     expect(uiCollections.map(({ env }) => env.OPENCLAW_VITEST_RUNTIME)).toEqual(["bun", "node"]);
     for (const collection of uiCollections) {

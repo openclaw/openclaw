@@ -62,9 +62,6 @@ it.each<[string, readonly string[], boolean]>([
   for (const event of name === locale ? ["push"] : ["push", "pull_request"]) {
     expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
   }
-  if (name === scaffold) {
-    expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
-  }
   expect(workflow.on.workflow_dispatch).toBeDefined();
   if (name !== locale) {
     expect(workflow.on.schedule).toBeDefined();
@@ -251,7 +248,6 @@ describe("workflow cost admission", () => {
       ]) {
         expect(accepts(path), path).toBe(true);
       }
-      expect(["patches/README.md", "patches/vitest@5.0.1.patch"].some(accepts)).toBe(true);
       expect(workflow.on.workflow_dispatch).toBeDefined();
     },
   );

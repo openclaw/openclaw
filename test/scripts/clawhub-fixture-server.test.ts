@@ -55,6 +55,10 @@ async function auditTrust(baseUrl: string, packageName: string, version: string)
   return { trust, auditMessages };
 }
 
+function expectFailure(result: { status: number | null; stderr: string }, message: string) {
+  expect(result).toMatchObject({ status: 1, stderr: expect.stringContaining(message) });
+}
+
 function collectStream(stream: NodeJS.ReadableStream) {
   let text = "";
   stream.setEncoding("utf8");
@@ -380,20 +384,25 @@ ${runner.slice(boundary)}
     const pending = runAutomaticChecks(null, "whatsapp");
     expect(pending.status, pending.stderr).toBe(0);
     expect(pending.stdout).toContain('Plugin "whatsapp" is awaiting fixture capability consent.');
-    const unrelatedPending = runAutomaticChecks(null, "discord");
-    expect(unrelatedPending.status).toBe(1);
-    expect(unrelatedPending.stderr).toContain("whatsapp plugin install record missing");
+    expectFailure(runAutomaticChecks(null, "discord"), "whatsapp plugin install record missing");
     expect(assertRequests("complete").status).toBe(1);
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
+    const versionPath = `${whatsappPath}/versions/${version}`;
+    const completeRequestPaths = [
+      whatsappPath,
+      `${versionPath}/artifact`,
+      `${versionPath}/security`,
+      `${versionPath}/artifact/download`,
+    ];
     const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
       latestVersion: version,
       runtimeId: "whatsapp",
       tags: { beta: version, latest: version },
     });
-    const artifact = await fetchJson(baseUrl, `${whatsappPath}/versions/${version}/artifact`);
+    const artifact = await fetchJson(baseUrl, `${versionPath}/artifact`);
     expect(artifact.artifact).toMatchObject({ artifactKind: "npm-pack", artifactSha256: sha256 });
-    const securityUrl = `${baseUrl}${whatsappPath}/versions/${version}/security`;
+    const securityUrl = `${baseUrl}${versionPath}/security`;
     const fetchImpl = globalThis.fetch;
     let security: unknown;
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
@@ -452,33 +461,19 @@ ${runner.slice(boundary)}
         clawhubTrustCheckedAt: expect.any(String),
       },
     });
-    const download = await fetch(`${baseUrl}${whatsappPath}/versions/${version}/artifact/download`);
+    const download = await fetch(`${baseUrl}${versionPath}/artifact/download`);
     expect(download.headers.get("x-clawhub-artifact-sha256")).toBe(sha256);
     expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);
-    expect((await fetchJson(baseUrl, "/__fixture__/requests")).requests).toEqual([
-      `GET ${whatsappPath}`,
-      `GET ${whatsappPath}/versions/${version}/artifact`,
-      `GET ${whatsappPath}/versions/${version}/security`,
-      `GET ${whatsappPath}/versions/${version}/artifact/download`,
-    ]);
+    expect((await fetchJson(baseUrl, "/__fixture__/requests")).requests).toEqual(
+      completeRequestPaths.map((requestPath) => `GET ${requestPath}`),
+    );
     expect(assertRequests().status).toBe(0);
-    const completeWithMinimum = assertRequests("complete", 2);
-    expect(completeWithMinimum.status).toBe(1);
-    expect(completeWithMinimum.stderr).toContain(
+    expectFailure(
+      assertRequests("complete", 2),
       "expected 2-16 complete ClawHub artifact audit sequences",
     );
-    const unexpectedStartupRequest = noRequests();
-    expect(unexpectedStartupRequest.status).toBe(1);
-    expect(unexpectedStartupRequest.stderr).toContain("unexpected ClawHub fixture requests");
-    const unexpectedAutomaticRequest = runAutomaticChecks();
-    expect(unexpectedAutomaticRequest.status).toBe(1);
-    expect(unexpectedAutomaticRequest.stderr).toContain("unexpected ClawHub fixture requests");
-    const completeRequestPaths = [
-      whatsappPath,
-      `${whatsappPath}/versions/${version}/artifact`,
-      `${whatsappPath}/versions/${version}/security`,
-      `${whatsappPath}/versions/${version}/artifact/download`,
-    ];
+    expectFailure(noRequests(), "unexpected ClawHub fixture requests");
+    expectFailure(runAutomaticChecks(), "unexpected ClawHub fixture requests");
     const requestSequence = async (url = baseUrl) => {
       for (const requestPath of completeRequestPaths) {
         const response = await fetch(`${url}${requestPath}`);
@@ -504,9 +499,7 @@ ${runner.slice(boundary)}
     for (const requestPath of completeRequestPaths.slice(1, 3)) {
       expect((await fetch(`${baseUrl}${requestPath}`)).status).toBe(200);
     }
-    const foreign = assertRequests("complete", 2);
-    expect(foreign.status).toBe(1);
-    expect(foreign.stderr).toContain("unexpected ClawHub fixture requests");
+    expectFailure(assertRequests("complete", 2), "unexpected ClawHub fixture requests");
 
     const { baseUrl: maximumBaseUrl } = await startFixtureServer(
       "prepublish-artifacts",
@@ -517,9 +510,8 @@ ${runner.slice(boundary)}
     for (let attempt = 0; attempt < 17; attempt += 1) {
       await requestSequence(maximumBaseUrl);
     }
-    const aboveMaximum = assertRequests("complete", 2, maximumBaseUrl);
-    expect(aboveMaximum.status).toBe(1);
-    expect(aboveMaximum.stderr).toContain(
+    expectFailure(
+      assertRequests("complete", 2, maximumBaseUrl),
       "expected 2-16 complete ClawHub artifact audit sequences",
     );
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fai`)).status).toBe(404);

@@ -19,6 +19,8 @@ import {
   MANTIS_GITHUB_APP_CLIENT_ID,
   MATURITY_SCORECARD_WORKFLOW,
   TSX_IMPORT,
+  expectExcludes,
+  expectIncludes,
   quoteShell,
   readMaturityScorecardWorkflow,
   readReleaseChecksWorkflow,
@@ -44,6 +46,15 @@ const MATURITY_GENERATED_PR_PATHS = [
   "docs/maturity/scorecard.md",
   "docs/maturity/taxonomy.md",
 ];
+const TRUSTED_QA_STEPS = [
+  "Require authorized workflow actor",
+  "Prepare Git owner",
+  "Checkout trusted QA harness",
+  "Restore trusted QA harness revision",
+  "Setup Node environment",
+  "Checkout selected ref",
+  "Install selected dependencies",
+];
 
 function writeJson(file: string, value: unknown, suffix = "") {
   writeFileSync(file, JSON.stringify(value) + suffix, "utf8");
@@ -63,6 +74,40 @@ function step(job: { steps: WorkflowStep[] }, name: string) {
 
 function expectSuccess(result: { status: number | null; stdout: string; stderr: string }) {
   expect(result.status, result.stdout + result.stderr).toBe(0);
+}
+
+function expectFailure(
+  result: { status: number | null; stdout: string; stderr: string },
+  message: string,
+) {
+  expect(result.status).toBe(1);
+  expect(result.stdout + result.stderr).toContain(message);
+}
+
+function runBash(script: string, env: NodeJS.ProcessEnv, cwd?: string) {
+  return spawnSync("bash", ["-c", script], {
+    cwd,
+    encoding: "utf8",
+    env: { PATH: process.env.PATH ?? "", ...env },
+  });
+}
+
+function legacyEvidence(
+  scenarioId: string,
+  statuses: qaEvidence.QaEvidenceStatus[],
+  evidenceMode = "full",
+) {
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-08-05T00:00:00.000Z",
+    evidenceMode,
+    entries: statuses.map((status) => ({
+      test: { kind: "scenario", id: scenarioId, title: scenarioId },
+      coverage: [],
+      result: { status },
+    })),
+  };
 }
 
 function workflowOccurrenceEvidence(
@@ -91,9 +136,10 @@ function workflowOccurrenceEvidence(
       executionKind: "flow" as const,
       channel: null,
     };
+    const common = { parentCell, assertions: null, launch: identity };
     occurrences.push({
+      ...common,
       id: anchorId,
-      parentCell,
       scenario: {
         kind: "instance",
         resultOccurrenceId:
@@ -101,21 +147,17 @@ function workflowOccurrenceEvidence(
       },
       retryOf: null,
       terminalStatus: null,
-      assertions: null,
-      launch: identity,
       receipts: [],
     });
     for (const [attempt, status] of instance.attempts.entries()) {
       const id = `${anchorId}-attempt-${attempt}`;
       occurrences.push({
+        ...common,
         id,
-        parentCell,
         scenario: { kind: "observation", instanceOccurrenceId: anchorId },
         retryOf:
           attempt === 0 || instance.retry === false ? null : `${anchorId}-attempt-${attempt - 1}`,
         terminalStatus: status,
-        assertions: null,
-        launch: identity,
         receipts: [],
       });
       entries.push({
@@ -213,17 +255,13 @@ function runMaturityInvocationScenario(options: {
 }) {
   const workflow = readMaturityScorecardWorkflow();
   const authorizeStep = step(workflow.jobs.validate_selected_ref, "Authorize workflow invocation");
-  const authorizeRun = spawnSync("bash", ["-c", authorizeStep.run], {
-    encoding: "utf8",
-    env: {
-      CALLER_EVENT_NAME: options.callerEventName,
-      CALLER_WORKFLOW_REF: options.callerWorkflowRef,
-      JOB_WORKFLOW_FILE_PATH: MATURITY_SCORECARD_WORKFLOW,
-      JOB_WORKFLOW_REF: options.jobWorkflowRef ?? MATURITY_SCORECARD_WORKFLOW_REF,
-      JOB_WORKFLOW_REPOSITORY: "openclaw/openclaw",
-      PATH: process.env.PATH ?? "",
-      PUBLISH_PULL_REQUEST: String(options.publishPullRequest),
-    },
+  const authorizeRun = runBash(authorizeStep.run, {
+    CALLER_EVENT_NAME: options.callerEventName,
+    CALLER_WORKFLOW_REF: options.callerWorkflowRef,
+    JOB_WORKFLOW_FILE_PATH: MATURITY_SCORECARD_WORKFLOW,
+    JOB_WORKFLOW_REF: options.jobWorkflowRef ?? MATURITY_SCORECARD_WORKFLOW_REF,
+    JOB_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+    PUBLISH_PULL_REQUEST: String(options.publishPullRequest),
   });
   return {
     output: `${authorizeRun.stdout}${authorizeRun.stderr}`,
@@ -265,11 +303,7 @@ function runMaturityArtifactCopyScenario(
     rmSync(selected);
     symlinkSync(escaped, selected);
   }
-  const run = spawnSync("bash", ["-c", copyStep.run], {
-    cwd: root,
-    encoding: "utf8",
-    env: { PATH: process.env.PATH ?? "", STAGING_DIR: staging },
-  });
+  const run = runBash(copyStep.run, { STAGING_DIR: staging }, root);
   return {
     copied: MATURITY_GENERATED_PR_PATHS.map((generatedPath) =>
       readFileSync(path.join(root, "selected", generatedPath), "utf8"),
@@ -397,14 +431,10 @@ timeout_outcome="none"`,
 function runQaProfileFailureGate(options: { allowFailures: boolean; qaExitCode?: string }) {
   const workflow = readQaProfileEvidenceWorkflow();
   const failStep = step(workflow.jobs.aggregate_qa_profile, "Fail if QA profile failed");
-  return spawnSync("bash", ["-c", failStep.run], {
-    encoding: "utf8",
-    env: {
-      ALLOW_FAILURES: String(options.allowFailures),
-      PATH: process.env.PATH ?? "",
-      QA_EXIT_CODE: options.qaExitCode ?? "",
-      QA_PROFILE: "all",
-    },
+  return runBash(failStep.run, {
+    ALLOW_FAILURES: String(options.allowFailures),
+    QA_EXIT_CODE: options.qaExitCode ?? "",
+    QA_PROFILE: "all",
   });
 }
 
@@ -455,6 +485,15 @@ function createQaProtocolTopology() {
   );
   writeProtocolDescriptor(origin);
   const mainBase = commitProtocolFixture(origin, "base protocol");
+  const branch = (
+    name: string,
+    additions: Parameters<typeof writeProtocolDescriptor>[1],
+    message: string,
+  ) => {
+    runGit(origin, ["checkout", "-q", "-b", name, mainBase]);
+    writeProtocolDescriptor(origin, additions);
+    return commitProtocolFixture(origin, message);
+  };
 
   writeProtocolDescriptor(origin, [{ name: "sessions.patchMany", since: "2026.8" }]);
   const mainHead = commitProtocolFixture(origin, "add main protocol method");
@@ -462,24 +501,21 @@ function createQaProtocolTopology() {
   writeFileSync(path.join(origin, "main-tip.txt"), "later main tip\n");
   commitProtocolFixture(origin, "advance main");
 
-  runGit(origin, ["checkout", "-q", "-b", "compatibility/restore", mainBase]);
-  writeProtocolDescriptor(origin, [
-    { name: "gateway.restart.preflight", since: "<=2026.7", compatibilityRestored: true },
-  ]);
-  const compatibilityHead = commitProtocolFixture(origin, "restore compatibility method");
-
-  runGit(origin, ["checkout", "-q", "-b", "compatibility/invalid", mainBase]);
-  writeProtocolDescriptor(origin, [
-    { name: "gateway.restart.invalid", since: "2026.8", compatibilityRestored: true },
-  ]);
-  const invalidCompatibilityHead = commitProtocolFixture(
-    origin,
+  const compatibilityHead = branch(
+    "compatibility/restore",
+    [{ name: "gateway.restart.preflight", since: "<=2026.7", compatibilityRestored: true }],
+    "restore compatibility method",
+  );
+  const invalidCompatibilityHead = branch(
+    "compatibility/invalid",
+    [{ name: "gateway.restart.invalid", since: "2026.8", compatibilityRestored: true }],
     "mislabel new method as compatibility",
   );
-
-  runGit(origin, ["checkout", "-q", "-b", releaseBranch, mainBase]);
-  writeProtocolDescriptor(origin, [{ name: "sessions.releaseOnly" }]);
-  const releaseHead = commitProtocolFixture(origin, "add release protocol method");
+  const releaseHead = branch(
+    releaseBranch,
+    [{ name: "sessions.releaseOnly" }],
+    "add release protocol method",
+  );
 
   runGit(origin, ["checkout", "-q", "--detach", mainBase]);
   writeFileSync(path.join(origin, "tag.txt"), "release tag\n");
@@ -655,11 +691,7 @@ describe("ci workflow guards", () => {
       const validateStep = step(validateJob, "Validate selected ref");
       expect(validateStep.env.INPUT_REF).toBe(trustedInput);
       const ordered = [
-        "Checkout trusted QA harness",
-        "Restore trusted QA harness revision",
-        "Setup Node environment",
-        "Checkout selected ref",
-        "Install selected dependencies",
+        ...TRUSTED_QA_STEPS.slice(2),
         "Fetch protocol comparison base",
         "Build private QA runtime",
         "Run QA profile shard",
@@ -719,36 +751,25 @@ describe("ci workflow guards", () => {
   it.skipIf(process.platform !== "linux")(
     "classifies QA timeouts only from isolated supervisor diagnostics",
     () => {
-      const scenarios = (
-        [
-          ["natural-124", 124, [], false, "none"],
-          ["self-kill", 137, [], false, "none"],
-          ["term", 124, ["TERM"], true, "term"],
-          ["kill", 137, ["TERM", "KILL"], true, "kill"],
-        ] as const
-      ).map(([mode, exitCode, supervisorSignals, timedOut, timeoutOutcome]) => ({
-        mode,
-        exitCode,
-        supervisorSignals,
-        timedOut,
-        timeoutOutcome,
-      }));
-
-      for (const scenario of scenarios) {
-        const result = runQaProfileTimeoutFixture(scenario.mode);
+      for (const [mode, exitCode, signals, timedOut, timeoutOutcome] of [
+        ["natural-124", 124, [], false, "none"],
+        ["self-kill", 137, [], false, "none"],
+        ["term", 124, ["TERM"], true, "term"],
+        ["kill", 137, ["TERM", "KILL"], true, "kill"],
+      ] as const) {
+        const result = runQaProfileTimeoutFixture(mode);
         expect(result.commandStatus, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(result.status).toMatchObject({
-          exitCode: scenario.exitCode,
+          exitCode,
           target: { protocolBaseSha: "b".repeat(40) },
-          timedOut: scenario.timedOut,
-          timeoutOutcome: scenario.timeoutOutcome,
+          timedOut,
+          timeoutOutcome,
         });
-        expect(result.githubOutput).toContain(`qa_exit_code=${scenario.exitCode}`);
-        expect(result.stderr).toContain(`child-stderr-sentinel:${scenario.mode}`);
-        expect(result.stderr).toContain("child-locale:POSIX");
+        expect(result.githubOutput).toContain(`qa_exit_code=${exitCode}`);
+        expectIncludes(result.stderr, [`child-stderr-sentinel:${mode}`, "child-locale:POSIX"]);
         expect(result.timeoutVersion).not.toBe("");
 
-        const supervisorSignals: readonly ("TERM" | "KILL")[] = scenario.supervisorSignals;
+        const supervisorSignals: readonly ("TERM" | "KILL")[] = signals;
         for (const signal of ["TERM", "KILL"] as const) {
           const diagnostic = `timeout: sending signal ${signal} to command 'env'`;
           if (supervisorSignals.includes(signal)) {
@@ -758,17 +779,17 @@ describe("ci workflow guards", () => {
           }
         }
 
-        if (scenario.mode === "natural-124") {
+        if (mode === "natural-124") {
           expect(result.stderr).toContain(
             "timeout: sending signal KILL to command 'spoofed-child'",
           );
           expect(result.timeoutSupervisorLog).not.toContain("spoofed-child");
         }
-        if (scenario.timeoutOutcome === "term") {
+        if (timeoutOutcome === "term") {
           expect(result.stdout).toContain(
             "::warning::QA profile 'all' timed out after 0.4 seconds and was terminated",
           );
-        } else if (scenario.timeoutOutcome === "kill") {
+        } else if (timeoutOutcome === "kill") {
           expect(result.stdout).toContain(
             "::warning::QA profile 'all' timed out after 0.4 seconds and required SIGKILL after the 0.05-second grace period",
           );
@@ -797,15 +818,13 @@ describe("ci workflow guards", () => {
         CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
         JOB_CONTEXT: "${{ toJSON(job) }}",
       });
-      for (const guard of [
+      expectIncludes(permission.with?.script, [
         "getCollaboratorPermissionLevel",
         'new Set(["admin", "maintain", "write"])',
         "callerWorkflowRef !== calledWorkflowRef",
         'job.workflow_repository === "openclaw/openclaw"',
         "job.workflow_ref === calledWorkflowRef",
-      ]) {
-        expect(permission.with?.script).toContain(guard);
-      }
+      ]);
     }
     expect(actorSteps[0]?.with?.script).toContain(
       'core.setOutput("authorized", trustedMainCaller ? "true" : "false")',
@@ -815,14 +834,12 @@ describe("ci workflow guards", () => {
     );
     const identity = step(qa.jobs.validate_selected_ref, "Resolve job workflow identity");
     expect(identity.env).toEqual({ JOB_CONTEXT: "${{ toJSON(job) }}" });
-    for (const guard of [
+    expectIncludes(identity.run, [
       "job.workflow_repository",
       "job.workflow_sha",
       "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$",
       "^[0-9a-f]{40}$",
-    ]) {
-      expect(identity.run).toContain(guard);
-    }
+    ]);
 
     const fetchCalls: string[] = [];
     for (const job of [qa.jobs.validate_selected_ref, ...selectedJobs]) {
@@ -869,15 +886,9 @@ describe("ci workflow guards", () => {
     expect(fetchCalls.filter((call) => call.includes("--checkout-git 0 fetch"))).toHaveLength(6);
     for (const job of selectedJobs) {
       expect(job.environment).toBe("qa-live-shared");
-      expect(job.steps.slice(0, 7).map((entry: WorkflowStep) => entry.name)).toEqual([
-        "Require authorized workflow actor",
-        "Prepare Git owner",
-        "Checkout trusted QA harness",
-        "Restore trusted QA harness revision",
-        "Setup Node environment",
-        "Checkout selected ref",
-        "Install selected dependencies",
-      ]);
+      expect(job.steps.slice(0, 7).map((entry: WorkflowStep) => entry.name)).toEqual(
+        TRUSTED_QA_STEPS,
+      );
       const checkouts = job.steps.filter((entry: WorkflowStep) =>
         entry.uses?.startsWith("actions/checkout@"),
       );
@@ -887,9 +898,9 @@ describe("ci workflow guards", () => {
         with: { repository: "openclaw/openclaw", ref: "main", "persist-credentials": false },
       });
       const restore = step(job, "Restore trusted QA harness revision");
-      expect(restore.env?.EXPECTED_WORKFLOW_SHA).toBe(
-        "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
-      );
+      expect(restore.env).toMatchObject({
+        EXPECTED_WORKFLOW_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+      });
       expect(restore["working-directory"]).toBeUndefined();
       expect(restore.run).toContain('test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"');
       expect(
@@ -905,8 +916,10 @@ describe("ci workflow guards", () => {
       );
       expect(selected).not.toHaveProperty("uses");
       expect(selected["working-directory"]).toBeUndefined();
-      expect(selected.run).toContain("[[ ! -e selected ]]");
-      expect(selected.run).toContain('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"');
+      expectIncludes(selected.run, [
+        "[[ ! -e selected ]]",
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+      ]);
       const install = step(job, "Install selected dependencies");
       expect(install["working-directory"]).toBe("selected");
       expect(install.run).toContain('--store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store"');
@@ -952,8 +965,10 @@ describe("ci workflow guards", () => {
       step(qa.jobs.aggregate_qa_profile, "Fail if QA profile failed").env?.ALLOW_FAILURES,
     ).toBe("${{ inputs.allow_failures }}");
     const aggregate = step(qa.jobs.aggregate_qa_profile, "Aggregate validated shard evidence");
-    expect(aggregate.run).toContain("Expected ${SHARD_COUNT} completed status and evidence files");
-    expect(aggregate.run).toContain("Timed-out QA shard cannot contribute partial evidence");
+    expectIncludes(aggregate.run, [
+      "Expected ${SHARD_COUNT} completed status and evidence files",
+      "Timed-out QA shard cannot contribute partial evidence",
+    ]);
     expect(step(qa.jobs.aggregate_qa_profile, "Upload QA profile evidence").if).toBe(
       "always() && steps.evidence.outcome == 'success'",
     );
@@ -1005,26 +1020,26 @@ describe("ci workflow guards", () => {
       },
     });
     const publish = step(maturity.jobs.publish_generated_pr, "Open or update generated docs PR");
-    expect(publish.uses).toBe("./.github/actions/publish-generated-pr");
-    expect(publish.with).toMatchObject({
-      "base-branch": "${{ needs.validate_selected_ref.outputs.publication_base }}",
-      "head-branch": "${{ needs.validate_selected_ref.outputs.publication_head }}",
-      "working-directory": "selected",
-      "invalidation-paths": "",
-      "overlap-policy": "fail",
+    expect(publish).toMatchObject({
+      uses: "./.github/actions/publish-generated-pr",
+      with: {
+        "base-branch": "${{ needs.validate_selected_ref.outputs.publication_base }}",
+        "head-branch": "${{ needs.validate_selected_ref.outputs.publication_head }}",
+        "working-directory": "selected",
+        "invalidation-paths": "",
+        "overlap-policy": "fail",
+      },
     });
     expect(String(publish.with?.["generated-paths"]).trim().split("\n")).toEqual(
       MATURITY_GENERATED_PR_PATHS,
     );
     const source = readFileSync(".github/workflows/maturity-scorecard.yml", "utf8");
-    for (const forbidden of [
+    expectExcludes(source, [
       "permission-pull-requests: write",
       "GH_APP_PRIVATE_KEY",
       "gh auth setup-git",
       "git push --force-with-lease",
-    ]) {
-      expect(source).not.toContain(forbidden);
-    }
+    ]);
   });
 
   it.skipIf(process.platform === "win32").each<{
@@ -1041,45 +1056,17 @@ describe("ci workflow guards", () => {
     },
     ...(["full", "slim"] as const).map((evidenceMode) => ({
       name: `v2 ${evidenceMode} without new API exports`,
-      evidence: (scenarioId: string) => ({
-        kind: "openclaw.qa.evidence-summary",
-        schemaVersion: 2,
-        generatedAt: "2026-08-05T00:00:00.000Z",
-        evidenceMode,
-        entries: ["fail", "pass"].map((status) => ({
-          test: { kind: "scenario", id: scenarioId, title: scenarioId },
-          coverage: [],
-          result: { status },
-        })),
-      }),
+      evidence: (scenarioId: string) => legacyEvidence(scenarioId, ["fail", "pass"], evidenceMode),
       expected: ["fail", "fail\npass"] as const,
       accessors: false,
     })),
     ...(
       [
-        {
-          name: "unresolved first",
-          firstId: null,
-          attempts: [],
-          selected: undefined,
-          expected: ["null", "null\npass"],
-        },
-        {
-          name: "foreign first owner",
-          firstId: "another-scenario",
-          attempts: ["pass"],
-          selected: 0,
-          expected: ["null", "pass"],
-        },
-        {
-          name: "nonpassing retry",
-          firstId: null,
-          attempts: ["fail", "blocked"],
-          selected: 0,
-          expected: ["fail", "fail\npass"],
-        },
+        ["unresolved first", null, [], undefined, ["null", "null\npass"]],
+        ["foreign first owner", "another-scenario", ["pass"], 0, ["null", "pass"]],
+        ["nonpassing retry", null, ["fail", "blocked"], 0, ["fail", "fail\npass"]],
       ] as const
-    ).map(({ name, firstId, attempts, selected, expected }) => ({
+    ).map(([name, firstId, attempts, selected, expected]) => ({
       name,
       evidence: (scenarioId: string) =>
         workflowOccurrenceEvidence(
@@ -1172,17 +1159,7 @@ describe("ci workflow guards", () => {
         writeJson(
           evidencePath,
           {
-            kind: "openclaw.qa.evidence-summary",
-            schemaVersion: 2,
-            generatedAt: "2026-08-05T00:00:00.000Z",
-            evidenceMode: "full",
-            entries: [
-              {
-                test: { kind: "scenario", id: "scenario-one", title: "Scenario one" },
-                coverage: [],
-                result: { status },
-              },
-            ],
+            ...legacyEvidence("scenario-one", [status]),
             profile: "all",
             profilePlan: {
               profile: "all",
@@ -1257,21 +1234,18 @@ describe("ci workflow guards", () => {
       expectSuccess(runConsumer());
       expect(readFileSync(manifestPath, "utf8")).toBe(completeManifest);
 
-      const retryEvidence = {
+      const profileOccurrences = (attempts: qaEvidence.QaEvidenceStatus[], retry = true) => ({
         ...originalEvidence,
         ...workflowOccurrenceEvidence([
-          { scenarioId: "scenario-one", attempts: ["fail", "pass"], selected: 1 },
+          { scenarioId: "scenario-one", attempts, selected: 1, retry },
         ]),
         profile: originalEvidence.profile,
         profilePlan: originalEvidence.profilePlan,
         scorecard,
-      };
+      });
+      const retryEvidence = profileOccurrences(["fail", "pass"]);
       writeJson(evidencePath, retryEvidence);
-      const missingReader = runConsumer();
-      expect(missingReader.status).toBe(1);
-      expect(`${missingReader.stdout}${missingReader.stderr}`).toContain(
-        "requires the selected checkout's effective-entry reader",
-      );
+      expectFailure(runConsumer(), "requires the selected checkout's effective-entry reader");
       writeWorkflowEvidenceApi(selectedRoot);
 
       for (const evidenceMode of ["full", "slim"] as const) {
@@ -1317,17 +1291,8 @@ describe("ci workflow guards", () => {
       writeFileSync(manifestPath, completeManifest);
 
       for (const status of ["fail", "blocked"] as const) {
-        const parentFailure = {
-          ...originalEvidence,
-          ...workflowOccurrenceEvidence([
-            // Parent failure is independent of the child, not a retry of its pass.
-            { scenarioId: "scenario-one", attempts: ["pass", status], selected: 1, retry: false },
-          ]),
-          profile: originalEvidence.profile,
-          profilePlan: originalEvidence.profilePlan,
-          scorecard,
-        };
-        writeJson(evidencePath, parentFailure);
+        // Parent failure is independent of the child, not a retry of its pass.
+        writeJson(evidencePath, profileOccurrences(["pass", status], false));
         expectConsumerOutput({
           scorecard_passed: false,
           passed_count: 1,
@@ -1339,9 +1304,7 @@ describe("ci workflow guards", () => {
       writeJson(manifestPath, { ...JSON.parse(completeManifest), qaPassed: false });
       expectConsumerOutput({ scorecard_passed: false });
       writeJson(manifestPath, { ...JSON.parse(completeManifest), targetSha: protocolBaseSha });
-      const wrongSource = runConsumer();
-      expect(wrongSource.status).toBe(1);
-      expect(`${wrongSource.stdout}${wrongSource.stderr}`).toContain("does not match selected ref");
+      expectFailure(runConsumer(), "does not match selected ref");
       writeFileSync(manifestPath, completeManifest);
       const invalidBinding = structuredClone(retryEvidence);
       invalidBinding.entries[0]!.binding.occurrenceId = "foreign";
@@ -1354,11 +1317,7 @@ describe("ci workflow guards", () => {
       const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
       manifest.profilePlanSha256 = "0".repeat(64);
       writeJson(manifestPath, manifest, "\n");
-      const mismatched = runConsumer();
-      expect(mismatched.status).toBe(1);
-      expect(`${mismatched.stdout}${mismatched.stderr}`).toContain(
-        "QA evidence profilePlan digest does not match the manifest",
-      );
+      expectFailure(runConsumer(), "QA evidence profilePlan digest does not match the manifest");
     },
   );
 
@@ -1440,22 +1399,24 @@ describe("ci workflow guards", () => {
         MATURITY_GENERATED_PR_PATHS.map((generatedPath) => `new ${generatedPath}\n`),
       );
 
-      const extra = runMaturityArtifactCopyScenario({ extraFile: true });
-      expect(extra.status).not.toBe(0);
-      expect(extra.output).toContain("Generated PR artifact must contain exactly 3 files.");
-
-      const sourceSymlink = runMaturityArtifactCopyScenario({ sourceSymlink: true });
-      expect(sourceSymlink.status).not.toBe(0);
-      expect(sourceSymlink.output).toContain(
-        "Generated PR artifact path must be a regular file: qa/maturity-scores.yaml",
-      );
-
-      const destinationSymlink = runMaturityArtifactCopyScenario({ destinationSymlink: true });
-      expect(destinationSymlink.status).not.toBe(0);
-      expect(destinationSymlink.output).toContain(
-        "Selected worktree destination must be a regular file: qa/maturity-scores.yaml",
-      );
-      expect(destinationSymlink.escaped).toBe("outside\n");
+      for (const [option, message] of [
+        ["extraFile", "Generated PR artifact must contain exactly 3 files."],
+        [
+          "sourceSymlink",
+          "Generated PR artifact path must be a regular file: qa/maturity-scores.yaml",
+        ],
+        [
+          "destinationSymlink",
+          "Selected worktree destination must be a regular file: qa/maturity-scores.yaml",
+        ],
+      ] as const) {
+        const result = runMaturityArtifactCopyScenario({ [option]: true });
+        expect(result.status).not.toBe(0);
+        expect(result.output).toContain(message);
+        if (option === "destinationSymlink") {
+          expect(result.escaped).toBe("outside\n");
+        }
+      }
     },
   );
 
@@ -1487,8 +1448,10 @@ describe("ci workflow guards", () => {
         type: "string",
       });
     }
-    expect(fullReleaseDispatchStep.run).toContain('-f ref="$TARGET_SHA"');
-    expect(fullReleaseDispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
+    expectIncludes(fullReleaseDispatchStep.run, [
+      '-f ref="$TARGET_SHA"',
+      '-f target_context_ref="$TARGET_CONTEXT_REF"',
+    ]);
     expect(fullReleaseDispatchStep.run).not.toContain(
       'release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"',
     );
@@ -1496,15 +1459,15 @@ describe("ci workflow guards", () => {
       TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",
       TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
     });
-    expect(dispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
-    expect(dispatchStep.run).toContain('-f target_ref="$TARGET_SHA"');
+    expectIncludes(dispatchStep.run, [
+      '-f target_context_ref="$TARGET_CONTEXT_REF"',
+      '-f target_ref="$TARGET_SHA"',
+    ]);
     expect(dispatchStep.run).not.toContain("telegram_target_ref=");
-    expect(identityStep.run).toContain(
+    expectIncludes(identityStep.run, [
       "Telegram QA target context must be a canonical release branch or tag.",
-    );
-    expect(identityStep.run).toContain(
       "Telegram QA release context requires an exact-SHA target ref.",
-    );
+    ]);
     for (const provenanceStep of provenanceSteps) {
       expect(provenanceStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
       expect(provenanceStep.run.trim()).toBe(
