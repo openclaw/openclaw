@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 
+const unpinnedRuntime = { clientId: "test", clientMode: "test", pairedDeviceFamily: undefined };
+
 function resolvePlatforms(
   claimedPlatform: string,
   pairedPlatform: string,
@@ -45,9 +47,7 @@ describe("resolvePinnedClientMetadata", () => {
         unpinnedFamily ? canonical : legacy,
         legacy,
         family,
-        unpinnedFamily
-          ? { clientId: "test", clientMode: "test", pairedDeviceFamily: undefined }
-          : {},
+        unpinnedFamily ? unpinnedRuntime : {},
       ),
       canonical,
       unpinnedFamily ? undefined : family,
@@ -62,11 +62,7 @@ describe("resolvePinnedClientMetadata", () => {
     "keeps non-equivalent runtime tuples approval-bound: %j",
     ({ pairedPlatform, claimedDeviceFamily }) => {
       expect(
-        resolvePlatforms("windows", pairedPlatform, claimedDeviceFamily, {
-          clientId: "test",
-          clientMode: "test",
-          pairedDeviceFamily: undefined,
-        }),
+        resolvePlatforms("windows", pairedPlatform, claimedDeviceFamily, unpinnedRuntime),
       ).toMatchObject({
         platformMismatch: true,
         deviceFamilyMismatch: false,

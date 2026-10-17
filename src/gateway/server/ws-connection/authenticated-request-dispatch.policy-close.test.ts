@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { approveDevicePairing } from "../../../infra/device-pairing-approval.js";
 import * as deviceTokens from "../../../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pairing.js";
@@ -16,6 +16,7 @@ import { createSecretsHandlers } from "../../server-methods/secrets.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../../server-shared-auth-generation.js";
 import { holdGatewayPolicyResponse } from "../ws-policy-close.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -58,18 +59,6 @@ const device = (id: string, publicKey: string) => ({
   signedAt: 1,
   nonce: "nonce",
 });
-function createGate() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
 const loadRouter = () =>
   vi.importActual<typeof import("../../server-methods.js")>("../../server-methods.js");
 
@@ -77,6 +66,7 @@ describe("policy writer response ownership", () => {
   beforeEach(() => {
     runtime.handler.mockReset();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("keeps a later revoke final across failed profile preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -119,17 +109,16 @@ describe("policy writer response ownership", () => {
         credentialExecutions.push(execution);
         await execution;
       });
-      const preparation = createGate();
+      const preparation = createRequestGate();
       const prepareOriginal = profileAuthority.prepareUserProfileSelectionAuthority;
-      const prepare = vi
-        .spyOn(profileAuthority, "prepareUserProfileSelectionAuthority")
-        .mockImplementationOnce(async (...args) => {
+      vi.spyOn(profileAuthority, "prepareUserProfileSelectionAuthority").mockImplementationOnce(
+        async (...args) => {
           await preparation.wait();
           return prepareOriginal(...args);
-        });
+        },
+      );
       const createBinding = expectedProfile.createExpectedProfileBinding;
-      const binding = vi
-        .spyOn(expectedProfile, "createExpectedProfileBinding")
+      vi.spyOn(expectedProfile, "createExpectedProfileBinding")
         .mockImplementationOnce(createBinding)
         .mockRejectedValueOnce(new Error("middle profile preparation failed"));
       const dispatched: Promise<void>[] = [];
@@ -168,8 +157,6 @@ describe("policy writer response ownership", () => {
       } finally {
         preparation.release();
         await Promise.allSettled(dispatched);
-        prepare.mockRestore();
-        binding.mockRestore();
       }
     });
   });
@@ -182,7 +169,7 @@ describe("policy writer response ownership", () => {
         const target = ensureProfileForEmail("policy-target@example.test");
         const fixture = createFixture();
         fixture.client.authenticatedUserProfile = profileBinding(source);
-        const gate = createGate();
+        const gate = createRequestGate();
         const receipt = { committed: true, accountData: "original-account-result" };
         const { handleGatewayRequest } = await loadRouter();
         runtime.handler.mockImplementation((options: GatewayRequestOptions) =>
@@ -238,7 +225,7 @@ describe("policy writer response ownership", () => {
     "delivers a secrets activation result before closing (failed=%s)",
     async (failed) => {
       const fixture = createFixture();
-      const gate = createGate();
+      const gate = createRequestGate();
       const handlers = createSecretsHandlers({
         reloadSecrets: async () => {
           fixture.invalidate();
@@ -286,8 +273,8 @@ describe("policy writer response ownership", () => {
 
   it("keeps only accepted config.patch results, then closes after the last result", async () => {
     const fixture = createFixture();
-    const writers = ["first", "second"].map((id) => Object.assign(createGate(), { id }));
-    const read = createGate();
+    const writers = ["first", "second"].map((id) => Object.assign(createRequestGate(), { id }));
+    const read = createRequestGate();
     runtime.handler.mockImplementation(async ({ req, respond }) => {
       const writer = writers.find(({ id }) => id === req.id);
       if (writer) {
@@ -332,12 +319,12 @@ describe("policy writer response ownership", () => {
     fixture.client.isDeviceTokenAuth = true;
     fixture.client.usesSharedGatewayAuth = false;
     fixture.client.connect.device = device("self", "public");
-    const gate = createGate();
+    const gate = createRequestGate();
     const closed = createDeferredCore();
     const invalidateClientsForDevice = vi.fn();
     const disconnectClientsForDevice = vi.fn();
     fixture.harness.close.mockImplementation(() => closed.resolve());
-    const rotate = vi.spyOn(deviceTokens, "rotateDeviceToken").mockImplementationOnce(async () => {
+    vi.spyOn(deviceTokens, "rotateDeviceToken").mockImplementationOnce(async () => {
       await gate.wait();
       return {
         ok: true,
@@ -385,11 +372,7 @@ describe("policy writer response ownership", () => {
       expect(disconnectClientsForDevice).toHaveBeenCalledWith("self", { role: "operator" });
     } finally {
       gate.release();
-      try {
-        await dispatch;
-      } finally {
-        rotate.mockRestore();
-      }
+      await dispatch;
     }
   });
 

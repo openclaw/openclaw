@@ -33,6 +33,7 @@ import {
   setTestPluginRegistry,
 } from "../../test-helpers.plugin-registry.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -209,72 +210,51 @@ describe("authenticated WebSocket request trace dispatch", () => {
     vi.clearAllMocks();
   });
 
-  it("rejects a cached agent runtime identity after its delegated authority closes", async () => {
-    const handler = vi.fn();
-    const validateAgentRuntimeApprovalAuthority = vi.fn(() => false);
-    const { close, dispatcher, send, setCloseCause } = createDispatcher(handler, {
-      validateAgentRuntimeApprovalAuthority,
-    });
-    const client = createClient();
-    const agentRuntimeIdentity = createTestAgentRuntimeIdentity("closed-authority");
-    client.internal = { agentRuntimeIdentity };
+  it.each(["before dispatch", "before response"] as const)(
+    "rejects delegated authority revoked %s",
+    async (stage) => {
+      let authorityActive = stage === "before response";
+      const gate = createRequestGate();
+      const handler = vi.fn(async ({ respond }) => {
+        await gate.wait();
+        respond(true, { exposed: true }, undefined);
+      });
+      const validateAgentRuntimeApprovalAuthority = vi.fn(() => authorityActive);
+      const harness = createDispatcher(handler, { validateAgentRuntimeApprovalAuthority });
+      const client = createClient();
+      const agentRuntimeIdentity = createTestAgentRuntimeIdentity(stage);
+      client.internal = { agentRuntimeIdentity };
+      const dispatch = dispatchInFreshMessageScope(harness.dispatcher, client, stage);
+      try {
+        if (stage === "before response") {
+          await gate.entered;
+          expect(handler).toHaveBeenCalledOnce();
+          authorityActive = false;
+        }
+      } finally {
+        gate.release();
+        await dispatch;
+      }
 
-    await dispatchInFreshMessageScope(dispatcher, client, "closed-authority");
-
-    expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(agentRuntimeIdentity);
-    expect(handler).not.toHaveBeenCalled();
-    expect(send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "closed-authority",
+      const failure = {
+        id: stage,
         ok: false,
-        error: expect.objectContaining({ message: "agent runtime authority is no longer active" }),
-      }),
-    );
-    expect(setCloseCause).toHaveBeenCalledWith("agent-runtime-authority-closed", {
-      method: "test.trace",
-    });
-    expect(close).toHaveBeenCalledWith(4001, "agent runtime authority closed");
-  });
-
-  it("revalidates delegated authority before returning a post-await result", async () => {
-    let authorityActive = true;
-    const invoked = createDeferredCore();
-    const held = createDeferredCore();
-    const handler = vi.fn(async ({ respond }) => {
-      invoked.resolve();
-      await held.promise;
-      respond(true, { exposed: true }, undefined);
-    });
-    const validateAgentRuntimeApprovalAuthority = vi.fn(() => authorityActive);
-    const { awaitResponseFrame, close, dispatcher, send } = createDispatcher(handler, {
-      validateAgentRuntimeApprovalAuthority,
-    });
-    const client = createClient();
-    client.internal = {
-      agentRuntimeIdentity: createTestAgentRuntimeIdentity("closed-before-result"),
-    };
-
-    const dispatch = dispatchInFreshMessageScope(dispatcher, client, "closed-before-result");
-    try {
-      await invoked.promise;
-      expect(handler).toHaveBeenCalledOnce();
-      authorityActive = false;
-    } finally {
-      held.resolve();
-      await dispatch;
-    }
-
-    expect(await awaitResponseFrame("closed-before-result")).toMatchObject({
-      ok: false,
-      error: expect.objectContaining({
-        message: "agent runtime authority is no longer active",
-      }),
-    });
-    expect(send).not.toHaveBeenCalledWith(
-      expect.objectContaining({ id: "closed-before-result", ok: true }),
-    );
-    expect(close).toHaveBeenCalledWith(4001, "agent runtime authority closed");
-  });
+        error: expect.objectContaining({
+          message: "agent runtime authority is no longer active",
+        }),
+      };
+      expect(await harness.awaitResponseFrame(stage)).toMatchObject(failure);
+      expect(harness.send).toHaveBeenCalledWith(expect.objectContaining(failure));
+      expectAuthorityClosed(harness, stage, "agent runtime authority closed");
+      if (stage === "before dispatch") {
+        expect(validateAgentRuntimeApprovalAuthority).toHaveBeenCalledWith(agentRuntimeIdentity);
+        expect(handler).not.toHaveBeenCalled();
+        expect(harness.setCloseCause).toHaveBeenCalledWith("agent-runtime-authority-closed", {
+          method: "test.trace",
+        });
+      }
+    },
+  );
 
   it.each([
     { change: "shared-auth", closeReason: "gateway auth changed" },
@@ -304,26 +284,20 @@ describe("authenticated WebSocket request trace dispatch", () => {
     { change: "invalidated", closeReason: "client invalidated: device-token-revoked" },
   ] as const)("exposes live $change authority to an active handler", async (testCase) => {
     let observedAuthority: boolean | undefined;
-    const entered = createDeferredCore();
-    const held = createDeferredCore();
-    const checked = createDeferredCore();
+    const gate = createRequestGate();
     const handler: Handler = async ({ hasCurrentClientAuthority }) => {
-      entered.resolve();
-      await held.promise;
+      await gate.wait();
       observedAuthority = hasCurrentClientAuthority?.();
-      checked.resolve();
     };
     const { client, harness, revoke } = createAuthorityScenario(testCase.change, handler);
     const dispatch = harness.dispatcher.dispatch(traceRequest("active"), client);
     try {
-      await entered.promise;
+      await gate.entered;
       revoke();
     } finally {
-      held.resolve();
+      gate.release();
       await dispatch;
     }
-    await checked.promise;
-
     expect(observedAuthority).toBe(false);
     expectAuthorityClosed(harness, "active", testCase.closeReason);
   });

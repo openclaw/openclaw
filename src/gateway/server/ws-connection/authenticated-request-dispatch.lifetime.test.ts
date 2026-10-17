@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 
 beforeEach(() => vi.resetModules());
 afterEach(() => {
@@ -18,22 +19,6 @@ afterEach(() => {
   vi.doUnmock("../../server-methods/gateway-personal-caller.js");
   vi.resetModules();
 });
-
-function createGate(signal: AbortSignal) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const unblock = () => release.resolve();
-  signal.addEventListener("abort", unblock, { once: true });
-  return {
-    entered: entered.promise,
-    unblock,
-    hold: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-    cleanup: () => signal.removeEventListener("abort", unblock),
-  };
-}
 
 function mockDispatchStage(
   stage: string,
@@ -97,10 +82,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
   it.for(["lazy import", "start scheduler"] as const)(
     "rejects access revoked during %s before entering the handler",
     async (stage, { signal }) => {
-      const gate = createGate(signal);
+      const gate = createRequestGate(signal);
       const grant = new AbortController();
       const handleGatewayRequest = vi.fn(async () => {});
-      mockDispatchStage(stage, gate.hold, handleGatewayRequest);
+      mockDispatchStage(stage, gate.wait, handleGatewayRequest);
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness();
@@ -119,7 +104,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         await gate.entered;
         grant.abort(new Error("Access ended"));
       } finally {
-        gate.unblock();
+        gate.release();
         await dispatch;
         gate.cleanup();
       }
@@ -136,7 +121,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
   ] as const)(
     "joins %s before its caller can restore state selection",
     async (stage, { signal }) => {
-      const gate = createGate(signal);
+      const gate = createRequestGate(signal);
       const finished = createDeferredCore();
       const initialRoot = path.join(os.tmpdir(), "dispatch-lifetime", "fixture");
       const restoredRoot = path.join(os.tmpdir(), "dispatch-lifetime", "restored");
@@ -148,14 +133,14 @@ describe("authenticated request completion", { concurrent: false }, () => {
         try {
           options.respond(true, { accepted: true });
           if (stage === "handler after response") {
-            await gate.hold();
+            await gate.wait();
           }
           selectedRoot = resolveStateDir(selection);
         } finally {
           finished.resolve();
         }
       };
-      mockDispatchStage(stage, gate.hold, handleGatewayRequest);
+      mockDispatchStage(stage, gate.wait, handleGatewayRequest);
       if (stage === "profile authorization") {
         // This admin auxiliary request has no session target or personal-caller policy.
         // Keep the real router/profile fence without loading those unrelated runtimes.
@@ -188,7 +173,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
       const client = createOperatorWsClient({ socket: new EventEmitter() });
       if (stage === "profile authorization") {
         client.authenticatedGitHubIdentitySync = async () => {
-          await gate.hold();
+          await gate.wait();
           client.authenticatedUserProfile = {
             profileId: "lifetime-profile",
             displayName: "Lifetime fixture",
@@ -212,7 +197,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         expect([...harness.clients.authorityClients]).toEqual([client]);
       } finally {
         // Join the handler independently: the broken dispatcher returns before it finishes.
-        gate.unblock();
+        gate.release();
         await finished.promise;
         await dispatch;
         gate.cleanup();

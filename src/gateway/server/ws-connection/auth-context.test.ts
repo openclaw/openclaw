@@ -129,16 +129,6 @@ async function resolveBootstrapFixture(
   return { decision, verifyDeviceToken, rateLimiter, verifyBootstrapToken };
 }
 
-function expectBootstrapTokenAccepted(params: {
-  decision: Awaited<ReturnType<typeof resolveConnectAuthDecision>>;
-  verifyBootstrapToken: ReturnType<typeof vi.fn<VerifyBootstrapTokenFn>>;
-  verifyDeviceToken: ReturnType<typeof vi.fn<VerifyDeviceTokenFn>>;
-}) {
-  expect(params.decision).toMatchObject({ authOk: true, authMethod: "bootstrap-token" });
-  expect(params.verifyBootstrapToken).toHaveBeenCalledOnce();
-  expect(params.verifyDeviceToken).not.toHaveBeenCalled();
-}
-
 describe("resolveConnectAuthDecision", () => {
   it.each(["proxy_attribution_required", "token_redacted_config", "password_redacted_config"])(
     "does not try credential fallbacks after %s",
@@ -207,29 +197,25 @@ describe("resolveConnectAuthDecision", () => {
     expect(verifyDeviceToken).not.toHaveBeenCalled();
   });
 
-  it("prefers a valid bootstrap token over an already successful shared auth path", async () => {
-    expectBootstrapTokenAccepted(await resolveBootstrapFixture({ sharedAuth: true }));
-  });
-
-  it("keeps the original successful auth path when bootstrap validation fails", async () => {
-    const { decision, verifyBootstrapToken, verifyDeviceToken } = await resolveBootstrapFixture({
-      sharedAuth: true,
-      invalid: true,
-    });
-    expect(decision).toMatchObject({ authOk: true, authMethod: "tailscale" });
-    expect(verifyBootstrapToken).toHaveBeenCalledOnce();
-    expect(verifyDeviceToken).not.toHaveBeenCalled();
-  });
-
-  it("still verifies the device token when only the bootstrap-token path is rate-limited", async () => {
-    const { decision, verifyBootstrapToken, verifyDeviceToken } = await resolveBootstrapFixture({
-      blocked: true,
-      withDeviceFallback: true,
-    });
-    expect(decision).toMatchObject({ authOk: true, authMethod: "device-token" });
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
-    expect(verifyDeviceToken).toHaveBeenCalledOnce();
-  });
+  it.each([
+    ["bootstrap-token", { sharedAuth: true }, 1, 0, false],
+    ["tailscale", { sharedAuth: true, invalid: true }, 1, 0, false],
+    ["device-token", { blocked: true, withDeviceFallback: true }, 0, 1, false],
+    ["bootstrap-token", {}, 1, 0, true],
+  ] as const)(
+    "selects %s with bootstrap inputs %j",
+    async (authMethod, params, bootstrapChecks, deviceChecks, resets) => {
+      const { decision, verifyBootstrapToken, verifyDeviceToken, rateLimiter } =
+        await resolveBootstrapFixture(params);
+      expect(decision).toMatchObject({ authOk: true, authMethod });
+      expect(verifyBootstrapToken).toHaveBeenCalledTimes(bootstrapChecks);
+      expect(verifyDeviceToken).toHaveBeenCalledTimes(deviceChecks);
+      if (resets) {
+        expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
+        expect(rateLimiter.recordFailure).not.toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
+      }
+    },
+  );
 
   it("records a bootstrap-token failure when final auth rejects", async () => {
     const { rateLimiter } = await resolveBootstrapFixture({ invalid: true });
@@ -292,13 +278,5 @@ describe("resolveConnectAuthDecision", () => {
     } finally {
       rateLimiter.dispose();
     }
-  });
-
-  it("resets the bootstrap-token bucket when the verify succeeds", async () => {
-    const result = await resolveBootstrapFixture();
-    const { rateLimiter } = result;
-    expectBootstrapTokenAccepted(result);
-    expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
-    expect(rateLimiter.recordFailure).not.toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
   });
 });

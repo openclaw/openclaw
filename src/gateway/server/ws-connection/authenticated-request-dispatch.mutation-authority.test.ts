@@ -25,7 +25,6 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareUserProfileSelectionAuthority } from "../../../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
@@ -46,6 +45,7 @@ import {
   disconnectStaleSharedGatewayAuthClients,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -370,6 +370,17 @@ describe("authenticated request mutation custody", () => {
         },
       });
       harness.close.mockImplementation(() => connection.abort());
+      const disconnect = (
+        expectedGeneration: string | null,
+        clients = [client],
+        revokeSource?: false,
+      ) =>
+        disconnectStaleSharedGatewayAuthClients({
+          state: generation,
+          clients,
+          expectedGeneration,
+          revokeSource,
+        });
       await dispatch("accepted-source");
       const accepted = expectDefined(captures.at(-1), "accepted source");
       const releaseQueued = expectDefined(accepted.authority.retain, "source retention")();
@@ -383,12 +394,7 @@ describe("authenticated request mutation custody", () => {
             generation.claim(ownership, "generation-b"),
             "candidate generation owner",
           );
-          disconnectStaleSharedGatewayAuthClients({
-            state: generation,
-            clients: [client],
-            expectedGeneration: "generation-b",
-            revokeSource: false,
-          });
+          disconnect("generation-b", [client], false);
         }
         await dispatch("buffered-after-fence");
         expect(connection.signal.aborted).toBe(true);
@@ -401,11 +407,7 @@ describe("authenticated request mutation custody", () => {
           expect(generation.finalize(ownership)).toBe(true);
           expect(accepted.authority.signal?.aborted).toBe(true);
         } else if (outcome === "revoke all") {
-          disconnectStaleSharedGatewayAuthClients({
-            state: generation,
-            clients: [],
-            expectedGeneration: null,
-          });
+          disconnect(null, []);
           expect(accepted.authority.signal?.aborted).toBe(true);
         } else if (outcome === "policy commit") {
           committedConfig = nextConfig;
@@ -416,18 +418,13 @@ describe("authenticated request mutation custody", () => {
             setRuntimeConfigSnapshot(committedConfig);
             publishOperatorRoleConfigChange(context);
           } else {
-            expect(
-              generation.replace(ownership, {
-                current: "generation-a",
-                required: null,
-              }),
-            ).toBe(true);
-            // The original connection has left the socket set; rollback preserves its old source.
-            disconnectStaleSharedGatewayAuthClients({
-              state: generation,
-              clients: [],
-              expectedGeneration: "generation-a",
+            const restored = generation.replace(ownership, {
+              current: "generation-a",
+              required: null,
             });
+            expect(restored).toBe(true);
+            // The original connection has left the socket set; rollback preserves its old source.
+            disconnect("generation-a", []);
           }
           expect(accepted.authority.signal?.aborted).toBe(false);
           expect(() => accepted.authority.assertCurrent()).not.toThrow();
@@ -464,8 +461,7 @@ describe("authenticated request mutation custody", () => {
       hasAvatar: false,
       updatedAt: 1,
     };
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const gate = createRequestGate();
     const persisted = vi.fn();
     const grantProfileReads = vi.fn();
     const compatibilityReader = scenario === "copied generation reader";
@@ -492,8 +488,7 @@ describe("authenticated request mutation custody", () => {
         "test.mutation-custody": async (options) => {
           const authority = readGatewayRequestMutationAuthority(options);
           expect(authority.family).toBe(compatibilityReader ? "native-compatibility" : "worker");
-          entered.resolve();
-          await release.promise;
+          await gate.wait();
           try {
             if (compatibilityReader) {
               authority.assertCurrent();
@@ -562,7 +557,7 @@ describe("authenticated request mutation custody", () => {
     );
     try {
       await Promise.race([
-        entered.promise,
+        gate.entered,
         dispatch.then(() => {
           throw new Error("request returned before reaching its mutation owner");
         }),
@@ -577,7 +572,7 @@ describe("authenticated request mutation custody", () => {
         setRuntimeConfigSnapshot({ gateway: { auth: { allowTailscale: true } } });
       }
     } finally {
-      release.resolve();
+      gate.release();
       await dispatch;
     }
     expect(grantProfileReads).not.toHaveBeenCalled();
