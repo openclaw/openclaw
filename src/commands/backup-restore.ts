@@ -142,6 +142,7 @@ async function restorePostgresExports(
   targetPath: string,
   candidates: Array<{ directoryPath: string; anchorPath: string }>,
   recoveryConfigPath: string | undefined,
+  recoveryConfigContextPath: string | undefined,
   archiveRoot: string,
 ): Promise<void> {
   if (candidates.length === 0) {
@@ -240,7 +241,8 @@ async function restorePostgresExports(
       }
     },
     {
-      configPath,
+      configPath: path.join(targetPath, recoveryConfigContextPath ?? recoveryConfigPath),
+      configSourcePath: configPath,
       env: {
         ...process.env,
         OPENCLAW_INCLUDE_ROOTS: path.join(targetPath, archiveRoot, "payload"),
@@ -281,6 +283,7 @@ export async function backupRestoreCommand(
     regularFileExtractionBytes,
     databaseRestoreCandidates,
     recoveryConfigPath,
+    recoveryConfigContextPath,
   } = await prepareBackupArchive(options.archive);
   assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
@@ -304,6 +307,7 @@ export async function backupRestoreCommand(
       targetPath,
       databaseRestoreCandidates,
       recoveryConfigPath,
+      recoveryConfigContextPath,
       verified.archiveRoot,
     );
   } catch (extractionError) {

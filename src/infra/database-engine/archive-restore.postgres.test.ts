@@ -47,7 +47,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
     },
     {
       scenario: "mixed",
-      name: "publishes recovered PostgreSQL state and SQLite agent selection last",
+      name: "publishes recovered PostgreSQL and SQLite selection from a captured config alias last",
     },
     {
       scenario: "compatibility",
@@ -101,12 +101,17 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
               };
               process.env.OPENCLAW_ARCHIVE_TEST_PG = isolated.href;
               const includePath = state.path("external-config", "database.json5");
+              const configSourcePath = sqliteAgent
+                ? state.path("external-config", "openclaw.json")
+                : state.configPath;
               if (sqliteAgent) {
                 await fs.mkdir(path.dirname(includePath), { recursive: true });
                 await fs.writeFile(includePath, JSON.stringify({ database: config.database }));
                 process.env.OPENCLAW_INCLUDE_ROOTS = path.dirname(includePath);
                 const { database: _database, ...withoutDatabase } = config;
                 await state.writeConfig({ ...withoutDatabase, $include: includePath });
+                await fs.rename(state.configPath, configSourcePath);
+                await fs.symlink(configSourcePath, state.configPath);
               } else {
                 await state.writeConfig(config);
               }
@@ -332,7 +337,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   const targetPath = state.path("restored");
                   const restoredConfig = path.join(
                     targetPath,
-                    buildBackupArchivePath(backup.archiveRoot, state.configPath),
+                    buildBackupArchivePath(backup.archiveRoot, configSourcePath),
                   );
                   const rename = fs.rename.bind(fs);
                   let selectionPublished = false;
@@ -530,7 +535,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                       }
                     },
                   );
-                  if (scenario === "all") {
+                  if (sqliteAgent) {
                     clearRuntimeConfigSnapshot();
                     resetDatabaseEngineSelectionForTest();
                     const next = await createBackupArchive({
@@ -549,7 +554,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                         "utf8",
                       ),
                     );
-                    expect(nextManifest.postgresSnapshots).toHaveLength(stores.length);
+                    expect(nextManifest.postgresSnapshots).toHaveLength(
+                      stores.filter((store) => store.family !== "agent").length,
+                    );
                   }
                 } else {
                   const capturedRoot = state.path("captured-archive");

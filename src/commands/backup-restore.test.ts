@@ -14,7 +14,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
-import { verifyBackupArchive } from "./backup-verify.js";
+import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 async function listArchiveLeafEntries(archivePath: string): Promise<string[]> {
@@ -129,6 +129,41 @@ async function writeUnextractableArchive(archivePath: string) {
 }
 
 describe("backupRestoreCommand", () => {
+  it("selects a captured config payload from a legacy relative alias without following live paths", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const archiveRoot = "backup";
+      const configPath = "/missing/openclaw.json";
+      const configSourcePath = "/missing/captured.json";
+      const archivePath = state.path("alias.tar.gz");
+      const payloadPath = buildBackupArchivePath(archiveRoot, configSourcePath);
+      const aliasPath = buildBackupArchivePath(archiveRoot, configPath);
+      await writeArchive({
+        archivePath,
+        archiveRoot,
+        payloadPath,
+        manifest: JSON.stringify({
+          schemaVersion: 1,
+          archiveRoot,
+          platform: "linux",
+          createdAt: "2026-08-12T00:00:00.000Z",
+          paths: { configPath },
+          assets: [
+            { kind: "config", sourcePath: configSourcePath, archivePath: payloadPath },
+            { kind: "config", sourcePath: configPath, archivePath: aliasPath },
+          ],
+        }),
+        extraEntries: [
+          encodeTarEntry({ path: aliasPath, type: "SymbolicLink", linkpath: "captured.json" }),
+        ],
+      });
+
+      expect(await prepareBackupArchive(archivePath)).toMatchObject({
+        recoveryConfigPath: payloadPath,
+        recoveryConfigContextPath: aliasPath,
+      });
+    });
+  });
+
   it.each(["legacy", "current"])(
     "preserves opaque SQLite and PostgreSQL-named files in %s archives",
     async (format) => {

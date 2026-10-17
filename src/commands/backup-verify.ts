@@ -24,6 +24,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveBackupRecoveryConfig } from "./backup-recovery-config.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 import {
@@ -691,12 +692,9 @@ async function verifyResolvedBackupArchive(
     ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };
 
-  const configPath =
-    manifest.paths?.configPath ??
-    manifest.assets.find((asset) => asset.kind === "config")?.sourcePath;
   return {
     result,
-    recoveryConfigPath: configPath && buildBackupArchivePath(manifest.archiveRoot, configPath),
+    ...resolveBackupRecoveryConfig(manifest, entries, preparedSymbolicLinks),
     hardlinkTargets,
     symbolicLinks: preparedSymbolicLinks,
     regularFileExtractionBytes: resolveExtractionBytes(entries),

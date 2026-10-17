@@ -318,6 +318,9 @@ describe("archive PostgreSQL capsule verification", () => {
     "pending capture",
     "manifest binding",
     "unowned anchor",
+    "database WAL",
+    "inner anchor WAL",
+    "outer anchor WAL",
   ])(
     "rejects incomplete or damaged plugin-only PostgreSQL archives (%s) before restore",
     async (damage) => {
@@ -341,6 +344,19 @@ describe("archive PostgreSQL capsule verification", () => {
         using db = new DatabaseSync(path.join(directory, "database.sqlite"));
         db.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('retained')");
       }
+      using walWriter = damage.endsWith(" WAL")
+        ? new DatabaseSync(
+            damage === "outer anchor WAL"
+              ? anchor
+              : path.join(
+                  directory,
+                  damage === "database WAL" ? "database.sqlite" : "anchor.sqlite",
+                ),
+          )
+        : undefined;
+      walWriter?.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)",
+      );
       const artifact = async (name: string) => {
         const bytes = await fs.readFile(path.join(directory, name));
         return {
@@ -390,9 +406,27 @@ describe("archive PostgreSQL capsule verification", () => {
       ];
       await fs.writeFile(archiveManifestPath, JSON.stringify(manifest));
       await expect(
-        verifyBackupArchive(await repack(fixture.root, fixture.archiveRoot, "valid")),
+        verifyBackupArchive(
+          await repack(
+            fixture.root,
+            fixture.archiveRoot,
+            "valid",
+            // The checkpointed control image is sealed without the open writer's sidecars.
+            [
+              anchorPath,
+              `${directoryPath}/anchor.sqlite`,
+              `${directoryPath}/database.sqlite`,
+            ].flatMap((file) => [file + "-wal", file + "-shm"]),
+          ),
+        ),
       ).resolves.toMatchObject({ ok: true });
-      if (damage === "manifest binding") {
+      if (walWriter) {
+        walWriter.exec(
+          damage === "database WAL"
+            ? "UPDATE notes SET body = 'unmanifested'"
+            : "UPDATE openclaw_engine_anchor SET schema = 'unmanifested'",
+        );
+      } else if (damage === "manifest binding") {
         manifest.postgresSnapshots[0]!.manifestSha256 = "0".repeat(64);
         await fs.writeFile(archiveManifestPath, JSON.stringify(manifest));
       } else if (damage === "unowned anchor") {
@@ -424,7 +458,9 @@ describe("archive PostgreSQL capsule verification", () => {
       await expect(verifyBackupArchive(damaged)).rejects.toThrow(
         damage === "manifest binding"
           ? /does not match its capture inventory/
-          : /verification failed/,
+          : walWriter
+            ? /unexpected SQLite sidecar/
+            : /verification failed/,
       );
     },
   );

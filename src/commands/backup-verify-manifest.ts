@@ -10,9 +10,11 @@ import {
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
+  resolvePortableArchivePathKey,
   type BackupSymbolicLink,
 } from "../infra/backup-archive-path-policy.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
@@ -236,6 +238,7 @@ export type BackupManifest = {
   paths?: {
     stateDir?: string;
     configPath?: string;
+    configSourcePath?: string;
     oauthDir?: string;
     workspaceDirs?: string[];
     agentRoots?: Array<{ agentId: string; sourcePath: string }>;
@@ -493,6 +496,14 @@ export function parseBackupManifest(raw: string): BackupManifest {
             : {
                 configPath: parseBackupManifestSourcePath(parsed.paths.configPath, "configuration"),
               }),
+          ...(parsed.paths.configSourcePath === undefined
+            ? {}
+            : {
+                configSourcePath: parseBackupManifestSourcePath(
+                  parsed.paths.configSourcePath,
+                  "configuration source",
+                ),
+              }),
           agentRoots: parseBackupManifestAgentRoots(parsed.paths.agentRoots),
         }
       : undefined,
@@ -627,10 +638,24 @@ export function resolvePostgresRestoreEntries(
         : [];
     });
   const byPath = new Map(entries.map((entry) => [entry.normalized, entry]));
+  const portablePaths = new Set(
+    entries.map((entry) => resolvePortableArchivePathKey(entry.normalized)),
+  );
   const payloadRoot = path.posix.join(normalizeArchiveRoot(manifest.archiveRoot), "payload");
   for (const { directoryPath, anchorPath } of captures) {
     if (!isArchivePathWithin(directoryPath, payloadRoot)) {
       throw new Error(`PostgreSQL capsule path is outside payload root: ${directoryPath}`);
+    }
+    for (const database of [
+      anchorPath,
+      `${directoryPath}/anchor.sqlite`,
+      `${directoryPath}/database.sqlite`,
+    ]) {
+      for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+        if (portablePaths.has(resolvePortableArchivePathKey(`${database}${suffix}`))) {
+          throw new Error(`PostgreSQL export has unexpected SQLite sidecar: ${database}${suffix}`);
+        }
+      }
     }
     for (const required of [
       anchorPath,

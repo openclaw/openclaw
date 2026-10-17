@@ -68,6 +68,7 @@ export async function runOfflineDatabaseBackup<T>(
     | { config: OpenClawConfig; selection: DatabaseEngineSelection }
     | {
         configPath: string;
+        configSourcePath?: string;
         mapIncludePath?: (absolutePath: string) => string;
         env?: NodeJS.ProcessEnv;
       },
@@ -95,11 +96,19 @@ export async function runOfflineDatabaseBackup<T>(
       const captured = prepared && "config" in prepared ? prepared : undefined;
       let config = captured?.config;
       if (!config) {
-        const snapshot = await createConfigIO({
+        const capturedPaths = prepared && "configPath" in prepared ? prepared : undefined;
+        const io = createConfigIO({
           ...(prepared && "configPath" in prepared ? prepared : {}),
           observe: false,
           pluginValidation: "core-only",
-        }).readConfigFileSnapshot();
+        });
+        const sourceRaw = capturedPaths?.configSourcePath
+          ? await fs.readFile(capturedPaths.configSourcePath, "utf8")
+          : undefined;
+        assertCurrent();
+        const snapshot = await (sourceRaw === undefined
+          ? io.readConfigFileSnapshot()
+          : io.readConfigFileSnapshotFromRaw(sourceRaw));
         assertCurrent();
         if (!snapshot.valid) {
           const details = formatInvalidConfigDetails(snapshot.issues);

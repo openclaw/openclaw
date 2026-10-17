@@ -278,6 +278,9 @@ function buildManifest(
     paths: {
       stateDir: plan.resources.stateDir,
       configPath: plan.configPath,
+      ...(plan.configCapture?.files[0]
+        ? { configSourcePath: plan.configCapture.files[0].canonicalPath }
+        : {}),
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
       ...(result.agentRoots ? { agentRoots: [...result.agentRoots] } : {}),

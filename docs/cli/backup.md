@@ -250,10 +250,13 @@ into fresh namespaces, then replaces the extracted historical anchors with
 verified matching anchors. All stores are prepared before any anchor is
 published; a failed restore drops its new namespaces and cleans the target.
 After successful publication, restore consumes the generated PostgreSQL export
-files. New archives list their PostgreSQL stores explicitly; verification rejects
-valid PostgreSQL capsules missing from that inventory. Older archives use their
-matched export manifests. A legacy archive cannot identify a store whose
-entire export was already missing. Unmanaged SQLite files remain opaque.
+files. New archives record the generated capsule paths and their manifest hashes.
+Verification and restore use only that inventory; copied PostgreSQL exports and
+other unlisted files remain opaque and are preserved. Older archives can import
+only global and agent snapshots proven by their existing database inventory.
+For automatic recovery of plugin PostgreSQL stores from a legacy archive, re-run
+backup with this version on the source installation. Unmanaged SQLite files
+remain opaque.
 
 PostgreSQL archive restore requires its captured configuration and resolves each
 family through that recovered configuration. Make its external connection
