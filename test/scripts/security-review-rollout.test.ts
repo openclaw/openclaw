@@ -11,6 +11,8 @@ const mergeCommit = "a".repeat(40);
 const head = "b".repeat(40);
 const ancestor = "c".repeat(40);
 const mergedAt = "2026-09-19T12:00:00Z";
+const rolloutPath = `/repos/openclaw/openclaw/pulls/${rolloutNumber}`;
+const comparisonPath = `/repos/openclaw/openclaw/compare/${mergeCommit}...${head}?per_page=1&page=2`;
 const rollout = {
   number: rolloutNumber,
   state: "closed",
@@ -19,10 +21,7 @@ const rollout = {
   merge_commit_sha: mergeCommit,
   base: { ref: "main", repo: { full_name: "openclaw/openclaw" } },
 };
-const pullRequest = {
-  created_at: "2026-09-01T00:00:00Z",
-  head: { sha: head },
-};
+const pullRequest = { created_at: "2026-09-01T00:00:00Z", head: { sha: head } };
 const comparison = {
   base_commit: { sha: mergeCommit },
   merge_base_commit: { sha: ancestor },
@@ -112,49 +111,39 @@ try {
 }
 
 describe("security review rollout", () => {
-  it.each<{ name: string; options: Options; mode: string; requests: string[] }>([
-    {
-      name: "removed configuration",
-      options: { policy: { rollout: undefined } },
-      mode: "enforced",
-      requests: [],
-    },
-    {
-      name: "unmerged rollout",
-      options: { rollout: { ...rollout, state: "open", merged: false, merged_at: null } },
-      mode: "inactive",
-      requests: [`/repos/openclaw/openclaw/pulls/${rolloutNumber}`],
-    },
-    ...[
-      { name: "new PR", pullRequest: { ...pullRequest, created_at: mergedAt } },
-      { name: "rollout head", pullRequest: { ...pullRequest, head: { sha: mergeCommit } } },
-    ].map(({ name, pullRequest: candidate }) => ({
-      name,
-      options: { pullRequest: candidate },
-      mode: "enforced",
-      requests: [`/repos/openclaw/openclaw/pulls/${rolloutNumber}`],
-    })),
-    ...[
-      {
-        name: "older head",
-        comparison: { ...comparison, status: "behind" },
-        mode: "grandfathered",
-      },
-      {
-        name: "rebased head",
-        comparison: { ...comparison, merge_base_commit: { sha: mergeCommit }, status: "ahead" },
-        mode: "enforced",
-      },
-    ].map(({ name, comparison: ancestry, mode }) => ({
-      name,
-      options: { comparison: ancestry },
-      mode,
-      requests: [
-        `/repos/openclaw/openclaw/pulls/${rolloutNumber}`,
-        `/repos/openclaw/openclaw/compare/${mergeCommit}...${head}?per_page=1&page=2`,
-      ],
-    })),
-  ])("resolves $name rollout authority", ({ options, mode, requests }) => {
+  it.each<[string, Options, string, string[]]>([
+    ["removed configuration", { policy: { rollout: undefined } }, "enforced", []],
+    [
+      "unmerged rollout",
+      { rollout: { ...rollout, state: "open", merged: false, merged_at: null } },
+      "inactive",
+      [rolloutPath],
+    ],
+    [
+      "new PR",
+      { pullRequest: { ...pullRequest, created_at: mergedAt } },
+      "enforced",
+      [rolloutPath],
+    ],
+    [
+      "rollout head",
+      { pullRequest: { ...pullRequest, head: { sha: mergeCommit } } },
+      "enforced",
+      [rolloutPath],
+    ],
+    [
+      "older head",
+      { comparison: { ...comparison, status: "behind" } },
+      "grandfathered",
+      [rolloutPath, comparisonPath],
+    ],
+    [
+      "rebased head",
+      { comparison: { ...comparison, merge_base_commit: { sha: mergeCommit }, status: "ahead" } },
+      "enforced",
+      [rolloutPath, comparisonPath],
+    ],
+  ])("resolves %s rollout authority", (_name, options, mode, requests) => {
     expect(evaluate(options)).toEqual({ status: 0, mode, requests });
   });
 

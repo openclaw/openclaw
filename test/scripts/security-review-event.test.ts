@@ -44,6 +44,14 @@ function recordedPullRequest(number: number) {
   };
 }
 
+function runListing(workflow_runs: object[], total_count = workflow_runs.length) {
+  return { body: { total_count, workflow_runs } };
+}
+
+function gateStatus(state: string, created_at: string, patch: object = {}) {
+  return { ...recordedPullRequest(42), state, created_at, ...patch };
+}
+
 type Reply = { body: unknown; status?: number; headers?: Record<string, string> };
 type Options = {
   eventName?: string;
@@ -77,9 +85,7 @@ function evaluate(options: Options = {}) {
           : [],
     },
     [scheduledRunsPath]: { body: { workflow_runs: [] } },
-    [ciRunsPath]: {
-      body: { total_count: 1, workflow_runs: [{ ...completedRun, ...options.run }] },
-    },
+    [ciRunsPath]: runListing([{ ...completedRun, ...options.run }]),
     ...options.responses,
   };
   writeFileSync(
@@ -162,12 +168,13 @@ globalThis.fetch = async (url, options = {}) => {
   };
 }
 
+function scheduled(responses: NonNullable<Options["responses"]>) {
+  return evaluate({ eventName: "schedule", responses });
+}
+
 function reconcileStatuses(statuses: unknown[]) {
-  return evaluate({
-    eventName: "schedule",
-    responses: {
-      [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: statuses },
-    },
+  return scheduled({
+    [`${prefix}/commits/${head}/statuses?per_page=100&page=1`]: { body: statuses },
   });
 }
 
@@ -509,20 +516,15 @@ describe("automatic security review event resolution", () => {
 describe("scheduled reconciliation", () => {
   it("covers the previous pass's grace period without reading older head statuses", () => {
     const olderHead = "b".repeat(40);
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [scheduledRunsPath]: {
-          body: { workflow_runs: [{ created_at: "2026-01-01T23:45:00Z" }] },
-        },
-        [ciRunsPath.replace("20%3A00", "20%3A40")]: {
-          body: {
-            total_count: 2,
-            workflow_runs: [
-              { ...completedRun, updated_at: "2026-01-01T23:43:00Z" },
-              { ...completedRun, id: 122, head_sha: olderHead, updated_at: "2026-01-01T23:39:00Z" },
-            ],
-          },
+    const result = scheduled({
+      [scheduledRunsPath]: { body: { workflow_runs: [{ created_at: "2026-01-01T23:45:00Z" }] } },
+      [ciRunsPath.replace("20%3A00", "20%3A40")]: {
+        body: {
+          total_count: 2,
+          workflow_runs: [
+            { ...completedRun, updated_at: "2026-01-01T23:43:00Z" },
+            { ...completedRun, id: 122, head_sha: olderHead, updated_at: "2026-01-01T23:39:00Z" },
+          ],
         },
       },
     });
@@ -536,9 +538,7 @@ describe("scheduled reconciliation", () => {
   it.each([
     {
       name: "stale success",
-      statuses: [
-        { ...recordedPullRequest(42), state: "success", created_at: "2026-01-01T23:30:00Z" },
-      ],
+      statuses: [gateStatus("success", "2026-01-01T23:30:00Z")],
     },
     {
       name: "pending after completion",
@@ -554,20 +554,14 @@ describe("scheduled reconciliation", () => {
     {
       name: "foreign successes",
       statuses: [
-        {
-          ...recordedPullRequest(42),
-          state: "success",
-          created_at: "2026-01-01T23:45:00Z",
+        gateStatus("success", "2026-01-01T23:45:00Z", {
           creator: { login: "foreign-bot[bot]", type: "Bot" },
-        },
-        {
-          ...recordedPullRequest(42),
-          state: "success",
-          created_at: "2026-01-01T23:44:00Z",
+        }),
+        gateStatus("success", "2026-01-01T23:44:00Z", {
           creator: { login: "github-actions[bot]", type: "User" },
-        },
-        { ...recordedPullRequest(42), state: "pending", created_at: "2026-01-01T23:41:00Z" },
-        { ...recordedPullRequest(42), state: "success", created_at: "2026-01-01T23:20:00Z" },
+        }),
+        gateStatus("pending", "2026-01-01T23:41:00Z"),
+        gateStatus("success", "2026-01-01T23:20:00Z"),
       ],
     },
   ])("schedules $name before publishing its matrix", ({ statuses }) => {
@@ -606,30 +600,24 @@ describe("scheduled reconciliation", () => {
     })),
     {
       name: "paginated settled gate",
-      statuses: [
-        { ...recordedPullRequest(42), state: "success", created_at: completedRun.updated_at },
-      ],
+      statuses: [gateStatus("success", completedRun.updated_at)],
       paged: true,
       selected: false,
     },
     { name: "paginated missing gate", statuses: [], paged: true, selected: true },
   ])("reads the newest owned result for $name", ({ statuses, paged, selected }) => {
     const statusPath = `${prefix}/commits/${head}/statuses?per_page=100&page=`;
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [statusPath + "1"]: {
-          body: paged
-            ? Array.from({ length: 100 }, () => ({
-                ...recordedPullRequest(42),
-                state: "success",
-                created_at: "2026-01-01T23:45:00Z",
+    const result = scheduled({
+      [statusPath + "1"]: {
+        body: paged
+          ? Array.from({ length: 100 }, () =>
+              gateStatus("success", "2026-01-01T23:45:00Z", {
                 creator: { login: "foreign-bot[bot]", type: "Bot" },
-              }))
-            : statuses,
-        },
-        ...(paged ? { [statusPath + "2"]: { body: statuses } } : {}),
+              }),
+            )
+          : statuses,
       },
+      ...(paged ? { [statusPath + "2"]: { body: statuses } } : {}),
     });
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({ include: selected ? [{ pr: 42, head }] : [] });
@@ -643,17 +631,14 @@ describe("scheduled reconciliation", () => {
   });
 
   it("dedupes reruns by the highest run id before reading the head status", () => {
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [ciRunsPath]: {
-          body: {
-            total_count: 2,
-            workflow_runs: [
-              { ...completedRun, id: 124 },
-              { ...completedRun, updated_at: "2026-01-01T23:20:00Z" },
-            ],
-          },
+    const result = scheduled({
+      [ciRunsPath]: {
+        body: {
+          total_count: 2,
+          workflow_runs: [
+            { ...completedRun, id: 124 },
+            { ...completedRun, updated_at: "2026-01-01T23:20:00Z" },
+          ],
         },
       },
     });
@@ -668,7 +653,7 @@ describe("scheduled reconciliation", () => {
     const firstSlice = ciRunsPath.replace("2026-01-02T00%3A00", "2026-01-01T22%3A00");
     const secondSlice = ciRunsPath.replace("2026-01-01T20%3A00%3A00", "2026-01-01T22%3A00%3A01");
     const responses: Record<string, Reply> = {
-      [ciRunsPath]: { body: { total_count: 1500, workflow_runs: [completedRun] } },
+      [ciRunsPath]: runListing([completedRun], 1500),
     };
     const listingPaths = [ciRunsPath];
     for (const [slice, count, offset] of [
@@ -678,19 +663,17 @@ describe("scheduled reconciliation", () => {
       for (let page = 1; page <= count / 100 + 1; page += 1) {
         const path = slice.replace(/&page=1$/u, `&page=${page}`);
         listingPaths.push(path);
-        responses[path] = {
-          body: {
-            total_count: count,
-            workflow_runs: Array.from({ length: page <= count / 100 ? 100 : 0 }, (_, index) => ({
-              ...completedRun,
-              id: offset + (page - 1) * 100 + index + 1,
-              created_at: offset === 0 ? "2026-01-01T21:00:00Z" : "2026-01-01T23:00:00Z",
-            })),
-          },
-        };
+        responses[path] = runListing(
+          Array.from({ length: page <= count / 100 ? 100 : 0 }, (_, index) => ({
+            ...completedRun,
+            id: offset + (page - 1) * 100 + index + 1,
+            created_at: offset === 0 ? "2026-01-01T21:00:00Z" : "2026-01-01T23:00:00Z",
+          })),
+          count,
+        );
       }
     }
-    const result = evaluate({ eventName: "schedule", responses });
+    const result = scheduled(responses);
     expect(result.status, result.error).toBe(0);
     expect(result.requests.filter(({ path }) => path.includes("/workflows/ci.yml/runs"))).toEqual(
       listingPaths.map((path) => ({ path, method: "GET" })),
@@ -709,18 +692,16 @@ describe("scheduled reconciliation", () => {
       const responses: Record<string, Reply> = {};
       const listingPaths = sizes.map((size, index) => {
         const path = ciRunsPath.replace(/&page=1$/u, `&page=${index + 1}`);
-        responses[path] = {
-          body: {
-            total_count: total,
-            workflow_runs: Array.from({ length: size }, (_, runIndex) => ({
-              ...completedRun,
-              id: index * 100 + runIndex + 1,
-            })),
-          },
-        };
+        responses[path] = runListing(
+          Array.from({ length: size }, (_, runIndex) => ({
+            ...completedRun,
+            id: index * 100 + runIndex + 1,
+          })),
+          total,
+        );
         return path;
       });
-      const result = evaluate({ eventName: "schedule", responses });
+      const result = scheduled(responses);
       expect(result.requests.filter(({ path }) => path.includes("/workflows/ci.yml/runs"))).toEqual(
         listingPaths.map((path) => ({ path, method: "GET" })),
       );
@@ -753,17 +734,9 @@ describe("scheduled reconciliation", () => {
       (end) =>
         `${prefix}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&created=${encodeURIComponent(`2026-01-01T20:00:00.000Z..${end}`)}&per_page=100&page=1`,
     );
-    const result = evaluate({
-      eventName: "schedule",
-      responses: Object.fromEntries(
-        listingPaths.map((path) => [
-          path,
-          {
-            body: { total_count: 1001, workflow_runs: [completedRun] },
-          },
-        ]),
-      ),
-    });
+    const result = scheduled(
+      Object.fromEntries(listingPaths.map((path) => [path, runListing([completedRun], 1001)])),
+    );
     expect(result.status).toBe(1);
     expect(result.error).toContain(
       "more than 1000 runs in a creation range shorter than ten minutes",
@@ -792,10 +765,7 @@ describe("scheduled reconciliation", () => {
   ])(
     "rejects incomplete or invalid listing totals: $total_count",
     ({ total_count, workflow_runs, error }) => {
-      const result = evaluate({
-        eventName: "schedule",
-        responses: { [ciRunsPath]: { body: { total_count, workflow_runs } } },
-      });
+      const result = scheduled({ [ciRunsPath]: { body: { total_count, workflow_runs } } });
       expect(result).toMatchObject({ status: 1, output: "", published: [] });
       expect(result.error).toContain(error);
     },
@@ -814,12 +784,10 @@ describe("scheduled reconciliation", () => {
     const responses: Record<string, Reply> = {};
     const newestFirst = candidates.toReversed();
     for (let page = 1; page <= Math.floor(count / 100) + 1; page += 1) {
-      responses[ciRunsPath.replace(/&page=1$/u, `&page=${page}`)] = {
-        body: {
-          total_count: count,
-          workflow_runs: newestFirst.slice((page - 1) * 100, page * 100),
-        },
-      };
+      responses[ciRunsPath.replace(/&page=1$/u, `&page=${page}`)] = runListing(
+        newestFirst.slice((page - 1) * 100, page * 100),
+        count,
+      );
     }
     for (const candidate of candidates) {
       responses[`${prefix}/commits/${candidate.head_sha}/statuses?per_page=100&page=1`] = {
@@ -833,7 +801,7 @@ describe("scheduled reconciliation", () => {
         },
       };
     }
-    const result = evaluate({ eventName: "schedule", responses });
+    const result = scheduled(responses);
     const selected = candidates.slice(0, 100);
     expect(result.status, result.error).toBe(0);
     expect(result.matrix).toEqual({
@@ -855,17 +823,14 @@ describe("scheduled reconciliation", () => {
 
   it("uses the current PR head when multiple completed heads name the same PR", () => {
     const oldHead = "b".repeat(40);
-    const result = evaluate({
-      eventName: "schedule",
-      responses: {
-        [ciRunsPath]: {
-          body: {
-            total_count: 2,
-            workflow_runs: [completedRun, { ...completedRun, id: 122, head_sha: oldHead }],
-          },
+    const result = scheduled({
+      [ciRunsPath]: {
+        body: {
+          total_count: 2,
+          workflow_runs: [completedRun, { ...completedRun, id: 122, head_sha: oldHead }],
         },
-        [`${prefix}/commits/${oldHead}/statuses?per_page=100&page=1`]: { body: [] },
       },
+      [`${prefix}/commits/${oldHead}/statuses?per_page=100&page=1`]: { body: [] },
     });
     expect(result).toMatchObject({ status: 0, matrix: { include: [{ pr: 42, head }] } });
     expect(result.published).toHaveLength(1);

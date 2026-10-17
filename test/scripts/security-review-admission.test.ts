@@ -3,6 +3,11 @@ import { revalidatePublishedSecurityClearance } from "../../scripts/github/guard
 
 const head = "a".repeat(40);
 const rolloutCommit = "b".repeat(40);
+const ciProjections = [
+  ["failure", "CI must complete successfully; review updates automatically"],
+  ["success", "CI and applicable security review requirements passed"],
+  ["pending", "Waiting for CI; review updates automatically"],
+];
 const publisher = {
   url: "https://github.com/openclaw/openclaw/actions/runs/100",
   startedAt: "2026-09-27T12:00:00Z",
@@ -137,11 +142,7 @@ function fixture() {
 }
 
 describe("published security clearance admission", () => {
-  it.each([
-    ["failure", "CI must complete successfully; review updates automatically"],
-    ["success", "CI and applicable security review requirements passed"],
-    ["pending", "Waiting for CI; review updates automatically"],
-  ])(
+  it.each(ciProjections)(
     "admits the CI %s projection after clear guard decisions without requiring a maintainer",
     async (state, description) => {
       const f = fixture();
@@ -158,38 +159,29 @@ describe("published security clearance admission", () => {
     },
   );
 
-  it.each([
-    ["failure", "CI must complete successfully; review updates automatically"],
-    ["success", "CI and applicable security review requirements passed"],
-    ["pending", "Waiting for CI; review updates automatically"],
-  ])("revalidates approval behind a published %s projection", async (state, description) => {
-    const f = fixture();
-    f.requireApproval();
-    f.combined.state = state;
-    f.combined.description = `PR #7: ${description}`;
-    const result = await f.run();
-    expect(result.approvals).toEqual([
-      {
-        context: "openclaw/dependency-review",
-        kind: "comment",
-        login: "maintainer",
-        role: "maintain",
-        sha: head,
-        url: f.approval.html_url,
-      },
-      {
-        context: "openclaw/security-sensitive-review",
-        kind: "comment",
-        login: "maintainer",
-        role: "maintain",
-        sha: head,
-        url: f.approval.html_url,
-      },
-    ]);
-    expect(result.combinedStatusId).toBe(3);
-    f.comments.pop();
-    await expect(f.run()).rejects.toThrow("approval is no longer current");
-  });
+  it.each(ciProjections)(
+    "revalidates approval behind a published %s projection",
+    async (state, description) => {
+      const f = fixture();
+      f.requireApproval();
+      f.combined.state = state;
+      f.combined.description = `PR #7: ${description}`;
+      const result = await f.run();
+      expect(result.approvals).toEqual(
+        ["openclaw/dependency-review", "openclaw/security-sensitive-review"].map((context) => ({
+          context,
+          kind: "comment",
+          login: "maintainer",
+          role: "maintain",
+          sha: head,
+          url: f.approval.html_url,
+        })),
+      );
+      expect(result.combinedStatusId).toBe(3);
+      f.comments.pop();
+      await expect(f.run()).rejects.toThrow("approval is no longer current");
+    },
+  );
 
   it.each(["edited", "revoked", "role lost"])(
     "refuses %s approval despite green published guards",
