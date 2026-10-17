@@ -41,6 +41,16 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
+Within a session, the provider request prefix (tool definitions, system prompt,
+earlier history) depends only on session and config facts, and history only
+grows by appending. Every turn kind sends the same prefix: user turns,
+non-owner senders, media and subagent completions, heartbeats, and session
+events. Per-turn authority (owner-only tools, a completion handoff's replayed
+requester policy) is checked when a tool runs: the tool keeps its definition
+and `gateAgentToolExecution` returns a refusal. Per-turn facts, such as a
+completion's source-only delivery rule, travel in that turn's own message.
+`src/agents/agent-tools.prefix-stability.test.ts` holds this contract.
+
 WebChat keeps the `message` reaction description and schema stable between runs
 in the same conversation, including runs without a current-prompt reaction grant.
 Code Mode keeps its `exec` and `wait` schemas stable when the enabled catalog
