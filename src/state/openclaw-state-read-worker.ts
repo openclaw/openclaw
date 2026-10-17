@@ -44,9 +44,7 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-export function decodeOpenClawStateReadReply(
-  reply: OpenClawStateReadReply,
-): OpenClawStateReadOutcome {
+function decodeOpenClawStateReadReply(reply: OpenClawStateReadReply): OpenClawStateReadOutcome {
   if (reply.ok) {
     return { value: reply };
   }

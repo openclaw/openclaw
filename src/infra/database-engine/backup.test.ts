@@ -32,6 +32,7 @@ import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "../client-credential-schema.js";
 import { resolveClientCredentialStorePath } from "../client-credential-store.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import * as snapshotSource from "../sqlite-snapshot-source.js";
 import { createUpdateStateInspectionDiagnostics } from "../update-candidate-state.diagnostics.js";
 import * as inspection from "../update-candidate-state.inspection.js";
 import {
@@ -272,6 +273,8 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
           );
           await withDatabaseEngineSelection(capturedSelection, async () => {
             const directory = state.path("captured-selection-backup");
+            const reacquire = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+            const isolatePrivate = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation");
             await capturePostgresBackup({
               sourcePath: anchorPath,
               directory,
@@ -279,6 +282,15 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
               profile: "user-backup",
               assertCurrent() {},
             });
+            // The verified anchor image is the identity source; do not copy the live anchor twice.
+            expect(reacquire.mock.calls.filter(([file]) => file === anchorPath)).toHaveLength(0);
+            expect(
+              isolatePrivate.mock.calls.filter(
+                ([file]) => path.basename(file) === ".export.sqlite",
+              ),
+            ).toHaveLength(0);
+            reacquire.mockRestore();
+            isolatePrivate.mockRestore();
             const restored = await preparePostgresRestore({
               directory,
               anchorPath: state.path("captured-selection-restored.sqlite"),

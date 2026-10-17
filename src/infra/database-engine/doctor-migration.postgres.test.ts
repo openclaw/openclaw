@@ -52,16 +52,14 @@ import { resolveDatabaseFamilyEngines } from "./registry.js";
 import { statePortProvider } from "./state-port.js";
 
 // Keep the actual read contracts in-process so all consumers see the
-// synthetic migration registration; retain the real reply decoder.
+// synthetic migration registration.
 const reads = vi.hoisted(() => ({
   capture: vi.fn<typeof StateReadWorker.captureOpenClawStateReadSource>(),
-  decode: vi.fn<typeof StateReadWorker.decodeOpenClawStateReadReply>(),
   retire: vi.fn<typeof StateReadWorker.retireIdleOpenClawStateReadWorkers>(),
 }));
-// mock-isolation: Install transport before cyclic state imports; load the real decoder afterward so the synthetic migration stays in-process.
+// mock-isolation: Install transport before cyclic state imports so the synthetic migration stays in-process.
 vi.mock("../../state/openclaw-state-read-worker.js", () => ({
   captureOpenClawStateReadSource: reads.capture,
-  decodeOpenClawStateReadReply: reads.decode,
   retireIdleOpenClawStateReadWorkers: reads.retire,
 }));
 
@@ -148,13 +146,12 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     const worker = await vi.importActual<typeof StateReadWorker>(
       "../../state/openclaw-state-read-worker.js",
     );
-    reads.decode.mockImplementation(worker.decodeOpenClawStateReadReply);
     reads.retire.mockImplementation(worker.retireIdleOpenClawStateReadWorkers);
     reads.capture.mockImplementation(() => ({
       own: () => () => {},
       createTransport: (command) =>
         createMockStateReadSource({
-          read: async (source) => reads.decode(await readInProcess(command, source)),
+          read: async (source) => ({ value: await readInProcess(command, source) }),
           async close() {},
         }).createTransport(command),
     }));

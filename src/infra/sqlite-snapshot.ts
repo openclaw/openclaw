@@ -10,11 +10,9 @@ import {
   pinDirectory,
   publishFileExclusive,
   requireDirectorySync,
-  sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
@@ -28,8 +26,12 @@ import {
 } from "./sqlite-readonly-location.js";
 import {
   assertExpectedContent,
+  assertMutationFingerprintUnchanged,
+  assertOpenFileIdentity,
   assertOpenFileIdentitySync,
   assertPublishedFileIdentitySync,
+  hashOpenPublishedFile,
+  hashPublishedFile,
   hashPublishedFileSync,
   removePublicationStagingDirectory,
   removePublishedTargetIfOwned,
@@ -142,23 +144,6 @@ async function copyFileExclusive(
   }
 }
 
-async function assertMutationFingerprintUnchanged(
-  handle: FileHandle,
-  expected: FileMutationFingerprint,
-  filePath: string,
-  expectedContent: SqliteFileContent,
-): Promise<void> {
-  const current = await handle.stat({ bigint: true });
-  if (!sameFileMutationFingerprint(current, expected)) {
-    if (!sameFileStatFingerprint(current, expected)) {
-      throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
-    }
-    // Re-read the pinned snapshot when FUSE timestamps settle after copying or hashing.
-    const { digest, bytes } = await sha256File(handle);
-    assertExpectedContent({ sha256: digest, sizeBytes: bytes }, expectedContent, filePath);
-  }
-}
-
 async function syncFile(filePath: string): Promise<void> {
   const handle = await fs.open(filePath, "r+");
   try {
@@ -198,49 +183,6 @@ export async function createStoppedSqliteSnapshot(options: {
   // Restore requires this digest; the stopped owner checks source/journal stability separately.
   const content = await hashPublishedFile(options.targetPath, identity);
   return { path: options.targetPath, userVersion, ...content };
-}
-
-async function assertOpenFileIdentity(
-  handle: FileHandle,
-  filePath: string,
-  expectedIdentity: FileIdentityStat,
-): Promise<void> {
-  const openedIdentity = await handle.stat({ bigint: true });
-  const currentIdentity = await fs.lstat(filePath, { bigint: true });
-  if (
-    !openedIdentity.isFile() ||
-    !currentIdentity.isFile() ||
-    !sameFileIdentity(expectedIdentity, openedIdentity) ||
-    !sameFileIdentity(expectedIdentity, currentIdentity)
-  ) {
-    throw new Error(`SQLite snapshot file changed: ${filePath}`);
-  }
-}
-
-async function hashPublishedFile(
-  filePath: string,
-  expectedIdentity: FileIdentityStat,
-): Promise<SqliteFileContent> {
-  const handle = await fs.open(filePath, "r");
-  try {
-    return await hashOpenPublishedFile(handle, filePath, expectedIdentity);
-  } finally {
-    await handle.close();
-  }
-}
-
-async function hashOpenPublishedFile(
-  handle: FileHandle,
-  filePath: string,
-  expectedIdentity: FileIdentityStat,
-): Promise<SqliteFileContent> {
-  await assertOpenFileIdentity(handle, filePath, expectedIdentity);
-  const fingerprint = await handle.stat({ bigint: true });
-  const { digest, bytes } = await sha256File(handle);
-  const content = { sha256: digest, sizeBytes: bytes };
-  await assertMutationFingerprintUnchanged(handle, fingerprint, filePath, content);
-  await assertOpenFileIdentity(handle, filePath, expectedIdentity);
-  return content;
 }
 
 function assertSynchronousCallbackResult(result: unknown, label: string): void {
