@@ -103,69 +103,75 @@ it.each([
       const foregroundRequests: ModelRequest[] = [];
       const checkpointTools: string[][] = [];
       const checkpointText = "# Durable checkpoint\nArchive policy preserved.\n";
-      const server = createServer(async (request, response) => {
-        const received = JSON.parse(await readBody(request)) as ModelRequest;
-        const tools = received.tools?.flatMap((tool) => tool.function?.name ?? []) ?? [];
-        const lastUser = received.messages.findLast(
-          (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
-        );
-        const lastUserText = providerText(lastUser?.content);
-        const foreground = lastUserText.endsWith(approved);
-        const activeInstructions = [
-          lastUserText,
-          ...received.messages
-            .filter((message) => message.role === "system" || message.role === "developer")
-            .map((message) => providerText(message.content)),
-        ].join("\n");
-        // Runtime-only tasks carry instructions in the system message. A
-        // compactor can quote the same words but does not advertise write.
-        const checkpoint =
-          !foreground &&
-          activeInstructions.includes("Checkpoint durable notes.") &&
-          tools.includes("write");
-        if (checkpoint) {
-          checkpointTools.push(tools);
-        }
-        const writeCheckpoint = checkpoint && checkpointTools.length === 1;
-        if (foreground) {
-          foregroundRequests.push(received);
-          observeForeground?.();
-        }
-        const text = foreground
-          ? "FOREGROUND_READY"
-          : checkpoint
-            ? "NO_REPLY"
-            : "## Decisions\nKeep documentation clear.\n## Open TODOs\nRespond to the current user.\n## Constraints/Rules\nPreserve approved input.\n## Pending user asks\nContinue the current task.\n## Exact identifiers\narchive-marker";
-        response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
-        writeChunk(
-          response,
-          writeCheckpoint
-            ? {
-                role: "assistant",
-                tool_calls: [
-                  {
-                    index: 0,
-                    id: "checkpoint-write",
-                    type: "function",
-                    function: {
-                      name: "write",
-                      arguments: JSON.stringify({
-                        path: "memory/checkpoint.md",
-                        content: checkpointText,
-                      }),
-                    },
-                  },
-                ],
-              }
-            : { role: "assistant", content: text },
-        );
-        writeChunk(
-          response,
-          {},
-          writeCheckpoint ? "tool_calls" : "stop",
-          foreground ? 18_000 : 22_000,
-        );
-        response.end("data: [DONE]\n\n");
+      const server = createServer((request, response) => {
+        void readBody(request)
+          .then((body) => {
+            const received = JSON.parse(body) as ModelRequest;
+            const tools = received.tools?.flatMap((tool) => tool.function?.name ?? []) ?? [];
+            const lastUser = received.messages.findLast(
+              (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
+            );
+            const lastUserText = providerText(lastUser?.content);
+            const foreground = lastUserText.endsWith(approved);
+            const activeInstructions = [
+              lastUserText,
+              ...received.messages
+                .filter((message) => message.role === "system" || message.role === "developer")
+                .map((message) => providerText(message.content)),
+            ].join("\n");
+            // Runtime-only tasks carry instructions in the system message. A
+            // compactor can quote the same words but does not advertise write.
+            const checkpoint =
+              !foreground &&
+              activeInstructions.includes("Checkpoint durable notes.") &&
+              tools.includes("write");
+            if (checkpoint) {
+              checkpointTools.push(tools);
+            }
+            const writeCheckpoint = checkpoint && checkpointTools.length === 1;
+            if (foreground) {
+              foregroundRequests.push(received);
+              observeForeground?.();
+            }
+            const text = foreground
+              ? "FOREGROUND_READY"
+              : checkpoint
+                ? "NO_REPLY"
+                : "## Decisions\nKeep documentation clear.\n## Open TODOs\nRespond to the current user.\n## Constraints/Rules\nPreserve approved input.\n## Pending user asks\nContinue the current task.\n## Exact identifiers\narchive-marker";
+            response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+            writeChunk(
+              response,
+              writeCheckpoint
+                ? {
+                    role: "assistant",
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "checkpoint-write",
+                        type: "function",
+                        function: {
+                          name: "write",
+                          arguments: JSON.stringify({
+                            path: "memory/checkpoint.md",
+                            content: checkpointText,
+                          }),
+                        },
+                      },
+                    ],
+                  }
+                : { role: "assistant", content: text },
+            );
+            writeChunk(
+              response,
+              {},
+              writeCheckpoint ? "tool_calls" : "stop",
+              foreground ? 18_000 : 22_000,
+            );
+            response.end("data: [DONE]\n\n");
+          })
+          .catch((error: Error) => {
+            response.destroy(error);
+          });
       });
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);

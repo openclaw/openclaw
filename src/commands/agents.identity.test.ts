@@ -42,7 +42,11 @@ const writtenAgent = (id = "main") => configMocks.write.mock.calls[0]?.[0].agent
 
 async function jsonIdentity(options: IdentityOptions): Promise<unknown> {
   await agentsSetIdentityCommand({ ...options, json: true }, runtime);
-  return JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0] ?? "{}"));
+  const output = runtime.log.mock.calls.at(-1)?.[0];
+  if (typeof output !== "string") {
+    throw new Error("Identity command did not emit JSON text");
+  }
+  return JSON.parse(output);
 }
 
 async function expectIdentityUpdate(

@@ -205,7 +205,7 @@ it.for(
           expect(admission.status).toBe("owned");
           if (admission.status === "owned") {
             try {
-              await followup(queued);
+              followup(queued);
             } finally {
               admission.operation.complete();
             }

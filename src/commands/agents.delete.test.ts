@@ -642,7 +642,7 @@ describe("agents delete command", () => {
   it.for([
     ["parent", "main-child", ""],
     ["child", "", "ops-child"],
-  ])(
+  ] as const)(
     "retains a %s workspace overlapping a survivor",
     async ([_kind, mainPath, opsPath], { state }) => {
       const shared = path.join(state.stateDir, "workspace-shared");

@@ -20,19 +20,24 @@ vi.mock("./config-cli-validation.js", () => ({
   validateConfigMutation: async () => ({ kind: "write" }),
   assertStrictConfigForMutation: vi.fn(),
 }));
+// mock-isolation: Observe supplied write intent without preparing filesystem writes.
 vi.mock("../config/io.write-prepare.js", () => ({ prepareConfigWriteValues: state.prepare }));
+// mock-isolation: Fail if a real write unexpectedly enters the dry-run topology path.
 vi.mock("../config/io.write-topology.js", () => ({
   prepareConfigWriteTopology: () => state.unexpected("dry-run topology"),
 }));
+// mock-isolation: Fail if the runner unexpectedly requests dry-run unset expansion.
 vi.mock("../config/config-path-mutation.js", () => ({
   resolveManagedUnsetPathsForWrite: () => state.unexpected("dry-run unsets"),
 }));
 vi.mock("../config/io.meta.js", () => ({ AUTO_MANAGED_CONFIG_META_PATHS: [] }));
+// mock-isolation: Keep the supplied synthetic snapshot intact at the reader boundary.
 vi.mock("../config/io.read-helpers.js", () => ({ coerceConfig: (value: unknown) => value }));
 vi.mock("../config/paths.js", () => ({
   resolveConfigPath: () => "/test/openclaw.json",
   resolveStateDir: vi.fn(),
 }));
+// mock-isolation: Reject unexpected redacted input without loading secret discovery.
 vi.mock("../config/redact-snapshot.js", () => ({
   REDACTED_SENTINEL: "__OPENCLAW_REDACTED__",
   restoreRedactedValues: () => state.unexpected("redacted input"),

@@ -28,7 +28,7 @@ vi.mock("../channels/plugins/index.js", () => ({
       : undefined,
 }));
 
-// Owner matching needs loaded channel plugins; the qa-channel scenario covers it for real.
+// mock-isolation: Match synthetic owners without loading channel plugins; qa-channel covers that boundary.
 vi.mock("../auto-reply/command-auth.js", () => ({
   isConfiguredCommandOwner: (cfg: OpenClawConfig, actor: { channel: string; senderId: string }) =>
     cfg.commands?.ownerAllowFrom?.includes(`${actor.channel}:${actor.senderId}`) === true,

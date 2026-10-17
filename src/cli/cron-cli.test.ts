@@ -733,9 +733,12 @@ it.each([
     ["--at", "+002027-01-15T12:00:00", "--tz", "America/New_York", "--keep-after-run"],
     { schedule: { kind: "at", at: "2027-01-15T17:00:00.000Z" }, deleteAfterRun: false },
   ],
-] satisfies Array<[string, string[], CronJobPatch]>)("%s", async (_name, args, expected) => {
-  expect(await edit(...args)).toEqual(expected);
-});
+] satisfies Array<[string, string[], Record<string, unknown>]>)(
+  "%s",
+  async (_name, args, expected) => {
+    expect(await edit(...args)).toEqual(expected);
+  },
+);
 
 it("normalizes offset one-shot creation independently of timezone", async () => {
   const params = await addOptions({

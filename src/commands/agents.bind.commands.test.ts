@@ -16,6 +16,7 @@ vi.mock("../config/bindings.js", () => ({
   listRouteBindings: (cfg: OpenClawConfig) =>
     (cfg.bindings ?? []).filter((binding) => Boolean(binding.match)),
 }));
+// mock-isolation: Supply synthetic channel contributions without discovering installed plugins.
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   listPluginContributionIds: listContributions,

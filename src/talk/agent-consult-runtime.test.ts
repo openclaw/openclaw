@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
@@ -305,7 +306,7 @@ describe("realtime voice agent consult runtime", () => {
     });
 
     expect(result).toEqual({ text: "Speak this.\n\nThen this." });
-    const voiceSession = sessionStore["voice:15550001234"];
+    const voiceSession = expectDefined(sessionStore["voice:15550001234"], "voice session");
     expect(voiceSession).toStrictEqual({
       createdAt: expect.any(Number),
       createdVia: "talk",
@@ -528,7 +529,10 @@ describe("realtime voice agent consult runtime", () => {
       sessionKey: "agent:main:subagent:google-meet:meet-1",
     });
     expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
-    const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
+    const forkedEntry = expectDefined(
+      sessionStore["agent:main:subagent:google-meet:meet-1"],
+      "forked voice session",
+    );
     expect(forkedEntry).toBeDefined();
     expect(forkedEntry).toStrictEqual({
       sessionId: "forked-session",

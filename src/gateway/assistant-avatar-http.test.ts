@@ -39,7 +39,7 @@ function avatarFixture(basePath = "") {
   const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
   return {
     workspace,
-    setAvatar(avatar: string | undefined, agentId = "main") {
+    setAvatar(this: void, avatar: string | undefined, agentId = "main") {
       const identity = entries[agentId]?.identity;
       if (identity) {
         identity.avatar = avatar;
@@ -48,7 +48,7 @@ function avatarFixture(basePath = "") {
       }
       setRuntimeConfigSnapshot(config);
     },
-    async project(agentId = "main") {
+    async project(this: void, agentId = "main") {
       const { avatar } = await resolveGatewayAssistantAvatar({
         cfg: config,
         identity: await resolveAssistantIdentity({ cfg: config, agentId }),
@@ -56,7 +56,7 @@ function avatarFixture(basePath = "") {
       });
       return avatar;
     },
-    async request(url: string, method = "GET", etag?: string, authorized = true) {
+    async request(this: void, url: string, method = "GET", etag?: string, authorized = true) {
       const response = makeMockHttpResponse();
       await handleControlUiAvatarRequest(
         {

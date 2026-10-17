@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
@@ -213,7 +214,10 @@ it("rejects a changed active transcript without losing a known compaction", asyn
         sessionPromptState.capturePreparedCompactionTarget({
           sessionId: "session-2",
           sessionFile: "agent:main:session-2",
-          sessionTarget: { ...input.runParams.sessionTarget, sessionId: "session-2" },
+          sessionTarget: {
+            ...expectDefined(input.runParams.sessionTarget, "active transcript target"),
+            sessionId: "session-2",
+          },
         });
         return {
           ok: true,

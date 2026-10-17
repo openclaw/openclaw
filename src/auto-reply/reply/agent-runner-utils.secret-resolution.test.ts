@@ -6,10 +6,12 @@ const { resolveSecrets, scopedTargets } = vi.hoisted(() => ({
   scopedTargets: vi.fn(),
 }));
 
+// mock-isolation: Resolve synthetic secrets without contacting a Gateway.
 vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: resolveSecrets,
 }));
 
+// mock-isolation: Supply fixed target inventories without loading channel or plugin registries.
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries.*.apiKey"]),
   getAgentRuntimeOptionalCommandSecretPaths: () =>

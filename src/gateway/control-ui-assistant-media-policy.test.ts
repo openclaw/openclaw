@@ -70,7 +70,7 @@ let cfg: OpenClawConfig;
 let entry: InternalSessionEntry;
 let restoreEnv = () => {};
 const sessionKey = "agent:main:dashboard:media";
-const readScopes = ["operator.read"];
+const readScopes: GatewayOperatorRolesConfig["definitions"][string]["scopes"] = ["operator.read"];
 const viewerRole = { sessions: { others: "view" }, agents: "*", scopes: readScopes } as const;
 
 async function image(name = "image.png", root = project, contents: string | Buffer = PNG) {
@@ -124,7 +124,8 @@ function onOpen(
 }
 
 beforeEach(async () => {
-  restoreEnv = captureEnv(["OPENCLAW_STATE_DIR"]).restore;
+  const env = captureEnv(["OPENCLAW_STATE_DIR"]);
+  restoreEnv = () => env.restore();
   state.placements.mockReset().mockReturnValue(new Map());
   state.placementsAsync
     .mockReset()
