@@ -182,6 +182,7 @@ describe("Control UI build chunking", () => {
         new URL("../styles/sidebar-update-card.css", import.meta.url).pathname,
         "sidebar-update-runtime",
       ],
+      [new URL("../pages/chat/route-entry.ts", import.meta.url).pathname, "chat-route-entry"],
       [new URL("../pages/cron/cron-page.tsx", import.meta.url).pathname, "cron-page"],
       [new URL("../pages/plugins/plugins-page.tsx", import.meta.url).pathname, "plugins-page"],
       [new URL("../components/markdown-parser.ts", import.meta.url).pathname, "markdown-runtime"],
