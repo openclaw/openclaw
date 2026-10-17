@@ -113,8 +113,7 @@ export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
 export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
-export const MODEL_CATALOG_INPUTS = ["text", "image", "video", "document"] as const;
-export type ModelCatalogInput = (typeof MODEL_CATALOG_INPUTS)[number];
+export type ModelCatalogInput = "text" | "image" | "video" | "document";
 export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
 export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
@@ -163,8 +162,7 @@ export function listMappedModelThinkingLevels(model: {
 }
 
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
-export const MODEL_CATALOG_STATUSES = ["available", "preview", "deprecated", "disabled"] as const;
-export type ModelCatalogStatus = (typeof MODEL_CATALOG_STATUSES)[number];
+export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
 export type ModelCatalogSource =
   | "manifest"
   | "provider-index"
