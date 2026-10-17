@@ -1,59 +1,26 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
-import type {
-  ChannelAccountSnapshot,
-  ChannelPlugin,
-  ChannelStatusIssue,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
-type ChannelTestPlugin = {
-  id: string;
-  config: {
-    listAccountIds: () => string[];
-    resolveAccount: () => Record<string, never>;
-    isEnabled: () => boolean;
-    isConfigured: () => boolean;
-  };
-  status?: {
-    probeAccount?: (params?: unknown) => unknown;
-    buildChannelSummary?: () => unknown;
-    collectStatusIssues?: () => ChannelStatusIssue[];
-  };
-};
+type ChannelTestPlugin = Pick<ChannelPlugin<Record<string, never>>, "id" | "config" | "status">;
 
-export function createChannelPlugin(
-  params: {
-    id?: string;
-    probeAccount?: (params?: unknown) => unknown;
-    buildChannelSummary?: () => unknown;
-    collectStatusIssues?: () => ChannelStatusIssue[];
-  } = {},
-): ChannelTestPlugin {
+export function createChannelPlugin({
+  id = "whatsapp",
+  ...status
+}: { id?: string } & ChannelTestPlugin["status"] = {}): ChannelTestPlugin {
   return {
-    id: params.id ?? "whatsapp",
+    id,
     config: {
       listAccountIds: () => ["default"],
       resolveAccount: () => ({}),
       isEnabled: () => true,
       isConfigured: () => true,
     },
-    ...(params.probeAccount || params.buildChannelSummary || params.collectStatusIssues
-      ? {
-          status: {
-            ...(params.probeAccount ? { probeAccount: params.probeAccount } : {}),
-            ...(params.buildChannelSummary
-              ? { buildChannelSummary: params.buildChannelSummary }
-              : {}),
-            ...(params.collectStatusIssues
-              ? { collectStatusIssues: params.collectStatusIssues }
-              : {}),
-          },
-        }
-      : {}),
+    ...(Object.keys(status).length ? { status } : {}),
   };
 }
 
@@ -142,18 +109,11 @@ export function firstChannelAccount(
 }
 
 export function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected first mock call");
-  }
-  return call[0];
+  return expectDefined(mock.mock.calls[0], "Expected first mock call")[0];
 }
 
 function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const call = respond.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected respond call");
-  }
+  const call = expectDefined(respond.mock.calls[0], "Expected respond call");
   expect(call[0]).toBe(true);
   expect(call[2]).toBeUndefined();
   return requireGatewayRecord(call[1], "respond payload");
@@ -177,11 +137,7 @@ export function createChannelsStatusHarness(options: {
       context: {
         getRuntimeConfig: options.getRuntimeConfig,
         getRuntimeSnapshot:
-          options.getRuntimeSnapshot ??
-          (() => ({
-            channels: {},
-            channelAccounts: {},
-          })),
+          options.getRuntimeSnapshot ?? (() => ({ channels: {}, channelAccounts: {} })),
       },
       ...overrides,
     } as unknown as GatewayRequestHandlerOptions;
@@ -203,10 +159,10 @@ export function createRecordedAccountSnapshots() {
   const baseUrl = new URL("https://chat.example.test/?token=runtime-token");
   baseUrl.username = "runtime-user";
   baseUrl.password = "runtime-password";
+  const common = { enabled: true, configured: true };
   const recovered: ChannelAccountSnapshot = {
+    ...common,
     accountId: "recovered",
-    enabled: true,
-    configured: true,
     running: true,
     lifecycle: "starting",
     tokenSource: "config",
@@ -226,9 +182,8 @@ export function createRecordedAccountSnapshots() {
     profile: { credential: "private-profile" },
   };
   const retrying: ChannelAccountSnapshot = {
+    ...common,
     accountId: "retrying",
-    enabled: true,
-    configured: true,
     running: false,
     connected: false,
     lifecycle: "recovering",

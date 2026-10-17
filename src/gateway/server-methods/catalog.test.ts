@@ -21,6 +21,7 @@ vi.mock("../../plugins/management-service.js", () => ({
 vi.mock("../../skills/discovery/status.js", () => ({ prepareWorkspaceSkillStatus: local.skills }));
 
 const registry = "https://catalog.example.test";
+const skillRequest = { kind: "skill", agentId: "main" };
 const config = {
   agents: {
     list: [
@@ -70,20 +71,18 @@ function trackedSkill(owner: string, skillRegistry = registry, requestedReferenc
 }
 
 type CallResult<T> = { ok: boolean; result: T; error: ErrorShape | undefined };
+type Params = Record<string, unknown>;
 
-function call(
-  method: "catalog.browse",
-  params: Record<string, unknown>,
-): Promise<CallResult<CatalogBrowseResult>>;
+function call(method: "catalog.browse", params: Params): Promise<CallResult<CatalogBrowseResult>>;
 function call(
   method: "catalog.searchKeywords",
-  params: Record<string, unknown>,
+  params: Params,
 ): Promise<CallResult<CatalogSearchKeywordsResult>>;
 function call(
   method: string,
-  params: Record<string, unknown>,
+  params: Params,
 ): Promise<CallResult<CatalogBrowseResult | CatalogSearchKeywordsResult>>;
-async function call(method: string, params: Record<string, unknown>) {
+async function call(method: string, params: Params) {
   const respond = vi.fn();
   const options: GatewayRequestHandlerOptions = {
     req: { type: "req", id: "catalog", method, params },
@@ -103,17 +102,31 @@ async function call(method: string, params: Record<string, unknown>) {
   };
 }
 
-function stubRegistry(rows: unknown[], nextCursor?: string) {
+function stubFetch(body: (url: URL) => unknown) {
   const fetchMock = vi.fn(async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    return Response.json(
-      url.pathname.endsWith("/search")
-        ? { results: rows.map((entry) => ({ score: 1, package: entry })) }
-        : { items: rows, nextCursor },
-    );
+    return Response.json(body(url));
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+function stubRegistry(rows: unknown[], nextCursor?: string) {
+  return stubFetch((url) =>
+    url.pathname.endsWith("/search")
+      ? { results: rows.map((entry) => ({ score: 1, package: entry })) }
+      : { items: rows, nextCursor },
+  );
+}
+function trendingSkill(source: string, displayName: string, reference: string) {
+  return {
+    slug: "same-slug",
+    displayName,
+    source,
+    official: true,
+    publisher: { handle: "alice", ...(source === "clawhub" ? { official: true } : {}) },
+    metrics: { updatedAt: 1 },
+    install: { kind: source, reference },
+  };
 }
 
 beforeEach(() => {
@@ -169,11 +182,10 @@ describe("registered Gateway catalog discovery", () => {
           ? [plugin("official-plugin", true), plugin("community", false), plugin("missing")]
           : [skill("alice", true), skill("bob", false), skill("missing")];
       const fetchMock = stubRegistry(rows, "page-two");
+      const request = { kind, agentId: "main", pageSize: 3 };
       const first = await call("catalog.browse", {
-        kind,
+        ...request,
         officialOnly: true,
-        agentId: "main",
-        pageSize: 3,
       });
       expect(first.ok).toBe(true);
       expect(Value.Check(CatalogBrowseResultSchema, first.result)).toBe(true);
@@ -185,11 +197,9 @@ describe("registered Gateway catalog discovery", () => {
       });
       expect(first.result.nextCursor).toBe("page-two");
       const second = await call("catalog.browse", {
-        kind,
+        ...request,
         officialOnly: false,
-        agentId: "main",
         cursor: first.result.nextCursor,
-        pageSize: 3,
       });
       expect(second.result.items).toHaveLength(3);
       const input = fetchMock.mock.calls[1]![0];
@@ -207,21 +217,18 @@ describe("registered Gateway catalog discovery", () => {
           ? [plugin("community", false), plugin("official-plugin", true)]
           : [skill("community", false), skill("alice", true)],
       );
+      const request = { kind, query: "calendar", agentId: "main" };
       const found = await call("catalog.browse", {
-        kind,
-        query: "calendar",
+        ...request,
         officialOnly: true,
         pageSize: 2,
-        agentId: "main",
       });
       expect(found.result).toMatchObject({ mode: "search", searchLimit: 2 });
       expect(found.result.items).toHaveLength(1);
       expect(found.result.nextCursor).toBeUndefined();
       const invalid = await call("catalog.browse", {
-        kind,
-        query: "calendar",
+        ...request,
         cursor: "browse-cursor",
-        agentId: "main",
       });
       expect(invalid.error?.code).toBe("INVALID_REQUEST");
     },
@@ -229,19 +236,13 @@ describe("registered Gateway catalog discovery", () => {
 
   it("keeps native publisher, registry, external source, and selected agent installation state distinct", async () => {
     stubRegistry([skill("alice", true), skill("bob", true), skill("external", true)]);
-    const first = await call("catalog.browse", {
-      kind: "skill",
-      agentId: "main",
-    });
+    const first = await call("catalog.browse", skillRequest);
     expect(first.result.items.map((entry) => [entry.id, entry.local.installed])).toEqual([
       ["@alice/same-slug", true],
       ["@bob/same-slug", false],
       ["@external/same-slug", false],
     ]);
-    const other = await call("catalog.browse", {
-      kind: "skill",
-      agentId: "other",
-    });
+    const other = await call("catalog.browse", { ...skillRequest, agentId: "other" });
     expect(other.result.items.every((entry) => !entry.local.installed)).toBe(true);
     expect(local.skills.mock.calls.map(([workspace]) => workspace)).toEqual([
       "/tmp/catalog-main",
@@ -252,50 +253,26 @@ describe("registered Gateway catalog discovery", () => {
   });
 
   it("qualifies trending native skills with listing flags and preserves install-only external identities", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input) => {
-        const url = new URL(String(input));
-        if (url.pathname.startsWith("/api/v1/packages/")) {
-          return Response.json({
-            package: {
-              family: "skill",
-              name: "same-slug",
-              ownerHandle: "alice",
-              isOfficial: false,
-            },
-          });
-        }
-        return Response.json({
-          items: [
-            {
-              slug: "same-slug",
-              displayName: "Official publisher",
-              source: "clawhub",
-              official: true,
-              publisher: { handle: "alice", official: true },
-              metrics: { updatedAt: 1 },
-              install: { kind: "clawhub", reference: "alice/same-slug" },
-            },
-            {
-              slug: "same-slug",
-              displayName: "External",
-              source: "skills-sh",
-              official: true,
-              publisher: { handle: "alice" },
-              metrics: { updatedAt: 1 },
-              install: { kind: "skills-sh", reference: "skills-sh:alice/repo/same-slug" },
-            },
-          ],
-          nextCursor: "trending-page-two",
-        });
-      }),
-    );
-    const general = await call("catalog.browse", {
-      kind: "skill",
-      feed: "trending",
-      agentId: "main",
+    stubFetch((url) => {
+      if (url.pathname.startsWith("/api/v1/packages/")) {
+        return {
+          package: {
+            family: "skill",
+            name: "same-slug",
+            ownerHandle: "alice",
+            isOfficial: false,
+          },
+        };
+      }
+      return {
+        items: [
+          trendingSkill("clawhub", "Official publisher", "alice/same-slug"),
+          trendingSkill("skills-sh", "External", "skills-sh:alice/repo/same-slug"),
+        ],
+        nextCursor: "trending-page-two",
+      };
     });
+    const general = await call("catalog.browse", { ...skillRequest, feed: "trending" });
     expect(general.result.mode).toBe("trending");
     expect(general.result.items[1]).toMatchObject({
       id: "skills-sh:alice/repo/same-slug",
@@ -303,10 +280,9 @@ describe("registered Gateway catalog discovery", () => {
       local: { installed: true },
     });
     const official = await call("catalog.browse", {
-      kind: "skill",
+      ...skillRequest,
       feed: "trending",
       officialOnly: true,
-      agentId: "main",
     });
     expect(official.result.items).toEqual([]);
     expect(official.result.nextCursor).toBe("trending-page-two");
@@ -318,10 +294,7 @@ describe("registered Gateway catalog discovery", () => {
       items: [],
       mode: "catalog",
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ error: "unavailable" })),
-    );
+    stubFetch(() => ({ error: "unavailable" }));
     const failure = await call("catalog.browse", {
       kind: "plugin",
       cursor: "retry-page",
@@ -338,14 +311,12 @@ describe("registered Gateway catalog discovery", () => {
   });
 
   it("pages the deduplicated official union without combining keywords or truncating matches", async () => {
-    const fetchMock = vi.fn(async (input) => {
-      const url = new URL(String(input));
+    const fetchMock = stubFetch((url) => {
       const rows = url.pathname.includes("plugins")
         ? [plugin("official-plugin", true), plugin("community", false)]
         : [skill("alice", true), skill("bob", true), skill("unknown")];
-      return Response.json({ results: rows.map((entry) => ({ score: 1, package: entry })) });
+      return { results: rows.map((entry) => ({ score: 1, package: entry })) };
     });
-    vi.stubGlobal("fetch", fetchMock);
     const request = {
       keywords: [" Calendar  ", "calendar", "   Office   tools "],
       agentId: "main",
@@ -375,14 +346,8 @@ describe("registered Gateway catalog discovery", () => {
   });
 
   it("accepts 100 keywords and returns explicit partial failures", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input) => {
-        const url = new URL(String(input));
-        return Response.json(
-          url.searchParams.get("q") === "term0" ? { failure: true } : { results: [] },
-        );
-      }),
+    stubFetch((url) =>
+      url.searchParams.get("q") === "term0" ? { failure: true } : { results: [] },
     );
     const page = await call("catalog.searchKeywords", {
       keywords: Array.from({ length: 100 }, (_, index) => `term${index}`),

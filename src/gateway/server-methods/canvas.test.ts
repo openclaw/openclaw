@@ -32,7 +32,9 @@ function createHarness(method = "canvas.document.view") {
   } as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
   const invoke = async (
-    params: Record<string, unknown> = { docId: "cv_widget" },
+    params: Record<string, unknown> = method.endsWith("preview")
+      ? { html: "<p>Preview</p>" }
+      : { docId: "cv_widget" },
     options: Partial<GatewayRequestHandlerOptions> = {},
   ) => {
     const respond = vi.fn();
@@ -50,6 +52,30 @@ function createHarness(method = "canvas.document.view") {
   return { client, context, invoke };
 }
 
+function expectFailure(respond: ReturnType<typeof vi.fn>, code = "UNAVAILABLE") {
+  expect(respond.mock.calls[0]).toEqual([false, undefined, expect.objectContaining({ code })]);
+}
+
+function expectHostedHtml(respond: ReturnType<typeof vi.fn>, html: string) {
+  expect(respond.mock.calls).toEqual([
+    [
+      true,
+      {
+        html,
+        sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
+        sandboxPort: 18790,
+        sandboxOrigin: "https://sandbox.example",
+      },
+    ],
+  ]);
+  const url = new URL(respond.mock.calls[0]![1].sandboxUrl, "https://sandbox.example");
+  return decodeSandboxHostCsp(url.searchParams.get("csp"));
+}
+
+const hostingDisabled = () => ({
+  plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
+});
+
 beforeEach(() => {
   resetGatewayWorkAdmission();
   readDocument.mockReset().mockResolvedValue({ html: "<p>Widget</p>", cspSandbox: "scripts" });
@@ -62,19 +88,7 @@ describe("canvas.document.view", () => {
     context.getRuntimeConfig = () => ({
       mcp: { apps: { sandboxOrigin: "https://sandbox.example" } },
     });
-    const respond = await invoke();
-    expect(respond.mock.calls[0]).toEqual([
-      true,
-      {
-        html: "<p>Widget</p>",
-        sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
-        sandboxPort: 18790,
-        sandboxOrigin: "https://sandbox.example",
-      },
-    ]);
-    const result = respond.mock.calls[0]![1];
-    const url = new URL(result.sandboxUrl, "https://sandbox.example");
-    const policy = decodeSandboxHostCsp(url.searchParams.get("csp"));
+    const policy = expectHostedHtml(await invoke(), "<p>Widget</p>");
     expect(policy).toMatchObject({
       blockDescendantFrames: true,
       resourceDomains: expect.arrayContaining([
@@ -106,20 +120,15 @@ describe("canvas.document.view", () => {
     "rejects invalid document identifiers and extra source fields: %j",
     async (params) => {
       const { invoke } = createHarness();
-      const respond = await invoke(params);
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(respond.mock.calls[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+      expectFailure(await invoke(params), "INVALID_REQUEST");
       expect(readDocument).not.toHaveBeenCalled();
     },
   );
 
   it("honors Canvas hosting disablement before reading content", async () => {
     const { context, invoke } = createHarness();
-    context.getRuntimeConfig = () => ({
-      plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-    });
-    const respond = await invoke();
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    context.getRuntimeConfig = hostingDisabled;
+    expectFailure(await invoke());
     expect(readDocument).not.toHaveBeenCalled();
   });
 
@@ -141,7 +150,7 @@ describe("canvas.document.view", () => {
     const { context, invoke } = createHarness();
     readDocument.mockRejectedValueOnce(new Error("ENOENT: /private/state/canvas/secret"));
     const missing = await invoke();
-    expect(missing.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expectFailure(missing);
     expect(JSON.stringify(missing.mock.calls)).not.toContain("/private/state");
     context.getMcpAppSandboxPort = () => undefined;
     context.ensureSandboxHostPort = undefined;
@@ -150,9 +159,7 @@ describe("canvas.document.view", () => {
 });
 
 describe("canvas.document.preview", () => {
-  function createPreviewHarness() {
-    return createHarness("canvas.document.preview");
-  }
+  const createPreviewHarness = () => createHarness("canvas.document.preview");
 
   afterEach(() => {
     expect(readDocument).not.toHaveBeenCalled();
@@ -165,23 +172,7 @@ describe("canvas.document.preview", () => {
     });
     const html =
       "\uFEFF<!doctype html>\r\n<p>café 漢字 🦀</p><script>window.example = true;</script>\n";
-    const respond = await invoke({ html });
-    expect(respond.mock.calls).toEqual([
-      [
-        true,
-        {
-          html,
-          sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
-          sandboxPort: 18790,
-          sandboxOrigin: "https://sandbox.example",
-        },
-      ],
-    ]);
-    const result = respond.mock.calls[0]![1];
-    const url = new URL(result.sandboxUrl, "https://sandbox.example");
-    expect(decodeSandboxHostCsp(url.searchParams.get("csp"))).toEqual({
-      blockDescendantFrames: true,
-    });
+    expect(expectHostedHtml(await invoke({ html }), html)).toEqual({ blockDescendantFrames: true });
     expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
   });
 
@@ -203,7 +194,6 @@ describe("canvas.document.preview", () => {
   ])("accepts empty HTML and the exact ASCII/multibyte UTF-8 limit (case %#)", async (html) => {
     const { invoke } = createPreviewHarness();
     const respond = await invoke({ html });
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]).toEqual([
       true,
       { html, sandboxPort: 18790, sandboxUrl: expect.any(String) },
@@ -215,12 +205,7 @@ describe("canvas.document.preview", () => {
     async (html) => {
       const { context, invoke } = createPreviewHarness();
       context.getMcpAppSandboxPort = () => undefined;
-      const respond = await invoke({ html });
-      expect(respond.mock.calls[0]).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      ]);
+      expectFailure(await invoke({ html }), "INVALID_REQUEST");
       expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
     },
   );
@@ -237,8 +222,7 @@ describe("canvas.document.preview", () => {
   ])("rejects invalid params without granting document or policy selection: %j", async (params) => {
     const { context, invoke } = createPreviewHarness();
     context.getMcpAppSandboxPort = () => undefined;
-    const respond = await invoke(params);
-    expect(respond.mock.calls[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+    expectFailure(await invoke(params), "INVALID_REQUEST");
     expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
   });
 
@@ -262,52 +246,37 @@ describe("canvas.document.preview", () => {
         context.getMcpAppSandboxPort = () => undefined;
         vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
         const controller = new AbortController();
-        let guardActive = true;
+        const guard = new AbortController();
         let currentContext: GatewayRequestContext | undefined = context;
         context.resolveGatewayContext = () => currentContext;
         const options = {
           signal: controller.signal,
-          sessionMutationCommitGuard: () => {
-            if (!guardActive) {
-              throw new Error("retired request");
-            }
+          sessionMutationCommitGuard: () => guard.signal.throwIfAborted(),
+        };
+        const retire = {
+          gateway: () => {
+            currentContext = undefined;
           },
-        };
-        const retire = () => {
-          switch (boundary) {
-            case "gateway":
-              currentContext = undefined;
-              break;
-            case "resolver":
-              context.resolveGatewayContext = () => context;
-              break;
-            case "client":
-              client.invalidated = true;
-              break;
-            case "connection":
-              context.isConnectionActive = () => false;
-              break;
-            case "method-registry": {
-              const replacement = createGatewayMethodRegistry([]);
-              context.getGatewayMethodRegistry = () => replacement;
-              break;
-            }
-            case "signal":
-              controller.abort();
-              break;
-            case "configuration":
-              context.getRuntimeConfig = () => ({
-                plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-              });
-              break;
-            case "admission":
-              markGatewayRestartDraining();
-              break;
-            case "commit-guard":
-              guardActive = false;
-              break;
-          }
-        };
+          resolver: () => {
+            context.resolveGatewayContext = () => context;
+          },
+          client: () => {
+            client.invalidated = true;
+          },
+          connection: () => {
+            context.isConnectionActive = () => false;
+          },
+          "method-registry": () => {
+            const replacement = createGatewayMethodRegistry([]);
+            context.getGatewayMethodRegistry = () => replacement;
+          },
+          signal: () => controller.abort(),
+          configuration: () => {
+            context.getRuntimeConfig = hostingDisabled;
+          },
+          admission: markGatewayRestartDraining,
+          "commit-guard": () => guard.abort(),
+        }[boundary];
         // Replacing an otherwise live resolver/registry only retires already-captured requests.
         if (when === "before" && (boundary === "resolver" || boundary === "method-registry")) {
           continue;
@@ -315,7 +284,7 @@ describe("canvas.document.preview", () => {
         if (when === "before") {
           retire();
         }
-        const pending = invoke({ html: "<p>Preview</p>" }, options);
+        const pending = invoke(undefined, options);
         if (when === "after") {
           expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
           retire();
@@ -323,9 +292,9 @@ describe("canvas.document.preview", () => {
           expect(context.ensureSandboxHostPort).not.toHaveBeenCalled();
         }
         sandbox.resolve(18790);
-        expect((await pending).mock.calls).toEqual([
-          [false, undefined, expect.objectContaining({ code: "UNAVAILABLE" })],
-        ]);
+        const respond = await pending;
+        expectFailure(respond);
+        expect(respond).toHaveBeenCalledOnce();
         resetGatewayWorkAdmission();
       }
     },
@@ -335,10 +304,10 @@ describe("canvas.document.preview", () => {
     const { context, invoke } = createPreviewHarness();
     context.getMcpAppSandboxPort = () => undefined;
     vi.mocked(context.ensureSandboxHostPort!).mockRejectedValue(new Error("/private/sandbox-host"));
-    const failed = await invoke({ html: "<p>Preview</p>" });
-    expect(failed.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    const failed = await invoke();
+    expectFailure(failed);
     expect(JSON.stringify(failed.mock.calls)).not.toContain("/private/");
     context.ensureSandboxHostPort = undefined;
-    expect((await invoke({ html: "" })).mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expectFailure(await invoke({ html: "" }));
   });
 });

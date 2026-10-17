@@ -106,6 +106,7 @@ const { createOptions, runChannelsStatus } = createChannelsStatusHarness({
 
 describe("channelsHandlers channels.status", () => {
   afterEach(() => {
+    vi.useRealTimers();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(createTestRegistry([]));
   });
@@ -209,11 +210,7 @@ describe("channelsHandlers channels.status", () => {
       config: { inspectAccount: inspectUnrelated },
     });
     const registry = createTestRegistry(
-      [selected, unrelated].map((plugin) => ({
-        pluginId: plugin.id,
-        plugin,
-        source: "test",
-      })),
+      [selected, unrelated].map((plugin) => ({ pluginId: plugin.id, plugin, source: "test" })),
     );
     setActivePluginRegistry(registry);
     setActiveDegradedSecretOwners([
@@ -546,9 +543,9 @@ describe("channelsHandlers channels.status", () => {
     ]);
 
     const payload = await runChannelsStatus({ probe: true, timeoutMs: 2000 });
-    const channels = requireGatewayRecord(payload.channels, "channels payload");
-    const whatsapp = requireGatewayRecord(channels.whatsapp, "whatsapp channel");
-    expect(whatsapp.baseUrl).toBe("https://chat.example.test/?token=***");
+    expect(payload.channels).toMatchObject({
+      whatsapp: { baseUrl: "https://chat.example.test/?token=***" },
+    });
   });
 
   it.each(["cold", "stale"] as const)(
@@ -656,15 +653,12 @@ describe("channelsHandlers channels.status", () => {
         configured: true,
         lastError: expect.stringContaining("missing SDK export"),
       });
-      const accounts = requireGatewayRecord(payload.channelAccounts, "accounts")["broken-channel"];
-      expect(accounts).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            accountId: "disabled",
-            enabled: false,
-            lastError: expect.stringContaining("missing SDK export"),
-          }),
-        ]),
+      expect(channelAccounts(payload, "broken-channel")).toContainEqual(
+        expect.objectContaining({
+          accountId: "disabled",
+          enabled: false,
+          lastError: expect.stringContaining("missing SDK export"),
+        }),
       );
       expect(failedProbe).not.toHaveBeenCalled();
       expect(healthyProbe).toHaveBeenCalledOnce();
@@ -681,106 +675,85 @@ describe("channelsHandlers channels.status", () => {
     "shares the capped deadline across preparation and live %s hooks",
     async (hooks) => {
       vi.useFakeTimers();
-      try {
-        const delay = (ms: number) =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, ms);
-          });
-        const resolutionMs = hooks === "async" ? 900 : 0;
-        const runtimeConfig = { channels: { whatsapp: { enabled: true } } };
-        mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-        const probeAccount = vi.fn(async () => {
-          await delay(400);
-          return { ok: true };
+      const delay = (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
         });
-        const auditAccount = vi.fn(async () => ({ ok: true }));
-        const account = {};
-        const plugin = createChannelPlugin({ probeAccount });
-        mocks.listChannelPlugins.mockReturnValue([
-          {
-            ...plugin,
-            status: { ...plugin.status, auditAccount },
-            config: {
-              ...plugin.config,
-              resolveAccount: () => {
-                if (hooks === "async") {
-                  throw new Error("legacy account hook used");
-                }
-                return account;
-              },
-              ...(hooks === "async"
-                ? {
-                    resolveAccountAsync: async () => {
-                      await delay(resolutionMs);
-                      return account;
-                    },
-                  }
-                : {}),
-            },
-          },
-        ]);
-        const run = runChannelsStatus({ probe: true, timeoutMs: 999_999 });
-        await vi.advanceTimersByTimeAsync(1300);
-        await run;
-        const probeArgs = requireGatewayRecord(requireFirstCallArg(probeAccount), "probe args");
-        expect(probeArgs.timeoutMs).toBe(30_000 - resolutionMs);
-        expect(probeArgs.cfg).toBe(runtimeConfig);
-        expect(probeArgs.account).toBe(account);
-        const auditArgs = requireGatewayRecord(requireFirstCallArg(auditAccount), "audit args");
-        expect(auditArgs.timeoutMs).toBe(30_000 - resolutionMs - 400);
-      } finally {
-        vi.useRealTimers();
+      const resolutionMs = hooks === "async" ? 900 : 0;
+      const runtimeConfig = { channels: { whatsapp: { enabled: true } } };
+      mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+      const probeAccount = vi.fn(async () => {
+        await delay(400);
+        return { ok: true };
+      });
+      const auditAccount = vi.fn(async () => ({ ok: true }));
+      const account = {};
+      const plugin = createChannelPlugin({ probeAccount });
+      plugin.status = { ...plugin.status, auditAccount };
+      plugin.config.resolveAccount = () => {
+        if (hooks === "async") {
+          throw new Error("legacy account hook used");
+        }
+        return account;
+      };
+      if (hooks === "async") {
+        plugin.config.resolveAccountAsync = async () => {
+          await delay(resolutionMs);
+          return account;
+        };
       }
+      mocks.listChannelPlugins.mockReturnValue([plugin]);
+      const run = runChannelsStatus({ probe: true, timeoutMs: 999_999 });
+      await vi.advanceTimersByTimeAsync(1300);
+      await run;
+      const probeArgs = requireGatewayRecord(requireFirstCallArg(probeAccount), "probe args");
+      expect(probeArgs.timeoutMs).toBe(30_000 - resolutionMs);
+      expect(probeArgs.cfg).toBe(runtimeConfig);
+      expect(probeArgs.account).toBe(account);
+      const auditArgs = requireGatewayRecord(requireFirstCallArg(auditAccount), "audit args");
+      expect(auditArgs.timeoutMs).toBe(30_000 - resolutionMs - 400);
     },
   );
 
   it("runs channel probes concurrently and preserves deterministic status-map order", async () => {
     vi.useFakeTimers();
-    try {
-      const started: string[] = [];
-      const createDelayedProbe = (id: string) => async () => {
-        started.push(id);
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1000);
-        });
-        return { ok: true };
-      };
-      mocks.listChannelPlugins.mockReturnValue([
-        createChannelPlugin({ id: "zeta", probeAccount: createDelayedProbe("zeta") }),
-        createChannelPlugin({ id: "alpha", probeAccount: createDelayedProbe("alpha") }),
-      ]);
+    const started: string[] = [];
+    const createDelayedProbe = (id: string) => async () => {
+      started.push(id);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1000);
+      });
+      return { ok: true };
+    };
+    mocks.listChannelPlugins.mockReturnValue([
+      createChannelPlugin({ id: "zeta", probeAccount: createDelayedProbe("zeta") }),
+      createChannelPlugin({ id: "alpha", probeAccount: createDelayedProbe("alpha") }),
+    ]);
 
-      const startedAt = Date.now();
-      const run = runChannelsStatus({ probe: true, timeoutMs: 2000 });
+    const startedAt = Date.now();
+    const run = runChannelsStatus({ probe: true, timeoutMs: 2000 });
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(started).toEqual(["alpha", "zeta"]);
-      await vi.advanceTimersByTimeAsync(1000);
-      const payload = await run;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(started).toEqual(["alpha", "zeta"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    const payload = await run;
 
-      expect(Date.now() - startedAt).toBe(1000);
-      expect(payload.channelOrder).toEqual(["zeta", "alpha"]);
-      expect(Object.keys(requireGatewayRecord(payload.channels, "channels payload"))).toEqual([
-        "alpha",
-        "zeta",
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(Date.now() - startedAt).toBe(1000);
+    expect(payload.channelOrder).toEqual(["zeta", "alpha"]);
+    expect(Object.keys(requireGatewayRecord(payload.channels, "channels payload"))).toEqual([
+      "alpha",
+      "zeta",
+    ]);
   });
 
   it("fences summaries queued before another microtask exhausts their deadline", async () => {
     vi.useFakeTimers();
-    try {
-      const { summary, plugins } = createQueuedSummaryFixture();
-      mocks.listChannelPlugins.mockReturnValue(plugins);
-      const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
-      expect(summary).not.toHaveBeenCalled();
-      expect(firstChannelAccount(payload, "beta")).toMatchObject({ running: true });
-      expect(payload.partial).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+    const { summary, plugins } = createQueuedSummaryFixture();
+    mocks.listChannelPlugins.mockReturnValue(plugins);
+    const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
+    expect(summary).not.toHaveBeenCalled();
+    expect(firstChannelAccount(payload, "beta")).toMatchObject({ running: true });
+    expect(payload.partial).toBe(true);
   });
 
   it("preserves channel account rows when a live probe throws", async () => {
@@ -842,44 +815,37 @@ describe("channelsHandlers channels.status", () => {
     "bounds the channel when $step exceeds its deadline (synchronous=$synchronous)",
     async ({ step, synchronous }) => {
       vi.useFakeTimers();
-      try {
-        const { plugin: hanging, describeAccount } = createChannelDeadlineFixture(
-          step,
-          synchronous,
-        );
-        const healthyProbe = vi.fn(async () => ({ ok: true, identity: "healthy" }));
-        mocks.listChannelPlugins.mockReturnValue([
-          hanging,
-          createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }),
-        ]);
-        const status = await vi.importActual<typeof import("../../channels/plugins/status.js")>(
-          "../../channels/plugins/status.js",
-        );
-        mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
-          status.buildChannelAccountSnapshotFromAccount,
-        );
-        const run = runChannelsStatus({ probe: true, timeoutMs: 1000 });
+      const { plugin: hanging, describeAccount } = createChannelDeadlineFixture(step, synchronous);
+      const healthyProbe = vi.fn(async () => ({ ok: true, identity: "healthy" }));
+      mocks.listChannelPlugins.mockReturnValue([
+        hanging,
+        createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }),
+      ]);
+      const status = await vi.importActual<typeof import("../../channels/plugins/status.js")>(
+        "../../channels/plugins/status.js",
+      );
+      mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
+        status.buildChannelAccountSnapshotFromAccount,
+      );
+      const run = runChannelsStatus({ probe: true, timeoutMs: 1000 });
 
-        if (!synchronous) {
-          await vi.advanceTimersByTimeAsync(1000);
-        }
-        const payload = await run;
-
-        if (step === "snapshot") {
-          expect(describeAccount).not.toHaveBeenCalled();
-        }
-        expect(firstChannelAccount(payload, "hanging")).toMatchObject({
-          running: true,
-          lastError: "status timed out after 1000ms",
-        });
-        expect(firstChannelAccount(payload, "healthy")).toMatchObject(
-          synchronous ? { running: true } : { probe: { ok: true, identity: "healthy" } },
-        );
-        expect(payload.partial).toBe(true);
-        expect(payload.warnings).toContain("hanging status timed out after 1000ms");
-      } finally {
-        vi.useRealTimers();
+      if (!synchronous) {
+        await vi.advanceTimersByTimeAsync(1000);
       }
+      const payload = await run;
+
+      if (step === "snapshot") {
+        expect(describeAccount).not.toHaveBeenCalled();
+      }
+      expect(firstChannelAccount(payload, "hanging")).toMatchObject({
+        running: true,
+        lastError: "status timed out after 1000ms",
+      });
+      expect(firstChannelAccount(payload, "healthy")).toMatchObject(
+        synchronous ? { running: true } : { probe: { ok: true, identity: "healthy" } },
+      );
+      expect(payload.partial).toBe(true);
+      expect(payload.warnings).toContain("hanging status timed out after 1000ms");
     },
   );
 
@@ -889,99 +855,89 @@ describe("channelsHandlers channels.status", () => {
       const { checkGatewayHealth } = await import("../../commands/doctor-gateway-health.js");
       await import("../../agents/tools/in-process-gateway.js");
       vi.useFakeTimers();
-      try {
-        const statusStarted = createDeferred();
-        const channelsStarted = createDeferred();
-        mocks.listChannelPlugins.mockReturnValue([
-          createChannelPlugin({
-            id: "hanging",
-            probeAccount: () => new Promise(() => {}),
-          }),
-          createChannelPlugin({
-            id: "healthy",
-            probeAccount: async () => ({ ok: true }),
-            collectStatusIssues: () => [
-              {
-                channel: "healthy",
-                accountId: "default",
-                kind: "config",
-                message: "Check routing",
-              },
-            ],
-          }),
-        ]);
-        mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
-          async ({ accountId, probe }) => ({ accountId, configured: true, probe }),
-        );
-        let channelPayload: Record<string, unknown> | undefined;
-        mocks.callGateway.mockImplementation(
-          ({ method, params, timeoutMs }: CallGatewayOptions) => {
-            if (timeoutMs == null) {
-              throw new Error("Doctor requests must have a deadline");
-            }
-            if (method === "diagnostics.stability") {
-              return Promise.resolve({});
-            }
-            return new Promise((resolve, reject) => {
-              const deadline = setTimeout(
-                () => reject(new Error(`gateway timeout after ${timeoutMs}ms`)),
-                timeoutMs,
-              );
-              const response = async () => {
-                await new Promise((resume) => {
-                  setTimeout(resume, roundTripMs);
-                });
-                if (method === "status") {
-                  return { ok: true };
-                }
-                channelPayload = await runChannelsStatus(
-                  requireGatewayRecord(params, "request params"),
-                );
-                return channelPayload;
-              };
-              void response()
-                .then(resolve, reject)
-                .finally(() => {
-                  clearTimeout(deadline);
-                });
-              (method === "status" ? statusStarted : channelsStarted).resolve();
+      const statusStarted = createDeferred();
+      const channelsStarted = createDeferred();
+      mocks.listChannelPlugins.mockReturnValue([
+        createChannelPlugin({
+          id: "hanging",
+          probeAccount: () => new Promise(() => {}),
+        }),
+        createChannelPlugin({
+          id: "healthy",
+          probeAccount: async () => ({ ok: true }),
+          collectStatusIssues: () => [
+            {
+              channel: "healthy",
+              accountId: "default",
+              kind: "config",
+              message: "Check routing",
+            },
+          ],
+        }),
+      ]);
+      mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
+        async ({ accountId, probe }) => ({ accountId, configured: true, probe }),
+      );
+      let channelPayload: Record<string, unknown> | undefined;
+      mocks.callGateway.mockImplementation(({ method, params, timeoutMs }: CallGatewayOptions) => {
+        if (timeoutMs == null) {
+          throw new Error("Doctor requests must have a deadline");
+        }
+        if (method === "diagnostics.stability") {
+          return Promise.resolve({});
+        }
+        return new Promise((resolve, reject) => {
+          const deadline = setTimeout(
+            () => reject(new Error(`gateway timeout after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+          const response = async () => {
+            await new Promise((resume) => {
+              setTimeout(resume, roundTripMs);
             });
-          },
-        );
-        const result = checkGatewayHealth({
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          cfg: {},
-          timeoutMs: roundTripMs < 3_000 ? 3_000 : 10_000,
+            if (method === "status") {
+              return { ok: true };
+            }
+            channelPayload = await runChannelsStatus(
+              requireGatewayRecord(params, "request params"),
+            );
+            return channelPayload;
+          };
+          void response()
+            .then(resolve, reject)
+            .finally(() => {
+              clearTimeout(deadline);
+            });
+          (method === "status" ? statusStarted : channelsStarted).resolve();
         });
-        await statusStarted.promise;
-        await vi.advanceTimersByTimeAsync(roundTripMs);
-        await channelsStarted.promise;
-        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      const result = checkGatewayHealth({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        cfg: {},
+        timeoutMs: roundTripMs < 3_000 ? 3_000 : 10_000,
+      });
+      await statusStarted.promise;
+      await vi.advanceTimersByTimeAsync(roundTripMs);
+      await channelsStarted.promise;
+      await vi.advanceTimersByTimeAsync(30_000);
 
-        await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
-        const payload = expectDefined(channelPayload, "channel response");
-        expect(payload.partial).toBe(true);
-        expect(firstChannelAccount(payload, "hanging").lastError).toContain("status timed out");
-        expect(firstChannelAccount(payload, "healthy").probe).toEqual({ ok: true });
-        expect(mocks.note).toHaveBeenCalledWith(
-          expect.stringContaining("Check routing"),
-          "Channel warnings",
-        );
-        expect(mocks.note).not.toHaveBeenCalledWith(
-          expect.stringContaining("host may be slow"),
-          expect.anything(),
-        );
-      } finally {
-        vi.useRealTimers();
-      }
+      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      const payload = expectDefined(channelPayload, "channel response");
+      expect(payload.partial).toBe(true);
+      expect(firstChannelAccount(payload, "hanging").lastError).toContain("status timed out");
+      expect(firstChannelAccount(payload, "healthy").probe).toEqual({ ok: true });
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("Check routing"),
+        "Channel warnings",
+      );
+      expect(mocks.note).not.toHaveBeenCalledWith(
+        expect.stringContaining("host may be slow"),
+        expect.anything(),
+      );
     },
   );
 
   it("falls back to account-derived channel summaries when summary building fails", async () => {
-    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
-      accountId: "default",
-      configured: true,
-    });
     mocks.listChannelPlugins.mockReturnValue([
       createChannelPlugin({
         buildChannelSummary: async () => {
@@ -991,14 +947,13 @@ describe("channelsHandlers channels.status", () => {
     ]);
 
     const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
-    const channels = requireGatewayRecord(payload.channels, "channels payload");
-    const whatsapp = requireGatewayRecord(channels.whatsapp, "whatsapp channel");
-    expect(whatsapp.configured).toBe(true);
-    expect(String(whatsapp.lastError)).toContain("summary failed");
-
-    const account = firstChannelAccount(payload, "whatsapp");
-    expect(account.accountId).toBe("default");
-    expect(account.configured).toBe(true);
+    expect(payload.channels).toMatchObject({
+      whatsapp: { configured: true, lastError: expect.stringContaining("summary failed") },
+    });
+    expect(firstChannelAccount(payload, "whatsapp")).toMatchObject({
+      accountId: "default",
+      configured: true,
+    });
   });
 
   it.each(RECORDED_CHANNEL_HEALTH_CASES)(
