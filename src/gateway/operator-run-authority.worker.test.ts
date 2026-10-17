@@ -68,23 +68,22 @@ function withOperator(
 ) {
   return withOpenClawTestState({ scenario: "minimal" }, () => run(operatorFixture(scopes)));
 }
-function readerConfig(scopes: GatewayOperatorRoleDefinition["scopes"]): OpenClawConfig {
+function readerConfig(scopes: GatewayOperatorRoleDefinition["scopes"], withDenied = false) {
+  const reader: GatewayOperatorRoleDefinition = {
+    sessions: { others: "none" },
+    agents: [],
+    scopes,
+    modelPolicy: { allow: ["fixture/a", "fixture/b"] },
+  };
+  const denied: GatewayOperatorRoleDefinition = {
+    agents: [],
+    scopes: [],
+    sessions: { others: "none" },
+  };
   return {
     agents: { defaults: { model: "fixture/a" } },
-    gateway: {
-      roles: {
-        definitions: {
-          reader: {
-            sessions: { others: "none" },
-            agents: [],
-            scopes,
-            modelPolicy: { allow: ["fixture/a", "fixture/b"] },
-          },
-          denied: { agents: [], scopes: [], sessions: { others: "none" } },
-        },
-      },
-    },
-  };
+    gateway: { roles: { definitions: { reader, ...(withDenied ? { denied } : {}) } } },
+  } satisfies OpenClawConfig;
 }
 function registerProof(
   context: OperatorFixture["context"],
@@ -196,7 +195,7 @@ it.each(["capture", "operator tool"])(
       const sourceScopes: GatewayOperatorRoleDefinition["scopes"] =
         entry === "operator tool" ? ["operator.read", "operator.write"] : ["operator.read"];
       const client = createOperatorClient({ profileId: profile.id, scopes: sourceScopes });
-      let cfg = readerConfig(sourceScopes);
+      let cfg: OpenClawConfig = readerConfig(sourceScopes);
       context.getRuntimeConfig = () => cfg;
       registerProof(
         context,
@@ -213,8 +212,8 @@ it.each(["capture", "operator tool"])(
       );
       const sql = observeHostDataSql();
       try {
-        const calibration = new DatabaseSync(":memory:");
-        try {
+        {
+          using calibration = new DatabaseSync(":memory:");
           calibration.exec("CREATE TABLE calibration (value INTEGER)");
           calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
           const read = calibration.prepare("SELECT value FROM calibration");
@@ -225,8 +224,6 @@ it.each(["capture", "operator tool"])(
             expect(call).toHaveBeenCalled();
             call.mockClear();
           }
-        } finally {
-          calibration.close();
         }
 
         if (entry === "capture") {
@@ -303,7 +300,7 @@ it.each([
     withOperator(async ({ profile, client, context }) => {
       const target = ensureProfileForEmail("preparing-target@example.test");
       setUserProfileRole(profile.id, "reader");
-      const cfg = readerConfig(["operator.read"]);
+      const cfg = readerConfig(["operator.read"], true);
       let currentConfig = cfg;
       context.getRuntimeConfig = () => currentConfig;
       let currentGateway = context;
@@ -345,70 +342,63 @@ it.each([
         sideEffect();
       });
       const allowed =
-        revocation === "policy restored" ||
-        revocation === "unrelated policy" ||
-        revocation === "target alias" ||
+        ["policy restored", "unrelated policy", "target alias"].includes(revocation) ||
         revocation.startsWith("model policy");
       const checked = allowed
         ? expect(pending).resolves.toBeUndefined()
         : expect(pending).rejects.toThrow();
       try {
         await entered.promise;
-        if (revocation === "client") {
-          connected = false;
-        } else if (revocation === "gateway") {
-          currentGateway = createContext();
-        } else if (revocation === "source") {
-          source.abort(new Error("source ended"));
-        } else if (revocation === "invocation") {
-          invocation.abort(new Error("invocation ended"));
-        } else if (revocation === "profile") {
-          linkEmail("operator@example.test", target.id);
-        } else if (revocation === "role") {
-          setUserProfileRole(profile.id, "denied");
-        } else if (revocation === "role restored") {
-          for (const role of ["denied", "reader"]) {
-            await setCanonicalUserProfileRole(profile.id, role, {
-              onCommitted: invalidateOperatorRolePolicy,
-            });
-          }
-        } else if (revocation === "target alias") {
-          linkEmail("preparing-target@example.test", profile.id);
-        } else if (revocation.startsWith("model policy")) {
+        const changePolicy = () => {
           currentConfig = structuredClone(cfg);
-          const role = expectDefined(
-            currentConfig.gateway?.roles?.definitions.reader,
-            "reader role",
-          );
-          role.modelPolicy = {
-            allow:
-              revocation === "model policy widened"
-                ? ["fixture/a", "fixture/b", "fixture/c"]
-                : ["fixture/b", "fixture/c"],
-          };
+          const roles = currentConfig.gateway.roles.definitions;
+          if (revocation.startsWith("model policy")) {
+            roles.reader.modelPolicy = {
+              allow:
+                revocation === "model policy widened"
+                  ? ["fixture/a", "fixture/b", "fixture/c"]
+                  : ["fixture/b", "fixture/c"],
+            };
+          } else {
+            roles[revocation === "unrelated policy" ? "denied" : "reader"] = {
+              agents: [],
+              scopes: [],
+              sessions: { others: "none" },
+              sandbox: "required",
+            };
+          }
           publishOperatorRoleConfigChange(context);
-          if (revocation === "model policy restored") {
+          if (revocation.endsWith("restored")) {
             currentConfig = cfg;
             publishOperatorRoleConfigChange(context);
           }
+        };
+        const mutations = {
+          client: () => (connected = false),
+          gateway: () => (currentGateway = createContext()),
+          source: () => source.abort(new Error("source ended")),
+          invocation: () => invocation.abort(new Error("invocation ended")),
+          profile: () => linkEmail("operator@example.test", target.id),
+          role: () => setUserProfileRole(profile.id, "denied"),
+          "target alias": () => linkEmail("preparing-target@example.test", profile.id),
+          "role restored": async () => {
+            for (const role of ["denied", "reader"]) {
+              await setCanonicalUserProfileRole(profile.id, role, {
+                onCommitted: invalidateOperatorRolePolicy,
+              });
+            }
+          },
+          "policy downgraded": changePolicy,
+          "policy restored": changePolicy,
+          "unrelated policy": changePolicy,
+          "model policy widened": changePolicy,
+          "model policy narrowed": changePolicy,
+          "model policy restored": changePolicy,
+        };
+        if (revocation === "role restored") {
+          await mutations[revocation]();
         } else {
-          currentConfig = structuredClone(cfg);
-          const roles = expectDefined(currentConfig.gateway?.roles, "configured roles");
-          roles.definitions[
-            revocation === "policy restored" || revocation === "policy downgraded"
-              ? "reader"
-              : "denied"
-          ] = {
-            agents: [],
-            scopes: [],
-            sessions: { others: "none" },
-            sandbox: "required",
-          };
-          publishOperatorRoleConfigChange(context);
-          if (revocation === "policy restored") {
-            currentConfig = cfg;
-            publishOperatorRoleConfigChange(context);
-          }
+          mutations[revocation]();
         }
         resume.resolve();
         await checked;

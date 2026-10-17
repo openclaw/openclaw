@@ -7,6 +7,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { runWithModelFallback } from "../agents/model-fallback-runner.js";
 import { resolveReplyOperatorAuthorityKey } from "../auto-reply/reply/reply-tool-authority.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -60,6 +61,10 @@ const github = (accountId: number, login: string) =>
 type Source = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
 type Authority = Source["authority"];
 type CaptureInput = Parameters<typeof captureGatewayOperatorRunAuthority>[0];
+const liveDependency = (controller: AbortController) => ({
+  signal: controller.signal,
+  assertCurrent: () => controller.signal.throwIfAborted(),
+});
 async function captureSource(input: CaptureInput) {
   const source = expectDefined(await captureGatewayOperatorRunAuthority(input), "operator source");
   return { ...source, [Symbol.dispose]: source.release };
@@ -97,7 +102,7 @@ const guestRole = {
   sessions: { others: "view" },
   agents: ["guest-agent"],
   scopes: ["operator.read", "operator.write"],
-} as const;
+} satisfies GatewayOperatorRoleDefinition;
 
 function roleConfig(defaultRole = true): OpenClawConfig {
   return {
@@ -105,11 +110,7 @@ function roleConfig(defaultRole = true): OpenClawConfig {
       roles: {
         ...(defaultRole ? { default: "guest" } : {}),
         definitions: {
-          guest: {
-            sessions: { ...guestRole.sessions },
-            agents: [...guestRole.agents],
-            scopes: [...guestRole.scopes],
-          },
+          guest: structuredClone(guestRole),
           maintainer: {
             sessions: { others: "write" },
             agents: "*",
@@ -222,36 +223,35 @@ describe("operator role policy", () => {
         roles.assignments = {
           byGithubLogin: roleSource === "assigned" ? { [login.toLowerCase()]: "guest" } : {},
         };
-        const catalog = route === "Gateway" ? await prepareUserProfileCatalog() : undefined;
-        let source: Source | undefined;
-        let cliAuthority: ReturnType<typeof resolveChannelOperatorAdminAuthority>;
-        try {
-          if (route === "Gateway") {
-            const context = createGatewayTestContext();
-            context.getRuntimeConfig = () => cfg;
-            source = await captureSource({
+        using cleanup = new DisposableStack();
+        let assertCurrent: () => void;
+        if (route === "Gateway") {
+          cleanup.defer((await prepareUserProfileCatalog()).release);
+          const context = createGatewayTestContext();
+          context.getRuntimeConfig = () => cfg;
+          const source = cleanup.use(
+            await captureSource({
               client: identifiedClient(person.id),
               context,
               sourceAuthority: resolveGatewayOperatorAccessAuthority(person.id, cfg),
-            });
-          } else {
-            const identity = { channelId: "slack", accountId: "default", senderId: "cli-operator" };
-            linkUserChannelIdentity(person.id, identity);
-            cliAuthority = resolveChannelOperatorAdminAuthority(cfg, identity);
-          }
-          const renamedLogin = route === "Gateway" ? "Renamed-Explicit-Operator" : "CLI-Operator";
-          github(43, renamedLogin);
-          if (route === "Gateway") {
-            const authority = expectDefined(source, "explicit operator authority").authority;
-            expectCurrent(authority);
+            }),
+          );
+          assertCurrent = () => {
+            expectCurrent(source.authority);
             expectRole(person.id, cfg, roles.definitions.maintainer);
-          } else {
-            expect(expectDefined(cliAuthority, "explicit CLI authority").isCurrent(cfg)).toBe(true);
-          }
-        } finally {
-          source?.release();
-          catalog?.release();
+          };
+        } else {
+          const identity = { channelId: "slack", accountId: "default", senderId: "cli-operator" };
+          linkUserChannelIdentity(person.id, identity);
+          const authority = expectDefined(
+            resolveChannelOperatorAdminAuthority(cfg, identity),
+            "CLI authority",
+          );
+          assertCurrent = () => expect(authority.isCurrent(cfg)).toBe(true);
         }
+        const renamedLogin = route === "Gateway" ? "Renamed-Explicit-Operator" : "CLI-Operator";
+        github(43, renamedLogin);
+        assertCurrent();
       }),
   );
 
@@ -264,66 +264,53 @@ describe("operator role policy", () => {
         guestDefinition(cfg).modelPolicy = { allow: ["fixture/*"] };
         const context = { ...createGatewayTestContext(), ...runtimeContext };
         const controllers = [new AbortController(), new AbortController()];
-        const dependencies = controllers.map((controller) => ({
-          signal: controller.signal,
-          assertCurrent: () => controller.signal.throwIfAborted(),
-        }));
-        const captures: Source[] = [];
-        const capture = async (params: CaptureInput) => {
-          const result = await captureSource(params);
-          captures.push(result);
-          return result.authority;
-        };
-        try {
-          const [first, second] = await Promise.all(
-            dependencies.map((dependency) =>
-              capture({
-                client,
-                context:
-                  dependencyKind === "gateway resolver"
-                    ? {
-                        getRuntimeConfig: context.getRuntimeConfig,
-                        resolveGatewayContext: () =>
-                          dependency.signal.aborted ? undefined : context,
-                      }
-                    : context,
-                ...(dependencyKind === "invocation"
-                  ? { invocationAuthority: dependency }
-                  : dependencyKind === "access"
-                    ? { sourceAuthority: dependency }
-                    : {}),
-              }),
-            ),
-          );
-          const original = expectDefined(first, "first source");
-          const independent = expectDefined(second, "independent source");
-          expect(resolveReplyOperatorAuthorityKey(independent)).not.toBe(
-            resolveReplyOperatorAuthorityKey(original),
-          );
-          const narrowed = await capture({
-            client: narrowClient(client, original),
-            context,
-          });
-          expect(narrowed.source).toBe(original.source);
-          expect(narrowed.scopes).toEqual([]);
-          expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(
-            resolveReplyOperatorAuthorityKey(original),
-          );
-          expectModel(narrowed, "b", true);
-          expectDefined(controllers[0], "first dependency").abort(new Error("dependency ended"));
-          if (dependencyKind === "gateway resolver") {
-            expect(original.assertCurrent).toThrow("authority is no longer active");
-            expect(narrowed.assertCurrent).toThrow("authority is no longer active");
-          } else {
-            expect(original.signal?.aborted).toBe(true);
-            expect(narrowed.signal?.aborted).toBe(true);
-          }
-          expectCurrent(independent);
-        } finally {
-          for (const captured of captures) {
-            captured.release();
-          }
+        using captures = new DisposableStack();
+        const capture = async (params: CaptureInput) =>
+          captures.use(await captureSource(params)).authority;
+        const [first, second] = await Promise.all(
+          controllers.map(liveDependency).map((dependency) =>
+            capture({
+              client,
+              context:
+                dependencyKind === "gateway resolver"
+                  ? {
+                      getRuntimeConfig: context.getRuntimeConfig,
+                      resolveGatewayContext: () =>
+                        dependency.signal.aborted ? undefined : context,
+                    }
+                  : context,
+              ...(dependencyKind === "invocation"
+                ? { invocationAuthority: dependency }
+                : dependencyKind === "access"
+                  ? { sourceAuthority: dependency }
+                  : {}),
+            }),
+          ),
+        );
+        const original = expectDefined(first, "first source");
+        const independent = expectDefined(second, "independent source");
+        expect(resolveReplyOperatorAuthorityKey(independent)).not.toBe(
+          resolveReplyOperatorAuthorityKey(original),
+        );
+        const narrowed = await capture({
+          client: narrowClient(client, original),
+          context,
+        });
+        expect(narrowed.source).toBe(original.source);
+        expect(narrowed.scopes).toEqual([]);
+        expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(
+          resolveReplyOperatorAuthorityKey(original),
+        );
+        expectModel(narrowed, "b", true);
+        expectDefined(controllers[0], "first dependency").abort(new Error("dependency ended"));
+        if (dependencyKind === "gateway resolver") {
+          expect(original.assertCurrent).toThrow("authority is no longer active");
+          expect(narrowed.assertCurrent).toThrow("authority is no longer active");
+        } else {
+          expect(original.signal?.aborted).toBe(true);
+          expect(narrowed.signal?.aborted).toBe(true);
         }
+        expectCurrent(independent);
       }),
   );
 
@@ -342,18 +329,14 @@ describe("operator role policy", () => {
         client.internal = {
           operatorAccessAuthority: {
             gatewayAccessGrant: grant,
-            signal: access.signal,
-            assertCurrent: () => access.signal.throwIfAborted(),
+            ...liveDependency(access),
           },
         };
         const captured = await captureSource({
           client,
           context,
           ...(independent ? { sourceAuthority: null } : {}),
-          invocationAuthority: {
-            signal: request.signal,
-            assertCurrent: () => request.signal.throwIfAborted(),
-          },
+          invocationAuthority: liveDependency(request),
         });
         using _ = { [Symbol.dispose]: captured.release };
 

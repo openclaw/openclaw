@@ -6,6 +6,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
@@ -218,14 +219,12 @@ describe("restart recovery authenticated operator source", () => {
     (timing) =>
       withRecovery(async (fixture) => {
         const caller = acceptedCaller(fixture);
-        const restored =
+        const source =
           timing === "after restoration"
             ? expectDefined(await fixture.restore(), "restored device source")
-            : undefined;
-        const accepted =
-          timing === "after admission"
-            ? expectDefined(await caller.capture(), "accepted exact original token")
-            : undefined;
+            : timing === "after admission"
+              ? expectDefined(await caller.capture(), "accepted exact original token")
+              : undefined;
         try {
           const rotated = await rotateDeviceToken({
             deviceId: "recovery-device",
@@ -239,7 +238,6 @@ describe("restart recovery authenticated operator source", () => {
             "device-token-rotated",
           );
           expect(fixture.client.invalidated).toBe(true);
-          const source = restored ?? accepted;
           if (source) {
             expectRevoked(source.authority);
           } else {
@@ -248,8 +246,7 @@ describe("restart recovery authenticated operator source", () => {
             );
           }
         } finally {
-          restored?.release();
-          accepted?.release();
+          source?.release();
           caller.release();
         }
       }),
@@ -394,14 +391,15 @@ describe("restart recovery authenticated operator source", () => {
         try {
           const profile = ensureProfileForEmail("access@example.test");
           if (revocation === "github binding") {
-            syncGitHubIdentity({
-              identity: { accountId: 41, login: "primary" },
-              authenticationAlias: { kind: "email", email: "access@example.test" },
-            });
-            syncGitHubIdentity({
-              identity: { accountId: 42, login: "secondary" },
-              authenticationAlias: { kind: "email", email: "secondary@example.test" },
-            });
+            for (const [accountId, login, email] of [
+              [41, "primary", "access@example.test"],
+              [42, "secondary", "secondary@example.test"],
+            ] as const) {
+              syncGitHubIdentity({
+                identity: { accountId, login },
+                authenticationAlias: { kind: "email", email },
+              });
+            }
             linkEmail("secondary@example.test", profile.id);
           }
           const fixture = await recoveryFixture(state.stateDir, profile.id, {
@@ -595,28 +593,22 @@ describe("restart recovery authenticated operator source", () => {
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("model@example.test");
       setUserProfileRole(profile.id, "operator");
-      const cfg: OpenClawConfig = {
+      const operator = {
+        sessions: { others: "none" },
+        agents: ["main"],
+        scopes: ["operator.admin"],
+        sandbox: "required",
+        modelPolicy: { allow: ["fixture/a", "fixture/b"] },
+      } satisfies GatewayOperatorRoleDefinition;
+      const cfg = {
         agents: { defaults: { model: "fixture/a" } },
-        gateway: {
-          roles: {
-            definitions: {
-              operator: {
-                sessions: { others: "none" },
-                agents: ["main"],
-                scopes: ["operator.admin"],
-                sandbox: "required",
-                accessPolicyPlugin: undefined,
-                modelPolicy: { allow: ["fixture/a", "fixture/b"] },
-              },
-            },
-          },
-        },
-      };
+        gateway: { roles: { definitions: { operator } } },
+      } satisfies OpenClawConfig;
       const fixture = await recoveryFixture(state.stateDir, profile.id, {
         config: cfg,
       });
       const current = structuredClone(cfg);
-      expectDefined(current.gateway?.roles?.definitions.operator, "operator role").modelPolicy = {
+      current.gateway.roles.definitions.operator.modelPolicy = {
         allow: ["fixture/b", "fixture/c"],
       };
       fixture.setConfig(current);
@@ -632,7 +624,7 @@ describe("restart recovery authenticated operator source", () => {
       expect(restored.authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
       expect(restored.authority.modelPolicy?.allows(modelRef("c"))).toBe(false);
       const widened = structuredClone(current);
-      expectDefined(widened.gateway?.roles?.definitions.operator, "operator role").modelPolicy = {
+      widened.gateway.roles.definitions.operator.modelPolicy = {
         allow: ["fixture/a", "fixture/b", "fixture/c"],
       };
       fixture.setConfig(widened);
