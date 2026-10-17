@@ -67,6 +67,8 @@ const requesterKey = "agent:main:direct:completion-requester";
 const requesterSessionId = "completion-requester-session";
 const childKey = "agent:main:subagent:completion-child";
 const incognitoChildKey = "agent:main:subagent:incognito-completion-child";
+const incognitoAlias = "agent:main:subagent:incognito-lineage-id-alias";
+const durableAlias = "agent:main:subagent:lineage-id-alias";
 const childEntry: SessionEntry = {
   sessionId: "completion-child-session",
   updatedAt: 1,
@@ -167,18 +169,10 @@ async function removeChild() {
   clearSessionStoreCacheForTest();
 }
 
-async function reparentChild() {
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey: childKey },
-    { ...childEntry, spawnedBy: "agent:main:direct:another-requester" },
-  );
-  clearSessionStoreCacheForTest();
-}
-
-async function reownChild(sourceKey = childKey) {
+async function updateChild(overrides: Partial<SessionEntry>, sourceKey = childKey) {
   await replaceSessionEntry(
     { agentId: "main", sessionKey: sourceKey },
-    { ...childEntry, completionOwnerSessionKey: "agent:main:direct:another-requester" },
+    { ...childEntry, ...overrides },
   );
   clearSessionStoreCacheForTest();
 }
@@ -276,7 +270,35 @@ async function mintCompletionGrant(
       (content) => content,
       () => undefined,
     );
-  return { request, written, target, outcomes, prepared: prepared.promise };
+  return {
+    request,
+    written,
+    target,
+    outcomes,
+    prepared: prepared.promise,
+    call: async () => (await request("tools/call")).json(),
+    list: async () => {
+      await (await request("tools/list")).body?.cancel();
+    },
+  };
+}
+
+async function expectExpiredWrite(grant: Awaited<ReturnType<typeof mintCompletionGrant>>) {
+  expect(await grant.call()).toMatchObject({
+    result: { isError: true, content: [{ text: "Tool call authorization expired" }] },
+  });
+  expect(await grant.written()).toBeUndefined();
+  expect(grant.outcomes).toMatchObject([
+    { toolName: "write", outcome: "blocked", deniedReason: "client-grant-revoked" },
+  ]);
+}
+
+function readWatch(targetSessionKey: string) {
+  return openOpenClawStateDatabase()
+    .db.prepare(
+      "SELECT target_session_key FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+    )
+    .get(requesterKey, targetSessionKey);
 }
 
 function registerBeforeToolCallHook(handler: () => Promise<object | void>) {
@@ -284,37 +306,16 @@ function registerBeforeToolCallHook(handler: () => Promise<object | void>) {
 }
 
 describe("MCP loopback completion lineage at the final tool-effect fence", () => {
-  it.each([
-    { kind: "durable", sourceKey: childKey, storedKey: childKey, sessionId: childEntry.sessionId },
-    {
-      kind: "incognito",
-      sourceKey: incognitoChildKey,
-      storedKey: incognitoChildKey,
-      sessionId: childEntry.sessionId,
-    },
-    {
-      kind: "incognito-by-id",
-      sourceKey: "agent:main:subagent:incognito-lineage-id-alias",
-      storedKey: incognitoChildKey,
-      sessionId: "agent:main:subagent:incognito-lineage-id-alias",
-    },
-    {
-      kind: "mixed",
-      sourceKey: incognitoChildKey,
-      storedKey: incognitoChildKey,
-      sessionId: childEntry.sessionId,
-      parentKey: childKey,
-    },
-    {
-      kind: "by-id",
-      sourceKey: "agent:main:subagent:lineage-id-alias",
-      storedKey: childKey,
-      sessionId: "agent:main:subagent:lineage-id-alias",
-    },
+  it.each<[string, string, string, string?, string?]>([
+    ["durable", childKey, childKey],
+    ["incognito", incognitoChildKey, incognitoChildKey],
+    ["incognito-by-id", incognitoAlias, incognitoChildKey, incognitoAlias],
+    ["mixed", incognitoChildKey, incognitoChildKey, childEntry.sessionId, childKey],
+    ["by-id", durableAlias, childKey, durableAlias],
   ])(
-    "registers watches without host SQL for $kind lineage",
-    async ({ kind, sourceKey, storedKey, sessionId, ...lineage }) => {
-      const parentKey = "parentKey" in lineage ? lineage.parentKey : undefined;
+    "registers watches without host SQL for %s lineage",
+    async (kind, sourceKey, storedKey, suppliedSessionId, parentKey) => {
+      const sessionId = suppliedSessionId ?? childEntry.sessionId;
       await seedLineage({ sessionId, ...(parentKey ? { spawnedBy: parentKey } : {}) }, storedKey);
       if (parentKey) {
         await replaceSessionEntry({ agentId: "main", sessionKey: parentKey }, childEntry);
@@ -347,9 +348,7 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       });
       registerBeforeToolCallHook(hook);
 
-      const response = await grant.request("tools/call");
-
-      expect(await response.json()).toMatchObject({ result: { isError: false } });
+      expect(await grant.call()).toMatchObject({ result: { isError: false } });
       expect(hook).toHaveBeenCalledTimes(1);
       expect(watches).toEqual([true, true]);
       expect(authoritySql).toBe(0);
@@ -387,17 +386,10 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
         admission.mockRestore();
       }
     });
-    const response = await grant.request("tools/call");
-    expect(await response.json()).toMatchObject({ result: { isError: true } });
+    expect(await grant.call()).toMatchObject({ result: { isError: true } });
     expect(witnessed).toBe(true);
     expect(watched).toBe(false);
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare(
-          "SELECT 1 FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
-        )
-        .get(requesterKey, targetSessionKey),
-    ).toBeUndefined();
+    expect(readWatch(targetSessionKey)).toBeUndefined();
     expect(await grant.written()).toBeUndefined();
   });
 
@@ -456,17 +448,12 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
           admission.mockRestore();
         }
       });
-      const response = await grant.request("tools/call");
+      const response = await grant.call();
       expect(witnessed).toBe(true);
       expect(committed, String(writeFailure)).toBe(true);
-      expect(await response.json()).toMatchObject({ result: { isError: true } });
+      expect(response).toMatchObject({ result: { isError: true } });
       expect(watched).toBe(false);
-      const cursor = openOpenClawStateDatabase()
-        .db.prepare(
-          "SELECT target_session_key FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
-        )
-        .get(requesterKey, targetSessionKey);
-      expect(Boolean(cursor)).toBe(stage === "prepare");
+      expect(Boolean(readWatch(targetSessionKey))).toBe(stage === "prepare");
       expect(await grant.written()).toBeUndefined();
     },
   );
@@ -479,60 +466,45 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     });
     const grant = await mintCompletionGrant("lineage-completion-owner");
 
-    const response = await grant.request("tools/call");
-
-    expect(await response.json()).toMatchObject({ result: { isError: false } });
+    expect(await grant.call()).toMatchObject({ result: { isError: false } });
     expect(await grant.written()).toBe("lineage-completion-owner");
   });
 
-  it.each([
-    { name: "removed", runId: "lineage-removed-in-hook", revoke: removeChild },
-    { name: "re-parented", runId: "lineage-reparented-in-hook", revoke: reparentChild },
-    {
-      name: "handed to another completion owner",
-      runId: "lineage-reowned-in-hook",
-      seed: { completionOwnerSessionKey: requesterKey },
-      revoke: () => reownChild(),
-    },
-    {
-      name: "reassigned in memory",
-      runId: "lineage-memory-reowned-in-hook",
-      sourceKey: incognitoChildKey,
-      revoke: () => reownChild(incognitoChildKey),
-    },
-  ] satisfies Array<{
-    name: string;
-    runId: string;
-    seed?: Partial<SessionEntry>;
-    sourceKey?: string;
-    revoke: () => Promise<void>;
-  }>)(
-    "rejects the write when the child lineage is $name during an awaited before-tool hook",
-    async (testCase) => {
-      const { runId, revoke } = testCase;
-      const sourceKey = "sourceKey" in testCase ? testCase.sourceKey : childKey;
-      await seedLineage("seed" in testCase ? testCase.seed : undefined, sourceKey);
-      const grant = await mintCompletionGrant(runId, sourceKey);
+  it.each<[string, () => Promise<void>, Partial<SessionEntry>?, string?]>([
+    ["removed", removeChild],
+    ["re-parented", () => updateChild({ spawnedBy: "agent:main:direct:another-requester" })],
+    [
+      "handed to another completion owner",
+      () => updateChild({ completionOwnerSessionKey: "agent:main:direct:another-requester" }),
+      { completionOwnerSessionKey: requesterKey },
+    ],
+    [
+      "reassigned in memory",
+      () =>
+        updateChild(
+          { completionOwnerSessionKey: "agent:main:direct:another-requester" },
+          incognitoChildKey,
+        ),
+      {},
+      incognitoChildKey,
+    ],
+  ])(
+    "rejects the write when the child lineage is %s during an awaited before-tool hook",
+    async (name, revoke, seed = {}, sourceKey = childKey) => {
+      await seedLineage(seed, sourceKey);
+      const grant = await mintCompletionGrant(`lineage-${name}-in-hook`, sourceKey);
       // The tool list resolves while the lineage still verifies.
-      await (await grant.request("tools/list")).body?.cancel();
+      await grant.list();
       registerBeforeToolCallHook(revoke);
 
-      const response = await grant.request("tools/call");
-
-      expect(await response.json()).toMatchObject({
-        result: { isError: true, content: [{ text: "Tool call authorization expired" }] },
-      });
-      expect(await grant.written()).toBeUndefined();
-      expect(grant.outcomes).toMatchObject([
-        { toolName: "write", outcome: "blocked", deniedReason: "client-grant-revoked" },
-      ]);
+      await expectExpiredWrite(grant);
     },
   );
 
   it("rejects the write when the child lineage is removed during a hook approval wait", async () => {
     await seedLineage();
     const grant = await mintCompletionGrant("lineage-removed-in-approval");
-    await (await grant.request("tools/list")).body?.cancel();
+    await grant.list();
     registerBeforeToolCallHook(async () => ({
       requireApproval: { title: "Review write", description: "Approve the completion write" },
     }));
@@ -547,22 +519,14 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       return { id: "approval-1", decision: "allow-once" };
     });
 
-    const response = await grant.request("tools/call");
-
-    expect(await response.json()).toMatchObject({
-      result: { isError: true, content: [{ text: "Tool call authorization expired" }] },
-    });
+    await expectExpiredWrite(grant);
     expect(waited).toHaveBeenCalledWith("plugin.approval.waitDecision");
-    expect(await grant.written()).toBeUndefined();
-    expect(grant.outcomes).toMatchObject([
-      { toolName: "write", outcome: "blocked", deniedReason: "client-grant-revoked" },
-    ]);
   });
 
   it("rejects the write at its source guard when the lineage is removed after dispatch", async () => {
     await seedLineage();
     const grant = await mintCompletionGrant("lineage-removed-in-tool");
-    await (await grant.request("tools/list")).body?.cancel();
+    await grant.list();
     // Another mutation of the same file holds its queue, so the authorized write waits
     // inside the tool, after dispatch authorization and before its own I/O.
     const releaseQueue = createDeferredCore();

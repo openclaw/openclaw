@@ -76,6 +76,11 @@ type McpResponse = {
     isError?: boolean;
   };
 };
+type QuestionGateway = Parameters<Parameters<typeof withQuestionGateway>[0]>[0];
+
+function resolveGrant(token: string, runtimeOwnerToken: string) {
+  return resolveMcpLoopbackClientGrant({ token, runtimeOwnerToken, captureKey });
+}
 
 beforeEach(({ signal }) => {
   fixtureSignal = signal;
@@ -134,8 +139,8 @@ async function withCliQuestionLoopback(
     }>;
     answer: (overlay?: ReplyToolAuthorityOverlay) => Promise<boolean>;
     retire: (id: string) => void;
-    manager: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["manager"];
-    holdNextHello: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["holdNextHello"];
+    manager: QuestionGateway["manager"];
+    holdNextHello: QuestionGateway["holdNextHello"];
     runtimeOwnerToken: string;
     resolutionCount: () => number;
     resolveRequestCount: () => number;
@@ -250,13 +255,7 @@ async function withCliQuestionLoopback(
                   captureKey,
                   createCliRunCurrentAssertion(context.params),
                 );
-                expect(
-                  resolveMcpLoopbackClientGrant({
-                    token,
-                    runtimeOwnerToken: runtime.ownerToken,
-                    captureKey,
-                  })?.isCurrent(),
-                ).toBe(true);
+                expect(resolveGrant(token, runtime.ownerToken)?.isCurrent()).toBe(true);
                 return { token, context, source, admission, originalToolsAllow };
               },
               list: (token, attached) => request(token, "tools/list", attached),
@@ -369,11 +368,7 @@ describe("CLI loopback question creator authority", () => {
       const owner = await fixture.prepare(undefined, { sessionKey: undefined });
       expect(owner.context.params.sessionKey).toBeUndefined();
       const grant = expectDefined(
-        resolveMcpLoopbackClientGrant({
-          token: owner.token,
-          runtimeOwnerToken: fixture.runtimeOwnerToken,
-          captureKey,
-        }),
+        resolveGrant(owner.token, fixture.runtimeOwnerToken),
         "live CLI grant",
       );
       expect(grant.context.sessionKey).toBe(sessionKey);
@@ -397,13 +392,7 @@ describe("CLI loopback question creator authority", () => {
       const question = await fixture.ask(owner.token);
       await expect(fixture.answer({ ...caller, toolsAllow: [] })).rejects.toThrow("caller policy");
       owner.source.abort(new Error("original CLI source aborted"));
-      expect(
-        resolveMcpLoopbackClientGrant({
-          token: owner.token,
-          runtimeOwnerToken: fixture.runtimeOwnerToken,
-          captureKey,
-        }),
-      ).toBeUndefined();
+      expect(resolveGrant(owner.token, fixture.runtimeOwnerToken)).toBeUndefined();
 
       await expect(fixture.answer()).rejects.toThrow();
       expect(fixture.persist).not.toHaveBeenCalled();
@@ -461,7 +450,7 @@ describe("CLI loopback question creator authority", () => {
       let releaseHello = () => {};
       let asking: Promise<{ id: string; response: Promise<McpResponse> }> | undefined;
       let requestSettled = false;
-      let manager: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["manager"] | undefined;
+      let manager: QuestionGateway["manager"] | undefined;
       const run = withCliQuestionLoopback(
         async (fixture) => {
           // Timed-out setup must not start a late request.
@@ -476,14 +465,10 @@ describe("CLI loopback question creator authority", () => {
             asking = fixture.ask(grant.token, true);
             void asking.catch(() => {});
             const request = hello ? asking : (await asking).response;
-            void request.then(
-              () => {
-                requestSettled = true;
-              },
-              () => {
-                requestSettled = true;
-              },
-            );
+            const markSettled = () => {
+              requestSettled = true;
+            };
+            void request.then(markSettled, markSettled);
             if (hello) {
               await Promise.race([hello.entered, asking]);
             }

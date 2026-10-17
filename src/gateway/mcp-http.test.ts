@@ -358,6 +358,25 @@ async function callMainSessionTool(params: {
   return readOkMcpPayload(await sendMainSessionToolCall(params));
 }
 
+async function expectHttpStatus(response: Promise<Response>, status = 200) {
+  const result = await response;
+  expect(result.status).toBe(status);
+  return result;
+}
+
+function textResult(text: string) {
+  return { content: [{ type: "text", text }] };
+}
+
+function capturedMessage(token: string, captureKey: string, args: Record<string, unknown>) {
+  return sendLoopbackToolCall({
+    token,
+    name: "message",
+    args,
+    headers: captureHeaders(captureKey),
+  });
+}
+
 function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
   const names = (payload.result?.tools ?? []).map((tool) => tool.name);
   for (const name of expected) {
@@ -444,6 +463,10 @@ function mcpToolsListBody(id = 1) {
 
 function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
   return buildMcpToolSchema(tools as unknown as Parameters<typeof buildMcpToolSchema>[0]);
+}
+
+function schemaFor(parameters: Record<string, unknown>, name = "schema_tool") {
+  return buildMockMcpToolSchema([makeMockTool({ name, parameters })])[0]?.inputSchema;
 }
 
 type McpToolCacheParams = Parameters<McpLoopbackToolCache["resolve"]>[0];
@@ -575,19 +598,13 @@ describe("buildMcpToolSchema", () => {
     const properties = Object.fromEntries(
       ["__proto__", "toString"].map((key) => [key, { type: "string" }]),
     );
-    const [entry] = buildMockMcpToolSchema([
-      makeMockTool({
-        name: "proof_tool",
-        description: "proof",
-        parameters: {
-          anyOf: [{ type: "object", properties, required: ["__proto__", "toString", "valueOf"] }],
-        },
-      }),
-    ]);
-    expect(entry?.inputSchema.properties).toEqual(properties);
-    expect(Object.keys(entry?.inputSchema.properties ?? {})).toEqual(["__proto__", "toString"]);
-    expect(JSON.stringify(entry?.inputSchema.properties)).toContain('"__proto__"');
-    expect(entry?.inputSchema.required).toEqual(["__proto__", "toString"]);
+    const schema = schemaFor({
+      anyOf: [{ type: "object", properties, required: ["__proto__", "toString", "valueOf"] }],
+    });
+    expect(schema?.properties).toEqual(properties);
+    expect(Object.keys(schema?.properties ?? {})).toEqual(["__proto__", "toString"]);
+    expect(JSON.stringify(schema?.properties)).toContain('"__proto__"');
+    expect(schema?.required).toEqual(["__proto__", "toString"]);
   });
 
   it("flattens usable schemas from malformed and boolean union variants", () => {
@@ -620,14 +637,7 @@ describe("buildMcpToolSchema", () => {
     ];
 
     for (const testCase of cases) {
-      expect(
-        buildMockMcpToolSchema([
-          makeMockTool({
-            name: testCase.name,
-            parameters: testCase.parameters,
-          }),
-        ])[0]?.inputSchema,
-      ).toEqual(testCase.expected);
+      expect(schemaFor(testCase.parameters, testCase.name)).toEqual(testCase.expected);
     }
   });
 
@@ -883,7 +893,7 @@ describe("mcp loopback server", () => {
           label: "Message",
           execute: async () => {
             toolCallerIdentity = getGatewayToolCallerIdentity();
-            return { content: [{ type: "text", text: "ok" }] };
+            return textResult("ok");
           },
         }),
       ],
@@ -974,12 +984,12 @@ describe("mcp loopback server", () => {
         body: method === "call" ? mcpToolCallBody("message") : mcpToolsListBody(),
       });
 
-    expect((await sendWithCapture()).status).toBe(401);
-    expect((await sendWithCapture("capture-forged")).status).toBe(401);
+    await expectHttpStatus(sendWithCapture(), 401);
+    await expectHttpStatus(sendWithCapture("capture-forged"), 401);
     expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
 
-    expect((await sendWithCapture("capture-bound")).status).toBe(200);
-    expect((await sendWithCapture("capture-bound", "call")).status).toBe(200);
+    await expectHttpStatus(sendWithCapture("capture-bound"));
+    await expectHttpStatus(sendWithCapture("capture-bound", "call"));
     const { runId: _runId, toolsAllow: _toolsAllow, ...resolvedContext } = boundContext;
     const expectedBoundContext = {
       ...resolvedContext,
@@ -1084,8 +1094,8 @@ describe("mcp loopback server", () => {
       captureKey: "capture-second",
       toolAuth: { agentDir: "/agents/second", store: secondStore },
     });
-    expect((await sendLoopbackToolsList(firstGrant.scope)).status).toBe(200);
-    expect((await sendLoopbackToolsList(secondGrant.scope)).status).toBe(200);
+    await expectHttpStatus(sendLoopbackToolsList(firstGrant.scope));
+    await expectHttpStatus(sendLoopbackToolsList(secondGrant.scope));
 
     expect(getScopedToolsCall(0)).toMatchObject({
       agentDir: "/agents/first",
@@ -1100,9 +1110,7 @@ describe("mcp loopback server", () => {
   it("revalidates admitted authority after async preparation before tool execution", async () => {
     const { promise: preparationGate, resolve: releasePreparation } = createDeferred();
     const { promise: preparationStarted, resolve: markPreparationStarted } = createDeferred();
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text", text: "should not execute" }],
-    }));
+    const execute = vi.fn(async () => textResult("should not execute"));
     mockScopedTools([
       makeMockTool({
         name: "exec",
@@ -1164,18 +1172,16 @@ describe("mcp loopback server", () => {
 
     await requestStarted;
     const resolverCallsBeforeBody = resolveGatewayScopedToolsMock.mock.calls.length;
-    expect((await responsePromise).status).toBe(401);
+    await expectHttpStatus(responsePromise, 401);
     expect(changed).toBe(true);
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(resolverCallsBeforeBody);
     clearMcpLoopbackToolCallCapture(captureKey);
-    expect(
-      (
-        await sendLoopbackToolsList({
-          token: grant.token,
-          headers: captureHeaders(captureKey),
-        })
-      ).status,
-    ).toBe(200);
+    await expectHttpStatus(
+      sendLoopbackToolsList({
+        token: grant.token,
+        headers: captureHeaders(captureKey),
+      }),
+    );
   });
 
   it("rejects a grant revoked while node availability is being resolved", async () => {
@@ -1196,7 +1202,7 @@ describe("mcp loopback server", () => {
     await entered.promise;
     expect(revokeMcpLoopbackClientGrant(grant.token)).toBe(true);
     availability.resolve({ cacheKey: "eligible", isAvailable: () => true });
-    expect((await response).status).toBe(401);
+    await expectHttpStatus(response, 401);
   });
 
   it("does not dispatch after the HTTP client disconnects during node discovery", async () => {
@@ -1274,7 +1280,7 @@ describe("mcp loopback server", () => {
             throw new Error("Grant authority expired before publication");
           }
           committed = true;
-          return { content: [{ type: "text", text: "published" }] };
+          return textResult("published");
         },
       }),
     ]);
@@ -1357,10 +1363,8 @@ describe("mcp loopback server", () => {
     };
 
     const captureKey = "capture-reused";
-    expect((await sendYield(captureKey, "first yield", "First wait", firstYield)).status).toBe(200);
-    expect((await sendYield(captureKey, "second yield", "Second wait", secondYield)).status).toBe(
-      200,
-    );
+    await expectHttpStatus(sendYield(captureKey, "first yield", "First wait", firstYield));
+    await expectHttpStatus(sendYield(captureKey, "second yield", "Second wait", secondYield));
 
     expect(firstYield).toHaveBeenCalledWith("first yield", "First wait");
     expect(secondYield).toHaveBeenCalledWith("second yield", "Second wait");
@@ -1435,9 +1439,7 @@ describe("mcp loopback server", () => {
   it.each([["array", []]])(
     "rejects %s tool call arguments before hooks or execution",
     async (_label, badArguments) => {
-      const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
-        content: [{ type: "text", text: "EXECUTED" }],
-      }));
+      const execute = vi.fn<MockGatewayTool["execute"]>(async () => textResult("EXECUTED"));
       mockScopedTools([makeMessageTool({ execute })]);
       const { runtime, port } = await startLoopbackServerForTest();
 
@@ -1493,42 +1495,36 @@ describe("mcp loopback server", () => {
     });
     const { runtime } = await startLoopbackServerForTest();
 
-    expect(
-      (
-        await sendLoopbackToolCall({
-          token: runtime.ownerToken,
-          name: "message",
-          args: { action: "send", target: "chat123", message: "sent" },
-          headers: captureHeaders(captureKey),
-        })
-      ).status,
-    ).toBe(200);
+    await expectHttpStatus(
+      sendLoopbackToolCall({
+        token: runtime.ownerToken,
+        name: "message",
+        args: { action: "send", target: "chat123", message: "sent" },
+        headers: captureHeaders(captureKey),
+      }),
+    );
 
     runBeforeToolCallHookMock.mockResolvedValueOnce({
       blocked: true,
       kind: "veto",
       reason: "blocked for test",
     });
-    expect(
-      (
-        await sendLoopbackToolCall({
-          token: runtime.ownerToken,
-          name: "message",
-          args: { action: "send", target: "blocked", message: "not sent" },
-          headers: captureHeaders(captureKey),
-        })
-      ).status,
-    ).toBe(200);
+    await expectHttpStatus(
+      sendLoopbackToolCall({
+        token: runtime.ownerToken,
+        name: "message",
+        args: { action: "send", target: "blocked", message: "not sent" },
+        headers: captureHeaders(captureKey),
+      }),
+    );
 
-    expect(
-      (
-        await sendLoopbackToolCall({
-          token: runtime.ownerToken,
-          name: "message",
-          args: { action: "send", target: "implicit-main", message: "not captured" },
-        })
-      ).status,
-    ).toBe(200);
+    await expectHttpStatus(
+      sendLoopbackToolCall({
+        token: runtime.ownerToken,
+        name: "message",
+        args: { action: "send", target: "implicit-main", message: "not captured" },
+      }),
+    );
 
     expect(captured).toEqual([
       expect.objectContaining({
@@ -1573,11 +1569,10 @@ describe("mcp loopback server", () => {
         ...(testCase.disposition === "blocked" ? { deniedReason: testCase.deniedReason } : {}),
         reason: "hook prevented execution",
       });
-      const response = await sendLoopbackToolCall({
-        token: runtime.ownerToken,
-        name: "message",
-        args: { action: "send", target: testCase.disposition, message: "not sent" },
-        headers: captureHeaders(captureKey),
+      const response = await capturedMessage(runtime.ownerToken, captureKey, {
+        action: "send",
+        target: testCase.disposition,
+        message: "not sent",
       });
       expect(response.status).toBe(200);
       expect((await readMcpPayload(response)).result?.isError).toBe(true);
@@ -1627,14 +1622,9 @@ describe("mcp loopback server", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const response = await sendLoopbackToolCall({
-        token: runtime.ownerToken,
-        name: "message",
-        args: {
-          status: testCase.status === "completed-timeout" ? "completed" : testCase.status,
-          ...("timedOut" in testCase && testCase.timedOut ? { timedOut: true } : {}),
-        },
-        headers: captureHeaders(captureKey),
+      const response = await capturedMessage(runtime.ownerToken, captureKey, {
+        status: testCase.status === "completed-timeout" ? "completed" : testCase.status,
+        ...("timedOut" in testCase && testCase.timedOut ? { timedOut: true } : {}),
       });
       expect(response.status).toBe(200);
       const payload = await readMcpPayload(response);
@@ -1672,9 +1662,7 @@ describe("mcp loopback server", () => {
       expect(preparedParams).toBe(prepared);
       return { ...prepared, stage: "finalized" };
     });
-    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
-      content: [{ type: "text", text: "EXECUTED" }],
-    }));
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => textResult("EXECUTED"));
     mockScopedTools([
       makeMessageTool({
         prepareBeforeToolCallParams: prepare,
@@ -1688,12 +1676,7 @@ describe("mcp loopback server", () => {
     });
     const { runtime } = await startLoopbackServerForTest();
     const payload = await readOkMcpPayload(
-      await sendLoopbackToolCall({
-        token: runtime.ownerToken,
-        name: "message",
-        args: { stage: "raw" },
-        headers: captureHeaders(captureKey),
-      }),
+      await capturedMessage(runtime.ownerToken, captureKey, { stage: "raw" }),
     );
     const args = { stage: "finalized", privateState: "preserved" };
     expect(prepare).toHaveBeenCalledWith(
@@ -1818,11 +1801,10 @@ describe("mcp loopback server", () => {
     });
     const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendLoopbackToolCall({
-      token: runtime.ownerToken,
-      name: "message",
-      args: { action: "send", target: "chat123", message: "sent" },
-      headers: captureHeaders(captureKey),
+    const response = await capturedMessage(runtime.ownerToken, captureKey, {
+      action: "send",
+      target: "chat123",
+      message: "sent",
     });
 
     expect(response.status).toBe(200);
@@ -1846,11 +1828,10 @@ describe("mcp loopback server", () => {
     ]);
     const { runtime } = await startLoopbackServerForTest();
 
-    const response = await sendLoopbackToolCall({
-      token: runtime.ownerToken,
-      name: "message",
-      args: { action: "send", target: "chat123", message: "sent partly" },
-      headers: captureHeaders(captureKey),
+    const response = await capturedMessage(runtime.ownerToken, captureKey, {
+      action: "send",
+      target: "chat123",
+      message: "sent partly",
     });
 
     const payload = await readMcpPayload(response);
@@ -1865,9 +1846,7 @@ describe("mcp loopback server", () => {
   });
 
   it("resolves legacy cron tools/call names to the renamed automations tool", async () => {
-    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
-      content: [{ type: "text", text: "SCHEDULED" }],
-    }));
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => textResult("SCHEDULED"));
     const tool = makeMockTool({ name: "automations", description: "manage schedules", execute });
 
     const payload = await handleMcpJsonRpc({
@@ -2061,7 +2040,7 @@ describe("mcp loopback server", () => {
       const events: string[] = [];
       const admitted = createDeferred();
       const finished = createDeferred();
-      const execute = vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] }));
+      const execute = vi.fn(async () => textResult("ok"));
       mockScopedTools([makeMessageTool({ execute })]);
       beginMcpLoopbackToolCallCapture({
         captureKey,
@@ -2310,7 +2289,7 @@ describe("createMcpLoopbackServerConfig", () => {
     const getResponse = await send("GET", captureKey);
     expect(getResponse.status).toBe(200);
     await expectInitialSseCommentFrame(getResponse);
-    expect((await send("DELETE", captureKey)).status).toBe(200);
+    await expectHttpStatus(send("DELETE", captureKey));
 
     deactivateMcpLoopbackClientGrantCapture({
       token: grant.token,
@@ -2382,16 +2361,14 @@ describe("createMcpLoopbackServerConfig", () => {
       await responsePromise;
       await oldClose;
       expect(getActiveMcpLoopbackRuntime()?.ownerToken).toBe(successor.runtime.ownerToken);
-      expect(
-        (
-          await sendRaw({
-            port: successor.port,
-            token: successorGrant.token,
-            headers: jsonHeaders({ "x-openclaw-cli-capture-key": "capture-successor" }),
-            body: mcpToolsListBody(),
-          })
-        ).status,
-      ).toBe(200);
+      await expectHttpStatus(
+        sendRaw({
+          port: successor.port,
+          token: successorGrant.token,
+          headers: jsonHeaders({ "x-openclaw-cli-capture-key": "capture-successor" }),
+          body: mcpToolsListBody(),
+        }),
+      );
     } finally {
       clearMcpLoopbackToolCallCapture(captureKey);
       finishStalledRequest();
