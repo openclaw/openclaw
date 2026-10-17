@@ -1,4 +1,3 @@
-// Auth storage tests cover the provider-keyed SDK facade over canonical SQLite auth profiles.
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,8 +10,11 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import * as sdkDeprecation from "../../plugins/sdk-deprecation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
@@ -52,7 +54,7 @@ import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-regist
 import { AuthStorage, OAuthProviderConfiguredUnavailableError } from "./auth-storage.js";
 
 describe("SQLite auth storage", () => {
-  const tempDirs: string[] = [];
+  let tempDir: string;
   let agentDir: string;
   const unreadableStore = { version: 1, profiles: "invalid-profile-map" };
   const expiredOAuth = {
@@ -64,19 +66,30 @@ describe("SQLite auth storage", () => {
   };
   const secretRuntimeError =
     "requires the active secrets runtime to materialize SecretRef credentials";
+  const identity = { accountId: "fake-account-id", email: "fake-user@example.com" };
 
-  function writeProfiles(directory: string, profiles: unknown) {
-    writePersistedAuthProfileStoreRaw(createAuthProfileStoreFixture(profiles), directory);
+  function writeProfiles(profiles: unknown) {
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles }, agentDir);
   }
 
-  function runtimeProfiles(directory: string, profiles: AuthProfileStore["profiles"]) {
-    replaceRuntimeAuthProfileStoreSnapshots([
-      { agentDir: directory, store: createAuthProfileStoreFixture(profiles) },
-    ]);
+  function runtimeProfiles(profiles: AuthProfileStore["profiles"]) {
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: { version: 1, profiles } }]);
   }
 
   function envRef(id: string) {
     return { source: "env" as const, provider: "default", id };
+  }
+
+  function loginCallbacks() {
+    return { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") };
+  }
+
+  function withWorkerState(prefix: string, action: (state: OpenClawTestState) => Promise<void>) {
+    return withOpenClawTestState({ layout: "state-only", prefix }, async (state) => {
+      agentDir = state.agentDir("worker");
+      fs.mkdirSync(agentDir, { recursive: true });
+      await action(state);
+    });
   }
 
   function secretKey(keyRef: ReturnType<typeof envRef>, key?: string) {
@@ -119,12 +132,9 @@ describe("SQLite auth storage", () => {
   }
 
   beforeEach(() => {
-    agentDir = fs.mkdtempSync(path.join(tmpdir(), "auth-sqlite-"));
-    tempDirs.push(agentDir);
-    providerOAuthMocks.login.mockReset();
-    providerOAuthMocks.login.mockResolvedValue({ status: "unowned" });
-    providerOAuthMocks.resolveCredential.mockReset();
-    providerOAuthMocks.resolveCredential.mockResolvedValue({ status: "unowned" });
+    tempDir = agentDir = fs.mkdtempSync(path.join(tmpdir(), "auth-sqlite-"));
+    providerOAuthMocks.login.mockReset().mockResolvedValue({ status: "unowned" });
+    providerOAuthMocks.resolveCredential.mockReset().mockResolvedValue({ status: "unowned" });
   });
 
   afterEach(() => {
@@ -132,9 +142,7 @@ describe("SQLite auth storage", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     vi.unstubAllEnvs();
     closeOpenClawAgentDatabasesForTest();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("initializes detached in-memory credentials without a legacy reload warning", () => {
@@ -157,42 +165,30 @@ describe("SQLite auth storage", () => {
   });
 
   it("merges async SDK writes and reloads committed peer changes without host SQLite", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "auth-async-sdk-" },
-      async (state) => {
-        agentDir = state.agentDir("worker");
-        fs.mkdirSync(agentDir, { recursive: true });
-        const left = await PublicAuthStorage.forAgentAsync(agentDir);
-        const right = await PublicAuthStorage.forAgentAsync(agentDir);
-        await withoutHostSql(async () => {
-          await Promise.all([
-            left.setAsync("openai", { type: "api_key", key: "synthetic-openai" }),
-            right.setAsync("anthropic", { type: "api_key", key: "synthetic-anthropic" }),
-          ]);
-          await left.reloadAsync();
-          expect(left.list().toSorted()).toEqual(["anthropic", "openai"]);
-          await right.removeAsync("openai");
-          await left.reloadAsync();
-          expect(left.get("openai")).toBeUndefined();
-          expect(await left.getApiKey("anthropic")).toBe("synthetic-anthropic");
-        });
-      },
-    );
+    await withWorkerState("auth-async-sdk-", async () => {
+      const left = await PublicAuthStorage.forAgentAsync(agentDir);
+      const right = await PublicAuthStorage.forAgentAsync(agentDir);
+      await withoutHostSql(async () => {
+        await Promise.all([
+          left.setAsync("openai", { type: "api_key", key: "synthetic-openai" }),
+          right.setAsync("anthropic", { type: "api_key", key: "synthetic-anthropic" }),
+        ]);
+        await left.reloadAsync();
+        expect(left.list().toSorted()).toEqual(["anthropic", "openai"]);
+        await right.removeAsync("openai");
+        await left.reloadAsync();
+        expect(left.get("openai")).toBeUndefined();
+        expect(await left.getApiKey("anthropic")).toBe("synthetic-anthropic");
+      });
+    });
   });
 
   it("dispatches callback-based login to the owning provider plugin", async () => {
     const storage = await AuthStorage.forAgentAsync(agentDir);
-    const callbacks = {
-      onAuth: vi.fn(),
-      onPrompt: vi.fn(async () => ""),
-    };
+    const callbacks = loginCallbacks();
     providerOAuthMocks.login.mockResolvedValueOnce({
       status: "available",
-      credentials: {
-        access: "fake-access",
-        refresh: "fake-refresh",
-        expires: Date.now() + 60_000,
-      },
+      credentials: freshOAuth({ access: "fake-access" }),
     });
 
     await storage.login("plugin-oauth", callbacks);
@@ -215,10 +211,7 @@ describe("SQLite auth storage", () => {
     const storage = AuthStorage.forAgent(agentDir);
     providerOAuthMocks.login.mockResolvedValueOnce({ status: "configured-unavailable" });
 
-    const login = storage.login("plugin-oauth", {
-      onAuth: vi.fn(),
-      onPrompt: vi.fn(async () => ""),
-    });
+    const login = storage.login("plugin-oauth", loginCallbacks());
     await expect(login).rejects.toMatchObject({
       name: "OAuthProviderConfiguredUnavailableError",
       code: "OAUTH_PROVIDER_CONFIGURED_UNAVAILABLE",
@@ -250,7 +243,7 @@ describe("SQLite auth storage", () => {
   });
 
   it("never overwrites a store that becomes unreadable during an OAuth refresh", async () => {
-    writeProfiles(agentDir, { "test-oauth:default": expiredOAuth });
+    writeProfiles({ "test-oauth:default": expiredOAuth });
     const storage = AuthStorage.forAgent(agentDir);
     getAuthStorageOAuthProviderRegistry(storage).register(oauthProvider(async () => freshOAuth()));
     writePersistedAuthProfileStoreRaw(unreadableStore, agentDir);
@@ -263,7 +256,7 @@ describe("SQLite auth storage", () => {
   });
 
   it("does not commit a refresh when a legacy source appears during the provider call", async () => {
-    writeProfiles(agentDir, {
+    writeProfiles({
       "test-oauth:default": { ...expiredOAuth, access: "not-a-real", refresh: "not-a-real" },
     });
     const storage = AuthStorage.forAgent(agentDir);
@@ -284,11 +277,10 @@ describe("SQLite auth storage", () => {
   });
 
   it("keeps stored OAuth identity fields through the published agent sessions SDK", async () => {
-    writeProfiles(agentDir, {
+    writeProfiles({
       "test-oauth:default": {
         ...expiredOAuth,
-        accountId: "fake-account-id",
-        email: "fake-user@example.com",
+        ...identity,
         subscriptionType: "max",
         rateLimitTier: "default_max_20x",
       },
@@ -306,15 +298,11 @@ describe("SQLite auth storage", () => {
       provider: "test-oauth",
       access: "fake-fresh-access",
       refresh: "fake-rotated-refresh",
-      accountId: "fake-account-id",
-      email: "fake-user@example.com",
+      ...identity,
       subscriptionType: "max",
       rateLimitTier: "default_max_20x",
     });
-    expect(storage.get("test-oauth")).toMatchObject({
-      accountId: "fake-account-id",
-      email: "fake-user@example.com",
-    });
+    expect(storage.get("test-oauth")).toMatchObject(identity);
   });
 
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {
@@ -341,7 +329,7 @@ describe("SQLite auth storage", () => {
   it("reads materialized SecretRefs without persisting their resolved value", async () => {
     vi.stubEnv("OPENAI_API_KEY", "fake-ambient-key");
     const keyRef = envRef("OPENAI_API_KEY");
-    writeProfiles(agentDir, {
+    writeProfiles({
       "openai:default": secretKey(keyRef),
       "openai:work": secretKey(envRef("OPENAI_WORK_KEY")),
       "xai:default": {
@@ -351,7 +339,7 @@ describe("SQLite auth storage", () => {
       },
     });
     expect(() => AuthStorage.forAgent(agentDir)).toThrow(secretRuntimeError);
-    runtimeProfiles(agentDir, {
+    runtimeProfiles({
       "openai:default": secretKey(keyRef, "fake-materialized-key"),
       "xai:default": {
         type: "token",
@@ -369,11 +357,7 @@ describe("SQLite auth storage", () => {
     const persisted = readPersistedAuthProfileStoreRaw(agentDir) as {
       profiles: Record<string, { key?: string; keyRef?: unknown }>;
     };
-    expect(persisted).toMatchObject({
-      profiles: {
-        "openai:default": { keyRef },
-      },
-    });
+    expect(persisted.profiles["openai:default"]).toMatchObject({ keyRef });
     expect(persisted.profiles["openai:default"]?.key).toBeUndefined();
     storage.remove("openai");
     expect(
@@ -382,38 +366,21 @@ describe("SQLite auth storage", () => {
     ).toBeUndefined();
   });
 
-  it("does not reuse a materialized value after its persisted SecretRef changes", async () => {
-    const originalRef = envRef("QA_AUTH_REF_OLD");
-    writeProfiles(agentDir, {
-      "openai:default": secretKey(originalRef),
-    });
-    runtimeProfiles(agentDir, {
-      "openai:default": secretKey(originalRef, "not-a-real"),
-    });
+  it.each([
+    ["its persisted SecretRef changes", "QA_AUTH_REF_OLD", true],
+    ["the current snapshot is unresolved", "QA_AUTH_REF", false],
+  ] as const)("rejects stale secrets when %s", async (_name, refId, changePersistedRef) => {
+    const originalRef = envRef(refId);
+    writeProfiles({ "openai:default": secretKey(originalRef) });
+    runtimeProfiles({ "openai:default": secretKey(originalRef, "not-a-real") });
     const storage = AuthStorage.forAgent(agentDir);
-    expect(await storage.getApiKey("openai")).toBe("not-a-real");
-
-    writeProfiles(agentDir, {
-      "openai:default": secretKey(envRef("QA_AUTH_REF_NEW")),
-    });
-    clearRuntimeAuthProfileStoreSnapshots();
-    storage.reload();
-
-    await expect(storage.getApiKey("openai")).rejects.toThrow(secretRuntimeError);
-  });
-
-  it("does not reuse prepared materialization when the current snapshot is unresolved", async () => {
-    const keyRef = envRef("QA_AUTH_REF");
-    writeProfiles(agentDir, {
-      "openai:default": secretKey(keyRef),
-    });
-    runtimeProfiles(agentDir, {
-      "openai:default": secretKey(keyRef, "not-a-real"),
-    });
-    const storage = AuthStorage.forAgent(agentDir);
-    runtimeProfiles(agentDir, {
-      "openai:default": secretKey(keyRef),
-    });
+    if (changePersistedRef) {
+      expect(await storage.getApiKey("openai")).toBe("not-a-real");
+      writeProfiles({ "openai:default": secretKey(envRef("QA_AUTH_REF_NEW")) });
+      clearRuntimeAuthProfileStoreSnapshots();
+    } else {
+      runtimeProfiles({ "openai:default": secretKey(originalRef) });
+    }
 
     storage.reload();
 
@@ -421,15 +388,12 @@ describe("SQLite auth storage", () => {
   });
 
   it("preserves state-only SQLite rows when adding credentials", () => {
-    writePersistedAuthProfileStateRaw(
-      {
-        version: 1,
-        order: { openai: ["openai:default"] },
-        lastGood: { openai: "openai:default" },
-        usageStats: { "openai:default": { cooldownUntil: 1_900_000_000_000 } },
-      },
-      agentDir,
-    );
+    const state = {
+      order: { openai: ["openai:default"] },
+      lastGood: { openai: "openai:default" },
+      usageStats: { "openai:default": { cooldownUntil: 1_900_000_000_000 } },
+    };
+    writePersistedAuthProfileStateRaw({ version: 1, ...state }, agentDir);
 
     AuthStorage.forAgent(agentDir).set("anthropic", {
       type: "api_key",
@@ -440,50 +404,35 @@ describe("SQLite auth storage", () => {
       profiles: {
         "anthropic:default": { type: "api_key", provider: "anthropic" },
       },
-      order: { openai: ["openai:default"] },
-      lastGood: { openai: "openai:default" },
-      usageStats: { "openai:default": { cooldownUntil: 1_900_000_000_000 } },
+      ...state,
     });
   });
 
   it("revalidates widened shared refusals on the next credential request without reload", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "auth-shared-refusal-" },
-      async (state) => {
-        agentDir = state.agentDir("worker");
-        fs.mkdirSync(agentDir, { recursive: true });
-        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
-        const profiles = {
-          "anthropic:default": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "synthetic-legacy-key",
-          },
-        };
-        await state.writeJson("agents/main/agent/auth-profiles.json", { version: 1, profiles });
-        const storage = AuthStorage.forAgent(agentDir);
-        storage.setFallbackResolver(() => "synthetic-fallback-key");
-        await expect(storage.getApiKey("nvidia")).resolves.toBeDefined();
-        await state.writeJson("agents/main/agent/auth-profiles.json", {
-          version: 1,
-          profiles: {
-            ...profiles,
-            "nvidia:default": {
-              type: "api_key",
-              provider: "nvidia",
-              key: "synthetic-new-legacy-key",
-            },
-          },
-        });
-        expect(() => assertAuthProfileMigrationReady(undefined, undefined, "nvidia")).toThrow(
-          "requires legacy credential migration",
-        );
-        await expect(storage.getApiKey("nvidia")).rejects.toMatchObject({
-          code: "AUTH_PROFILE_MIGRATION_REQUIRED",
-          affectedProviders: ["anthropic", "nvidia"],
-        });
-      },
-    );
+    await withWorkerState("auth-shared-refusal-", async (state) => {
+      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+      const profiles = {
+        "anthropic:default": createApiKeyCredential("anthropic", "synthetic-legacy-key"),
+      };
+      await state.writeJson("agents/main/agent/auth-profiles.json", { version: 1, profiles });
+      const storage = AuthStorage.forAgent(agentDir);
+      storage.setFallbackResolver(() => "synthetic-fallback-key");
+      await expect(storage.getApiKey("nvidia")).resolves.toBeDefined();
+      await state.writeJson("agents/main/agent/auth-profiles.json", {
+        version: 1,
+        profiles: {
+          ...profiles,
+          "nvidia:default": createApiKeyCredential("nvidia", "synthetic-new-legacy-key"),
+        },
+      });
+      expect(() => assertAuthProfileMigrationReady(undefined, undefined, "nvidia")).toThrow(
+        "requires legacy credential migration",
+      );
+      await expect(storage.getApiKey("nvidia")).rejects.toMatchObject({
+        code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+        affectedProviders: ["anthropic", "nvidia"],
+      });
+    });
   });
 
   it("fails closed when a legacy credential source appears after construction", async () => {
@@ -498,7 +447,7 @@ describe("SQLite auth storage", () => {
   });
 
   it("fails closed for an identityless SQLite peer until the owner commits its rotation", async () => {
-    writeProfiles(agentDir, { "test-oauth:default": expiredOAuth });
+    writeProfiles({ "test-oauth:default": expiredOAuth });
     const left = AuthStorage.forAgent(agentDir);
     const right = AuthStorage.forAgent(agentDir);
     const refreshEntered = createDeferredCore();
@@ -544,7 +493,6 @@ describe("SQLite auth storage", () => {
       void peerKey.catch(peerSelected.reject);
       await peerSelected.promise;
       releaseRefresh.resolve();
-      await expect(peerKey).resolves.toBeUndefined();
       await expect(Promise.all([ownerKey, peerKey])).resolves.toEqual([
         "fake-fresh-access",
         undefined,
@@ -552,13 +500,12 @@ describe("SQLite auth storage", () => {
     } finally {
       releaseRefresh.resolve();
     }
-    expect(refreshCalls).toBe(1);
-    expect(maxActiveRefreshes).toBe(1);
+    expect([refreshCalls, maxActiveRefreshes]).toEqual([1, 1]);
     await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
   });
 
   it("falls back to environment auth when a stored token is expired", async () => {
-    writeProfiles(agentDir, {
+    writeProfiles({
       "xai:default": {
         type: "token",
         provider: "xai",

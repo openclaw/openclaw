@@ -8,12 +8,17 @@ import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json"
 import type { ExtensionFactory } from "./extensions/types.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
-import type { SourceScope } from "./source-info.js";
+import type { PathMetadata, SourceScope } from "./source-info.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function entry(path: string, source = "extension", scope: SourceScope = "temporary") {
-  return { path, metadata: { path, source, scope, origin: "package" as const, baseDir: path } };
+function entry(
+  path: string,
+  source = "extension",
+  scope: SourceScope = "temporary",
+  extra: Partial<PathMetadata> = {},
+) {
+  return { path, metadata: { source, scope, origin: "package" as const, baseDir: path, ...extra } };
 }
 
 function linkDirectory(target: string, path: string) {
@@ -219,15 +224,10 @@ describe("DefaultResourceLoader", () => {
       await loader.reload();
       loader.extendResources({
         themePaths: [
-          {
-            path: themePaths[0]!,
-            metadata: {
-              source: "local",
-              scope: "user",
-              origin: "top-level",
-              baseDir: join(variantAgentDir, "themes"),
-            },
-          },
+          entry(themePaths[0]!, "local", "user", {
+            origin: "top-level",
+            baseDir: join(variantAgentDir, "themes"),
+          }),
           entry(variantPackageDir, "package", "user"),
           ...themePaths.slice(1).map((path) => entry(path, "fallback")),
         ],

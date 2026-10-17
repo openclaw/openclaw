@@ -31,6 +31,13 @@ const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const { writeModelsJson, writeModelsJsonWithPluginCatalog, writeModelsJsonWithPluginCatalogs } =
   installModelRegistryTestFixtures();
+const providerConfig = (models: unknown[], config: Record<string, unknown> = {}) => ({
+  baseUrl: "https://models.example/v1",
+  api: "openai-completions",
+  models,
+  ...config,
+});
+const nvidia = { baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "NVIDIA_API_KEY" };
 
 const zai = {
   baseUrl: "https://api.z.ai/api/paas/v4",
@@ -38,12 +45,9 @@ const zai = {
   apiKey: "ZAI_API_KEY",
   models: [{ id: "glm-5.1", name: "GLM 5.1" }],
 };
-const custom = {
-  baseUrl: "https://models.example/v1",
-  api: "openai-completions",
+const custom = providerConfig([{ id: "authored-model", name: "Authored Model" }], {
   apiKey: "authored-provider-test-key",
-  models: [{ id: "authored-model", name: "Authored Model" }],
-};
+});
 function catalog(providers: Record<string, unknown>) {
   return { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers };
 }
@@ -70,24 +74,21 @@ const createRegistry = (
 const exampleCatalog = (apiKey?: string) =>
   writeModelsJson({
     providers: {
-      custom: {
-        baseUrl: "https://models.example/v1",
-        api: "openai-responses",
-        ...(apiKey ? { apiKey } : {}),
-        models: [{ id: "example-model" }],
-      },
+      custom: providerConfig([{ id: "example-model" }], { api: "openai-responses", apiKey }),
     },
   });
 
-function writeGeneratedPluginCatalog(
-  providerId: string,
-  provider: Record<string, unknown>,
-  root: unknown = { providers: {} },
-): Promise<string> {
-  return writeModelsJsonWithPluginCatalog({
-    root,
-    ...pluginCatalog(providerId, { [providerId]: provider }),
-  });
+const ownerSnapshot = (...ids: string[]) =>
+  pluginOwnerSnapshotEntries(ids.map((id) => ({ providerId: id, pluginId: id })));
+async function generatedRegistry(
+  providers: Record<string, unknown>,
+  auth = AuthStorage.inMemory(),
+) {
+  return createRegistry(
+    await writeCatalogs(providers),
+    { pluginMetadataSnapshot: ownerSnapshot(...Object.keys(providers)) },
+    auth,
+  );
 }
 
 function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
@@ -111,7 +112,7 @@ function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfig
   };
 }
 
-describe("ModelRegistry models.json auth", () => {
+describe("ModelRegistry", () => {
   it("names the async unregister replacement once and keeps async unregister silent", async () => {
     const modelsPath = writeModelsJson({ providers: {} });
     const registry = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath);
@@ -234,30 +235,26 @@ describe("ModelRegistry models.json auth", () => {
   it.each(["persisted", "registered"] as const)("preserves %s model metadata", (source) => {
     // Synthetic providers deliberately share an id but not a prompt budget.
     // Native window and output capacity must remain separate from that budget.
+    const model = {
+      id: "shared-model",
+      name: "Shared model",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      parameterCount: 4_000_000_000,
+      maxTokens: 128_000,
+    };
+    const windows = [
+      ["fixture-primary", 1_000_000, 872_000],
+      ["fixture-secondary", 1_050_000, 922_000],
+    ] as const;
     const providers: Record<string, ProviderConfigInput> = Object.fromEntries(
-      (
-        [
-          ["fixture-primary", 1_000_000, 872_000],
-          ["fixture-secondary", 1_050_000, 922_000],
-        ] as const
-      ).map(([provider, contextWindow, contextTokens]) => [
+      windows.map(([provider, contextWindow, contextTokens]) => [
         provider,
         {
           api: "openai-responses",
           baseUrl: "https://models.example/v1",
-          models: [
-            {
-              id: "shared-model",
-              name: "Shared model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow,
-              contextTokens,
-              parameterCount: 4_000_000_000,
-              maxTokens: 128_000,
-            },
-          ],
+          models: [{ ...model, input: [...model.input], contextWindow, contextTokens }],
         },
       ]),
     );
@@ -306,15 +303,15 @@ describe("ModelRegistry models.json auth", () => {
       pluginMetadataSnapshot: pluginOwnerSnapshot(provider, provider),
     });
     for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
-      expect(candidate.find(provider, "unknown")).toMatchObject({
-        contextWindow: 128_000,
-        contextWindowSource: "synthetic",
-      });
-      expect(candidate.find(provider, "prompt-only")).toMatchObject({
-        contextWindow: 777_000,
-        contextTokens: 777_000,
-        contextWindowSource: "synthetic",
-      });
+      for (const [id, expected] of [
+        ["unknown", { contextWindow: 128_000 }],
+        ["prompt-only", { contextWindow: 777_000, contextTokens: 777_000 }],
+      ] as const) {
+        expect(candidate.find(provider, id)).toMatchObject({
+          ...expected,
+          contextWindowSource: "synthetic",
+        });
+      }
       for (const [id, window] of [
         ["reported", 128_000],
         ["authored", 64_000],
@@ -334,10 +331,7 @@ describe("ModelRegistry models.json auth", () => {
       contents: JSON.stringify(catalog({ zai: { ...zai, apiKey: undefined } })),
     };
 
-    const pluginMetadataSnapshot = pluginOwnerSnapshotEntries([
-      { providerId: "zai", pluginId: "zai" },
-      { providerId: "other", pluginId: "other" },
-    ]);
+    const pluginMetadataSnapshot = ownerSnapshot("zai", "other");
     const registry = createRegistry(modelsPath, {
       includePluginCatalogs: true,
       modelsJsonContents: null,
@@ -366,35 +360,26 @@ describe("ModelRegistry models.json auth", () => {
   it("loads richer generated catalog metadata without widening runtime inputs", async () => {
     // Generated catalogs can report video/audio support. Keep those rows while
     // projecting their metadata to the runtime execution contract.
-    const modelsPath = await writeCatalogs({
-      minimax: {
-        baseUrl: "https://api.minimaxi.com/v1",
-        api: "openai-completions",
-        apiKey: "MINIMAX_API_KEY",
-        models: [{ id: "MiniMax-M3", input: ["text", "image", "video"] }],
-      },
-      nvidia: {
-        baseUrl: "https://integrate.api.nvidia.com/v1",
-        api: "openai-completions",
-        apiKey: "NVIDIA_API_KEY",
-        models: [
-          {
-            id: "microsoft/phi-4-multimodal-instruct",
-            input: ["text", "image", "audio"],
-          },
-          { id: "audio-only", input: ["audio"] },
-          { id: "explicit-empty", input: [] },
-        ],
-      },
-    });
-
-    const registry = createRegistry(
-      modelsPath,
+    const registry = await generatedRegistry(
       {
-        pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
-          { providerId: "minimax", pluginId: "minimax" },
-          { providerId: "nvidia", pluginId: "nvidia" },
-        ]),
+        minimax: {
+          baseUrl: "https://api.minimaxi.com/v1",
+          api: "openai-completions",
+          apiKey: "MINIMAX_API_KEY",
+          models: [{ id: "MiniMax-M3", input: ["text", "image", "video"] }],
+        },
+        nvidia: {
+          ...nvidia,
+          api: "openai-completions",
+          models: [
+            {
+              id: "microsoft/phi-4-multimodal-instruct",
+              input: ["text", "image", "audio"],
+            },
+            { id: "audio-only", input: ["audio"] },
+            { id: "explicit-empty", input: [] },
+          ],
+        },
       },
       AuthStorage.inMemory({
         minimax: { type: "api_key", key: "sk-minimax" },
@@ -415,69 +400,71 @@ describe("ModelRegistry models.json auth", () => {
     expect(availableRefs).toContain("nvidia/explicit-empty");
   });
 
-  it.each(["persisted"] as const)(
-    "isolates invalid %s plugin catalogs from valid models",
-    async () => {
-      const modelsPath = await writeModelsJsonWithPluginCatalogs({
-        root: {
-          providers: {
-            custom: {
-              baseUrl: "https://models.example/v1",
-              api: "openai-responses",
-              apiKey: "CUSTOM_API_KEY",
-              models: [{ id: "root-model", name: "Root Model" }],
-            },
-          },
-        },
-        pluginCatalogs: [
-          pluginCatalog("google", {
-            "google-vertex": {
-              baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
-              api: "google-vertex",
-              apiKey: "GOOGLE_API_KEY",
-              models: [
-                {
-                  id: "gemini-3.1-pro-preview",
-                  name: "Gemini 3.1 Pro",
-                  contextWindow: 0,
-                },
-              ],
-            },
+  it("isolates invalid persisted plugin catalogs from valid models", async () => {
+    const modelsPath = await writeModelsJsonWithPluginCatalogs({
+      root: {
+        providers: {
+          custom: providerConfig([{ id: "root-model", name: "Root Model" }], {
+            api: "openai-responses",
+            apiKey: "CUSTOM_API_KEY",
           }),
-          pluginCatalog("zai", { zai }),
-        ],
-      });
+        },
+      },
+      pluginCatalogs: [
+        pluginCatalog("google", {
+          "google-vertex": {
+            baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+            api: "google-vertex",
+            apiKey: "GOOGLE_API_KEY",
+            models: [
+              {
+                id: "gemini-3.1-pro-preview",
+                name: "Gemini 3.1 Pro",
+                contextWindow: 0,
+              },
+            ],
+          },
+        }),
+        pluginCatalog("zai", { zai }),
+      ],
+    });
 
-      const registry = createRegistry(modelsPath, {
-        pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
-          { providerId: "google-vertex", pluginId: "google" },
-          { providerId: "zai", pluginId: "zai" },
-        ]),
-      });
+    const registry = createRegistry(modelsPath, {
+      pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
+        { providerId: "google-vertex", pluginId: "google" },
+        { providerId: "zai", pluginId: "zai" },
+      ]),
+    });
 
-      expect(registry.getError()).toContain(
-        "Provider google-vertex, model gemini-3.1-pro-preview: invalid contextWindow",
-      );
-      expect(registry.find("custom", "root-model")?.name).toBe("Root Model");
-      expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
-      expect(registry.find("google-vertex", "gemini-3.1-pro-preview")).toBeUndefined();
+    expect(registry.getError()).toContain(
+      "Provider google-vertex, model gemini-3.1-pro-preview: invalid contextWindow",
+    );
+    expect(registry.find("custom", "root-model")?.name).toBe("Root Model");
+    expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+    expect(registry.find("google-vertex", "gemini-3.1-pro-preview")).toBeUndefined();
+  });
+
+  it.each([
+    { label: "non-generated", generated: false, options: {} },
+    {
+      label: "without current ownership",
+      generated: true,
+      options: { pluginMetadataSnapshot: pluginOwnerSnapshot("other", "other") },
     },
-  );
-
-  it("ignores non-generated SQLite plugin catalog entries", async () => {
-    // Plugin catalogs are codegen artifacts; unmarked lookalikes must
-    // not extend the provider registry.
+    {
+      label: "owned by disabled plugins",
+      generated: true,
+      options: { pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai", false) },
+    },
+  ])("ignores $label catalog providers", async ({ generated, options }) => {
     const modelsPath = await writeModelsJsonWithPluginCatalog({
       root: { providers: {} },
       pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
-      pluginCatalog: {
-        providers: { zai },
-      },
+      pluginCatalog: generated ? catalog({ zai }) : { providers: { zai } },
     });
-
     const registry = createRegistry(
       modelsPath,
-      {},
+      options,
       AuthStorage.inMemory({ zai: { type: "api_key", key: "sk-test" } }),
     );
 
@@ -485,34 +472,6 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
   });
 
-  it("ignores generated plugin catalog providers without current ownership", async () => {
-    const modelsPath = await writeGeneratedPluginCatalog("zai", zai);
-
-    const registry = createRegistry(
-      modelsPath,
-      { pluginMetadataSnapshot: pluginOwnerSnapshot("other", "other") },
-      AuthStorage.inMemory({ zai: { type: "api_key", key: "sk-test" } }),
-    );
-
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.find("zai", "glm-5.1")).toBeUndefined();
-  });
-
-  it("ignores generated plugin catalog providers owned by disabled plugins", async () => {
-    const modelsPath = await writeGeneratedPluginCatalog("zai", zai);
-
-    const registry = createRegistry(
-      modelsPath,
-      { pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai", false) },
-      AuthStorage.inMemory({ zai: { type: "api_key", key: "sk-test" } }),
-    );
-
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.find("zai", "glm-5.1")).toBeUndefined();
-  });
-});
-
-describe("ModelRegistry OAuth provider ownership", () => {
   it("keeps providers isolated when another registry refreshes", async () => {
     const sessionAAuth = AuthStorage.inMemory({
       "corporate-ai": {
@@ -542,9 +501,7 @@ describe("ModelRegistry OAuth provider ownership", () => {
       "corporate:test-token-placeholder",
     );
   });
-});
 
-describe("ModelRegistry API provider ownership", () => {
   it("rebuilds built-ins and lifecycle stream registrations on registry refresh", () => {
     const sessionA = ModelRegistry.inMemory(AuthStorage.inMemory());
     const sessionB = ModelRegistry.inMemory(AuthStorage.inMemory());
@@ -575,16 +532,10 @@ describe("ModelRegistry API provider ownership", () => {
     expect(runtimeA.apiRegistry.getApiProvider("test-session-api")).toBeDefined();
     expect(runtimeB.apiRegistry.getApiProvider("test-session-api")).toBeUndefined();
   });
-});
 
-describe("ModelRegistry persisted catalog state", () => {
   it("refreshes an acknowledged plugin catalog write without reading SQLite on the host", async () => {
-    const provider = (id: string) => ({
-      baseUrl: "https://models.example/v1",
-      api: "openai-completions",
-      models: [{ id }],
-    });
-    const modelsPath = await writeGeneratedPluginCatalog("zai", provider("before"));
+    const provider = (id: string) => providerConfig([{ id }]);
+    const modelsPath = await writeCatalogs({ zai: provider("before") });
     const auth = AuthStorage.inMemory();
     auth.setRuntimeApiKey("zai", "synthetic-catalog-key");
     const observation = observeHostDataSql();
@@ -608,163 +559,151 @@ describe("ModelRegistry persisted catalog state", () => {
     }
   });
 
-  it.each(["catalog.json.doctor-importing-previous-process"])(
-    "leaves released provider catalogs for Doctor (%s)",
-    async (filename) => {
-      // A synthetic provider keeps host credentials out of this migration fixture.
-      const providerId = "migrated-catalog-provider";
-      const modelsPath = writeModelsJson({ providers: {} });
-      const agentDir = dirname(modelsPath);
-      const catalogPath = join(agentDir, "plugins", "zai", filename);
-      const contents = JSON.stringify(
-        catalog({ [providerId]: { ...zai, apiKey: "released-zai-provider-test-key" } }),
-      );
-      mkdirSync(dirname(catalogPath), { recursive: true });
-      writeFileSync(catalogPath, contents, "utf8");
-      chmodSync(dirname(catalogPath), 0o755);
+  it("leaves released provider catalogs for Doctor", async () => {
+    // A synthetic provider keeps host credentials out of this migration fixture.
+    const providerId = "migrated-catalog-provider";
+    const modelsPath = writeModelsJson({ providers: {} });
+    const agentDir = dirname(modelsPath);
+    const catalogPath = join(
+      agentDir,
+      "plugins",
+      "zai",
+      "catalog.json.doctor-importing-previous-process",
+    );
+    const contents = JSON.stringify(
+      catalog({ [providerId]: { ...zai, apiKey: "released-zai-provider-test-key" } }),
+    );
+    mkdirSync(dirname(catalogPath), { recursive: true });
+    writeFileSync(catalogPath, contents, "utf8");
+    chmodSync(dirname(catalogPath), 0o755);
 
-      const registry = createRegistry(modelsPath, {
-        pluginMetadataSnapshot: pluginOwnerSnapshot(providerId, "zai"),
-      });
+    const registry = createRegistry(modelsPath, {
+      pluginMetadataSnapshot: pluginOwnerSnapshot(providerId, "zai"),
+    });
 
-      expect(registry.getError()).toContain("Run openclaw doctor --fix");
-      expect(registry.find(providerId, "glm-5.1")).toBeUndefined();
-      await expect(registry.getApiKeyForProvider(providerId)).resolves.toBeUndefined();
-      expect(registry.getProviderAuthStatus(providerId).configured).toBe(false);
-      registry.refresh();
-      expect(readFileSync(catalogPath, "utf8")).toBe(contents);
-      if (process.platform !== "win32") {
-        expect(statSync(dirname(catalogPath)).mode & 0o777).toBe(0o755);
-      }
-      expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
-      rmSync(catalogPath);
-      registry.getAll();
-      registry.getAvailable();
-      registry.find(providerId, "glm-5.1");
-      expect(registry.getError()).toContain("Run openclaw doctor --fix");
-      registry.refresh();
-      expect(registry.getError()).toBeUndefined();
-    },
-  );
+    expect(registry.getError()).toContain("Run openclaw doctor --fix");
+    expect(registry.find(providerId, "glm-5.1")).toBeUndefined();
+    await expect(registry.getApiKeyForProvider(providerId)).resolves.toBeUndefined();
+    expect(registry.getProviderAuthStatus(providerId).configured).toBe(false);
+    registry.refresh();
+    expect(readFileSync(catalogPath, "utf8")).toBe(contents);
+    if (process.platform !== "win32") {
+      expect(statSync(dirname(catalogPath)).mode & 0o777).toBe(0o755);
+    }
+    expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+    rmSync(catalogPath);
+    registry.getAll();
+    registry.getAvailable();
+    registry.find(providerId, "glm-5.1");
+    expect(registry.getError()).toContain("Run openclaw doctor --fix");
+    registry.refresh();
+    expect(registry.getError()).toBeUndefined();
+  });
 
-  it.each(["disk", "captured"])(
-    "limits legacy diagnosis to disk discovery (%s)",
-    async (source) => {
-      if (process.getuid?.() === 0) {
-        return;
-      }
-      const modelsPath = await writeModelsJsonWithPluginCatalog({
-        root: { providers: { custom } },
-        ...pluginCatalog("anthropic", {
-          anthropic: {
-            baseUrl: "https://anthropic.example/v1",
-            api: "anthropic-messages",
-            apiKey: "healthy-provider-test-key",
-            models: [{ id: "healthy-model", name: "Healthy Model" }],
-          },
-        }),
-      });
-      const sourcePath = join(dirname(modelsPath), "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
-      mkdirSync(dirname(sourcePath), { recursive: true });
-      writeFileSync(
-        sourcePath,
-        JSON.stringify(catalog({ zai: { apiKey: "unreadable-released-provider-test-key" } })),
-      );
-      chmodSync(sourcePath, 0o000);
-
-      try {
-        const registry = createRegistry(modelsPath, {
-          ...(source === "captured"
-            ? {
-                modelsJsonContents: readFileSync(modelsPath, "utf8"),
-                pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath)),
-              }
-            : {}),
-          pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
-            { providerId: "anthropic", pluginId: "anthropic" },
-            { providerId: "zai", pluginId: "zai" },
-          ]),
-        });
-
-        if (source === "disk") {
-          expect(registry.getError()).toContain("Could not read legacy provider catalog");
-          expect(registry.getError()).toContain("Run openclaw doctor --fix");
-        } else {
-          expect(registry.getError()).toBeUndefined();
-        }
-        expect(registry.find("custom", "authored-model")?.name).toBe("Authored Model");
-        expect(registry.find("anthropic", "healthy-model")?.name).toBe("Healthy Model");
-        expect(existsSync(sourcePath)).toBe(true);
-      } finally {
-        chmodSync(sourcePath, 0o600);
-      }
-    },
-  );
-
-  it.each(["generated", "persisted"])(
-    "keeps %s catalog state unchanged across registry refresh",
-    async (source) => {
-      const modelsPath = await writeCatalogs({
-        nvidia: {
-          baseUrl: "https://integrate.api.nvidia.com/v1",
-          apiKey: "NVIDIA_API_KEY",
-          models: [
-            {
-              id: "meta-llama/llama-3.3-70b-instruct",
-              name: "Llama 3.3 70B Instruct",
-            },
-          ],
+  it.each(["disk", "captured"])("diagnoses legacy disk catalogs (%s)", async (source) => {
+    if (process.getuid?.() === 0) {
+      return;
+    }
+    const modelsPath = await writeModelsJsonWithPluginCatalog({
+      root: { providers: { custom } },
+      ...pluginCatalog("anthropic", {
+        anthropic: {
+          baseUrl: "https://anthropic.example/v1",
+          api: "anthropic-messages",
+          apiKey: "healthy-provider-test-key",
+          models: [{ id: "healthy-model", name: "Healthy Model" }],
         },
-        zai,
+      }),
+    });
+    const sourcePath = join(dirname(modelsPath), "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
+    mkdirSync(dirname(sourcePath), { recursive: true });
+    writeFileSync(
+      sourcePath,
+      JSON.stringify(catalog({ zai: { apiKey: "unreadable-released-provider-test-key" } })),
+    );
+    chmodSync(sourcePath, 0o000);
+
+    try {
+      const registry = createRegistry(modelsPath, {
+        ...(source === "captured"
+          ? {
+              modelsJsonContents: readFileSync(modelsPath, "utf8"),
+              pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath)),
+            }
+          : {}),
+        pluginMetadataSnapshot: ownerSnapshot("anthropic", "zai"),
       });
-      const snapshot = pluginOwnerSnapshotEntries([
-        { providerId: "nvidia", pluginId: "nvidia" },
-        { providerId: "zai", pluginId: "zai" },
-      ]);
-      if (source === "persisted") {
-        const database = new DatabaseSync(join(dirname(modelsPath), "openclaw-agent.sqlite"));
-        try {
-          database
-            .prepare(
-              "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
-            )
-            .run(
-              JSON.stringify(
-                catalog({
-                  nvidia: {
-                    baseUrl: "https://integrate.api.nvidia.com/v1",
-                    apiKey: "NVIDIA_API_KEY",
-                    models: [{ id: "missing-api" }],
-                  },
-                }),
-              ),
-              "plugin-model-catalog-v1",
-              "nvidia",
-            );
-        } finally {
-          database.close();
-        }
+
+      if (source === "disk") {
+        expect(registry.getError()).toContain("Could not read legacy provider catalog");
+        expect(registry.getError()).toContain("Run openclaw doctor --fix");
+      } else {
+        expect(registry.getError()).toBeUndefined();
       }
-      const before = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
+      expect(registry.find("custom", "authored-model")?.name).toBe("Authored Model");
+      expect(registry.find("anthropic", "healthy-model")?.name).toBe("Healthy Model");
+      expect(existsSync(sourcePath)).toBe(true);
+    } finally {
+      chmodSync(sourcePath, 0o600);
+    }
+  });
 
-      const errors = Array.from({ length: 3 }, () => {
-        const registry = createRegistry(modelsPath, {
-          pluginMetadataSnapshot: snapshot,
-        });
-        registry.refresh();
-        expect(registry.find("nvidia", "meta-llama/llama-3.3-70b-instruct")).toBeUndefined();
-        expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
-        return registry.getError();
+  it.each(["generated", "persisted"])("preserves %s catalogs across refresh", async (source) => {
+    const modelsPath = await writeCatalogs({
+      nvidia: {
+        ...nvidia,
+        models: [
+          {
+            id: "meta-llama/llama-3.3-70b-instruct",
+            name: "Llama 3.3 70B Instruct",
+          },
+        ],
+      },
+      zai,
+    });
+    const snapshot = ownerSnapshot("nvidia", "zai");
+    if (source === "persisted") {
+      const database = new DatabaseSync(join(dirname(modelsPath), "openclaw-agent.sqlite"));
+      try {
+        database
+          .prepare(
+            "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+          )
+          .run(
+            JSON.stringify(
+              catalog({
+                nvidia: {
+                  ...nvidia,
+                  models: [{ id: "missing-api" }],
+                },
+              }),
+            ),
+            "plugin-model-catalog-v1",
+            "nvidia",
+          );
+      } finally {
+        database.close();
+      }
+    }
+    const before = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
+
+    const errors = Array.from({ length: 3 }, () => {
+      const registry = createRegistry(modelsPath, {
+        pluginMetadataSnapshot: snapshot,
       });
+      registry.refresh();
+      expect(registry.find("nvidia", "meta-llama/llama-3.3-70b-instruct")).toBeUndefined();
+      expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+      return registry.getError();
+    });
 
-      expect(errors).toEqual(
-        Array(3).fill(
-          source === "persisted"
-            ? expect.stringContaining('Provider nvidia, model missing-api: no "api" specified')
-            : undefined,
-        ),
-      );
-      expect(loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath))).toEqual(before);
-    },
-  );
+    expect(errors).toEqual(
+      Array(3).fill(
+        source === "persisted"
+          ? expect.stringContaining('Provider nvidia, model missing-api: no "api" specified')
+          : undefined,
+      ),
+    );
+    expect(loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath))).toEqual(before);
+  });
 });
