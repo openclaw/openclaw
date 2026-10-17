@@ -23,6 +23,7 @@ import {
 import type {
   AgentRuntimeIdentity,
   AgentRuntimeIdentityTokenParams,
+  AgentRuntimeSessionSpawnContext,
 } from "./agent-runtime-identity-token.js";
 
 const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
@@ -59,27 +60,24 @@ function useTempHome(): string {
   return home;
 }
 
-function readExecApprovals(): {
-  socket?: { token?: string };
-} {
-  return readExecApprovalsSnapshot().file;
-}
-
 function rewriteSignedPayload(
   token: string,
-  mutate: (payload: Record<string, unknown>) => void,
+  changes: Record<string, unknown>,
+  resign = true,
 ): string {
-  const [payloadPart] = token.split(".");
+  const [payloadPart, originalSignature] = token.split(".");
   if (!payloadPart) {
     throw new Error("missing payload");
   }
-  const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as Record<
-    string,
-    unknown
-  >;
-  mutate(payload);
+  const payload: Record<string, unknown> = JSON.parse(
+    Buffer.from(payloadPart, "base64url").toString("utf8"),
+  );
+  Object.assign(payload, changes);
   const rewritten = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const secret = readExecApprovals().socket?.token;
+  if (!resign) {
+    return `${rewritten}.${originalSignature}`;
+  }
+  const secret = readExecApprovalsSnapshot().file.socket?.token;
   if (!secret) {
     throw new Error("missing signing secret");
   }
@@ -100,19 +98,6 @@ async function importRuntimeTokenModule() {
     verify: runtimeToken.verifyAgentRuntimeIdentityToken,
     direct: runtimeToken.createAgentRuntimeIdentity,
   };
-}
-
-function validateDelegatedAuthority(
-  approvalAuthority: typeof import("./agent-runtime-approval-authority.js"),
-  authority: import("./agent-runtime-identity-token.js").AgentRuntimeDelegatedAuthority,
-): boolean {
-  return approvalAuthority.createAgentRuntimeApprovalAuthorityValidator()({
-    kind: "agentRuntime",
-    agentId: "test",
-    sessionKey: "agent:test:test",
-    operationalRunInstance: authority.operationalRunInstance,
-    delegatedAuthority: authority,
-  });
 }
 
 afterEach(() => {
@@ -144,19 +129,20 @@ describe("agent runtime identity token", () => {
     const run = operationalRun("worker-scope-signed");
     const lifetime = new AbortController();
     const original = claimAgentRunApprovalAuthority(run.delegatedAuthority, [lifetime.signal]);
-    const params: AgentRuntimeIdentityTokenParams = {
-      agentId: "main",
-      sessionKey: "agent:main:worker-scope",
-      operationalRunInstance: run.operationalRunInstance,
-      approvalAuthority: original,
-      workerTurnClaim: {
-        sessionId: "worker-scope-session",
-        claimId: "worker-scope-claim",
-        runId: run.operationalRunInstance.runId,
-        placementGeneration: 0,
-        owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 1 },
+    const params = runtimeParams(
+      {
+        sessionKey: "agent:main:worker-scope",
+        approvalAuthority: original,
+        workerTurnClaim: {
+          sessionId: "worker-scope-session",
+          claimId: "worker-scope-claim",
+          runId: run.operationalRunInstance.runId,
+          placementGeneration: 0,
+          owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 1 },
+        },
       },
-    };
+      run,
+    );
     const token = await api.mint(params);
     lifetime.abort();
     const replacement = claimAgentRunApprovalAuthority(run.delegatedAuthority, [
@@ -186,8 +172,9 @@ describe("agent runtime identity token", () => {
 
   it("rejects signed delegated authority after terminal, replacement, and restart boundaries", async () => {
     const approvalAuthority = await import("./agent-runtime-approval-authority.js");
+    const validate = approvalAuthority.createAgentRuntimeApprovalAuthorityValidator();
     const valid = (identity: AgentRuntimeIdentity | undefined) =>
-      identity && validateDelegatedAuthority(approvalAuthority, identity.delegatedAuthority);
+      identity && validate({ ...identity, agentId: "test", sessionKey: "agent:test:test" });
     const first = operationalRun("run-lifecycle");
     const firstRun = first.operationalRunInstance;
     const copied = await createIdentity(runtimeParams({}, first));
@@ -268,7 +255,7 @@ describe("agent runtime identity token", () => {
       const params = runtimeParams();
       const token = await firstProcess.mint(params);
 
-      const persistedToken = readExecApprovals().socket?.token;
+      const persistedToken = readExecApprovalsSnapshot().file.socket?.token;
       expect(persistedToken).toEqual(expect.any(String));
       expect(persistedToken).not.toHaveLength(0);
 
@@ -291,10 +278,9 @@ describe("agent runtime identity token", () => {
   );
 
   it("preserves the signed plugin owner, turn-source route, requesting UI, and cron capture", async () => {
+    const params = runtimeParams();
     const identity = await createIdentity({
-      agentId: "main",
-      sessionKey: "session-1",
-      ...operationalRun(),
+      ...params,
       approvalOwnerPluginId: " codex ",
       turnSourceChannel: " telegram ",
       turnSourceTo: " chat-1 ",
@@ -307,9 +293,7 @@ describe("agent runtime identity token", () => {
 
     expect(identity).toMatchObject({
       kind: "agentRuntime",
-      agentId: "main",
-      sessionKey: "session-1",
-      operationalRunInstance: operationalRun().operationalRunInstance,
+      ...params,
       approvalOwnerPluginId: "codex",
       turnSourceChannel: "telegram",
       turnSourceTo: "chat-1",
@@ -337,27 +321,19 @@ describe("agent runtime identity token", () => {
   it("preserves the signed payload structural acceptance boundary", async () => {
     const token = await api.mint(runtimeParams({ sessionKey: "agent:main:main" }));
 
-    const withUnknownField = rewriteSignedPayload(token, (payload) => {
-      payload.futurePayloadField = { version: 2 };
-    });
-    await expect(api.verify(withUnknownField)).resolves.toMatchObject({
+    await expect(
+      api.verify(rewriteSignedPayload(token, { futurePayloadField: { version: 2 } })),
+    ).resolves.toMatchObject({
       agentId: "main",
       sessionKey: "agent:main:main",
     });
 
-    const withInvalidKnownField = rewriteSignedPayload(token, (payload) => {
-      payload.turnSourceLocal = false;
-    });
-    await expect(api.verify(withInvalidKnownField)).resolves.toBeUndefined();
-
-    for (const gatewayUiCommandTarget of [
-      { connId: "" },
-      { connId: "ui-connection-1", profileId: 1 },
+    for (const changes of [
+      { turnSourceLocal: false },
+      { gatewayUiCommandTarget: { connId: "" } },
+      { gatewayUiCommandTarget: { connId: "ui-connection-1", profileId: 1 } },
     ]) {
-      const withInvalidUiTarget = rewriteSignedPayload(token, (payload) => {
-        payload.gatewayUiCommandTarget = gatewayUiCommandTarget;
-      });
-      await expect(api.verify(withInvalidUiTarget)).resolves.toBeUndefined();
+      await expect(api.verify(rewriteSignedPayload(token, changes))).resolves.toBeUndefined();
     }
   });
 
@@ -374,6 +350,13 @@ describe("agent runtime identity token", () => {
         allow: [" read ", "sessions_spawn"],
         deny: ["exec"],
       };
+      const spawnFacts: Omit<AgentRuntimeSessionSpawnContext, "inheritedToolPolicy"> = {
+        requesterProfileId: "profile-vito",
+        requesterSenderIsOwner: false,
+        completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        resolvedModel: { provider: "custom", model: "custom/model" },
+        spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
+      };
       let token = "";
       const permissionModes =
         identityRunId === "run-1"
@@ -389,14 +372,9 @@ describe("agent runtime identity token", () => {
             ? { inheritedPermissionMode, inheritedToolPolicy }
             : withAgentRuntimeExecutionLineage(
                 {
+                  ...spawnFacts,
                   requesterProfileId: " profile-vito ",
-                  requesterSenderIsOwner: false,
                   completionOwnerSessionKey: " agent:main:discord:direct:alice ",
-                  resolvedModel: { provider: "custom", model: "custom/model" },
-                  spawnModelAutoSelection: {
-                    model: "custom/custom/model",
-                    hasFallbackOrigin: true,
-                  },
                   inheritedToolPolicy,
                 },
                 {
@@ -425,18 +403,7 @@ describe("agent runtime identity token", () => {
           sessionKey: "agent:main:main",
           operationalRunInstance: run.operationalRunInstance,
           sessionSpawnContext: {
-            ...(inheritedPermissionMode
-              ? { inheritedPermissionMode }
-              : {
-                  requesterProfileId: "profile-vito",
-                  requesterSenderIsOwner: false,
-                  completionOwnerSessionKey: "agent:main:discord:direct:alice",
-                  resolvedModel: { provider: "custom", model: "custom/model" },
-                  spawnModelAutoSelection: {
-                    model: "custom/custom/model",
-                    hasFallbackOrigin: true,
-                  },
-                }),
+            ...(inheritedPermissionMode ? { inheritedPermissionMode } : spawnFacts),
             inheritedToolPolicy: {
               version: 1,
               allow: ["read", "sessions_spawn"],
@@ -452,11 +419,11 @@ describe("agent runtime identity token", () => {
         expect(readAgentRuntimeExecutionLineage(identity?.sessionSpawnContext)).toBeUndefined();
       }
       if (identityRunId === "run-1") {
-        const malformed = rewriteSignedPayload(token, (payload) => {
-          payload.sessionSpawnContext = {
+        const malformed = rewriteSignedPayload(token, {
+          sessionSpawnContext: {
             inheritedToolPolicy,
             inheritedPermissionMode: "approve-all",
-          };
+          },
         });
         await expect(api.verify(malformed)).resolves.toBeUndefined();
       }
@@ -465,18 +432,18 @@ describe("agent runtime identity token", () => {
 
   it("round-trips a short-lived cron self-management capability", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1000);
-    const token = await api.mint({
+    const params = runtimeParams({
       agentId: "ops",
       sessionKey: "agent:ops:cron:job-1:run:run-1",
-      ...operationalRun(),
+    });
+    const token = await api.mint({
+      ...params,
       cronSelfManagementJobId: " job-1 ",
     });
 
     await expect(api.verify(token, 60_999)).resolves.toMatchObject({
       kind: "agentRuntime",
-      agentId: "ops",
-      sessionKey: "agent:ops:cron:job-1:run:run-1",
-      operationalRunInstance: operationalRun().operationalRunInstance,
+      ...params,
       cronSelfManagementContext: { jobId: "job-1", expiresAtMs: 61_000 },
     });
     await expect(api.verify(token, 61_000)).resolves.toBeUndefined();
@@ -563,22 +530,21 @@ describe("agent runtime identity token", () => {
   });
 
   it("rejects a shortened signature or a changed requesting UI", async () => {
-    const token = await api.mint({
-      agentId: "main",
-      sessionKey: "session-1",
-      ...operationalRun(),
-      gatewayUiCommandTarget: { connId: "ui-connection-1", profileId: "profile-1" },
-    });
+    const token = await api.mint(
+      runtimeParams({
+        gatewayUiCommandTarget: { connId: "ui-connection-1", profileId: "profile-1" },
+      }),
+    );
 
     await expect(api.verify(token.slice(0, -1))).resolves.toBeUndefined();
-    const [payloadPart, signature] = token.split(".");
-    const payload = JSON.parse(Buffer.from(payloadPart!, "base64url").toString("utf8")) as Record<
-      string,
-      unknown
-    >;
-    payload.gatewayUiCommandTarget = { connId: "another-connection", profileId: "profile-2" };
-    const changedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-    await expect(api.verify(`${changedPayload}.${signature}`)).resolves.toBeUndefined();
+    const tampered = rewriteSignedPayload(
+      token,
+      {
+        gatewayUiCommandTarget: { connId: "another-connection", profileId: "profile-2" },
+      },
+      false,
+    );
+    await expect(api.verify(tampered)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -627,10 +593,9 @@ describe("agent runtime identity token", () => {
     "queues token verification behind approvals updates and rechecks expiry (expires: %s)",
     async (expires) => {
       const { updateExecApprovals } = await import("../infra/exec-approvals.js");
+      const params = runtimeParams();
       const token = await api.mint({
-        agentId: "main",
-        sessionKey: "session-1",
-        ...operationalRun(),
+        ...params,
         ...(expires ? { messageActionContext: { expiresAtMs: 5000 } } : {}),
       });
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4000);
@@ -654,9 +619,7 @@ describe("agent runtime identity token", () => {
         } else {
           expect(identity).toMatchObject({
             kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "session-1",
-            operationalRunInstance: operationalRun().operationalRunInstance,
+            ...params,
             delegatedAuthority: { kind: "local" },
           });
         }
