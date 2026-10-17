@@ -4,13 +4,14 @@ import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
+import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
-import { resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import { resolveFiniteTimeoutDelayMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
 
 export type GatewayProtocolRequestTiming = {
   id: string;
@@ -37,6 +38,7 @@ type GatewayPendingRequest = {
   method: string;
   startedAtMs: number;
   resend?: () => void;
+  retryStartup?: (retryAfterMs?: number) => void;
   waitingForResume?: boolean;
 };
 
@@ -154,6 +156,7 @@ export class GatewayPendingRequests {
         : undefined;
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let startupRetry: ReturnType<typeof setTimeout> | undefined;
       let requestSent = false;
       const pending: GatewayPendingRequest = {
         resolve: (value) => resolve(value as T),
@@ -166,6 +169,7 @@ export class GatewayPendingRequests {
         startedAtMs: this.opts.nowMs(),
       };
       const cleanup = () => {
+        clearTimeout(startupRetry);
         if (timeout !== undefined) {
           clearTimeout(timeout);
         }
@@ -221,7 +225,7 @@ export class GatewayPendingRequests {
           if (
             this.pending.get(id) !== pending ||
             options?.signal?.aborted ||
-            (pending.waitingForResume &&
+            ((requestSent || pending.waitingForResume) &&
               timeoutMs !== undefined &&
               this.opts.nowMs() - pending.startedAtMs >= timeoutMs)
           ) {
@@ -250,7 +254,16 @@ export class GatewayPendingRequests {
             }
           }
         };
-        // Writes retain their synchronous authority/send boundary and are never replayed.
+        // A startup refusal proves dispatch never reached the handler. Retain the
+        // exact frame for that retry only; ordinary writes still send synchronously.
+        pending.retryStartup = (retryAfterMs) => {
+          clearTimeout(startupRetry);
+          startupRetry = setTimeout(
+            send,
+            resolveFiniteTimeoutDelayMs(retryAfterMs, GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS),
+          );
+          startupRetry.unref?.();
+        };
         if (
           method === "agent.identity.get" ||
           method === "sessions.subscribe" ||
@@ -280,6 +293,18 @@ export class GatewayPendingRequests {
         pending.acceptedNotified = true;
         this.invoke("accepted", () => pending.onAccepted?.(frame.payload));
       }
+      return;
+    }
+    const startupDetails = frame.error?.details;
+    const startupRefusal =
+      !frame.ok &&
+      isRetryableGatewayStartupUnavailableError(frame.error) &&
+      startupDetails !== null &&
+      typeof startupDetails === "object" &&
+      "method" in startupDetails &&
+      startupDetails.method === pending.method;
+    if (startupRefusal && !pending.acceptedNotified) {
+      pending.retryStartup?.(frame.error?.retryAfterMs);
       return;
     }
     if (

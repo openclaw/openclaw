@@ -20,7 +20,9 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneMcpApps, type ChatPaneMcpAppOwner } from "./chat-pane-mcp-app.ts";
+import { handleAbortChat } from "./run-lifecycle.ts";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -45,6 +47,8 @@ function fixture() {
   // These events only read gateway state; new-session delivery is observed at its existing owner.
   const context = { gateway: gateway.gateway } as ApplicationContext;
   const state: ChatPaneMcpAppOwner["state"] = {
+    client,
+    connected: true,
     sessionKey: "agent:main:one",
     assistantAgentId: "main",
     chatAttachments: [],
@@ -211,10 +215,35 @@ describe("MCP app pane actions", () => {
       .spyOn(appMessages, "sendMcpAppNewConversation")
       .mockReturnValue(pending.promise);
     f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
-    expect(create).toHaveBeenCalledWith(f.context, "main", sent.detail);
+    expect(create).toHaveBeenCalledWith(f.context, "main", sent.detail, expect.any(AbortSignal));
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
     expect(sent.respond).not.toHaveBeenCalled();
     pending.resolve(false);
+    expect(await sent.receipt.promise).toBe(false);
+  });
+
+  it("cancels a new-conversation admission wait when the source pane receives Stop", async () => {
+    const f = fixture();
+    const host = Object.assign(makeChatHost({ client: f.client, sessionKey: f.state.sessionKey }), {
+      requestUpdate: f.state.requestUpdate,
+      handleSendChat: f.state.handleSendChat,
+      handleOpenSidebar: f.state.handleOpenSidebar,
+    });
+    f.owner.state = host;
+    const sent = message(host.sessionKey, "new");
+    let signal: AbortSignal | undefined;
+    vi.spyOn(appMessages, "sendMcpAppNewConversation").mockImplementation(
+      (_context, _agentId, _detail, requestSignal) => {
+        signal = requestSignal;
+        return new Promise<boolean>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(false), { once: true });
+        });
+      },
+    );
+    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
+    expect(signal?.aborted).toBe(false);
+    await handleAbortChat(host, { preserveDraft: true });
+    expect(signal?.aborted).toBe(true);
     expect(await sent.receipt.promise).toBe(false);
   });
 

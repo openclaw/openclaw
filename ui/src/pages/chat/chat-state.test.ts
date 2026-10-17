@@ -1,6 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
+import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -36,6 +39,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPageStateContext } from "./chat-page.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
+import { requestChatSend } from "./chat-send-request.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -2571,6 +2575,71 @@ describe("chat state render lifecycle", () => {
       }
     },
   );
+
+  it("cancels startup admission when its chat state owner disconnects", async () => {
+    vi.useFakeTimers();
+    let ready = false;
+    const writes: RequestFrame[] = [];
+    const pending = new GatewayPendingRequests({
+      createRequestId: () => "navigation",
+      nowMs: Date.now,
+    });
+    onTestFinished(() => {
+      pending.flush(new Error("test request owner disposed"));
+      vi.useRealTimers();
+    });
+    const wire = {
+      send(raw: string) {
+        const request = JSON.parse(raw) as RequestFrame;
+        if (ready) {
+          writes.push(request);
+        }
+        pending.handleResponse({
+          type: "res",
+          id: request.id,
+          ok: ready,
+          ...(ready
+            ? { payload: { status: "ok", runId: "started" } }
+            : {
+                error: {
+                  code: "UNAVAILABLE",
+                  message: "Agent is preparing",
+                  retryable: true,
+                  retryAfterMs: 1_000,
+                  details: { reason: "startup-sidecars", method: request.method },
+                },
+              }),
+        });
+      },
+    };
+    const { controller, dispose } = createOwner(createRenderer());
+    const state = createPageState(
+      createChatPageStateContext(),
+      controller.createRenderLifecycle(),
+      {
+        dispatchEvent: () => true,
+        querySelector: () => null,
+      },
+    );
+    state.client = createTestGatewayClient((method, params, options) =>
+      pending.request(wire, method, params, options),
+    );
+    state.connected = true;
+    state.sessionKey = "agent:main:startup-navigation";
+    controller.attach(state);
+    const sending = requestChatSend(state, {
+      message: "Wait for this agent",
+      runId: "waiting",
+    }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(pending.hasPending).toBe(true);
+    dispose();
+    expect(await sending).toMatchObject({ message: "gateway request aborted for chat.send" });
+    ready = true;
+    await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
+    expect(writes).toHaveLength(0);
+    expect(pending.hasPending).toBe(false);
+  });
 
   it("fully tears down realtime Talk when its state owner disconnects", () => {
     const host = createRenderer();

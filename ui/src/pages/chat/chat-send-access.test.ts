@@ -117,9 +117,11 @@ it.each([true, false])(
     expect(host.chatQueue).toMatchObject([{ text: "keep this later draft", sendAttempts: 0 }]);
     expect(host.chatQueue[0]).not.toHaveProperty("queueMode");
     const queuedId = host.chatQueue[0]!.sendRunId;
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(host.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     host.chatMessage = "next unfinished draft";
     host.connected = true;
     pending = false;

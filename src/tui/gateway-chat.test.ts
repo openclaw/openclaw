@@ -6,6 +6,7 @@ import {
   validateSessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
@@ -430,15 +431,20 @@ describe("GatewayChatClient", () => {
     await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
     await client.listModels({ agentId: "work" });
 
-    expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
-      sessionKey: "global",
-      agentId: "work",
-      message: "hello",
-      thinking: undefined,
-      deliver: undefined,
-      timeoutMs: undefined,
-      idempotencyKey: "run-global-work",
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "chat.send",
+      {
+        sessionKey: "global",
+        agentId: "work",
+        message: "hello",
+        thinking: undefined,
+        deliver: undefined,
+        timeoutMs: undefined,
+        idempotencyKey: "run-global-work",
+      },
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: expect.any(AbortSignal) },
+    );
     expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
       sessionKey: "global",
       agentId: "work",
@@ -487,16 +493,22 @@ describe("GatewayChatClient", () => {
         ok: true,
         key: "agent:main:tui-next",
       });
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
-        ...opts,
-        emitCommandHooks: true,
-      });
+      expect(request).toHaveBeenNthCalledWith(
+        1,
+        "sessions.create",
+        {
+          ...opts,
+          emitCommandHooks: true,
+        },
+        { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: expect.any(AbortSignal) },
+      );
       expect(request).toHaveBeenNthCalledWith(
         2,
         "sessions.create",
         succeedsParent
           ? { key: "tui-next", parentSessionKey: "agent:main:main", emitCommandHooks: true }
           : { key: "tui-next", agentId: "main" },
+        { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: expect.any(AbortSignal) },
       );
     },
   );

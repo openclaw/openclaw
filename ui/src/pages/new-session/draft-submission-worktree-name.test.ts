@@ -73,7 +73,7 @@ describe("submitted custom worktree names", () => {
             worktreeName: "first-task",
             worktreeBaseRef: "main",
           }),
-          { reconciliation: "background" },
+          { reconciliation: "background", signal: expect.any(AbortSignal) },
         );
         expect(place.worktree).toBe(true);
         expect(place.baseRef).toBe("main");
@@ -185,6 +185,7 @@ describe("submitted custom worktree names", () => {
       if (restored) {
         expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
           reconciliation: "background",
+          signal: expect.any(AbortSignal),
         });
       } else {
         expect(vi.mocked(retry.context.sessions.createResult).mock.calls[1]![0]).toEqual(original);

@@ -32,7 +32,7 @@ import {
   type WorkshopViewerTarget,
 } from "./view.tsx";
 
-type WorkshopScope = { client: GatewayBrowserClient; agentId: string };
+type WorkshopScope = { client: GatewayBrowserClient; agentId: string; abort: AbortController };
 
 function resolveWorkshopAgentId(context: ApplicationContext): string {
   const snapshot = context.gateway.snapshot;
@@ -80,6 +80,7 @@ class SkillWorkshopPageState {
       },
     );
     onCleanup(() => {
+      this.scope?.abort.abort();
       this.scope = null;
     });
   }
@@ -92,7 +93,8 @@ class SkillWorkshopPageState {
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
     }
-    this.scope = client && agentId ? { client, agentId } : null;
+    this.scope?.abort.abort();
+    this.scope = client && agentId ? { client, agentId, abort: new AbortController() } : null;
     this.snapshot = null;
     this.error = null;
     this.viewer = null;
@@ -330,7 +332,10 @@ class SkillWorkshopPageState {
     this.changed();
     const createdAt = Date.now();
     try {
-      const result = await context.sessions.createResult(params, { reconciliation: "background" });
+      const result = await context.sessions.createResult(params, {
+        reconciliation: "background",
+        signal: scope.abort.signal,
+      });
       if (context.gateway.snapshot.client !== client) {
         return;
       }

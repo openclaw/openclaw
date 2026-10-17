@@ -90,7 +90,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
 
   const createResult = async (
     params: SessionCreateParams = {},
-    options: { reconciliation?: SessionCreateReconciliation } = {},
+    options: { reconciliation?: SessionCreateReconciliation; signal?: AbortSignal } = {},
   ) => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -98,10 +98,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
     try {
       const { currentSessionKey, ...requestParams } = params;
-      const result = await requestSessionCreate(scope.client, {
-        ...requestParams,
-        ...resolveSessionCreateParams(currentSessionKey, params.agentId),
-      });
+      const result = await requestSessionCreate(
+        scope.client,
+        {
+          ...requestParams,
+          ...resolveSessionCreateParams(currentSessionKey, params.agentId),
+        },
+        options,
+      );
       if (!host.connection.isCurrent(scope)) {
         return (await reconcileConfirmedPreviousConnection(scope, params.agentId)) ? result : null;
       }
@@ -129,13 +133,15 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result;
     } catch (error) {
-      reportError(scope, error);
+      if (!options.signal?.aborted) {
+        reportError(scope, error);
+      }
       return null;
     }
   };
 
-  const create = async (params: SessionCreateParams = {}) =>
-    (await createResult(params))?.key ?? null;
+  const create = async (params: SessionCreateParams = {}, options?: { signal?: AbortSignal }) =>
+    (await createResult(params, options))?.key ?? null;
 
   const patch = async (
     key: string,

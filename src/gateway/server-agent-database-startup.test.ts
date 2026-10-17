@@ -5,7 +5,7 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { openFixtureReceiptChannel } from "../../test/helpers/fixture-receipts.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
@@ -287,7 +287,10 @@ it.for([
     const refusal = () => readAgentDatabaseAdmissionRefusal(agentId, { env });
     const waitForRecovery = () =>
       vi.waitFor(() => expect(refusal()).toBeUndefined(), { timeout: 10000 });
-    const handoffReceipts = outcome === "handoff" ? await openFixtureReceiptChannel() : undefined;
+    const handoffReceipts =
+      outcome === "handoff" || outcome === "shutdown-preparation"
+        ? await openFixtureReceiptChannel()
+        : undefined;
     if (handoffReceipts) {
       onTestFinished(() => handoffReceipts.close());
     }
@@ -307,6 +310,7 @@ it.for([
     const preparationRelease = createDeferredCore();
     const preparationEntered = createDeferredCore();
     const maintenanceCompleted = createDeferredCore();
+    const dispatched = createDeferredCore();
     let sessionPrepared = false;
     let preparationParent: number | undefined;
     let brokerPid: number | undefined;
@@ -509,16 +513,6 @@ it.for([
         message: "Synthetic startup dispatch",
         idempotencyKey: `startup-dispatch-${agentId}`,
       };
-      if (outcome === "recover") {
-        chatClient = await connectWebchatClient({ port });
-        expect(await rpcReq(chatClient, "chat.send", chatParams)).toMatchObject({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            details: { code: "agent-database-inspection-pending", agentId },
-          },
-        });
-      }
       if (paused) {
         expect(refusal()).toMatchObject({
           code: "agent-database-inspection-pending",
@@ -572,9 +566,15 @@ it.for([
       } else if (outcome === "shutdown-preparation") {
         fs.writeFileSync(releasePath, "resume");
         const preparationEnteredPath = pause!.preparationEnteredPath;
-        await vi.waitFor(() => expect(fs.existsSync(preparationEnteredPath)).toBe(true), {
-          timeout: 10000,
-        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            handoffReceipts!.waitFor(preparationEnteredPath, "entered"),
+            inspectionSettled!,
+            "startup preparation settled before entering its shutdown gate",
+          ),
+          signal,
+        );
+        expect(fs.existsSync(preparationEnteredPath)).toBe(true);
         expect(preparationCancelled).toBe(false);
         expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
         await server.close();
@@ -604,6 +604,20 @@ it.for([
           code: "agent-database-inspection-pending",
         });
         if (outcome === "recover") {
+          chatClient = await connectWebchatClient({ port });
+          gatewayReplyMock.mockImplementationOnce(async () => {
+            dispatched.resolve();
+            return { text: "Synthetic startup reply" };
+          });
+          expect(await rpcReq(chatClient, "chat.send", chatParams)).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              retryable: true,
+              details: { reason: "startup-sidecars", method: "chat.send" },
+            },
+          });
+          expect(gatewayReplyMock).not.toHaveBeenCalled();
           const active = getActiveSecretsRuntimeSnapshot()!;
           const source = structuredClone(active.sourceConfig);
           source.models = {
@@ -674,11 +688,6 @@ it.for([
           false,
         );
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
-        const dispatched = createDeferredCore();
-        gatewayReplyMock.mockImplementationOnce(async () => {
-          dispatched.resolve();
-          return { text: "Synthetic startup reply" };
-        });
         expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({ ok: true });
         await withinTest(dispatched.promise, signal);
         if (checkHostJournalReads) {

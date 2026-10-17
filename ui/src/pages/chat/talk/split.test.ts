@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
@@ -243,7 +244,7 @@ it.each(["displayed-leaf", null])(
         message: "Tell me something local",
         expectedLeafEntryId: leaf,
       }),
-      { timeoutMs: 30_000 },
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: expect.any(AbortSignal) },
     );
     await h.state.toggleRealtimeTalk();
   },
@@ -279,7 +280,7 @@ it.each(["openai", undefined])(
         sessionKey: "agent:local:main",
         message: "Tell me something local",
       }),
-      { timeoutMs: 30_000 },
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: expect.any(AbortSignal) },
     );
     h.emit("chat", {
       runId: "unrelated",
@@ -530,7 +531,7 @@ it("waits for buffered local STT to finish instead of dropping a slow final tran
   expect(h.request).toHaveBeenCalledWith(
     "chat.send",
     expect.objectContaining({ message: "Tell me something local" }),
-    { timeoutMs: 30_000 },
+    { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: expect.any(AbortSignal) },
   );
   await h.state.toggleRealtimeTalk();
 });

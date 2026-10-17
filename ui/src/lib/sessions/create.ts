@@ -3,6 +3,7 @@ import type {
   SessionsCreateParams,
   SessionsCreateResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
@@ -36,8 +37,12 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
 export async function requestSessionCreate(
   client: Pick<GatewayBrowserClient, "request">,
   params: Omit<SessionCreateParams, "currentSessionKey"> = {},
+  options?: { signal?: AbortSignal },
 ): Promise<SessionCreateOutcome> {
-  const result = await client.request<SessionsCreateResult>("sessions.create", params);
+  const result = await client.request<SessionsCreateResult>("sessions.create", params, {
+    timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+    signal: options?.signal,
+  });
   const key = stringValue(result?.key) ?? "";
   if (!key) {
     throw new Error("sessions.create returned no key");

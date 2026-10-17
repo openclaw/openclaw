@@ -118,6 +118,7 @@ export async function sendMcpAppNewConversation(
   context: ApplicationContext,
   agentId: string,
   detail: McpAppMessageEventDetail,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const client = context.gateway.snapshot.client;
   if (!client || context.gateway.snapshot.phase !== "connected") {
@@ -138,11 +139,14 @@ export async function sendMcpAppNewConversation(
     context.agentSelection.intentRevision === intent;
   let released = false;
   try {
-    const result = await context.sessions.createResult({
-      agentId,
-      message: turn.text,
-      attachments: buildChatApiAttachments(turn.attachments),
-    });
+    const result = await context.sessions.createResult(
+      {
+        agentId,
+        message: turn.text,
+        attachments: buildChatApiAttachments(turn.attachments),
+      },
+      { signal },
+    );
     if (!result) {
       return false;
     }

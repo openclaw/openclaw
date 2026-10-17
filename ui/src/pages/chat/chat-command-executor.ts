@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   isSessionDefaultDirectiveValue,
   normalizeVerboseLevel,
@@ -68,6 +69,7 @@ type SlashCommandContext = {
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
+  runRequest?: { runId: string; signal: AbortSignal };
   chatModelCatalog?: ModelCatalogEntry[];
   defaultAgentId?: string;
   agentId?: string;
@@ -587,16 +589,20 @@ async function executeRunCommand(
       };
     }
     assertCurrentSlashCommand(context);
-    const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
-      sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
-      message,
-      attachments: buildChatApiAttachments(context.attachments),
-      ...(command === "steer"
-        ? { deliver: false, queueMode: "steer" }
-        : { queueMode: "interrupt" }),
-      idempotencyKey: generateUUID(),
-    });
+    const response = await client.request<{ runId?: unknown; status?: unknown }>(
+      "chat.send",
+      {
+        sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        message,
+        attachments: buildChatApiAttachments(context.attachments),
+        ...(command === "steer"
+          ? { deliver: false, queueMode: "steer" }
+          : { queueMode: "interrupt" }),
+        idempotencyKey: context.runRequest?.runId ?? generateUUID(),
+      },
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: context.runRequest?.signal },
+    );
     const ackStatus = normalizeChatSendAckStatus(response?.status);
     if (ackStatus === "timeout" || ackStatus === "error") {
       return {

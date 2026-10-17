@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
+import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway-client/src/protocol-client.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   deleteSessionPlacementDraft,
@@ -71,10 +74,87 @@ function expectReclaim(request: ReturnType<typeof vi.fn>, call: number) {
 }
 
 function expectNotSent(request: ReturnType<typeof vi.fn>) {
-  expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+  expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
 }
 
 describe("session placement startup", () => {
+  it.each([
+    { waitMs: 45_000, cancel: false },
+    { waitMs: 240_000, cancel: false },
+    { waitMs: 45_000, cancel: true },
+    { waitMs: 240_000, cancel: true },
+  ])(
+    "retains a cancellable initial send through startup ($waitMs ms, cancel=$cancel)",
+    async ({ waitMs, cancel }) => {
+      fakeTimers();
+      const abort = new AbortController();
+      const frames: string[] = [];
+      let ready = false;
+      let writes = 0;
+      const pending = new GatewayPendingRequests({
+        createRequestId: () => "placement-initial-turn",
+        nowMs: Date.now,
+        requestTimeoutMs: 30_000,
+      });
+      onTestFinished(() => pending.flush(new Error("test disposed")));
+      const request = vi.fn(
+        (method: string, input?: unknown, options?: GatewayProtocolRequestOptions) => {
+          if (method !== "sessions.send") {
+            return Promise.resolve(method === "sessions.dispatch" ? placement("active") : {});
+          }
+          return pending.request(
+            {
+              send(raw) {
+                frames.push(raw);
+                const frame = JSON.parse(raw) as { id: string };
+                if (ready) {
+                  writes += 1;
+                  pending.handleResponse({
+                    type: "res",
+                    id: frame.id,
+                    ok: true,
+                    payload: { runId: "initial-turn", status: "started" },
+                  });
+                } else {
+                  pending.handleResponse({
+                    type: "res",
+                    id: frame.id,
+                    ok: false,
+                    error: {
+                      code: "UNAVAILABLE",
+                      message: "Agent is preparing",
+                      retryable: true,
+                      retryAfterMs: 500,
+                      details: { reason: "startup-sidecars", method },
+                    },
+                  });
+                }
+              },
+            },
+            method,
+            input,
+            options,
+          );
+        },
+      );
+      const outcome = start(request, { signal: abort.signal }, () => !abort.signal.aborted);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(pending.hasPending).toBe(true);
+      expect(writes).toBe(0);
+      if (cancel) {
+        abort.abort();
+        expect(pending.hasPending).toBe(false);
+      }
+      await vi.advanceTimersByTimeAsync(waitMs - 30_000);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await outcome).toMatchObject({ status: cancel ? "cancelled" : "started" });
+      expect(writes).toBe(cancel ? 0 : 1);
+      expect(new Set(frames).size).toBe(1);
+      expect(pending.hasPending).toBe(false);
+    },
+  );
+
   it.each([
     [
       { kind: "profile", profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
@@ -157,6 +237,7 @@ describe("session placement startup", () => {
       4,
       "sessions.send",
       expect.objectContaining({ message: params.message, attachments }),
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
     );
   });
 
@@ -448,6 +529,7 @@ describe("session placement startup", () => {
         message: params.message,
         idempotencyKey: (outcome as { messageId: string }).messageId,
       }),
+      expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
     );
   });
 });

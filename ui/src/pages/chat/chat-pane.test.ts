@@ -894,7 +894,10 @@ describe("chat pane session creation lifecycle", () => {
 
     const pending = pane.createSession();
     await expect(pane.createSession()).resolves.toBe(false);
-    expect(sessions.create).toHaveBeenCalledExactlyOnceWith({ agentId: "main", incognito: true });
+    expect(sessions.create).toHaveBeenCalledExactlyOnceWith(
+      { agentId: "main", incognito: true },
+      { signal: expect.any(AbortSignal) },
+    );
     const nextKey = "agent:main:dashboard:incognito-fresh";
     created.resolve(nextKey);
     await expect(pending).resolves.toBe(true);

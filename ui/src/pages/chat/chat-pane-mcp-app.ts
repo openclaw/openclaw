@@ -20,12 +20,15 @@ import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { mcpAppMessageInput, sendMcpAppNewConversation } from "../../lib/mcp-app-message.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import {
   releaseChatAttachmentPayloads,
   generateAttachmentId,
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   resolveChatAttachmentLimits,
@@ -33,6 +36,7 @@ import {
   chatAttachmentBatchBytes,
 } from "./components/chat-attachment-admission.ts";
 import { encodeTextAsDataUrl } from "./components/chat-attachment-text.ts";
+import type { ChatComposerScope } from "./composer-persistence.ts";
 
 registerMcpAppEnglish();
 
@@ -49,17 +53,18 @@ declare global {
   }
 }
 
-type ChatPaneMcpAppState = Pick<
-  ChatPageHost,
-  | "sessionKey"
-  | "assistantAgentId"
-  | "chatAttachments"
-  | "uploadConfig"
-  | "hello"
-  | "requestUpdate"
-  | "handleSendChat"
-  | "handleOpenSidebar"
->;
+type ChatPaneMcpAppState = ChatComposerScope &
+  Pick<
+    ChatPageHost,
+    | "sessionKey"
+    | "assistantAgentId"
+    | "chatAttachments"
+    | "uploadConfig"
+    | "hello"
+    | "requestUpdate"
+    | "handleSendChat"
+    | "handleOpenSidebar"
+  >;
 
 /** Read at delivery, not subscription time: retained panes can change presentation/connection. */
 export type ChatPaneMcpAppOwner = {
@@ -168,11 +173,21 @@ export function createChatPaneMcpApps(options: {
     event.preventDefault();
     void (async () => {
       if (detail.target === "new") {
-        return sendMcpAppNewConversation(
-          context,
-          state.assistantAgentId || owner.agentId || "",
-          detail,
+        const request = chatOutboxOwner(state).admissions.beginRequest(
+          state,
+          resolveUiConversationIdentity(state, state.sessionKey),
+          generateUUID(),
         );
+        try {
+          return await sendMcpAppNewConversation(
+            context,
+            state.assistantAgentId || owner.agentId || "",
+            detail,
+            request.signal,
+          );
+        } finally {
+          request.release();
+        }
       }
       const turn = mcpAppMessageInput(detail.content, context);
       let admitted = false;

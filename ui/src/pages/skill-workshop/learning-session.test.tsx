@@ -43,7 +43,7 @@ describe("Workshop learning session", () => {
         message: expect.stringContaining("past conversations"),
         idempotencyKey: expect.any(String),
       },
-      { reconciliation: "background" },
+      { reconciliation: "background", signal: expect.any(AbortSignal) },
     );
     expect(context.navigate).not.toHaveBeenCalled();
     const key = "agent:research:dashboard:7e93881c-0186-4d25-9e99-cdce85cac675";
@@ -70,9 +70,14 @@ describe("Workshop learning session", () => {
   it("retains an accepted run without redirecting a replaced Workshop page", async () => {
     const { unmount, context, button } = await mountLearningPage();
     const creation = createDeferredCore<SessionCreateOutcome | null>();
-    context.sessions.createResult = vi.fn(() => creation.promise);
+    let signal: AbortSignal | undefined;
+    context.sessions.createResult = vi.fn((_params, options) => {
+      signal = options?.signal;
+      return creation.promise;
+    });
     button.click();
     unmount();
+    expect(signal?.aborted).toBe(true);
     creation.resolve({
       key: "agent:research:dashboard:7e93881c-0186-4d25-9e99-cdce85cac675",
       initialRun: { status: "started", runId: "learning-run" },

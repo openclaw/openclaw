@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { ControlUiSessionListSnapshot } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
@@ -81,11 +82,15 @@ describe("native UI roster refresh", () => {
         surface: "plugin-dock",
       }),
     ).resolves.toBe(key);
-    expect(request).toHaveBeenCalledWith("sessions.create", {
-      agentId: "main",
-      displayName: "Board agent",
-      surface: "plugin-dock",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.create",
+      {
+        agentId: "main",
+        displayName: "Board agent",
+        surface: "plugin-dock",
+      },
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: fixture.host.signal },
+    );
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
       expect.objectContaining({ excludeDock: true }),

@@ -1,10 +1,10 @@
-import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
@@ -12,10 +12,12 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
+  resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -61,29 +63,41 @@ export async function requestChatSend(
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
-  const payload = await state.client!.request(
-    "chat.send",
-    {
-      sessionKey,
-      ...(isUiGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
-      ...(sessionId ? { sessionId } : {}),
-      ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
-      message: params.message,
-      ...(params.workContext ? { workContext: params.workContext } : {}),
-      ...(params.mentions?.length ? { mentions: params.mentions } : {}),
-      ...(params.intent ? { intent: params.intent } : {}),
-      deliver: false,
-      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-      ...(params.queueMode ? { queueMode: params.queueMode } : {}),
-      ...(params.expectedLeafEntryId !== undefined
-        ? { expectedLeafEntryId: params.expectedLeafEntryId }
-        : {}),
-      idempotencyKey: params.runId,
-      attachments: buildChatApiAttachments(params.attachments),
-    },
-    // This bounds receipt of the admission ACK, not execution of the admitted turn.
-    { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+  const request = chatOutboxOwner(state).admissions.beginRequest(
+    state,
+    resolveUiConversationIdentity(state, sessionKey, selectedAgentId),
+    params.runId,
   );
+  let payload: unknown;
+  try {
+    payload = await state.client!.request(
+      "chat.send",
+      {
+        sessionKey,
+        ...(isUiGlobalSessionKey(sessionKey) && selectedAgentId
+          ? { agentId: selectedAgentId }
+          : {}),
+        ...(sessionId ? { sessionId } : {}),
+        ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+        message: params.message,
+        ...(params.workContext ? { workContext: params.workContext } : {}),
+        ...(params.mentions?.length ? { mentions: params.mentions } : {}),
+        ...(params.intent ? { intent: params.intent } : {}),
+        deliver: false,
+        ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+        ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+        ...(params.expectedLeafEntryId !== undefined
+          ? { expectedLeafEntryId: params.expectedLeafEntryId }
+          : {}),
+        idempotencyKey: params.runId,
+        attachments: buildChatApiAttachments(params.attachments),
+      },
+      // This bounds receipt of the admission ACK, not execution of the admitted turn.
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: request.signal },
+    );
+  } finally {
+    request.release();
+  }
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
   }

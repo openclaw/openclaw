@@ -202,14 +202,18 @@ describe("session placement draft advancement", () => {
         .mentions,
     ).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
     expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
-    expect(request).toHaveBeenCalledWith("sessions.send", {
-      key: sessionKey,
-      agentId: "cloud",
-      message: "@Alex older task",
-      mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-      attachments: undefined,
-      idempotencyKey: "message-older",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.send",
+      {
+        key: sessionKey,
+        agentId: "cloud",
+        message: "@Alex older task",
+        mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+        attachments: undefined,
+        idempotencyKey: "message-older",
+      },
+      expect.anything(),
+    );
     expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
     expect(clearRecovery).toHaveBeenCalledWith("resolved");
   });
@@ -483,7 +487,7 @@ describe("session placement draft advancement", () => {
       },
     });
     expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
     expect(request).not.toHaveBeenCalledWith("sessions.delete", expect.anything());
     expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
     expect(clearRecovery).not.toHaveBeenCalled();

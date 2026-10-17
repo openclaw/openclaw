@@ -571,11 +571,14 @@ describe("sessions page lifecycle", () => {
       createSessions({ create: vi.fn(async () => "active-fork") }),
     );
     await page.forkSession("main", true);
-    expect(sessions.create).toHaveBeenCalledWith({
-      parentSessionKey: "main",
-      fork: true,
-      forkFrom: "last-completed",
-    });
+    expect(sessions.create).toHaveBeenCalledWith(
+      {
+        parentSessionKey: "main",
+        fork: true,
+        forkFrom: "last-completed",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 });
 

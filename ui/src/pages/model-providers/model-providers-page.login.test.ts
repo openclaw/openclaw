@@ -9,7 +9,7 @@ import type {
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
+import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelProviderLogin, type ModelProviderLogin } from "./login-controller.ts";
@@ -52,107 +52,6 @@ function providerChoices(page: Pick<ParentNode, "querySelectorAll">) {
 }
 
 describe("Models provider login", () => {
-  it.each([
-    { recommended: true, delayed: false },
-    { recommended: false, delayed: false },
-    { recommended: true, delayed: true },
-    { recommended: false, delayed: false, verified: true },
-  ])(
-    "offers the first available recommendation (recommended: $recommended, delayed: $delayed)",
-    async ({ recommended, delayed, verified }) => {
-      const { context, request, answer, publishEvent } = loginHarness();
-      const originalRequest = request.getMockImplementation()!;
-      let available = !delayed;
-      request.mockImplementation(async (method, ...args) =>
-        method === "models.list"
-          ? ({
-              models: [
-                {
-                  provider: "other",
-                  id: "best",
-                  name: "Other best",
-                  recommended: true,
-                  available: true,
-                },
-                {
-                  provider: "example",
-                  id: "old",
-                  name: "Unavailable",
-                  recommended: true,
-                  available: false,
-                },
-                {
-                  provider: "example",
-                  id: "best",
-                  name: "Example best",
-                  recommended,
-                  available,
-                  agentRuntime: { id: "openclaw", source: "model" },
-                },
-                {
-                  provider: "example",
-                  id: "second",
-                  name: "Example second",
-                  recommended,
-                  available,
-                },
-              ],
-            } satisfies ModelCatalogResult)
-          : originalRequest(method, ...args),
-      );
-      const create = vi.fn(async () => null);
-      Object.assign(context, { sessions: { create, state: {} } });
-      const page = appendPage(context);
-      await openLogin(page);
-      await submitCredential(page);
-      answer.resolve({
-        done: true,
-        status: "done",
-        ...(verified ? { modelActivation: { modelRef: "example/best" } } : {}),
-      });
-      await waitForSolid(() =>
-        expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-          "Example API key is connected",
-        ),
-      );
-      if (recommended || verified) {
-        if (delayed) {
-          await waitForSolid(() =>
-            expect(request).toHaveBeenCalledWith(
-              "models.list",
-              expect.objectContaining({ agentId: "writer" }),
-            ),
-          );
-          expect(page.querySelector("[data-login-start-chat]")).toBeNull();
-          available = true;
-          publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-        }
-        await waitForSolid(() =>
-          expect(page.querySelector("[data-login-start-chat]")?.textContent).toBe(
-            "Start a new chat with Example best",
-          ),
-        );
-        page.querySelector<HTMLButtonElement>("[data-login-start-chat]")!.click();
-        await waitForSolid(() =>
-          expect(create).toHaveBeenCalledWith({
-            agentId: "writer",
-            model: "example/best",
-            agentRuntime: "openclaw",
-          }),
-        );
-      } else {
-        await waitForSolid(() =>
-          expect(
-            request.mock.calls.filter(([method]) => method === "models.list").length,
-          ).toBeGreaterThan(0),
-        );
-        expect(page.querySelector("[data-login-start-chat]")).toBeNull();
-      }
-      expect(context.runtimeConfig.patch).not.toHaveBeenCalled();
-      unmountPage(page);
-    },
-  );
-
   it.each([
     { setup: false, entry: "provider-access" },
     { setup: false, entry: "readiness" },

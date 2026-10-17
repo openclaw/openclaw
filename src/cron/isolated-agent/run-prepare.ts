@@ -20,6 +20,7 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -101,6 +102,9 @@ export async function prepareCronRunContext(params: {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
+  await waitForAgentDatabaseWriteAdmission(initialAgentId, {
+    signal: input.abortSignal ?? input.signal,
+  });
   await using runtimeResources = new AsyncDisposableStack();
   let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({

@@ -63,7 +63,7 @@ describe("PaletteSessionDraft", () => {
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     expect(context.sessions.createResult).toHaveBeenCalledWith(
       expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
-      { reconciliation: "background" },
+      { reconciliation: "background", signal: expect.any(AbortSignal) },
     );
     expect(context.placementStartup.start).toHaveBeenCalledOnce();
     expect(context.placementStartup.start).toHaveBeenCalledWith(
@@ -305,7 +305,7 @@ describe("PaletteSessionDraft", () => {
       await host.draft.submit();
       expect(context.sessions.createResult).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
-        { reconciliation: "background" },
+        { reconciliation: "background", signal: expect.any(AbortSignal) },
       );
       if (initialRun.status === "rejected") {
         expect(host.started).not.toHaveBeenCalled();

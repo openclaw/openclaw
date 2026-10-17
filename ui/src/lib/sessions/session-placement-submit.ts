@@ -43,6 +43,7 @@ export async function advanceSessionPlacementDraft(params: {
   ownsRecovery: () => boolean;
   clearRecovery: (retirement: SessionPlacementRecoveryRetirement) => void;
   setRecoveryPhase: (phase: "sending", durable: boolean) => void;
+  signal?: AbortSignal;
 }): Promise<SessionPlacementDraftAdvanceResult> {
   const persistRecovery = params.persistRecovery !== false;
   const recovering = params.mode !== "dispatch";
@@ -167,6 +168,7 @@ export async function advanceSessionPlacementDraft(params: {
       messageId: recovery.messageId,
       mode: params.mode,
       cleanupOnCancellation: params.cleanupOnCancellation,
+      signal: params.signal,
     },
     isCurrentOwner,
     () => {

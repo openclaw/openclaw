@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 // @vitest-environment node
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -897,12 +898,16 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
 
     expect(result.content).toBe(t("chat.commandResults.redirect.succeeded"));
     expect(result.trackRunId).toBe("run-3");
-    expect(request).toHaveBeenCalledWith("chat.send", {
-      sessionKey: "agent:main:main",
-      message: "researcher start over completely",
-      queueMode: "interrupt",
-      idempotencyKey: expect.any(String),
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      {
+        sessionKey: "agent:main:main",
+        message: "researcher start over completely",
+        queueMode: "interrupt",
+        idempotencyKey: expect.any(String),
+      },
+      { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: undefined },
+    );
   });
 });
 

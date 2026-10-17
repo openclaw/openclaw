@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { expect, it, vi } from "vitest";
+// @vitest-environment node
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
@@ -67,7 +68,8 @@ it.each([
     });
     await vi.waitFor(() =>
       expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: expect.any(AbortSignal),
       }),
     );
     expect(host.chatStream).toBe("Already visible response text");

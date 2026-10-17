@@ -306,9 +306,12 @@ export type SessionCapability = {
   capturePermissionObservation: (key: string, agentId?: string | null) => () => boolean;
   createResult: (
     params?: SessionCreateParams,
-    options?: { reconciliation?: SessionCreateReconciliation },
+    options?: { reconciliation?: SessionCreateReconciliation; signal?: AbortSignal },
   ) => Promise<SessionCreateOutcome | null>;
-  create: (params?: SessionCreateParams) => Promise<string | null>;
+  create: (
+    params?: SessionCreateParams,
+    options?: { signal?: AbortSignal },
+  ) => Promise<string | null>;
   recover: (params: SessionsRecoverParams) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   patchMany: (

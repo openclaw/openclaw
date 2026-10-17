@@ -103,6 +103,9 @@ export function createChatState<TState extends ChatPageHost>(
         return;
       }
       disposed = true;
+      if (stateValue) {
+        chatOutboxOwner(stateValue).admissions.cancelRequests(stateValue);
+      }
       cancelRenderLifecycleScope();
       attachmentReadsValue.abortReads();
       // Flush while stateValue still points at the active session. Composer
@@ -185,6 +188,7 @@ export function createChatState<TState extends ChatPageHost>(
 
     attach(state: TState) {
       if (stateValue && stateValue !== state) {
+        chatOutboxOwner(stateValue).admissions.cancelRequests(stateValue);
         privateDraftReview?.controller.abort();
         disposeSelectedSessionMessageSubscription(stateValue);
         releaseChatMediaResourceSubscriber(stateValue.requestUpdate);

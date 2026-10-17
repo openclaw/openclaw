@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { expect, it, vi } from "vitest";
+// @vitest-environment node
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -401,7 +402,7 @@ it.each(
         expect(host.request).toHaveBeenCalledWith(
           "chat.send",
           expect.objectContaining({ sessionKey: host.sessionKey, message }),
-          { timeoutMs: 30_000 },
+          { timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS, signal: expect.any(AbortSignal) },
         );
         expect(
           host.request.mock.calls.filter(([method]) => method === "chat.history"),

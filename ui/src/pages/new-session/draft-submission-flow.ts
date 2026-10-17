@@ -3,7 +3,6 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
-import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   readSessionMethodAccess,
@@ -81,7 +80,7 @@ export class DraftSubmissionFlow {
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
   error: string | null = null;
-  private submitRequestToken = 0;
+  private submitRequest = new AbortController();
   private readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
@@ -167,8 +166,8 @@ export class DraftSubmissionFlow {
   openSubmittedSession() {
     return this.startedSession.openSubmission(this.read().context, this.completedSubmission, {
       capture: () => {
-        const requestId = ++this.submitRequestToken;
-        return () => requestId === this.submitRequestToken;
+        const requestSignal = this.captureSubmitRequest();
+        return () => !requestSignal.aborted;
       },
       publish: (message, error) => {
         this.activeSubmission = message ? { phase: "accepted", message } : null;
@@ -333,8 +332,14 @@ export class DraftSubmissionFlow {
       pendingPlacement: this.pendingPlacement,
     });
 
+  private captureSubmitRequest(): AbortSignal {
+    this.submitRequest.abort();
+    this.submitRequest = new AbortController();
+    return this.submitRequest.signal;
+  }
+
   invalidate(outcomeUnknown: SubmissionOutcomeReason | null = null) {
-    this.submitRequestToken += 1;
+    this.submitRequest.abort();
     this.startedSession.current = null;
     const creating = this.activeSubmission?.phase === "creating";
     const interrupted = outcomeUnknown !== null && creating && this.sessionStartup.interrupt();
@@ -425,23 +430,15 @@ export class DraftSubmissionFlow {
       return;
     }
     const preparedTitle = this.callbacks.takePreparedTitle?.();
-    const requestId = ++this.submitRequestToken;
+    const requestSignal = this.captureSubmitRequest();
     const submittedDraft = this.draftPersistence.captureSubmission();
-    const submittedAt = startup?.startedAt ?? Date.now();
-    const { hello, selfUser } = context.gateway.snapshot;
-    const turn = {
-      text: input.message,
-      mentions: input.mentions,
-      attachments: input.attachments,
-      createdAt: submittedAt,
-      sender: resolveCurrentUserIdentity(hello, input.client.instanceId, selfUser) ?? undefined,
-    };
+    const { turn } = input;
     const submittedMessage = this.startedSession.messageForTurn(context, this.place.agentId, turn);
     const retainSubmittedSession = this.startedSession.captureSubmission(
       context,
       input.agentId,
       submittedMessage,
-      () => requestId === this.submitRequestToken,
+      () => !requestSignal.aborted,
     );
     // The draft keeps custody until creation succeeds; this snapshot only makes
     // foreground submission visible while the Gateway is still admitting it.
@@ -496,7 +493,7 @@ export class DraftSubmissionFlow {
           { gitUrl: remoteProject.cloneUrl },
           { timeoutMs: null },
         );
-        if (requestId !== this.submitRequestToken || this.gateway.client !== input.client) {
+        if (requestSignal.aborted || this.gateway.client !== input.client) {
           return;
         }
         this.place.browser.recordRemoteProjectId(remoteProject.cloneUrl, project.id);
@@ -566,14 +563,14 @@ export class DraftSubmissionFlow {
               placementCreateParams ??
                 startup?.params ??
                 this.sessionStartup.start(createParams, background),
-              { reconciliation: "background" },
+              { reconciliation: "background", signal: requestSignal },
             );
       instant = beginInstant?.();
       const result = await createRequest;
       if (result && !placementTarget && result.initialRun.status !== "rejected") {
         worktreeNameCleanup = input.consumeWorktreeName?.();
       }
-      if (requestId !== this.submitRequestToken && !placementTarget) {
+      if (requestSignal.aborted && !placementTarget) {
         // Leaving the view cancels navigation, not a confirmed send. Retire only
         // the captured source draft; the current route may already hold new input.
         if (result && result.initialRun.status !== "rejected") {
@@ -582,7 +579,7 @@ export class DraftSubmissionFlow {
         return;
       }
       if (!result) {
-        if (requestId !== this.submitRequestToken) {
+        if (requestSignal.aborted) {
           return;
         }
         this.sessionStartup.clear();
@@ -600,14 +597,14 @@ export class DraftSubmissionFlow {
           pending,
           submittedRecovery: submissionPlacementRecovery,
           sessionKey: result.key,
-          createdAt: submittedAt,
+          createdAt: turn.createdAt,
           startupError:
             result.initialRun.status === "rejected" ? result.initialRun.error : undefined,
-          isRequestCurrent: () => requestId === this.submitRequestToken,
+          isRequestCurrent: () => !requestSignal.aborted,
           isLifecycleCurrent: () =>
             this.read().isConnected &&
             input.client.recoveryScopeReady &&
-            requestId === this.submitRequestToken &&
+            !requestSignal.aborted &&
             this.gateway.client === input.client &&
             this.gateway.gatewayUrl === input.gatewayUrl &&
             this.gateway.recoveryScope === input.recoveryScope,
@@ -656,7 +653,7 @@ export class DraftSubmissionFlow {
         instant,
         composer: this.creationComposer,
         navigation: this.startedSession,
-        isCurrent: () => requestId === this.submitRequestToken,
+        isCurrent: () => !requestSignal.aborted,
         clearDraft: (release, keepPending) => {
           if (keepPending !== false) {
             retainSubmittedSession(
@@ -671,7 +668,7 @@ export class DraftSubmissionFlow {
         finishNavigation: () => this.sessionStartup.clear(),
       });
     } catch (error) {
-      if (requestId === this.submitRequestToken && this.gateway.client === input.client) {
+      if (!requestSignal.aborted && this.gateway.client === input.client) {
         this.sessionStartup.clear();
         this.error = error instanceof Error ? error.message : String(error);
         if (instant) {
@@ -683,7 +680,7 @@ export class DraftSubmissionFlow {
       if (worktreeNameCleanup || instant) {
         await Promise.all([worktreeNameCleanup, instant?.finish()]);
       }
-      if (requestId === this.submitRequestToken) {
+      if (!requestSignal.aborted) {
         this.activeSubmission = null;
         this.callbacks.changed();
       }
@@ -699,9 +696,9 @@ export class DraftSubmissionFlow {
       capture: (client) => {
         this.blockedSubmitGate = null;
         this.error = null;
-        const requestId = ++this.submitRequestToken;
+        const requestSignal = this.captureSubmitRequest();
         const submitted = this.draftPersistence.captureSubmission();
-        const isRequestCurrent = () => requestId === this.submitRequestToken;
+        const isRequestCurrent = () => !requestSignal.aborted;
         return {
           isRequestCurrent,
           isCurrent: () => isRequestCurrent() && this.gateway.client === client,
@@ -735,6 +732,7 @@ export class DraftSubmissionFlow {
   }
 
   disconnect() {
+    this.submitRequest.abort();
     this.creationComposerValue?.releaseDraft();
     this.pendingPlacement.releaseClaim();
     this.startedSession.current = null;
