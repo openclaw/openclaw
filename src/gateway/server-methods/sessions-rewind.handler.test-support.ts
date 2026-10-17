@@ -74,7 +74,7 @@ type MessageCutMethod =
   | "sessions.fork"
   | "sessions.rewind";
 
-export function messageCutContext(active = false): GatewayRequestContext {
+function messageCutContext(active = false): GatewayRequestContext {
   return {
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(
