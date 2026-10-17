@@ -73,6 +73,13 @@ import {
   getFirstStreamEventTimeoutMs,
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
+import {
+  classifyStreamFailure,
+  isRequestTimeoutError,
+  logCodexRequestFailure,
+  summarizeCodexRequestDispatch,
+  type CodexRequestDispatch,
+} from "./openai-chatgpt-responses-diagnostics.js";
 import { CodexApiError, mapCodexEvents } from "./openai-chatgpt-responses-events.js";
 import {
   CodexProtocolError,
@@ -157,45 +164,6 @@ type ProcessCodexStream = (
   activitySignal?: AbortSignal,
 ) => ReturnType<typeof processResponsesStream>;
 
-function isRequestTimeoutError(
-  error: unknown,
-  callerSignal: AbortSignal | undefined,
-  requestSignal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): boolean {
-  if (timeoutMs === undefined || callerSignal?.aborted || !requestSignal?.aborted) {
-    return false;
-  }
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return (
-    error.name === "AbortError" ||
-    error.name === "TimeoutError" ||
-    error.message === "Request was aborted"
-  );
-}
-
-type StreamFailureKind = "timeout" | "caller-abort" | "provider-failure" | "transport";
-
-/** Local-only failure category for transport diagnostics; never provider text. */
-function classifyStreamFailure(
-  error: unknown,
-  signal: AbortSignal | undefined,
-  requestTimedOut: boolean,
-): StreamFailureKind {
-  if (requestTimedOut) {
-    return "timeout";
-  }
-  if (signal?.aborted) {
-    return "caller-abort";
-  }
-  // CodexApiError carries a non-OK HTTP reply; both are provider decisions, not transport faults.
-  return error instanceof ResponsesStreamFailure || error instanceof CodexApiError
-    ? "provider-failure"
-    : "transport";
-}
-
 function formatRequestTimeoutError(timeoutMs: number, cause: unknown): Error {
   return new Error(`Request timed out after ${timeoutMs}ms`, {
     cause: cause instanceof Error ? cause : undefined,
@@ -244,6 +212,7 @@ export const streamOpenAICodexResponses: StreamFunction<
     let activeSignal: AbortSignal | undefined;
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     const output = createResponsesAssistantOutput(model);
+    let lastDispatch: CodexRequestDispatch | undefined;
 
     try {
       if (compactRequest && (!v2Compaction || responsesRequestLifecycle.get(options))) {
@@ -432,6 +401,11 @@ export const streamOpenAICodexResponses: StreamFunction<
               activeAttempt.kind,
               (request) => {
                 dispatch.request = request;
+                lastDispatch = {
+                  request,
+                  actualTransport: "websocket",
+                  payloadVariant: activeAttempt.kind,
+                };
               },
               options?.signal,
             );
@@ -451,11 +425,6 @@ export const streamOpenAICodexResponses: StreamFunction<
                     buildFullHistoryRequest: () => buildBody("full-history"),
                   })
                 : undefined;
-            if (nextSemanticAttempt) {
-              semanticAttempt = nextSemanticAttempt;
-              retriedWebSocketRejection = false;
-              continue;
-            }
             // Releasing the rejected socket discards its continuation. Retry the
             // retained full input, including completed tools, without stripping state.
             const reconnectBeforeStart =
@@ -464,6 +433,25 @@ export const streamOpenAICodexResponses: StreamFunction<
                 (dispatch.request?.previous_response_id &&
                   error instanceof CodexApiError &&
                   error.message === WEBSOCKET_REPLAY_REJECTION));
+            if (dispatch.request && error instanceof CodexApiError) {
+              logCodexRequestFailure(
+                {
+                  request: dispatch.request,
+                  actualTransport: "websocket",
+                  payloadVariant: activeAttempt.kind,
+                },
+                websocketStarted,
+                nextSemanticAttempt?.kind ??
+                  (!aborted && reconnectBeforeStart && !retriedWebSocketRejection
+                    ? "full-input-reconnect"
+                    : "propagate"),
+              );
+            }
+            if (nextSemanticAttempt) {
+              semanticAttempt = nextSemanticAttempt;
+              retriedWebSocketRejection = false;
+              continue;
+            }
             if (!aborted && reconnectBeforeStart && !retriedWebSocketRejection) {
               retriedWebSocketRejection = true;
               continue;
@@ -551,6 +539,11 @@ export const streamOpenAICodexResponses: StreamFunction<
             activeSignal?.throwIfAborted();
             lifecycle.assertCurrent();
           }
+          lastDispatch = {
+            request: activeAttempt.request,
+            actualTransport: "sse",
+            payloadVariant: activeAttempt.kind,
+          };
           attemptResponse = await requestFetch(resolveCodexUrl(model.baseUrl), {
             method: "POST",
             headers: sseHeaders,
@@ -621,6 +614,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           terminalResponseError,
           { buildFullHistoryRequest: () => buildBody("full-history") },
         );
+        logCodexRequestFailure(lastDispatch, false, nextSemanticAttempt?.kind ?? "propagate");
         if (!nextSemanticAttempt) {
           throw terminalResponseError;
         }
@@ -679,6 +673,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         elapsedMs: Math.max(0, Date.now() - startedAt),
         stopReason: terminal.stopReason,
         failureKind: classifyStreamFailure(error, options?.signal, requestTimedOut),
+        ...summarizeCodexRequestDispatch(lastDispatch),
       });
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();

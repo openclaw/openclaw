@@ -329,7 +329,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(logWarn).toHaveBeenCalledWith(
       "openai-transport",
       "ChatGPT Responses stream terminated",
-      {
+      expect.objectContaining({
         api: "openai-chatgpt-responses",
         elapsedMs: expect.any(Number),
         failureKind: "caller-abort",
@@ -337,7 +337,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         provider: "openai",
         stopReason: "aborted",
         transport: "auto",
-      },
+      }),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -363,6 +363,19 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorType).toBe("invalid_request_error");
+    expect(logWarn).toHaveBeenCalledWith("openai-transport", "ChatGPT Responses request rejected", {
+      requestDispatched: true,
+      actualTransport: "sse",
+      payloadVariant: "initial",
+      hasPreviousResponseId: false,
+      inputItems: 1,
+      reasoningItems: 0,
+      compactionItems: 0,
+      toolCallItems: 0,
+      toolResultItems: 0,
+      eventsEmitted: false,
+      recoveryAction: "propagate",
+    });
     expect(logWarn).toHaveBeenCalledWith(
       "provider-error",
       "Model request failed",
@@ -374,7 +387,8 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     );
     expect(JSON.stringify(logWarn.mock.calls)).not.toContain("hostile prompt echo in a 400 body");
     const transportWarnings = logWarn.mock.calls.filter(
-      ([category]) => category === "openai-transport",
+      ([category, message]) =>
+        category === "openai-transport" && message === "ChatGPT Responses stream terminated",
     );
     expect(transportWarnings).toHaveLength(1);
     const logged = transportWarnings[0]?.[2];
@@ -443,11 +457,21 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
       expect.objectContaining({ responseId: "resp_failed" }),
     );
     const transportWarnings = logWarn.mock.calls.filter(
-      ([category]) => category === "openai-transport",
+      ([category, message]) =>
+        category === "openai-transport" && message === "ChatGPT Responses stream terminated",
     );
     expect(transportWarnings).toHaveLength(1);
     const logged = transportWarnings[0]?.[2];
     expect(logged).toEqual({
+      requestDispatched: true,
+      actualTransport: "websocket",
+      payloadVariant: "initial",
+      hasPreviousResponseId: false,
+      inputItems: 1,
+      reasoningItems: 0,
+      compactionItems: 0,
+      toolCallItems: 0,
+      toolResultItems: 0,
       api: "openai-chatgpt-responses",
       elapsedMs: expect.any(Number),
       failureKind: "provider-failure",

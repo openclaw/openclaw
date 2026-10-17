@@ -139,6 +139,20 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     does not rerun tools. Rejections of full input and failures after response
     events remain terminal.
 
+    Failed ChatGPT Responses requests include structural transport diagnostics in
+    Gateway logs. `ChatGPT Responses request rejected` records the actual transport,
+    presence (not value) of `previous_response_id`, input/reasoning/compaction/tool
+    item counts, whether response events began, and the selected recovery action.
+    `full-input-reconnect` means a fresh WebSocket attempt was selected, not that
+    recovery succeeded; `propagate` passes the failure to the existing outer handler.
+    Terminal stream warnings also describe the last dispatched request, or report
+    `requestDispatched: false` when no dispatch was recorded. These fields contain
+    no message text, tool arguments/results, response IDs, or encrypted content.
+    Dispatch means the local send interface was invoked, not that the server
+    received the request. SSE stream errors after an HTTP 200 response carry the
+    terminal request summary, not a separate rejection/recovery event.
+    This logging does not change retry policy or rerun tools.
+
     Related OpenAI docs:
     - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
     - [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
