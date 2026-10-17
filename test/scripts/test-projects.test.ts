@@ -1979,6 +1979,20 @@ export const single = {
     ).toEqual(["src/cli/update-cli/update-command-legacy-finalize.test.ts"]);
   });
 
+  it("deduplicates local agent process tests selected by directory and exact leaf", () => {
+    const plans = buildVitestRunPlans(["src/agents", "src/agents/agent-command-local.test.ts"]);
+    expectSingleVitestRunPlan(
+      plans.filter((plan) => plan.config === "test/vitest/vitest.cli-process.config.ts"),
+      {
+        config: "test/vitest/vitest.cli-process.config.ts",
+        includePatterns: [
+          "src/agents/agent-command-local.plugins.test.ts",
+          "src/agents/agent-command-local.test.ts",
+        ],
+      },
+    );
+  });
+
   it("preserves post-separator Vitest args without parsing them as targets", () => {
     for (const [arg, watchMode] of [
       ["--reporter=verbose", false],

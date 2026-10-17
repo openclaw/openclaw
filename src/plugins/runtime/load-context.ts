@@ -152,6 +152,7 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "env"
   | "logger"
   | "manifestRegistry"
+  | "metadataSnapshot"
   | "installRecords"
   | "preferBuiltPluginArtifacts"
   | "expectedSourceDigests"
@@ -178,6 +179,7 @@ export function buildPluginRuntimeLoadOptions(
     env: values.env,
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
+    metadataSnapshot: values.metadataSnapshot,
     installRecords: values.installRecords,
     preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
     expectedSourceDigests: values.expectedSourceDigests,

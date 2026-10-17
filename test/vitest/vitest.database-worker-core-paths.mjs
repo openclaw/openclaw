@@ -1133,6 +1133,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.chat-metadata.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+  "src/agents/prepared-model-catalog-worker.registration-facts.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
