@@ -263,14 +263,12 @@ describe("agent session resolution", () => {
         sessionId,
         isNewSession: false,
       });
-      expect(resolution.sessionEntry).not.toHaveProperty("sessionFile");
-
       const persisted = loadSessionEntry({
         sessionKey: expectDefined(resolution.sessionKey, "resolved session key"),
         storePath: resolution.storePath,
       });
-      expect(persisted).not.toHaveProperty("sessionFile");
       for (const entry of [resolution.sessionEntry, persisted]) {
+        expect(entry).not.toHaveProperty("sessionFile");
         expect(entry).toMatchObject({
           sessionId,
           status: "done",

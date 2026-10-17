@@ -100,14 +100,21 @@ describe("deliverAgentCommandResult", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("uses runContext turn source over stale session last route", async () => {
+  it.each([
+    ["uses turn source over stale session route", "+15559876543", "work"],
+    [
+      "does not reuse session lastTo when the turn source omits currentChannelId",
+      undefined,
+      undefined,
+    ],
+  ])("%s", async (_label, to, accountId) => {
     await runDelivery({
       opts: {
         deliver: true,
         runContext: {
           messageChannel: "whatsapp",
-          currentChannelId: "+15559876543",
-          accountId: "work",
+          currentChannelId: to,
+          accountId,
         },
       },
       sessionEntry: sessionEntry({ channel: "slack", to: "U_WRONG", accountId: "wrong" }),
@@ -115,23 +122,8 @@ describe("deliverAgentCommandResult", () => {
 
     expect(onlyCall(mocks.resolveOutboundTarget)).toMatchObject({
       channel: "whatsapp",
-      to: "+15559876543",
-      accountId: "work",
-    });
-  });
-
-  it("does not reuse session lastTo when runContext source omits currentChannelId", async () => {
-    await runDelivery({
-      opts: {
-        deliver: true,
-        runContext: { messageChannel: "whatsapp" },
-      },
-      sessionEntry: sessionEntry({ channel: "slack", to: "U_WRONG" }),
-    });
-
-    expect(onlyCall(mocks.resolveOutboundTarget)).toMatchObject({
-      channel: "whatsapp",
-      to: undefined,
+      to,
+      ...(accountId ? { accountId } : {}),
     });
   });
 

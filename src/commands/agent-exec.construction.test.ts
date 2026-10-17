@@ -108,15 +108,13 @@ setInterval(() => {}, 1000);`,
       signal,
     );
     // The PID precedes its receipt, so it decides readiness after result settlement.
-    const readPid = () =>
-      fs.readFile(pidPath, "utf8").catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
     const requirePid = async (error: unknown = new Error(`No PID: ${pidPath}`)) => {
-      if (!(await readPid())) {
+      const pid = await fs.readFile(pidPath, "utf8").catch((readError: unknown) => {
+        if (!hasErrnoCode(readError, "ENOENT")) {
+          throw readError;
+        }
+      });
+      if (!pid) {
         throw error;
       }
     };

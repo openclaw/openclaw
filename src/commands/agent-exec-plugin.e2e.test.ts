@@ -27,7 +27,33 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
 );
 
 async function writeHarnessPlugin(stateDir: string, workspace?: string): Promise<void> {
-  const config = buildExecProofConfig();
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: ["exec-proof"],
+      entries: { "exec-proof": { enabled: true } },
+    },
+    models: {
+      providers: {
+        "exec-proof": {
+          api: "openai-responses",
+          baseUrl: "https://example.invalid/v1",
+          models: [
+            {
+              id: "proof-model",
+              name: "Proof model",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 4096,
+              agentRuntime: { id: "exec-proof" },
+            },
+          ],
+        },
+      },
+    },
+    agents: { defaults: { model: { primary: "exec-proof/proof-model" } } },
+  };
   if (workspace) {
     config.agents = { defaults: { ...config.agents?.defaults, workspace, skipBootstrap: true } };
   }
@@ -115,36 +141,6 @@ async function writeHarnessPlugin(stateDir: string, workspace?: string): Promise
   );
 }
 
-function buildExecProofConfig(): OpenClawConfig {
-  return {
-    plugins: {
-      allow: ["exec-proof"],
-      entries: { "exec-proof": { enabled: true } },
-    },
-    models: {
-      providers: {
-        "exec-proof": {
-          api: "openai-responses",
-          baseUrl: "https://example.invalid/v1",
-          models: [
-            {
-              id: "proof-model",
-              name: "Proof model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128000,
-              maxTokens: 4096,
-              agentRuntime: { id: "exec-proof" },
-            },
-          ],
-        },
-      },
-    },
-    agents: { defaults: { model: { primary: "exec-proof/proof-model" } } },
-  };
-}
-
 async function writeJson(file: string, value: unknown): Promise<void> {
   await fs.writeFile(file, JSON.stringify(value), "utf8");
 }
@@ -163,11 +159,14 @@ function buildChildEnv(stateDir: string): NodeJS.ProcessEnv {
   return childEnv;
 }
 
-function buildCliSource(args: string[]): string {
-  return `
+function runCli(stateDir: string, message: string, ...args: string[]) {
+  return runBuiltScript(
+    stateDir,
+    `
     import { runMainOrRootHelp } from "./dist/entry.js";
-    await runMainOrRootHelp(${JSON.stringify(["node", "openclaw", ...args])});
-  `;
+    await runMainOrRootHelp(${JSON.stringify(["node", "openclaw", "agent", "exec", message, "--json", ...args])});
+  `,
+  );
 }
 
 function runBuiltScript(stateDir: string, source: string) {
@@ -300,8 +299,7 @@ if (process.argv[2] === "--version") {
 it("runs an operator-installed harness without retaining run state", async () => {
   const stateDir = tempDirs.make("openclaw-agent-exec-plugin-e2e-");
   await writeHarnessPlugin(stateDir);
-  const source = buildCliSource(["agent", "exec", "prove plugin discovery", "--json"]);
-  const { stdout, stderr } = await runBuiltScript(stateDir, source);
+  const { stdout, stderr } = await runCli(stateDir, "prove plugin discovery");
 
   expect(stdout, stderr).not.toBe("");
   expect(JSON.parse(stdout)).toMatchObject({
@@ -312,18 +310,7 @@ it("runs an operator-installed harness without retaining run state", async () =>
     provider: "exec-proof",
   });
   await expect(
-    runBuiltScript(
-      stateDir,
-      buildCliSource([
-        "agent",
-        "exec",
-        "prove isolated discovery",
-        "--isolated",
-        "--model",
-        "exec-proof/proof-model",
-        "--json",
-      ]),
-    ),
+    runCli(stateDir, "prove isolated discovery", "--isolated", "--model", "exec-proof/proof-model"),
   ).rejects.toMatchObject({
     code: 1,
     stdout: expect.not.stringContaining("PLUGIN_HARNESS_OK"),

@@ -130,14 +130,6 @@ vi.mock("../cli/command-config-resolution.runtime.js", () => ({
 
 const runtime = createThrowingTestRuntime();
 
-function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigParams {
-  const params = resolveCommandConfigWithSecretsMock.mock.calls[callIndex]?.[0];
-  if (!params) {
-    throw new Error(`expected command config resolution call ${callIndex}`);
-  }
-  return params;
-}
-
 function mockConfig(cfg: OpenClawConfig = {}): OpenClawConfig {
   loadConfigMock.mockReturnValue(cfg);
   return cfg;
@@ -248,7 +240,7 @@ describe("agentCommand runtime config", () => {
     await resolveAgentRuntimeConfig(runtime, {
       runtimeChannelSecretScope: { channel: "telegram", ...(selected ? { accountId: "ops" } : {}) },
     });
-    expect(requireResolveCommandConfigParams().allowedPaths).toEqual(
+    expect(resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].allowedPaths).toEqual(
       new Set([
         ...(selected ? ["models.providers.openai.apiKey"] : []),
         "channels.telegram.botToken",
@@ -257,25 +249,20 @@ describe("agentCommand runtime config", () => {
     );
   });
 
-  it.each(["global", "per-agent"])(
-    "resolves command secrets for %s memory headers",
-    async (scope) => {
-      const loadedConfig = mockConfig();
-      const memory = memoryConfig(scope === "global" ? "MEMORY_HEADER" : "AGENT_MEMORY_HEADER");
-      if (scope === "global") {
-        loadedConfig.memory = memory as unknown as OpenClawConfig["memory"];
-      } else {
-        loadedConfig.agents = {
-          entries: { personal: { memory } },
-        } as unknown as OpenClawConfig["agents"];
-      }
-      resolveSecretsWith(loadedConfig);
+  it.each([
+    ["global", { memory: memoryConfig("MEMORY_HEADER") }],
+    [
+      "per-agent",
+      { agents: { entries: { personal: { memory: memoryConfig("AGENT_MEMORY_HEADER") } } } },
+    ],
+  ] as const)("resolves command secrets for %s memory headers", async (_scope, config) => {
+    const loadedConfig = mockConfig(config as unknown as OpenClawConfig);
+    resolveSecretsWith(loadedConfig);
 
-      await resolveAgentRuntimeConfig(runtime);
+    await resolveAgentRuntimeConfig(runtime);
 
-      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 function memoryConfig(id: string) {
