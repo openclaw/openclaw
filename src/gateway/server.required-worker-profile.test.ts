@@ -54,33 +54,49 @@ import { stagePlacementTurnClaimWorkerPublication } from "./worker-environments/
 import type { ensureWorkerSessionPlacement } from "./worker-environments/session-placement-lifecycle.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 
+type PlacementSetup = Pick<
+  Parameters<typeof ensureWorkerSessionPlacement>[0],
+  "placements" | "environments" | "redispatchPlacement"
+>;
+
 function createPreparation(
-  options: Pick<Parameters<typeof ensureWorkerSessionPlacement>[0], "placements"> &
-    Partial<
-      Pick<
-        Parameters<typeof ensureWorkerSessionPlacement>[0],
-        "environments" | "redispatchPlacement"
-      >
-    > & {
-      getConfig: () => OpenClawConfig;
-      warn?: (message: string) => void;
-      dispatch: WorkerPlacementDispatchService["dispatch"];
-    },
+  getConfig: () => OpenClawConfig,
+  dispatch: WorkerPlacementDispatchService["dispatch"],
+  overrides: Partial<PlacementSetup> = {},
 ) {
-  const dispatch = coordinateWorkerPlacementDispatch(
-    { dispatch: options.dispatch } as WorkerPlacementDispatchService,
-    createGatewayWorkerDispatchAdmission(),
-    undefined,
-    undefined,
-    {
-      environments: { get: () => undefined } as never,
-      redispatchPlacement: vi.fn(),
-      warn: vi.fn(),
-      ...options,
-    },
-  );
-  return createRequiredPreparation({ getConfig: options.getConfig, dispatch });
+  const {
+    placements = createWorkerSessionPlacementStore(),
+    environments = { get: () => undefined } as never,
+    redispatchPlacement = vi.fn(),
+  } = overrides;
+  return createRequiredPreparation({
+    getConfig,
+    dispatch: coordinateWorkerPlacementDispatch(
+      { dispatch } as WorkerPlacementDispatchService,
+      createGatewayWorkerDispatchAdmission(),
+      undefined,
+      undefined,
+      { placements, environments, redispatchPlacement, warn: vi.fn() },
+    ),
+  });
 }
+
+async function requiredSession(name: string, device = "new-node", inference?: "worker") {
+  const { storePath } = await createSessionStoreDir();
+  const config = await configureRequiredWorker(device, inference);
+  const identity = sessionIdentity(name);
+  await upsertSessionEntryCore(
+    { ...identity, storePath },
+    { sessionId: identity.sessionId, updatedAt: Date.now() },
+  );
+  return { storePath, config, identity };
+}
+
+const assertPrepared = async (assertCurrent: () => void) => assertCurrent();
+const failingDispatch = (error: Error) =>
+  vi.fn<WorkerPlacementDispatchService["dispatch"]>(async () => {
+    throw error;
+  });
 
 const skipPlacement: NonNullable<SessionPlacementAdmissionProvider["withRequiredSession"]> = async (
   _identity,
@@ -182,11 +198,7 @@ test("a write-only ordinary create retains its owned workspace and unsent messag
     respond(true, { runId: "required-worker-retry", status: "started" });
   });
   const context = { workerPlacementDispatchService: { withRequiredSession } };
-  const params = {
-    key,
-    agentId: "main",
-    message: "Keep this message for the required worker.",
-  };
+  const params = { key, agentId: "main", message: "Keep this message for the required worker." };
   const created = await directSessionReq<{
     key: string;
     sessionId: string;
@@ -301,9 +313,7 @@ test.each(["channel", "incognito", "shared"] as const)(
               {
                 client: { connect: { scopes: ["operator.admin"] } } as never,
                 context: {
-                  workerPlacementDispatchService: {
-                    withRequiredSession: skipPlacement,
-                  },
+                  workerPlacementDispatchService: { withRequiredSession: skipPlacement },
                 },
               },
             );
@@ -344,7 +354,6 @@ test.each(["channel", "incognito", "shared"] as const)(
     const nextPublication = createDeferredCore();
     let pending: ReturnType<typeof stagePlacementTurnClaimWorkerPublication> | undefined;
     let dispatchAssertion: (() => void) | undefined;
-    const warn = vi.fn();
     // Dispatch is the existing coordinator boundary: this fixture records its real
     // durable admission and pauses provider work. No remote worker is simulated as live.
     const dispatch = vi.fn<WorkerPlacementDispatchService["dispatch"]>(
@@ -376,12 +385,7 @@ test.each(["channel", "incognito", "shared"] as const)(
         throw new Error("Synthetic provider unavailable");
       },
     );
-    const prepare = createPreparation({
-      getConfig: config.getRuntimeConfig,
-      placements,
-      warn,
-      dispatch,
-    });
+    const prepare = createPreparation(config.getRuntimeConfig, dispatch, { placements });
     try {
       let retainedAssertion: (() => void) | undefined;
       await prepare(
@@ -413,9 +417,7 @@ test.each(["channel", "incognito", "shared"] as const)(
         requiredProfile: "dedicated-native",
         runSetupScript: false,
       });
-      await prepare(identity, async (assertCurrent) => assertCurrent(), undefined, undefined, {
-        waitForReady: false,
-      });
+      await prepare(identity, assertPrepared, undefined, undefined, { waitForReady: false });
       expect(dispatch).toHaveBeenCalledOnce();
       expect((await managedWorktrees.findLiveByOwner("session", key))?.id).toBe(worktree.id);
       // Coordinator custody survives RPC completion, not a runtime selection change.
@@ -454,12 +456,8 @@ test("required preparation awaits rejection of a missing repository workspace be
   const dispatch = vi.fn(async () => {
     throw new Error("Dispatch must not run without its workspace owner");
   });
-  const prepare = createPreparation({
-    getConfig: config.getRuntimeConfig,
-    placements: createWorkerSessionPlacementStore(),
-    dispatch,
-  });
-  await expect(prepare(identity, async (assertCurrent) => assertCurrent())).rejects.toThrow(
+  const prepare = createPreparation(config.getRuntimeConfig, dispatch);
+  await expect(prepare(identity, assertPrepared)).rejects.toThrow(
     "The session workspace owner is unavailable",
   );
   expect(dispatch).not.toHaveBeenCalled();
@@ -483,14 +481,8 @@ test.each(["unchanged", "caller", "runtime"] as const)(
       { sessionId: caller.sessionId, updatedAt: 1, thinkingLevel: "high" },
     );
     const reachedDispatch = new Error("Reached required worker dispatch");
-    const dispatch = vi.fn<WorkerPlacementDispatchService["dispatch"]>(async () => {
-      throw reachedDispatch;
-    });
-    const prepare = createPreparation({
-      getConfig: config.getRuntimeConfig,
-      placements: createWorkerSessionPlacementStore(),
-      dispatch,
-    });
+    const dispatch = failingDispatch(reachedDispatch);
+    const prepare = createPreparation(config.getRuntimeConfig, dispatch);
     const uninstall = installSessionPlacementAdmissionProvider({
       withRequiredSession: prepare,
       assertCompactionSuccessorAllowed() {},
@@ -584,10 +576,7 @@ test.each(["unchanged", "caller", "runtime"] as const)(
       }
     } finally {
       uninstall();
-      const worktree = await managedWorktrees.findLiveByOwner("session", identity.sessionKey);
-      if (worktree) {
-        ownedWorktrees.add(worktree.id);
-      }
+      await retainWorktree(identity.sessionKey);
     }
   },
 );
@@ -595,13 +584,7 @@ test.each(["unchanged", "caller", "runtime"] as const)(
 test.each(["unallocated", "missing", "different", "matching"] as const)(
   "required retry respects a failed placement with %s recorded environment",
   async (record) => {
-    const { storePath } = await createSessionStoreDir();
-    const config = await configureRequiredWorker("new-node", "worker");
-    const identity = sessionIdentity("required-retry");
-    await upsertSessionEntryCore(
-      { ...identity, storePath },
-      { sessionId: identity.sessionId, updatedAt: Date.now() },
-    );
+    const { config, identity } = await requiredSession("required-retry", "new-node", "worker");
     const placements = createWorkerSessionPlacementStore();
     const requested = await placements.startDispatch({ ...identity, executionMode: "worker-turn" });
     const provisioning = await placements.transition({
@@ -617,12 +600,9 @@ test.each(["unallocated", "missing", "different", "matching"] as const)(
       recoveryError: "original allocation failed",
     });
     const reached = new Error("same recorded profile reached dispatch");
-    const dispatch = vi.fn<WorkerPlacementDispatchService["dispatch"]>(async () => {
-      throw reached;
-    });
+    const dispatch = failingDispatch(reached);
     const profileSnapshot = { settings: { device: "original-node", inference: "worker" } };
-    const prepare = createPreparation({
-      getConfig: config.getRuntimeConfig,
+    const prepare = createPreparation(config.getRuntimeConfig, dispatch, {
       placements,
       environments: {
         get: () =>
@@ -635,13 +615,10 @@ test.each(["unallocated", "missing", "different", "matching"] as const)(
                 profileSnapshot,
               },
       } as never,
-      dispatch,
     });
     try {
       if (record === "matching" || record === "unallocated") {
-        await expect(prepare(identity, async (assertCurrent) => assertCurrent())).rejects.toBe(
-          reached,
-        );
+        await expect(prepare(identity, assertPrepared)).rejects.toBe(reached);
         expect(dispatch).toHaveBeenCalledWith(
           expect.objectContaining({
             profileId: "dedicated-native",
@@ -658,7 +635,7 @@ test.each(["unallocated", "missing", "different", "matching"] as const)(
           expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty("inheritedProfile");
         }
       } else {
-        await expect(prepare(identity, async (assertCurrent) => assertCurrent())).rejects.toThrow(
+        await expect(prepare(identity, assertPrepared)).rejects.toThrow(
           record === "missing"
             ? "recorded worker profile is unavailable"
             : "another worker profile",
@@ -678,13 +655,7 @@ test.each(["unallocated", "missing", "different", "matching"] as const)(
 test.each(["failed", "reclaimed"] as const)(
   "required %s recovery retains the recorded profile and exact placement fence",
   async (state) => {
-    const { storePath } = await createSessionStoreDir();
-    const config = await configureRequiredWorker("new-node");
-    const identity = sessionIdentity("required-recovery");
-    await upsertSessionEntryCore(
-      { ...identity, storePath },
-      { sessionId: identity.sessionId, updatedAt: Date.now() },
-    );
+    const { config, identity } = await requiredSession("required-recovery");
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
     const profileSnapshot = { settings: { device: "original-node", inference: "worker" } };
@@ -738,15 +709,12 @@ test.each(["failed", "reclaimed"] as const)(
     writePlacementEnvironmentFixture(database, environment);
     const terminal = placements.get(identity.sessionId)!;
     const reached = new Error("recorded recovery reached dispatch");
-    const recoveredDispatch = vi.fn(async () => {
-      throw reached;
-    });
+    const recoveredDispatch = failingDispatch(reached);
     const freshDispatch = vi.fn();
     const freshWorkspace = vi
       .spyOn(sessionWorktreePreparation, "prepareSessionWorktree")
       .mockRejectedValue(new Error("fresh workspace setup reached"));
-    const prepare = createPreparation({
-      getConfig: config.getRuntimeConfig,
+    const prepare = createPreparation(config.getRuntimeConfig, freshDispatch, {
       placements,
       environments: { get: () => environment } as never,
       redispatchPlacement: createWorkerPlacementRedispatch({
@@ -757,31 +725,26 @@ test.each(["failed", "reclaimed"] as const)(
           consumesWorkerSlot: true,
         }),
       }),
-      dispatch: freshDispatch,
     });
-    {
-      await expect(prepare(identity, async (assertCurrent) => assertCurrent())).rejects.toBe(
-        reached,
-      );
-      expect(recoveredDispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...identity,
-          profileId: "dedicated-native",
-          requiredProfile: "dedicated-native",
-          deviceId: "original-node",
-          inheritedProfile: { providerId: "device", profileSnapshot },
-          expectedPlacement: {
-            state,
-            generation: terminal.generation,
-            environmentId: terminal.environmentId,
-            activeOwnerEpoch: terminal.activeOwnerEpoch,
-          },
-        }),
-        undefined,
-        expect.any(Function),
-        expect.any(AbortSignal),
-      );
-    }
+    await expect(prepare(identity, assertPrepared)).rejects.toBe(reached);
+    expect(recoveredDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...identity,
+        profileId: "dedicated-native",
+        requiredProfile: "dedicated-native",
+        deviceId: "original-node",
+        inheritedProfile: { providerId: "device", profileSnapshot },
+        expectedPlacement: {
+          state,
+          generation: terminal.generation,
+          environmentId: terminal.environmentId,
+          activeOwnerEpoch: terminal.activeOwnerEpoch,
+        },
+      }),
+      undefined,
+      expect.any(Function),
+      expect.any(AbortSignal),
+    );
     expect(freshDispatch).not.toHaveBeenCalled();
     expect(freshWorkspace).not.toHaveBeenCalled();
     expect(await managedWorktrees.findLiveByOwner("session", identity.sessionKey)).toBeUndefined();
