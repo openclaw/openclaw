@@ -17,10 +17,29 @@ function createResult(): OpenClawDatabaseSchemaPreflight {
   };
 }
 
+function startup<T>(
+  canDefer: (target: T) => boolean,
+  defer: NonNullable<Parameters<typeof preflightAgentDatabasesBounded<T>>[4]>["defer"],
+  tracked: Promise<unknown>[] = [],
+  signal = new AbortController().signal,
+) {
+  return { signal, canDefer, defer, track: (work: Promise<unknown>) => tracked.push(work) };
+}
+
+function releases(count: number) {
+  return Array.from({ length: count }, () => createDeferred());
+}
+
+function releaseAll(pending: ReturnType<typeof releases>) {
+  for (const release of pending) {
+    release.resolve();
+  }
+}
+
 describe("bounded agent database preflight scheduling", () => {
   it("shares one foreground wait across active and queued agent inspections", async () => {
     vi.useFakeTimers();
-    const releases = [createDeferred(), createDeferred(), createDeferred(), createDeferred()];
+    const pendingReleases = releases(4);
     const tracked: Promise<unknown>[] = [];
     const started: number[] = [];
     const result = createResult();
@@ -32,7 +51,7 @@ describe("bounded agent database preflight scheduling", () => {
       [0, 1, 2, 3],
       async (target, inspection) => {
         started.push(target);
-        await releases[target]!.promise;
+        await pendingReleases[target]!.promise;
         inspection.indeterminate.push({
           kind: "agent",
           path: `agent-${target}`,
@@ -41,18 +60,13 @@ describe("bounded agent database preflight scheduling", () => {
       },
       result,
       undefined,
-      {
-        signal: new AbortController().signal,
-        canDefer: () => true,
-        track: (work) => tracked.push(work),
-        defer,
-      },
+      startup(() => true, defer, tracked),
     ).then(() => {
       foregroundSettled = true;
     });
     try {
       await vi.advanceTimersByTimeAsync(4_000);
-      releases[0]!.resolve();
+      pendingReleases[0]!.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(started).toEqual([0, 1, 2]);
       expect(foregroundSettled).toBe(false);
@@ -65,9 +79,7 @@ describe("bounded agent database preflight scheduling", () => {
       expect(pending.map(({ target }) => target)).toEqual([1, 2, 3]);
       expect(started).toEqual([0, 1, 2]);
 
-      for (const release of releases) {
-        release.resolve();
-      }
+      releaseAll(pendingReleases);
       await Promise.all(tracked);
       const completed = await Promise.all(pending.map((entry) => entry.result));
       expect(completed.flatMap((entry) => entry.indeterminate.map((row) => row.path))).toEqual([
@@ -76,9 +88,7 @@ describe("bounded agent database preflight scheduling", () => {
         "agent-3",
       ]);
     } finally {
-      for (const release of releases) {
-        release.resolve();
-      }
+      releaseAll(pendingReleases);
       await Promise.allSettled([run, ...tracked]);
       vi.useRealTimers();
     }
@@ -94,12 +104,7 @@ describe("bounded agent database preflight scheduling", () => {
       async () => await released.promise,
       createResult(),
       undefined,
-      {
-        signal: new AbortController().signal,
-        canDefer: () => false,
-        track: () => {},
-        defer,
-      },
+      startup(() => false, defer),
     ).then(() => {
       settled = true;
     });
@@ -135,14 +140,12 @@ describe("bounded agent database preflight scheduling", () => {
           },
           createResult(),
           undefined,
-          {
-            signal: gateway.signal,
-            canDefer: () => true,
-            track: (work) => {
-              tracked.push(work);
-            },
-            defer: () => [],
-          },
+          startup(
+            () => true,
+            () => [],
+            tracked,
+            gateway.signal,
+          ),
         );
         await vi.advanceTimersByTimeAsync(5_000);
         await foreground;
@@ -161,7 +164,7 @@ describe("bounded agent database preflight scheduling", () => {
 
   it("rejects a deferred failure while a strict store still prevents handoff", async () => {
     vi.useFakeTimers();
-    const releases = [createDeferred(), createDeferred()];
+    const pendingReleases = releases(2);
     const failure = new Error("unowned database inspection failed");
     const started: number[] = [];
     const defer = vi.fn(() => {
@@ -171,45 +174,35 @@ describe("bounded agent database preflight scheduling", () => {
       [0, 1, 2],
       async (target) => {
         started.push(target);
-        await releases[target]?.promise;
+        await pendingReleases[target]?.promise;
         if (target === 0) {
           throw failure;
         }
       },
       createResult(),
       undefined,
-      {
-        signal: new AbortController().signal,
-        canDefer: (target) => target !== 1,
-        track: () => {},
-        defer,
-      },
+      startup((target: number) => target !== 1, defer),
     );
     void run.catch(() => {});
     try {
       await vi.advanceTimersByTimeAsync(5_000);
-      releases[0]!.resolve();
+      pendingReleases[0]!.resolve();
       await vi.advanceTimersByTimeAsync(0);
-      releases[1]!.resolve();
+      pendingReleases[1]!.resolve();
       await expect(run).rejects.toBe(failure);
       expect(defer).not.toHaveBeenCalled();
       expect(started).toEqual([0, 1]);
     } finally {
-      for (const release of releases) {
-        release.resolve();
-      }
+      releaseAll(pendingReleases);
       await Promise.allSettled([run]);
       vi.useRealTimers();
     }
   });
 
-  it.each([2])("bounds active inspections to the host's %i CPUs", async (cpus) => {
+  it("bounds active inspections to the host's CPUs", async () => {
+    const cpus = 2;
     vi.mocked(availableParallelism).mockReturnValue(cpus);
-    const releases = {
-      0: createDeferred(),
-      1: createDeferred(),
-      2: createDeferred(),
-    };
+    const pendingReleases = releases(3);
     let active = 0;
     let peak = 0;
     const started: number[] = [];
@@ -222,7 +215,7 @@ describe("bounded agent database preflight scheduling", () => {
         active += 1;
         peak = Math.max(peak, active);
         try {
-          await releases[target].promise;
+          await pendingReleases[target]!.promise;
         } finally {
           active -= 1;
         }
@@ -235,15 +228,14 @@ describe("bounded agent database preflight scheduling", () => {
     expect(active).toBe(cpus);
     expect(peak).toBe(cpus);
 
-    releases[0].resolve();
+    pendingReleases[0]!.resolve();
     await Promise.resolve();
     await Promise.resolve();
 
     expect(started).toEqual([0, 1, 2].slice(0, cpus + 1));
     expect(peak).toBe(cpus);
 
-    releases[1].resolve();
-    releases[2].resolve();
+    releaseAll(pendingReleases);
     await run;
 
     expect(active).toBe(0);
@@ -252,17 +244,13 @@ describe("bounded agent database preflight scheduling", () => {
   });
 
   it("preserves input result order when inspections finish out of order", async () => {
-    const releases = {
-      0: createDeferred(),
-      1: createDeferred(),
-      2: createDeferred(),
-    };
+    const pendingReleases = releases(3);
     const result = createResult();
 
     const run = preflightAgentDatabasesBounded(
       [0, 1, 2] as const,
       async (target, inspection) => {
-        await releases[target].promise;
+        await pendingReleases[target]!.promise;
         inspection.indeterminate.push({
           kind: "agent",
           path: `agent-${target}`,
@@ -274,12 +262,12 @@ describe("bounded agent database preflight scheduling", () => {
 
     await Promise.resolve();
 
-    releases[1].resolve();
+    pendingReleases[1]!.resolve();
     await Promise.resolve();
     await Promise.resolve();
 
-    releases[2].resolve();
-    releases[0].resolve();
+    pendingReleases[2]!.resolve();
+    pendingReleases[0]!.resolve();
 
     await run;
 

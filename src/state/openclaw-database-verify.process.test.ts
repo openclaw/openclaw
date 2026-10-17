@@ -12,6 +12,17 @@ describe("database verifier bounded diagnostics", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  function failed(error: string, terminal = false) {
+    return { path: target.path, ok: false, error, terminal };
+  }
+
+  function throwOnRead(failure: unknown) {
+    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+      // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error native failures.
+      throw failure;
+    });
+  }
+
   it.each([
     {
       name: "wrapped I/O error without cause prose or metadata",
@@ -41,17 +52,8 @@ describe("database verifier bounded diagnostics", () => {
       expected: "AggregateError: aggregate failure",
     },
   ])("preserves $name", async ({ failure, expected }) => {
-    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
-      // oxlint-disable-next-line typescript/only-throw-error -- Verify diagnostics for non-Error native failures.
-      throw failure;
-    });
-
-    await expect(verifyOpenClawDatabase(target)).resolves.toEqual({
-      path: target.path,
-      ok: false,
-      error: expected,
-      terminal: false,
-    });
+    throwOnRead(failure);
+    await expect(verifyOpenClawDatabase(target)).resolves.toEqual(failed(expected));
   });
 
   it("bounds cyclic and deep causes without serializing their prose", async () => {
@@ -61,29 +63,15 @@ describe("database verifier bounded diagnostics", () => {
     for (let index = 7; index >= 0; index -= 1) {
       deep = Object.assign(new Error("deep failure", { cause: deep }), { errcode: index });
     }
-    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase")
-      .mockImplementationOnce(() => {
-        throw cycle;
-      })
-      .mockImplementationOnce(() => {
-        throw deep;
-      });
+    throwOnRead(cycle);
+    throwOnRead(deep);
 
     const results = [await verifyOpenClawDatabase(target), await verifyOpenClawDatabase(target)];
     expect(results).toEqual([
-      {
-        path: target.path,
-        ok: false,
-        error: "Error: cyclic failure (code=EIO, errcode=10)",
-        terminal: false,
-      },
-      {
-        path: target.path,
-        ok: false,
-        error:
-          "Error: deep failure (errcode=0, errcode=1, errcode=2, errcode=3, errcode=4, errcode=5, errcode=6, errcode=7)",
-        terminal: false,
-      },
+      failed("Error: cyclic failure (code=EIO, errcode=10)"),
+      failed(
+        "Error: deep failure (errcode=0, errcode=1, errcode=2, errcode=3, errcode=4, errcode=5, errcode=6, errcode=7)",
+      ),
     ]);
   });
 
@@ -98,16 +86,10 @@ describe("database verifier bounded diagnostics", () => {
       }),
       metadata,
     );
-    vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
-      throw failure;
-    });
-
-    await expect(verifyOpenClawDatabase(target)).resolves.toEqual({
-      path: target.path,
-      ok: false,
-      error: "Error: source read failed (code=EIO, errcode=10)",
-      terminal: false,
-    });
+    throwOnRead(failure);
+    await expect(verifyOpenClawDatabase(target)).resolves.toEqual(
+      failed("Error: source read failed (code=EIO, errcode=10)"),
+    );
   });
 
   it.each([
@@ -116,26 +98,21 @@ describe("database verifier bounded diagnostics", () => {
   ])("preserves $name and classification", async ({ errcode, terminal }) => {
     const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
     vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
-    if (errcode !== undefined) {
-      vi.spyOn(database, "prepare").mockImplementationOnce(() => {
-        throw Object.assign(new Error("scan failed"), { code: "ERR_SQLITE_ERROR", errcode });
-      });
-    }
+    vi.spyOn(database, "prepare").mockImplementationOnce(() => {
+      throw Object.assign(new Error("scan failed"), { code: "ERR_SQLITE_ERROR", errcode });
+    });
     const close = database.close.bind(database);
     vi.spyOn(database, "close").mockImplementationOnce(() => {
       close();
       throw Object.assign(new Error("close failed"), { code: "EIO", errcode: 10 });
     });
     try {
-      await expect(verifyOpenClawDatabase(target)).resolves.toEqual({
-        path: target.path,
-        ok: false,
-        terminal,
-        error:
-          errcode === undefined
-            ? "Error: close failed (code=EIO, errcode=10)"
-            : `SqliteIntegrityError: SQLite quick_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
-      });
+      await expect(verifyOpenClawDatabase(target)).resolves.toEqual(
+        failed(
+          `SqliteIntegrityError: SQLite quick_check failed for synthetic database: scan failed (code=ERR_SQLITE_ERROR, errcode=${errcode})`,
+          terminal,
+        ),
+      );
       expect(database.isOpen).toBe(false);
     } finally {
       if (database.isOpen) {
