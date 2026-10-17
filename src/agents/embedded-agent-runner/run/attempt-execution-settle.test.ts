@@ -88,6 +88,35 @@ beforeEach(() => {
   mocks.completeResult.mockReset();
 });
 
+const imageNote = {
+  customType: "openclaw.system-note",
+  display: true,
+  content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+};
+
+async function useActualResult(once = false) {
+  const { completeEmbeddedAttemptResult } =
+    await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
+  if (once) {
+    mocks.completeResult.mockImplementationOnce(completeEmbeddedAttemptResult);
+  } else {
+    mocks.completeResult.mockImplementation(completeEmbeddedAttemptResult);
+  }
+}
+
+function replaySnapshot(messagesSnapshot: unknown[]) {
+  const settleStream = mocks.settleStream.getMockImplementation()!;
+  mocks.settleStream.mockImplementationOnce(async (...args) => ({
+    ...(await settleStream(...args)),
+    messagesSnapshot: [...messagesSnapshot],
+  }));
+}
+
+function expectCleanup(fixture: ReturnType<typeof createFixture>) {
+  expect(fixture.unsubscribe).toHaveBeenCalledOnce();
+  expect(fixture.detachBackend).toHaveBeenCalledOnce();
+}
+
 describe("runEmbeddedAttemptSettledPhase", () => {
   it("runs prompt and finalization, cleans stream resources, then projects the result", async () => {
     const fixture = createFixture(mocks);
@@ -104,19 +133,15 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       "clear-active-run",
       "result",
     ]);
-    expect(fixture.state).toEqual(
-      expect.objectContaining({
-        beforeAgentRunBlockedBy: "before_agent",
-        terminal: { kind: "ok" },
-        trajectoryEndRecorded: true,
-      }),
-    );
-    expect(fixture.sessionRuntimeState).toEqual(
-      expect.objectContaining({
-        prePromptMessageCount: 4,
-        promptCache: { cacheRead: 1 },
-      }),
-    );
+    expect(fixture.state).toMatchObject({
+      beforeAgentRunBlockedBy: "before_agent",
+      terminal: { kind: "ok" },
+      trajectoryEndRecorded: true,
+    });
+    expect(fixture.sessionRuntimeState).toMatchObject({
+      prePromptMessageCount: 4,
+      promptCache: { cacheRead: 1 },
+    });
     expect(mocks.completeAfterTurn).toHaveBeenCalledWith(
       fixture.input,
       expect.objectContaining({ sessionIdUsed: "settled-session" }),
@@ -146,11 +171,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     await runEmbeddedAttemptSettledPhase(fixture.input);
 
     expect(fixture.sessionManager.appendMessageAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customType: "openclaw.system-note",
-        display: true,
-        content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
-      }),
+      expect.objectContaining(imageNote),
     );
     expect(fixture.sessionManager.appendMessageAsync.mock.calls[0]?.[0]).not.toHaveProperty(
       "excludeFromContext",
@@ -170,11 +191,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     await withOpenClawTestState({ label: "settled-image-note" }, async (testState) => {
       const { fixture, target, activeSession, before, previousLeaf, previousMessages, lifecycle } =
         await createPersistedImageNoteFixture(mocks, testState);
-      const actualAttemptResult =
-        await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
-      mocks.completeResult.mockImplementationOnce(
-        actualAttemptResult.completeEmbeddedAttemptResult,
-      );
+      await useActualResult(true);
 
       try {
         const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
@@ -226,9 +243,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           parentId: previousLeaf,
           message: {
             role: "custom",
-            customType: "openclaw.system-note",
-            display: true,
-            content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+            ...imageNote,
             details: {
               source: "prompt-image-hydration",
               runId: fixture.input.attempt.runId,
@@ -244,8 +259,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         const expectedMessages = [...previousMessages, appended.message];
         expect(activeSession.messages).toEqual(expectedMessages);
         expect(measured.result.messagesSnapshot).toEqual(expectedMessages);
-        expect(fixture.unsubscribe).toHaveBeenCalledOnce();
-        expect(fixture.detachBackend).toHaveBeenCalledOnce();
+        expectCleanup(fixture);
         expect(measured.parentSql).toEqual({
           prepare: 0,
           exec: 0,
@@ -271,8 +285,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         const first = await createPersistedImageNoteFixture(mocks, testState, storage);
         const { target, before, previousMessages } = first;
         const config = redact ? { logging: { redactPatterns: ["run-1"] } } : undefined;
-        const actualAttemptResult =
-          await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
         const cleanupFailure = new Error("backend detach failed after image note publication");
         first.fixture.detachBackend.mockImplementationOnce(() => {
           throw cleanupFailure;
@@ -305,9 +317,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
                 expect(current.previousMessages).toEqual(first.activeSession.messages);
               }
               current.fixture.input.attempt.config = config;
-              mocks.completeResult.mockImplementation(
-                actualAttemptResult.completeEmbeddedAttemptResult,
-              );
+              await useActualResult();
               expect(current.fixture.input.attempt.runId).toBe(first.fixture.input.attempt.runId);
               try {
                 return await runEmbeddedAttemptSettledPhase(current.fixture.input);
@@ -345,8 +355,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           expect(fallback.result.messagesSnapshot).toEqual(expected);
           for (const attempt of attempts) {
             expect(attempt.activeSession.messages).toEqual(expected);
-            expect(attempt.fixture.unsubscribe).toHaveBeenCalledOnce();
-            expect(attempt.fixture.detachBackend).toHaveBeenCalledOnce();
+            expectCleanup(attempt.fixture);
             expect(attempt.fixture.clearTimers).toHaveBeenCalledOnce();
           }
           expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledTimes(2);
@@ -385,11 +394,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             ]),
           );
           const before = await loadTranscriptEvents(current.target);
-          const actualAttemptResult =
-            await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
-          mocks.completeResult.mockImplementation(
-            actualAttemptResult.completeEmbeddedAttemptResult,
-          );
+          await useActualResult();
 
           const result = await runEmbeddedAttemptSettledPhase(current.fixture.input);
 
@@ -398,8 +403,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           expect(current.manager.buildSessionContext().messages).toEqual(expected);
           expect(current.activeSession.messages).toEqual(expected);
           expect(result.messagesSnapshot).toEqual(expected);
-          expect(current.fixture.unsubscribe).toHaveBeenCalledOnce();
-          expect(current.fixture.detachBackend).toHaveBeenCalledOnce();
+          expectCleanup(current.fixture);
         } finally {
           await current.lifecycle.dispose();
         }
@@ -547,16 +551,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           const beforeReplay = await loadTranscriptEvents(target);
 
           Object.defineProperty(state, "messages", descriptor);
-          const actualAttemptResult =
-            await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
-          mocks.completeResult.mockImplementation(
-            actualAttemptResult.completeEmbeddedAttemptResult,
-          );
-          const settleStream = mocks.settleStream.getMockImplementation()!;
-          mocks.settleStream.mockImplementationOnce(async (...args) => ({
-            ...(await settleStream(...args)),
-            messagesSnapshot: [...previousMessages],
-          }));
+          await useActualResult();
+          replaySnapshot(previousMessages);
 
           if (intervening === "side-dirty" || intervening === "controls-dirty") {
             const database = openOpenClawAgentDatabase(
@@ -695,8 +691,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             throw new Error("Expected stale image note publication to be rejected");
           }
           expect(mocks.completeResult).not.toHaveBeenCalled();
-          expect(fixture.unsubscribe).toHaveBeenCalledOnce();
-          expect(fixture.detachBackend).toHaveBeenCalledOnce();
+          expectCleanup(fixture);
           expect(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
           const originalAfter = await loadTranscriptEvents(target);
           if (transition === "cancel before commit") {
@@ -733,16 +728,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
               expect(activeSession.messages).toEqual(previousMessages);
               operationSpy.mockRestore();
               admissionSpy.mockRestore();
-              const actualAttemptResult =
-                await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
-              mocks.completeResult.mockImplementation(
-                actualAttemptResult.completeEmbeddedAttemptResult,
-              );
-              const settleStream = mocks.settleStream.getMockImplementation()!;
-              mocks.settleStream.mockImplementationOnce(async (...args) => ({
-                ...(await settleStream(...args)),
-                messagesSnapshot: [...previousMessages],
-              }));
+              await useActualResult();
+              replaySnapshot(previousMessages);
               const replay = await runEmbeddedAttemptSettledPhase(fixture.input);
               const expected = SessionManager.open(target).buildSessionContext().messages;
               expect(await loadTranscriptEvents(target)).toEqual(originalAfter);
@@ -767,10 +754,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     const actualStreamSettle = await vi.importActual<typeof import("./attempt-stream-settle.js")>(
       "./attempt-stream-settle.js",
     );
-    const actualAttemptResult =
-      await vi.importActual<typeof import("./attempt-result.js")>("./attempt-result.js");
     mocks.settleStream.mockImplementationOnce(actualStreamSettle.settleEmbeddedAttemptStream);
-    mocks.completeResult.mockImplementationOnce(actualAttemptResult.completeEmbeddedAttemptResult);
+    await useActualResult(true);
 
     const attempt = await runEmbeddedAttemptSettledPhase(fixture.input);
     const prepared = prepareEmbeddedRunTerminal({
@@ -846,20 +831,18 @@ describe("runEmbeddedAttemptSettledPhase", () => {
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture(mocks);
     const failure = new Error("settlement failed");
-    mocks.settleStream.mockImplementationOnce(async () => {
-      return {
-        promptError: failure,
-        promptErrorSource: null,
-        timedOutDuringCompaction: true,
-        messagesSnapshot: [],
-        sessionIdUsed: "settled-session",
-        lastAssistant: undefined,
-        currentAttemptAssistant: undefined,
-        attemptUsage: undefined,
-        promptCache: undefined,
-        lastCallUsage: undefined,
-        compactionOccurredThisAttempt: false,
-      };
+    mocks.settleStream.mockResolvedValueOnce({
+      promptError: failure,
+      promptErrorSource: null,
+      timedOutDuringCompaction: true,
+      messagesSnapshot: [],
+      sessionIdUsed: "settled-session",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      attemptUsage: undefined,
+      promptCache: undefined,
+      lastCallUsage: undefined,
+      compactionOccurredThisAttempt: false,
     });
 
     await runEmbeddedAttemptSettledPhase(fixture.input);

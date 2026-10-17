@@ -58,6 +58,35 @@ import {
 
 registerAgentSessionLoopTestLifecycle();
 
+type CatalogCall = Parameters<
+  ReturnType<typeof prepareCatalogExecutor>["toolSearchCatalogExecutor"]
+>[0];
+
+function lookupCall(toolCallId: string, text: string): CatalogCall {
+  return {
+    tool: {
+      name: "lookup",
+      execute: async () => ({ content: [{ type: "text", text }] }),
+    } as never,
+    toolName: "lookup",
+    source: "openclaw",
+    toolCallId,
+    input: {},
+    acceptResultBeforeProjection: async (result) => result,
+  };
+}
+
+async function createStoredSession(sessionKey: string) {
+  const target = {
+    agentId: "main",
+    sessionId: "session-output-schema",
+    sessionKey,
+    storePath: resolveDefaultSessionStorePath("main"),
+  };
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+  return target;
+}
+
 describe("nested tool activity ownership", () => {
   afterEach(async () => {
     const { testing } = await import("../runs.test-support.js");
@@ -78,13 +107,7 @@ describe("nested tool activity ownership", () => {
     "admits nested tool transcript writes only for the current attempt (%s)",
     async (owner) => {
       await withStateDirEnv("openclaw-nested-tool-admission-", async () => {
-        const target = {
-          agentId: "main",
-          sessionId: "session-output-schema",
-          sessionKey: "agent:main:nested-admission",
-          storePath: resolveDefaultSessionStorePath("main"),
-        };
-        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+        const target = await createStoredSession("agent:main:nested-admission");
         const manager = SessionManager.open(target);
         const { session } = await createTestSession({ sessionManager: manager });
         const originalEntries = manager.getEntries();
@@ -131,16 +154,8 @@ describe("nested tool activity ownership", () => {
           execution = parent
             .run(() =>
               prepared.toolSearchCatalogExecutor({
-                tool: {
-                  name: "lookup",
-                  execute: async () => ({ content: [{ type: "text", text: "synthetic result" }] }),
-                } as never,
-                toolName: "lookup",
-                source: "openclaw",
-                toolCallId: "nested-admission",
+                ...lookupCall("nested-admission", "synthetic result"),
                 parentToolCallId: "outer-exec",
-                input: {},
-                acceptResultBeforeProjection: async (result) => result,
               }),
             )
             .then((result) => {
@@ -189,13 +204,7 @@ describe("nested tool activity ownership", () => {
     "reads complete canonical hook evidence across compaction (malformed=%s)",
     async (malformed) => {
       await withStateDirEnv("openclaw-nested-hook-evidence-", async () => {
-        const target = {
-          agentId: "main",
-          sessionId: "session-output-schema",
-          sessionKey: "agent:main:nested-evidence",
-          storePath: resolveDefaultSessionStorePath("main"),
-        };
-        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+        const target = await createStoredSession("agent:main:nested-evidence");
         const manager = await SessionManager.openBoundedAsync(target, {
           maxEvents: 32,
           maxBytes: 8192,
@@ -249,17 +258,7 @@ describe("nested tool activity ownership", () => {
         };
         const previous = prepareCatalogExecutor(options);
         const call = (prepared: typeof previous, toolCallId: string) =>
-          prepared.toolSearchCatalogExecutor({
-            tool: {
-              name: "lookup",
-              execute: async () => ({ content: [{ type: "text", text: "original tool output" }] }),
-            } as never,
-            toolName: "lookup",
-            source: "openclaw",
-            toolCallId,
-            input: {},
-            acceptResultBeforeProjection: async (result) => result,
-          });
+          prepared.toolSearchCatalogExecutor(lookupCall(toolCallId, "original tool output"));
         await call(previous, "previous-attempt");
         previous.subscription.unsubscribe();
         const prepared = prepareCatalogExecutor(options);
