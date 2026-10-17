@@ -107,19 +107,17 @@ describe("GatewayClient", () => {
     const registration = registerGatewayOnlyProxy();
 
     try {
-      const last = startGatewayClient({ url: "ws://[::1]:18789" }) as {
-        noProxyDuringConstruction: unknown;
-        httpProxyDuringConstruction: unknown;
-        httpsProxyDuringConstruction: unknown;
-      } | null;
-
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
-      expect(last?.httpProxyDuringConstruction).toBe("http://127.0.0.1:3128");
-      expect(last?.httpsProxyDuringConstruction).toBe("http://127.0.0.1:3128");
-      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
-      expect(process.env["no_proxy"]).toBe("corp.example.com");
-      expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
-      expect(process.env["HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
+      expect(startGatewayClient({ url: "ws://[::1]:18789" })).toMatchObject({
+        noProxyDuringConstruction: "corp.example.com",
+        httpProxyDuringConstruction: "http://127.0.0.1:3128",
+        httpsProxyDuringConstruction: "http://127.0.0.1:3128",
+      });
+      expect(process.env).toMatchObject({
+        NO_PROXY: "corp.example.com",
+        no_proxy: "corp.example.com",
+        HTTP_PROXY: "http://127.0.0.1:3128",
+        HTTPS_PROXY: "http://127.0.0.1:3128",
+      });
     } finally {
       stopActiveManagedProxyRegistration(registration);
     }
@@ -185,17 +183,7 @@ function makeOperatorWsClients(
   );
 }
 
-function makeReadPairClients(
-  first: { connId: string; socket: TestSocket; scopes: string[] },
-  readSocket: TestSocket,
-) {
-  return makeOperatorWsClients([
-    first,
-    { connId: "c-read", socket: readSocket, scopes: ["operator.read"] },
-  ]);
-}
-
-function makeScopedBroadcastClients() {
+function makeScopedBroadcastContext() {
   const pairingSocket = makeRecordingSocket();
   const nodeSocket = makeRecordingSocket();
   const readSocket = makeRecordingSocket();
@@ -214,24 +202,29 @@ function makeScopedBroadcastClients() {
     makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
   ]);
 
-  return { pairingSocket, nodeSocket, readSocket, talkSocket, writeSocket, adminSocket, clients };
-}
-
-function makeScopedBroadcastContext() {
-  const scoped = makeScopedBroadcastClients();
-  const broadcaster = createGatewayBroadcaster({
-    clients: scoped.clients,
-    preparePresenceProjection: (presence) => () => presence,
-  });
-  return { ...scoped, ...broadcaster };
+  return {
+    pairingSocket,
+    nodeSocket,
+    readSocket,
+    talkSocket,
+    writeSocket,
+    adminSocket,
+    ...createGatewayBroadcaster({
+      clients,
+      preparePresenceProjection: (presence) => () => presence,
+    }),
+  };
 }
 
 function sentEvents(socket: RecordingSocket) {
   return socket.sent.map((frame) => frame.event);
 }
 
-function expectSentEvents(socket: RecordingSocket, events: string[]) {
-  expect(sentEvents(socket)).toEqual(events);
+function expectSentEvents(events: string[], ...sockets: RecordingSocket[]) {
+  for (const socket of sockets) {
+    expect(socket.send).toHaveBeenCalledTimes(events.length);
+    expect(sentEvents(socket)).toEqual(events);
+  }
 }
 
 function sentEventSeq(socket: RecordingSocket) {
@@ -430,15 +423,13 @@ describe("gateway broadcaster", () => {
 
     broadcastChatClassEvents(broadcast);
 
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).toHaveBeenCalledTimes(4);
-    expect(writeSocket.send).toHaveBeenCalledTimes(4);
-    expect(adminSocket.send).toHaveBeenCalledTimes(4);
-    const expectedEvents = ["chat", "agent", "chat.send_timing", "chat.side_result"];
-    expectSentEvents(readSocket, expectedEvents);
-    expectSentEvents(writeSocket, expectedEvents);
-    expectSentEvents(adminSocket, expectedEvents);
+    expectSentEvents([], pairingSocket, nodeSocket);
+    expectSentEvents(
+      ["chat", "agent", "chat.send_timing", "chat.side_result"],
+      readSocket,
+      writeSocket,
+      adminSocket,
+    );
   });
 
   it("requires operator.questions for question broadcasts", () => {
@@ -464,14 +455,12 @@ describe("gateway broadcaster", () => {
     broadcast("plugin.myplugin.custom", { data: "test" });
     broadcast("plugin.otherplugin.state", { state: "updated" });
 
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).not.toHaveBeenCalled();
-    expect(writeSocket.send).toHaveBeenCalledTimes(2);
-    expect(adminSocket.send).toHaveBeenCalledTimes(2);
-    const expectedEvents = ["plugin.myplugin.custom", "plugin.otherplugin.state"];
-    expectSentEvents(writeSocket, expectedEvents);
-    expectSentEvents(adminSocket, expectedEvents);
+    expectSentEvents([], pairingSocket, nodeSocket, readSocket);
+    expectSentEvents(
+      ["plugin.myplugin.custom", "plugin.otherplugin.state"],
+      writeSocket,
+      adminSocket,
+    );
   });
 
   it("honors explicit read scope for plugin lifecycle events", () => {
@@ -486,11 +475,8 @@ describe("gateway broadcaster", () => {
 
     broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
 
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["plugin.workboard.changed"]);
-    expectSentEvents(writeSocket, ["plugin.workboard.changed"]);
-    expectSentEvents(adminSocket, ["plugin.workboard.changed"]);
+    expectSentEvents([], pairingSocket, nodeSocket);
+    expectSentEvents(["plugin.workboard.changed"], readSocket, writeSocket, adminSocket);
   });
 
   it("rejects invalid or reserved plugin event broadcasts", () => {
@@ -541,33 +527,20 @@ describe("gateway broadcaster", () => {
     });
     broadcast("unknown.future.event", { hidden: true });
 
-    expectSentEvents(pairingSocket, [
-      "heartbeat",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
-    expectSentEvents(nodeSocket, ["heartbeat", "health", "tick", "shutdown", "update.available"]);
-    expectSentEvents(readSocket, [
-      "cron",
-      "voicewake.changed",
-      "voicewake.routing.changed",
-      "heartbeat",
-      "presence",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
-    expectSentEvents(talkSocket, [
-      "talk.mode",
-      "heartbeat",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
+    const publicEvents = ["heartbeat", "health", "tick", "shutdown", "update.available"];
+    expectSentEvents(publicEvents, pairingSocket, nodeSocket);
+    expectSentEvents(
+      [
+        "cron",
+        "voicewake.changed",
+        "voicewake.routing.changed",
+        publicEvents[0]!,
+        "presence",
+        ...publicEvents.slice(1),
+      ],
+      readSocket,
+    );
+    expectSentEvents(["talk.mode", ...publicEvents], talkSocket);
     const writeVisibleEvents = [
       "cron",
       "talk.mode",
@@ -580,18 +553,17 @@ describe("gateway broadcaster", () => {
       "shutdown",
       "update.available",
     ];
-    expectSentEvents(writeSocket, writeVisibleEvents);
-    expectSentEvents(adminSocket, writeVisibleEvents);
+    expectSentEvents(writeVisibleEvents, writeSocket, adminSocket);
   });
 
   it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {
     const pairingSocket = makeRecordingSocket();
     const readSocket = makeRecordingSocket();
 
-    const clients = makeReadPairClients(
+    const clients = makeOperatorWsClients([
       { connId: "c-pairing", socket: pairingSocket, scopes: ["operator.pairing"] },
-      readSocket,
-    );
+      { connId: "c-read", socket: readSocket, scopes: ["operator.read"] },
+    ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
       clients,
@@ -641,14 +613,13 @@ describe("gateway broadcaster", () => {
     broadcast("chat", payload);
 
     expect(payloadKeys).toEqual(["payload"]);
-    expect(firstSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
-    expect(secondSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
-    expect(thirdSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
-    expect([
-      firstSocket.sent.at(-1)?.seq,
-      secondSocket.sent.at(-1)?.seq,
-      thirdSocket.sent.at(-1)?.seq,
-    ]).toEqual([1, 2, 2]);
+    const lastFrames = [firstSocket, secondSocket, thirdSocket].map((socket) => socket.sent.at(-1));
+    expect(lastFrames.map((frame) => frame?.payload)).toEqual([
+      { foo: "payload" },
+      { foo: "payload" },
+      { foo: "payload" },
+    ]);
+    expect(lastFrames.map((frame) => frame?.seq)).toEqual([1, 2, 2]);
   });
 });
 
@@ -703,19 +674,15 @@ describe("late-arriving invoke results", () => {
         context,
       });
 
-      const [ok, rawPayload, error] = respond.mock.lastCall ?? [];
-      const payload = rawPayload as { ok?: boolean; ignored?: boolean } | undefined;
-
-      // Late-arriving results return success instead of error to reduce log noise.
-      expect(ok).toBe(true);
-      expect(error).toBeUndefined();
-      expect(payload?.ok).toBe(true);
-      expect(payload?.ignored).toBe(true);
+      expect(respond.mock.lastCall).toEqual([true, { ok: true, ignored: true }, undefined]);
     }
   });
 });
 
 describe("resolveNodeCommandAllowlist", () => {
+  const allowFor = (metadata: Parameters<typeof resolveNodeCommandAllowlist>[1]) =>
+    resolveNodeCommandAllowlist({}, metadata);
+
   function expectAllowed(allow: { has: (cmd: string) => boolean }, commands: string[]) {
     for (const cmd of commands) {
       expect(allow.has(cmd)).toBe(true);
@@ -728,18 +695,8 @@ describe("resolveNodeCommandAllowlist", () => {
     }
   }
 
-  function expectDangerousCommandsDenied(allow: { has: (cmd: string) => boolean }) {
-    expectDenied(allow, DEFAULT_DANGEROUS_NODE_COMMANDS);
-  }
-
   it("includes Android notifications and device diagnostics commands by default", () => {
-    const allow = resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "Android 16",
-        deviceFamily: "Android",
-      },
-    );
+    const allow = allowFor({ platform: "Android 16", deviceFamily: "Android" });
 
     expectAllowed(allow, [
       "notifications.list",
@@ -754,14 +711,11 @@ describe("resolveNodeCommandAllowlist", () => {
   });
 
   it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
-    const allow = resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "macOS 26.3.1",
-        deviceFamily: "Mac",
-        approvedCommands: ["screen.snapshot"],
-      },
-    );
+    const allow = allowFor({
+      platform: "macOS 26.3.1",
+      deviceFamily: "Mac",
+      approvedCommands: ["screen.snapshot"],
+    });
 
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
@@ -771,14 +725,11 @@ describe("resolveNodeCommandAllowlist", () => {
   });
 
   it("allows safe Windows companion commands by default but keeps dangerous media gated", () => {
-    const allow = resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "windows",
-        deviceFamily: "Windows",
-        approvedCommands: ["screen.snapshot", "system.run", "system.which"],
-      },
-    );
+    const allow = allowFor({
+      platform: "windows",
+      deviceFamily: "Windows",
+      approvedCommands: ["screen.snapshot", "system.run", "system.which"],
+    });
 
     expectDenied(allow, ["canvas.present", "canvas.a2ui.pushJSONL"]);
     expectAllowed(allow, [
@@ -791,7 +742,7 @@ describe("resolveNodeCommandAllowlist", () => {
       "system.which",
       "system.notify",
     ]);
-    expectDangerousCommandsDenied(allow);
+    expectDenied(allow, DEFAULT_DANGEROUS_NODE_COMMANDS);
   });
 
   it("can explicitly allow dangerous commands via commands.allow", () => {
@@ -811,26 +762,14 @@ describe("resolveNodeCommandAllowlist", () => {
   });
 
   it("treats unknown/confusable metadata as fail-safe for system.run defaults", () => {
-    const allow = resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "iPhοne",
-        deviceFamily: "iPhοne",
-      },
-    );
+    const allow = allowFor({ platform: "iPhοne", deviceFamily: "iPhοne" });
 
     expectDenied(allow, ["system.run", "system.which"]);
     expectAllowed(allow, ["system.notify"]);
   });
 
   it("normalizes dotted-I platform values to iOS classification", () => {
-    const allow = resolveNodeCommandAllowlist(
-      {},
-      {
-        platform: "İOS",
-        deviceFamily: "iPhone",
-      },
-    );
+    const allow = allowFor({ platform: "İOS", deviceFamily: "iPhone" });
 
     expectDenied(allow, ["system.run", "system.which"]);
     expectAllowed(allow, ["device.info"]);

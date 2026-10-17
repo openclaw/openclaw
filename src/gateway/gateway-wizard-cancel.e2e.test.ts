@@ -1,12 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resetConfigOverrides } from "../config/runtime-overrides.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import {
@@ -19,45 +13,23 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import {
+  removeGatewayTempHome,
+  resetGatewayTestState as resetSharedGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import type { SetupWizardRunner } from "./server-methods/wizard.js";
 import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
-const ENV_KEYS = [
-  "HOME",
-  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-  "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
-];
-
-function resetGatewayTestState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
+afterEach(() => {
+  resetSharedGatewayTestState();
+  // Unlike the shared reset, cancellation tests also retire listeners and queue owners.
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
   resetGatewayWorkAdmission();
-}
-
-afterEach(() => {
-  resetGatewayTestState();
 });
 
 async function withWizardGateway(
@@ -68,26 +40,13 @@ async function withWizardGateway(
     connect: () => ReturnType<typeof connectGatewayClient>;
   }) => Promise<void>,
 ): Promise<void> {
-  const envSnapshot = captureEnv(ENV_KEYS);
-  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-cancel-home-"));
-  const stateDir = path.join(tempHome, ".openclaw");
-  const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
+  const { envSnapshot, tempHome } = await setupGatewayTempHome({
+    prefix: "openclaw-wizard-cancel-home-",
+    minimalGateway: true,
+  });
   const token = `wizard-cancel-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}`;
   const clients: Array<Awaited<ReturnType<typeof connectGatewayClient>>> = [];
   try {
-    await fs.mkdir(bundledPluginsDir, { recursive: true });
-    setTestEnvValue("HOME", tempHome);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-    setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
-    setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-    setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
-    setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
-    setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
-    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledPluginsDir);
-    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
     const claim = await acquireGatewayE2ePortBlock();
     const server = await startClaimedGateway(claim, () =>
       startGatewayServer(claim.port, {
@@ -118,7 +77,7 @@ async function withWizardGateway(
   } finally {
     releaseRunner();
     try {
-      await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      await removeGatewayTempHome(tempHome);
     } finally {
       envSnapshot.restore();
     }
