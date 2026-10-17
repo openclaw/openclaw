@@ -120,11 +120,29 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     { flags: ["--root", "alternate"] },
     { flags: ["-r", "alternate"] },
     { flags: ["-r=alternate"] },
-  ])("preserves native Gateway discovery for root override $flags", ({ flags }) => {
+    { flags: ["--reporter=json"] },
+    { flags: ["--reporter", "blob"] },
+    { flags: ["--reporters", "junit"] },
+  ])("preserves the native Gateway invocation for $flags", ({ flags }) => {
     const config = "test/vitest/vitest.gateway-server.config.ts";
     const specs = createVitestRunSpecs([config, "--", ...flags], { baseEnv: {} });
     expect(specs.map((spec) => spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("--config")))).toEqual([
       ["--config", config, ...flags],
+    ]);
+  });
+
+  it("preserves line-qualified Gateway selections without widening them to entire files", () => {
+    const cwd = makeScratchDir();
+    mkdirSync(path.join(cwd, "src/gateway"), { recursive: true });
+    const filters = Array.from({ length: 17 }, (_, index) => {
+      const file = `src/gateway/server.line-${index}.test.ts`;
+      writeFileSync(path.join(cwd, file), "");
+      return `${file}:3`;
+    });
+    const config = "test/vitest/vitest.gateway-server.config.ts";
+    const specs = createVitestRunSpecs([config, "--", ...filters], { cwd, baseEnv: {} });
+    expect(specs.map((spec) => spec.pnpmArgs.slice(spec.pnpmArgs.indexOf("--config")))).toEqual([
+      ["--config", config, ...filters],
     ]);
   });
 
@@ -137,9 +155,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         { length: 74 },
         (_, index) => `src/gateway/server.chat-fixture-${String(index).padStart(3, "0")}.test.ts`,
       );
-      for (const file of files) {
+      for (const file of files.filter((_, index) => index !== 72)) {
         writeFileSync(path.join(cwd, file), "");
       }
+      expect(childProcess.spawnSync("git", ["init", "--quiet"], { cwd }).status).toBe(0);
+      expect(childProcess.spawnSync("git", ["add", "."], { cwd }).status).toBe(0);
+      // Native discovery includes a newly written test before it is staged.
+      writeFileSync(path.join(cwd, files[72]!), "");
       const included = files.slice(0, 73);
       const config = "test/vitest/vitest.gateway-server.config.ts";
       const launched: string[][] = [];

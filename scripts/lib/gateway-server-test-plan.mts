@@ -5,7 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isGatewayServerTestFile } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
-import { hasNonRunVitestSubcommand, resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
+import {
+  collectVitestFileFilters,
+  hasNonRunVitestSubcommand,
+  resolveExplicitVitestMode,
+} from "./vitest-cli-mode.mts";
 
 // Two workers with at most 16 files per process peaked at 10.94 GiB on four CPUs.
 const GATEWAY_SERVER_TEST_FILE_LIMIT = 16;
@@ -26,16 +30,20 @@ function listRepoFilesRecursive(root: string, cwd: string): string[] {
 }
 
 function listGatewayFilesFromGit(cwd: string): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", "src/gateway"], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const result = spawnSync(
+    "git",
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "src/gateway"],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
   if (result.status !== 0) {
     return null;
   }
   return result.stdout
-    .split("\n")
+    .split("\0")
     .map((line) => normalizePath(line.trim()))
     .filter((line) => line.length > 0);
 }
@@ -78,9 +86,10 @@ export function createGatewayServerTestTargetChunks(
   if (
     hasNonRunVitestSubcommand(args) ||
     resolveExplicitVitestMode(args) === "watch" ||
+    collectVitestFileFilters(args).some((filter) => /:\d+$/u.test(filter)) ||
     args.some(
       (arg, index) =>
-        /^(?:-r|--(?:shard|changed|bail|coverage|mergeReports|outputFile|project|root|dir|no-run))(?:[.=]|$)/u.test(
+        /^(?:-r|--(?:shard|changed|bail|coverage|mergeReports|outputFile|reporters?|project|root|dir|no-run))(?:[.=]|$)/u.test(
           arg,
         ) ||
         arg === "--run=false" ||
