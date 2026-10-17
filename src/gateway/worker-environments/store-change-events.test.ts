@@ -29,6 +29,8 @@ const SESSION = {
   sessionKey: "agent:main:placement",
 };
 const DAY_MS = 24 * 60 * 60 * 1_000;
+const subscribe = (listener: Parameters<typeof sessionChanges.subscribe>[0]) =>
+  onTestFinished(sessionChanges.subscribe(listener));
 
 it.each([
   "reopening the store",
@@ -94,18 +96,15 @@ describe("worker store session change publications", () => {
     const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     const transactions: boolean[] = [];
     const committedStates: unknown[] = [];
-    onTestFinished(
-      sessionChanges.subscribe((change) => {
-        if ("all" in change && change.scope === "worker-environments") {
-          transactions.push(database.db.isTransaction);
-          committedStates.push(
-            database.db
-              .prepare("SELECT state FROM worker_environments WHERE environment_id = ?")
-              .get("worker-1"),
-          );
-        }
-      }),
+    const committedState = database.db.prepare(
+      "SELECT state FROM worker_environments WHERE environment_id = ?",
     );
+    subscribe((change) => {
+      if ("all" in change && change.scope === "worker-environments") {
+        transactions.push(database.db.isTransaction);
+        committedStates.push(committedState.get("worker-1"));
+      }
+    });
     await store.createSessionAttachmentIntent(
       {
         ...SESSION,
@@ -134,33 +133,20 @@ describe("worker store session change publications", () => {
     await store.transition({ environmentId: "worker-1", from: "requested", to: "failed" });
     expect(await store.pruneTerminalEnvironments({ nowMs: 8 * DAY_MS })).toBe(1);
     expect(transactions).toEqual([false, false, false, false]);
-    expect(committedStates).toEqual([
-      { state: "requested" },
-      { state: "requested" },
-      { state: "failed" },
-      undefined,
-    ]);
+    const requested = { state: "requested" };
+    expect(committedStates).toEqual([requested, requested, { state: "failed" }, undefined]);
   });
 
   it("publishes pending-only and conflict changes after their owner commits", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    const active = await advancePlacementFixtureToActive(
-      store,
-      database,
-      { ...SESSION, executionMode: "remote-exec" },
-      {
-        environmentId: `environment-${SESSION.sessionId}`,
-        remoteWorkspaceDir: `/workspace/${SESSION.sessionId}`,
-        seedEnvironment: "before-dispatch",
-      },
-    );
+    const dispatch = { ...SESSION, executionMode: "remote-exec" as const };
+    const fixture = { seedEnvironment: "before-dispatch" as const };
+    const active = await advancePlacementFixtureToActive(store, database, dispatch, fixture);
+    const { environmentId, activeOwnerEpoch: ownerEpoch } = active;
+    const { agentId, sessionKey } = SESSION;
     const claim = await store.claimWorkspaceMutationResult({
       ...SESSION,
-      owner: {
-        kind: "local",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
+      owner: { kind: "local", environmentId, ownerEpoch },
       claimId: "pending-row-change",
     });
     const authority = await store.prepareTurnClaimAuthority(claim);
@@ -171,21 +157,19 @@ describe("worker store session change publications", () => {
     onTestFinished(authority.release);
     onTestFinished(observation.release);
     const observed: Array<{ reconciling: boolean; conflict: boolean; transaction: boolean }> = [];
-    onTestFinished(
-      sessionChanges.subscribe((change) => {
-        if (
-          "sessionKey" in change &&
-          change.sessionKey === SESSION.sessionKey &&
-          change.agentId === SESSION.agentId
-        ) {
-          observed.push({
-            reconciling: Boolean(store.preparedWorkspaceResult(claim)?.stagedResultRef),
-            conflict: Boolean(store.get(SESSION.sessionId)?.workspaceResultConflict),
-            transaction: database.db.isTransaction,
-          });
-        }
-      }),
-    );
+    subscribe((change) => {
+      if (
+        "sessionKey" in change &&
+        change.sessionKey === sessionKey &&
+        change.agentId === agentId
+      ) {
+        observed.push({
+          reconciling: Boolean(store.preparedWorkspaceResult(claim)?.stagedResultRef),
+          conflict: Boolean(store.get(SESSION.sessionId)?.workspaceResultConflict),
+          transaction: database.db.isTransaction,
+        });
+      }
+    });
     const ref = "refs/openclaw/worker-results/pending-row-change";
     let refused = 0;
     let current = true;
@@ -207,13 +191,10 @@ describe("worker store session change publications", () => {
       }
       admit(request, grant);
     });
-    try {
-      await expect(
-        store.recordStagedWorkspaceResult(claim, ref, undefined, assertCurrent),
-      ).rejects.toThrow("rollback pending row");
-    } finally {
-      admission.mockRestore();
-    }
+    await expect(
+      store.recordStagedWorkspaceResult(claim, ref, undefined, assertCurrent),
+    ).rejects.toThrow("rollback pending row");
+    admission.mockRestore();
     expect(refused).toBe(1);
     expect(observed).toEqual([]);
     expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
@@ -233,11 +214,8 @@ describe("worker store session change publications", () => {
         return grant();
       });
     });
-    try {
-      await store.recordStagedWorkspaceResult(claim, ref);
-    } finally {
-      successfulAdmission.mockRestore();
-    }
+    await store.recordStagedWorkspaceResult(claim, ref);
+    successfulAdmission.mockRestore();
     expect(commitGrants).toBe(1);
     expect(authority.isCurrent()).toBe(true);
     expect(() => observation.assertCurrent()).toThrow("placement authority changed");

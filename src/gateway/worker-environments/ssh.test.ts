@@ -44,40 +44,34 @@ async function prepareTestWorkerSsh(params: Partial<Parameters<typeof prepareWor
 }
 
 describe("worker SSH preparation", () => {
-  it("discards a late identity before writing it and closes the retained preparation guard", async () => {
-    const controller = new AbortController();
-    const closed = new Error("SSH preparation stopped");
-    let retained: (() => void) | undefined;
-    const writeFile = vi.spyOn(fs, "writeFile");
-    await expect(
-      prepareTestWorkerSsh({
+  it.each([false, true])(
+    "closes preparation authority after success or revocation (%s)",
+    async (revoked) => {
+      const controller = new AbortController();
+      const closed = new Error("SSH preparation stopped");
+      let retained: (() => void) | undefined;
+      const writeFile = vi.spyOn(fs, "writeFile");
+      const preparing = prepareTestWorkerSsh({
         assertCurrent: () => controller.signal.throwIfAborted(),
         resolveIdentity: async (_keyRef, context) => {
           retained = context.assertCurrent;
           context.assertCurrent();
-          controller.abort(closed);
-          return { kind: "material", contents: "synthetic-worker-key" };
+          if (revoked) {
+            controller.abort(closed);
+          }
+          return revoked ? { kind: "material", contents: "synthetic-worker-key" } : IDENTITY;
         },
-      }),
-    ).rejects.toBe(closed);
-    expect(writeFile).not.toHaveBeenCalled();
-    expect(retained).toBeTypeOf("function");
-    expect(() => retained?.()).toThrow("preparation invocation is closed");
-  });
-
-  it("closes the preparation guard after success without disposing the prepared identity", async () => {
-    let retained: (() => void) | undefined;
-    const prepared = await prepareTestWorkerSsh({
-      resolveIdentity: async (_keyRef, context) => {
-        retained = context.assertCurrent;
-        context.assertCurrent();
-        return IDENTITY;
-      },
-    });
-    expect(retained).toBeTypeOf("function");
-    expect(() => retained?.()).toThrow("preparation invocation is closed");
-    await fs.access(prepared.knownHostsPath);
-  });
+      });
+      if (revoked) {
+        await expect(preparing).rejects.toBe(closed);
+        expect(writeFile).not.toHaveBeenCalled();
+      } else {
+        await fs.access((await preparing).knownHostsPath);
+      }
+      expect(retained).toBeTypeOf("function");
+      expect(() => retained?.()).toThrow("preparation invocation is closed");
+    },
+  );
 
   it("retries disposal after a filesystem cleanup failure", async () => {
     const prepared = await prepareTestWorkerSsh();

@@ -24,6 +24,7 @@ import * as support from "./service.test-support.js";
 
 describe("conversation-owned temporary environments", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  const state = support.testState;
   const identity = {
     sessionId: "conversation-one",
     sessionKey: "agent:main:crabbox",
@@ -32,17 +33,41 @@ describe("conversation-owned temporary environments", () => {
   const request = { ...identity, profileId: "development", idempotencyKey: "open-desktop" };
   const authorize = () => {};
   type Service = ReturnType<typeof support.createService>;
+  let service: Service;
+  let provision = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
   const makeService = (
     overrides: Parameters<typeof support.createProvider>[0] = {},
     options: Parameters<typeof support.createService>[1] = {},
-  ) => support.createService(support.createProvider(overrides), options);
-  const provisionLease = () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT });
-  const create = (
-    service: Service,
-    overrides: Partial<Parameters<Service["createSessionAttachment"]>[0]> = {},
-  ) => service.createSessionAttachment({ ...request, ...overrides }, authorize);
-  const stop = (service: Service) =>
-    service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize);
+  ) => {
+    service = support.createService(support.createProvider({ provision, ...overrides }), options);
+  };
+  const create = (overrides: Partial<Parameters<Service["createSessionAttachment"]>[0]> = {}) =>
+    service.createSessionAttachment({ ...request, ...overrides }, authorize);
+  const stop = () => service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize);
+  function barrier() {
+    const entered = createDeferredCore();
+    const released = createDeferredCore();
+    return {
+      entered: entered.promise,
+      release: released.resolve,
+      wait: async () => {
+        entered.resolve();
+        await released.promise;
+      },
+    };
+  }
+  const outcome = <T>(operation: Promise<T>) =>
+    operation.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+  const awaitBlocked = (entered: Promise<void>, operation: Promise<unknown>, message: string) =>
+    Promise.race([
+      entered,
+      operation.then((cause) => {
+        throw new Error(message, { cause });
+      }),
+    ]);
   const runAsCaller = <T>(
     run: () => Promise<T> | T,
     overrides: Partial<NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>> = {},
@@ -59,45 +84,53 @@ describe("conversation-owned temporary environments", () => {
   const scope = () => ({
     agentId: identity.agentId,
     sessionKey: identity.sessionKey,
-    storePath: support.testState.config.session!.store,
+    storePath: state.config.session!.store,
   });
-  function createSessionRpc(
-    service: Service,
-    presentation?: "desktop" | "portal",
+  const replaceSession = () =>
+    replaceSessionEntrySync(scope(), {
+      sessionId: identity.sessionId,
+      lifecycleRevision: "reset-incarnation",
+      updatedAt: 2,
+    });
+  function createRpc(
+    params: Record<string, unknown> = {},
     overrides: Parameters<typeof createDirectChatContext>[0] = {},
+    method = "environments.session.create",
+    existingContext?: GatewayRequestHandlerOptions["context"],
   ) {
     const respond = vi.fn();
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => support.testState.config,
-      workerEnvironmentService: service,
-      ...overrides,
-    });
+    const context =
+      existingContext ??
+      createDirectChatContext({
+        getRuntimeConfig: () => state.config,
+        workerEnvironmentService: service,
+        ...overrides,
+      });
     const options: GatewayRequestHandlerOptions = {
-      req: { type: "req", id: "create-preview", method: "environments.session.create" },
-      params: {
-        profileId: request.profileId,
-        idempotencyKey: request.idempotencyKey,
-        ...(presentation ? { presentation } : {}),
-      },
+      req: { type: "req", id: "attachment-rpc", method },
+      params:
+        method === "environments.session.create"
+          ? { profileId: request.profileId, idempotencyKey: request.idempotencyKey, ...params }
+          : params,
       context,
       client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
       isWebchatConnect: () => false,
       respond,
     };
-    return { options, respond, context };
+    const handlers = method === "portal.open" ? portalHandlers : environmentsSessionHandlers;
+    return { options, respond, context, invoke: () => handlers[method]!(options) };
   }
 
   beforeEach(() => {
-    support.testState.config.session = {
-      store: path.join(support.testState.root, "sessions.json"),
-    };
+    provision = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
+    state.config.session = { store: path.join(state.root, "sessions.json") };
     ensureSessionEntrySync(scope(), { sessionId: identity.sessionId, updatedAt: 1 });
+    makeService();
   });
   afterEach(() => closeOpenClawAgentDatabases());
 
   it("admits the actual plugin RPC through ambient run authority and fences a retained caller after revocation", async () => {
-    const service = makeService();
-    const { options, respond } = createSessionRpc(service);
+    const { options, respond, invoke } = createRpc();
     await expect(resolveSessionEnvironmentCaller(options)).rejects.toThrow(
       "authenticated operator or admitted agent run",
     );
@@ -108,7 +141,7 @@ describe("conversation-owned temporary environments", () => {
         await expect(
           resolveSessionEnvironmentCaller(options, { sessionKey: "agent:main:other" }),
         ).rejects.toThrow("only manage its own");
-        await environmentsSessionHandlers["environments.session.create"]!(options);
+        await invoke();
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({
@@ -124,8 +157,8 @@ describe("conversation-owned temporary environments", () => {
   });
 
   it("opens a portal through ambient plugin authority and closes an unused carrier when that authority ends", async () => {
-    const service = makeService();
-    const created = await create(service);
+    const { attachment } = await create();
+    const { environmentId, ownerEpoch } = attachment;
     const portalService = createGatewayPortalService({
       httpBindHosts: ["127.0.0.1"],
       httpServers: [],
@@ -139,43 +172,21 @@ describe("conversation-owned temporary environments", () => {
       }
       return { connect: vi.fn(), close: closeConnection };
     });
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => support.testState.config,
-      workerEnvironmentService: service,
-      portalService,
-      broadcast: vi.fn(),
-    });
-    const invoke = async (environmentId: string, port: number) => {
-      const respond = vi.fn();
-      await portalHandlers["portal.open"]!({
-        req: { type: "req", id: "portal-one", method: "portal.open" },
-        params: { environmentId, port },
-        context,
-        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
-        isWebchatConnect: () => false,
-        respond,
-      });
-      return respond;
+    const { context } = createRpc({}, { portalService, broadcast: vi.fn() });
+    const open = async (target: string, port: number) => {
+      const rpc = createRpc({ environmentId: target, port }, {}, "portal.open", context);
+      await rpc.invoke();
+      return rpc.respond.mock.calls[0]?.[0];
     };
     try {
       await runAsCaller(
         async () => {
-          const opened = await invoke(created.attachment.environmentId, 3000);
-          expect(opened.mock.calls[0]?.[0]).toBe(true);
-          expect(
-            portalService.listWorkerPortals(
-              created.attachment.environmentId,
-              created.attachment.ownerEpoch,
-            ),
-          ).toHaveLength(1);
-          expect((await invoke("worker:another-conversation", 3000)).mock.calls[0]?.[0]).toBe(
-            false,
-          );
+          expect(await open(environmentId, 3000)).toBe(true);
+          expect(portalService.listWorkerPortals(environmentId, ownerEpoch)).toHaveLength(1);
+          expect(await open("worker:another-conversation", 3000)).toBe(false);
           expect(openNodePortal).toHaveBeenCalledTimes(1);
           revokeDuringDiscovery = true;
-          expect((await invoke(created.attachment.environmentId, 3001)).mock.calls[0]?.[0]).toBe(
-            false,
-          );
+          expect(await open(environmentId, 3001)).toBe(false);
           expect(closeConnection).toHaveBeenCalledOnce();
           expect(portalService.list()).toHaveLength(1);
         },
@@ -193,14 +204,12 @@ describe("conversation-owned temporary environments", () => {
   ] as const)(
     "does not reserve or allocate a machine when $presentation presentation lacks $deniedBy screen authority",
     async ({ presentation, deniedBy }) => {
-      const provision = vi.fn(async () => provisionLease());
-      const service = makeService({ provision });
       if (deniedBy === "live") {
-        support.testState.config.tools = { deny: ["screen"] };
+        state.config.tools = { deny: ["screen"] };
       }
-      const { options, respond, context } = createSessionRpc(service, presentation);
+      const { respond, context, invoke } = createRpc({ presentation });
       await runAsCaller(
-        () => environmentsSessionHandlers["environments.session.create"]!(options),
+        invoke,
         deniedBy === "missing"
           ? {}
           : {
@@ -219,31 +228,24 @@ describe("conversation-owned temporary environments", () => {
           message: expect.stringMatching(/screen|captured tool authority/u),
         }),
       );
-      expect(support.testState.store.list()).toEqual([]);
+      expect(state.store.list()).toEqual([]);
       expect(provision).not.toHaveBeenCalled();
       expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     },
   );
 
   it("cancels its exact fresh reservation if screen policy narrows before presentation", async () => {
-    const provision = vi.fn(async () => provisionLease());
-    const service = makeService({ provision });
-    const reserve = support.testState.store.createSessionAttachmentIntent.bind(
-      support.testState.store,
-    );
+    const reserve = state.store.createSessionAttachmentIntent.bind(state.store);
     const reserveSpy = vi
-      .spyOn(support.testState.store, "createSessionAttachmentIntent")
+      .spyOn(state.store, "createSessionAttachmentIntent")
       .mockImplementation(async (...args) => {
         const reserved = await reserve(...args);
-        support.testState.config.tools = { deny: ["screen"] };
+        state.config.tools = { deny: ["screen"] };
         return reserved;
       });
-    const { options, respond, context } = createSessionRpc(service, "portal");
+    const { respond, context, invoke } = createRpc({ presentation: "portal" });
     try {
-      await runAsCaller(
-        () => environmentsSessionHandlers["environments.session.create"]!(options),
-        { assertToolAllowed: () => {} },
-      );
+      await runAsCaller(invoke, { assertToolAllowed: () => {} });
     } finally {
       reserveSpy.mockRestore();
     }
@@ -260,24 +262,21 @@ describe("conversation-owned temporary environments", () => {
   });
 
   it("reuses concurrent and changed-key retries without moving the conversation or allowing placement adoption", async () => {
-    const provision = vi.fn(async () => provisionLease());
-    const service = makeService({ provision });
     const [first, retry] = await Promise.all([
-      create(service, { os: "linux", machineClass: "tiny" }),
-      create(service, { idempotencyKey: "retried-tool-call" }),
+      create({ os: "linux", machineClass: "tiny" }),
+      create({ idempotencyKey: "retried-tool-call" }),
     ]);
     expect(provision).toHaveBeenCalledOnce();
     expect(retry.attachment).toEqual(first.attachment);
     expect(retry.reused).toBe(true);
-    expect(
-      support.testState.store.get(first.attachment.environmentId)?.profileSnapshot,
-    ).toMatchObject({ os: "linux", machineClass: "tiny" });
-    const explicitRetry = await create(service, { os: "linux", machineClass: "tiny" });
+    expect(state.store.get(first.attachment.environmentId)?.profileSnapshot).toMatchObject({
+      os: "linux",
+      machineClass: "tiny",
+    });
+    const explicitRetry = await create({ os: "linux", machineClass: "tiny" });
     expect(explicitRetry.attachment.environmentId).toBe(first.attachment.environmentId);
     for (const incompatible of [{ os: "windows" }, { machineClass: "large" }]) {
-      await expect(create(service, incompatible)).rejects.toThrow(
-        "already owns a different environment",
-      );
+      await expect(create(incompatible)).rejects.toThrow("already owns a different environment");
     }
     expect(provision).toHaveBeenCalledOnce();
     expect(first.environment).toMatchObject({ state: "ready", attachedSessionIds: [] });
@@ -289,57 +288,39 @@ describe("conversation-owned temporary environments", () => {
   });
 
   it("cancels creations registered while Stop is awaiting the inventory", async () => {
-    const provision = vi.fn(async () => provisionLease());
-    const service = makeService({ provision });
-    const closeEntered = createDeferredCore();
-    const releaseClose = createDeferredCore();
-    const creationEntered = createDeferredCore();
-    const releaseCreation = createDeferredCore();
-    const ready = support.testState.store.ready.bind(support.testState.store);
-    vi.spyOn(support.testState.store, "ready")
+    const closingGate = barrier();
+    const creationGate = barrier();
+    const ready = state.store.ready.bind(state.store);
+    vi.spyOn(state.store, "ready")
       .mockImplementationOnce(async () => {
         await ready();
-        closeEntered.resolve();
-        await releaseClose.promise;
+        await closingGate.wait();
       })
       .mockImplementationOnce(async () => {
         await ready();
-        creationEntered.resolve();
-        await releaseCreation.promise;
+        await creationGate.wait();
       });
-    const closing = stop(service).then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const closing = outcome(stop());
     let creation: Promise<unknown> | undefined;
     try {
-      await Promise.race([
-        closeEntered.promise,
-        closing.then((result) => {
-          throw new Error("Stop ended before inventory readiness", { cause: result });
-        }),
-      ]);
-      creation = create(service).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
+      await awaitBlocked(closingGate.entered, closing, "Stop ended before inventory readiness");
+      creation = outcome(create());
+      await awaitBlocked(
+        creationGate.entered,
+        creation,
+        "Creation ended before inventory readiness",
       );
-      await Promise.race([
-        creationEntered.promise,
-        creation.then((result) => {
-          throw new Error("Creation ended before inventory readiness", { cause: result });
-        }),
-      ]);
-      releaseClose.resolve();
+      closingGate.release();
       expect(await closing).toEqual({ value: undefined });
-      releaseCreation.resolve();
+      creationGate.release();
       expect(await creation).toMatchObject({
         error: { message: "Conversation environment was stopped" },
       });
       expect(provision).not.toHaveBeenCalled();
-      expect(support.testState.store.list()).toEqual([]);
+      expect(state.store.list()).toEqual([]);
     } finally {
-      releaseClose.resolve();
-      releaseCreation.resolve();
+      closingGate.release();
+      creationGate.release();
       await Promise.all([closing, creation]);
     }
   });
@@ -351,25 +332,22 @@ describe("conversation-owned temporary environments", () => {
   ] as const)(
     "checks $authority after deferred $phase preparation before allocation without an abort",
     async ({ phase, authority }) => {
-      const entered = createDeferredCore();
-      const released = createDeferredCore();
+      const preparation = barrier();
       const signalOwner = new AbortController();
       const allocate = vi.fn(async () => ({
         leaseId: "lease-authorized",
         ssh: support.SSH_ENDPOINT,
       }));
       if (phase === "installation") {
-        support.testState.prepareInstallation = async () => {
-          entered.resolve();
-          await released.promise;
+        state.prepareInstallation = async () => {
+          await preparation.wait();
           return support.BUNDLE_ARTIFACT;
         };
       }
-      const service = makeService({
+      makeService({
         prepareProvision: async () => {
           if (phase === "provider") {
-            entered.resolve();
-            await released.promise;
+            await preparation.wait();
           }
           return allocate;
         },
@@ -388,22 +366,22 @@ describe("conversation-owned temporary environments", () => {
           caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
         },
       };
-      const { options, respond } = createSessionRpc(service, "desktop", {
-        getClientConnIds: (filter) =>
-          new Set(!filter || filter(requester) ? [requester.connId!] : []),
-      });
+      const { respond, invoke } = createRpc(
+        { presentation: "desktop" },
+        {
+          getClientConnIds: (filter) =>
+            new Set(!filter || filter(requester) ? [requester.connId!] : []),
+        },
+      );
       let runCurrent = true;
       await runAsCaller(
         async () => {
-          const creation = environmentsSessionHandlers["environments.session.create"]!(options);
-          await Promise.race([
-            entered.promise,
-            Promise.resolve(creation).then(() => {
-              throw new Error(
-                `Creation ended before provider preparation: ${JSON.stringify(respond.mock.calls[0])}`,
-              );
-            }),
-          ]);
+          const creation = invoke();
+          await awaitBlocked(
+            preparation.entered,
+            Promise.resolve(creation),
+            "Creation ended before provider preparation",
+          );
           expect(allocate).not.toHaveBeenCalled();
           const reserved = service.getSessionAttachmentStatus(identity.sessionId)!;
           const queuedRecovery = service.reconcileOnce(reserved.attachment.environmentId);
@@ -411,9 +389,9 @@ describe("conversation-owned temporary environments", () => {
             runCurrent = false;
           }
           if (authority === "screen-revoked") {
-            support.testState.config.tools = { deny: ["screen"] };
+            state.config.tools = { deny: ["screen"] };
           }
-          released.resolve();
+          preparation.release();
           await Promise.all([creation, queuedRecovery]);
         },
         {
@@ -437,8 +415,6 @@ describe("conversation-owned temporary environments", () => {
   );
 
   it("presents the actual reserved machine before allocation and keeps recovery behind required presentation", async () => {
-    const provision = vi.fn(async () => provisionLease());
-    const service = makeService({ provision });
     const reserved = createDeferredCore<string>();
     const presented = createDeferredCore();
     const onReserved = vi.fn(
@@ -458,8 +434,8 @@ describe("conversation-owned temporary environments", () => {
     await Promise.resolve();
     expect(provision).not.toHaveBeenCalled();
     presented.resolve();
-    const [created] = await Promise.all([creation, recovery]);
-    expect(created.attachment.environmentId).toBe(environmentId);
+    const [{ attachment }] = await Promise.all([creation, recovery]);
+    expect(attachment.environmentId).toBe(environmentId);
     expect(provision).toHaveBeenCalledOnce();
     const showExisting = vi.fn(async () => {});
     await service.createSessionAttachment(
@@ -474,51 +450,40 @@ describe("conversation-owned temporary environments", () => {
 
   it("preserves the attachment through reopen and rejects the old session incarnation after replacement", async () => {
     const provider = support.createProvider();
-    let service = support.createService(provider);
-    const created = await create(service);
+    service = support.createService(provider);
+    const { attachment } = await create();
     await support.reopenWorkerEnvironmentStore();
     service = support.createService(provider);
     await service.reconcileSessionAttachments();
     expect(service.findSessionAttachment(identity)).toMatchObject({
       ...identity,
-      environmentId: created.attachment.environmentId,
+      environmentId: attachment.environmentId,
     });
-    replaceSessionEntrySync(scope(), {
-      sessionId: identity.sessionId,
-      lifecycleRevision: "reset-incarnation",
-      updatedAt: 2,
-    });
+    replaceSession();
     expect(service.findSessionAttachment(identity)).toBeUndefined();
-    expect(() => service.assertSessionAttachment(created.attachment)).toThrow("no longer current");
+    expect(() => service.assertSessionAttachment(attachment)).toThrow("no longer current");
     await service.reconcileSessionAttachments();
-    expect(service.get(created.attachment.environmentId)?.state).toBe("destroyed");
+    expect(service.get(attachment.environmentId)?.state).toBe("destroyed");
   });
 
   it("retires prepared attachment authority before reset cleanup awaits inventory readiness", async () => {
-    const service = makeService();
-    const created = await create(service);
-    const captured = service.captureSessionAttachment(created.attachment);
+    const { attachment } = await create();
+    const captured = service.captureSessionAttachment(attachment);
     service.start();
     await service.reconcileOnce();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const ready = support.testState.store.ready.bind(support.testState.store);
-    vi.spyOn(support.testState.store, "ready").mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
+    const resetGate = barrier();
+    const ready = state.store.ready.bind(state.store);
+    vi.spyOn(state.store, "ready").mockImplementationOnce(async () => {
+      await resetGate.wait();
       await ready();
     });
     try {
-      replaceSessionEntrySync(scope(), {
-        sessionId: identity.sessionId,
-        lifecycleRevision: "reset-incarnation",
-        updatedAt: 2,
-      });
-      await entered.promise;
+      replaceSession();
+      await resetGate.entered;
       expect(() => captured.assertCurrent()).toThrow("no longer current");
-      expect(() => service.captureSessionAttachment(created.attachment)).toThrow();
+      expect(() => service.captureSessionAttachment(attachment)).toThrow();
     } finally {
-      release.resolve();
+      resetGate.release();
       await service.stop();
     }
   });
@@ -527,35 +492,35 @@ describe("conversation-owned temporary environments", () => {
     const stopped = createDeferredCore();
     const destroy = vi.fn(async () => await stopped.promise);
     let allocations = 0;
-    const service = makeService({
+    makeService({
       destroy,
       provision: async () => ({ leaseId: `lease-${++allocations}`, ssh: support.SSH_ENDPOINT }),
     });
-    const created = await create(service);
-    const teardown = stop(service);
+    const { attachment } = await create();
+    const teardown = stop();
     expect(service.findSessionAttachment(identity)).toBeUndefined();
-    expect(() => service.assertSessionAttachment(created.attachment)).toThrow("no longer current");
+    expect(() => service.assertSessionAttachment(attachment)).toThrow("no longer current");
     stopped.resolve();
     await teardown;
-    expect(service.get(created.attachment.environmentId)?.state).toBe("destroyed");
-    await expect(create(service)).rejects.toThrow("already stopped");
-    const next = await create(service, { idempotencyKey: "new-box" });
-    expect(next.attachment.generation).toBe(created.attachment.generation + 1);
+    expect(service.get(attachment.environmentId)?.state).toBe("destroyed");
+    await expect(create()).rejects.toThrow("already stopped");
+    const next = await create({ idempotencyKey: "new-box" });
+    expect(next.attachment.generation).toBe(attachment.generation + 1);
   });
 
   it("reports bounded current cleanup failures without losing the original failure or lease", async () => {
     const originalFailure = "worker bootstrap could not finish";
     const firstCleanupFailure = "initial provider cleanup is unavailable";
-    vi.mocked(support.testState.bootstrapWorker).mockRejectedValue(new Error(originalFailure));
+    vi.mocked(state.bootstrapWorker).mockRejectedValue(new Error(originalFailure));
     const destroy = vi.fn().mockRejectedValue(new Error(firstCleanupFailure));
     const warn = vi.fn<(message: string) => void>();
-    const service = makeService({ destroy }, { logger: { warn } });
+    makeService({ destroy }, { logger: { warn } });
 
-    await expect(create(service)).rejects.toThrow(originalFailure);
-    await expect(stop(service)).rejects.toThrow(firstCleanupFailure);
+    await expect(create()).rejects.toThrow(originalFailure);
+    await expect(stop()).rejects.toThrow(firstCleanupFailure);
     const environmentId = service.getSessionAttachmentStatus(identity.sessionId)!.environment
       .environmentId;
-    const pending = support.testState.store.get(environmentId)!;
+    const pending = state.store.get(environmentId)!;
     expect(pending).toMatchObject({
       state: "destroying",
       leaseId: "lease-1",
@@ -570,7 +535,7 @@ describe("conversation-owned temporary environments", () => {
         `Current cleanup failed: Authorization: Bearer ${secret}\n${"provider progress ".repeat(200)}\n${currentDiagnosis}`,
       ),
     );
-    support.testState.nowMs += 30_000;
+    state.nowMs += 30_000;
     await service.reconcileSessionAttachments();
 
     expect(warn).toHaveBeenCalledOnce();
@@ -582,16 +547,16 @@ describe("conversation-owned temporary environments", () => {
     expect(warning).not.toContain(secret);
     expect(warning).not.toContain(originalFailure);
     expect(warning.length).toBeLessThanOrEqual(prefix.length + 1_024);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
+    expect(state.store.get(environmentId)).toMatchObject({
       state: "destroying",
       leaseId: pending.leaseId,
       lastError: originalFailure,
     });
 
     destroy.mockResolvedValue(undefined);
-    support.testState.nowMs += 60_000;
+    state.nowMs += 60_000;
     await service.reconcileSessionAttachments();
-    expect(support.testState.store.get(environmentId)).toMatchObject({
+    expect(state.store.get(environmentId)).toMatchObject({
       state: "failed",
       leaseId: null,
       lastError: originalFailure,
@@ -602,14 +567,14 @@ describe("conversation-owned temporary environments", () => {
   it("bounds conversation cleanup attempts across four hours of transient provider failure", async () => {
     const destroy = vi.fn().mockRejectedValue(new Error("coordinator release: http 503"));
     const warn = vi.fn<(message: string) => void>();
-    const service = makeService({ id: "crabbox", destroy }, { logger: { warn } });
+    makeService({ id: "crabbox", destroy }, { logger: { warn } });
     support.getDevelopmentProfile().provider = "crabbox";
-    const created = await create(service);
-    await expect(stop(service)).rejects.toThrow("http 503");
+    const { attachment } = await create();
+    await expect(stop()).rejects.toThrow("http 503");
     for (let sweep = 0; sweep < 95; sweep += 1) {
-      support.testState.nowMs += 150_000;
+      state.nowMs += 150_000;
       await service.reconcileOnce();
-      await service.reconcileEnvironment(created.attachment.environmentId);
+      await service.reconcileEnvironment(attachment.environmentId);
     }
     expect(destroy).toHaveBeenCalledTimes(10);
     expect(warn).toHaveBeenCalledTimes(9);
@@ -619,20 +584,10 @@ describe("conversation-owned temporary environments", () => {
     expect(parked[0]![0]).toContain("http 503");
     expect(parked[0]![0]).toContain("crabbox stop lease-1");
     expect(parked[0]![0]).toContain("crabbox inspect --id lease-1 --json");
-    expect(service.get(created.attachment.environmentId)?.error).toBe(parked[0]![0]);
+    expect(service.get(attachment.environmentId)?.error).toBe(parked[0]![0]);
     await runAsCaller(async () => {
-      const respond = vi.fn();
-      await environmentsSessionHandlers["environments.session.status"]!({
-        req: { type: "req", id: "parked-status", method: "environments.session.status" },
-        params: {},
-        context: createDirectChatContext({
-          getRuntimeConfig: () => support.testState.config,
-          workerEnvironmentService: service,
-        }),
-        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
-        isWebchatConnect: () => false,
-        respond,
-      });
+      const { respond, invoke } = createRpc({}, {}, "environments.session.status");
+      await invoke();
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -649,30 +604,30 @@ describe("conversation-owned temporary environments", () => {
   it.each(["explicit stop"] as const)("parks after one hour and resumes only on %s", async () => {
     const destroy = vi.fn().mockRejectedValue(new Error("stop outcome unknown: http 404"));
     const warn = vi.fn<(message: string) => void>();
-    const service = makeService({ destroy }, { logger: { warn } });
-    const created = await create(service);
-    await expect(stop(service)).rejects.toThrow("http 404");
-    support.testState.nowMs += 3_600_000;
+    makeService({ destroy }, { logger: { warn } });
+    const { attachment } = await create();
+    await expect(stop()).rejects.toThrow("http 404");
+    state.nowMs += 3_600_000;
     await service.reconcileOnce();
     await service.reconcileOnce();
     expect(destroy).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledOnce();
-    expect(service.get(created.attachment.environmentId)?.error).toContain("parked");
+    expect(service.get(attachment.environmentId)?.error).toContain("parked");
     destroy.mockResolvedValue(undefined);
-    await stop(service);
+    await stop();
     expect(destroy).toHaveBeenCalledTimes(2);
-    expect(service.get(created.attachment.environmentId)).toMatchObject({ state: "destroyed" });
-    expect(service.get(created.attachment.environmentId)?.error).toBeUndefined();
+    expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
+    expect(service.get(attachment.environmentId)?.error).toBeUndefined();
   });
 
   it("keeps an unconfirmed orphaned lease parked across status reads and sweeps", async () => {
     const warn = vi.fn<(message: string) => void>();
-    const service = makeService({}, { logger: { warn } });
-    const created = await create(service);
-    const environmentId = created.attachment.environmentId;
-    await support.testState.store.transition({ environmentId, from: "ready", to: "orphaned" });
-    await expect(stop(service)).rejects.toThrow("cleanup is not confirmed (orphaned)");
-    support.testState.nowMs += 3_600_000;
+    makeService({}, { logger: { warn } });
+    const { attachment } = await create();
+    const environmentId = attachment.environmentId;
+    await state.store.transition({ environmentId, from: "ready", to: "orphaned" });
+    await expect(stop()).rejects.toThrow("cleanup is not confirmed (orphaned)");
+    state.nowMs += 3_600_000;
     for (let sweep = 0; sweep < 3; sweep += 1) {
       await service.reconcileSessionAttachments();
       expect(service.get(environmentId)).toMatchObject({
@@ -685,25 +640,23 @@ describe("conversation-owned temporary environments", () => {
   });
 
   it("does not allocate after caller revocation and expires only the unchanged idle attachment", async () => {
-    const provision = vi.fn(async () => provisionLease());
-    const service = makeService({ provision });
     await expect(
       service.createSessionAttachment(request, () => {
         throw new Error("run ended");
       }),
     ).rejects.toThrow("run ended");
     expect(provision).not.toHaveBeenCalled();
-    expect(support.testState.store.list()).toEqual([]);
+    expect(state.store.list()).toEqual([]);
     support.getDevelopmentProfile().suspendAfter = "1m";
-    const created = await create(service);
-    support.testState.nowMs += 59_000;
-    await service.touchSessionAttachment(created.attachment);
-    support.testState.nowMs += 59_000;
+    const { attachment } = await create();
+    state.nowMs += 59_000;
+    await service.touchSessionAttachment(attachment);
+    state.nowMs += 59_000;
     await service.reconcileSessionAttachments();
     expect(service.findSessionAttachment(identity)).toBeDefined();
-    support.testState.nowMs += 1_001;
+    state.nowMs += 1_001;
     await service.reconcileSessionAttachments();
     expect(service.findSessionAttachment(identity)).toBeUndefined();
-    expect(service.get(created.attachment.environmentId)?.state).toBe("destroyed");
+    expect(service.get(attachment.environmentId)?.state).toBe("destroyed");
   });
 });
