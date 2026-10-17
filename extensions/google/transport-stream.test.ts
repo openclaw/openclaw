@@ -1,5 +1,6 @@
+// Google tests cover transport stream plugin behavior.
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { createServer, type RequestListener } from "node:http";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -20,10 +21,12 @@ const {
   const googleAuthGetAccessTokenMockLocal = vi.fn();
   return {
     buildGuardedModelFetchMock: vi.fn(),
-    guardedFetchMock: vi.fn<typeof fetch>(),
+    guardedFetchMock: vi.fn(),
     googleAuthGetAccessTokenMock: googleAuthGetAccessTokenMockLocal,
     googleAuthMock: vi.fn(function GoogleAuthMock() {
-      return { getAccessToken: googleAuthGetAccessTokenMockLocal };
+      return {
+        getAccessToken: googleAuthGetAccessTokenMockLocal,
+      };
     }),
   };
 });
@@ -33,14 +36,14 @@ vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal)
   buildGuardedModelFetch: buildGuardedModelFetchMock,
 }));
 
-vi.mock("google-auth-library", () => ({ GoogleAuth: googleAuthMock }));
+vi.mock("google-auth-library", () => ({
+  GoogleAuth: googleAuthMock,
+}));
 
 let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
-
-const SKIP_SIGNATURE = "skip_thought_signature_validator";
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
@@ -50,10 +53,13 @@ function attachModelProviderRequestTransport<TModel extends object>(
   model: TModel,
   request: unknown,
 ): TModel {
-  return { ...model, [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request };
+  return {
+    ...model,
+    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request,
+  };
 }
 
-function geminiModel(
+function buildGeminiModel(
   overrides: Partial<Model<"google-generative-ai">> = {},
 ): Model<"google-generative-ai"> {
   return {
@@ -71,36 +77,35 @@ function geminiModel(
   };
 }
 
-function vertexModel(overrides: Partial<Model<"google-vertex">> = {}): Model<"google-vertex"> {
+function buildGoogleVertexModel(
+  overrides: Partial<Model<"google-vertex">> = {},
+): Model<"google-vertex"> {
   return {
-    ...geminiModel(),
     id: "gemini-3.1-pro-preview",
     name: "Gemini 3.1 Pro Preview",
     api: "google-vertex",
     provider: "google-vertex",
     baseUrl: "https://{location}-aiplatform.googleapis.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
     ...overrides,
   };
 }
 
-function replayParams(messages: Record<string, unknown>[]) {
-  return buildGoogleGenerativeAiParams(gemini3Model(), { messages } as never);
+function buildGeminiReplayParams(messages: Record<string, unknown>[]) {
+  return buildGoogleGenerativeAiParams(
+    buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    }),
+    { messages } as never,
+  );
 }
 
-function videoContext(
-  content: Extract<ProviderContext["messages"][number], { role: "user" }>["content"],
-): ProviderContext {
-  return { messages: [{ role: "user", content, timestamp: 0 }] };
-}
-
-function toolContext(parameters: Record<string, unknown> = { type: "object" }) {
-  return {
-    messages: [{ role: "user", content: "hello", timestamp: 0 }],
-    tools: [{ name: "lookup", description: "Look up a value", parameters }],
-  } as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1];
-}
-
-async function openGeminiStream(
+async function runGeminiStreamResult(
   params: {
     model?: Model<"google-generative-ai">;
     context?: Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1];
@@ -108,18 +113,19 @@ async function openGeminiStream(
   } = {},
 ) {
   const streamFn = createGoogleGenerativeAiTransportStreamFn();
-  return await streamFn(
-    params.model ?? geminiModel(),
-    params.context ?? { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-    params.options as Parameters<typeof streamFn>[2],
+  const stream = await Promise.resolve(
+    streamFn(
+      params.model ?? buildGeminiModel(),
+      (params.context ?? {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      }) as Parameters<typeof streamFn>[1],
+      params.options as Parameters<typeof streamFn>[2],
+    ),
   );
+  return stream.result();
 }
 
-async function geminiResult(params: Parameters<typeof openGeminiStream>[0] = {}) {
-  return (await openGeminiStream(params)).result();
-}
-
-function withContextHandoff(
+function withProviderContextHandoff(
   options: Record<string, unknown>,
   handoff: () => Promise<ProviderContext>,
 ): Record<string, unknown> {
@@ -129,81 +135,46 @@ function withContextHandoff(
   });
 }
 
-async function vertexResult(params: { model?: Model<"google-vertex">; fetch: typeof fetch }) {
+async function runGoogleVertexStreamResult(params: {
+  model?: Model<"google-vertex">;
+  fetch: typeof guardedFetchMock;
+}) {
   const streamFn = createGoogleVertexTransportStreamFn();
-  const stream = await streamFn(
-    params.model ?? vertexModel(),
-    { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
-      typeof streamFn
-    >[1],
-    { apiKey: "gcp-vertex-credentials", fetch: params.fetch } as Parameters<typeof streamFn>[2],
+  const stream = await Promise.resolve(
+    streamFn(
+      params.model ?? buildGoogleVertexModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
+        typeof streamFn
+      >[1],
+      { apiKey: "gcp-vertex-credentials", fetch: params.fetch } as Parameters<typeof streamFn>[2],
+    ),
   );
   return stream.result();
 }
 
-async function runProviderResult(
-  provider: string,
-  gemini: Parameters<typeof openGeminiStream>[0] = {},
-) {
-  if (provider !== "google-vertex") {
-    return geminiResult({ options: { apiKey: "gemini-api-key" }, ...gemini });
-  }
-  vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
-  vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-  await useAuthLibraryAdc("stream", "ya29.vertex-token");
-  return vertexResult({ fetch: guardedFetchMock });
-}
-
-async function expectVertexToken(fetchImpl: typeof fetch, token: string) {
-  await expect(resolveGoogleVertexAuthorizedUserHeaders(fetchImpl)).resolves.toEqual({
-    Authorization: `Bearer ${token}`,
-  });
-}
-
-async function runRegisteredStream(
-  provider: string,
-  model: ReturnType<typeof geminiModel> | ReturnType<typeof vertexModel>,
-) {
-  const { buildGoogleProvider } = await import("./provider-registration.js");
-  const streamFn = buildGoogleProvider().createStreamFn?.({ provider, modelId: model.id, model });
-  if (!streamFn) {
-    throw new Error(`Missing registered ${provider} stream`);
-  }
-  const stream = await streamFn(
-    model,
-    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-    { apiKey: "fixture-google-api-key" },
-  );
-  return stream.result();
-}
-
-async function writeAdc(directory: string, credentials: Record<string, unknown>) {
-  await mkdir(directory, { recursive: true });
-  const file = path.join(directory, "application_default_credentials.json");
-  await writeFile(file, JSON.stringify(credentials), "utf8");
-  return file;
-}
-
-async function useUserAdc(
+async function useGoogleAuthorizedUserCredentials(
   label: string,
   refreshToken: string,
   quotaProjectId?: string,
-  directory?: string,
 ) {
-  const tempDir =
-    directory ?? (await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`)));
-  const credentialsPath = await writeAdc(tempDir, {
-    type: "authorized_user",
-    client_id: "client-id",
-    client_secret: "client-secret",
-    refresh_token: refreshToken,
-    ...(quotaProjectId ? { quota_project_id: quotaProjectId } : {}),
-  });
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`));
+  const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+  await writeFile(
+    credentialsPath,
+    JSON.stringify({
+      type: "authorized_user",
+      client_id: "client-id",
+      client_secret: "client-secret",
+      refresh_token: refreshToken,
+      ...(quotaProjectId ? { quota_project_id: quotaProjectId } : {}),
+    }),
+    "utf8",
+  );
   vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
   return credentialsPath;
 }
 
-async function useAuthLibraryAdc(label: string, token?: string): Promise<void> {
+async function useGoogleAuthLibraryCredentials(label: string, token?: string): Promise<void> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`));
   vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
   vi.stubEnv("CLOUDSDK_CONFIG", "");
@@ -219,91 +190,33 @@ function buildSseResponse(events: unknown[]): Response {
   return buildRawSseResponse(sse);
 }
 
-async function withSseServer(handler: RequestListener, run: (origin: string) => Promise<void>) {
-  const server = createServer(handler);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing Google loopback server address");
-    }
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-}
-
-function googleChunk(
-  parts: Record<string, unknown>[],
-  candidate: Record<string, unknown> = { finishReason: "STOP" },
-  extra: Record<string, unknown> = {},
-) {
-  return { candidates: [{ content: { parts }, ...candidate }], ...extra };
-}
-
-function mockGoogleChunks(...events: unknown[]): void {
-  guardedFetchMock.mockResolvedValueOnce(buildSseResponse(events));
-}
-
 function mockGoogleTextResponse(text = "ok"): void {
-  mockGoogleChunks(googleChunk([{ text }]));
-}
-
-function gemini3Model(overrides: Partial<Model<"google-generative-ai">> = {}) {
-  return geminiModel({
-    id: "gemini-3.1-pro-preview",
-    name: "Gemini 3.1 Pro Preview",
-    ...overrides,
-  });
-}
-
-function guardedInit(index = 0): RequestInit {
-  return expectDefined(requestCall(index)[1], "Google request init");
-}
-
-function requestCall(index = 0) {
-  return expectDefined(guardedFetchMock.mock.calls[index], "guarded fetch");
-}
-
-function guardedBody(index = 0) {
-  const body = guardedInit(index).body;
-  if (typeof body !== "string") {
-    throw new Error("Expected request body to be serialized JSON");
-  }
-  return JSON.parse(body) as Record<string, unknown> & {
-    contents: GoogleTestContentTurn[];
-    generationConfig?: Record<string, unknown>;
-  };
-}
-
-function expectedBudget(
-  maxOutputTokens: number | undefined,
-  thinkingBudget: number,
-  thoughts = true,
-) {
-  return {
-    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-    thinkingConfig: { ...(thoughts ? { includeThoughts: true } : {}), thinkingBudget },
-  };
+  guardedFetchMock.mockResolvedValueOnce(
+    buildSseResponse([{ candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }] }]),
+  );
 }
 
 function buildRateLimitResponse(): Response {
   return Response.json(
-    { error: { message: "quota exceeded", status: "RESOURCE_EXHAUSTED" } },
+    {
+      error: { message: "quota exceeded", status: "RESOURCE_EXHAUSTED" },
+    },
     { status: 429 },
   );
 }
 
 function buildRawSseResponse(sse: string): Response {
-  return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse));
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
 }
 
 function buildOpenRawSseResponse(params: { sse: string; onCancel: () => void }): Response {
@@ -316,25 +229,13 @@ function buildOpenRawSseResponse(params: { sse: string; onCancel: () => void }):
       params.onCancel();
     },
   });
-  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
-
-function mockOpenSse(sse = 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n') {
-  const cancel = vi.fn();
-  guardedFetchMock.mockResolvedValueOnce(buildOpenRawSseResponse({ sse, onCancel: cancel }));
-  return cancel;
-}
-
-function pendingResponseHook() {
-  const { promise: started, resolve } = Promise.withResolvers<void>();
-  const onResponse = vi.fn<() => void | Promise<void>>().mockImplementationOnce(() => {
-    resolve();
-    return new Promise<void>(() => {});
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
   });
-  return { started, onResponse, markStarted: resolve };
 }
 
-function delayedSseResponse(params: {
+function buildDelayedSecondSseResponse(params: {
   first: unknown;
   second: unknown;
   delayMs: number;
@@ -357,7 +258,30 @@ function delayedSseResponse(params: {
       }
     },
   });
-  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function requireMockCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  index: number,
+  label: string,
+): TArgs {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected ${label} mock call ${index}`);
+  }
+  return call;
+}
+
+function requireRequestInit(call: unknown[], label: string): RequestInit {
+  const init = call[1];
+  if (!init || typeof init !== "object") {
+    throw new Error(`Expected ${label} request init`);
+  }
+  return init as RequestInit;
 }
 
 function expectHeaders(init: RequestInit, expected: Record<string, string>): void {
@@ -365,6 +289,22 @@ function expectHeaders(init: RequestInit, expected: Record<string, string>): voi
   for (const [key, value] of Object.entries(expected)) {
     expect(headers.get(key)).toBe(value);
   }
+}
+
+function parseRequestJsonBody(init: RequestInit): Record<string, unknown> {
+  const requestBody = init.body;
+  if (typeof requestBody !== "string") {
+    throw new Error("Expected request body to be serialized JSON");
+  }
+  return JSON.parse(requestBody) as Record<string, unknown>;
+}
+
+function requireGenerationConfig(params: { generationConfig?: unknown }): Record<string, unknown> {
+  const config = params.generationConfig;
+  if (!config || typeof config !== "object") {
+    throw new Error("Expected generationConfig");
+  }
+  return config as Record<string, unknown>;
 }
 
 type GoogleTestContentTurn = Record<string, unknown> & {
@@ -376,37 +316,22 @@ function isModelTurnWithParts(content: Record<string, unknown>): content is Goog
 }
 
 function getFirstModelTurn(contents: Array<Record<string, unknown>>): GoogleTestContentTurn {
-  return expectDefined(contents.find(isModelTurnWithParts), "Google model turn");
+  const turn = contents.find(isModelTurnWithParts);
+  if (!turn) {
+    throw new Error("Expected at least one Google model turn");
+  }
+  return turn;
 }
 
 function getLastModelTurn(contents: Array<Record<string, unknown>>): GoogleTestContentTurn {
-  return getFirstModelTurn(contents.toReversed());
+  const turn = contents.toReversed().find(isModelTurnWithParts);
+  if (!turn) {
+    throw new Error("Expected at least one Google model turn");
+  }
+  return turn;
 }
 
-function expectUnsignedCall(turn: unknown, args = { q: "hello" }) {
-  expect(turn).toMatchObject({
-    role: "model",
-    parts: [{ thoughtSignature: SKIP_SIGNATURE, functionCall: { name: "lookup", args } }],
-  });
-}
-
-function assistantTurn(
-  content: Record<string, unknown>[],
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    role: "assistant",
-    provider: "google",
-    api: "google-generative-ai",
-    model: "gemini-3.1-pro-preview",
-    stopReason: "toolUse",
-    timestamp: 0,
-    content,
-    ...overrides,
-  };
-}
-
-function toolCallTurn({
+function googleToolCallAssistantTurn({
   timestamp = 0,
   provider = "google",
   api = "google-generative-ai",
@@ -425,8 +350,14 @@ function toolCallTurn({
   args?: Record<string, unknown>;
   thoughtSignature?: string;
 } = {}): Record<string, unknown> {
-  return assistantTurn(
-    [
+  return {
+    role: "assistant",
+    provider,
+    api,
+    model,
+    stopReason: "toolUse",
+    timestamp,
+    content: [
       {
         type: "toolCall",
         id,
@@ -435,19 +366,39 @@ function toolCallTurn({
         ...(thoughtSignature ? { thoughtSignature } : {}),
       },
     ],
-    { provider, api, model, timestamp },
-  );
+  };
 }
 
 function toolResultTurn(toolCallId = "call_1", timestamp = 1): Record<string, unknown> {
   return {
     role: "toolResult",
     timestamp,
-    content: [{ type: "toolResult", toolCallId, content: [{ type: "text", text: "ok" }] }],
+    content: [
+      {
+        type: "toolResult",
+        toolCallId,
+        content: [{ type: "text", text: "ok" }],
+      },
+    ],
   };
 }
 
-function parallelResult(name: "screenshot" | "weather"): Record<string, unknown> {
+function parallelGoogleToolCallAssistantTurn(): Record<string, unknown> {
+  return {
+    role: "assistant",
+    provider: "google",
+    api: "google-generative-ai",
+    model: "gemini-2.5-flash",
+    stopReason: "toolUse",
+    timestamp: 0,
+    content: [
+      { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
+      { type: "toolCall", id: "call_2", name: "weather", arguments: {} },
+    ],
+  };
+}
+
+function googleToolResultMessage(name: "screenshot" | "weather"): Record<string, unknown> {
   return {
     role: "toolResult",
     toolCallId: name === "screenshot" ? "call_1" : "call_2",
@@ -459,6 +410,28 @@ function parallelResult(name: "screenshot" | "weather"): Record<string, unknown>
     isError: false,
     timestamp: 1,
   };
+}
+
+function buildGoogleToolResultParams(
+  content: Array<Record<string, unknown>>,
+  options: {
+    model?: Partial<Model<"google-generative-ai">>;
+    toolName?: string;
+  } = {},
+) {
+  return buildGoogleGenerativeAiParams(buildGeminiModel(options.model), {
+    messages: [
+      googleToolCallAssistantTurn(),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: options.toolName ?? "lookup",
+        content,
+        isError: false,
+        timestamp: 1,
+      },
+    ],
+  } as never);
 }
 
 describe("google transport stream", () => {
@@ -492,27 +465,107 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    ["2.5 Pro low", ["gemini-2.5-pro", "low", 64], expectedBudget(2112, 2048)],
-    ["2.5 Pro off", ["gemini-2.5-pro", "off", 64], expectedBudget(192, 128, false)],
-    ["2.5 Flash off", ["gemini-2.5-flash", "off", 64], expectedBudget(64, 0, false)],
-    ["omitted cap", ["gemini-2.5-pro", "low", undefined], expectedBudget(undefined, 2048)],
-    ["omitted cap with Pro off", ["gemini-2.5-pro", "off", undefined], {}],
-    ["model ceiling", ["gemini-2.5-pro", "low", 8000], expectedBudget(8192, 2048)],
-    ["thinking budget ceiling", ["gemini-2.5-pro", "high", 64], expectedBudget(8192, 7168)],
-    [
-      "Gemini 3 level",
-      ["gemini-3.1-pro-preview", "low", 64],
-      { maxOutputTokens: 64, thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" } },
-    ],
-    [
-      "Gemini 3 automatic thinking",
-      ["gemini-3.1-pro-preview", "adaptive", 64],
-      { maxOutputTokens: 64, thinkingConfig: { includeThoughts: true } },
-    ],
-    ["dynamic budget", ["gemini-2.5-flash", "adaptive", 64], expectedBudget(64, -1)],
+    {
+      name: "2.5 Pro low",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 2112,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      name: "2.5 Pro off",
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: 64,
+      cap: 8192,
+      expected: { maxOutputTokens: 192, thinkingConfig: { thinkingBudget: 128 } },
+    },
+    {
+      name: "2.5 Flash off",
+      id: "gemini-2.5-flash",
+      reasoning: "off",
+      maxTokens: 64,
+      cap: 8192,
+      expected: { maxOutputTokens: 64, thinkingConfig: { thinkingBudget: 0 } },
+    },
+    {
+      name: "omitted cap",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: undefined,
+      cap: 8192,
+      expected: { thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 } },
+    },
+    {
+      name: "omitted cap with Pro off",
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: undefined,
+      cap: 8192,
+      expected: {},
+    },
+    {
+      name: "model ceiling",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 8000,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      name: "thinking budget ceiling",
+      id: "gemini-2.5-pro",
+      reasoning: "high",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 7168 },
+      },
+    },
+    {
+      name: "Gemini 3 level",
+      id: "gemini-3.1-pro-preview",
+      reasoning: "low",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+      },
+    },
+    {
+      name: "Gemini 3 automatic thinking",
+      id: "gemini-3.1-pro-preview",
+      reasoning: "adaptive",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true },
+      },
+    },
+    {
+      name: "dynamic budget",
+      id: "gemini-2.5-flash",
+      reasoning: "adaptive",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+      },
+    },
   ] as const)(
-    "applies thinking and caller output budgets in serialized requests: %s",
-    async (_name, [id, reasoning, maxTokens], expected) => {
+    "applies thinking and caller output budgets in serialized requests: $name",
+    async ({ id, reasoning, maxTokens, cap, expected }) => {
       for (const api of ["google-generative-ai", "google-vertex"] as const) {
         mockGoogleTextResponse();
         const streamFn =
@@ -520,7 +573,7 @@ describe("google transport stream", () => {
             ? createGoogleVertexTransportStreamFn()
             : createGoogleGenerativeAiTransportStreamFn();
         const model = {
-          ...geminiModel({ id, maxTokens: 8192 }),
+          ...buildGeminiModel({ id, maxTokens: cap }),
           api,
           provider: api === "google-vertex" ? "google-vertex" : "google",
         };
@@ -537,7 +590,12 @@ describe("google transport stream", () => {
         );
         const result = await stream.result();
         expect(result.stopReason).toBe("stop");
-        const payload = guardedBody(guardedFetchMock.mock.calls.length - 1);
+        const call = requireMockCall(
+          guardedFetchMock,
+          guardedFetchMock.mock.calls.length - 1,
+          "Google request",
+        );
+        const payload = parseRequestJsonBody(requireRequestInit(call, "Google request"));
         expect(payload.generationConfig ?? {}).toEqual(expected);
       }
     },
@@ -554,7 +612,7 @@ describe("google transport stream", () => {
     const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
 
     try {
-      await geminiResult({ options: { signal: controller.signal } });
+      await runGeminiStreamResult({ options: { signal: controller.signal } });
     } finally {
       unsubscribe();
     }
@@ -567,13 +625,21 @@ describe("google transport stream", () => {
     const videoData = "current-video-base64";
     const quicktimeData = "current-quicktime-base64";
     const imageData = "current-image-base64";
-    const providerContext: ProviderContext = videoContext([
-      { type: "text", text: "before" },
-      { type: "image", mimeType: "image/png", data: imageData },
-      { type: "video", mimeType: "video/mp4", data: videoData },
-      { type: "video", mimeType: "video/quicktime", data: quicktimeData },
-      { type: "text", text: "after" },
-    ]);
+    const providerContext: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "before" },
+            { type: "image", mimeType: "image/png", data: imageData },
+            { type: "video", mimeType: "video/mp4", data: videoData },
+            { type: "video", mimeType: "video/quicktime", data: quicktimeData },
+            { type: "text", text: "after" },
+          ],
+          timestamp: 0,
+        },
+      ],
+    };
     const handoff = vi.fn(async () => providerContext);
     const onPayload = vi.fn((payload: unknown) => {
       expect(JSON.stringify(payload)).not.toContain(videoData);
@@ -582,14 +648,16 @@ describe("google transport stream", () => {
       return payload;
     });
 
-    const result = await geminiResult({
-      model: geminiModel({ input: ["text", "image", "video"] as never }),
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
       context: { messages: [{ role: "user", content: "fallback", timestamp: 0 }] },
-      options: withContextHandoff({ onPayload }, handoff),
+      options: withProviderContextHandoff({ onPayload }, handoff),
     });
     expect(result.errorMessage).toBeUndefined();
 
-    const body = guardedBody() as { contents: GoogleTestContentTurn[] };
+    const body = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+    ) as { contents: GoogleTestContentTurn[] };
     expect(body.contents[0]?.parts).toEqual([
       { text: "before" },
       { inlineData: { mimeType: "image/png", data: imageData } },
@@ -605,12 +673,18 @@ describe("google transport stream", () => {
     mockGoogleTextResponse();
     const trustedData = "trusted-video-base64";
     const injectedData = "injected-video-base64";
-    const providerContext: ProviderContext = videoContext([
-      { type: "video", mimeType: "video/mp4", data: trustedData },
-    ]);
-    await geminiResult({
-      model: geminiModel({ input: ["text", "image", "video"] as never }),
-      options: withContextHandoff(
+    const providerContext: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "video", mimeType: "video/mp4", data: trustedData }],
+          timestamp: 0,
+        },
+      ],
+    };
+    await runGeminiStreamResult({
+      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
+      options: withProviderContextHandoff(
         {
           onPayload: (payload: unknown) => {
             const cloned = structuredClone(payload) as {
@@ -625,7 +699,10 @@ describe("google transport stream", () => {
         async () => providerContext,
       ),
     });
-    const bodyText = guardedInit().body as string;
+    const bodyText = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    ).body as string;
     expect(bodyText).not.toContain(trustedData);
     expect(bodyText).not.toContain(injectedData);
     expect(bodyText).toContain("native video slot unavailable");
@@ -638,20 +715,31 @@ describe("google transport stream", () => {
       expect(JSON.stringify(payload)).not.toContain(videoData);
       return payload;
     });
-    await geminiResult({
-      model: geminiModel({ input: ["text", "image", "video"] as never }),
-      options: withContextHandoff({ onPayload }, async () =>
-        videoContext([{ type: "video", mimeType: "video/x-msvideo", data: videoData }]),
-      ),
+    await runGeminiStreamResult({
+      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
+      options: withProviderContextHandoff({ onPayload }, async () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/x-msvideo", data: videoData }],
+            timestamp: 0,
+          },
+        ],
+      })),
     });
-    const body = guardedInit().body as string;
+    const body = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    ).body as string;
     expect(body).not.toContain(videoData);
     expect(body).toContain("unsupported Google video MIME type");
   });
 
   it("returns a useful provider error when the non-video request still exceeds 20MB", async () => {
-    const result = await geminiResult({
-      context: { messages: [{ role: "user", content: "A".repeat(20_000_000), timestamp: 0 }] },
+    const result = await runGeminiStreamResult({
+      context: {
+        messages: [{ role: "user", content: "A".repeat(20_000_000), timestamp: 0 }],
+      },
     });
     expect(result).toMatchObject({
       stopReason: "error",
@@ -676,7 +764,7 @@ describe("google transport stream", () => {
     const onResponse = vi.fn();
     const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
-    const result = await geminiResult({ options });
+    const result = await runGeminiStreamResult({ options });
 
     expect(result.stopReason).toBe(status === 200 ? "stop" : "error");
     if (status === 200) {
@@ -691,19 +779,25 @@ describe("google transport stream", () => {
   });
 
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {
-    mockGoogleChunks(
-      googleChunk(
-        [
-          { thought: true, text: "draft", thoughtSignature: "c2lnXzE=" },
-          { text: "answer" },
-          {
-            thoughtSignature: "Y2FsbF9zaWdfMQ==",
-            functionCall: { name: "lookup", args: { q: "hello" } },
-          },
-        ],
-        undefined,
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
         {
           responseId: "resp_1",
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { thought: true, text: "draft", thoughtSignature: "c2lnXzE=" },
+                  { text: "answer" },
+                  {
+                    thoughtSignature: "Y2FsbF9zaWdfMQ==",
+                    functionCall: { name: "lookup", args: { q: "hello" } },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
           usageMetadata: {
             promptTokenCount: 10,
             cachedContentTokenCount: 2,
@@ -712,11 +806,11 @@ describe("google transport stream", () => {
             totalTokenCount: 18,
           },
         },
-      ),
+      ]),
     );
 
     const model = attachModelProviderRequestTransport(
-      geminiModel({
+      buildGeminiModel({
         id: "gemini-3.1-pro-preview",
         name: "Gemini 3.1 Pro Preview",
         baseUrl: "https://generativelanguage.googleapis.com",
@@ -731,27 +825,40 @@ describe("google transport stream", () => {
     );
 
     const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await streamFn(
-      model,
-      {
-        ...toolContext({ type: "object", properties: { q: { type: "string" } }, required: ["q"] }),
-        systemPrompt: "Follow policy.",
-      },
-      {
-        apiKey: "gemini-api-key",
-        cachedContent: " cachedContents/request-cache ",
-        reasoning: "medium",
-        toolChoice: "auto",
-      } as Parameters<typeof streamFn>[2],
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          systemPrompt: "Follow policy.",
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: {
+                type: "object",
+                properties: { q: { type: "string" } },
+                required: ["q"],
+              },
+            },
+          ],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+          cachedContent: " cachedContents/request-cache ",
+          reasoning: "medium",
+          toolChoice: "auto",
+        } as Parameters<typeof streamFn>[2],
+      ),
     );
     const result = await stream.result();
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
-    const guardedCall = requestCall();
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     expect(guardedCall[0]).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
     );
-    const init = guardedInit();
+    const init = requireRequestInit(guardedCall, "guarded fetch");
     expect(init.method).toBe("POST");
     expectHeaders(init, {
       accept: "text/event-stream",
@@ -761,40 +868,53 @@ describe("google transport stream", () => {
     });
     expect(new Headers(init.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
 
-    const payload = guardedBody();
+    const payload = parseRequestJsonBody(init);
     expect(payload.cachedContent).toBe("cachedContents/request-cache");
-    expect([payload.systemInstruction, payload.tools, payload.toolConfig]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
-    expect(payload.generationConfig?.thinkingConfig).toEqual({
+    expect(payload.systemInstruction).toBeUndefined();
+    expect(payload.tools).toBeUndefined();
+    expect(payload.toolConfig).toBeUndefined();
+    expect((payload.generationConfig as { thinkingConfig?: unknown }).thinkingConfig).toEqual({
       includeThoughts: true,
       thinkingLevel: "HIGH",
     });
-    expect(result).toMatchObject({
-      api: "google-generative-ai",
-      provider: "google",
-      responseId: "resp_1",
-      stopReason: "toolUse",
-      usage: { input: 8, output: 8, cacheRead: 2, totalTokens: 18 },
+    expect(result.api).toBe("google-generative-ai");
+    expect(result.provider).toBe("google");
+    expect(result.responseId).toBe("resp_1");
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.usage.input).toBe(8);
+    expect(result.usage.output).toBe(8);
+    expect(result.usage.cacheRead).toBe(2);
+    expect(result.usage.totalTokens).toBe(18);
+    expect(result.content).toHaveLength(3);
+    expect(result.content[0]).toEqual({
+      type: "thinking",
+      thinking: "draft",
+      thinkingSignature: "c2lnXzE=",
     });
-    expect(result.content).toEqual([
-      { type: "thinking", thinking: "draft", thinkingSignature: "c2lnXzE=" },
-      expect.objectContaining({ type: "text", text: "answer" }),
-      expect.objectContaining({
-        type: "toolCall",
-        name: "lookup",
-        arguments: { q: "hello" },
-        thoughtSignature: "Y2FsbF9zaWdfMQ==",
-      }),
-    ]);
+    expect(result.content[1]?.type).toBe("text");
+    expect(result.content[1]).toHaveProperty("text", "answer");
+    expect(result.content[2]?.type).toBe("toolCall");
+    expect(result.content[2]).toHaveProperty("name", "lookup");
+    expect(result.content[2]).toHaveProperty("arguments", { q: "hello" });
+    expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
   it.each([
-    { provider: "google", requested: "google/gemini-2.5-pro", returned: ["gemini-2.5-pro"] },
-    { provider: "google", requested: "models/gemini-2.5-pro", returned: ["gemini-2.5-pro"] },
-    { provider: "google", requested: "gemini-2.5-pro", returned: ["models/gemini-2.5-pro"] },
+    {
+      provider: "google",
+      requested: "google/gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google",
+      requested: "models/gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: ["models/gemini-2.5-pro"],
+    },
     {
       provider: "google",
       requested: "tunedModels/fixture-gemini",
@@ -812,101 +932,210 @@ describe("google transport stream", () => {
       returned: ["publishers/meta/models/gemini-2.5-pro"],
       expected: "publishers/meta/models/gemini-2.5-pro",
     },
-    { provider: "google", requested: "gemini-2.5-pro", returned: [undefined, "", "   "] },
+    {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: [undefined, "", "   "],
+    },
     {
       provider: "google",
       requested: "gemini-2.5-pro",
       returned: ["", "gemini-2.5-pro-002", "gemini-2.5-pro-003"],
       expected: "gemini-2.5-pro-002",
     },
-    {
-      provider: "google",
-      requested: "google/gemini-2.5-pro",
-      returned: ["gemini-2.5-pro-002"],
-      expected: "gemini-2.5-pro-002",
-      wirePath: true,
-    },
-    {
-      provider: "google-vertex",
-      requested: "google/gemini-2.5-pro",
-      returned: ["gemini-2.5-pro-002"],
-      expected: "gemini-2.5-pro-002",
-      wirePath: true,
-    },
-    {
-      provider: "google-vertex",
-      requested: "gemini-2.5-pro",
-      returned: [
-        "projects/fixture-project/locations/global/publishers/google/models/gemini-2.5-pro",
-      ],
-      wirePath: true,
-    },
   ])(
-    "preserves registered $provider model identity for $requested over HTTP SSE",
-    async ({ provider, requested, returned, expected, wirePath }) => {
+    "retains the concrete provider-returned model only when it actually differs ($provider, $requested)",
+    async ({ provider, requested, returned, expected }) => {
       vi.stubEnv("GOOGLE_CLOUD_PROJECT", "fixture-google-project");
       vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
-      const responseId = wirePath ? "loopback-google-response" : "actual-google-response";
-      const events = returned.map((modelVersion, index) => ({
-        ...(modelVersion === undefined ? {} : { modelVersion }),
-        ...(index === returned.length - 1
-          ? googleChunk([{ text: "actual response" }], undefined, { responseId })
-          : {}),
-      }));
-      const requests: Array<{ method?: string; url?: string }> = [];
-      await withSseServer(
-        (request, response) => {
-          requests.push({ method: request.method, url: request.url });
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(
-            events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") +
-              "data: [DONE]\n\n",
-          );
-        },
-        async (origin) => {
-          buildGuardedModelFetchMock.mockReturnValue(fetch);
-          const model =
-            provider === "google"
-              ? geminiModel({ id: requested, baseUrl: `${origin}/v1beta` })
-              : vertexModel({ id: requested, baseUrl: origin });
-          const result = await runRegisteredStream(provider, model);
-          if (wirePath) {
-            expect(requests).toEqual([
-              {
-                method: "POST",
-                url: expect.stringContaining(
-                  "/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
-                ),
-              },
-            ]);
-          }
-          expect(result).toMatchObject({ responseId, stopReason: "stop" });
-          if (expected) {
-            expect(result.responseModel).toBe(expected);
-          } else {
-            expect(result).not.toHaveProperty("responseModel");
-          }
-        },
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse(
+          returned.map((modelVersion, index) => ({
+            ...(modelVersion === undefined ? {} : { modelVersion }),
+            ...(index === returned.length - 1
+              ? {
+                  responseId: "actual-google-response",
+                  candidates: [
+                    { content: { parts: [{ text: "actual response" }] }, finishReason: "STOP" },
+                  ],
+                }
+              : {}),
+          })),
+        ),
       );
+
+      const model =
+        provider === "google"
+          ? buildGeminiModel({ id: requested })
+          : buildGoogleVertexModel({ id: requested });
+      const { buildGoogleProvider } = await import("./provider-registration.js");
+      const streamFn = buildGoogleProvider().createStreamFn?.({
+        provider,
+        modelId: requested,
+        model,
+      });
+      if (!streamFn) {
+        throw new Error(`Missing registered ${provider} stream`);
+      }
+      const stream = await Promise.resolve(
+        streamFn(
+          model,
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          {
+            apiKey: "fixture-google-api-key",
+          },
+        ),
+      );
+      const result = await stream.result();
+
+      expect(result.responseId).toBe("actual-google-response");
+      expect(result.stopReason).toBe("stop");
+      if (expected) {
+        expect(result.responseModel).toBe(expected);
+      } else {
+        expect(result).not.toHaveProperty("responseModel");
+      }
     },
   );
 
   it.each([
-    ["billed tool-result tokens", { toolUsePromptTokenCount: 5, totalTokenCount: 19 }, 13, 19],
-    ["missing optional aggregate", {}, 8, 14],
-  ])("accounts for %s", async (_name, extraUsage, expectedInput, expectedTotal) => {
-    mockGoogleChunks({
-      candidates: [{ finishReason: "STOP" }],
+    {
+      provider: "google",
+      requested: "google/gemini-2.5-pro",
+      returned: "gemini-2.5-pro-002",
+      expected: "gemini-2.5-pro-002",
+    },
+    {
+      provider: "google-vertex",
+      requested: "google/gemini-2.5-pro",
+      returned: "gemini-2.5-pro-002",
+      expected: "gemini-2.5-pro-002",
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: "projects/fixture-project/locations/global/publishers/google/models/gemini-2.5-pro",
+    },
+  ])(
+    "keeps the registered $provider model identity across actual localhost HTTP SSE",
+    async ({ provider, requested, returned, expected }) => {
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "fixture-google-project");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+      const observedRequests: Array<{ method?: string; url?: string }> = [];
+      const server = createServer((request, response) => {
+        observedRequests.push({ method: request.method, url: request.url });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            responseId: "loopback-google-response",
+            modelVersion: returned,
+            candidates: [
+              { content: { parts: [{ text: "actual response" }] }, finishReason: "STOP" },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing Google loopback server address");
+        }
+        buildGuardedModelFetchMock.mockReturnValue(fetch);
+        const model =
+          provider === "google"
+            ? buildGeminiModel({
+                id: requested,
+                baseUrl: `http://127.0.0.1:${address.port}/v1beta`,
+              })
+            : buildGoogleVertexModel({
+                id: requested,
+                baseUrl: `http://127.0.0.1:${address.port}`,
+              });
+        const { buildGoogleProvider } = await import("./provider-registration.js");
+        const streamFn = buildGoogleProvider().createStreamFn?.({
+          provider,
+          modelId: requested,
+          model,
+        });
+        if (!streamFn) {
+          throw new Error(`Missing registered ${provider} stream`);
+        }
+        const stream = await Promise.resolve(
+          streamFn(
+            model,
+            { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+            {
+              apiKey: "fixture-google-api-key",
+            },
+          ),
+        );
+        const result = await stream.result();
+
+        expect(observedRequests).toEqual([
+          {
+            method: "POST",
+            url: expect.stringContaining("/models/gemini-2.5-pro:streamGenerateContent?alt=sse"),
+          },
+        ]);
+        expect(result).toMatchObject({
+          responseId: "loopback-google-response",
+          stopReason: "stop",
+        });
+        if (expected) {
+          expect(result.responseModel).toBe(expected);
+        } else {
+          expect(result).not.toHaveProperty("responseModel");
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "includes billed tool-result prompt tokens in input accounting",
       usageMetadata: {
         promptTokenCount: 10,
         cachedContentTokenCount: 2,
         candidatesTokenCount: 3,
         thoughtsTokenCount: 1,
-        ...extraUsage,
+        toolUsePromptTokenCount: 5,
+        totalTokenCount: 19,
       },
-    });
-    const result = await geminiResult({
-      model: geminiModel({ cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 } }),
+      expectedInput: 13,
+      expectedTotal: 19,
+    },
+    {
+      name: "derives the total when Google omits its optional aggregate",
+      usageMetadata: {
+        promptTokenCount: 10,
+        cachedContentTokenCount: 2,
+        candidatesTokenCount: 3,
+        thoughtsTokenCount: 1,
+      },
+      expectedInput: 8,
+      expectedTotal: 14,
+    },
+  ])("$name", async ({ usageMetadata, expectedInput, expectedTotal }) => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }], usageMetadata }]),
+    );
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 },
+      }),
       options: { apiKey: "gemini-api-key" },
     });
 
@@ -952,8 +1181,17 @@ describe("google transport stream", () => {
   ])(
     "surfaces blocked $provider prompts as typed stream errors",
     async ({ provider, feedback, expectedCode, expectedMessage }) => {
-      mockGoogleChunks({ promptFeedback: feedback });
-      const result = await runProviderResult(provider);
+      guardedFetchMock.mockResolvedValueOnce(buildSseResponse([{ promptFeedback: feedback }]));
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        await useGoogleAuthLibraryCredentials("blocked", "ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
 
       expect(result).toMatchObject({
         stopReason: "error",
@@ -979,16 +1217,33 @@ describe("google transport stream", () => {
       ending === "empty"
         ? buildRawSseResponse("")
         : buildSseResponse([
-            googleChunk(
-              [{ text: "partial output" }],
-              ending === "unspecified" ? { finishReason: "FINISH_REASON_UNSPECIFIED" } : {},
-            ),
+            {
+              candidates: [
+                {
+                  content: { parts: [{ text: "partial output" }] },
+                  ...(ending === "unspecified"
+                    ? { finishReason: "FINISH_REASON_UNSPECIFIED" }
+                    : {}),
+                },
+              ],
+            },
           ]),
     );
-    const result = await runProviderResult(
-      provider,
-      ending === "empty" ? { model: gemini3Model(), options: { reasoning: "high" } } : {},
-    );
+    if (provider === "google-vertex") {
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+      await useGoogleAuthLibraryCredentials("unfinished", "ya29.vertex-token");
+    }
+
+    const result =
+      provider === "google-vertex"
+        ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+        : await runGeminiStreamResult({
+            ...(ending === "empty"
+              ? { model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }) }
+              : {}),
+            options: ending === "empty" ? { reasoning: "high" } : { apiKey: "gemini-api-key" },
+          });
 
     expect(result).toMatchObject({
       stopReason: "error",
@@ -1004,11 +1259,20 @@ describe("google transport stream", () => {
   it.each(["SAFETY", "MALFORMED_FUNCTION_CALL"] as const)(
     "preserves the actionable %s candidate finish message",
     async (finishReason) => {
-      mockGoogleChunks({
-        candidates: [{ finishReason, finishMessage: "Provider rejected the generated response" }],
-      });
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                finishReason,
+                finishMessage: "Provider rejected the generated response",
+              },
+            ],
+          },
+        ]),
+      );
 
-      const result = await geminiResult({ options: { apiKey: "gemini-api-key" } });
+      const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
 
       expect(result).toMatchObject({
         stopReason: "error",
@@ -1022,19 +1286,35 @@ describe("google transport stream", () => {
   it("rotates Gemini LLM API keys when a pre-stream request is rate limited", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");
-    guardedFetchMock
-      .mockResolvedValueOnce(buildRateLimitResponse())
-      .mockResolvedValueOnce(buildSseResponse([googleChunk([{ text: "recovered" }])]));
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse()).mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
 
-    const result = await geminiResult({ options: { apiKey: "gemini-key-1" } });
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-key-1" } });
 
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
     expect(guardedFetchMock).toHaveBeenCalledTimes(2);
-    expectHeaders(guardedInit(), { "x-goog-api-key": "gemini-key-1" });
-    expectHeaders(guardedInit(1), { "x-goog-api-key": "gemini-key-2" });
-    const firstBody = guardedInit().body;
-    const secondBody = guardedInit(1).body;
+    expectHeaders(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+      { "x-goog-api-key": "gemini-key-1" },
+    );
+    expectHeaders(
+      requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+      { "x-goog-api-key": "gemini-key-2" },
+    );
+    const firstBody = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    ).body;
+    const secondBody = requireRequestInit(
+      requireMockCall(guardedFetchMock, 1, "guarded fetch"),
+      "guarded fetch",
+    ).body;
     expect(secondBody).toBe(firstBody);
   });
 
@@ -1042,12 +1322,18 @@ describe("google transport stream", () => {
     {
       name: "does not rotate OAuth JSON credentials through configured Gemini API keys",
       options: { apiKey: JSON.stringify({ token: "oauth-token", projectId: "demo" }) },
-      expectedHeaders: { Authorization: "Bearer oauth-token", "Content-Type": "application/json" },
+      expectedHeaders: {
+        Authorization: "Bearer oauth-token",
+        "Content-Type": "application/json",
+      },
       omitApiKeyHeader: true,
     },
     {
       name: "does not rotate when request headers override Gemini authentication",
-      options: { apiKey: "explicit-option-key", headers: { "x-goog-api-key": "header-key" } },
+      options: {
+        apiKey: "explicit-option-key",
+        headers: { "x-goog-api-key": "header-key" },
+      },
       expectedHeaders: { "x-goog-api-key": "header-key" },
     },
     {
@@ -1074,12 +1360,12 @@ describe("google transport stream", () => {
     vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
     guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
 
-    const result = await geminiResult({ model: geminiModel(model), options });
+    const result = await runGeminiStreamResult({ model: buildGeminiModel(model), options });
 
     expect(result.stopReason).toBe("error");
     expect(guardedFetchMock).toHaveBeenCalledTimes(1);
-    const guardedCall = requestCall();
-    const init = guardedInit();
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    const init = requireRequestInit(guardedCall, "guarded fetch");
     expectHeaders(init, Object.fromEntries(Object.entries(expectedHeaders)));
     if (expectedUrl) {
       expect(guardedCall[0]).toBe(expectedUrl);
@@ -1093,10 +1379,19 @@ describe("google transport stream", () => {
     "preserves %s when the partial response contains a function call",
     async (finishReason) => {
       const functionCall = { name: "lookup", args: { q: "hello" } };
-      mockGoogleChunks(googleChunk([{ functionCall }], { finishReason }));
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          { candidates: [{ content: { parts: [{ functionCall }] }, finishReason }] },
+        ]),
+      );
 
-      const result = await geminiResult({
-        context: toolContext(),
+      const result = await runGeminiStreamResult({
+        context: {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            { name: "lookup", description: "Look up a value", parameters: { type: "object" } },
+          ],
+        } as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1],
         options: { apiKey: "gemini-api-key" },
       });
 
@@ -1108,14 +1403,32 @@ describe("google transport stream", () => {
   );
 
   it("merges tool-call thought signatures from sibling SSE parts", async () => {
-    mockGoogleChunks(
-      googleChunk([
-        { functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } } },
-        { thoughtSignature: "bWVyZ2Vk" },
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
+                  },
+                  { thoughtSignature: "Y2FsbF9zaWdfbWVyZ2VkXzE=" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
       ]),
     );
 
-    const result = await geminiResult({ model: gemini3Model() });
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      }),
+    });
 
     expect(result.content).toEqual([
       {
@@ -1123,23 +1436,44 @@ describe("google transport stream", () => {
         id: "call_1",
         name: "lookup",
         arguments: { q: "hello" },
-        thoughtSignature: "bWVyZ2Vk",
+        thoughtSignature: "Y2FsbF9zaWdfbWVyZ2VkXzE=",
       },
     ]);
   });
 
   it("keeps duplicate tool-call ids and their own thought signatures distinct", async () => {
-    mockGoogleChunks(
-      googleChunk([
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
         {
-          functionCall: { id: "call_1", name: "first", args: { value: 1 } },
-          thoughtSignature: "first_signature",
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "call_1",
+                      name: "first",
+                      args: { value: 1 },
+                    },
+                    thoughtSignature: "first_signature",
+                  },
+                  {
+                    functionCall: {
+                      id: "call_1",
+                      name: "second",
+                      args: { value: 2 },
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
         },
-        { functionCall: { id: "call_1", name: "second", args: { value: 2 } } },
       ]),
     );
 
-    const result = await geminiResult();
+    const result = await runGeminiStreamResult();
     const toolCalls = result.content.filter((block) => block.type === "toolCall");
 
     expect(toolCalls).toHaveLength(2);
@@ -1149,22 +1483,43 @@ describe("google transport stream", () => {
       arguments: { value: 1 },
       thoughtSignature: "first_signature",
     });
-    expect(toolCalls[1]).toMatchObject({ name: "second", arguments: { value: 2 } });
+    expect(toolCalls[1]).toMatchObject({
+      name: "second",
+      arguments: { value: 2 },
+    });
     expect(toolCalls[1]).not.toHaveProperty("thoughtSignature", "first_signature");
     expect(toolCalls[1]?.id).not.toBe("call_1");
   });
 
   it("keeps explicit thinking signatures after tool-call SSE parts", async () => {
-    mockGoogleChunks(
-      googleChunk([
-        { functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } } },
-        { thought: true, thoughtSignature: "YWZ0ZXI=" },
-        { thought: true, text: "draft" },
-        { text: "answer" },
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
+                  },
+                  { thought: true, thoughtSignature: "dGhvdWdodF9zaWdfYWZ0ZXJfY2FsbA==" },
+                  { thought: true, text: "draft" },
+                  { text: "answer" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
       ]),
     );
 
-    const result = await geminiResult({ model: gemini3Model() });
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      }),
+    });
 
     expect(result.content[0]).toMatchObject({
       type: "toolCall",
@@ -1175,7 +1530,7 @@ describe("google transport stream", () => {
     expect(result.content[1]).toEqual({
       type: "thinking",
       thinking: "draft",
-      thinkingSignature: "YWZ0ZXI=",
+      thinkingSignature: "dGhvdWdodF9zaWdfYWZ0ZXJfY2FsbA==",
     });
     expect(result.content[2]).toEqual({ type: "text", text: "answer" });
   });
@@ -1185,28 +1540,37 @@ describe("google transport stream", () => {
     'data: {"candidates":[{"finishReason":"STOP"}]}\r\n',
   ])("rejects an incomplete SSE frame: %s", async (sse) => {
     guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(sse));
-    const result = await geminiResult({ options: { apiKey: "gemini-api-key" } });
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
     expect(result.stopReason).toBe("error");
     // Agent retry classifies this exact text as a transient disconnect.
     expect(result.errorMessage).toBe("Google SSE stream ended with an incomplete frame");
   });
 
-  const terminalFrame = 'data: {"candidates":[{"finishReason":"STOP"}]}';
   it.each([
-    ["keepalive comment", `${terminalFrame}\n\r: keepalive\n`],
-    ["control fields", `${terminalFrame}\n\revent: ping\nid: heartbeat`],
-    ["empty data field", `${terminalFrame}\n\rdata:\n`],
-    ["carriage-return-only", `${terminalFrame}\r\r`],
-    ["line-feed then CRLF", `${terminalFrame}\n\r\n`],
-    ["CRLF then carriage-return", `${terminalFrame}\r\n\r`],
-    ["carriage-return then CRLF", `${terminalFrame}\r\r\n`],
-    [
-      "CRLF-separated data lines",
-      'data: {"candidates":[\r\ndata: {"finishReason":"STOP"}]}\r\n\r\n',
-    ],
-  ])("accepts Google SSE framing with %s", async (_label, sse) => {
+    ...[
+      { label: "keepalive comment", tail: ": keepalive\n" },
+      { label: "control fields", tail: "event: ping\nid: heartbeat" },
+      { label: "empty data field", tail: "data:\n" },
+    ].map(({ label, tail }) => ({
+      label,
+      sse: `data: {"candidates":[{"finishReason":"STOP"}]}\n\r${tail}`,
+    })),
+    ...[
+      { label: "carriage-return-only", delimiter: "\r\r" },
+      { label: "line-feed then CRLF", delimiter: "\n\r\n" },
+      { label: "CRLF then carriage-return", delimiter: "\r\n\r" },
+      { label: "carriage-return then CRLF", delimiter: "\r\r\n" },
+    ].map(({ label, delimiter }) => ({
+      label,
+      sse: `data: {"candidates":[{"finishReason":"STOP"}]}${delimiter}`,
+    })),
+    {
+      label: "CRLF-separated data lines",
+      sse: 'data: {"candidates":[\r\ndata: {"finishReason":"STOP"}]}\r\n\r\n',
+    },
+  ])("accepts Google SSE framing with $label", async ({ sse }) => {
     guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(sse));
-    const result = await geminiResult({ options: { apiKey: "gemini-api-key" } });
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
     expect(result.stopReason).toBe("stop");
   });
 
@@ -1216,39 +1580,59 @@ describe("google transport stream", () => {
   ])(
     "preserves an undelimited $framing error over a real Google HTTP/SSE stream",
     async ({ prefix }) => {
-      await withSseServer(
-        (request, response) => {
-          request.resume();
-          request.on("end", () => {
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            response.write('data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
-            response.end(
-              `${prefix}{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"live quota exhausted"}}`,
-            );
-          });
-        },
-        async (origin) => {
-          guardedFetchMock.mockImplementation((_url, init) => fetch(`${origin}/stream`, init));
-          const result = await geminiResult({ options: { apiKey: "test-google-key" } });
+      const server = createServer((request, response) => {
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.write('data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
+          response.end(
+            `${prefix}{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"live quota exhausted"}}`,
+          );
+        });
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
 
-          expect(result).toMatchObject({
-            stopReason: "error",
-            errorCode: "RESOURCE_EXHAUSTED",
-            errorMessage: expect.stringContaining("live quota exhausted"),
-          });
-        },
-      );
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing Google loopback server address");
+        }
+        guardedFetchMock.mockImplementation((_url, init) =>
+          fetch(`http://127.0.0.1:${address.port}/stream`, init),
+        );
+        const result = await runGeminiStreamResult({ options: { apiKey: "test-google-key" } });
+
+        expect(result).toMatchObject({
+          stopReason: "error",
+          errorCode: "RESOURCE_EXHAUSTED",
+          errorMessage: expect.stringContaining("live quota exhausted"),
+        });
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
     },
   );
 
   it("cancels open Gemini SSE bodies when parsing fails", async () => {
-    const cancel = mockOpenSse("data: {not json\n\n");
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: "data: {not json\n\n",
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
 
-    const result = await geminiResult({ options: { apiKey: "gemini-api-key" } });
+    const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
-    expect(cancel).toHaveBeenCalled();
+    expect(cancelCalled).toBe(true);
   });
 
   it.each(
@@ -1267,7 +1651,7 @@ describe("google transport stream", () => {
     "retries $modelId with $retryThinkingLevel thinking when the first $stalledPhase stalls",
     async ({ modelId, retryThinkingLevel, stalledPhase }) => {
       vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-      guardedFetchMock.mockImplementationOnce((_url, init) =>
+      guardedFetchMock.mockImplementationOnce((_url: string, init?: RequestInit) =>
         stalledPhase === "response body"
           ? Promise.resolve(
               new Response(new ReadableStream<Uint8Array>(), {
@@ -1287,21 +1671,36 @@ describe("google transport stream", () => {
       );
       mockGoogleTextResponse("recovered");
 
-      const result = await geminiResult({
-        model: geminiModel({ id: modelId }),
-        context: toolContext({ type: "object", properties: { q: { type: "string" } } }),
+      const result = await runGeminiStreamResult({
+        model: buildGeminiModel({ id: modelId }),
+        context: {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: { type: "object", properties: { q: { type: "string" } } },
+            },
+          ],
+        } as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1],
         options: { reasoning: "high" },
       });
 
       expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
       expect(guardedFetchMock).toHaveBeenCalledTimes(2);
-      const firstBody = guardedBody();
-      const retryBody = guardedBody(1);
-      expect(firstBody.generationConfig?.thinkingConfig).toEqual({
+      const firstBody = parseRequestJsonBody(
+        requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+      );
+      const retryBody = parseRequestJsonBody(
+        requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+      );
+      const firstGenerationConfig = requireGenerationConfig(firstBody);
+      const retryGenerationConfig = requireGenerationConfig(retryBody);
+      expect(firstGenerationConfig.thinkingConfig).toEqual({
         includeThoughts: true,
         thinkingLevel: "HIGH",
       });
-      expect(retryBody.generationConfig?.thinkingConfig).toEqual({
+      expect(retryGenerationConfig.thinkingConfig).toEqual({
         thinkingLevel: retryThinkingLevel,
       });
       expect(retryBody.tools).toEqual(firstBody.tools);
@@ -1310,82 +1709,102 @@ describe("google transport stream", () => {
 
   it("does not retry when provider acceptance observation fails", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-    const cancel = mockOpenSse();
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
 
     const options = withProviderAcceptanceObserver({ reasoning: "high" }, () => {
       throw new Error("acceptance observer failed");
     });
-    const result = await geminiResult({ model: gemini3Model(), options });
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options,
+    });
 
     expect(result).toMatchObject({
       stopReason: "error",
       errorMessage: "acceptance observer failed",
     });
     expect(guardedFetchMock).toHaveBeenCalledOnce();
-    expect(cancel).toHaveBeenCalled();
+    expect(cancelCalled).toBe(true);
   });
 
-  it.each(["response callback", "response body"])(
-    "does not retry when an external abort interrupts a pending %s",
-    async (phase) => {
-      vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
-      const controller = new AbortController();
-      const cancel = vi.fn();
-      const { started, onResponse, markStarted } = pendingResponseHook();
-      const response =
-        phase === "response callback"
-          ? buildOpenRawSseResponse({
-              sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
-              onCancel: cancel,
-            })
-          : new Response(
-              new ReadableStream<Uint8Array>({
-                pull() {
-                  markStarted();
-                },
-                cancel,
-              }),
-              { headers: { "content-type": "text/event-stream" } },
-            );
-      guardedFetchMock.mockResolvedValueOnce(response);
-      const result = geminiResult({
-        model: gemini3Model(),
-        options: {
-          reasoning: "high",
-          signal: controller.signal,
-          ...(phase === "response callback" ? { onResponse } : {}),
-        },
-      });
-      await started;
-      controller.abort(
-        Object.assign(new Error("operator canceled the request"), { code: "OPERATOR_CANCELLED" }),
-      );
-      await expect(result).resolves.toMatchObject({
-        stopReason: "aborted",
-        errorCode: "OPERATOR_CANCELLED",
-        errorMessage: "operator canceled the request",
-      });
-      if (phase === "response callback") {
-        expect(onResponse).toHaveBeenCalledOnce();
-      }
-      expect(guardedFetchMock).toHaveBeenCalledOnce();
-      expect(cancel).toHaveBeenCalledOnce();
-    },
-  );
+  it("aborts a pending response callback without retrying", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: cancel,
+      }),
+    );
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    const onResponse = vi.fn(() => {
+      markHookStarted();
+      return new Promise<void>(() => {});
+    });
+    const options = {
+      reasoning: "high",
+      signal: controller.signal,
+      onResponse,
+    };
+    const resultPromise = runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options,
+    });
+    await hookStarted;
+    controller.abort(
+      Object.assign(new Error("operator canceled the request"), {
+        code: "OPERATOR_CANCELLED",
+      }),
+    );
+
+    await expect(resultPromise).resolves.toMatchObject({
+      stopReason: "aborted",
+      errorCode: "OPERATOR_CANCELLED",
+      errorMessage: "operator canceled the request",
+    });
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 
   it("retries when a pending response callback reaches the Gemini first-response deadline", async () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-    const cancel = mockOpenSse();
+    const cancel = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      buildOpenRawSseResponse({
+        sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+        onCancel: cancel,
+      }),
+    );
     mockGoogleTextResponse("recovered");
-    const { started, onResponse } = pendingResponseHook();
-    const resultPromise = geminiResult({
-      model: gemini3Model(),
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    const onResponse = vi.fn<() => void | Promise<void>>().mockImplementationOnce(() => {
+      markHookStarted();
+      return new Promise<void>(() => {});
+    });
+    const resultPromise = runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
       options: { reasoning: "high", onResponse },
     });
 
     // Advance only after callback entry so host load cannot race recovery.
-    await started;
+    await hookStarted;
     await vi.advanceTimersByTimeAsync(9);
     expect(guardedFetchMock).toHaveBeenCalledOnce();
     expect(cancel).not.toHaveBeenCalled();
@@ -1408,38 +1827,95 @@ describe("google transport stream", () => {
     );
     mockGoogleTextResponse("recovered");
 
-    const result = await geminiResult({
-      model: geminiModel({
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
         id: "gemini-3.1-pro-preview",
         name: "Gemini 3.1 Pro Preview",
         input: ["text", "image", "video"] as never,
       }),
-      options: withContextHandoff({ reasoning: "high" }, async () =>
-        videoContext([{ type: "video", mimeType: "video/mp4", data: "A".repeat(20_000_000) }]),
-      ),
+      options: withProviderContextHandoff({ reasoning: "high" }, async () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/mp4", data: "A".repeat(20_000_000) }],
+            timestamp: 0,
+          },
+        ],
+      })),
     });
 
     expect(result.errorMessage).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
     expect(guardedFetchMock).toHaveBeenCalledTimes(2);
     for (const index of [0, 1]) {
-      const body = guardedInit(index).body as string;
+      const body = requireRequestInit(
+        requireMockCall(guardedFetchMock, index, "guarded fetch"),
+        "guarded fetch",
+      ).body as string;
       expect(new TextEncoder().encode(body).byteLength).toBeLessThan(20_000_000);
       expect(body).toContain("native video slot unavailable");
     }
   });
 
+  it("does not retry when an external abort interrupts a stalled Gemini 3 response body", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
+    const controller = new AbortController();
+    let resolveBodyRead!: () => void;
+    const bodyRead = new Promise<void>((resolve) => {
+      resolveBodyRead = resolve;
+    });
+    const cancel = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            resolveBodyRead();
+          },
+          cancel,
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+
+    const result = runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options: { reasoning: "high", signal: controller.signal },
+    });
+    await bodyRead;
+    controller.abort(
+      Object.assign(new Error("operator canceled the request"), { code: "OPERATOR_CANCELLED" }),
+    );
+
+    await expect(result).resolves.toMatchObject({
+      stopReason: "aborted",
+      errorCode: "OPERATOR_CANCELLED",
+      errorMessage: "operator canceled the request",
+    });
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("keeps streaming after the first Gemini 3 chunk arrives before the retry deadline", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock.mockResolvedValueOnce(
-      delayedSseResponse({
-        first: googleChunk([{ text: "first " }], {}),
-        second: googleChunk([{ text: "second" }]),
+      buildDelayedSecondSseResponse({
+        first: {
+          candidates: [{ content: { parts: [{ text: "first " }] } }],
+        },
+        second: {
+          candidates: [{ content: { parts: [{ text: "second" }] }, finishReason: "STOP" }],
+        },
         delayMs: 25,
       }),
     );
 
-    const result = await geminiResult({ model: gemini3Model(), options: { reasoning: "high" } });
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      }),
+      options: { reasoning: "high" },
+    });
 
     expect(result.content).toEqual([{ type: "text", text: "first second" }]);
     expect(guardedFetchMock).toHaveBeenCalledTimes(1);
@@ -1458,10 +1934,25 @@ describe("google transport stream", () => {
       vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
       vi.stubEnv("GOOGLE_CLOUD_LOCATION", location);
       googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
-      mockGoogleChunks({ candidates: [{ finishReason: "STOP" }] });
-      await vertexResult({ fetch: vi.fn() });
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+      );
+      const streamFn = createGoogleVertexTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          buildGoogleVertexModel(),
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
+            typeof streamFn
+          >[1],
+          {
+            apiKey: "gcp-vertex-credentials",
+            fetch: vi.fn(),
+          } as Parameters<typeof streamFn>[2],
+        ),
+      );
+      await stream.result();
 
-      const [url] = requestCall();
+      const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
       expect(String(url)).toBe(
         `${origin}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
       );
@@ -1470,12 +1961,18 @@ describe("google transport stream", () => {
 
   it("never refreshes stale home ADC when the selected Cloud SDK directory has no credentials", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-stale-home-"));
-    await writeAdc(path.join(tempDir, "home", ".config", "gcloud"), {
-      type: "authorized_user",
-      client_id: "stale-client",
-      client_secret: "stale-secret",
-      refresh_token: "stale-refresh",
-    });
+    const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
+    await mkdir(homeCredentialsDir, { recursive: true });
+    await writeFile(
+      path.join(homeCredentialsDir, "application_default_credentials.json"),
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "stale-client",
+        client_secret: "stale-secret",
+        refresh_token: "stale-refresh",
+      }),
+      "utf8",
+    );
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
     vi.stubEnv("CLOUDSDK_CONFIG", path.join(tempDir, "missing-cloud-sdk"));
     vi.stubEnv("HOME", path.join(tempDir, "home"));
@@ -1483,7 +1980,9 @@ describe("google transport stream", () => {
     googleAuthGetAccessTokenMock.mockResolvedValueOnce("fixture-google-auth-token");
     const tokenFetchMock = vi.fn();
 
-    await expectVertexToken(tokenFetchMock, "fixture-google-auth-token");
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer fixture-google-auth-token",
+    });
     expect(googleAuthMock).toHaveBeenCalledWith({
       scopes: ["https://www.googleapis.com/auth/cloud-platform"],
       clientOptions: { transporterOptions: { timeout: 30_000 } },
@@ -1503,7 +2002,9 @@ describe("google transport stream", () => {
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
     googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.file-token");
 
-    await expectVertexToken(vi.fn(), "ya29.file-token");
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(vi.fn())).resolves.toEqual({
+      Authorization: "Bearer ya29.file-token",
+    });
     expect(googleAuthMock).toHaveBeenCalledWith({
       scopes: ["https://www.googleapis.com/auth/cloud-platform"],
       credentials,
@@ -1520,7 +2021,7 @@ describe("google transport stream", () => {
   });
 
   it("bounds google-auth-library ADC token resolution at the Vertex owner", async () => {
-    await useAuthLibraryAdc("authlib-timeout");
+    await useGoogleAuthLibraryCredentials("authlib-timeout");
     vi.useFakeTimers();
     googleAuthGetAccessTokenMock
       .mockReturnValueOnce(new Promise(() => {}))
@@ -1535,13 +2036,15 @@ describe("google transport stream", () => {
       name: "TimeoutError",
       message: "request timed out",
     });
-    await expectVertexToken(vi.fn(), "ya29.recovered-token");
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(vi.fn())).resolves.toEqual({
+      Authorization: "Bearer ya29.recovered-token",
+    });
     expect(googleAuthMock).toHaveBeenCalledTimes(2);
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses refreshed google-auth ADC tokens on the next Vertex request", async () => {
-    await useAuthLibraryAdc("authlib-expiry");
+    await useGoogleAuthLibraryCredentials("authlib-expiry");
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-03T00:00:00.000Z"));
     googleAuthGetAccessTokenMock
@@ -1549,33 +2052,61 @@ describe("google transport stream", () => {
       .mockResolvedValueOnce("ya29.second-token");
     const tokenFetchMock = vi.fn();
 
-    await expectVertexToken(tokenFetchMock, "ya29.first-token");
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.first-token",
+    });
     vi.setSystemTime(new Date("2026-10-03T00:02:00.000Z"));
-    await expectVertexToken(tokenFetchMock, "ya29.second-token");
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.second-token",
+    });
 
     expect(googleAuthMock).toHaveBeenCalledOnce();
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
     expect(tokenFetchMock).not.toHaveBeenCalled();
   });
 
-  const jsonQuota = "fixture-json-billing";
-  const envQuota = "fixture-env-billing";
-  const serviceQuota = "fixture-service-billing";
-  const metadataQuota = "fixture-metadata-billing";
   it.each([
-    ["authorized_user", jsonQuota, "", jsonQuota],
-    ["authorized_user", jsonQuota, envQuota, envQuota],
-    ["service_account", serviceQuota, "", serviceQuota],
-    ["metadata", "", metadataQuota, metadataQuota],
+    {
+      scenario: "authorized-user ADC quota project",
+      credentialType: "authorized_user",
+      credentialQuotaProject: "fixture-json-billing",
+      envQuotaProject: "",
+      expectedQuotaProject: "fixture-json-billing",
+    },
+    {
+      scenario: "environment quota project overriding authorized-user ADC",
+      credentialType: "authorized_user",
+      credentialQuotaProject: "fixture-json-billing",
+      envQuotaProject: "fixture-env-billing",
+      expectedQuotaProject: "fixture-env-billing",
+    },
+    {
+      scenario: "google-auth service-account ADC quota project",
+      credentialType: "service_account",
+      credentialQuotaProject: "fixture-service-billing",
+      envQuotaProject: "",
+      expectedQuotaProject: "fixture-service-billing",
+    },
+    {
+      scenario: "google-auth metadata ADC environment quota project",
+      credentialType: "metadata",
+      credentialQuotaProject: "",
+      envQuotaProject: "fixture-metadata-billing",
+      expectedQuotaProject: "fixture-metadata-billing",
+    },
   ])(
-    "forwards %s quota %s with environment override %s on the Vertex request",
-    async (credentialType, credentialQuotaProject, envQuotaProject, expectedQuotaProject) => {
+    "forwards the $scenario on the actual Vertex request",
+    async ({ credentialType, credentialQuotaProject, envQuotaProject, expectedQuotaProject }) => {
       const tokenFetchMock = vi.fn();
       vi.stubEnv("GOOGLE_CLOUD_PROJECT", "fixture-project");
       vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
       vi.stubEnv("GOOGLE_CLOUD_QUOTA_PROJECT", envQuotaProject);
       if (credentialType === "authorized_user") {
-        await useUserAdc("quota-authorized-user", "fixture-refresh-token", credentialQuotaProject);
+        await useGoogleAuthorizedUserCredentials(
+          "quota-authorized-user",
+          "fixture-refresh-token",
+          credentialQuotaProject,
+        );
         tokenFetchMock.mockResolvedValueOnce(
           Response.json({ access_token: "fixture-vertex-token", expires_in: 3600 }),
         );
@@ -1583,14 +2114,17 @@ describe("google transport stream", () => {
         const tempDir = await mkdtemp(
           path.join(os.tmpdir(), "openclaw-google-vertex-quota-service-"),
         );
-        vi.stubEnv(
-          "GOOGLE_APPLICATION_CREDENTIALS",
-          await writeAdc(tempDir, {
+        const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+        await writeFile(
+          credentialsPath,
+          JSON.stringify({
             type: "service_account",
             client_email: "fixture@example.invalid",
             quota_project_id: credentialQuotaProject,
           }),
+          "utf8",
         );
+        vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
         googleAuthGetAccessTokenMock.mockResolvedValueOnce("fixture-vertex-token");
       } else {
         const tempDir = await mkdtemp(
@@ -1603,18 +2137,21 @@ describe("google transport stream", () => {
       }
       mockGoogleTextResponse();
 
-      await vertexResult({ fetch: tokenFetchMock });
+      await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
 
-      expectHeaders(guardedInit(), {
+      const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+      expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
         Authorization: "Bearer fixture-vertex-token",
         "x-goog-user-project": expectedQuotaProject,
       });
-      expect(new Headers(guardedInit().headers).has("x-goog-api-key")).toBe(false);
+      expect(
+        new Headers(requireRequestInit(guardedCall, "guarded fetch").headers).has("x-goog-api-key"),
+      ).toBe(false);
     },
   );
 
   it("times out an authorized_user ADC token refresh", async () => {
-    await useUserAdc("adc-timeout", "timeout-refresh-token");
+    await useGoogleAuthorizedUserCredentials("adc-timeout", "timeout-refresh-token");
     vi.useFakeTimers();
 
     let observedSignal: AbortSignal | undefined;
@@ -1652,7 +2189,7 @@ describe("google transport stream", () => {
   });
 
   it("refreshes authorized_user ADC from a compressed token response", async () => {
-    await useUserAdc("adc-gzip", "gzip-refresh-token");
+    await useGoogleAuthorizedUserCredentials("adc-gzip", "gzip-refresh-token");
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
     const tokenFetchMock = vi.fn().mockResolvedValue(
@@ -1660,16 +2197,22 @@ describe("google transport stream", () => {
         gzipSync(JSON.stringify({ access_token: "ya29.gzip-token", expires_in: 3600 })),
         {
           status: 200,
-          headers: { "content-encoding": "gzip", "content-type": "application/json" },
+          headers: {
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+          },
         },
       ),
     );
     mockGoogleTextResponse();
 
-    await vertexResult({ fetch: tokenFetchMock });
+    await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
 
     expect(tokenFetchMock).toHaveBeenCalledTimes(1);
-    expectHeaders(guardedInit(), { Authorization: "Bearer ya29.gzip-token" });
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      Authorization: "Bearer ya29.gzip-token",
+    });
   });
 
   it.each([
@@ -1678,7 +2221,7 @@ describe("google transport stream", () => {
   ])(
     "rejects oversized authorized_user ADC responses with $compression compression",
     async ({ compression, expected }) => {
-      await useUserAdc("adc-large", "large-refresh-token");
+      await useGoogleAuthorizedUserCredentials("adc-large", "large-refresh-token");
       const bytes = "x".repeat(1024 * 1024 + 1);
       const tokenFetchMock = vi.fn().mockResolvedValue(
         new Response(compression === "gzip" ? gzipSync(bytes) : bytes, {
@@ -1693,64 +2236,105 @@ describe("google transport stream", () => {
   );
 
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
-    await useUserAdc("unsafe-adc", "refresh-token");
+    await useGoogleAuthorizedUserCredentials("unsafe-adc", "refresh-token");
     const tokenFetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        Response.json({ access_token: "ya29.unsafe-token", expires_in: Number.MAX_SAFE_INTEGER }),
+        Response.json({
+          access_token: "ya29.unsafe-token",
+          expires_in: Number.MAX_SAFE_INTEGER,
+        }),
       )
       .mockResolvedValueOnce(Response.json({ access_token: "ya29.fresh-token", expires_in: 3600 }));
 
-    await expectVertexToken(tokenFetchMock, "ya29.unsafe-token");
-    await expectVertexToken(tokenFetchMock, "ya29.fresh-token");
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.unsafe-token",
+    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.fresh-token",
+    });
 
     expect(tokenFetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes authorized_user ADC from the Windows APPDATA fallback for Google Vertex requests", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-appdata-adc-"));
+    const homeDir = path.join(tempDir, "home");
     const appDataDir = path.join(tempDir, "AppData", "Roaming");
-    await useUserAdc(
-      "appdata",
-      "appdata-refresh-token",
-      undefined,
-      path.join(appDataDir, "gcloud"),
+    const fallbackDir = path.join(appDataDir, "gcloud");
+    const credentialsPath = path.join(fallbackDir, "application_default_credentials.json");
+    await mkdir(fallbackDir, { recursive: true });
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "appdata-refresh-token",
+      }),
+      "utf8",
     );
     vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
-    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("HOME", homeDir);
     vi.stubEnv("APPDATA", appDataDir);
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
     const tokenFetchMock = vi
-      .fn<typeof fetch>()
+      .fn()
       .mockResolvedValue(Response.json({ access_token: "ya29.appdata-token", expires_in: 3600 }));
     mockGoogleTextResponse();
 
-    await vertexResult({ fetch: tokenFetchMock });
+    await runGoogleVertexStreamResult({ fetch: tokenFetchMock });
 
-    const tokenCall = expectDefined(tokenFetchMock.mock.calls[0], "token fetch");
+    const tokenCall = requireMockCall(tokenFetchMock, 0, "token fetch");
     expect(tokenCall[0]).toBe("https://oauth2.googleapis.com/token");
-    const tokenInit = expectDefined(tokenCall[1], "token request init");
+    const tokenInit = requireRequestInit(tokenCall, "token fetch");
     expect(tokenInit.method).toBe("POST");
     expect(tokenInit.body).toBeInstanceOf(URLSearchParams);
     const requestBody = tokenInit.body as URLSearchParams;
     expect(requestBody?.get("refresh_token")).toBe("appdata-refresh-token");
-    const guardedCall = requestCall();
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     expect(typeof guardedCall[0]).toBe("string");
-    expectHeaders(guardedInit(), { Authorization: "Bearer ya29.appdata-token" });
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      Authorization: "Bearer ya29.appdata-token",
+    });
   });
 
   it.each([
-    ["transport alias", "openclaw-google-generative-ai-transport", "YWxpYXM="],
-    ["opaque same-route signature", "google-generative-ai", "b3BhcXVlLnNpZy11cmxfc2FmZX4x"],
-  ] as const)("replays signatures for %s", (_name, api, signature) => {
-    const params = buildGoogleGenerativeAiParams({ ...gemini3Model(), api }, {
+    {
+      name: "treats the Google transport alias as the same route for signature replay",
+      modelId: "gemini-3.1-pro-preview",
+      api: "openclaw-google-generative-ai-transport",
+      signature: "Y2FsbF9zaWdfYWxpYXNfMQ==",
       messages: [
-        toolCallTurn({ thoughtSignature: signature }),
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfYWxpYXNfMQ==" }),
         toolResultTurn(),
-        toolCallTurn({ timestamp: 2 }),
+        googleToolCallAssistantTurn({ timestamp: 2 }),
       ],
-    } as never);
+    },
+    {
+      name: "preserves opaque same-route Gemini thought signatures during replay",
+      modelId: "gemini-3.1-pro-preview",
+      signature: "b3BhcXVlLnNpZy11cmxfc2FmZX4x",
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "b3BhcXVlLnNpZy11cmxfc2FmZX4x" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({ timestamp: 2 }),
+      ],
+    },
+  ])("$name", ({ modelId, api, signature, messages }) => {
+    const model = {
+      ...buildGeminiModel({
+        id: modelId,
+        name:
+          modelId === "gemini-3-flash-preview"
+            ? "Gemini 3 Flash Preview"
+            : "Gemini 3.1 Pro Preview",
+      }),
+      ...(api ? { api } : {}),
+    } as Parameters<typeof buildGoogleGenerativeAiParams>[0];
+    const params = buildGoogleGenerativeAiParams(model, { messages } as never);
+
     expect(getLastModelTurn(params.contents)).toEqual({
       role: "model",
       parts: [
@@ -1764,80 +2348,142 @@ describe("google transport stream", () => {
 
   it("keeps text and thinking signatures when the request uses the Google transport alias", () => {
     const model = {
-      ...gemini3Model(),
+      ...buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      }),
       api: "openclaw-google-generative-ai-transport",
     } as Model<"openclaw-google-generative-ai-transport">;
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        assistantTurn(
-          [
-            { type: "thinking", thinking: "plan", thinkingSignature: "dGhpbms=" },
-            { type: "text", text: "answer", textSignature: "dGV4dA==" },
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3.1-pro-preview",
+          stopReason: "stop",
+          timestamp: 0,
+          content: [
+            {
+              type: "thinking",
+              thinking: "plan",
+              thinkingSignature: "dGhpbmtfc2lnX2FsaWFzXzE=",
+            },
+            {
+              type: "text",
+              text: "answer",
+              textSignature: "dGV4dF9zaWdfYWxpYXNfMQ==",
+            },
           ],
-          { stopReason: "stop" },
-        ),
+        },
       ],
     } as never);
 
     expect(params.contents[0]).toEqual({
       role: "model",
       parts: [
-        { thought: true, text: "plan", thoughtSignature: "dGhpbms=" },
-        { text: "answer", thoughtSignature: "dGV4dA==" },
+        {
+          thought: true,
+          text: "plan",
+          thoughtSignature: "dGhpbmtfc2lnX2FsaWFzXzE=",
+        },
+        {
+          text: "answer",
+          thoughtSignature: "dGV4dF9zaWdfYWxpYXNfMQ==",
+        },
       ],
     });
   });
 
   it("does not re-attach replayed Gemini thought signatures to a different tool-call part", () => {
-    const params = replayParams([
-      toolCallTurn({ thoughtSignature: "cmVwbGF5" }),
+    const params = buildGeminiReplayParams([
+      googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfcmVwbGF5XzE=" }),
       toolResultTurn(),
-      toolCallTurn({ timestamp: 2, args: { q: "hello-again" } }),
+      googleToolCallAssistantTurn({ timestamp: 2, args: { q: "hello-again" } }),
     ]);
 
-    expectUnsignedCall(getLastModelTurn(params.contents), { q: "hello-again" });
+    expect(getLastModelTurn(params.contents)).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello-again" } },
+        },
+      ],
+    });
   });
 
   it.each([
-    ["foreign signatures entering Gemini", "Zm9yZWlnbg==", 1],
-    ["prior Gemini signatures entering a foreign route", "Z29vZ2xl", 2],
-  ] as const)("isolates managed replay from %s", (_name, forbiddenSignature, turnCount) => {
-    const foreign = { provider: "anthropic", api: "anthropic", model: "claude-sonnet-4" };
-    const messages =
-      turnCount === 1
-        ? [
-            toolCallTurn({ ...foreign, id: "call_foreign", thoughtSignature: forbiddenSignature }),
-            toolResultTurn("call_foreign"),
-            { role: "user", content: [{ type: "text", text: "Continue." }] },
-          ]
-        : [
-            toolCallTurn({ thoughtSignature: forbiddenSignature }),
-            toolResultTurn(),
-            toolCallTurn({ ...foreign, timestamp: 2 }),
-          ];
-    const params = replayParams(messages);
+    {
+      name: "foreign signatures entering a Gemini route",
+      messages: [
+        googleToolCallAssistantTurn({
+          provider: "anthropic",
+          api: "anthropic",
+          model: "claude-sonnet-4",
+          id: "call_foreign",
+          thoughtSignature: "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
+        }),
+        toolResultTurn("call_foreign"),
+        { role: "user", content: [{ type: "text", text: "Continue." }] },
+      ],
+      turnCount: 1,
+      forbiddenSignature: "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
+    },
+    {
+      name: "prior Gemini signatures entering a later foreign route",
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfZ29vZ2xlXzE=" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({
+          provider: "anthropic",
+          api: "anthropic",
+          model: "claude-sonnet-4",
+          timestamp: 2,
+        }),
+      ],
+      turnCount: 2,
+      forbiddenSignature: "Y2FsbF9zaWdfZ29vZ2xlXzE=",
+    },
+  ])("isolates managed replay from $name", ({ messages, turnCount, forbiddenSignature }) => {
+    const params = buildGeminiReplayParams(messages);
     const modelTurns = params.contents.filter(isModelTurnWithParts);
     expect(modelTurns).toHaveLength(turnCount);
     const turn = expectDefined(modelTurns[turnCount - 1], "foreign Gemini model turn");
-    expectUnsignedCall(turn);
+    expect(turn).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
     expect(expectDefined(turn.parts[0], "foreign Gemini model part").thoughtSignature).not.toBe(
       forbiddenSignature,
     );
   });
 
-  it.each(["reasoning", SKIP_SIGNATURE])(
-    "normalizes the replay sentinel %s to the skip-validator fallback",
-    (signature) => {
-      const params = buildGoogleGenerativeAiParams(gemini3Model(), {
-        messages: [toolCallTurn({ thoughtSignature: signature })],
-      } as never);
-      expect(getFirstModelTurn(params.contents).parts[0]).toMatchObject({
-        thoughtSignature: SKIP_SIGNATURE,
-        functionCall: { name: "lookup", args: { q: "hello" } },
-      });
+  it.each([
+    {
+      name: "replaces invalid Gemini tool-call sentinel signatures with the skip fallback",
+      signature: "reasoning",
     },
-  );
+    {
+      name: "preserves the skip-validator fallback for unsigned Gemini tool-call replay",
+      signature: "skip_thought_signature_validator",
+    },
+  ])("$name", ({ signature }) => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }),
+      { messages: [googleToolCallAssistantTurn({ thoughtSignature: signature })] } as never,
+    );
+    expect(getFirstModelTurn(params.contents).parts[0]).toMatchObject({
+      thoughtSignature: "skip_thought_signature_validator",
+      functionCall: { name: "lookup", args: { q: "hello" } },
+    });
+  });
 
   it.each([
     ["gemini-pro-latest", "Gemini Pro Latest"],
@@ -1847,30 +2493,53 @@ describe("google transport stream", () => {
   ])(
     "adds skip-validator fallback to first-turn unsigned Gemini tool calls for %s",
     (modelId, modelName) => {
-      const model = geminiModel({ id: modelId, name: modelName });
+      const model = buildGeminiModel({ id: modelId, name: modelName });
       const params = buildGoogleGenerativeAiParams(model, {
         messages: [
-          toolCallTurn({ model: modelId }),
+          googleToolCallAssistantTurn({ model: modelId }),
           toolResultTurn(),
-          toolCallTurn({ timestamp: 2, model: modelId }),
+          googleToolCallAssistantTurn({ timestamp: 2, model: modelId }),
         ],
       } as never);
 
       const modelTurns = params.contents.filter(isModelTurnWithParts);
       expect(modelTurns).toHaveLength(2);
-      expectUnsignedCall(modelTurns[0]);
+      expect(modelTurns[0]).toMatchObject({
+        parts: [
+          {
+            thoughtSignature: "skip_thought_signature_validator",
+            functionCall: { name: "lookup", args: { q: "hello" } },
+          },
+        ],
+      });
     },
   );
 
   it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
-    const params = buildGoogleGenerativeAiParams(geminiModel(), {
+    const model = buildGeminiModel({
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        toolCallTurn({
+        {
+          role: "assistant",
           provider: "anthropic",
           api: "anthropic-messages",
           model: "claude-opus-4-7",
-          thoughtSignature: "Zm9yZWlnbl9zaWc=",
-        }),
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "Zm9yZWlnbl9zaWc=",
+            },
+          ],
+        },
       ],
     } as never);
 
@@ -1879,17 +2548,19 @@ describe("google transport stream", () => {
       parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
     });
     expect(JSON.stringify(params.contents)).not.toContain("Zm9yZWlnbl9zaWc=");
-    expect(JSON.stringify(params.contents)).not.toContain(SKIP_SIGNATURE);
+    expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
   });
 
   it.each([{ stop: [] }, { stop: ["</tool>", "\n\nObservation:"] }])(
     "serializes the stop list $stop via guarded fetch",
     async ({ stop }) => {
-      mockGoogleChunks({ candidates: [{ finishReason: "STOP" }] });
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+      );
 
-      await geminiResult({
+      await runGeminiStreamResult({
         model: attachModelProviderRequestTransport(
-          geminiModel({
+          buildGeminiModel({
             id: "gemini-3.1-pro-preview",
             baseUrl: "https://generativelanguage.googleapis.com",
           }),
@@ -1898,35 +2569,25 @@ describe("google transport stream", () => {
         options: { apiKey: "gemini-api-key", stop },
       });
 
-      const payload = guardedBody();
+      const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+      const init = requireRequestInit(guardedCall, "guarded fetch");
+      const payload = parseRequestJsonBody(init);
       if (stop.length === 0) {
         expect(payload.generationConfig ?? {}).not.toHaveProperty("stopSequences");
       } else {
-        expect(payload.generationConfig?.stopSequences).toEqual(stop);
+        expect(requireGenerationConfig(payload).stopSequences).toEqual(stop);
       }
     },
   );
 
   it("serializes structured-only Google tool results before fallback", () => {
-    const params = buildGoogleGenerativeAiParams(geminiModel(), {
-      messages: [
-        toolCallTurn(),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "lookup",
-          isError: false,
-          timestamp: 1,
-          content: [
-            {
-              type: "json",
-              value: { city: "Paris", temperatureC: 21 },
-              apiToken: "secret-token-123",
-            },
-          ],
-        },
-      ],
-    } as never);
+    const params = buildGoogleToolResultParams([
+      {
+        type: "json",
+        value: { city: "Paris", temperatureC: 21 },
+        apiToken: "secret-token-123",
+      },
+    ]);
 
     const responseTurn = params.contents[1] as GoogleTestContentTurn;
     const functionResponse = expectDefined(responseTurn.parts[0], "JSON tool response part")
@@ -1951,24 +2612,22 @@ describe("google transport stream", () => {
     "keeps parallel function responses in tool-call order and retains the deferred result for %s",
     (_label, modelId, resultOrder) => {
       const params = buildGoogleGenerativeAiParams(
-        geminiModel({ id: modelId, input: ["text", "image"] }),
+        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
         {
           messages: [
             { role: "user", content: "Screenshot the page and check the weather.", timestamp: 0 },
-            assistantTurn(
-              [
-                { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
-                { type: "toolCall", id: "call_2", name: "weather", arguments: {} },
-              ],
-              { model: "gemini-2.5-flash" },
-            ),
-            ...resultOrder.map(parallelResult),
+            parallelGoogleToolCallAssistantTurn(),
+            ...resultOrder.map(googleToolResultMessage),
           ],
         } as never,
       );
 
-      const roles = params.contents.map((content) => content.role);
-      expect(roles).toEqual(["user", "model", "user", "user"]);
+      expect(params.contents.map((content) => content.role)).toEqual([
+        "user",
+        "model",
+        "user",
+        "user",
+      ]);
       expect(params.contents[2]).toEqual({
         role: "user",
         parts: ["screenshot", "weather"].map((name) => ({
@@ -2011,16 +2670,43 @@ describe("google transport stream", () => {
   ])(
     "emits activity when a signature-only part $name",
     async ({ parts, signature, emptyDeltaIndex }) => {
-      mockGoogleChunks(googleChunk([...parts, { text: "answer" }]));
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [...parts, { text: "answer" }],
+                },
+                finishReason: "STOP",
+              },
+            ],
+            usageMetadata: {
+              promptTokenCount: 10,
+              candidatesTokenCount: 5,
+              thoughtsTokenCount: 3,
+              totalTokenCount: 18,
+            },
+          },
+        ]),
+      );
 
-      const stream = await openGeminiStream({
-        model: gemini3Model(),
-        context: {
-          systemPrompt: "You are a helpful assistant.",
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        },
-        options: { reasoning: "high" },
+      const model = buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
       });
+
+      const streamFn = createGoogleGenerativeAiTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          model,
+          {
+            systemPrompt: "You are a helpful assistant.",
+            messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          } as never,
+          { reasoning: "high" },
+        ),
+      );
       const events = [];
       for await (const event of stream) {
         events.push(event);
@@ -2042,7 +2728,8 @@ describe("google transport stream", () => {
         "text_end",
         "done",
       ]);
-      expect(events[emptyDeltaIndex]).toMatchObject({ type: "thinking_delta", delta: "" });
+      expect(events[emptyDeltaIndex]?.type).toBe("thinking_delta");
+      expect(events[emptyDeltaIndex]).toHaveProperty("delta", "");
     },
   );
 });

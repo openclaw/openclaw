@@ -10,7 +10,6 @@ import type {
 import type { prepareEmbeddedAttemptPromptPreflight } from "./attempt-prompt-preflight.js";
 import type { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
-import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   applyPromptToolsAllow: vi.fn(),
@@ -43,7 +42,9 @@ vi.mock("../logger.js", () => ({
   log: { debug: mocks.debug, warn: mocks.warn, isEnabled: mocks.isEnabled },
 }));
 vi.mock("../stream-resolution.js", () => ({
-  resolveEmbeddedAgentApiKey: () => mocks.resolveApiKey(),
+  resolveEmbeddedAgentApiKey() {
+    return mocks.resolveApiKey();
+  },
 }));
 vi.mock("./attempt-before-agent-run.js", () => ({
   runEmbeddedAttemptBeforeAgentRun: mocks.beforeAgentRun,
@@ -80,16 +81,6 @@ type FixturePromptToolPolicy = ReturnType<
 >;
 export type PromptPreflightCall = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
 export type PromptSubmissionCall = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
-
-export function createReadToolPolicy() {
-  return {
-    activeToolNames: ["read"],
-    callableToolNames: ["read"],
-    effectiveTools: [{ name: "read" }],
-    uncompactedEffectiveTools: [{ name: "read" }],
-    tools: [{ name: "read" }],
-  };
-}
 
 export function createPromptAssemblyResult(
   input: AssemblyCall,
@@ -133,8 +124,14 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     yieldDetected: false,
     yieldMessage: null as string | null,
   };
-  const agent = { state: { messages: [] }, streamFn: vi.fn() };
-  const activeSession = { isCompacting: false, messages: [], agent };
+  const activeSession = {
+    isCompacting: false,
+    messages: [],
+    agent: {
+      state: { messages: [] },
+      streamFn: vi.fn(),
+    },
+  };
   const sessionManager = {
     getSessionTarget: () => undefined,
     getHeader: () => ({ version: 3 }),
@@ -142,11 +139,9 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     getEntries: vi.fn(() => []),
   };
   const sessionRuntimeState = { systemPromptText: "system", prePromptMessageCount: 1 };
-  const record = <T>(stage: string, result: T): T => {
-    order.push(stage);
-    return result;
-  };
-  const stopAcceptingSteerMessages = vi.fn(() => record("stop-steering", undefined));
+  const stopAcceptingSteerMessages = vi.fn(() => {
+    order.push("stop-steering");
+  });
 
   mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
     order.push("assembly");
@@ -161,10 +156,13 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
       transcriptLeafId: "leaf-1",
     };
   });
-  mocks.preparePromptContext.mockImplementation(() =>
-    record("context", {
+  mocks.preparePromptContext.mockImplementation(() => {
+    order.push("context");
+    return {
+      aggregatePressureEngaged: false,
       contextTokenBudget: 32_000,
       currentUserTimestampOverride: { timestamp: 123, text: "hello" },
+      effectivePrompt: "hello",
       hookMessagesForCurrentPrompt: [],
       llmBoundaryPromptForPrecheck: pendingPrompt,
       prePromptMessageCount: 2,
@@ -175,24 +173,40 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
       promptToolResultMaxChars: 1_000,
       runtimeContextMessageForCurrentTurn: { role: "custom", content: "runtime" },
       systemPromptForHook: "system",
-    }),
-  );
-  mocks.beforeAgentRun.mockImplementation(async () => record("before-agent-run", undefined));
+    };
+  });
+  mocks.beforeAgentRun.mockImplementation(async () => {
+    order.push("before-agent-run");
+    return undefined;
+  });
   mocks.resolveApiKey.mockResolvedValue("test-key");
-  mocks.prepareGooglePromptCache.mockImplementation(async () => record("google-cache", undefined));
-  mocks.preparePromptExecution.mockImplementation(async () =>
-    record("images", {
+  mocks.prepareGooglePromptCache.mockImplementation(async () => {
+    order.push("google-cache");
+    return undefined;
+  });
+  mocks.preparePromptExecution.mockImplementation(async () => {
+    order.push("images");
+    return {
       images: Array.from({ length: pendingImageCount }, () => ({
         type: "image",
         data: "aW1hZ2U=",
         mimeType: "image/png",
       })),
-    }),
-  );
-  mocks.observePrompt.mockImplementation(() => record("observe", { skipPromptSubmission: false }));
-  mocks.preparePromptPreflight.mockImplementation(async (input: PromptPreflightCall) =>
-    record("preflight", input.state),
-  );
+      imageFactIndexes: [null],
+      detectedRefs: [],
+      failedMediaCount: 0,
+      loadedCount: 1,
+      skippedCount: 0,
+    };
+  });
+  mocks.observePrompt.mockImplementation(() => {
+    order.push("observe");
+    return { skipPromptSubmission: false };
+  });
+  mocks.preparePromptPreflight.mockImplementation(async (preflightInput: PromptPreflightCall) => {
+    order.push("preflight");
+    return preflightInput.state;
+  });
   mocks.submitPrompt.mockImplementation(async (submissionInput: PromptSubmissionCall) => {
     order.push("submit");
     submissionInput.onFinalPromptText("hello");
@@ -213,7 +227,13 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     sessionLock: {
       withOwnedTranscriptWrite: async <T>(operation: () => Promise<T> | T) => await operation(),
     },
-    setup: createAttemptSetupFixture(),
+    setup: {
+      prepStages: { mark: vi.fn() },
+      effectiveFsWorkspaceOnly: false,
+      effectiveWorkspace: "/tmp/workspace",
+      sandbox: null,
+      sessionAgentId: "main",
+    },
     diagnostics: { diagnosticTrace: {}, runTrace: {} },
     prepared: {
       sessionRuntime: {
@@ -221,13 +241,20 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           activeSession,
           hookRunner: null,
           setActiveSessionSystemPrompt: vi.fn(),
-          settingsManager: { getCompactionReserveTokens: () => 77 },
+          settingsManager: {
+            getCompactionEnabled: () => true,
+            getCompactionReserveTokens: () => 77,
+          },
         },
         boundary: {
           includeBoundaryTimestamp: false,
           setCurrentUserTimestampOverride: vi.fn(),
         },
-        contextGuards: { takePendingMidTurnPrecheckRequest: () => undefined },
+        cacheTrace: null,
+        contextGuards: {
+          checkMidTurnPrecheck: vi.fn(),
+          takePendingMidTurnPrecheckRequest: () => undefined,
+        },
         preparedUserTurnMessage: {
           role: "user",
           content: "hello",
@@ -238,6 +265,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
         sessionPromptState: {},
         state: sessionRuntimeState,
         toolResultPromptProjectionState: {},
+        trajectoryRecorder: null,
         transcriptPolicy: { appendOnlyRuntimeContext: true },
         transport: {
           effectiveAgentTransport: "sse",
@@ -252,7 +280,13 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
         toolSearchRunPlan: { capabilityToolNames: new Set(["read"]) },
       },
       promptToolPolicy: {
-        current: createReadToolPolicy(),
+        current: {
+          activeToolNames: ["read"],
+          callableToolNames: ["read"],
+          effectiveTools: [{ name: "read" }],
+          uncompactedEffectiveTools: [{ name: "read" }],
+          tools: [{ name: "read" }],
+        },
         apply(toolsAllow: string[] | undefined) {
           Object.assign(this.current, mocks.applyPromptToolsAllow({ toolsAllow }));
           return this.current;
@@ -265,7 +299,9 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     },
     preparedStreamRuntime: {
       cache: {},
-      history: { contextEnginePromptAuthority: "assembled" },
+      history: {
+        contextEnginePromptAuthority: "assembled",
+      },
       promptActiveSession: vi.fn(),
       stream: { stopAcceptingSteerMessages },
     },

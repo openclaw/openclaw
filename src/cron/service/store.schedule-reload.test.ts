@@ -5,160 +5,215 @@ import {
   setupCronServiceSuite,
 } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type { CronJob, CronJobPatch, CronJobState } from "../types.js";
+import type { CronJob, CronJobPatch } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { ensureLoaded } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-store-schedule-reload" });
 
-const NOW = Date.parse("2026-03-23T12:00:00.000Z");
+const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
-async function seedJob(initial?: Partial<CronJob>) {
-  const { storePath } = await makeStorePath();
-  const job: CronJob = {
+async function writeSingleJobStore(storePath: string, job: CronJob) {
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+}
+
+function createStoreTestService(storePath: string) {
+  const onEvent = vi.fn();
+  return {
+    ...createCronServiceWithStateForTest({
+      scheduler: createTestGatewayScheduler(),
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "main",
+      log: logger,
+      nowMs: () => STORE_TEST_NOW,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      onEvent,
+    }),
+    onEvent,
+  };
+}
+
+function createReloadCronJob(params?: Partial<CronJob>): CronJob {
+  return {
     id: "reload-cron-expr-job",
     name: "reload cron expr job",
     enabled: true,
-    createdAtMs: NOW - 60_000,
-    updatedAtMs: NOW - 60_000,
+    createdAtMs: STORE_TEST_NOW - 60_000,
+    updatedAtMs: STORE_TEST_NOW - 60_000,
     schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
     sessionTarget: "main",
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "tick" },
-    state: { nextRunAtMs: stale },
-    ...initial,
-  };
-  await saveCronStore(storePath, { version: 1, jobs: [job] });
-  return { storePath, job };
-}
-
-function makeService(storePath: string) {
-  const onEvent = vi.fn();
-  const service = createCronServiceWithStateForTest({
-    scheduler: createTestGatewayScheduler(),
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    log: logger,
-    nowMs: () => NOW,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    onEvent,
-  });
-  return { ...service, onEvent };
-}
-
-const stale = NOW + 3_600_000;
-const due = NOW - 1_000;
-const cron = (expr = "0 6 * * *") => ({ kind: "cron" as const, expr, tz: "UTC" });
-const every = (anchorMs: number) => ({ kind: "every" as const, everyMs: 60_000, anchorMs });
-const at = (hour: number) => ({ kind: "at" as const, at: `2026-03-23T${hour}:00:00.000Z` });
-function deadlines(s?: CronJobState) {
-  return [s?.nextRunAtMs, s?.pacedNextRunAtMs, s?.forcePreservedNextRunAtMs];
-}
-
-async function expectEdit(
-  initial: Partial<CronJob>,
-  patch: CronJobPatch,
-  nextRunAtMs: number | undefined,
-  preserved?: number,
-  recomputeExpired?: boolean,
-) {
-  const { storePath, job } = await seedJob(initial);
-  const writer = makeService(storePath);
-  const observer = makeService(storePath);
-  for (const { state } of [writer, observer]) {
-    await ensureLoaded(state);
-    expect(findJobOrThrow(state, job.id).state.nextRunAtMs).toBe(job.state.nextRunAtMs);
-  }
-  const updated = await writer.cron.update(job.id, patch);
-  await ensureLoaded(observer.state);
-  const persisted = (await loadCronStore(storePath)).jobs[0];
-  for (const result of [updated, findJobOrThrow(observer.state, job.id), persisted]) {
-    expect(result?.schedule).toEqual(patch.schedule ?? job.schedule);
-    expect(result?.pacing).toEqual(patch.pacing ?? job.pacing);
-    expect(result?.enabled).toBe(patch.enabled ?? job.enabled);
-    expect(deadlines(result?.state)).toEqual([nextRunAtMs, undefined, preserved]);
-  }
-  expect(observer.state.durableNextRunAtMsByJobId.get(job.id)).toBe(nextRunAtMs);
-  expect(writer.onEvent).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ action: "updated", jobId: job.id, nextRunAtMs }),
-  );
-  expect(observer.onEvent).not.toHaveBeenCalled();
-  const options = recomputeExpired ? { recomputeExpired } : undefined;
-  await recomputeUnownedCronSchedules(observer.state, options);
-  const maintained = findJobOrThrow(observer.state, job.id);
-  expect(deadlines(maintained.state)).toEqual([nextRunAtMs, undefined, preserved]);
-  expect(observer.onEvent).not.toHaveBeenCalled();
-}
-
-function completed(oneShot: boolean, enabled: boolean): Partial<CronJob> {
-  return {
-    enabled,
-    ...(oneShot ? { schedule: { kind: "at", at: new Date(due).toISOString() } } : {}),
-    state: {
-      nextRunAtMs: due,
-      forcePreservedNextRunAtMs: due,
-      lastRunAtMs: NOW,
-      lastRunStatus: "ok",
-    },
+    state: {},
+    ...params,
   };
 }
-type EditCase = [name: string, ...Parameters<typeof expectEdit>];
-it.each<EditCase>([
-  ["cron expression", {}, { schedule: cron("30 6 * * 0,6") }, Date.UTC(2026, 2, 28, 6, 30)],
-  [
-    "pacing",
-    {
+const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
+const dueNextRunAtMs = STORE_TEST_NOW - 1_000;
+
+type ReloadCase = {
+  name: string;
+  initial?: Partial<CronJob>;
+  patch: CronJobPatch;
+  nextRunAtMs: number;
+};
+
+it.each<ReloadCase>([
+  {
+    name: "cron expression",
+    patch: { schedule: { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" } },
+    nextRunAtMs: Date.parse("2026-03-28T06:30:00.000Z"),
+  },
+  {
+    name: "pacing",
+    initial: {
       pacing: { max: "4h" },
-      state: { nextRunAtMs: stale, pacedNextRunAtMs: stale },
+      state: { nextRunAtMs: staleNextRunAtMs, pacedNextRunAtMs: staleNextRunAtMs },
     },
-    { pacing: { max: "2h" } },
-    Date.UTC(2026, 2, 24, 6),
-  ],
-  ["every anchor", { schedule: every(NOW - 60_000) }, { schedule: every(NOW) }, NOW + 60_000],
-  [
-    "one-shot target",
-    {
-      schedule: at(13),
-      state: { nextRunAtMs: stale, forcePreservedNextRunAtMs: stale },
+    patch: { pacing: { max: "2h" } },
+    nextRunAtMs: Date.parse("2026-03-24T06:00:00.000Z"),
+  },
+  {
+    name: "every anchor",
+    initial: { schedule: { kind: "every", everyMs: 60_000, anchorMs: STORE_TEST_NOW - 60_000 } },
+    patch: { schedule: { kind: "every", everyMs: 60_000, anchorMs: STORE_TEST_NOW } },
+    nextRunAtMs: STORE_TEST_NOW + 60_000,
+  },
+  {
+    name: "one-shot target",
+    initial: {
+      schedule: { kind: "at", at: "2026-03-23T13:00:00.000Z" },
+      state: { nextRunAtMs: staleNextRunAtMs, forcePreservedNextRunAtMs: staleNextRunAtMs },
     },
-    { schedule: at(14) },
-    Date.UTC(2026, 2, 23, 14),
-  ],
-  ["disable recurring", completed(false, true), { enabled: false }, undefined, undefined, true],
-  ["disable one-shot", completed(true, true), { enabled: false }, undefined, due, true],
-  ["enable one-shot", completed(true, false), { enabled: true }, due, due, true],
-])("commits %s with its matching next-run identity before another view reloads", (_name, ...args) =>
-  expectEdit(...args),
+    patch: { schedule: { kind: "at", at: "2026-03-23T14:00:00.000Z" } },
+    nextRunAtMs: Date.parse("2026-03-23T14:00:00.000Z"),
+  },
+])(
+  "commits $name with its matching next-run identity before another view reloads",
+  async ({ initial, patch, nextRunAtMs }) => {
+    const { storePath } = await makeStorePath();
+    const job = createReloadCronJob({ state: { nextRunAtMs: staleNextRunAtMs }, ...initial });
+    await writeSingleJobStore(storePath, job);
+    const writer = createStoreTestService(storePath);
+    const observer = createStoreTestService(storePath);
+    for (const { state } of [writer, observer]) {
+      await ensureLoaded(state);
+      expect(findJobOrThrow(state, job.id).state.nextRunAtMs).toBe(job.state.nextRunAtMs);
+    }
+
+    const updated = await writer.cron.update(job.id, patch);
+    await ensureLoaded(observer.state);
+    const persisted = (await loadCronStore(storePath)).jobs[0];
+    for (const result of [updated, findJobOrThrow(observer.state, job.id), persisted]) {
+      expect(result?.schedule).toEqual(patch.schedule ?? job.schedule);
+      expect(result?.pacing).toEqual(patch.pacing ?? job.pacing);
+      expect(result?.state.nextRunAtMs).toBe(nextRunAtMs);
+      expect(result?.state.pacedNextRunAtMs).toBeUndefined();
+      expect(result?.state.forcePreservedNextRunAtMs).toBeUndefined();
+    }
+    expect(observer.state.durableNextRunAtMsByJobId.get(job.id)).toBe(nextRunAtMs);
+    expect(writer.onEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ action: "updated", jobId: job.id, nextRunAtMs }),
+    );
+    expect(observer.onEvent).not.toHaveBeenCalled();
+
+    await recomputeUnownedCronSchedules(observer.state);
+    expect(findJobOrThrow(observer.state, job.id).state.nextRunAtMs).toBe(nextRunAtMs);
+    expect(observer.onEvent).not.toHaveBeenCalled();
+  },
 );
 
-it.each<EditCase>([
-  [
-    "schedule key order only",
-    { state: { nextRunAtMs: due } },
-    { schedule: { expr: "0 6 * * *", kind: "cron", tz: "UTC" } },
-    due,
-  ],
-  ["runtime state only", {}, { state: { nextRunAtMs: stale + 60_000 } }, stale + 60_000],
+it.each<{
+  name: string;
+  initial: Partial<CronJob>;
+  replacement: Partial<CronJob>;
+  nextRunAtMs: number;
+}>([
+  {
+    name: "schedule key order only",
+    initial: { state: { nextRunAtMs: dueNextRunAtMs } },
+    replacement: { schedule: { expr: "0 6 * * *", kind: "cron", tz: "UTC" } },
+    nextRunAtMs: dueNextRunAtMs,
+  },
+  {
+    name: "runtime state only",
+    initial: {},
+    replacement: { state: { nextRunAtMs: staleNextRunAtMs + 60_000 } },
+    nextRunAtMs: staleNextRunAtMs + 60_000,
+  },
+])("reloads a $name snapshot without changing its deadline", async (testCase) => {
+  const { storePath } = await makeStorePath();
+  const job = createReloadCronJob({
+    state: { nextRunAtMs: staleNextRunAtMs },
+    ...testCase.initial,
+  });
+  await writeSingleJobStore(storePath, job);
+  const { state, onEvent } = createStoreTestService(storePath);
+  await ensureLoaded(state);
+
+  const updated = { ...job, updatedAtMs: STORE_TEST_NOW, ...testCase.replacement };
+  await writeSingleJobStore(storePath, updated);
+  await ensureLoaded(state, { forceReload: true });
+
+  const reloaded = findJobOrThrow(state, job.id);
+  expect(reloaded.schedule).toEqual(updated.schedule);
+  expect(reloaded.state.nextRunAtMs).toBe(testCase.nextRunAtMs);
+  expect(reloaded.state.pacedNextRunAtMs).toBeUndefined();
+  expect(reloaded.state.forcePreservedNextRunAtMs).toBeUndefined();
+  expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(testCase.nextRunAtMs);
+  expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(testCase.nextRunAtMs);
+  expect(onEvent).not.toHaveBeenCalled();
+});
+
+it.each([
+  { oneShot: false, enabled: true },
+  { oneShot: true, enabled: true },
+  { oneShot: true, enabled: false },
 ])(
-  "reloads a %s snapshot without changing its deadline",
-  async (_name, initial, replacement, nextRunAtMs) => {
-    const { storePath, job } = await seedJob(initial);
-    const { state, onEvent } = makeService(storePath);
-    await ensureLoaded(state);
+  "commits enablement and retains the authored one-shot across views ($oneShot, $enabled)",
+  async ({ oneShot, enabled }) => {
+    const { storePath } = await makeStorePath();
+    const occurrenceAtMs = STORE_TEST_NOW - 1_000;
+    const job = createReloadCronJob({
+      enabled,
+      ...(oneShot ? { schedule: { kind: "at", at: new Date(occurrenceAtMs).toISOString() } } : {}),
+      state: {
+        nextRunAtMs: occurrenceAtMs,
+        forcePreservedNextRunAtMs: occurrenceAtMs,
+        lastRunAtMs: STORE_TEST_NOW,
+        lastRunStatus: "ok",
+      },
+    });
+    await writeSingleJobStore(storePath, job);
+    const writer = createStoreTestService(storePath);
+    const observer = createStoreTestService(storePath);
+    await ensureLoaded(writer.state);
+    await ensureLoaded(observer.state);
 
-    const updated = { ...job, updatedAtMs: NOW, ...replacement };
-    await saveCronStore(storePath, { version: 1, jobs: [updated] });
-    await ensureLoaded(state, { forceReload: true });
+    const updated = await writer.cron.update(job.id, { enabled: !enabled });
+    await ensureLoaded(observer.state);
 
-    const reloaded = findJobOrThrow(state, job.id);
-    expect(reloaded.schedule).toEqual(updated.schedule);
-    expect(deadlines(reloaded.state)).toEqual([nextRunAtMs, undefined, undefined]);
-    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(nextRunAtMs);
-    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
-    expect(onEvent).not.toHaveBeenCalled();
+    const nextRunAtMs = oneShot && !enabled ? occurrenceAtMs : undefined;
+    const persisted = (await loadCronStore(storePath)).jobs[0];
+    for (const result of [updated, findJobOrThrow(observer.state, job.id), persisted]) {
+      expect(result?.enabled).toBe(!enabled);
+      expect(result?.state.nextRunAtMs).toBe(nextRunAtMs);
+      expect(result?.state.pacedNextRunAtMs).toBeUndefined();
+      expect(result?.state.forcePreservedNextRunAtMs).toBe(oneShot ? occurrenceAtMs : undefined);
+    }
+    expect(writer.onEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ action: "updated", jobId: job.id, nextRunAtMs }),
+    );
+    expect(observer.onEvent).not.toHaveBeenCalled();
+
+    await recomputeUnownedCronSchedules(observer.state, { recomputeExpired: true });
+    const maintained = findJobOrThrow(observer.state, job.id);
+    expect(maintained.state.nextRunAtMs).toBe(nextRunAtMs);
+    expect(maintained.state.forcePreservedNextRunAtMs).toBe(oneShot ? occurrenceAtMs : undefined);
+    expect(observer.onEvent).not.toHaveBeenCalled();
   },
 );

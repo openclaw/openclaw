@@ -53,7 +53,13 @@ const sessionCleanupMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => hookRunnerMocks as unknown as HookRunner,
+  getGlobalHookRunner: () =>
+    ({
+      hasHooks: hookRunnerMocks.hasHooks,
+      runSessionStart: hookRunnerMocks.runSessionStart,
+      runSessionEnd: hookRunnerMocks.runSessionEnd,
+      runBeforeReset: hookRunnerMocks.runBeforeReset,
+    }) as unknown as HookRunner,
 }));
 
 vi.mock("../../agents/harness/registry.js", () => ({
@@ -75,10 +81,16 @@ async function createStorePath(prefix: string): Promise<string> {
   return path.join(root, "sessions.json");
 }
 
-async function writeStore(storePath: string, store: Record<string, SessionEntry>): Promise<void> {
+async function writeStore(
+  storePath: string,
+  store: Record<string, SessionEntry | Record<string, unknown>>,
+): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(store)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const sessionEntry = entry as Partial<SessionEntry>;
+    if (typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()) {
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry as SessionEntry);
+    }
   }
 }
 
@@ -131,7 +143,10 @@ async function initStoredSessionState(params: {
 }): Promise<void> {
   const { storePath } = await createStoredSession(params);
   const cfg = {
-    session: { store: storePath, ...(params.reset ? { reset: params.reset } : {}) },
+    session: {
+      store: storePath,
+      ...(params.reset ? { reset: params.reset } : {}),
+    },
   } as OpenClawConfig;
 
   await initSessionState({
@@ -141,16 +156,49 @@ async function initStoredSessionState(params: {
   });
 }
 
-describe("session hook context wiring", () => {
-  beforeAll(() => suiteTempDirs.setup());
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
 
-  afterAll(() => suiteTempDirs.cleanup());
+function requireHookCall(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): readonly [Record<string, unknown>, Record<string, unknown> | undefined] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} hook call`);
+  }
+  const [event, context] = call;
+  if (!event || typeof event !== "object") {
+    throw new Error(`expected ${label} hook event`);
+  }
+  if (context !== undefined && (!context || typeof context !== "object")) {
+    throw new Error(`expected ${label} hook context`);
+  }
+  return [event as Record<string, unknown>, context as Record<string, unknown> | undefined];
+}
+
+describe("session hook context wiring", () => {
+  beforeAll(async () => {
+    await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTempDirs.cleanup();
+  });
 
   beforeEach(() => {
     resetGatewayWorkAdmission();
-    for (const mock of Object.values(hookRunnerMocks)) {
-      mock.mockReset();
-    }
+    hookRunnerMocks.hasHooks.mockReset();
+    hookRunnerMocks.runSessionStart.mockReset();
+    hookRunnerMocks.runSessionEnd.mockReset();
+    hookRunnerMocks.runBeforeReset.mockReset();
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockClear();
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockClear();
@@ -659,9 +707,65 @@ describe("session hook context wiring", () => {
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
+  it("marks daily stale rollovers and exposes the archived transcript path", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const sessionKey = "agent:main:telegram:direct:daily";
+      await initStoredSessionState({
+        prefix: "openclaw-session-hook-daily",
+        sessionKey,
+        sessionId: "daily-session",
+        text: "daily",
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        reset: { mode: "daily" },
+      });
+
+      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+      const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
+      expectFields(event, {
+        reason: "daily",
+      });
+      expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+      expect(startEvent?.sessionId).toBe("daily-session");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks idle stale rollovers with reason idle", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const sessionKey = "agent:main:telegram:direct:idle";
+      await initStoredSessionState({
+        prefix: "openclaw-session-hook-idle",
+        sessionKey,
+        sessionId: "idle-session",
+        text: "idle",
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        reset: {
+          mode: "idle",
+          idleMinutes: 30,
+        },
+      });
+
+      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+      expectFields(event, { reason: "idle" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
-    { reason: "daily", reset: { mode: "daily" } as SessionResetConfig },
-    { reason: "idle", reset: { mode: "idle", idleMinutes: 30 } as SessionResetConfig },
+    {
+      reason: "daily",
+      reset: { mode: "daily", atHour: 4 } as SessionResetConfig,
+    },
+    {
+      reason: "idle",
+      reset: { mode: "idle", idleMinutes: 30 } as SessionResetConfig,
+    },
   ])("emits one session:auto-reset event for $reason rollover", async ({ reason, reset }) => {
     vi.useFakeTimers();
     try {
@@ -680,15 +784,15 @@ describe("session hook context wiring", () => {
 
       await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
       const [event] = listener.mock.calls[0] ?? [];
-      expect(event).toMatchObject({ type: "session", action: "auto-reset", sessionKey });
-      expect(event.context).toMatchObject({ reason, nextSessionKey: sessionKey });
-      const ended = hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0];
-      expect(ended).toMatchObject({ reason });
-      if (reason === "daily") {
-        const started = hookRunnerMocks.runSessionStart.mock.calls[0]?.[0];
-        expect(started?.sessionId).toBe(`auto-${reason}-session`);
-        expect(ended?.nextSessionId).toBe(started?.sessionId);
-      }
+      expectFields(event, {
+        type: "session",
+        action: "auto-reset",
+        sessionKey,
+      });
+      expectFields((event as { context?: Record<string, unknown> }).context, {
+        reason,
+        nextSessionKey: sessionKey,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -705,10 +809,15 @@ describe("session hook context wiring", () => {
         sessionId: "overlap-session",
         text: "overlap",
         updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+        reset: {
+          mode: "daily",
+          atHour: 4,
+          idleMinutes: 30,
+        },
       });
 
-      expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "idle" });
+      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+      expectFields(event, { reason: "idle" });
     } finally {
       vi.useRealTimers();
     }

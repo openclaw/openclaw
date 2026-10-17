@@ -1,7 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -24,50 +23,6 @@ import {
 import * as support from "../worker-environments/service.test-support.js";
 import { portalHandlers } from "./portals.js";
 
-const identity = { agentId: "main", sessionKey: "agent:main:preview", sessionId: "conversation" };
-
-function policyFixture(profileId: string, cfg: OpenClawConfig = {}, locked = false) {
-  const projection = createSessionRowProjectionFixture({
-    cfg,
-    store: {
-      [identity.sessionKey]: {
-        sessionId: identity.sessionId,
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: profileId },
-        ...(locked ? { lifecycleRevision: "incarnation", modelSelectionLocked: true } : {}),
-      },
-    },
-  });
-  const context = bindSessionRowProjection(createContext(), () => projection);
-  const method = "portal.session.open";
-  const handler = vi.fn(portalHandlers[method]!);
-  const methodRegistry = createGatewayMethodRegistry(
-    createCoreGatewayMethodDescriptors({ [method]: handler }),
-  );
-  return {
-    context,
-    handler,
-    async invoke(callerId: string, scope = "operator.sessions.write", environmentId = "attached") {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: callerId,
-          method,
-          params: { sessionKey: identity.sessionKey, environmentId, port: 3000 },
-        },
-        client: createOperatorClient({ profileId: callerId, scopes: [scope] }),
-        context,
-        methodRegistry,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      return respond;
-    },
-  };
-}
-
 describe("session Portal RPC policy admission", () => {
   it.each(["operator.write", "operator.sessions.write"])(
     "rejects a locked canonical session through the actual router under %s",
@@ -75,8 +30,40 @@ describe("session Portal RPC policy admission", () => {
       withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
         const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
-        const { handler, invoke } = policyFixture(writer.id, {}, true);
-        const respond = await invoke(writer.id, scope);
+        const sessionKey = "agent:main:preview";
+        const projection = createSessionRowProjectionFixture({
+          cfg: {},
+          store: {
+            [sessionKey]: {
+              sessionId: "conversation",
+              lifecycleRevision: "incarnation",
+              updatedAt: 1,
+              modelSelectionLocked: true,
+              visibility: "shared",
+              createdActor: { type: "human", source: "profile", id: writer.id },
+            },
+          },
+        });
+        const context = bindSessionRowProjection(createContext(), () => projection);
+        const method = "portal.session.open";
+        const handler = vi.fn(portalHandlers[method]!);
+        const methodRegistry = createGatewayMethodRegistry(
+          createCoreGatewayMethodDescriptors({ [method]: handler }),
+        );
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "locked-preview",
+            method,
+            params: { sessionKey, environmentId: "attached", port: 3000 },
+          },
+          client: createOperatorClient({ profileId: writer.id, scopes: [scope] }),
+          context,
+          methodRegistry,
+          respond,
+          isWebchatConnect: () => false,
+        });
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
@@ -100,6 +87,11 @@ describe("session Portal authority through worker dispatch", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", support.testState.root);
     const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
     const unrelated = await ensureCanonicalUserProfileForEmail("portal-unrelated@example.test");
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:preview",
+      sessionId: "conversation",
+    };
     const environmentId = "preview-machine";
     const { store, config } = support.testState;
     await store.createSessionAttachmentIntent(
@@ -142,73 +134,106 @@ describe("session Portal authority through worker dispatch", () => {
     await environments.reconcileOnce(environmentId);
     const qualification = environments.getDedicatedNodeLeaseSignal(environmentId)!;
     expect(qualification.aborted).toBe(false);
+    const projection = createSessionRowProjectionFixture({
+      cfg: config,
+      store: {
+        [identity.sessionKey]: {
+          sessionId: identity.sessionId,
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: writer.id },
+        },
+      },
+    });
     const portals = createGatewayPortalService({ httpBindHosts: ["127.0.0.1"], httpServers: [] });
-    onTestFinished(() => portals.closeAll());
     const open = vi.spyOn(portals, "open");
-    const policy = policyFixture(writer.id, config);
-    const { context } = policy;
+    const context = bindSessionRowProjection(createContext(), () => projection);
     Object.assign(context, {
       workerEnvironmentService: environments,
       portalService: portals,
       getRuntimeConfig: () => config,
       broadcast: vi.fn(),
     });
+    const method = "portal.session.open";
+    const methodRegistry = createGatewayMethodRegistry(
+      createCoreGatewayMethodDescriptors({ [method]: portalHandlers[method]! }),
+    );
     const invoke = async (profileId: string) => {
-      const respond = await policy.invoke(profileId, "operator.sessions.write", environmentId);
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: profileId,
+          method,
+          params: { sessionKey: identity.sessionKey, environmentId, port: 3000 },
+        },
+        client: createOperatorClient({ profileId, scopes: ["operator.sessions.write"] }),
+        context,
+        methodRegistry,
+        respond,
+        isWebchatConnect: () => false,
+      });
       return respond.mock.calls[0];
     };
-    expect((await invoke(unrelated.id))?.[0]).toBe(false);
-    expect(open).not.toHaveBeenCalled();
-    expect(transport.invoke).not.toHaveBeenCalled();
-    expect((await invoke(writer.id))?.[0]).toBe(true);
-    const target = open.mock.calls[0]?.[0].target;
-    if (target?.kind !== "worker") {
-      throw new Error("missing worker preview");
-    }
-    const invoked = createDeferred();
-    const originalInvoke = transport.invoke.getMockImplementation()!;
-    transport.invoke.mockImplementation((request) => {
-      invoked.resolve();
-      return originalInvoke(request);
-    });
-    support.testState.nowMs += 100;
-    const connection = target.connect();
-    await invoked.promise;
-    const stream = broker.attachNext();
-    expect(await connection).toBe(stream);
-    expect(store.getSessionAttachmentRecord(identity.sessionId)?.lastUsedAtMs).toBe(
-      support.testState.nowMs,
-    );
-    const discovering = createDeferred();
-    const discover = createDeferred();
-    vi.spyOn(transport.transport, "getCurrentNode").mockImplementationOnce(async () => {
-      discovering.resolve();
-      await discover.promise;
-      return proof;
-    });
-    const pending = expect(target.connect()).rejects.toThrow();
-    await discovering.promise;
-    const persisting = createDeferred();
-    const persist = createDeferred();
-    const originalPersist = store.reconcileSharedHost.bind(store);
-    vi.spyOn(store, "reconcileSharedHost").mockImplementationOnce(async (input) => {
-      persisting.resolve();
-      await persist.promise;
-      return originalPersist(input);
-    });
-    sharedHost = undefined;
-    const reconciliation = environments.reconcileOnce(environmentId);
     try {
-      await persisting.promise;
-      expect(qualification.aborted).toBe(true);
-      expect(portals.list()).toEqual([]);
+      expect((await invoke(unrelated.id))?.[0]).toBe(false);
+      expect(open).not.toHaveBeenCalled();
+      expect(transport.invoke).not.toHaveBeenCalled();
+      expect((await invoke(writer.id))?.[0]).toBe(true);
+      const target = open.mock.calls[0]?.[0].target;
+      if (target?.kind !== "worker") {
+        throw new Error("missing worker preview");
+      }
+      const invoked = createDeferred();
+      const originalInvoke = transport.invoke.getMockImplementation()!;
+      transport.invoke.mockImplementation((request) => {
+        invoked.resolve();
+        return originalInvoke(request);
+      });
+      support.testState.nowMs += 100;
+      const connection = target.connect();
+      await invoked.promise;
+      const stream = broker.attachNext();
+      expect(await connection).toBe(stream);
+      expect(store.getSessionAttachmentRecord(identity.sessionId)?.lastUsedAtMs).toBe(
+        support.testState.nowMs,
+      );
+      const discovering = createDeferred();
+      const discover = createDeferred();
+      vi.spyOn(transport.transport, "getCurrentNode").mockImplementationOnce(async () => {
+        discovering.resolve();
+        await discover.promise;
+        return proof;
+      });
+      const pending = target.connect().then(
+        () => false,
+        () => true,
+      );
+      await discovering.promise;
+      const persisting = createDeferred();
+      const persist = createDeferred();
+      const originalPersist = store.reconcileSharedHost.bind(store);
+      vi.spyOn(store, "reconcileSharedHost").mockImplementationOnce(async (input) => {
+        persisting.resolve();
+        await persist.promise;
+        return originalPersist(input);
+      });
+      sharedHost = undefined;
+      const reconciliation = environments.reconcileOnce(environmentId);
+      try {
+        await persisting.promise;
+        expect(qualification.aborted).toBe(true);
+        expect(portals.list()).toEqual([]);
+      } finally {
+        discover.resolve();
+        persist.resolve();
+        await reconciliation;
+      }
+      expect(await pending).toBe(true);
+      expect(transport.invoke).toHaveBeenCalledOnce();
+      expect(stream.destroyed).toBe(true);
     } finally {
-      discover.resolve();
-      persist.resolve();
-      await reconciliation;
+      await portals.closeAll();
     }
-    await pending;
-    expect(transport.invoke).toHaveBeenCalledOnce();
-    expect(stream.destroyed).toBe(true);
   });
 });
