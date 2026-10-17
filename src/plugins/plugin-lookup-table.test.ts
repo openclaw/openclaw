@@ -27,11 +27,7 @@ vi.mock("../channels/config-presence.js", () => ({
       !Array.isArray(value) &&
       Object.keys(value).some((key) => key !== "enabled"),
     ),
-  listPotentialConfiguredChannelIds: (
-    config: OpenClawConfig,
-    env: NodeJS.ProcessEnv,
-    options?: { includePersistedAuthState?: boolean },
-  ) => listPotentialConfiguredChannelIds(config, env, options),
+  listPotentialConfiguredChannelIds,
   listPotentialConfiguredChannelPresenceSignals: (
     config: OpenClawConfig,
     env: NodeJS.ProcessEnv,
@@ -41,61 +37,54 @@ vi.mock("../channels/config-presence.js", () => ({
       channelId,
       source: "env" as const,
     })),
-  listExplicitlyDisabledChannelIdsForConfig: (config: OpenClawConfig) =>
-    listExplicitlyDisabledChannelIdsForConfig(config),
+  listExplicitlyDisabledChannelIdsForConfig,
 }));
 
 vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./manifest-registry-installed.js")>();
   return {
     ...actual,
-    loadPluginManifestRegistryForInstalledIndex: (params: unknown) =>
-      loadPluginManifestRegistryForInstalledIndex(params),
+    loadPluginManifestRegistryForInstalledIndex,
   };
 });
 
 function createManifestRecord(
-  plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id" | "origin">,
+  id: string,
+  plugin: Partial<PluginManifestRecord> = {},
 ): PluginManifestRecord {
   return {
-    name: plugin.id,
+    id,
+    name: id,
+    origin: "bundled",
     channels: [],
     providers: [],
     cliBackends: [],
     skills: [],
     hooks: [],
-    rootDir: `/plugins/${plugin.id}`,
-    source: `/plugins/${plugin.id}/index.js`,
-    manifestPath: `/plugins/${plugin.id}/openclaw.plugin.json`,
+    rootDir: `/plugins/${id}`,
+    source: `/plugins/${id}/index.js`,
+    manifestPath: `/plugins/${id}/openclaw.plugin.json`,
     ...plugin,
   };
 }
 
 function createStartupPlugins() {
   return [
-    createManifestRecord({
-      id: "openai",
-      origin: "bundled",
+    createManifestRecord("openai", {
       enabledByDefault: true,
       providers: ["openai"],
       activation: {
         onStartup: true,
       },
     }),
-    createManifestRecord({
-      id: "browser",
-      origin: "bundled",
+    createManifestRecord("browser", {
       enabledByDefault: true,
       activation: {
         onStartup: true,
         onConfigPaths: ["browser"],
       },
     }),
-    createManifestRecord({
-      id: "telegram",
-      origin: "bundled",
-      channels: ["telegram"],
-    }),
+    createManifestRecord("telegram", { channels: ["telegram"] }),
   ];
 }
 
@@ -156,9 +145,7 @@ describe("loadPluginLookUpTable", () => {
 
   it("builds owner maps and startup ids from one installed manifest registry", async () => {
     const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
+      createManifestRecord("telegram", {
         channels: ["telegram"],
         channelConfigs: {
           telegram: {
@@ -170,9 +157,7 @@ describe("loadPluginLookUpTable", () => {
           tools: ["telegram.send"],
         },
       }),
-      createManifestRecord({
-        id: "openai",
-        origin: "bundled",
+      createManifestRecord("openai", {
         providers: ["openai"],
         providerAuthAliases: {
           openai: "openai",
@@ -221,9 +206,11 @@ describe("loadPluginLookUpTable", () => {
 
     expect(table.manifestRegistry).toBe(manifestRegistry);
     expect(table.diagnostics).toEqual([indexDiagnostic, manifestDiagnostic]);
-    expect(table.metrics.indexPluginCount).toBe(2);
-    expect(table.metrics.manifestPluginCount).toBe(2);
-    expect(table.metrics.startupPluginCount).toBe(1);
+    expect(table.metrics).toMatchObject({
+      indexPluginCount: 2,
+      manifestPluginCount: 2,
+      startupPluginCount: 1,
+    });
     for (const metricName of [
       "registrySnapshotMs",
       "manifestRegistryMs",
@@ -249,13 +236,7 @@ describe("loadPluginLookUpTable", () => {
   });
 
   it("projects ambient activation policy from prepared lookup metadata", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
+    const plugins = [createManifestRecord("telegram", { channels: ["telegram"] })];
     const config = {
       plugins: { slots: { memory: "none" } },
     } as OpenClawConfig;
@@ -340,9 +321,7 @@ describe("loadPluginLookUpTable", () => {
 
   it("applies current activation policy without replacing the startup inventory", async () => {
     const plugins = [
-      createManifestRecord({
-        id: "demo",
-        origin: "bundled",
+      createManifestRecord("demo", {
         enabledByDefault: true,
         activation: { onStartup: true },
       }),
@@ -373,9 +352,7 @@ describe("loadPluginLookUpTable", () => {
     };
     const replacementIndex = createIndex([
       ...plugins,
-      createManifestRecord({
-        id: "next-boot",
-        origin: "bundled",
+      createManifestRecord("next-boot", {
         enabledByDefault: true,
         activation: { onStartup: true },
       }),
