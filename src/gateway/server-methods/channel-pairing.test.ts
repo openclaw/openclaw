@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
@@ -118,149 +118,147 @@ beforeEach(() => {
   mocks.captureOwnerGuard.mockReturnValue(() => {});
 });
 
-describe("channel DM pairing gateway handlers", () => {
-  it.each([
-    ["channels.pairing.list", listSelector],
-    ["channels.pairing.approve", codeSelector],
-    ["channels.pairing.list", { ...listSelector, accountId: " ", expectedOwnerId: "owner" }],
-    ["channels.pairing.approve", { ...codeSelector, accountId: " ", expectedOwnerId: "owner" }],
-    [
-      "channels.pairing.approve",
-      { ...codeSelector, requestId: "opaque", accountId: "personal", expectedOwnerId: "owner" },
-    ],
-  ] as const)("rejects an invalid CLI selector for %s", async (method, params) => {
-    const respond = await invoke(method, params, ["operator.admin"]);
-    expectError(respond, { code: "INVALID_REQUEST" });
-    expect(mocks.listRequests).not.toHaveBeenCalled();
-    expect(mocks.approveCode).not.toHaveBeenCalled();
-    expect(mocks.approve).not.toHaveBeenCalled();
+it.each([
+  ["channels.pairing.list", listSelector],
+  ["channels.pairing.approve", codeSelector],
+  ["channels.pairing.list", { ...listSelector, accountId: " ", expectedOwnerId: "owner" }],
+  ["channels.pairing.approve", { ...codeSelector, accountId: " ", expectedOwnerId: "owner" }],
+  [
+    "channels.pairing.approve",
+    { ...codeSelector, requestId: "opaque", accountId: "personal", expectedOwnerId: "owner" },
+  ],
+] as const)("rejects an invalid CLI selector for %s", async (method, params) => {
+  const respond = await invoke(method, params, ["operator.admin"]);
+  expectError(respond, { code: "INVALID_REQUEST" });
+  expect(mocks.listRequests).not.toHaveBeenCalled();
+  expect(mocks.approveCode).not.toHaveBeenCalled();
+  expect(mocks.approve).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["channels.pairing.list", { ...listSelector, expectedOwnerId: "owner" }],
+  ["channels.pairing.approve", { ...codeSelector, expectedOwnerId: "owner" }],
+] as const)("requires current admin owner authority for %s", async (method, params) => {
+  const denied = await invoke(method, params, ["operator.pairing"]);
+  expectError(denied, { code: "FORBIDDEN", details: { mutationAccepted: false } });
+  expect(mocks.captureOwnerGuard).not.toHaveBeenCalled();
+
+  mocks.captureOwnerGuard.mockImplementationOnce(() => {
+    throw new Error("owner replaced");
   });
+  const replaced = await invoke(method, params, ["operator.admin"]);
+  expectError(replaced, { details: { mutationAccepted: false, reason: "STATE_OWNER_CHANGED" } });
+  expect(mocks.listRequests).not.toHaveBeenCalled();
+  expect(mocks.approveCode).not.toHaveBeenCalled();
+});
 
-  it.each([
-    ["channels.pairing.list", { ...listSelector, expectedOwnerId: "owner" }],
-    ["channels.pairing.approve", { ...codeSelector, expectedOwnerId: "owner" }],
-  ] as const)("requires current admin owner authority for %s", async (method, params) => {
-    const denied = await invoke(method, params, ["operator.pairing"]);
-    expectError(denied, { code: "FORBIDDEN", details: { mutationAccepted: false } });
-    expect(mocks.captureOwnerGuard).not.toHaveBeenCalled();
-
-    mocks.captureOwnerGuard.mockImplementationOnce(() => {
-      throw new Error("owner replaced");
-    });
-    const replaced = await invoke(method, params, ["operator.admin"]);
-    expectError(replaced, { details: { mutationAccepted: false, reason: "STATE_OWNER_CHANGED" } });
-    expect(mocks.listRequests).not.toHaveBeenCalled();
-    expect(mocks.approveCode).not.toHaveBeenCalled();
-  });
-
-  it.each(["sync", "async"] as const)(
-    "lists only pairing-policy accounts with %s hooks without exposing the human code",
-    async (hooks) => {
-      if (hooks === "async") {
-        const refuseSync = () => {
-          throw new Error("legacy operational hook used");
-        };
-        mocks.listPlugins.mockReturnValue([
-          {
-            ...pairingPlugin,
-            config: {
-              ...pairingPlugin.config,
-              resolveAccount: refuseSync,
-              resolveAccountAsync: async (cfg: unknown, accountId: string) =>
-                pairingPlugin.config.resolveAccount(cfg, accountId),
-              describeAccount: refuseSync,
-              describeAccountAsync: async (account: { name: string }) =>
-                pairingPlugin.config.describeAccount(account),
-            },
-            security: {
-              resolveDmPolicy: refuseSync,
-              resolveDmPolicyAsync: async (context: { account: { dmPolicy: string } }) =>
-                pairingPlugin.security.resolveDmPolicy(context),
-            },
-          },
-        ]);
-      }
-      mocks.listRequests.mockResolvedValue([
+it.each(["sync", "async"] as const)(
+  "lists only pairing-policy accounts with %s hooks without exposing the human code",
+  async (hooks) => {
+    if (hooks === "async") {
+      const refuseSync = () => {
+        throw new Error("legacy operational hook used");
+      };
+      mocks.listPlugins.mockReturnValue([
         {
-          ...pairingEntry(`workspace:personal:user:${senderId}`, {
-            accountId: "personal",
-            name: "Alice",
-            senderId,
-          }),
-          lastSeenAt: "2026-07-20T10:05:00.000Z",
+          ...pairingPlugin,
+          config: {
+            ...pairingPlugin.config,
+            resolveAccount: refuseSync,
+            resolveAccountAsync: async (cfg: unknown, accountId: string) =>
+              pairingPlugin.config.resolveAccount(cfg, accountId),
+            describeAccount: refuseSync,
+            describeAccountAsync: async (account: { name: string }) =>
+              pairingPlugin.config.describeAccount(account),
+          },
+          security: {
+            resolveDmPolicy: refuseSync,
+            resolveDmPolicyAsync: async (context: { account: { dmPolicy: string } }) =>
+              pairingPlugin.security.resolveDmPolicy(context),
+          },
         },
       ]);
-
-      const respond = await invoke("channels.pairing.list", {});
-
-      expect(mocks.listRequests.mock.calls).toEqual([["whatsapp", process.env, "personal"]]);
-      expectSuccess(respond, {
-        accounts: [publicAccount],
-        requests: [
-          {
-            requestId: "opaque-request-id",
-            ...publicAccount,
-            senderId,
-            senderLabel: "Phone number",
-            metadata: { name: "Alice" },
-            createdAt: timestamp,
-            lastSeenAt: "2026-07-20T10:05:00.000Z",
-            expiresAt: "2026-07-20T11:00:00.000Z",
-          },
-        ],
-        commandOwnerConfigured: false,
-        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-      });
-      expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
-    },
-  );
-
-  it.each(["notification", "command-owner"])(
-    "keeps DM approval after %s failure",
-    async (failure) => {
-      const notify = failure === "notification";
-      const id = notify ? `workspace:personal:user:${senderId}` : senderId;
-      const meta = { accountId: "personal", senderId };
-      mocks.approve.mockResolvedValue(approved(id, notify ? meta : undefined));
-      (notify ? mocks.notify : mocks.bootstrapOwner).mockRejectedValue(
-        new Error("optional step failed"),
-      );
-      const respond = await invoke("channels.pairing.approve", {
-        ...target,
-        ...(notify ? { notify: true } : {}),
-        bootstrapCommandOwner: true,
-      });
-      expect(mocks.approve).toHaveBeenCalledWith({
-        ...target,
-        pairingAdapter: pairingPlugin.pairing,
-      });
-      expect(mocks.bootstrapOwner).toHaveBeenCalledWith({ channel: "whatsapp", id });
-      if (notify) {
-        expect(mocks.notify).toHaveBeenCalledWith({
-          channelId: "whatsapp",
+    }
+    mocks.listRequests.mockResolvedValue([
+      {
+        ...pairingEntry(`workspace:personal:user:${senderId}`, {
           accountId: "personal",
-          id,
-          cfg: expect.any(Object),
-          pairingAdapter: pairingPlugin.pairing,
-          meta,
-        });
-      }
-      expectSuccess(respond, {
-        requestId: target.requestId,
-        senderId,
-        notification: notify ? "failed" : "not-requested",
-        commandOwnerBootstrap: notify ? "configured" : "unavailable",
+          name: "Alice",
+          senderId,
+        }),
+        lastSeenAt: "2026-07-20T10:05:00.000Z",
+      },
+    ]);
+
+    const respond = await invoke("channels.pairing.list", {});
+
+    expect(mocks.listRequests.mock.calls).toEqual([["whatsapp", process.env, "personal"]]);
+    expectSuccess(respond, {
+      accounts: [publicAccount],
+      requests: [
+        {
+          requestId: "opaque-request-id",
+          ...publicAccount,
+          senderId,
+          senderLabel: "Phone number",
+          metadata: { name: "Alice" },
+          createdAt: timestamp,
+          lastSeenAt: "2026-07-20T10:05:00.000Z",
+          expiresAt: "2026-07-20T11:00:00.000Z",
+        },
+      ],
+      commandOwnerConfigured: false,
+      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+    });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
+  },
+);
+
+it.each(["notification", "command-owner"])(
+  "keeps DM approval after %s failure",
+  async (failure) => {
+    const notify = failure === "notification";
+    const id = notify ? `workspace:personal:user:${senderId}` : senderId;
+    const meta = { accountId: "personal", senderId };
+    mocks.approve.mockResolvedValue(approved(id, notify ? meta : undefined));
+    (notify ? mocks.notify : mocks.bootstrapOwner).mockRejectedValue(
+      new Error("optional step failed"),
+    );
+    const respond = await invoke("channels.pairing.approve", {
+      ...target,
+      ...(notify ? { notify: true } : {}),
+      bootstrapCommandOwner: true,
+    });
+    expect(mocks.approve).toHaveBeenCalledWith({
+      ...target,
+      pairingAdapter: pairingPlugin.pairing,
+    });
+    expect(mocks.bootstrapOwner).toHaveBeenCalledWith({ channel: "whatsapp", id });
+    if (notify) {
+      expect(mocks.notify).toHaveBeenCalledWith({
+        channelId: "whatsapp",
+        accountId: "personal",
+        id,
+        cfg: expect.any(Object),
+        pairingAdapter: pairingPlugin.pairing,
+        meta,
       });
-    },
-  );
+    }
+    expectSuccess(respond, {
+      requestId: target.requestId,
+      senderId,
+      notification: notify ? "failed" : "not-requested",
+      commandOwnerBootstrap: notify ? "configured" : "unavailable",
+    });
+  },
+);
 
-  it("dismisses a request without approving the sender", async () => {
-    mocks.dismiss.mockResolvedValue(approved());
+it("dismisses a request without approving the sender", async () => {
+  mocks.dismiss.mockResolvedValue(approved());
 
-    const respond = await invoke("channels.pairing.dismiss", target);
+  const respond = await invoke("channels.pairing.dismiss", target);
 
-    expect(mocks.dismiss).toHaveBeenCalledWith(target);
-    expect(mocks.approve).not.toHaveBeenCalled();
-    expectSuccess(respond, { requestId: "opaque-request-id", senderId });
-  });
+  expect(mocks.dismiss).toHaveBeenCalledWith(target);
+  expect(mocks.approve).not.toHaveBeenCalled();
+  expectSuccess(respond, { requestId: "opaque-request-id", senderId });
 });

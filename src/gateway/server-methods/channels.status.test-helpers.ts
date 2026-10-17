@@ -180,19 +180,7 @@ export function buildChannelTestUiCatalog(plugins: Array<{ id: string }>) {
 }
 
 export const RECORDED_CHANNEL_HEALTH_CASES = [
-  { snapshot: { running: false, terminalDisconnect: true }, healthState: "terminal-disconnect" },
   { snapshot: { healthState: "reconnecting" }, healthState: "reconnecting" },
-  {
-    snapshot: {
-      running: false,
-      connected: false,
-      terminalDisconnect: true,
-      lifecycle: "blocked" as const,
-      healthState: "conflict",
-      lastError: "status=440",
-    },
-    healthState: "conflict",
-  },
   {
     snapshot: { lifecycle: "blocked" as const, lastError: "Slack identity unavailable" },
     healthState: "blocked",

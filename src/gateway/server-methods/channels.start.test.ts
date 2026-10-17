@@ -40,6 +40,7 @@ const accountConfig = {
   listAccountIds: () => [selection.accountId],
   resolveAccount: () => ({}),
 };
+const pluginBase = { id: "whatsapp", config: accountConfig };
 
 function createChannelRuntimeSnapshot(running: boolean): ChannelRuntimeSnapshot {
   const account = { accountId: selection.accountId, running };
@@ -102,11 +103,7 @@ function createManager(
 }
 
 async function runLogout(logoutAccount: ReturnType<typeof vi.fn>, stopChannel = vi.fn()) {
-  mocks.getChannelPlugin.mockReturnValue({
-    id: "whatsapp",
-    gateway: { logoutAccount },
-    config: accountConfig,
-  });
+  mocks.getChannelPlugin.mockReturnValue({ ...pluginBase, gateway: { logoutAccount } });
   const options = createOptions({ channel: "whatsapp" });
   options.context.stopChannel = stopChannel;
   options.context.isConfigReloadSettled = () => true;
@@ -117,11 +114,7 @@ async function runLogout(logoutAccount: ReturnType<typeof vi.fn>, stopChannel = 
 it("explains a successful manual start while configuration publication is deferred", async () => {
   vi.clearAllMocks();
   mocks.getRuntimeConfig.mockReturnValue({});
-  mocks.getChannelPlugin.mockReturnValue({
-    id: "whatsapp",
-    gateway: { startAccount: vi.fn() },
-    config: accountConfig,
-  });
+  mocks.getChannelPlugin.mockReturnValue({ ...pluginBase, gateway: { startAccount: vi.fn() } });
   const options = createOptions({ channel: "whatsapp" });
   const startChannel = vi.fn<GatewayRequestHandlerOptions["context"]["startChannel"]>(
     async () => new Map([[selection.accountId, { status: "handed-off" }]]),

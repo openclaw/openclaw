@@ -8,7 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/catalog.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-method-policy.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
-import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import type { RespondFn } from "./types.js";
 
 const local = vi.hoisted(() => ({ plugins: vi.fn(), skills: vi.fn() }));
 // mock-isolation: Registered-handler proof uses synthetic inventory, never host installations.
@@ -21,6 +21,8 @@ vi.mock("../../skills/discovery/status.js", () => ({ prepareWorkspaceSkillStatus
 
 const registry = "https://catalog.example.test";
 const skillRequest = { kind: "skill", agentId: "main" };
+const trendingRequest = { ...skillRequest, feed: "trending" };
+const skillMetadata = { name: "same-slug", displayName: "Same", family: "skill", updatedAt: 1 };
 const config = {
   agents: {
     list: ["main", "other"].map((id) => ({ id, workspace: `/tmp/catalog-${id}` })),
@@ -30,14 +32,7 @@ function plugin(name: string, official?: boolean) {
   return { name, displayName: name, family: "code-plugin", isOfficial: official };
 }
 function skill(owner: string, official?: boolean) {
-  return {
-    name: "same-slug",
-    displayName: "Same display name",
-    family: "skill",
-    ownerHandle: owner,
-    isOfficial: official,
-    updatedAt: 1,
-  };
+  return { ...skillMetadata, ownerHandle: owner, isOfficial: official };
 }
 function trackedSkill(owner: string, skillRegistry = registry, requestedReference?: string) {
   return {
@@ -60,15 +55,14 @@ type CatalogResults = {
 async function call<M extends keyof CatalogResults>(action: M, params: Params) {
   const method = `catalog.${action}`;
   const respond = vi.fn<RespondFn>();
-  const options: GatewayRequestHandlerOptions = {
+  await coreGatewayHandlers[method]!({
     req: { type: "req", id: "catalog", method, params },
     params,
     client: null,
     context: { getRuntimeConfig: () => config } as never,
     isWebchatConnect: () => false,
     respond,
-  };
-  await coreGatewayHandlers[method]!(options);
+  });
   expect(respond).toHaveBeenCalledTimes(1);
   const [ok, result, error] = respond.mock.calls[0]!;
   return { ok, result: result as CatalogResults[M], error };
@@ -96,14 +90,12 @@ function trendingSkill(source: string, displayName: string, reference: string) {
     source,
     official: true,
     publisher: { handle: "alice", ...(source === "clawhub" ? { official: true } : {}) },
-    metrics: { updatedAt: 1 },
     install: { kind: source, reference },
   };
 }
 function installedPlugin(id: string, enabled: boolean, metadata: Params) {
   return {
     id,
-    name: id,
     installed: true,
     enabled,
     state: enabled ? "enabled" : "disabled",
@@ -116,7 +108,6 @@ beforeEach(() => {
   vi.stubEnv("CLAWHUB_TOKEN", "fixture-catalog-token");
   local.plugins.mockReset().mockResolvedValue({
     mutationAllowed: true,
-    diagnostics: [],
     plugins: [
       installedPlugin("local-bundle", true, { origin: "bundled" }),
       installedPlugin("installed", false, { clawhubPackage: "official-plugin" }),
@@ -207,14 +198,7 @@ it("keeps native publisher, registry, external source, and selected agent instal
 it("qualifies trending native skills with listing flags and preserves install-only external identities", async () => {
   stubFetch((url) => {
     if (url.pathname.startsWith("/api/v1/packages/")) {
-      return {
-        package: {
-          family: "skill",
-          name: "same-slug",
-          ownerHandle: "alice",
-          isOfficial: false,
-        },
-      };
+      return { package: skill("alice", false) };
     }
     return {
       items: [
@@ -224,18 +208,14 @@ it("qualifies trending native skills with listing flags and preserves install-on
       nextCursor: "trending-page-two",
     };
   });
-  const general = await call("browse", { ...skillRequest, feed: "trending" });
+  const general = await call("browse", trendingRequest);
   expect(general.result.mode).toBe("trending");
   expect(general.result.items[1]).toMatchObject({
     id: "skills-sh:alice/repo/same-slug",
     installOnly: true,
     local: { installed: true },
   });
-  const official = await call("browse", {
-    ...skillRequest,
-    feed: "trending",
-    officialOnly: true,
-  });
+  const official = await call("browse", { ...trendingRequest, officialOnly: true });
   expect(official.result).toMatchObject({ items: [], nextCursor: "trending-page-two" });
 });
 
