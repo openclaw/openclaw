@@ -19,38 +19,6 @@ afterEach(async () => {
   }
 });
 
-function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, content] of Object.entries(files)) {
-    writeFixture(root, name, content);
-  }
-}
-
-function writeFixture(root: string, name: string, content: string) {
-  fs.writeFileSync(path.join(root, name), content);
-}
-
-function conditionalDependency(root: string, importOnly: boolean) {
-  const dependency = path.join(root, "node_modules", "conditional-dependency");
-  fs.mkdirSync(dependency, { recursive: true });
-  writeFiles(dependency, {
-    "package.json": JSON.stringify({
-      exports: { import: "./import.mjs", ...(importOnly ? {} : { require: "./require.cjs" }) },
-    }),
-    "import.mjs": "export const value = 99;",
-    "require.cjs": "exports.value = 42;",
-  });
-  return dependency;
-}
-
-function legacyModule<T>(source: string, interopDefault?: boolean): T {
-  return createJiti(source, {
-    tryNative: false,
-    fsCache: false,
-    moduleCache: false,
-    ...(interopDefault === undefined ? {} : { interopDefault }),
-  })(source) as T;
-}
-
 function load(rootDir: string, entry: string, standalone = false) {
   const instance = new PluginInstance("generation-fixture");
   instances.push(instance);
@@ -71,10 +39,8 @@ describe("plugin module generations", () => {
     "keeps Bun-native plugin generations when Node module hooks are available",
     () => {
       const root = temp.make("plugin-bun-native-owner-");
-      writeFiles(root, {
-        "index.ts": "export const value: number = 42;",
-        "index.cjs": "exports.value = 42;",
-      });
+      fs.writeFileSync(path.join(root, "index.ts"), "export const value: number = 42;");
+      fs.writeFileSync(path.join(root, "index.cjs"), "exports.value = 42;");
       const previous = Object.getOwnPropertyDescriptor(Module, "registerHooks");
       Object.defineProperty(Module, "registerHooks", {
         configurable: true,
@@ -104,9 +70,8 @@ describe("plugin module generations", () => {
     "preserves synchronous $extension startup conditions in a $type package across reload (import-only: $importOnly)",
     ({ type, extension, importOnly }) => {
       const root = temp.make("plugin-source-startup-conditions-");
-      writeFixture(
-        root,
-        "package.json",
+      fs.writeFileSync(
+        path.join(root, "package.json"),
         JSON.stringify({
           type,
           dependencies: { "conditional-dependency": "1.0.0" },
@@ -115,12 +80,25 @@ describe("plugin module generations", () => {
             : {}),
         }),
       );
-      const dependency = conditionalDependency(root, importOnly);
+      const dependency = path.join(root, "node_modules", "conditional-dependency");
+      fs.mkdirSync(dependency, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependency, "package.json"),
+        JSON.stringify({
+          exports: { import: "./import.mjs", ...(importOnly ? {} : { require: "./require.cjs" }) },
+        }),
+      );
+      fs.writeFileSync(path.join(dependency, "import.mjs"), "export const value = 99;");
       const required = path.join(dependency, "require.cjs");
-      writeFiles(root, {
-        "helper.ts": 'export { value } from "conditional-dependency";',
-        "unvisited.ts": 'export { value } from "conditional-dependency";',
-      });
+      fs.writeFileSync(required, "exports.value = 42;");
+      fs.writeFileSync(
+        path.join(root, "helper.ts"),
+        'export { value } from "conditional-dependency";',
+      );
+      fs.writeFileSync(
+        path.join(root, "unvisited.ts"),
+        'export { value } from "conditional-dependency";',
+      );
       const entry = `index.${extension}`;
       const source = path.join(root, entry);
       fs.writeFileSync(
@@ -155,7 +133,12 @@ describe("plugin module generations", () => {
         nativeResolve(): string;
         requireProperties(): boolean[];
       };
-      const legacy = legacyModule<StartupPlugin>(source, false);
+      const legacy = createJiti(source, {
+        tryNative: false,
+        fsCache: false,
+        moduleCache: false,
+        interopDefault: false,
+      })(source) as StartupPlugin;
       expect(legacy).toMatchObject(expected);
       expect(legacy.resolveThenRequire()).toBe(value);
       const first = load(root, entry).value as StartupPlugin;
@@ -274,12 +257,13 @@ describe("plugin module generations", () => {
       source,
       `export const read = () => import('./helper.${extension}').then(module => [module.value, module.default]);`,
     );
-    writeFixture(
-      root,
-      `helper.${extension}`,
+    fs.writeFileSync(
+      path.join(root, `helper.${extension}`),
       "export const value = await Promise.resolve(42); export default value;",
     );
-    const legacy = legacyModule(source) as { read(): Promise<number[]> };
+    const legacy = createJiti(source, { tryNative: false, fsCache: false, moduleCache: false })(
+      source,
+    ) as { read(): Promise<number[]> };
     await expect(legacy.read()).resolves.toEqual([42, 42]);
     const current = load(root, "index.ts").value as typeof legacy;
     await expect(current.read()).resolves.toEqual([42, 42]);
@@ -313,7 +297,7 @@ describe("plugin module generations", () => {
     async (_label, extension, body, expected) => {
       const root = temp.make("plugin-source-dynamic-interop-");
       const source = path.join(root, "index.ts");
-      writeFixture(root, `value.${extension}`, body);
+      fs.writeFileSync(path.join(root, `value.${extension}`), body);
       fs.writeFileSync(
         source,
         `export const read = async () => {
@@ -322,7 +306,9 @@ describe("plugin module generations", () => {
         typeof module.read === 'function' ? module.read() : null];
     };`,
       );
-      const legacy = legacyModule(source) as { read(): Promise<unknown[]> };
+      const legacy = createJiti(source, { tryNative: false, fsCache: false, moduleCache: false })(
+        source,
+      ) as { read(): Promise<unknown[]> };
       await expect(legacy.read()).resolves.toEqual(expected);
       const current = load(root, "index.ts").value as typeof legacy;
       await expect(current.read()).resolves.toEqual(expected);
@@ -331,10 +317,14 @@ describe("plugin module generations", () => {
 
   it.each(["mjs", "ts"])("preserves computed import URL identity (%s)", async (extension) => {
     const root = temp.make("plugin-computed-url-");
-    writeFiles(root, {
-      [`index.${extension}`]: "export const read = name => import(name);",
-      [`helper.${extension}`]: "export const token = Symbol('module');",
-    });
+    fs.writeFileSync(
+      path.join(root, `index.${extension}`),
+      "export const read = name => import(name);",
+    );
+    fs.writeFileSync(
+      path.join(root, `helper.${extension}`),
+      "export const token = Symbol('module');",
+    );
     const plugin = load(root, `index.${extension}`, true).value as {
       read(name: string): Promise<{ token: symbol }>;
     };
@@ -351,16 +341,17 @@ describe("plugin module generations", () => {
 
   it("retains a failed computed package capture through another export path", () => {
     const root = temp.make("plugin-failed-computed-package-");
-    writeFixture(root, "index.cjs", "exports.read = name => require(name).value;");
+    fs.writeFileSync(path.join(root, "index.cjs"), "exports.read = name => require(name).value;");
     const dependency = path.join(root, "node_modules", "failed-dependency");
     fs.mkdirSync(dependency, { recursive: true });
-    writeFiles(dependency, {
-      "package.json": JSON.stringify({
+    fs.writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
         main: "index.cjs",
         dependencies: { "missing-required-dependency": "1.0.0" },
       }),
-      "index.cjs": "exports.value = 42;",
-    });
+    );
+    fs.writeFileSync(path.join(dependency, "index.cjs"), "exports.value = 42;");
     const plugin = load(root, "index.cjs", true).value as { read(name: string): number };
     expect(() => plugin.read("failed-dependency")).toThrow("missing-required-dependency");
     expect(() => plugin.read("failed-dependency/index.cjs")).toThrow("missing-required-dependency");
@@ -370,16 +361,17 @@ describe("plugin module generations", () => {
     "reports unsupported synchronous TypeScript top-level await (%s)",
     (extension) => {
       const root = temp.make("plugin-async-native-module-");
-      writeFixture(root, "package.json", '{"type":"commonjs"}');
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}');
       const entry = `index.${extension}`;
-      writeFixture(
-        root,
-        entry,
+      fs.writeFileSync(
+        path.join(root, entry),
         `import type { module, exports } from 'type-only-uninstalled';
          export const value = await Promise.resolve(42);`,
       );
       const source = path.join(root, entry);
-      expect(() => legacyModule(source)).toThrow(/await|Promise/);
+      expect(() =>
+        createJiti(source, { tryNative: false, fsCache: false, moduleCache: false })(source),
+      ).toThrow(/await|Promise/);
       expect(() => load(root, entry)).toThrow(/await|Promise/);
     },
   );
@@ -395,12 +387,23 @@ describe("plugin module generations", () => {
     "preserves authored $assignment CommonJS exports beside $imports imports",
     ({ imports, assignment }) => {
       const root = temp.make("plugin-type-only-commonjs-");
-      writeFixture(
-        root,
-        "package.json",
+      fs.writeFileSync(
+        path.join(root, "package.json"),
         JSON.stringify({ type: "commonjs", dependencies: { "conditional-dependency": "1.0.0" } }),
       );
-      conditionalDependency(root, imports === "require-import-only");
+      const dependency = path.join(root, "node_modules", "conditional-dependency");
+      fs.mkdirSync(dependency, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependency, "package.json"),
+        JSON.stringify({
+          exports: {
+            import: "./import.mjs",
+            ...(imports === "require-import-only" ? {} : { require: "./require.cjs" }),
+          },
+        }),
+      );
+      fs.writeFileSync(path.join(dependency, "import.mjs"), "export const value = 99;");
+      fs.writeFileSync(path.join(dependency, "require.cjs"), "exports.value = 42;");
       const source = path.join(root, "index.ts");
       const value = imports === "runtime" || imports.startsWith("require") ? "value" : "42";
       const declaration =
@@ -416,7 +419,12 @@ describe("plugin module generations", () => {
         `${declaration}
          ${assignment === "exports" ? `exports.value = ${value};` : `${assignment === "module" ? "module.exports" : "export"} = { value: ${value} };`}`,
       );
-      const legacy = legacyModule(source, false);
+      const legacy = createJiti(source, {
+        tryNative: false,
+        fsCache: false,
+        moduleCache: false,
+        interopDefault: false,
+      })(source);
       expect(legacy).toEqual({ value: imports === "require-import-only" ? 99 : 42 });
       expect(load(root, "index.ts").value).toEqual(legacy);
     },
@@ -437,38 +445,38 @@ describe("plugin module generations", () => {
       const helper = typescript ? "helper.ts" : mode === "require" ? "helper.cjs" : "helper.mjs";
       const specifier =
         dependency === "package" ? "computed-dependency" : `./${helper.replace(/\.ts$/, ".js")}`;
-      writeFixture(
-        root,
-        "package.json",
+      fs.writeFileSync(
+        path.join(root, "package.json"),
         JSON.stringify({ dependencies: { "computed-dependency": "1.0.0" } }),
       );
       const packageRoot = path.join(root, "node_modules", "computed-dependency");
       fs.mkdirSync(packageRoot, { recursive: true });
-      writeFixture(
-        packageRoot,
-        "package.json",
+      fs.writeFileSync(
+        path.join(packageRoot, "package.json"),
         JSON.stringify({ exports: { import: "./import.mjs", require: "./require.cjs" } }),
       );
       const write = (value: string) => {
-        writeFixture(
-          root,
-          helper,
+        fs.writeFileSync(
+          path.join(root, helper),
           typescript
             ? `enum Value { Current = ${JSON.stringify(value)} }; export const value = Value.Current;`
             : mode === "require"
               ? `exports.value = ${JSON.stringify(value)};`
               : `export const value = ${JSON.stringify(value)};`,
         );
-        writeFiles(packageRoot, {
-          "require.cjs": `exports.value = ${JSON.stringify(`require:${value}`)};`,
-          "import.mjs": `export const value = ${JSON.stringify(`import:${value}`)};`,
-        });
+        fs.writeFileSync(
+          path.join(packageRoot, "require.cjs"),
+          `exports.value = ${JSON.stringify(`require:${value}`)};`,
+        );
+        fs.writeFileSync(
+          path.join(packageRoot, "import.mjs"),
+          `export const value = ${JSON.stringify(`import:${value}`)};`,
+        );
       };
       write("before");
       const read = mode === "require" ? "require(name).value" : "(await import(name)).value";
-      writeFixture(
-        root,
-        entry,
+      fs.writeFileSync(
+        path.join(root, entry),
         `${entry.endsWith("cjs") ? "exports.read =" : "export const read ="} ${mode === "import" ? "async " : ""}(name${typescript ? ": string" : ""}) => ${read};
          ${mode === "require" ? `${entry.endsWith("cjs") ? "exports.initial = exports.read" : "export const initial = read"}(${JSON.stringify(specifier)});` : ""}`,
       );
@@ -510,7 +518,7 @@ describe("plugin module generations", () => {
         vi.stubEnv("TMPDIR", artifactTemp);
       }
       const entry = `index.${extension}`;
-      writeFixture(root, entry, "export const value: number = 42;");
+      fs.writeFileSync(path.join(root, entry), "export const value: number = 42;");
       expect(load(root, entry).value).toMatchObject({ value: 42 });
     },
   );
@@ -543,11 +551,14 @@ describe("plugin module generations", () => {
       const source = path.join(root, entry);
       const tsconfig = path.join(mode === "ancestor" ? fixtureRoot : root, "tsconfig.json");
       fs.mkdirSync(path.join(root, "lib"));
-      writeFixture(root, "package.json", '{"type":"module"}');
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
       const unused = path.join(root, "unused", "unrelated.ts");
       fs.mkdirSync(path.dirname(unused));
       fs.writeFileSync(unused, 'throw new Error("unrelated source must not execute");');
-      write(root, "unused", "tsconfig.json", JSON.stringify({ extends: "./not-installed.json" }));
+      fs.writeFileSync(
+        path.join(root, "unused", "tsconfig.json"),
+        JSON.stringify({ extends: "./not-installed.json" }),
+      );
       const writeConfig = (directory: string) => {
         const inherited = mode === "extends" || mode === "npm-extends";
         const base =
@@ -583,10 +594,8 @@ describe("plugin module generations", () => {
       const writeHelpers = (directory: string, value: string) => {
         fs.mkdirSync(path.join(root, directory), { recursive: true });
         for (const name of ["helper", "lazy"]) {
-          write(
-            root,
-            directory,
-            `${name}.ts`,
+          fs.writeFileSync(
+            path.join(root, directory, `${name}.ts`),
             `export const value: string = ${JSON.stringify(value)};`,
           );
         }
@@ -612,9 +621,14 @@ describe("plugin module generations", () => {
               ? path.relative(process.cwd(), tsconfig)
               : "false",
       );
-      const legacy = legacyModule<{
+      const legacy = createJiti(source, {
+        tryNative: false,
+        fsCache: false,
+        moduleCache: false,
+        interopDefault: false,
+      })(source) as {
         default: { value: string; read(): Promise<string>; missing(): Promise<unknown> };
-      }>(source, false);
+      };
       expect(legacy.default.value).toBe("ready");
       expect(await legacy.default.read()).toBe("ready");
       const first = load(root, entry, standalone);
@@ -695,10 +709,11 @@ describe("plugin module generations", () => {
 
   it("retains native JSON import attributes for a computed JavaScript edge", async () => {
     const root = temp.make("plugin-native-computed-json-");
-    writeFiles(root, {
-      "data.json": '{"value":42}',
-      "index.mjs": "export const read = (name, attributes) => import(name, { with: attributes });",
-    });
+    fs.writeFileSync(path.join(root, "data.json"), '{"value":42}');
+    fs.writeFileSync(
+      path.join(root, "index.mjs"),
+      "export const read = (name, attributes) => import(name, { with: attributes });",
+    );
     const plugin = load(root, "index.mjs", true).value as {
       read(name: string, attributes?: { type: string }): Promise<unknown>;
     };
@@ -752,11 +767,12 @@ describe("plugin module generations", () => {
 
   it("preserves a TypeScript plugin default beside wildcard CommonJS reexports", () => {
     const root = temp.make("plugin-source-wildcard-");
-    writeFiles(root, {
-      "dependency.cjs": "exports.answer = 42;",
-      "index.ts": `export default { id: 'fixture' };
+    fs.writeFileSync(path.join(root, "dependency.cjs"), "exports.answer = 42;");
+    fs.writeFileSync(
+      path.join(root, "index.ts"),
+      `export default { id: 'fixture' };
       export * from './dependency.cjs';`,
-    });
+    );
     const value = load(root, "index.ts").value as { default: { id: string }; answer: number };
     expect(value.default.id).toBe("fixture");
     expect(value.answer).toBe(42);
@@ -767,13 +783,13 @@ describe("plugin module generations", () => {
     (mode) => {
       const root = temp.make("plugin-native-module-exports-");
       const entry = mode === "native" ? "index.mjs" : "index.ts";
-      writeFiles(root, {
-        "dependency.cjs": "exports.answer = 42;",
-        [entry]:
-          mode === "native"
-            ? "export default { id: 'ignored' }; export * from './dependency.cjs';"
-            : "const value = { answer: 42 }; export { value as 'module.exports' }; export default { id: 'ignored' };",
-      });
+      fs.writeFileSync(path.join(root, "dependency.cjs"), "exports.answer = 42;");
+      fs.writeFileSync(
+        path.join(root, entry),
+        mode === "native"
+          ? "export default { id: 'ignored' }; export * from './dependency.cjs';"
+          : "const value = { answer: 42 }; export { value as 'module.exports' }; export default { id: 'ignored' };",
+      );
       const source = path.join(root, entry);
       const expected =
         mode === "native"
@@ -817,10 +833,11 @@ describe("plugin module generations", () => {
 
   it("defers unused TypeScript syntax errors until their module is loaded", async () => {
     const root = temp.make("plugin-lazy-source-error-");
-    writeFiles(root, {
-      "index.ts": "export const read = () => import('./broken.ts');",
-      "broken.ts": "export const value: = 1;",
-    });
+    fs.writeFileSync(
+      path.join(root, "index.ts"),
+      "export const read = () => import('./broken.ts');",
+    );
+    fs.writeFileSync(path.join(root, "broken.ts"), "export const value: = 1;");
     const plugin = load(root, "index.ts").value as { read(): Promise<unknown> };
     await expect(plugin.read()).rejects.toThrow(
       process.versions.bun
@@ -834,19 +851,18 @@ describe("plugin module generations", () => {
     const dependency = path.join(root, "node_modules", "source-main");
     fs.mkdirSync(dependency, { recursive: true });
     fs.mkdirSync(path.join(root, "unused"));
-    write(root, "unused", "package.json", "{");
-    writeFixture(
-      root,
-      "package.json",
+    fs.writeFileSync(path.join(root, "unused", "package.json"), "{");
+    fs.writeFileSync(
+      path.join(root, "package.json"),
       JSON.stringify({ type: "module", dependencies: { "source-main": "1.0.0" } }),
     );
-    writeFiles(dependency, {
-      "package.json": '{"main":"./index.ts"}',
-      "index.ts": "enum Value { Current = 42 }; export const value = Value.Current;",
-    });
-    writeFixture(
-      root,
-      "index.ts",
+    fs.writeFileSync(path.join(dependency, "package.json"), '{"main":"./index.ts"}');
+    fs.writeFileSync(
+      path.join(dependency, "index.ts"),
+      "enum Value { Current = 42 }; export const value = Value.Current;",
+    );
+    fs.writeFileSync(
+      path.join(root, "index.ts"),
       "import { value } from 'source-main'; export const read = () => value;",
     );
     expect((load(root, "index.ts").value as { read(): number }).read()).toBe(42);
@@ -858,14 +874,18 @@ describe("plugin module generations", () => {
       vi.stubEnv("JITI_JSX", "1");
       const root = temp.make("plugin-jsx-source-");
       const entry = `index.${extension}`;
-      writeFiles(root, {
-        "helper.jsx": `const React = {
+      fs.writeFileSync(
+        path.join(root, "helper.jsx"),
+        `const React = {
         createElement: (tag, props) => [tag, props.label]
       }; export const helper = <helper label="ready" />;`,
-        [entry]: `import { helper } from './helper.jsx';
+      );
+      fs.writeFileSync(
+        path.join(root, entry),
+        `import { helper } from './helper.jsx';
         const React = { createElement: (tag: string, props: { label: string }) => [tag, props.label] };
         export const value = [<demo label="ready" />, helper];`,
-      });
+      );
       expect((load(root, entry).value as { value: string[][] }).value).toEqual([
         ["demo", "ready"],
         ["helper", "ready"],
@@ -949,14 +969,13 @@ describe("plugin module generations", () => {
   it.each(["cjs", "ts"])("does not reevaluate a failing module through a %s entry", (extension) => {
     const root = temp.make("plugin-failed-native-");
     const effect = path.join(root, "effect.txt");
-    writeFixture(
-      root,
-      extension === "cjs" ? "index.cjs" : "failure.cjs",
+    fs.writeFileSync(
+      path.join(root, extension === "cjs" ? "index.cjs" : "failure.cjs"),
       `require('node:fs').appendFileSync(${JSON.stringify(effect)}, ${JSON.stringify("once\n")});
        require('./not-installed.cjs');`,
     );
     if (extension === "ts") {
-      writeFixture(root, "index.ts", "import './failure.cjs';");
+      fs.writeFileSync(path.join(root, "index.ts"), "import './failure.cjs';");
     }
     expect(() => load(root, `index.${extension}`)).toThrow("not-installed.cjs");
     expect(fs.readFileSync(effect, "utf8")).toBe("once\n");
@@ -967,22 +986,29 @@ describe("plugin module generations", () => {
     async (extension) => {
       const root = temp.make("plugin-source-generation-");
       const emitted = extension === "mts" ? "mjs" : extension === "cts" ? "cjs" : "js";
-      writeFiles(root, {
-        "package.json": '{"type":"module"}',
-        [`index.${extension}`]: `import { value } from './helper.${extension}';
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+      fs.writeFileSync(
+        path.join(root, `index.${extension}`),
+        `import { value } from './helper.${extension}';
          export async function read() {
            const name = 'helper';
            return [value, (await import('./' + name + '.${extension}')).value];
          }`,
-      });
+      );
       const helper = path.join(root, `helper.${extension}`);
       fs.writeFileSync(helper, "enum Value { Current = 1 }; export const value = Value.Current;");
-      writeFiles(root, {
-        [`helper.${emitted}`]: emitted === "cjs" ? "exports.value = 0;" : "export const value = 0;",
-        "native.mjs": `export { value } from './helper.${emitted}';`,
-      });
+      fs.writeFileSync(
+        path.join(root, `helper.${emitted}`),
+        emitted === "cjs" ? "exports.value = 0;" : "export const value = 0;",
+      );
+      fs.writeFileSync(
+        path.join(root, "native.mjs"),
+        `export { value } from './helper.${emitted}';`,
+      );
       const source = path.join(root, `index.${extension}`);
-      const legacy = legacyModule(source) as { read(): Promise<number[]> };
+      const legacy = createJiti(source, { tryNative: false, fsCache: false, moduleCache: false })(
+        source,
+      ) as { read(): Promise<number[]> };
       expect(await legacy.read()).toEqual([1, 1]);
       const first = load(root, `index.${extension}`);
       const a = first.value as typeof legacy;

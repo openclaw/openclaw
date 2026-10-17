@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import type { QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import { createFlowTestApi } from "./scenario-flow-runner.test-support.js";
 import type { QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
-const timeoutError = new Error("scenario deadline expired");
 
 const delayedSideEffectCases: Array<[name: string, action: QaFlowAction]> = [
   ["generic call", { call: "sideEffect", args: [{ expr: "await resolveInput()" }] }],
@@ -17,29 +16,57 @@ describe("scenario flow deadline", () => {
     "does not invoke %s after aborting during async input resolution",
     async (_name, action) => {
       const controller = new AbortController();
+      const timeoutError = new Error("scenario deadline expired");
       const sideEffect = vi.fn();
-      const inputStarted = Promise.withResolvers<void>();
-      const input = Promise.withResolvers<unknown>();
+      let markInputStarted!: () => void;
+      let releaseInput!: (value: unknown) => void;
+      const inputStarted = new Promise<void>((resolve) => {
+        markInputStarted = resolve;
+      });
+      const input = new Promise<unknown>((resolve) => {
+        releaseInput = resolve;
+      });
 
       const pending = runScenarioFlow({
-        api: createFlowTestApi("flow-post-resolution-abort-fence", {
+        api: {
           signal: controller.signal,
+          state: createQaBusState(),
+          scenario: {
+            id: "flow-post-resolution-abort-fence",
+            title: "flow-post-resolution-abort-fence",
+            sourcePath: "qa/scenarios/flow-post-resolution-abort-fence.yaml",
+            surface: "test",
+            objective: "test",
+            successCriteria: ["test"],
+            execution: { kind: "flow" },
+          },
+          config: {},
           resolveInput: async () => {
-            inputStarted.resolve();
-            return await input.promise;
+            markInputStarted();
+            return await input;
           },
           sideEffect,
           transport: {
             sendInbound: sideEffect,
+            sendNativeCommand: sideEffect,
+            waitForOutbound: sideEffect,
+            waitForOutboundSequence: sideEffect,
+            waitForNoOutbound: sideEffect,
           },
-        }),
+          runScenario: async (name, steps) => {
+            for (const step of steps) {
+              await step.run();
+            }
+            return { name, status: "pass", steps: [] };
+          },
+        },
         scenarioTitle: "flow-post-resolution-abort-fence",
         flow: { steps: [{ name: "resolve input", actions: [action] }] },
       });
 
-      await inputStarted.promise;
+      await inputStarted;
       controller.abort(timeoutError);
-      input.resolve({});
+      releaseInput({});
 
       await expect(pending).rejects.toBe(timeoutError);
       expect(sideEffect).not.toHaveBeenCalled();
@@ -48,35 +75,59 @@ describe("scenario flow deadline", () => {
 
   it("runs finally cleanup without advancing other actions after abort", async () => {
     const controller = new AbortController();
+    const timeoutError = new Error("scenario deadline expired");
     const nestedMutation = vi.fn();
     const catchMutation = vi.fn();
     const finallyMutation = vi.fn();
     const laterMutation = vi.fn();
     const detailsMutation = vi.fn(() => "details");
+    let markActionStarted!: () => void;
+    let releaseAction!: () => void;
+    let expireDeadline!: (reason: Error) => void;
     let pendingStep: Promise<QaSuiteStepOutcome | void> | undefined;
-    const actionStarted = Promise.withResolvers<void>();
-    const action = Promise.withResolvers<void>();
-    const deadline = Promise.withResolvers<never>();
-    const nestedActions = [
-      {
-        forEach: {
-          items: [1],
-          item: "item",
-          actions: [{ call: "delayedAction" }, { call: "nestedMutation" }],
-        },
-      },
-    ];
+    const actionStarted = new Promise<void>((resolve) => {
+      markActionStarted = resolve;
+    });
+    const action = new Promise<void>((resolve) => {
+      releaseAction = resolve;
+    });
+    const deadline = new Promise<never>((_resolve, reject) => {
+      expireDeadline = reject;
+    });
+    const thenKey = ["th", "en"].join("");
     const ifAction = Object.fromEntries([
       ["expr", "true"],
-      [["th", "en"].join(""), nestedActions],
+      [
+        thenKey,
+        [
+          {
+            forEach: {
+              items: [1],
+              item: "item",
+              actions: [{ call: "delayedAction" }, { call: "nestedMutation" }],
+            },
+          },
+        ],
+      ],
     ]);
 
     const pending = runScenarioFlow({
-      api: createFlowTestApi("flow-abort-fence", {
+      api: {
         signal: controller.signal,
+        state: createQaBusState(),
+        scenario: {
+          id: "flow-abort-fence",
+          title: "flow-abort-fence",
+          sourcePath: "qa/scenarios/flow-abort-fence.yaml",
+          surface: "test",
+          objective: "test",
+          successCriteria: ["test"],
+          execution: { kind: "flow" },
+        },
+        config: {},
         delayedAction: async () => {
-          actionStarted.resolve();
-          await action.promise;
+          markActionStarted();
+          await action;
         },
         nestedMutation,
         catchMutation,
@@ -86,7 +137,7 @@ describe("scenario flow deadline", () => {
         runScenario: async (name, steps) => {
           try {
             pendingStep = steps[0]?.run();
-            await Promise.race([pendingStep, deadline.promise]);
+            await Promise.race([pendingStep, deadline]);
             return { name, status: "pass", steps: [] };
           } catch (error) {
             return {
@@ -97,7 +148,7 @@ describe("scenario flow deadline", () => {
             };
           }
         },
-      }),
+      },
       scenarioTitle: "flow-abort-fence",
       flow: {
         steps: [
@@ -121,19 +172,19 @@ describe("scenario flow deadline", () => {
 
     try {
       await Promise.race([
-        actionStarted.promise,
+        actionStarted,
         pending.then(() => {
           throw new Error("flow settled before the delayed action started");
         }),
       ]);
       controller.abort(timeoutError);
-      deadline.reject(timeoutError);
+      expireDeadline(timeoutError);
       const result = await pending;
 
       expect(result).toMatchObject({ status: "fail", details: timeoutError.message });
       // The outer deadline returns while the action is held; cleanup belongs to its late unwind.
       expect(finallyMutation).not.toHaveBeenCalled();
-      action.resolve();
+      releaseAction();
       await expect(pendingStep).rejects.toBe(timeoutError);
       expect(nestedMutation).not.toHaveBeenCalled();
       expect(catchMutation).not.toHaveBeenCalled();
@@ -142,9 +193,9 @@ describe("scenario flow deadline", () => {
       expect(detailsMutation).not.toHaveBeenCalled();
     } finally {
       controller.abort(timeoutError);
-      deadline.reject(timeoutError);
-      action.resolve();
-      await Promise.allSettled([pending, pendingStep, deadline.promise]);
+      expireDeadline(timeoutError);
+      releaseAction();
+      await Promise.allSettled([pending, pendingStep, deadline]);
     }
   });
 });

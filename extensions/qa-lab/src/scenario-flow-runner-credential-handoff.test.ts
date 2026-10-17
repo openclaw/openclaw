@@ -35,10 +35,9 @@ type HandoffOptions = {
 };
 
 async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
-  const { file, reply, migrate, unrelatedMigration } = options;
   const state = createQaBusState();
   const stateDir = "/qa/state";
-  const providerPath = file?.path ?? path.join(stateDir, "secrets/key.txt");
+  const providerPath = options.file?.path ?? path.join(stateDir, "secrets/key.txt");
   const scenario = readQaScenarioById("operator-api-key-handoff-live");
   const oldKey = scenario.execution.config?.oldKey;
   if (typeof oldKey !== "string") {
@@ -68,14 +67,16 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
         providerMode: "live-frontier",
         gateway: {
           runtimeEnv: {
+            HOME: "/qa",
             OPENCLAW_CONFIG_PATH: "/qa/openclaw.json",
             OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_QA_TEMP_ROOT: "/qa",
           },
         },
       },
       fs: {
         realpath: async (filePath: string) =>
-          filePath === providerPath ? (file?.realPath ?? filePath) : filePath,
+          filePath === providerPath ? (options.file?.realPath ?? filePath) : filePath,
         readFile: async (filePath: string) => {
           if (filePath === "/qa/openclaw.json") {
             return configText;
@@ -92,10 +93,10 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
         lstat: async (filePath: string) => {
           expect(filePath).toBe(providerPath);
           return {
-            mtimeMs: file?.mtimeMs ?? 100,
+            mtimeMs: options.file?.mtimeMs ?? 100,
             mode: 0o100600,
             nlink: 1,
-            isFile: () => file?.isFile ?? true,
+            isFile: () => options.file?.isFile ?? true,
           };
         },
       },
@@ -104,6 +105,7 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
         if (!newKey) {
           throw new Error("operator request did not contain the new synthetic key");
         }
+        const file = options.file;
         const provider = file?.provider ?? "qa_key";
         const config = configWithKey(
           file
@@ -120,43 +122,46 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
             : `${newKey}\n`;
         configText = `// operator-authored config\n${JSON.stringify({
           ...config,
-          secrets: file
+          ...(file
             ? {
-                providers: {
-                  [provider]: {
-                    source: "file",
-                    path: providerPath,
-                    mode: file.mode ?? "singleValue",
+                secrets: {
+                  providers: {
+                    [provider]: {
+                      source: "file",
+                      path: providerPath,
+                      mode: file.mode ?? "singleValue",
+                    },
                   },
                 },
               }
-            : undefined,
-          meta:
-            migrate || unrelatedMigration
-              ? {
-                  migrations: unrelatedMigration
+            : {}),
+          ...(options.migrate || options.unrelatedMigration
+            ? {
+                meta: {
+                  migrations: options.unrelatedMigration
                     ? { unrelatedMarker: true }
                     : { modelPolicyAllowlist: true, utilityModelSeparation: true },
-                }
-              : undefined,
+                },
+              }
+            : {}),
         })}`;
-        const echo = reply === "sent-key-echo" || reply === "edited-key-echo";
-        const preview = send(
-          reply === "sent-key-echo"
-            ? `Temporary echo: ${newKey}`
-            : echo
-              ? "Working."
-              : "Working on the configuration.",
-          echo ? 200 : 50,
-        );
-        if (reply === "edited-key-echo") {
-          edit(preview.id, `Temporary echo: ${newKey}`, 250);
-        }
-        if (reply) {
-          edit(preview.id, "Configuration updated.", 300);
+        if (options.reply === "sent-key-echo" || options.reply === "edited-key-echo") {
+          const message = send(
+            options.reply === "sent-key-echo" ? `Temporary echo: ${newKey}` : "Working.",
+            200,
+          );
+          if (options.reply === "edited-key-echo") {
+            edit(message.id, `Temporary echo: ${newKey}`, 250);
+          }
+          edit(message.id, "Configuration updated.", 300);
         } else {
-          state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
-          send("Configuration updated.", 200);
+          const preview = send("Working on the configuration.", 50);
+          if (options.reply === "late-edited-final") {
+            edit(preview.id, "Configuration updated.", 300);
+          } else {
+            state.deleteMessage({ accountId: "qa-channel", messageId: preview.id });
+            send("Configuration updated.", 200);
+          }
         }
       },
       waitForOutboundMessage: async (...args: Parameters<typeof waitForOutboundMessage>) => {
@@ -199,26 +204,52 @@ describe("operator key handoff scenario assertions", () => {
     },
   );
 
-  const errors = {
-    ordering:
-      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
-    migration: "The assistant changed unrelated OpenClaw configuration while rotating the key.",
-    escaped: "The embeddings key file is outside the isolated QA Gateway state directory.",
-    relative: "The embeddings key file provider path is not absolute.",
-    symlink: "The embeddings key file is not a private regular file.",
-    array: "The embeddings key file provider payload is not a JSON object.",
-    provider: "The embeddings key references an invalid file provider.",
-  };
   it.each([
-    ["final predates config", { reply: "late-edited-final" }, errors.ordering],
-    ["final predates key file", { file: { mtimeMs: 250 } }, errors.ordering],
-    ["unrelated migration", { unrelatedMigration: true }, errors.migration],
-    ["escaped file", { file: { realPath: "/outside/key.txt" } }, errors.escaped],
-    ["relative path", { file: { path: "~/state/secrets/key.txt" } }, errors.relative],
-    ["symlink", { file: { isFile: false } }, errors.symlink],
-    ["array root", { file: { mode: "json", payload: (key: string) => [{ key }] } }, errors.array],
-    ["invalid singleValue id", { file: { id: "wrong" } }, errors.provider],
-    ["invalid provider alias", { file: { provider: "QA_KEY" } }, errors.provider],
+    [
+      "final predates config",
+      { reply: "late-edited-final" },
+      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
+    ],
+    [
+      "final predates key file",
+      { file: { mtimeMs: 250 } },
+      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
+    ],
+    [
+      "unrelated migration",
+      { unrelatedMigration: true },
+      "The assistant changed unrelated OpenClaw configuration while rotating the key.",
+    ],
+    [
+      "escaped file",
+      { file: { realPath: "/outside/key.txt" } },
+      "The embeddings key file is outside the isolated QA Gateway state directory.",
+    ],
+    [
+      "relative path",
+      { file: { path: "~/state/secrets/key.txt" } },
+      "The embeddings key file provider path is not absolute.",
+    ],
+    [
+      "symlink",
+      { file: { isFile: false } },
+      "The embeddings key file is not a private regular file.",
+    ],
+    [
+      "array root",
+      { file: { mode: "json", payload: (key: string) => [{ key }] } },
+      "The embeddings key file provider payload is not a JSON object.",
+    ],
+    [
+      "invalid singleValue id",
+      { file: { id: "wrong" } },
+      "The embeddings key references an invalid file provider.",
+    ],
+    [
+      "invalid provider alias",
+      { file: { provider: "QA_KEY" } },
+      "The embeddings key references an invalid file provider.",
+    ],
     [
       "invalid JSON pointer escape",
       {
@@ -228,7 +259,7 @@ describe("operator key handoff scenario assertions", () => {
           payload: (key: string) => ({ qa: { "~2key": key } }),
         },
       },
-      errors.provider,
+      "The embeddings key references an invalid file provider.",
     ],
   ] satisfies Array<[string, HandoffOptions, string]>)(
     "rejects %s",

@@ -73,45 +73,6 @@ function observe<T>(operation: Promise<T>) {
   return { result, settled };
 }
 
-type ResponseSource = ReturnType<typeof createResponseSource>;
-async function withResponse<T>(
-  sources: ResponseSource[],
-  operation: Promise<T>,
-  check: (
-    bodies: Awaited<ResponseSource["connected"]>[],
-    pending: ReturnType<typeof observe<T>>,
-  ) => Promise<void>,
-  cleanup?: (value: T) => Promise<void>,
-  headersAfterMs = 0,
-) {
-  const pending = observe(operation);
-  if (headersAfterMs) {
-    await vi.advanceTimersByTimeAsync(headersAfterMs);
-  }
-  const bodies = [];
-  for (const source of sources) {
-    bodies.push(await source.connected);
-  }
-  try {
-    await check(bodies, pending);
-  } finally {
-    for (const body of bodies) {
-      body.close();
-    }
-    const outcome = await pending.result;
-    if ("value" in outcome) {
-      await cleanup?.(outcome.value);
-    }
-  }
-}
-
-const options = { token: "fixture-token", timeoutMs: 100 };
-const search = (fetchImpl: ClawHubFetch) =>
-  searchClawHubPackages({ ...options, query: "calendar", fetchImpl });
-const download = (fetchImpl: ClawHubFetch) =>
-  downloadClawHubPackageArchive({ ...options, name: "deadline-fixture", fetchImpl });
-const encode = (value: string) => new TextEncoder().encode(value);
-
 describe("ClawHub response deadlines", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -126,87 +87,142 @@ describe("ClawHub response deadlines", () => {
   });
 
   it.each([
-    ["metadata", 200, 60, 20, { message: "ClawHub request timed out after 100ms" }],
-    [
-      "metadata",
-      400,
-      60,
-      20,
-      { status: 400, requestPath: "/api/v1/packages/search", responseBody: "Bad Request" },
-    ],
-    ["archive", 400, 0, 50, { status: 400, responseBody: "Bad Request" }],
-  ] as const)(
-    "keeps the absolute deadline through a dripping %s %s body",
-    async (kind, status, headersAfterMs, dripAfterMs, error) => {
-      const source = createResponseSource({ status, headersAfterMs });
-      await withResponse<Awaited<ReturnType<typeof search | typeof download>>>(
-        [source],
-        kind === "metadata" ? search(source.fetchImpl) : download(source.fetchImpl),
-        async ([body], pending) => {
-          body.write(encode(kind === "metadata" ? "partial" : "partial error"));
-          await vi.advanceTimersByTimeAsync(dripAfterMs);
-          body.write(encode(" "));
-          await vi.advanceTimersByTimeAsync(99 - headersAfterMs - dripAfterMs);
-          expect(pending.settled).not.toHaveBeenCalled();
-          if (kind === "metadata") {
-            body.write(encode(" "));
-          }
-          await vi.advanceTimersByTimeAsync(1);
-          expect(pending.settled).toHaveBeenCalledOnce();
-          await expect(pending.result).resolves.toMatchObject({ error });
-          expect(source.aborted).toHaveBeenCalledOnce();
-          if (kind === "metadata") {
-            expect(source.cancelled).not.toHaveBeenCalled();
-          }
-          expect(vi.getTimerCount()).toBe(0);
-        },
-        undefined,
-        headersAfterMs,
-      );
+    {
+      status: 200,
+      expectedError: { message: "ClawHub request timed out after 100ms" },
     },
-  );
+    {
+      status: 400,
+      expectedError: {
+        status: 400,
+        requestPath: "/api/v1/packages/search",
+        responseBody: "Bad Request",
+      },
+    },
+  ])("keeps the original deadline through a dripping $status metadata body", async (scenario) => {
+    const source = createResponseSource({ status: scenario.status, headersAfterMs: 60 });
+    const pending = observe(
+      searchClawHubPackages({
+        query: "calendar",
+        token: "fixture-token",
+        timeoutMs: 100,
+        fetchImpl: source.fetchImpl,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(60);
+    const body = await source.connected;
+    try {
+      body.write(new TextEncoder().encode("partial"));
+      await vi.advanceTimersByTimeAsync(20);
+      body.write(new TextEncoder().encode(" "));
+      await vi.advanceTimersByTimeAsync(19);
+      expect(pending.settled).not.toHaveBeenCalled();
+      body.write(new TextEncoder().encode(" "));
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(pending.settled).toHaveBeenCalledOnce();
+      await expect(pending.result).resolves.toMatchObject({ error: scenario.expectedError });
+      expect(source.aborted).toHaveBeenCalledOnce();
+      expect(source.cancelled).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      body.close();
+      await pending.result;
+    }
+  });
+
+  it("keeps a dripping archive error under the absolute deadline", async () => {
+    const source = createResponseSource({ status: 400 });
+    const pending = observe(
+      downloadClawHubPackageArchive({
+        name: "deadline-fixture",
+        token: "fixture-token",
+        timeoutMs: 100,
+        fetchImpl: source.fetchImpl,
+      }),
+    );
+    const body = await source.connected;
+    try {
+      body.write(new TextEncoder().encode("partial error"));
+      await vi.advanceTimersByTimeAsync(50);
+      body.write(new TextEncoder().encode(" "));
+      await vi.advanceTimersByTimeAsync(49);
+      expect(pending.settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(pending.settled).toHaveBeenCalledOnce();
+      await expect(pending.result).resolves.toMatchObject({
+        error: { status: 400, responseBody: "Bad Request" },
+      });
+      expect(source.aborted).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      body.close();
+      await pending.result;
+    }
+  });
 
   it("finishes a progressing successful archive after the absolute request budget", async () => {
     const source = createResponseSource({ status: 200 });
-    await withResponse(
-      [source],
-      download(source.fetchImpl),
-      async ([body], pending) => {
-        for (const byte of [1, 2, 3]) {
-          body.write(new Uint8Array([byte]));
-          await vi.advanceTimersByTimeAsync(40);
-        }
-        expect(source.aborted).not.toHaveBeenCalled();
-        expect(pending.settled).not.toHaveBeenCalled();
-        body.write(new Uint8Array([4]));
-        body.close();
-        const outcome = await pending.result;
-        expect(outcome).toHaveProperty("value");
-        if ("value" in outcome) {
-          await expect(fs.readFile(outcome.value.archivePath)).resolves.toEqual(
-            Buffer.from([1, 2, 3, 4]),
-          );
-        }
-        expect(source.cancelled).not.toHaveBeenCalled();
-        expect(vi.getTimerCount()).toBe(0);
-      },
-      (value) => value.cleanup(),
+    const pending = observe(
+      downloadClawHubPackageArchive({
+        name: "deadline-fixture",
+        token: "fixture-token",
+        timeoutMs: 100,
+        fetchImpl: source.fetchImpl,
+      }),
     );
+    const body = await source.connected;
+    try {
+      body.write(new Uint8Array([1]));
+      await vi.advanceTimersByTimeAsync(40);
+      body.write(new Uint8Array([2]));
+      await vi.advanceTimersByTimeAsync(40);
+      body.write(new Uint8Array([3]));
+      await vi.advanceTimersByTimeAsync(40);
+      expect(source.aborted).not.toHaveBeenCalled();
+      expect(pending.settled).not.toHaveBeenCalled();
+      body.write(new Uint8Array([4]));
+      body.close();
+
+      const outcome = await pending.result;
+      expect(outcome).toHaveProperty("value");
+      if ("value" in outcome) {
+        await expect(fs.readFile(outcome.value.archivePath)).resolves.toEqual(
+          Buffer.from([1, 2, 3, 4]),
+        );
+      }
+      expect(source.cancelled).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      body.close();
+      const outcome = await pending.result;
+      if ("value" in outcome) {
+        await outcome.value.cleanup();
+      }
+    }
   });
 
   it("disposes the unread successful telemetry response", async () => {
     const source = createResponseSource({ status: 200 });
-    const operation = reportClawHubPluginInstallTelemetry({
-      ...options,
-      packageName: "deadline-fixture",
-      fetchImpl: source.fetchImpl,
-    });
-    await withResponse([source], operation, async (_bodies, pending) => {
+    const pending = observe(
+      reportClawHubPluginInstallTelemetry({
+        packageName: "deadline-fixture",
+        token: "fixture-token",
+        timeoutMs: 100,
+        fetchImpl: source.fetchImpl,
+      }),
+    );
+    const body = await source.connected;
+    try {
       await expect(pending.result).resolves.toEqual({ value: undefined });
       expect(source.cancelled).toHaveBeenCalledOnce();
       expect(source.aborted).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
-    });
+    } finally {
+      body.close();
+      await pending.result;
+    }
   });
 
   it("releases a discarded retry response and the completed metadata deadline", async () => {
@@ -216,9 +232,19 @@ describe("ClawHub response deadlines", () => {
       .fn<ClawHubFetch>()
       .mockImplementationOnce(discarded.fetchImpl)
       .mockImplementationOnce(successful.fetchImpl);
-    await withResponse([discarded, successful], search(fetchImpl), async ([, body], pending) => {
-      body.write(encode('{"results":[]}'));
-      body.close();
+    const pending = observe(
+      searchClawHubPackages({
+        query: "calendar",
+        token: "fixture-token",
+        timeoutMs: 100,
+        fetchImpl,
+      }),
+    );
+    const discardedBody = await discarded.connected;
+    const successfulBody = await successful.connected;
+    try {
+      successfulBody.write(new TextEncoder().encode('{"results":[]}'));
+      successfulBody.close();
       await expect(pending.result).resolves.toEqual({ value: [] });
       expect(fetchImpl).toHaveBeenCalledTimes(2);
       expect(discarded.cancelled).toHaveBeenCalledOnce();
@@ -226,6 +252,10 @@ describe("ClawHub response deadlines", () => {
       expect(successful.cancelled).not.toHaveBeenCalled();
       expect(successful.aborted).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
-    });
+    } finally {
+      discardedBody.close();
+      successfulBody.close();
+      await pending.result;
+    }
   });
 });

@@ -5,7 +5,6 @@ import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { projectQaToolActivity } from "./tool-activity.js";
 
@@ -30,41 +29,9 @@ type Fault =
   | "early-result"
   | "early-artifact";
 
-const entry = (id: string, message: unknown) => ({ type: "message", id, message });
-const toolCall = (id: string, name: string, args: unknown) => ({
-  type: "toolCall",
-  id,
-  name,
-  arguments: args,
-});
-const assistant = (timestamp: number, call: ReturnType<typeof toolCall>) => ({
-  role: "assistant",
-  timestamp,
-  content: [call],
-});
-const toolResult = (
-  toolCallId: string,
-  toolName: string,
-  timestamp: number,
-  isError: boolean,
-  content: unknown[] = [{ type: "text", text: "completed" }],
-) => ({
-  role: "toolResult",
-  toolCallId,
-  toolName,
-  isError,
-  timestamp,
-  content,
-});
-
-async function runTaskEvidence(codeMode: boolean, fault?: Fault) {
+async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = false) {
   const workspaceDir = tempDirs.make("qa-task-evidence-");
   let messages: unknown[] = [];
-  const trace = [paths.ledger, paths.note, paths.artifact].map((file, index) => ({
-    name: index === 2 ? "write" : "read",
-    arguments: { path: path.join(workspaceDir, file) },
-  }));
-  const tied = !fault || fault === "tied-parallel";
   return await runLoadedScenarioFlow("telemetry-task-evidence-followthrough", {
     api: {
       fs,
@@ -96,55 +63,88 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault) {
         const file = operation === 0 ? paths.ledger : operation === 1 ? paths.note : paths.artifact;
         const input = { path: path.join(workspaceDir, file) };
         const toolCallId = `task-${index}`;
-        const startedAt = tied ? terminalAt - 50 : terminalAt - 70 + index * 10;
+        const startedAt =
+          fault === "tied-parallel" || tiedSerial ? terminalAt - 50 : terminalAt - 70 + index * 10;
         const timestamp =
           fault === "early-result" && operation === 2
             ? terminalAt + 1
-            : tied
+            : fault === "tied-parallel" || tiedSerial
               ? startedAt
               : startedAt + 5;
-        const wrapperId = `wrapper-${index < 2 || fault === "tied-parallel" ? 0 : 2}`;
-        const isError = fault === "failed" && operation === 2;
         if (codeMode) {
           if (index === 0 || (index === 2 && fault !== "tied-parallel")) {
-            messages.push(
-              entry(
-                `wrapper-entry-${index}`,
-                assistant(
-                  startedAt - 1,
-                  toolCall(`wrapper-${index}`, "exec", { code: "dispatch task tools" }),
-                ),
-              ),
-            );
+            messages.push({
+              type: "message",
+              id: `wrapper-entry-${index}`,
+              message: {
+                role: "assistant",
+                timestamp: startedAt - 1,
+                content: [
+                  {
+                    type: "toolCall",
+                    id: `wrapper-${index}`,
+                    name: "exec",
+                    arguments: { code: "dispatch task tools" },
+                  },
+                ],
+              },
+            });
           }
-          const receipt = nestedToolActivityFixture({
-            toolName,
-            toolCallId: fault === "unmatched" && operation === 2 ? "" : toolCallId,
-            input,
-            text: "completed",
-            isError,
+          messages.push({
+            type: "message",
+            id: `receipt-${index}`,
+            message: {
+              role: "custom",
+              customType: "openclaw.nested-tool.v1",
+              display: true,
+              excludeFromContext: true,
+              content: "",
+              timestamp: startedAt,
+              details: {
+                runId: "task-run",
+                scopeId: "task-scope",
+                afterEntryId: tiedSerial && index > 0 ? `receipt-${index - 1}` : "wrapper-entry-0",
+                startOrder: index,
+                parentToolCallId: `wrapper-${index < 2 || fault === "tied-parallel" ? 0 : 2}`,
+                toolCallId: fault === "unmatched" && operation === 2 ? "" : toolCallId,
+                toolName,
+                input,
+                result: { content: [{ type: "text", text: "completed" }] },
+                isError: fault === "failed" && operation === 2,
+                startedAt,
+                timestamp,
+              },
+            },
           });
-          Object.assign(receipt, { timestamp: startedAt });
-          Object.assign(receipt.details, {
-            afterEntryId: !fault && index > 0 ? `receipt-${index - 1}` : "wrapper-entry-0",
-            startOrder: index,
-            parentToolCallId: wrapperId,
-            startedAt,
-            timestamp,
-          });
-          messages.push(entry(`receipt-${index}`, receipt));
           if ((index === 1 && fault !== "tied-parallel") || index === order.length - 1) {
-            messages.push(toolResult(wrapperId, "exec", timestamp + 1, false, []));
+            messages.push({
+              role: "toolResult",
+              toolCallId: `wrapper-${index < 2 || fault === "tied-parallel" ? 0 : 2}`,
+              toolName: "exec",
+              isError: false,
+              timestamp: timestamp + 1,
+              content: [],
+            });
           }
         } else {
-          messages.push(assistant(startedAt, toolCall(toolCallId, toolName, input)));
-          const result = toolResult(
-            fault === "unmatched" && operation === 2 ? "unrelated" : toolCallId,
+          messages.push({
+            role: "assistant",
+            timestamp: startedAt,
+            content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: input }],
+          });
+          const result = {
+            role: "toolResult",
+            toolCallId: fault === "unmatched" && operation === 2 ? "unrelated" : toolCallId,
             toolName,
+            isError: fault === "failed" && operation === 2,
             timestamp,
-            isError,
-          );
-          (fault === "tied-parallel" ? deferredResults : messages).push(result);
+            content: [{ type: "text", text: "completed" }],
+          };
+          if (fault === "tied-parallel") {
+            deferredResults.push(result);
+          } else {
+            messages.push(result);
+          }
         }
       }
       messages.push(...deferredResults);
@@ -158,7 +158,26 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault) {
         replyToId: inbound.id,
         text: reply,
         timestamp: fault === "early-artifact" ? statSync(artifactPath).mtimeMs - 1 : terminalAt,
-        toolCalls: trace,
+        toolCalls: (codeMode
+          ? ([
+              ["exec", undefined],
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["exec", undefined],
+              ["write", paths.artifact],
+              ["read", paths.artifact],
+            ] as const)
+          : ([
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["write", paths.artifact],
+            ] as const)
+        ).map(([name, file]) => ({
+          name,
+          arguments: file
+            ? { path: path.join(workspaceDir, file) }
+            : { code: "dispatch task tools" },
+        })),
       });
     },
   });
@@ -166,7 +185,7 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault) {
 
 describe.each([false, true])("task telemetry evidence with codeMode=%s", (codeMode) => {
   it("accepts correlated serial task work with tied timestamps", async () => {
-    await expect(runTaskEvidence(codeMode)).resolves.toMatchObject({
+    await expect(runTaskEvidence(codeMode, undefined, true)).resolves.toMatchObject({
       status: "pass",
     });
   });

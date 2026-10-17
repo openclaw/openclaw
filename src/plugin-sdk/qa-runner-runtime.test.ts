@@ -13,8 +13,11 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Exercise discovery with synthetic bundled manifests, not installed plugins.
 vi.mock("../plugins/manifest-registry-build.js", () => ({ loadBundledPluginManifestRegistry }));
+// mock-isolation: Control the manifest inventory independently of host plugin state.
 vi.mock("../plugins/manifest-registry.js", () => ({ loadPluginManifestRegistryCore }));
+// mock-isolation: Resolve only the temporary package roots created by this fixture.
 vi.mock("../infra/openclaw-root.js", () => ({ resolveOpenClawPackageRootSync }));
 
 vi.mock("./facade-runtime.js", () => ({

@@ -16,8 +16,10 @@ const resolveCodexHealthApi = vi.fn();
 const probeCodexWorkspaceWriteSandbox = vi.fn();
 const codexSandboxCommand = `codex sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`;
 
+// mock-isolation: Doctor receives a synthetic health API without loading bundled runtimes.
 vi.mock("../flows/bundled-health-checks.js", () => ({ resolveCodexHealthApi }));
 
+// mock-isolation: Sandbox probes must not launch commands on the test host.
 vi.mock("../process/exec.js", () => ({ runExec, runCommandWithTimeout }));
 
 vi.mock("../agents/sandbox.js", () => ({
@@ -27,12 +29,14 @@ vi.mock("../agents/sandbox.js", () => ({
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
+// mock-isolation: Synthetic engine descriptors keep probes independent of installed containers.
 vi.mock("../agents/sandbox/docker.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
   PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },
   validateSandboxContainerEngineTarget,
 }));
 
+// mock-isolation: Capture Doctor notices without writing to the real terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =

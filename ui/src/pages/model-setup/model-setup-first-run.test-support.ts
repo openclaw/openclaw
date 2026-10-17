@@ -19,9 +19,9 @@ export { mountPage };
 export function authOption(
   id: string,
   label = "Provider",
-  kind: SystemAgentSetupDetectResult["authOptions"][number]["kind"] = "oauth",
+  kind: NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number]["kind"] = "oauth",
   featured = true,
-): SystemAgentSetupDetectResult["authOptions"][number] {
+): NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number] {
   return { id, label, kind, featured };
 }
 

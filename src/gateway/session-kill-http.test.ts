@@ -27,8 +27,11 @@ const authMock = vi.fn(async (): Promise<GatewayAuthResult> => ({ ok: true }));
 const loadSessionEntryMock = vi.fn();
 const killSubagentRunAdminMock = vi.fn();
 
+// mock-isolation: HTTP authorization cases use only the fixture's mutable config.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => cfg }));
+// mock-isolation: Keep config reads inside the fixture rather than host configuration.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => cfg }));
+// mock-isolation: Inject authorization outcomes at the HTTP handler boundary.
 vi.mock("./auth.js", () => ({ authorizeHttpGatewayConnect: authMock }));
 
 // mock-isolation: HTTP kill tests supply target rows without opening a session database.

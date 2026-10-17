@@ -43,7 +43,7 @@ const memoryPath = (agentId = "main") => resolveIncognitoOpenClawAgentSqlitePath
 let time: ReturnType<typeof schedulerTest.createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof schedulerTest.createTestGatewayScheduler>;
 let sidecar: { stop(): Promise<void> | void } | undefined;
-let logWarning: ReturnType<typeof vi.fn>;
+let logWarning: ReturnType<typeof vi.fn<(message: string) => void>>;
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
@@ -70,7 +70,7 @@ async function createSession(createdAt: number, key = sessionKey, sessionId = "o
   const lifetime = { assertCurrent() {}, assertReadable() {} };
   const actor = await owner.acquire({ sessionKey: key, database: owner.identity }, lifetime);
   actors.push(actor);
-  const entry = { sessionId, updatedAt: createdAt, createdAt, incognito: true };
+  const entry = { sessionId, updatedAt: createdAt, createdAt, incognito: true as const };
   const created = await actor.storage!.mutate(
     { type: "session.entry.create", input: { entry } },
     authority,
@@ -183,7 +183,9 @@ it("starts memory expiry with Gateway sidecars and preserves replacement deadlin
   await time.advanceBy(day - 60_000);
   expect(cleanup).not.toHaveBeenCalled();
   await time.advanceBy(60_000);
-  const deletedIds = cleanup.mock.calls.map(([call]) => call.params.expectedSessionId).toSorted();
+  const deletedIds = cleanup.mock.calls
+    .map(([call]) => call.params.expectedSessionId)
+    .toSorted((a, b) => a.localeCompare(b));
   expect(deletedIds).toEqual(["other-agent", "replacement"]);
   expect(logWarning).not.toHaveBeenCalled();
 });

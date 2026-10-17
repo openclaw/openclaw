@@ -40,6 +40,7 @@ vi.mock("./openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => null),
   resolveOpenClawPackageRootSync: vi.fn(() => null),
 }));
+// mock-isolation: Build outcomes are supplied without starting package-manager processes.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: state.runCommandWithTimeout }));
 
 const { runCommandWithTimeout: runRealCommandWithTimeout } =

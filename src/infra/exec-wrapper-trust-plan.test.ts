@@ -230,15 +230,18 @@ describe("resolveExecWrapperTrustPlan", () => {
         blockedWrapper: "env",
       },
     ],
-  ])("trust plan: %s", (_name, enabled, argv, expected, { depth, platform } = {}) => {
-    if (!enabled) {
-      return;
-    }
-    const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
-      argv,
-      depth,
-      platform,
-    );
-    expect(policyPlan).toEqual({ argv, policyArgv: argv, ...defaultPolicyPlan, ...expected });
-  });
+  ])(
+    "trust plan: %s",
+    (_name, enabled, argv, expected, { depth, platform }: NonNullable<TrustCase[4]> = {}) => {
+      if (!enabled) {
+        return;
+      }
+      const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
+        argv,
+        depth,
+        platform,
+      );
+      expect(policyPlan).toEqual({ argv, policyArgv: argv, ...defaultPolicyPlan, ...expected });
+    },
+  );
 });

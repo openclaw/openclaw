@@ -27,7 +27,7 @@ const session = (threadId: string): SessionCatalogSession => ({
   canArchive: false,
 });
 
-function unexpected() {
+function unexpected(): never {
   throw new Error("Unexpected catalog operation");
 }
 

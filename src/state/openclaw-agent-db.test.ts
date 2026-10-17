@@ -1102,15 +1102,15 @@ it("refuses unreleased version 1 session tables with none cache without changing
         updated_at INTEGER NOT NULL
       );
       INSERT INTO sessions VALUES ('retained-session', 'agent:worker-1:main', 1, 2);
-      PRAGMA user_version = ${1};
-      UPDATE schema_meta SET schema_version = ${1} WHERE meta_key = 'primary';
+      PRAGMA user_version = 1;
+      UPDATE schema_meta SET schema_version = 1 WHERE meta_key = 'primary';
     `,
   );
   const before = fs.readFileSync(dbPath);
   {
     using candidate = openRawDatabase(dbPath);
     expect(() => ensureSchema(candidate, options)).toThrow(
-      `contains an unreleased session schema (version ${1})`,
+      "contains an unreleased session schema (version 1)",
     );
     expectRows(candidate, "SELECT * FROM sessions", [
       {
@@ -2096,7 +2096,7 @@ it("rejects an inline unique constraint hidden behind a SQLite autoindex", async
   ).rejects.toThrow(/unexpected unique index on cache_entries/iu);
   using after = openRawDatabase(dbPath, true);
   expectRecord(after, "sqlite_schema WHERE type = 'index' AND name = 'idx_agent_cache_expiry'", {
-    sql: "CREATE INDEX idx_agent_cache_expiry\n        ON cache_entries(key)",
+    sql: "CREATE INDEX idx_agent_cache_expiry\n      ON cache_entries(key)",
   });
 });
 
