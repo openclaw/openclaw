@@ -9,7 +9,10 @@ import { formatSlackError } from "../errors.js";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
 import type { SlackIdentityHealth } from "./enterprise-install.js";
-import { waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+import {
+  resolveSlackSocketModeControlFrame,
+  waitForSlackSocketDisconnect,
+} from "./reconnect-policy.js";
 import { installSlackSocketModeEnvelopeGuard } from "./socket-mode-envelope.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
@@ -26,6 +29,16 @@ type SlackSocketDisconnect = Awaited<ReturnType<typeof waitForSlackSocketDisconn
 
 const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
 const OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT = "unable_to_socket_mode_start";
+const SLACK_SOCKET_REFRESH_REQUESTED_AT_KEY = "__openclawSlackRefreshRequestedAt";
+const SLACK_SOCKET_CONNECTED_AT_KEY = "__openclawSlackConnectedAt";
+const SLACK_SOCKET_CONNECTION_LOST_AT_KEY = "__openclawSlackConnectionLostAt";
+// Slack refreshes every connection about every five hours and resets some without a disconnect
+// frame. Losing a connection that had been up for a while is not a failure, so its replacement
+// skips the failure backoff.
+const SLACK_SOCKET_FAST_RECONNECT_DELAY_MS = 1_000;
+const SLACK_SOCKET_STABLE_CONNECTION_MS = 60_000;
+const SLACK_SOCKET_REFRESH_REQUEST_TTL_MS = 120_000;
+const SLACK_SOCKET_REFRESH_REASONS = new Set(["warning", "refresh_requested"]);
 const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
 const SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX = "A ping wasn't received from the server";
 const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
@@ -34,6 +47,7 @@ const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
 // every frame from a WebSocket built by another undici copy, such as core's.
 const SLACK_SOCKET_FOREIGN_DIAGNOSTICS_WARNING_RE =
   /^Received unexpected (?:ping|pong) diagnostics message format$/;
+const SLACK_SOCKET_DISCONNECT_MESSAGE_RE = /^Received "disconnect" \(.*\) message/;
 
 export type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
@@ -78,10 +92,26 @@ function installSlackNativeReconnectFailureObserver(
       const nextFailureCount = failureCount + 1;
       Reflect.set(this, "numOfConsecutiveReconnectionFailures", nextFailureCount);
       const pingTimeoutMs = Number(Reflect.get(this, "clientPingTimeoutMS"));
+      const now = Date.now();
+      const refreshRequestedAt = Number(Reflect.get(this, SLACK_SOCKET_REFRESH_REQUESTED_AT_KEY));
+      const connectedAt = Number(Reflect.get(this, SLACK_SOCKET_CONNECTED_AT_KEY));
+      // Both marks describe the connection that just ended, so only its first replacement uses them.
+      Reflect.set(this, SLACK_SOCKET_REFRESH_REQUESTED_AT_KEY, undefined);
+      Reflect.set(this, SLACK_SOCKET_CONNECTED_AT_KEY, undefined);
+      if (!Number.isFinite(Number(Reflect.get(this, SLACK_SOCKET_CONNECTION_LOST_AT_KEY)))) {
+        Reflect.set(this, SLACK_SOCKET_CONNECTION_LOST_AT_KEY, now);
+      }
+      const slackRequestedRefresh =
+        Number.isFinite(refreshRequestedAt) &&
+        now - refreshRequestedAt < SLACK_SOCKET_REFRESH_REQUEST_TTL_MS;
+      const stableConnectionLost =
+        Number.isFinite(connectedAt) && now - connectedAt >= SLACK_SOCKET_STABLE_CONNECTION_MS;
       const delayMs =
-        (Number.isFinite(pingTimeoutMs) && pingTimeoutMs >= 0
-          ? pingTimeoutMs
-          : OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS) * nextFailureCount;
+        slackRequestedRefresh || stableConnectionLost
+          ? SLACK_SOCKET_FAST_RECONNECT_DELAY_MS
+          : (Number.isFinite(pingTimeoutMs) && pingTimeoutMs >= 0
+              ? pingTimeoutMs
+              : OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS) * nextFailureCount;
       const logger = Reflect.get(this, "logger") as { debug?: (message: string) => void };
       logger?.debug?.(
         `Before trying to reconnect, this client will wait for ${delayMs} milliseconds`,
@@ -111,6 +141,39 @@ function installSlackNativeReconnectFailureObserver(
       });
     },
   );
+}
+
+function installSlackSocketConnectionObserver(client: unknown, accountId?: string) {
+  const socketClient = asOptionalObjectRecord(client);
+  const on = socketClient ? Reflect.get(socketClient, "on") : undefined;
+  if (!socketClient || typeof on !== "function") {
+    return;
+  }
+  const accountArgs = accountId ? [`[${accountId}]`] : [];
+  on.call(socketClient, "ws_message", (message: unknown, isBinary?: unknown) => {
+    if (isBinary === true) {
+      return;
+    }
+    const frame = resolveSlackSocketModeControlFrame(message);
+    if (frame?.type === "hello") {
+      const now = Date.now();
+      const lostAt = Number(Reflect.get(socketClient, SLACK_SOCKET_CONNECTION_LOST_AT_KEY));
+      Reflect.set(socketClient, SLACK_SOCKET_CONNECTED_AT_KEY, now);
+      Reflect.set(socketClient, SLACK_SOCKET_CONNECTION_LOST_AT_KEY, undefined);
+      if (Number.isFinite(lostAt)) {
+        console.info(...accountArgs, `slack socket mode reconnected after ${now - lostAt} ms`);
+      }
+    } else if (frame?.type === "disconnect" && SLACK_SOCKET_REFRESH_REASONS.has(frame.reason)) {
+      // The SDK starts closing on this frame, so the outage begins here, before the close handshake.
+      const now = Date.now();
+      Reflect.set(socketClient, SLACK_SOCKET_REFRESH_REQUESTED_AT_KEY, now);
+      if (
+        !Number.isFinite(Number(Reflect.get(socketClient, SLACK_SOCKET_CONNECTION_LOST_AT_KEY)))
+      ) {
+        Reflect.set(socketClient, SLACK_SOCKET_CONNECTION_LOST_AT_KEY, now);
+      }
+    }
+  });
 }
 
 function createSlackRelayReceiver(): SlackReceiver {
@@ -226,6 +289,13 @@ function isSlackSocketNoiseWarning(args: readonly unknown[]) {
   );
 }
 
+// Slack's disconnect requests (routine refreshes, capacity refusals) explain the reconnects that
+// follow, so they surface at info instead of staying in the SDK's debug output.
+function isSlackSocketDisconnectMessage(args: readonly unknown[]) {
+  const message = args[0];
+  return typeof message === "string" && SLACK_SOCKET_DISCONNECT_MESSAGE_RE.test(message);
+}
+
 function formatSlackSdkLogArgs(args: readonly unknown[]) {
   return args
     .map((arg) => formatSlackError(arg, ""))
@@ -233,10 +303,11 @@ function formatSlackSdkLogArgs(args: readonly unknown[]) {
     .join(" ");
 }
 
-function createSlackSocketModeLogger(): SlackSocketModeLogger {
+function createSlackSocketModeLogger(accountId?: string): SlackSocketModeLogger {
   let level = "info" as SlackSdkLogLevel;
   let name = "socket-mode";
   const prefix = () => `socket-mode:${name}`;
+  const accountArgs = accountId ? [`[${accountId}]`] : [];
   let lastMessage: string | undefined;
   const remember = (args: readonly unknown[]) => {
     const message = formatSlackSdkLogArgs([prefix(), ...args]);
@@ -245,18 +316,22 @@ function createSlackSocketModeLogger(): SlackSocketModeLogger {
     }
   };
   return {
-    debug: () => {},
+    debug: (...args: unknown[]) => {
+      if (isSlackSocketDisconnectMessage(args)) {
+        console.info(...accountArgs, prefix(), ...args);
+      }
+    },
     info: () => {},
     warn: (...args: unknown[]) => {
       if (isSlackSocketNoiseWarning(args)) {
         return;
       }
       remember(args);
-      console.warn(prefix(), ...args);
+      console.warn(...accountArgs, prefix(), ...args);
     },
     error: (...args: unknown[]) => {
       remember(args);
-      console.error(prefix(), ...args);
+      console.error(...accountArgs, prefix(), ...args);
     },
     setLevel: (nextLevel) => {
       level = nextLevel;
@@ -307,6 +382,7 @@ export function createSlackBoltApp(params: {
   dispatcher?: SlackSocketModeReceiverOptions["dispatcher"];
   wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
   onContextIdentity?: (identity: SlackContextIdentity) => void | Promise<void>;
+  accountId?: string;
 }): {
   app: InstanceType<SlackAppConstructor>;
   receiver:
@@ -316,7 +392,7 @@ export function createSlackBoltApp(params: {
   socketClient: InstanceType<SlackSocketModeReceiverConstructor>["client"] | undefined;
   socketModeLogger: SlackSocketModeLogger;
 } {
-  const socketModeLogger = createSlackSocketModeLogger();
+  const socketModeLogger = createSlackSocketModeLogger(params.accountId);
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",
     autoReconnectEnabled: true,
@@ -351,6 +427,7 @@ export function createSlackBoltApp(params: {
       socketModeLogger,
     );
     installSlackNativeReconnectFailureObserver(socketReceiver);
+    installSlackSocketConnectionObserver(socketClient, params.accountId);
     receiver = socketReceiver;
   } else if (params.slackMode === "http") {
     receiver = new params.interop.HTTPReceiver({
