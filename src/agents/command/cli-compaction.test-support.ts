@@ -12,7 +12,6 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import * as agentProjectSettings from "../agent-project-settings.js";
 import * as agentSettings from "../agent-settings.js";
 import * as cliBackends from "../cli-backends.js";
-import * as cliSessionStore from "../cli-session-store.js";
 import * as contextEngineMaintenance from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import * as preemptiveCompaction from "../embedded-agent-runner/run/preemptive-compaction.js";
@@ -37,7 +36,6 @@ export type CliCompactionTestDeps = Partial<{
   acquirePreparedModelRuntime: typeof preparedModelRuntime.acquireAgentRunPreparedModelRuntime;
   ensureSelectedAgentHarnessPlugin: typeof harnessRuntimePlugin.ensureSelectedAgentHarnessPlugin;
   maybeCompactAgentHarnessSession: typeof harnessCompaction.maybeCompactAgentHarnessSession;
-  clearCliSessionInStore: typeof cliSessionStore.clearCliSessionInStore;
   resolveCliBackendConfig: typeof cliBackends.resolveCliBackendConfig;
   recordCliCompactionInStore: typeof sessionStoreModule.recordCliCompactionInStore;
 }>;
@@ -100,11 +98,6 @@ export function setCliCompactionTestDeps(overrides: CliCompactionTestDeps): void
   if (overrides.maybeCompactAgentHarnessSession) {
     vi.spyOn(harnessCompaction, "maybeCompactAgentHarnessSession").mockImplementation(
       overrides.maybeCompactAgentHarnessSession,
-    );
-  }
-  if (overrides.clearCliSessionInStore) {
-    vi.spyOn(cliSessionStore, "clearCliSessionInStore").mockImplementation(
-      overrides.clearCliSessionInStore,
     );
   }
   if (overrides.resolveCliBackendConfig) {

@@ -26,7 +26,7 @@ import {
   createPreparedEmbeddedAgentSettingsManager,
 } from "../agent-project-settings.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "../embedded-agent-runner/run/preemptive-compaction.js";
-import { SessionManager } from "../sessions/session-manager.js";
+import { SessionManager, type SessionMessageEntry } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import { cliCompactionBackendEntrypoints } from "./cli-compaction-runtime.test-support.js";
 import { runCliTurnCompactionLifecycle } from "./cli-compaction.js";
@@ -45,9 +45,26 @@ import {
 } from "./cli-compaction.test-support.js";
 
 type CompactParams = Parameters<ContextEngine["compact"]>[0];
+type CompactResult = NonNullable<Awaited<ReturnType<ContextEngine["compact"]>>["result"]>;
+const successfulCompaction = (result: CompactResult) => ({ ok: true, compacted: true, result });
+const expectCallContaining = (mock: unknown, expected: unknown) =>
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(expected));
+function createOwnedRegistry(retire: () => void) {
+  const registry = createEmptyPluginRegistry();
+  const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+  resources.attach(registry);
+  resources.register("fixture", { id: "resource", dispose: retire });
+  return { registry, resources };
+}
 
 describe("runCliTurnCompactionLifecycle", () => {
   let tmpDir: string;
+  const prepareScenario = (
+    params: Omit<Parameters<typeof prepareCompactionScenario>[0], "tmpDir">,
+  ) => prepareCompactionScenario({ tmpDir, ...params });
+  const prepareSuccessor = (
+    params: Omit<Parameters<typeof prepareContextSuccessorScenario>[0], "tmpDir">,
+  ) => prepareContextSuccessorScenario({ tmpDir, ...params });
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
@@ -68,11 +85,8 @@ describe("runCliTurnCompactionLifecycle", () => {
   it.each(["context", "native", "fallback", "failure", "stale"] as const)(
     "retains one resolved engine through compaction and awaits its cleanup (%s)",
     async (mode) => {
-      const registry = createEmptyPluginRegistry();
-      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-      resources.attach(registry);
       const retire = vi.fn();
-      resources.register("fixture", { id: "resource", dispose: retire });
+      const { registry, resources } = createOwnedRegistry(retire);
       const cleanupStarted = createDeferred();
       const cleanupGate = createDeferred();
       const cleanupFile = path.join(tmpDir, `owned-${mode}-cleanup.txt`);
@@ -92,8 +106,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       };
       registerContextEngineInRegistry(registry, "legacy", () => raw, "core");
       let engine: ContextEngine | undefined;
-      const scenario = await prepareCompactionScenario({
-        tmpDir,
+      const scenario = await prepareScenario({
         suffix: `owned-${mode}`,
         provider: "github-copilot",
         sessionEntry: mode === "native" || mode === "fallback" ? { agentHarnessId: "copilot" } : {},
@@ -161,12 +174,9 @@ describe("runCliTurnCompactionLifecycle", () => {
   );
 
   it("retains an aborted compaction engine until its raw work and cleanup settle", async () => {
-    const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    resources.attach(registry);
     const retired = createDeferred();
     const retire = vi.fn(() => retired.resolve());
-    resources.register("fixture", { id: "resource", dispose: retire });
+    const { registry, resources } = createOwnedRegistry(retire);
     const compactStarted = createDeferred();
     const compactGate = createDeferred();
     const cleanupStarted = createDeferred();
@@ -187,8 +197,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     };
     registerContextEngineInRegistry(registry, "legacy", () => engine, "core");
     let owned: ContextEngine | undefined;
-    const scenario = await prepareCompactionScenario({
-      tmpDir,
+    const scenario = await prepareScenario({
       suffix: "owned-abort-tail",
       deps: {
         ensureContextEnginesInitialized: vi.fn(),
@@ -229,9 +238,8 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("ignores an unversioned fresh total on the first upgraded turn", async () => {
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "legacy-unversioned-total",
-      tmpDir,
       sessionEntry: { totalTokens: 950, totalTokensFresh: true, totalTokensVersion: undefined },
     });
 
@@ -243,9 +251,8 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   it("accepts no compactable entries only from a successful compaction result", async () => {
     let result = { ok: true, compacted: false, reason: "no real conversation messages" };
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "no-compactable-entries",
-      tmpDir,
       provider: "test-provider",
       model: "test-model",
       contextEngine: () => ({
@@ -281,8 +288,6 @@ describe("runCliTurnCompactionLifecycle", () => {
   it.each(["admitted", "current"] as const)(
     "refreshes the CLI compaction budget with the %s plugin generation",
     async (source) => {
-      const createSettings = createPreparedEmbeddedAgentSettingsManager;
-      const checkBudget = shouldPreemptivelyCompactBeforePrompt;
       const pluginRoot = path.join(tmpDir, "settings-bundle");
       await fs.mkdir(pluginRoot);
       const settingsFile = path.join(pluginRoot, "settings.json");
@@ -302,14 +307,13 @@ describe("runCliTurnCompactionLifecycle", () => {
       await using initialCache = createPluginCache();
       await using replacementCache = createPluginCache();
       await fs.writeFile(settingsFile, JSON.stringify({ compaction: { reserveTokens: 20_000 } }));
-      const scenario = await prepareCompactionScenario({
-        tmpDir,
+      const scenario = await prepareScenario({
         suffix: `settings-${source}`,
         cfg: { plugins: { entries: { "settings-bundle": { enabled: true } } } },
         sessionEntry: { contextTokens: 128_000, totalTokens: 100_000 },
         deps: {
-          createPreparedEmbeddedAgentSettingsManager: createSettings,
-          shouldPreemptivelyCompactBeforePrompt: checkBudget,
+          createPreparedEmbeddedAgentSettingsManager,
+          shouldPreemptivelyCompactBeforePrompt,
           ensureContextEnginesInitialized: vi.fn(),
         },
       });
@@ -348,9 +352,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const taskCwd = path.join(tmpDir, "task-repo");
     await fs.mkdir(taskCwd, { recursive: true });
     const settingsCwds: string[] = [];
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "cli-rotates",
-      tmpDir,
       cwd: taskCwd,
       sessionEntry: {
         cliSessionBindings: {
@@ -364,20 +367,16 @@ describe("runCliTurnCompactionLifecycle", () => {
         ...buildContextEngine({ compactCalls }),
         async compact(compactParams) {
           compactCalls.push(compactParams);
-          return {
-            ok: true,
-            compacted: true,
-            result: {
-              summary: "compacted",
-              tokensBefore: compactParams.currentTokenCount ?? 0,
-              tokensAfter: 100,
-              sessionId: successorSessionId,
-              sessionTarget: {
-                sessionKey: "agent:main:cli-rotates",
-                storePath: path.join(tmpDir, "cli-rotates.sqlite"),
-              },
+          return successfulCompaction({
+            summary: "compacted",
+            tokensBefore: compactParams.currentTokenCount ?? 0,
+            tokensAfter: 100,
+            sessionId: successorSessionId,
+            sessionTarget: {
+              sessionKey: "agent:main:cli-rotates",
+              storePath: path.join(tmpDir, "cli-rotates.sqlite"),
             },
-          };
+          });
         },
       }),
       recordCliCompactionInStore,
@@ -400,19 +399,15 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionKey,
       storePath,
     });
-    expect(maintenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: successorSessionId,
-        sessionFile: sessionKey,
-      }),
-    );
-    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        compactionKind: "context-engine",
-        expectedSession: expect.objectContaining({ sessionId: successorSessionId }),
-        tokensAfter: 100,
-      }),
-    );
+    expectCallContaining(maintenance, {
+      sessionId: successorSessionId,
+      sessionFile: sessionKey,
+    });
+    expectCallContaining(recordCliCompactionInStore, {
+      compactionKind: "context-engine",
+      expectedSession: expect.objectContaining({ sessionId: successorSessionId }),
+      tokensAfter: 100,
+    });
     expect(updatedEntry?.cliSessionBindings).toBeUndefined();
     expect(updatedEntry?.cliSessionIds).toBeUndefined();
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
@@ -420,61 +415,48 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   it("preserves deprecated SQLite-marker successors during CLI maintenance", async () => {
     const successorId = "session-cli-marker-successor";
-    const scenario = await prepareContextSuccessorScenario({
+    const scenario = await prepareSuccessor({
       suffix: "marker",
-      tmpDir,
-      result: ({ storePath }) => ({
-        ok: true,
-        compacted: true,
-        result: {
+      result: ({ storePath }) =>
+        successfulCompaction({
           tokensBefore: 950,
           tokensAfter: 100,
           sessionId: successorId,
           sessionFile: `sqlite:main:${successorId}:${storePath}`,
-        },
-      }),
+        }),
     });
 
     await scenario.run();
 
-    expect(scenario.maintenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: `sqlite:main:${successorId}:${scenario.storePath}`,
+    expectCallContaining(scenario.maintenance, {
+      sessionFile: `sqlite:main:${successorId}:${scenario.storePath}`,
+      sessionId: successorId,
+      sessionTarget: {
+        agentId: "main",
         sessionId: successorId,
-        sessionTarget: {
-          agentId: "main",
-          sessionId: successorId,
-          sessionKey: scenario.sessionKey,
-          storePath: scenario.storePath,
-        },
-      }),
-    );
-    expect(scenario.recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedSession: expect.objectContaining({ sessionId: successorId }),
-      }),
-    );
+        sessionKey: scenario.sessionKey,
+        storePath: scenario.storePath,
+      },
+    });
+    expectCallContaining(scenario.recordCliCompactionInStore, {
+      expectedSession: expect.objectContaining({ sessionId: successorId }),
+    });
   });
 
   it("rejects an engine that changes the host row before successor acceptance", async () => {
     const successorId = "session-cli-key-successor";
-    const scenario = await prepareContextSuccessorScenario({
+    const scenario = await prepareSuccessor({
       suffix: "session-key",
-      tmpDir,
       result: async ({ sessionKey, storePath }) => {
         await replaceSessionEntry(
           { sessionKey, storePath },
           { sessionId: successorId, updatedAt: Date.now() },
         );
-        return {
-          ok: true,
-          compacted: true,
-          result: {
-            tokensBefore: 950,
-            sessionId: successorId,
-            sessionFile: sessionKey,
-          },
-        };
+        return successfulCompaction({
+          tokensBefore: 950,
+          sessionId: successorId,
+          sessionFile: sessionKey,
+        });
       },
     });
 
@@ -484,13 +466,10 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("rejects conflicting CLI successor ids", async () => {
-    const scenario = await prepareContextSuccessorScenario({
+    const scenario = await prepareSuccessor({
       suffix: "conflicting-ids",
-      tmpDir,
-      result: ({ sessionKey, storePath }) => ({
-        ok: true,
-        compacted: true,
-        result: {
+      result: ({ sessionKey, storePath }) =>
+        successfulCompaction({
           tokensBefore: 950,
           sessionId: "reported-successor",
           sessionTarget: {
@@ -499,8 +478,7 @@ describe("runCliTurnCompactionLifecycle", () => {
             sessionKey,
             storePath,
           },
-        },
-      }),
+        }),
     });
 
     await expect(scenario.run()).rejects.toThrow("successor identity is inconsistent");
@@ -511,13 +489,10 @@ describe("runCliTurnCompactionLifecycle", () => {
     ["session key", () => ({ sessionKey: "agent:main:other" })],
     ["store", () => ({ storePath: path.join(tmpDir, "other-openclaw-sessions.sqlite") })],
   ])("rejects a CLI successor outside the active %s binding", async (label, buildOverride) => {
-    const scenario = await prepareContextSuccessorScenario({
+    const scenario = await prepareSuccessor({
       suffix: `outside-${label.replace(" ", "-")}`,
-      tmpDir,
-      result: ({ sessionKey, storePath }) => ({
-        ok: true,
-        compacted: true,
-        result: {
+      result: ({ sessionKey, storePath }) =>
+        successfulCompaction({
           tokensBefore: 950,
           sessionTarget: {
             agentId: "main",
@@ -526,8 +501,7 @@ describe("runCliTurnCompactionLifecycle", () => {
             storePath,
             ...buildOverride(),
           },
-        },
-      }),
+        }),
     });
 
     await expect(scenario.run()).rejects.toThrow(
@@ -536,9 +510,8 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("treats already-compacted CLI transcript compaction as a no-op", async () => {
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "qwen-already-compacted",
-      tmpDir,
       provider: "ollama",
       model: "qwen3:14b",
       contextEngine: (compactCalls) => ({
@@ -582,11 +555,9 @@ describe("runCliTurnCompactionLifecycle", () => {
       return preparedRuntimeLease;
     });
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => undefined);
-    const compactAgentHarnessSession = vi.fn(async () => ({
-      ok: true,
-      compacted: true,
-      result: { tokensBefore: 950, tokensAfter: 100 },
-    }));
+    const compactAgentHarnessSession = vi.fn(async () =>
+      successfulCompaction({ tokensBefore: 950, tokensAfter: 100 }),
+    );
     const applyAgentAutoCompactionGuard = vi.fn(() => ({
       supported: true,
       disabled: false,
@@ -596,9 +567,8 @@ describe("runCliTurnCompactionLifecycle", () => {
       updatedAt: Date.now(),
       compactionCount: 1,
     }));
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "codex",
-      tmpDir,
       provider: "openai",
       model: "gpt-5.5",
       sessionEntry: {
@@ -620,20 +590,16 @@ describe("runCliTurnCompactionLifecycle", () => {
     const updatedEntry = await scenario.run({ pluginGeneration });
 
     expect(resolveContextEngine).toHaveBeenCalledTimes(1);
-    expect(applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextEngineInfo: contextEngine.info,
-      }),
-    );
-    expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        sessionKey,
-        agentHarnessRuntimeOverride: "codex",
-        pluginRegistry: preparedRuntimeLease.snapshot.pluginRegistry,
-      }),
-    );
+    expectCallContaining(applyAgentAutoCompactionGuard, {
+      contextEngineInfo: contextEngine.info,
+    });
+    expectCallContaining(ensureSelectedAgentHarnessPlugin, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      sessionKey,
+      agentHarnessRuntimeOverride: "codex",
+      pluginRegistry: preparedRuntimeLease.snapshot.pluginRegistry,
+    });
     expect(acquirePreparedModelRuntime).toHaveBeenCalledOnce();
     expect(applyAgentAutoCompactionGuard.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       compactAgentHarnessSession.mock.invocationCallOrder[0] ?? 0,
@@ -667,21 +633,18 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(preparedRuntimeLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
-    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        compactionKind: "native-harness",
-        sessionKey,
-        tokensAfter: 100,
-      }),
-    );
+    expectCallContaining(recordCliCompactionInStore, {
+      compactionKind: "native-harness",
+      sessionKey,
+      tokensAfter: 100,
+    });
     expect(updatedEntry?.compactionCount).toBe(1);
   });
 
   it("ignores stale native harness ids when the active provider no longer matches", async () => {
     const compactAgentHarnessSession = vi.fn();
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "openclaw-after-codex",
-      tmpDir,
       provider: "openclaw",
       model: "sonnet-4.6",
       sessionEntry: { agentHarnessId: "codex" },
@@ -710,9 +673,8 @@ describe("runCliTurnCompactionLifecycle", () => {
       const compactAgentHarnessSession = vi.fn<
         NonNullable<CliCompactionTestDeps["maybeCompactAgentHarnessSession"]>
       >(async () => ({ ok: true, compacted: true }));
-      const scenario = await prepareCompactionScenario({
+      const scenario = await prepareScenario({
         suffix: `harness-change-${initialHarness}`,
-        tmpDir,
         provider: "github-copilot",
         sessionEntry: { agentHarnessId: initialHarness },
         deps: {
@@ -745,9 +707,8 @@ describe("runCliTurnCompactionLifecycle", () => {
         tokensBefore: 950,
       },
     }));
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "codex-native-auto-compaction",
-      tmpDir,
       provider: "codex",
       model: "gpt-5.5",
       sessionEntry: { agentHarnessId: "codex" },
@@ -786,9 +747,8 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("does not fall back when native harness compaction returns no result", async () => {
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "codex-native-empty",
-      tmpDir,
       provider: "codex",
       model: "gpt-5.5",
       sessionEntry: { agentHarnessId: "codex" },
@@ -819,27 +779,22 @@ describe("runCliTurnCompactionLifecycle", () => {
         tokenBudget: 1_000,
         trigger: "cli_native_budget",
       });
-      return {
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "engine-owned",
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 950,
-          tokensAfter: 42,
-          sessionId: "session-codex-owned-engine-rotated",
-          sessionFile: path.join(tmpDir, "session-codex-owned-engine-rotated.jsonl"),
-        },
-      };
+      return successfulCompaction({
+        summary: "engine-owned",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 950,
+        tokensAfter: 42,
+        sessionId: "session-codex-owned-engine-rotated",
+        sessionFile: path.join(tmpDir, "session-codex-owned-engine-rotated.jsonl"),
+      });
     });
     const recordCliCompactionInStore = vi.fn(async () => ({
       sessionId: "session-codex-owned-engine",
       updatedAt: Date.now(),
       compactionCount: 1,
     }));
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "codex-owned-engine",
-      tmpDir,
       provider: "codex",
       model: "gpt-5.5",
       sessionEntry: { agentHarnessId: "codex" },
@@ -857,13 +812,11 @@ describe("runCliTurnCompactionLifecycle", () => {
     await scenario.run();
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
-    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        tokensAfter: 42,
-        expectedSession: expect.objectContaining({ sessionId: "session-codex-owned-engine" }),
-      }),
-    );
+    expectCallContaining(recordCliCompactionInStore, {
+      sessionKey,
+      tokensAfter: 42,
+      expectedSession: expect.objectContaining({ sessionId: "session-codex-owned-engine" }),
+    });
   });
 
   it("clears stale Codex native binding when context-engine fallback is below target", async () => {
@@ -875,9 +828,8 @@ describe("runCliTurnCompactionLifecycle", () => {
         reason: "stale_thread_binding",
       },
     }));
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "codex-stale-binding-under-target",
-      tmpDir,
       provider: "codex",
       model: "gpt-5.5",
       sessionEntry: {
@@ -917,9 +869,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const maintenance = vi.fn(async () => {
       throw new Error("maintenance rotated stale binding");
     });
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "codex-stale-maintenance",
-      tmpDir,
       provider: "codex",
       model: "gpt-5.5",
       sessionEntry: { agentHarnessId: "codex" },
@@ -946,9 +897,8 @@ describe("runCliTurnCompactionLifecycle", () => {
   it("initializes built-in context engines before constructing CLI compaction engine", async () => {
     const calls: string[] = [];
     const registry = createEmptyPluginRegistry();
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "cli-init",
-      tmpDir,
       sessionKey: "agent:main:cli",
       sessionEntry: { sessionFile: undefined },
       deps: {
@@ -979,9 +929,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactStarted = createDeferred();
     const compactGate = createDeferred();
     const disposed = createDeferred();
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: "cli-timeout",
-      tmpDir,
       sessionKey: "agent:main:cli",
       cfg: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } } as OpenClawConfig,
       sessionEntry: {
@@ -1052,9 +1001,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
     expect(backend).not.toBeNull();
     const compactAgentHarnessSession = vi.fn();
-    const scenario = await prepareCompactionScenario({
+    const scenario = await prepareScenario({
       suffix: `${provider}-owns-compaction`,
-      tmpDir,
       provider,
       sessionEntry: {
         cliSessionBindings: { [provider]: { sessionId: "native-session" } },
@@ -1075,14 +1023,11 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("still uses native harness path when backend declares ownsNativeCompaction and has agentHarnessId", async () => {
-    const compactAgentHarnessSession = vi.fn(async () => ({
-      ok: true,
-      compacted: true,
-      result: { tokensBefore: 950, tokensAfter: 100 },
-    }));
-    const scenario = await prepareCompactionScenario({
+    const compactAgentHarnessSession = vi.fn(async () =>
+      successfulCompaction({ tokensBefore: 950, tokensAfter: 100 }),
+    );
+    const scenario = await prepareScenario({
       suffix: "codex-with-ownership",
-      tmpDir,
       provider: "openai",
       model: "gpt-5.5",
       sessionEntry: { agentHarnessId: "codex" },
@@ -1126,6 +1071,17 @@ describe("runCliTurnCompactionLifecycle", () => {
     const bigOutput = "x".repeat(20_000);
     const compactCalls: CompactParams[] = [];
     const recordCliCompactionInStore = vi.fn(async () => sessionEntry);
+    const messageEntry = (
+      id: string,
+      parentId: string | null,
+      message: SessionMessageEntry["message"],
+    ): SessionMessageEntry => ({
+      type: "message",
+      id,
+      parentId,
+      timestamp: new Date(0).toISOString(),
+      message,
+    });
     setCliCompactionTestDeps({
       openSessionManager: async () =>
         SessionManager.fromEntries([
@@ -1136,49 +1092,31 @@ describe("runCliTurnCompactionLifecycle", () => {
             timestamp: new Date(0).toISOString(),
             cwd: tmpDir,
           },
-          {
-            type: "message",
-            id: "kept-user",
-            parentId: null,
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "kept question", timestamp: 1 },
-          },
-          {
-            type: "message",
-            id: "kept-tool",
-            parentId: "kept-user",
-            timestamp: new Date(0).toISOString(),
-            message: {
-              role: "toolResult",
-              toolCallId: "call-1",
-              toolName: "bash",
-              content: [{ type: "text", text: bigOutput }],
-              isError: false,
-              timestamp: 2,
+          messageEntry("kept-user", null, { role: "user", content: "kept question", timestamp: 1 }),
+          messageEntry("kept-tool", "kept-user", {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "bash",
+            content: [{ type: "text", text: bigOutput }],
+            isError: false,
+            timestamp: 2,
+          }),
+          messageEntry("kept-assistant", "kept-tool", {
+            role: "assistant",
+            content: [{ type: "text", text: "kept answer" }],
+            provider: "test-provider",
+            model: "test-model",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },
-          },
-          {
-            type: "message",
-            id: "kept-assistant",
-            parentId: "kept-tool",
-            timestamp: new Date(0).toISOString(),
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "kept answer" }],
-              provider: "test-provider",
-              model: "test-model",
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "stop",
-              timestamp: 3,
-            },
-          },
+            stopReason: "stop",
+            timestamp: 3,
+          }),
           {
             type: "reset",
             id: "reset",
@@ -1187,13 +1125,11 @@ describe("runCliTurnCompactionLifecycle", () => {
             reason: "new",
             firstKeptEntryId: "kept-user",
           },
-          {
-            type: "message",
-            id: "new",
-            parentId: "reset",
-            timestamp: new Date(0).toISOString(),
-            message: { role: "user", content: "new turn after reset", timestamp: 4 },
-          },
+          messageEntry("new", "reset", {
+            role: "user",
+            content: "new turn after reset",
+            timestamp: 4,
+          }),
         ]),
       resolveContextEngine: async (_cfg, options) => {
         await options?.initialize?.();

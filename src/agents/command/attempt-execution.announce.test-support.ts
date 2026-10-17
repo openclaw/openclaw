@@ -90,108 +90,65 @@ export type SubagentAnnounceDeliveryCase = {
   expectedToolsAllow?: readonly string[];
 };
 
-const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
-  {
-    name: "automatic source replies",
-    sourceReplyDeliveryMode: "automatic" as const,
+function deliveryCase(
+  name: string,
+  overrides: Partial<Omit<SubagentAnnounceDeliveryCase, "name">> = {},
+): SubagentAnnounceDeliveryCase {
+  return {
+    name,
+    sourceReplyDeliveryMode: "message_tool_only",
     disableMessageTool: false,
     expectedDisableTools: true,
-  },
-  {
-    name: "message-tool-only source replies",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: false,
+    ...overrides,
+  };
+}
+
+const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+  deliveryCase("automatic source replies", { sourceReplyDeliveryMode: "automatic" }),
+  deliveryCase("message-tool-only source replies", {
     requireExplicitMessageTarget: true,
     expectedDisableTools: false,
     expectedToolsAllow: ["message"],
-  },
-
-  {
-    name: "an explicitly disabled message tool",
-    sourceReplyDeliveryMode: "message_tool_only" as const,
-    disableMessageTool: true,
-    expectedDisableTools: true,
-  },
-  {
-    name: "a coding profile with a source-bound message grant",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("an explicitly disabled message tool", { disableMessageTool: true }),
+  deliveryCase("a coding profile with a source-bound message grant", {
     inheritedToolAllow: ["read", "exec", "sessions_spawn"],
     operatorTools: { profile: "coding" },
     expectedDisableTools: false,
     expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an operator allowlist with a source-bound message grant",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("an operator allowlist with a source-bound message grant", {
     operatorTools: { allow: ["read", "exec"] },
     expectedDisableTools: false,
     expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an inherited explicit message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("an inherited explicit message deny", {
     inheritedToolAllow: ["*"],
     inheritedToolDeny: ["message"],
-    expectedDisableTools: true,
-  },
-  {
-    name: "a current operator message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("a current operator message deny", {
     operatorTools: { deny: ["message"] },
-    expectedDisableTools: true,
-  },
-  {
-    name: "an active sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("an active sandbox message deny", {
     operatorTools: { sandbox: { tools: { deny: ["message"] } } },
     sandboxMode: "all",
-    expectedDisableTools: true,
-  },
-  {
-    name: "a non-main sandbox message deny",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("a non-main sandbox message deny", {
     operatorTools: { sandbox: { tools: { deny: ["message"] } } },
     sandboxMode: "non-main",
-    expectedDisableTools: true,
-  },
-
-  {
-    name: "an empty runtime allowlist",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    runtimeToolsAllow: [],
-    expectedDisableTools: true,
-  },
-  {
-    name: "an intersected runtime allowlist excluding message",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("an empty runtime allowlist", { runtimeToolsAllow: [] }),
+  deliveryCase("an intersected runtime allowlist excluding message", {
     runtimeToolsAllow: attachToolAllowlistIntersection(["*", "message"], [["*"], ["read"]]),
-    expectedDisableTools: true,
-  },
-  {
-    name: "an authorized messaging tool group",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
+  }),
+  deliveryCase("an authorized messaging tool group", {
     inheritedToolAllow: ["group:messaging"],
     runtimeToolsAllow: ["group:messaging"],
     operatorTools: { profile: "coding" },
     expectedDisableTools: false,
     expectedToolsAllow: ["message"],
-  },
-  {
-    name: "an untrusted completion handoff",
-    sourceReplyDeliveryMode: "message_tool_only",
-    disableMessageTool: false,
-    trustedInternalHandoff: false,
-    expectedDisableTools: true,
-  },
+  }),
+  deliveryCase("an untrusted completion handoff", { trustedInternalHandoff: false }),
 ];
 
 // Only automatic Claude CLI completion replies restore requester tools.
@@ -211,21 +168,14 @@ function createClaudeCliSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliver
 export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES =
   createClaudeCliSubagentAnnounceDeliveryCases();
 
-function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
-  const cases: SubagentAnnounceDeliveryCase[] = [];
-  for (const testCase of SUBAGENT_ANNOUNCE_DELIVERY_CASES) {
-    if (testCase.name === "message-tool-only source replies") {
-      cases.push({
-        ...testCase,
-        expectedDisableTools: false,
-        expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
-      });
-    }
-  }
-  return cases;
-}
-export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES =
-  createEmbeddedSubagentAnnounceDeliveryCases();
+export const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES = SUBAGENT_ANNOUNCE_DELIVERY_CASES.filter(
+  (testCase) => testCase.name === "message-tool-only source replies",
+).map((testCase) =>
+  Object.assign({}, testCase, {
+    expectedDisableTools: false,
+    expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+  }),
+);
 
 export function createSubagentAnnounceSessionStore(
   requesterSessionKey: string,

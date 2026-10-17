@@ -1,4 +1,3 @@
-/** Owner-boundary tests for durable assistant-transcript repair records and replay. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -18,15 +17,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./attempt-execution.shared.js", () => ({
-  persistAgentSession: (...args: Parameters<PersistAgentSession>) =>
-    mocks.persistAgentSession(...args),
+  persistAgentSession: mocks.persistAgentSession,
 }));
 
 vi.mock("./runtime-loaders.js", () => ({
   loadTranscriptAppendRuntime: async () => ({
-    appendExactAssistantMessageToSessionTranscript: (
-      ...args: Parameters<AppendExactAssistantMessage>
-    ) => mocks.appendExactAssistantMessage(...args),
+    appendExactAssistantMessageToSessionTranscript: mocks.appendExactAssistantMessage,
   }),
 }));
 
@@ -35,10 +31,7 @@ vi.mock("../harness/hook-helpers.js", () => ({
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    info: vi.fn(),
-    warn: mocks.warn,
-  }),
+  createSubsystemLogger: () => ({ info: vi.fn(), warn: mocks.warn }),
 }));
 
 const sessionKey = "agent:main:explicit:repair";
@@ -47,14 +40,11 @@ const storePath = "/tmp/sessions.json";
 function makeEntry(
   overrides: Partial<SessionEntry> = {},
 ): SessionEntry & { sessionId: string; updatedAt: number } {
-  return {
-    sessionId: "session-1",
-    updatedAt: 1,
-    ...overrides,
-  };
+  return { sessionId: "session-1", updatedAt: 1, ...overrides };
 }
 
-function makeContext(entry: SessionEntry) {
+function makeContext(pendingTranscriptRepair?: SessionEntry["pendingTranscriptRepair"]) {
+  const entry = makeEntry({ pendingTranscriptRepair });
   const sessionStore = { [sessionKey]: entry };
   return {
     context: {
@@ -72,14 +62,33 @@ function makeContext(entry: SessionEntry) {
 function successfulAppend(messageId: string) {
   return {
     ok: true as const,
-    target: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey,
-      storePath,
-    },
+    target: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
     messageId,
   };
+}
+
+function repair(text = "missing", id = "repair-1", createdAt = 10) {
+  return { id, text, createdAt };
+}
+
+function expectedAppend(
+  id: string,
+  text: string,
+  timestamp: number,
+  provider = "cli",
+  model = "default",
+) {
+  return expect.objectContaining({
+    idempotencyKey: `transcript-repair:${id}`,
+    expectedSessionId: "session-1",
+    updateMode: "file-only",
+    message: expect.objectContaining({
+      provider,
+      model,
+      timestamp,
+      content: [{ type: "text", text }],
+    }),
+  });
 }
 
 beforeEach(() => {
@@ -98,15 +107,14 @@ beforeEach(() => {
 describe("persistAssistantTranscriptRepairRecord", () => {
   it("appends a canonical record and fences it to the run-owned session", async () => {
     const existingRepair = { id: "repair-1", text: "first", createdAt: 1 };
-    const entry = makeEntry({ pendingTranscriptRepair: [existingRepair] });
-    const { context, sessionStore } = makeContext(entry);
+    const { context, sessionStore } = makeContext([existingRepair]);
 
     await persistAssistantTranscriptRepairRecord({
       context,
       replyText: "second",
       provider: " openai ",
       model: " gpt-5.5 ",
-      runOwnedSessionId: entry.sessionId,
+      runOwnedSessionId: context.sessionEntry.sessionId,
     });
 
     expect(sessionStore[sessionKey]?.pendingTranscriptRepair).toEqual([
@@ -126,7 +134,7 @@ describe("persistAssistantTranscriptRepairRecord", () => {
   });
 
   it("does not fail the completed turn when repair-record persistence fails", async () => {
-    const { context } = makeContext(makeEntry());
+    const { context } = makeContext();
     mocks.persistAgentSession.mockRejectedValueOnce(new Error("store unavailable"));
 
     await expect(
@@ -143,19 +151,10 @@ describe("persistAssistantTranscriptRepairRecord", () => {
 
 describe("repairPendingAssistantTranscriptTurns", () => {
   it("replays every missing final in order before clearing the backlog", async () => {
-    const entry = makeEntry({
-      pendingTranscriptRepair: [
-        {
-          id: "repair-1",
-          text: "first",
-          provider: "openai",
-          model: "gpt-5.5",
-          createdAt: 10,
-        },
-        { id: "repair-2", text: "second", createdAt: 20 },
-      ],
-    });
-    const { context, sessionStore } = makeContext(entry);
+    const { context, sessionStore } = makeContext([
+      { ...repair("first"), provider: "openai", model: "gpt-5.5" },
+      repair("second", "repair-2", 20),
+    ]);
     mocks.appendExactAssistantMessage
       .mockResolvedValueOnce(successfulAppend("message-1"))
       .mockResolvedValueOnce(successfulAppend("message-2"));
@@ -164,35 +163,14 @@ describe("repairPendingAssistantTranscriptTurns", () => {
 
     expect(mocks.appendExactAssistantMessage).toHaveBeenCalledTimes(2);
     expect(mocks.appendExactAssistantMessage.mock.calls.map(([params]) => params)).toEqual([
-      expect.objectContaining({
-        idempotencyKey: "transcript-repair:repair-1",
-        expectedSessionId: "session-1",
-        updateMode: "file-only",
-        message: expect.objectContaining({
-          provider: "openai",
-          model: "gpt-5.5",
-          timestamp: 10,
-          content: [{ type: "text", text: "first" }],
-        }),
-      }),
-      expect.objectContaining({
-        idempotencyKey: "transcript-repair:repair-2",
-        message: expect.objectContaining({
-          provider: "cli",
-          model: "default",
-          timestamp: 20,
-          content: [{ type: "text", text: "second" }],
-        }),
-      }),
+      expectedAppend("repair-1", "first", 10, "openai", "gpt-5.5"),
+      expectedAppend("repair-2", "second", 20),
     ]);
     expect(sessionStore[sessionKey]?.pendingTranscriptRepair).toBeUndefined();
   });
 
   it("keeps the backlog and blocks admission while an append is unavailable", async () => {
-    const entry = makeEntry({
-      pendingTranscriptRepair: [{ id: "repair-1", text: "missing", createdAt: 10 }],
-    });
-    const { context, sessionStore } = makeContext(entry);
+    const { context, sessionStore } = makeContext([repair()]);
     mocks.appendExactAssistantMessage.mockResolvedValueOnce({
       ok: false,
       reason: "transcript store unavailable",
@@ -207,10 +185,7 @@ describe("repairPendingAssistantTranscriptTurns", () => {
   });
 
   it("drops a final blocked by before_message_write and clears the backlog", async () => {
-    const entry = makeEntry({
-      pendingTranscriptRepair: [{ id: "repair-1", text: "blocked", createdAt: 10 }],
-    });
-    const { context, sessionStore } = makeContext(entry);
+    const { context, sessionStore } = makeContext([repair("blocked")]);
     mocks.appendExactAssistantMessage.mockResolvedValueOnce({
       ok: false,
       code: "blocked",
@@ -223,10 +198,7 @@ describe("repairPendingAssistantTranscriptTurns", () => {
   });
 
   it("retries cleanup with the same append idempotency key", async () => {
-    const entry = makeEntry({
-      pendingTranscriptRepair: [{ id: "repair-1", text: "missing", createdAt: 10 }],
-    });
-    const { context, sessionStore } = makeContext(entry);
+    const { context, sessionStore } = makeContext([repair()]);
     mocks.persistAgentSession.mockRejectedValueOnce(new Error("cleanup unavailable"));
 
     await repairPendingAssistantTranscriptTurns({ context });
@@ -241,10 +213,7 @@ describe("repairPendingAssistantTranscriptTurns", () => {
   });
 
   it("does not clear repair state from a replacement session", async () => {
-    const entry = makeEntry({
-      pendingTranscriptRepair: [{ id: "repair-1", text: "missing", createdAt: 10 }],
-    });
-    const { context, sessionStore } = makeContext(entry);
+    const { context, sessionStore } = makeContext([repair()]);
     mocks.appendExactAssistantMessage.mockImplementationOnce(async () => {
       sessionStore[sessionKey] = makeEntry({ sessionId: "replacement" });
       return successfulAppend("message-1");

@@ -140,6 +140,7 @@ export function makeRunAgentAttemptParams(
 }
 
 export function makeCliResult(text: string, sessionId = "session-cli"): EmbeddedAgentRunResult {
+  const usage = { input: 12, output: 4, cacheRead: 3, cacheWrite: 0, total: 19 };
   return {
     payloads: [{ text }],
     meta: {
@@ -150,20 +151,8 @@ export function makeCliResult(text: string, sessionId = "session-cli"): Embedded
         ...(sessionId ? { cliSessionBinding: { sessionId } } : {}),
         provider: "claude-cli",
         model: "opus",
-        usage: {
-          input: 12,
-          output: 4,
-          cacheRead: 3,
-          cacheWrite: 0,
-          total: 19,
-        },
-        lastCallUsage: {
-          input: 12,
-          output: 4,
-          cacheRead: 3,
-          cacheWrite: 0,
-          total: 19,
-        },
+        usage: { ...usage },
+        lastCallUsage: { ...usage },
       },
       executionTrace: {
         winnerProvider: "claude-cli",
@@ -276,13 +265,13 @@ export async function runTrustedClaudeCompletionForTest({
     sessionStore,
   });
 
-  expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+  const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;
+  expect(run).toMatchObject({
     provider: "claude-cli",
     disableTools: false,
     terminalReplyExpectation: "required",
   });
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;
   expect(run.runtimeContextFragments).toEqual([
     {
       kind: "runtime-instruction",
