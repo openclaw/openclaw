@@ -35,8 +35,6 @@ import { setupSessionMutationState } from "./sessions-mutations.state.test-suppo
 import * as catalogPreparation from "./sessions-patch-catalog-preparation.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-// Keep provider discovery and compaction out of this session/queue boundary test.
-// Patch validation, persistence, refresh, drain, and follow-up admission stay real.
 // mock-isolation: Provider discovery is outside this synthetic session/queue preference boundary.
 vi.mock("../../plugins/provider-thinking.js", () => ({
   resolveEffectiveThinkingProfile: () => undefined,
@@ -73,6 +71,12 @@ const cfg: OpenClawConfig = {
 const selectionX = { provider: "fixture", model: "x", thinkLevel: "low" } as const;
 const selectionY = { provider: "fixture", model: "y", thinkLevel: "high" } as const;
 const selectionZ = { provider: "fixture", model: "z", thinkLevel: "off" } as const;
+const highX = { ...selectionX, thinkLevel: "high" } as const;
+const offX = { ...selectionX, thinkLevel: "off" } as const;
+const effortHigh = { thinkingLevel: "high" };
+const effortOff = { thinkingLevel: "off" };
+const modelY = { model: "fixture/y", ...effortHigh };
+const modelZ = { model: "fixture/z", ...effortOff };
 const scope = { agentId: "main", sessionKey };
 const queuedAccount = {
   model: "y",
@@ -99,7 +103,6 @@ async function admitQueued(
       ...(onQueuedFollowupAdmitted ? { opts: { onQueuedFollowupAdmitted } } : {}),
     },
   });
-  expect(result.kind).toBe("admitted");
   if (result.kind !== "admitted") {
     throw new Error("Follow-up was not admitted");
   }
@@ -111,18 +114,15 @@ afterEach(() => {
 });
 
 async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntry> = {}) {
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey },
-    {
-      sessionId,
-      updatedAt: 1,
-      providerOverride: "fixture",
-      modelOverride: "x",
-      modelOverrideSource: "user",
-      thinkingLevel,
-      ...overrides,
-    },
-  );
+  await upsertSessionEntryCore(scope, {
+    sessionId,
+    updatedAt: 1,
+    providerOverride: "fixture",
+    modelOverride: "x",
+    modelOverrideSource: "user",
+    thinkingLevel,
+    ...overrides,
+  });
 }
 
 async function patchSession(patch: Record<string, unknown>, config = cfg) {
@@ -158,15 +158,14 @@ async function patchSession(patch: Record<string, unknown>, config = cfg) {
   return expectDefined(responses[0], "patch response");
 }
 
-it("preserves requested thinking when switching away from and back to a reasoning model", async () => {
-  await withState(async () => {
+it("preserves requested thinking when switching away from and back to a reasoning model", () =>
+  withState(async () => {
     await seedSession("high");
     for (const model of ["fixture/z", "fixture/x"]) {
       expect((await patchSession({ model }))[0]).toBe(true);
       expect(loadSessionEntry(scope)?.thinkingLevel).toBe("high");
     }
-  });
-});
+  }));
 
 function enqueue(
   state: OpenClawTestState,
@@ -196,8 +195,8 @@ function enqueue(
   return queued;
 }
 
-it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to waiting C", async () => {
-  await withState(async (state) => {
+it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to waiting C", () =>
+  withState(async (state) => {
     await seedSession();
     const entered = [0, 1, 2].map(() => createDeferredCore<AdmittedFollowupTurn>());
     const release = [0, 1, 2].map(() => createDeferredCore());
@@ -232,11 +231,7 @@ it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to w
       const a = await expectDefined(entered[0], "turn gate").promise;
       expect(a.queued.run).toMatchObject(selectionX);
       expect((await patchSession({ thinkingLevel: "high" }))[0]).toBe(true);
-      expect([a.queued.run, b.run, c.run]).toMatchObject([
-        selectionX,
-        { ...selectionX, thinkLevel: "high" },
-        { ...selectionX, thinkLevel: "high" },
-      ]);
+      expect([a.queued.run, b.run, c.run]).toMatchObject([selectionX, highX, highX]);
       expect((await patchSession({ model: "fixture/y", thinkingLevel: "high" }))[0]).toBe(true);
       expect([a.queued.run, b.run, c.run]).toMatchObject([selectionX, selectionY, selectionY]);
 
@@ -259,67 +254,53 @@ it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to w
       }
       await finished.promise;
     }
-  });
-});
+  }));
 
 it.each([
-  { patch: { thinkingLevel: "off" }, expected: "off", model: "x" },
-  { patch: { thinkingLevel: null }, expected: "medium", model: "x" },
-  { patch: { model: "fixture/y", thinkingLevel: "high" }, expected: "high", model: "y" },
-])(
-  "refreshes $patch without overriding turn thinking intent",
-  async ({ patch, expected, model }) => {
-    await withState(async (state) => {
-      await seedSession("high");
-      const explicit = enqueue(state, "explicit low", {
-        thinkLevel: "low",
-        thinkLevelOverride: "low",
-      });
-      const defaults = enqueue(state, "explicit default", {
-        thinkLevel: "medium",
-        thinkLevelOverride: "default",
-      });
-      const ordinary = enqueue(state, "ordinary", { thinkLevel: "high" });
-
-      expect((await patchSession(patch))[0]).toBe(true);
-      expect(loadSessionEntry(scope)?.thinkingLevel).toBe(patch.thinkingLevel ?? undefined);
-      expect(ordinary.run).toMatchObject({ model, thinkLevel: expected });
-      expect(explicit.run).toMatchObject({ model, thinkLevel: "low", thinkLevelOverride: "low" });
-      expect(defaults.run).toMatchObject({
-        model,
-        thinkLevel: "medium",
-        thinkLevelOverride: "default",
-      });
-      expect(getExistingFollowupQueue(sessionKey)?.lastRun?.thinkLevel).toBe(expected);
+  [{ thinkingLevel: "off" }, "off", "x"],
+  [{ thinkingLevel: null }, "medium", "x"],
+  [{ model: "fixture/y", thinkingLevel: "high" }, "high", "y"],
+] as const)("refreshes %j without overriding turn thinking intent", (patch, expected, model) =>
+  withState(async (state) => {
+    await seedSession("high");
+    const explicit = enqueue(state, "explicit low", {
+      thinkLevel: "low",
+      thinkLevelOverride: "low",
     });
-  },
+    const defaults = enqueue(state, "explicit default", {
+      thinkLevel: "medium",
+      thinkLevelOverride: "default",
+    });
+    const ordinary = enqueue(state, "ordinary", { thinkLevel: "high" });
+
+    expect((await patchSession(patch))[0]).toBe(true);
+    expect(loadSessionEntry(scope)?.thinkingLevel).toBe(patch.thinkingLevel ?? undefined);
+    expect([ordinary.run, explicit.run, defaults.run]).toMatchObject([
+      { model, thinkLevel: expected },
+      { model, thinkLevel: "low", thinkLevelOverride: "low" },
+      { model, thinkLevel: "medium", thinkLevelOverride: "default" },
+    ]);
+    expect(getExistingFollowupQueue(sessionKey)?.lastRun?.thinkLevel).toBe(expected);
+  }),
 );
 
-it("changes only effort on a queued fallback route", async () => {
-  await withState(async (state) => {
+it("changes only effort on a queued fallback route", () =>
+  withState(async (state) => {
     await seedSession();
     const queued = enqueue(state, "keep queued route", queuedAccount);
     expect((await patchSession({ thinkingLevel: "high" }))[0]).toBe(true);
     expect(queued.run).toMatchObject({ ...queuedAccount, thinkLevel: "high" });
-  });
-});
+  }));
 
 it.each([null, "fixture/configured", "Fixture/configured", "preferred"])(
   "follows the agent default and retains fallbacks after selecting %s",
-  async (model) => {
-    await withState(async (state) => {
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            ...cfg.agents?.defaults,
-            model: "fixture/x",
-            models: {
-              ...cfg.agents?.defaults?.models,
-              "fixture/configured": { alias: "preferred" },
-            },
-          },
-          entries: { main: { model: { primary: "fixture/configured", fallbacks: ["fixture/z"] } } },
-        },
+  (model) =>
+    withState(async (state) => {
+      const config = structuredClone(cfg);
+      config.agents!.defaults!.model = "fixture/x";
+      config.agents!.defaults!.models!["fixture/configured"] = { alias: "preferred" };
+      config.agents!.entries = {
+        main: { model: { primary: "fixture/configured", fallbacks: ["fixture/z"] } },
       };
       await seedSession("high", { modelOverrideSource: "auto" });
       const queued = enqueue(state, "reset", {
@@ -350,15 +331,14 @@ it.each([null, "fixture/configured", "Fixture/configured", "preferred"])(
         provider: "fixture",
         model: "y",
       });
-    });
-  },
+    }),
 );
 
 it.each([
   { patch: { thinkingLevel: "not-a-level" }, error: "invalid thinkingLevel" },
   { patch: { model: "fixture/not-allowed", thinkingLevel: "high" }, error: "model not allowed" },
-])("does not refresh or persist a rejected $patch patch", async ({ patch, error }) => {
-  await withState(async (state) => {
+])("does not refresh or persist a rejected $patch patch", ({ patch, error }) =>
+  withState(async (state) => {
     await seedSession();
     const queued = enqueue(state, "unchanged");
     const before = loadSessionEntry(scope);
@@ -367,17 +347,17 @@ it.each([
     expect(response[2]?.message).toContain(error);
     expect(loadSessionEntry(scope)).toEqual(before);
     expect(queued.run).toMatchObject(selectionX);
-  });
-});
+  }),
+);
 
 it.each([
-  { command: "/think high", expected: "high", stored: "high" },
-  { command: "/think default", expected: "medium", stored: undefined },
-  { command: "/think invalid", expected: "low", stored: "low" },
-])(
-  "publishes $command to waiting turns without replacing their route or thinking intent",
-  async ({ command, expected, stored }) => {
-    await withState(async (state) => {
+  ["/think high", "high", "high"],
+  ["/think default", "medium", undefined],
+  ["/think invalid", "low", "low"],
+] as const)(
+  "publishes %s without replacing waiting turns' route or thinking intent",
+  (command, expected, stored) =>
+    withState(async (state) => {
       await seedSession();
       const route = {
         ...queuedAccount,
@@ -424,50 +404,22 @@ it.each([
         command === "/think invalid" ? "Unrecognized thinking level" : "Thinking level",
       );
       expect(loadSessionEntry(scope)?.thinkingLevel).toBe(stored);
-      expect(ordinary.run).toMatchObject({ ...route, thinkLevel: expected });
-      expect(explicit.run).toMatchObject({
-        ...route,
-        thinkLevel: "low",
-        thinkLevelOverride: "low",
-      });
-      expect(defaults.run).toMatchObject({
-        ...route,
-        thinkLevel: "medium",
-        thinkLevelOverride: "default",
-      });
-    });
-  },
+      expect([ordinary.run, explicit.run, defaults.run]).toMatchObject([
+        { ...route, thinkLevel: expected },
+        { ...route, thinkLevel: "low", thinkLevelOverride: "low" },
+        { ...route, thinkLevel: "medium", thinkLevelOverride: "default" },
+      ]);
+    }),
 );
 
 it.each([
-  {
-    name: "effort",
-    patch: { thinkingLevel: "high" },
-    selected: { ...selectionX, thinkLevel: "high" },
-    later: { thinkingLevel: "off" },
-    next: { ...selectionX, thinkLevel: "off" },
-    probe: false,
-  },
-  {
-    name: "model with a queued primary probe",
-    patch: { model: "fixture/y", thinkingLevel: "high" },
-    selected: selectionY,
-    later: { model: "fixture/z", thinkingLevel: "off" },
-    next: selectionZ,
-    probe: true,
-  },
-  {
-    name: "effort with a queued primary probe",
-    patch: { thinkingLevel: "high" },
-    selected: { ...selectionX, thinkLevel: "high" },
-    later: { model: "fixture/z", thinkingLevel: "off" },
-    next: selectionZ,
-    probe: true,
-  },
-])(
-  "binds $name at the writer-ordered queued admission, not before or after it",
-  async ({ patch, selected, later, next, probe }) => {
-    await withState(async (state) => {
+  [effortHigh, highX, effortOff, offX, false],
+  [modelY, selectionY, modelZ, selectionZ, true],
+  [effortHigh, highX, modelZ, selectionZ, true],
+] as const)(
+  "binds %j at writer-ordered admission (selection %j, later %j, next %j, probe=%s)",
+  (patch, selected, later, next, probe) =>
+    withState(async (state) => {
       await seedSession(
         "low",
         probe
@@ -546,6 +498,5 @@ it.each([
         turn ??= await starting;
         turn?.operation.complete();
       }
-    });
-  },
+    }),
 );

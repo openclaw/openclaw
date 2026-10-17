@@ -183,12 +183,11 @@ it("lets read-only viewers list everyone's reactions while hiding none-capped an
         },
       },
     ]);
-    const hidden = await listReactions(client("viewer"), context(roleConfig("none")));
-    expect(hidden[0]).toBe(false);
-    expect(hidden[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: `unknown session: ${sessionKey}`,
-    });
+    expect(await listReactions(client("viewer"), context(roleConfig("none")))).toMatchObject([
+      false,
+      undefined,
+      { code: "INVALID_REQUEST", message: `unknown session: ${sessionKey}` },
+    ]);
 
     const incognitoKey = "agent:main:dashboard:incognito-reactions";
     const incognitoScope = await seedSession(
@@ -214,9 +213,7 @@ it("lets read-only viewers list everyone's reactions while hiding none-capped an
     expect((await setReaction(incognitoMessageId, { sessionKey: incognitoKey }, admin))[0]).toBe(
       true,
     );
-    expect(
-      (await call("session.reactions.list", { sessionKey: incognitoKey }, admin))[1],
-    ).toMatchObject({
+    expect((await listReactions(admin, undefined, incognitoKey))[1]).toMatchObject({
       sessionId: "incognito-reactions",
       reactions: { [incognitoMessageId]: [{ count: 1 }] },
     });
@@ -317,7 +314,7 @@ it("broadcasts committed summaries and queues next-turn system events without ch
         },
         { sessionKeys: [sessionKey, "main"], agentId: "main" },
       );
-      expect((await call("session.reactions.list", { sessionKey }))[1]).toEqual({
+      expect((await listReactions())[1]).toEqual({
         sessionId,
         reactions: remove ? {} : { [messageId]: reactions },
       });

@@ -24,26 +24,22 @@ vi.mock("../../config/sessions/provider-review-store.js", () => ({
 vi.mock("./chat-send-handler.js", () => ({
   handleProviderReviewContinuationChat: mocks.handoff,
 }));
-vi.mock("../session-sharing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-sharing.js")>();
-  return {
-    ...actual,
-    resolveSessionSharingTargetAsync: async () => ({
-      agentId: "main",
-      canonicalKey: sessionKey,
-      storeKey: sessionKey,
-      storePath: "/synthetic/session-store",
-      entry,
-    }),
-  };
-});
+vi.mock("../session-sharing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-sharing.js")>()),
+  resolveSessionSharingTargetAsync: async () => ({
+    agentId: "main",
+    canonicalKey: sessionKey,
+    storeKey: sessionKey,
+    storePath: "/synthetic/session-store",
+    entry,
+  }),
+}));
 // mock-isolation: Provider-review tests control authorization changes while the review is awaited.
 vi.mock("../session-sharing-authorization-async.js", () => ({
   resolveSessionMutationAuthorizationAsync: async () => ({
     authorization: {
       assertCurrent,
       assertAdmittedInputCurrent: assertCurrent,
-      assertTargetCurrent: assertCurrent,
       release: mocks.releaseAuthorization,
     },
     error: null,
@@ -52,6 +48,8 @@ vi.mock("../session-sharing-authorization-async.js", () => ({
 
 const sessionKey = "agent:main:provider-review";
 const sessionId = "session-a";
+const target = { sessionKey, agentId: "main", sessionId };
+const requestParams = { ...target, reviewId: "review-a", idempotencyKey: "next-run" };
 const message = "/stop e\u0301\n ";
 let entry: SessionEntry;
 let sourceCurrent: boolean;
@@ -65,14 +63,7 @@ function request(overrides: Record<string, unknown> = {}): GatewayRequestHandler
   const client = soloClient();
   client.connId = "operator-a";
   client.connect.client.mode = "ui";
-  const params = {
-    sessionKey,
-    agentId: "main",
-    sessionId,
-    reviewId: "review-a",
-    idempotencyKey: "next-run",
-    ...overrides,
-  };
+  const params = { ...requestParams, ...overrides };
   return {
     req: { type: "req", id: "request-a", method: "sessions.providerReview.continue", params },
     params,
@@ -84,7 +75,8 @@ function request(overrides: Record<string, unknown> = {}): GatewayRequestHandler
   };
 }
 
-function expectRejected(options: GatewayRequestHandlerOptions) {
+async function reject(options: GatewayRequestHandlerOptions = request()) {
+  await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
   expect(mocks.handoff).not.toHaveBeenCalled();
   expect(options.respond).toHaveBeenCalledWith(
     false,
@@ -123,28 +115,26 @@ afterEach(() => {
   }
 });
 
-it("hands the reviewed literal input and host capability to ordinary chat admission", async () => {
-  const options = request();
-  await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
+it("hands literal input and host capability to chat admission", async () => {
+  await coreGatewayHandlers["sessions.providerReview.continue"]!(request());
   expect(mocks.handoff).toHaveBeenCalledTimes(1);
   expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
   const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0]!;
   expect(chatOptions.params).toEqual({
-    sessionKey,
-    agentId: "main",
-    sessionId,
+    ...target,
     message,
     idempotencyKey: "next-run",
     deliver: false,
   });
   expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
   await loadOrCreateProcessDeviceIdentityAsync();
-  const normalized = await normalizeChatSendRequest({
-    params: chatOptions.params,
-    client: chatOptions.client,
-    providerReviewAcknowledgment: acknowledgment,
-  });
-  expect(normalized).toMatchObject({
+  await expect(
+    normalizeChatSendRequest({
+      params: chatOptions.params,
+      client: chatOptions.client,
+      providerReviewAcknowledgment: acknowledgment,
+    }),
+  ).resolves.toMatchObject({
     ok: true,
     value: {
       inboundMessage: message,
@@ -158,23 +148,19 @@ it("hands the reviewed literal input and host capability to ordinary chat admiss
 });
 
 it.each(["review", "generation", "authority"])(
-  "rejects %s changes during the awaited read",
+  "rejects awaited-read %s changes",
   async (change) => {
     mocks.read.mockImplementation(async () => {
       if (change === "review") {
         entry.providerReview!.id = "new-review";
-      }
-      if (change === "generation") {
+      } else if (change === "generation") {
         entry.lifecycleRevision = "new-generation";
-      }
-      if (change === "authority") {
+      } else {
         sourceCurrent = false;
       }
       return structuredClone(entry);
     });
-    const options = request();
-    await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
-    expectRejected(options);
+    await reject();
   },
 );
 
@@ -195,10 +181,9 @@ it.each(["client-supplied authority", "synthetic UI", "ordinary API"])(
         canContinue: false,
       });
     }
-    await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
+    await reject(options);
     if (source !== "ordinary API") {
       expect(mocks.read).not.toHaveBeenCalled();
     }
-    expectRejected(options);
   },
 );

@@ -111,12 +111,11 @@ it.each([
     },
   });
   if (tools) {
-    expect(
-      (await prepare({ ...entry, nativeRuntimeConsent: "native-fixture" }, true, config)).ok,
-    ).toBe(true);
-    expect(
-      (await prepare({ ...entry, nativeRuntimeConsent: "different-runtime" }, true, config)).ok,
-    ).toBe(false);
+    for (const consent of ["native-fixture", "different-runtime"]) {
+      expect((await prepare({ ...entry, nativeRuntimeConsent: consent }, true, config)).ok).toBe(
+        consent === "native-fixture",
+      );
+    }
   }
 });
 
@@ -141,7 +140,6 @@ it.each([
   "does not offer an escape from %s",
   async (_label, overrides, admin, config, reason) => {
     const result = await prepare({ ...original, ...overrides }, admin, config);
-    expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error("Expected native refusal");
     }
@@ -175,9 +173,7 @@ it.each([
       patch: { key, model: `${model}@fixture:selected`, ...patch },
       expectedEntry,
     });
-
     if (preserved) {
-      expect(result.ok).toBe(true);
       expect(entry.agentRuntimeOverride).toBe("native-fixture");
       if (!result.ok) {
         throw new Error("Expected the existing selection to be preserved");
@@ -189,38 +185,28 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "accepts an unrestricted local candidate (dormant node=%s)",
-  async (node) => {
-    const result = await prepare(
-      unrestricted(node ? { execHost: "gateway", execNode: "dormant-node" } : {}),
-      true,
-      node ? { tools: { exec: { host: "node" } } } : cfg,
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Expected recovery selection");
-    }
-    expect(result.validate?.()).toBeUndefined();
-    preparation.validate.mockReturnValue("Runtime owner changed");
-    expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
-    expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
-  },
-);
+it.each([false, true])("validates local selection (dormant node=%s)", async (node) => {
+  const result = await prepare(
+    unrestricted(node ? { execHost: "gateway", execNode: "dormant-node" } : {}),
+    true,
+    node ? { tools: { exec: { host: "node" } } } : cfg,
+  );
+  if (!result.ok) {
+    throw new Error("Expected recovery selection");
+  }
+  expect(result.validate?.()).toBeUndefined();
+  preparation.validate.mockReturnValue("Runtime owner changed");
+  expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
+  expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
+});
 
-it.each([false, true])(
-  "defers optional creation restrictions but preserves mandatory sandbox=%s",
-  async (mandatory) => {
-    const entry: SessionEntry = {
-      ...original,
-      ...(mandatory ? { sandbox: "required" as const } : {}),
-    };
-    const result = await prepare(entry, false, cfg, { expectedEntry: undefined });
-    expect(result.ok).toBe(!mandatory);
-    expect(entry.nativeRuntimeConsent).toBeUndefined();
-    if (!result.ok) {
-      expect(result.error.details).toMatchObject({ reason: "sandbox-required" });
-      expect(result.error.details).not.toHaveProperty("recovery");
-    }
-  },
-);
+it.each([false, true])("preserves mandatory sandbox=%s at creation", async (mandatory) => {
+  const entry = mandatory ? { ...original, sandbox: "required" as const } : { ...original };
+  const result = await prepare(entry, false, cfg, { expectedEntry: undefined });
+  expect(result.ok).toBe(!mandatory);
+  expect(entry.nativeRuntimeConsent).toBeUndefined();
+  if (!result.ok) {
+    expect(result.error.details).toMatchObject({ reason: "sandbox-required" });
+    expect(result.error.details).not.toHaveProperty("recovery");
+  }
+});

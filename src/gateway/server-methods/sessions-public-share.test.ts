@@ -63,7 +63,7 @@ async function call(
   return respond.mock.calls[0];
 }
 
-function beforeWrite(change: () => Promise<unknown>) {
+function beforeWrite(change: () => unknown) {
   const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
   vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
     async (operation, params) => {
@@ -77,80 +77,74 @@ async function expectToken(share: { token: string } | undefined, shareId: string
   expect(await resolveToken(share)).toEqual({ ...scope, sessionId, shareId });
 }
 
-async function createSession() {
-  setRuntimeConfigSnapshot(cfg);
-  await upsertSessionEntryCore(scope, ownerEntry);
+const publication = (result: Awaited<ReturnType<typeof call>>) =>
+  Value.Decode(SessionPublicShareSetResultSchema, result?.[1]).publicShare;
+
+const expectStale = (pending: Promise<unknown>) =>
+  expect(pending).rejects.toThrow("Session access facts are unavailable");
+
+function withSession(run: () => Promise<void>, sessionScope = scope) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    await upsertSessionEntryCore(sessionScope, ownerEntry);
+    await run();
+  });
 }
 
 async function setPublic(enabled: boolean, client?: GatewayClient, expectedSessionId = sessionId) {
   return call("session.publicShare.set", { ...scope, expectedSessionId, enabled }, client);
 }
 
-async function setShared() {
-  expect((await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0]).toBe(
-    true,
-  );
-}
-
-it("lets the owner publish, reuse, revoke and rotate a public link independently of team visibility", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await createSession();
+it("publishes, reuses, revokes and rotates links independently of team visibility", () =>
+  withSession(async () => {
     const published = await setPublic(true);
     expect(published?.[0]).toBe(true);
-    const result = Value.Decode(SessionPublicShareSetResultSchema, published?.[1]);
+    const result = publication(published);
     const firstGrant = grant();
-    expect(result.publicShare).toEqual({
+    expect(result).toEqual({
       token: expect.stringMatching(/^v1\.[A-Za-z0-9_-]+$/u),
       createdAt: firstGrant.createdAt,
     });
-    await expectToken(result.publicShare, firstGrant.id);
-    expect(isSecretValueRegisteredForRedaction(result.publicShare?.token ?? "")).toBe(true);
+    await expectToken(result, firstGrant.id);
+    expect(isSecretValueRegisteredForRedaction(result?.token ?? "")).toBe(true);
     expect(isSecretValueRegisteredForRedaction(firstGrant.id)).toBe(true);
     expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
 
-    const repeated = await setPublic(true);
-    const repeatedResult = Value.Decode(SessionPublicShareSetResultSchema, repeated?.[1]);
-    expect(repeatedResult.publicShare?.token).not.toBe(result.publicShare?.token);
-    expect(repeatedResult.publicShare?.createdAt).toBe(result.publicShare?.createdAt);
+    const repeated = publication(await setPublic(true));
+    expect(repeated?.token).not.toBe(result?.token);
+    expect(repeated?.createdAt).toBe(result?.createdAt);
     const listed = await call("session.members.listEvidence", scope);
     const listedShare = Value.Decode(
       SessionMembersListEvidenceResultSchema,
       listed?.[1],
     ).publicShare;
-    expect(listedShare?.createdAt).toBe(result.publicShare?.createdAt);
+    expect(listedShare?.createdAt).toBe(result?.createdAt);
     await expectToken(listedShare, firstGrant.id);
     expect(projectPublicSessionEntry(loadSessionEntry(scope)!)).not.toHaveProperty("publicShare");
 
     expect((await setPublic(false))?.[0]).toBe(true);
     expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
-    const firstGrantId = firstGrant.id;
-    const republished = Value.Decode(
-      SessionPublicShareSetResultSchema,
-      (await setPublic(true))?.[1],
-    );
+    const republished = publication(await setPublic(true));
     const republishedGrant = grant();
-    expect(republishedGrant.id).not.toBe(firstGrantId);
-    expect((await resolveToken(republished.publicShare))?.shareId).toBe(republishedGrant.id);
-  });
-});
+    expect(republishedGrant.id).not.toBe(firstGrant.id);
+    expect((await resolveToken(republished))?.shareId).toBe(republishedGrant.id);
+  }));
 
-it("rejects non-managers and stale generation confirmations without changing publication", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await createSession();
+it("rejects non-managers and stale generations without changing publication", () =>
+  withSession(async () => {
     expect((await setPublic(true, identifiedClient("outsider")))?.[0]).toBe(false);
     expect((await setPublic(true, undefined, "previous-generation"))?.[0]).toBe(false);
     expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
     const admin = identifiedClient("admin");
     admin.connect.scopes = ["operator.admin"];
     expect((await setPublic(true, admin))?.[0]).toBe(true);
-    const publication = loadSessionEntry(scope)?.publicShare;
+    const existingGrant = loadSessionEntry(scope)?.publicShare;
     expect((await setPublic(false, identifiedClient("outsider")))?.[0]).toBe(false);
-    expect(loadSessionEntry(scope)?.publicShare).toEqual(publication);
-  });
-});
+    expect(loadSessionEntry(scope)?.publicShare).toEqual(existingGrant);
+  }));
 
-it("rejects publication when runtime config remaps the exact store before commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("rejects publication when runtime config remaps the exact store before commit", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "global";
     const firstStorePath = state.path("public-share-first.sqlite");
     const secondStorePath = state.path("public-share-second.sqlite");
@@ -172,18 +166,14 @@ it("rejects publication when runtime config remaps the exact store before commit
     const requestContext = sessionSharingTestContext(vi.fn(), firstConfig);
     requestContext.getRuntimeConfig = () => currentConfig;
     await initializeSessionReadContext(requestContext);
-    const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
-    vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
-      async (operation, params) => {
-        currentConfig = secondConfig;
-        return run(operation, params);
-      },
-    );
+    beforeWrite(() => {
+      currentConfig = secondConfig;
+    });
     const admin = identifiedClient("admin");
     admin.connect.scopes = ["operator.admin"];
     const respond = vi.fn<RespondFn>();
 
-    await expect(
+    await expectStale(
       call(
         "session.publicShare.set",
         { sessionKey, expectedSessionId: sessionId, enabled: true },
@@ -191,7 +181,7 @@ it("rejects publication when runtime config remaps the exact store before commit
         requestContext,
         respond,
       ),
-    ).rejects.toThrow("Session access facts are unavailable");
+    );
 
     expect(respond).not.toHaveBeenCalled();
     for (const storePath of [firstStorePath, secondStorePath]) {
@@ -199,70 +189,64 @@ it("rejects publication when runtime config remaps the exact store before commit
         loadSessionEntry({ agentId: "main", sessionKey, storePath })?.publicShare,
       ).toBeUndefined();
     }
-  });
-});
+  }));
 
 it.each([
   ["session.publicShare.set", true],
   ["session.members.listEvidence", true],
   ["session.visibility.set", true],
   ["session.visibility.set", false],
-] as const)(
-  "%s uses the fresh stored row (generation replaced: %s)",
-  async (method, resetGeneration) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await createSession();
-      await closeOpenClawAgentDatabasesAsync();
-      await setShared();
-      expect(loadSessionEntry(scope)?.createdActor?.id).toBe("owner");
-      if (!resetGeneration) {
-        expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
-      }
-      const resetSession = () =>
-        upsertSessionEntryCore(
-          scope,
-          resetGeneration ? { sessionId: "replacement-generation" } : { visibility: "draft" },
-        );
-      if (method !== "session.members.listEvidence") {
-        beforeWrite(resetSession);
-      } else {
-        const read = sharingStore.readSessionMembersInWorker;
-        vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(
-          async (input) => {
-            const evidence = await read(input);
-            await resetSession();
-            return evidence;
-          },
-        );
-      }
-      const pending =
-        method === "session.publicShare.set"
-          ? setPublic(true)
-          : call(method, {
-              ...scope,
-              ...(method === "session.visibility.set" ? { visibility: "shared" } : {}),
-            });
-      if (resetGeneration) {
-        await expect(pending).rejects.toThrow("Session access facts are unavailable");
-        const entry = loadSessionEntry(scope);
-        expect(entry).toMatchObject({
-          sessionId: "replacement-generation",
-          createdActor: { id: "owner" },
-        });
-        expect(entry?.publicShare).toBeUndefined();
-      } else {
-        expect((await pending)?.[0]).toBe(true);
-        expect(loadSessionEntry(scope)?.visibility).toBe("shared");
-      }
-    });
-  },
+] as const)("%s uses the fresh stored row (generation replaced: %s)", (method, resetGeneration) =>
+  withSession(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    expect((await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0]).toBe(
+      true,
+    );
+    expect(loadSessionEntry(scope)?.createdActor?.id).toBe("owner");
+    if (!resetGeneration) {
+      expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
+    }
+    const resetSession = () =>
+      upsertSessionEntryCore(
+        scope,
+        resetGeneration ? { sessionId: "replacement-generation" } : { visibility: "draft" },
+      );
+    if (method !== "session.members.listEvidence") {
+      beforeWrite(resetSession);
+    } else {
+      const read = sharingStore.readSessionMembersInWorker;
+      vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(async (input) => {
+        const evidence = await read(input);
+        await resetSession();
+        return evidence;
+      });
+    }
+    const pending =
+      method === "session.publicShare.set"
+        ? setPublic(true)
+        : call(method, {
+            ...scope,
+            ...(method === "session.visibility.set" ? { visibility: "shared" } : {}),
+          });
+    if (resetGeneration) {
+      await expectStale(pending);
+      const entry = loadSessionEntry(scope);
+      expect(entry).toMatchObject({
+        sessionId: "replacement-generation",
+        createdActor: { id: "owner" },
+      });
+      expect(entry?.publicShare).toBeUndefined();
+    } else {
+      expect((await pending)?.[0]).toBe(true);
+      expect(loadSessionEntry(scope)?.visibility).toBe("shared");
+    }
+  }),
 );
 
 it.each([false, true])(
   "rechecks a worker-committed generation change during codec preparation (restored grant: %s)",
-  async (restoredGrant) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await createSession();
+  (restoredGrant) =>
+    withSession(async () => {
       await setPublic(true);
       const publishedGrant = grant();
       if (restoredGrant) {
@@ -285,23 +269,14 @@ it.each([false, true])(
           return codec;
         },
       );
-      await expect(call("session.members.listEvidence", scope)).rejects.toThrow(
-        "Session access facts are unavailable",
-      );
+      await expectStale(call("session.members.listEvidence", scope));
       expect(loadSessionEntry(scope)?.sessionId).toBe("replacement-generation");
-    });
-  },
+    }),
 );
 
-it("rejects an unencodable locator before persisting its publication grant", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot(cfg);
-    const oversizedScope = {
-      agentId: "main",
-      sessionKey: `agent:main:${"🙂".repeat(2_000)}`,
-    };
-    await upsertSessionEntryCore(oversizedScope, ownerEntry);
-
+const oversizedScope = { ...scope, sessionKey: `agent:main:${"🙂".repeat(2_000)}` };
+it("rejects an unencodable locator before persisting its publication grant", () =>
+  withSession(async () => {
     await expect(
       call("session.publicShare.set", {
         ...oversizedScope,
@@ -310,12 +285,10 @@ it("rejects an unencodable locator before persisting its publication grant", asy
       }),
     ).rejects.toThrow("public session locator exceeds the maximum length");
     expect(loadSessionEntry(oversizedScope)?.publicShare).toBeUndefined();
-  });
-});
+  }, oversizedScope));
 
-it("drops publication at the canonical writer when resetting or copying into a fork", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await createSession();
+it("drops publication at the canonical writer on reset, fork and incognito", () =>
+  withSession(async () => {
     await setPublic(true);
     const original = loadSessionEntry(scope)!;
     const forkScope = { ...scope, sessionKey: "agent:main:public-example-fork" };
@@ -330,5 +303,4 @@ it("drops publication at the canonical writer when resetting or copying into a f
     expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
     await patchSessionEntryCore(scope, () => ({ incognito: undefined }));
     expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
-  });
-});
+  }));
