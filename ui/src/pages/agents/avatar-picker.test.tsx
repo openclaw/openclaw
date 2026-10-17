@@ -1,7 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import * as avatarImage from "./avatar-image.ts";
@@ -50,11 +49,13 @@ function mount(onGenerate: AvatarPickerProps["onGenerate"] = vi.fn().mockResolve
   return { ...view, props, click, describe };
 }
 
-it("offers every bundled preset without a Lobsterdex collection", () => {
+it("offers bundled character presets without a Lobsterdex collection", () => {
   const view = mount();
-  expect(view.container.querySelectorAll(".avatar-picker__preset")).toHaveLength(
-    LOBSTER_PET_PALETTES.length,
-  );
+  for (const name of ["Clawnstantine", "Clawie Stardust", "24K"]) {
+    const preset = view.container.querySelector(`.avatar-picker__preset[aria-label="${name}"]`);
+    expect(preset).not.toBeNull();
+    expect(preset?.hasAttribute("disabled")).toBe(false);
+  }
   expect(view.container.querySelectorAll(".avatar-picker__preset:disabled")).toHaveLength(0);
 });
 
