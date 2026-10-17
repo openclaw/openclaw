@@ -252,7 +252,7 @@ it.each([
               .get(),
           ).toEqual({ value_json: '"preserved"' });
           expect(liveFullChecks()).toBe(1);
-          expect(readSqliteDatabaseIntegrityVerification(reopened.db)).toBeDefined();
+          expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeDefined();
         });
       } finally {
         await maintenance.close();
