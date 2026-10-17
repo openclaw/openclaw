@@ -15,6 +15,7 @@ import { registerCopilotActiveRun } from "./attempt-active-run.js";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import {
   createFixture,
+  createFakeSession,
   event,
   transcriptMessages,
 } from "./attempt-transcript-journal.test-helpers.js";
@@ -38,27 +39,22 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   };
 });
 
-function registerTestRun(params?: {
-  agentId?: string;
+type RunOptions = Partial<
+  Pick<
+    Parameters<typeof registerCopilotActiveRun>[0],
+    "agentId" | "canAcceptSteering" | "isAborted" | "isSettled" | "startedAtMs" | "session"
+  >
+> & {
   sessionKey?: string;
-  canAcceptSteering?: () => boolean;
-  isAborted?: () => boolean;
-  isSettled?: () => boolean;
-  startedAtMs?: number;
   receipt?: Promise<void>;
   send?: SessionLike["send"];
-  session?: SessionLike;
   journal?: AttemptTranscriptJournal;
-}) {
+};
+
+function registerTestRun(params?: RunOptions) {
   const send = params?.send ?? vi.fn(async () => "steer-1");
   const waitForSdkUserPersisted = vi.fn(() => params?.receipt ?? Promise.resolve());
-  const session: SessionLike = params?.session ?? {
-    abort: vi.fn(async () => undefined),
-    disconnect: vi.fn(async () => undefined),
-    on: vi.fn() as SessionLike["on"],
-    send,
-    sendAndWait: vi.fn(async () => undefined),
-  };
+  const session = params?.session ?? { ...createFakeSession(), send };
   const handle = registerCopilotActiveRun({
     abortActiveSession: vi.fn(),
     agentId: params?.agentId ?? "main",
@@ -90,13 +86,13 @@ function registerTestRun(params?: {
 function createSteeringRecorder(
   recorder: NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>,
   sourceSessionKey = "agent:other:source",
-) {
-  const message = {
-    role: "user" as const,
+  message: NonNullable<typeof recorder.message> & { content: string } = {
+    role: "user",
     content: "change course",
     timestamp: 1,
-    provenance: { kind: "inter_session" as const, sourceSessionKey, sourceTool: "sessions_send" },
-  };
+    provenance: { kind: "inter_session", sourceSessionKey, sourceTool: "sessions_send" },
+  },
+) {
   return {
     ...recorder,
     message,
@@ -104,6 +100,22 @@ function createSteeringRecorder(
     markSentToProvider: vi.fn(),
     markRuntimePersisted: vi.fn(),
   };
+}
+
+async function steeringFixture() {
+  const fixture = await createFixture();
+  const emit = (type: string, id: string, data: Record<string, unknown>) =>
+    fixture.session.emit(event(type, id, data));
+  await fixture.journal.persistInitialUser();
+  emit("user.message", "initial-user", { content: "inspect both files" });
+  return { ...fixture, emit };
+}
+
+function voiceControl(
+  text: string,
+  options: Partial<Parameters<typeof controlRealtimeVoiceAgentRun>[0]> = {},
+) {
+  return controlRealtimeVoiceAgentRun({ sessionKey: "agent:main:session-1", text, ...options });
 }
 
 function expectNotCalled(...mocks: unknown[]) {
@@ -144,40 +156,34 @@ describe("registerCopilotActiveRun", () => {
     const abort = vi.spyOn(handle, "abort");
     runtime.setActiveEmbeddedRun("session-1", handle, "agent:main:session-1");
     try {
-      const result = await controlRealtimeVoiceAgentRun({
-        sessionKey: "agent:main:session-1",
-        text: "change course",
+      const result = await voiceControl("change course", {
         mode: "steer",
-        runTarget: {
-          runId: "run-1",
-          signal: new AbortController().signal,
-          isCurrent: () => true,
-        },
+        runTarget: { runId: "run-1", signal: new AbortController().signal, isCurrent: () => true },
       });
       expect(result).toMatchObject({ ok: false, reason: "guarded_injection_unsupported" });
       expectNotCalled(queue, claim, harnessMocks.claimPendingAgentQuestionAnswer, send);
-      const sessionKey = "agent:main:session-1";
-      const unscopedControl = await controlRealtimeVoiceAgentRun({
-        sessionKey,
-        text: "change course",
-        mode: "steer",
-      });
+      const unscopedControl = await voiceControl("change course", { mode: "steer" });
       expect(unscopedControl).toMatchObject({
         ok: false,
         queued: false,
         reason: "guarded_injection_unsupported",
       });
       expectNotCalled(queue, claim, send);
-      await expect(
-        controlRealtimeVoiceAgentRun({ sessionKey, text: "status" }),
-      ).resolves.toMatchObject({ ok: true, active: true, mode: "status" });
+      await expect(voiceControl("status")).resolves.toMatchObject({
+        ok: true,
+        active: true,
+        mode: "status",
+      });
       expect(runtime.queueAgentHarnessMessage("session-1", "unscoped change")).toBe(true);
       await vi.waitFor(() =>
         expect(send).toHaveBeenCalledExactlyOnceWith({ prompt: "unscoped change" }),
       );
-      await expect(
-        controlRealtimeVoiceAgentRun({ sessionKey, text: "cancel" }),
-      ).resolves.toMatchObject({ ok: true, active: true, mode: "cancel", aborted: true });
+      await expect(voiceControl("cancel")).resolves.toMatchObject({
+        ok: true,
+        active: true,
+        mode: "cancel",
+        aborted: true,
+      });
       expect(abort).toHaveBeenCalledOnce();
       expect(send).toHaveBeenCalledOnce();
     } finally {
@@ -186,9 +192,14 @@ describe("registerCopilotActiveRun", () => {
     }
   });
 
-  it.each([true, false])(
-    "settles accepted steering only after its transcript receipt: wait=%s",
-    async (waitForTranscriptCommit) => {
+  it.each([
+    [true, false],
+    [false, false],
+    [true, true],
+    [false, true],
+  ] as const)(
+    "settles accepted steering after its receipt without revoking acceptance: wait=%s failed=%s",
+    async (waitForTranscriptCommit, failed) => {
       const receipt = createDeferred<void>();
       const accepted = createDeferred<void>();
       const onQueueAccepted = vi.fn(() => accepted.resolve());
@@ -200,8 +211,9 @@ describe("registerCopilotActiveRun", () => {
       let deliverySettled = false;
       const delivery = handle
         .queueMessage("change course", { onQueueAccepted, onQueueSettled, waitForTranscriptCommit })
-        .then(() => {
+        .then((result) => {
           deliverySettled = true;
+          return result;
         });
 
       await accepted.promise;
@@ -215,9 +227,18 @@ describe("registerCopilotActiveRun", () => {
       }
       expect(onQueueSettled).not.toHaveBeenCalled();
 
-      receipt.resolve();
-      await receipt.promise;
-      await expect(delivery).resolves.toBeUndefined();
+      if (failed) {
+        receipt.reject(new Error("journal failed"));
+        await expect(receipt.promise).rejects.toThrow("journal failed");
+      } else {
+        receipt.resolve();
+        await receipt.promise;
+      }
+      await expect(delivery).resolves.toEqual(
+        failed && waitForTranscriptCommit
+          ? { transcriptCommit: "unconfirmed", errorMessage: "journal failed" }
+          : undefined,
+      );
       expect(onQueueAccepted).toHaveBeenCalledOnce();
       expect(onQueueSettled).toHaveBeenCalledOnce();
     },
@@ -226,9 +247,7 @@ describe("registerCopilotActiveRun", () => {
   it.each(["before response", "after response", "during tools", "hook replacement"])(
     "persists decorated reply steering with selected mentions once: %s",
     async (timing) => {
-      const { journal, recorder, session, target } = await createFixture();
-      await journal.persistInitialUser();
-      session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+      const { journal, recorder, session, target, emit } = await steeringFixture();
       const mentions = [{ profileId: "profile-taylor", start: 3, end: 10 }];
       const message = {
         role: "user" as const,
@@ -237,13 +256,7 @@ describe("registerCopilotActiveRun", () => {
         provenance: { kind: "external_user" as const },
         __openclaw: { humanMentions: mentions },
       };
-      const steeringRecorder = {
-        ...recorder,
-        message,
-        resolveMessage: vi.fn(async () => message),
-        markSentToProvider: vi.fn(),
-        markRuntimePersisted: vi.fn(),
-      };
+      const steeringRecorder = createSteeringRecorder(recorder, undefined, message);
       const modelPrompt = `Reply context: earlier message\n\n${message.content}`;
       const { provenance } = message;
       if (timing === "hook replacement") {
@@ -272,16 +285,12 @@ describe("registerCopilotActiveRun", () => {
       });
       session.send = send;
       if (timing === "during tools") {
-        session.emit(
-          event("assistant.message", "assistant-tools", {
-            content: "checking",
-            messageId: "assistant-tools",
-            toolRequests: [{ name: "read", arguments: {}, toolCallId: "read-1" }],
-          }),
-        );
-        session.emit(
-          event("tool.execution_start", "start-read", { toolCallId: "read-1", toolName: "read" }),
-        );
+        emit("assistant.message", "assistant-tools", {
+          content: "checking",
+          messageId: "assistant-tools",
+          toolRequests: [{ name: "read", arguments: {}, toolCallId: "read-1" }],
+        });
+        emit("tool.execution_start", "start-read", { toolCallId: "read-1", toolName: "read" });
       }
       const { handle } = registerTestRun({ journal, session });
       const onQueueAccepted = vi.fn();
@@ -307,13 +316,11 @@ describe("registerCopilotActiveRun", () => {
       if (timing === "after response") {
         session.emit(sdkUser);
       } else if (timing === "during tools") {
-        session.emit(
-          event("tool.execution_complete", "result-read", {
-            toolCallId: "read-1",
-            success: true,
-            result: { content: "done" },
-          }),
-        );
+        emit("tool.execution_complete", "result-read", {
+          toolCallId: "read-1",
+          success: true,
+          result: { content: "done" },
+        });
       }
       await expect(delivery).resolves.toBeUndefined();
       session.emit(sdkUser);
@@ -347,9 +354,7 @@ describe("registerCopilotActiveRun", () => {
   it.each([false, true])(
     "correlates concurrent identical steering by SDK id and releases rejected sends: reject=%s",
     async (rejectFirst) => {
-      const { journal, recorder, session, target } = await createFixture();
-      await journal.persistInitialUser();
-      session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
+      const { journal, recorder, session, target, emit } = await steeringFixture();
       const first = createSteeringRecorder(recorder, "agent:first:source");
       const second = createSteeringRecorder(recorder, "agent:second:source");
       const response = createDeferred<string>();
@@ -357,7 +362,7 @@ describe("registerCopilotActiveRun", () => {
         .fn()
         .mockImplementationOnce(() => response.promise)
         .mockImplementationOnce(async () => {
-          session.emit(event("user.message", "second", { content: second.message.content }));
+          emit("user.message", "second", { content: second.message.content });
           return "second";
         });
       session.send = send;
@@ -379,12 +384,12 @@ describe("registerCopilotActiveRun", () => {
         response.reject(new Error("send rejected"));
         await expect(firstOutcome).resolves.toMatchObject({ message: "send rejected" });
       } else {
-        session.emit(event("user.message", "first", { content: first.message.content }));
+        emit("user.message", "first", { content: first.message.content });
         response.resolve("first");
         await expect(firstOutcome).resolves.toBeUndefined();
       }
       await expect(secondDelivery).resolves.toBeUndefined();
-      session.emit(event("user.message", "native", { content: first.message.content }));
+      emit("user.message", "native", { content: first.message.content });
       await journal.barrier("concurrent steering");
       const users = transcriptMessages(await readSessionTranscriptEvents(target))
         .filter((row) => row.message.role === "user")
@@ -410,35 +415,42 @@ describe("registerCopilotActiveRun", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves confirmed and unconfirmed host questions without SDK steering: failed=%s",
-    async (failed) => {
-      const claimError = new Error("host question confirmation unavailable");
-      if (failed) {
-        harnessMocks.claimPendingAgentQuestionAnswer.mockRejectedValueOnce(claimError);
-      } else {
+  it.each(["host answered", "host rejected", "SDK rejected"] as const)(
+    "settles queue ownership without reopening failed delivery: %s",
+    async (outcome) => {
+      const error = new Error("delivery rejected");
+      const hostQuestion = outcome !== "SDK rejected";
+      if (outcome === "host rejected") {
+        harnessMocks.claimPendingAgentQuestionAnswer.mockRejectedValueOnce(error);
+      } else if (hostQuestion) {
         harnessMocks.claimPendingAgentQuestionAnswer.mockResolvedValueOnce(true);
       }
+      const { handle, send, waitForSdkUserPersisted } = registerTestRun(
+        hostQuestion ? {} : { send: vi.fn().mockRejectedValueOnce(error) },
+      );
       const onQueueAccepted = vi.fn();
       const onQueueSettled = vi.fn();
-      const { handle, send, waitForSdkUserPersisted } = registerTestRun();
-      const delivery = handle.queueMessage("answer", {
-        isInboundUserMessage: true,
+      const delivery = handle.queueMessage(hostQuestion ? "answer" : "change course", {
         onQueueAccepted,
         onQueueSettled,
-        waitForTranscriptCommit: true,
+        ...(hostQuestion ? { isInboundUserMessage: true, waitForTranscriptCommit: true } : {}),
       });
-
-      if (failed) {
-        await expect(delivery).rejects.toBe(claimError);
-        expect(onQueueAccepted).not.toHaveBeenCalled();
-      } else {
+      if (outcome === "host answered") {
         await expect(delivery).resolves.toBeUndefined();
         expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      } else {
+        await expect(delivery).rejects.toBe(error);
+        if (hostQuestion) {
+          expectNotCalled(onQueueAccepted);
+        } else {
+          expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+        }
       }
       expect(onQueueSettled).toHaveBeenCalledOnce();
-      expect(harnessMocks.claimPendingAgentQuestionAnswer).toHaveBeenCalledOnce();
-      expectNotCalled(send, waitForSdkUserPersisted);
+      if (hostQuestion) {
+        expect(harnessMocks.claimPendingAgentQuestionAnswer).toHaveBeenCalledOnce();
+        expectNotCalled(send, waitForSdkUserPersisted);
+      }
     },
   );
 
@@ -475,57 +487,6 @@ describe("registerCopilotActiveRun", () => {
       });
       expect(send).not.toHaveBeenCalled();
       expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
-    },
-  );
-
-  it("reports a rejected send as rejected", async () => {
-    const onQueueAccepted = vi.fn();
-    const onQueueSettled = vi.fn();
-    const sendError = new Error("send rejected");
-    const { handle } = registerTestRun({
-      send: vi.fn(async () => {
-        throw sendError;
-      }),
-    });
-
-    await expect(
-      handle.queueMessage("change course", { onQueueAccepted, onQueueSettled }),
-    ).rejects.toBe(sendError);
-    expect(onQueueAccepted).toHaveBeenCalledOnce();
-    expect(onQueueAccepted).toHaveBeenCalledWith(false);
-    expect(onQueueSettled).toHaveBeenCalledOnce();
-  });
-
-  it.each([true, false])(
-    "settles failed transcript confirmation without revoking acceptance: wait=%s",
-    async (waitForTranscriptCommit) => {
-      const receipt = createDeferred<void>();
-      const accepted = createDeferred<void>();
-      const onQueueAccepted = vi.fn(() => accepted.resolve());
-      const onQueueSettled = vi.fn();
-      const { handle } = registerTestRun({ receipt: receipt.promise });
-      const delivery = handle.queueMessage("change course", {
-        onQueueAccepted,
-        onQueueSettled,
-        waitForTranscriptCommit,
-      });
-
-      await accepted.promise;
-      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
-      if (!waitForTranscriptCommit) {
-        await expect(delivery).resolves.toBeUndefined();
-      }
-      expect(onQueueSettled).not.toHaveBeenCalled();
-      receipt.reject(new Error("journal failed"));
-      await expect(receipt.promise).rejects.toThrow("journal failed");
-
-      await expect(delivery).resolves.toEqual(
-        waitForTranscriptCommit
-          ? { transcriptCommit: "unconfirmed", errorMessage: "journal failed" }
-          : undefined,
-      );
-      expect(onQueueAccepted).toHaveBeenCalledOnce();
-      expect(onQueueSettled).toHaveBeenCalledOnce();
     },
   );
 });
