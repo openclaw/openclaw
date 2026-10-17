@@ -37,6 +37,32 @@ import { getCronStoreKysely } from "./store/schema.js";
 import type { CronJob } from "./types.js";
 
 const tempDirs: string[] = [];
+const scratchReceipt = () =>
+  expectDefined(createCronMutationCompletion("cron.scratch.set"), "scratch receipt");
+const conflict = (currentRevision: number) => ({
+  ok: false,
+  reason: "revision-conflict",
+  currentRevision,
+});
+const written = (content: string | null, revision: number, updatedAtMs?: number) => ({
+  ok: true,
+  currentRevision: revision,
+  ...(content !== null
+    ? { scratch: { content, revision, ...(updatedAtMs === undefined ? {} : { updatedAtMs }) } }
+    : {}),
+});
+
+async function withoutCallerSql<T>(run: () => Promise<T>) {
+  const sql = observeMainThreadSql();
+  try {
+    sql.calibrate();
+    const result = await run();
+    expect(sql.count()).toBe(0);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
 
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
@@ -90,23 +116,13 @@ describe("cron scratch worker service", () => {
     await withOpenClawTestState({ label: "heartbeat-scratch-cold-read" }, async (fixture) => {
       const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
       await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-      const sql = observeMainThreadSql();
-      let observed: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
-      let callerSql = 0;
-      try {
-        sql.calibrate();
-        observed = await readCronScratchSnapshot(
+      const observed = await withoutCallerSql(() =>
+        readCronScratchSnapshot(
           fixture.statePath("cron", "jobs.json"),
           { kind: "heartbeat", agentId: "alpha" },
-          {
-            path: databasePath,
-            env: fixture.env,
-          },
-        );
-        callerSql = sql.count();
-      } finally {
-        sql.restore();
-      }
+          { path: databasePath, env: fixture.env },
+        ),
+      );
       expect(observed).toBeUndefined();
       expect((await fs.stat(databasePath)).isFile()).toBe(true);
       const verification = new DatabaseSync(databasePath, { readOnly: true });
@@ -121,7 +137,6 @@ describe("cron scratch worker service", () => {
       } finally {
         verification.close();
       }
-      expect(callerSql).toBe(0);
     });
   });
 
@@ -199,60 +214,30 @@ describe("cron scratch worker service", () => {
 
   it("writes off the caller thread while preserving CAS, tombstones, and actual-write receipts", async () => {
     await withScratchService(async ({ service, job }) => {
-      const steps = [
-        {
-          content: null,
-          expectedRevision: 0,
-          expected: { ok: true, currentRevision: 0 },
-          committed: false,
-        },
-        {
-          content: "scheduled café",
-          expectedRevision: 0,
-          expected: { ok: true, currentRevision: 1, scratch: { content: "scheduled café" } },
-          committed: true,
-        },
-        {
-          content: null,
-          expectedRevision: 1,
-          expected: { ok: true, currentRevision: 2 },
-          committed: true,
-        },
-        {
-          content: "stale resurrection",
-          expectedRevision: 1,
-          expected: { ok: false, reason: "revision-conflict", currentRevision: 2 },
-          committed: false,
-        },
-      ];
-      const sql = observeMainThreadSql();
-      try {
-        sql.calibrate();
-        for (const step of steps) {
-          sql.clear();
-          const completion = expectDefined(
-            createCronMutationCompletion("cron.scratch.set"),
-            "scratch receipt",
-          );
+      for (const [content, expectedRevision, expected, committed] of [
+        [null, 0, written(null, 0), false],
+        ["scheduled café", 0, written("scheduled café", 1), true],
+        [null, 1, written(null, 2), true],
+        ["stale resurrection", 1, conflict(2), false],
+      ] as const) {
+        const completion = scratchReceipt();
+        await withoutCallerSql(async () => {
           const result = await completion.run(() =>
             service.writeScratch(job.id, {
-              content: step.content,
-              expectedRevision: step.expectedRevision,
+              content,
+              expectedRevision,
               commitGuard: () => expect(service.getJob(job.id)?.agentId).toBe("alpha"),
             }),
           );
-          expect(result).toMatchObject(step.expected);
-          if (step.expected.currentRevision === 1) {
+          expect(result).toMatchObject(expected);
+          if (expected.currentRevision === 1) {
             expect(await service.readScratch(job.id)).toMatchObject({
               currentRevision: 1,
               scratch: { content: "scheduled café", revision: 1 },
             });
           }
-          expect(completion.isCommitted()).toBe(step.committed);
-          expect.soft(sql.count(), `scratch revision ${step.expected.currentRevision}`).toBe(0);
-        }
-      } finally {
-        sql.restore();
+          expect(completion.isCommitted()).toBe(committed);
+        });
       }
       expect(await service.readScratch(job.id)).toEqual({ currentRevision: 2 });
     });
@@ -275,10 +260,7 @@ describe("cron scratch worker service", () => {
           return execute(params);
         });
       let callerCurrent = true;
-      const completion = expectDefined(
-        createCronMutationCompletion("cron.scratch.set"),
-        "scratch receipt",
-      );
+      const completion = scratchReceipt();
       const pending = completion
         .run(() =>
           service.writeScratch(job.id, {
@@ -345,10 +327,7 @@ describe("cron scratch worker service", () => {
 
   it("retains scratch bytes without claiming completion after reply loss", async () => {
     await withScratchService(async ({ service, job, storePath }) => {
-      const completion = expectDefined(
-        createCronMutationCompletion("cron.scratch.set"),
-        "scratch receipt",
-      );
+      const completion = scratchReceipt();
       const dropped = loseFirstCronMutationReply("cron.writeScratch");
       try {
         const result = await completion
@@ -430,17 +409,9 @@ describe("cron job scratch store", () => {
       ok: true,
       currentRevision: 1,
     });
-    expect(fixture.write("stale", { expectedRevision: 1 })).toEqual({
-      ok: false,
-      reason: "revision-conflict",
-      currentRevision: 2,
-    });
+    expect(fixture.write("stale", { expectedRevision: 1 })).toEqual(conflict(2));
     const storePath = path.join(path.dirname(fixture.storePath), "other.json");
-    expect(fixture.write("orphan", { storePath, expectedRevision: 0 })).toEqual({
-      ok: false,
-      reason: "revision-conflict",
-      currentRevision: 0,
-    });
+    expect(fixture.write("orphan", { storePath, expectedRevision: 0 })).toEqual(conflict(0));
     expect(fixture.read("job-1", storePath)).toEqual({ currentRevision: 0 });
     expect(fixture.read().scratch?.content).toBe("second");
   });
@@ -448,20 +419,11 @@ describe("cron job scratch store", () => {
   it("marks actual writes but not an unset no-op or revision conflict", async () => {
     const fixture = await createFixture();
     for (const [content, expectedRevision, expected, committed] of [
-      [null, undefined, { ok: true, currentRevision: 0 }, false],
-      [
-        "committed",
-        undefined,
-        {
-          ok: true,
-          currentRevision: 1,
-          scratch: { content: "committed", revision: 1, updatedAtMs: 10 },
-        },
-        true,
-      ],
-      ["stale", 0, { ok: false, reason: "revision-conflict", currentRevision: 1 }, false],
+      [null, undefined, written(null, 0), false],
+      ["committed", undefined, written("committed", 1, 10), true],
+      ["stale", 0, conflict(1), false],
     ] as const) {
-      const completion = createCronMutationCompletion("cron.scratch.set")!;
+      const completion = scratchReceipt();
       expect(
         await completion.run(async () => fixture.write(content, { expectedRevision, nowMs: 10 })),
       ).toEqual(expected);
@@ -473,35 +435,12 @@ describe("cron job scratch store", () => {
     const fixture = await createFixture();
     expect(fixture.read()).toEqual({ currentRevision: 0 });
     for (const [content, expectedRevision, nowMs, expected] of [
-      [
-        "",
-        undefined,
-        10,
-        { ok: true, currentRevision: 1, scratch: { content: "", revision: 1, updatedAtMs: 10 } },
-      ],
-      ["stale", 0, 20, { ok: false, reason: "revision-conflict", currentRevision: 1 }],
-      [
-        "second",
-        1,
-        30,
-        {
-          ok: true,
-          currentRevision: 2,
-          scratch: { content: "second", revision: 2, updatedAtMs: 30 },
-        },
-      ],
-      [null, 2, 40, { ok: true, currentRevision: 3 }],
-      ["resurrected", 2, 50, { ok: false, reason: "revision-conflict", currentRevision: 3 }],
-      [
-        "recreated",
-        3,
-        60,
-        {
-          ok: true,
-          currentRevision: 4,
-          scratch: { content: "recreated", revision: 4, updatedAtMs: 60 },
-        },
-      ],
+      ["", undefined, 10, written("", 1, 10)],
+      ["stale", 0, 20, conflict(1)],
+      ["second", 1, 30, written("second", 2, 30)],
+      [null, 2, 40, written(null, 3)],
+      ["resurrected", 2, 50, conflict(3)],
+      ["recreated", 3, 60, written("recreated", 4, 60)],
     ] as const) {
       expect(fixture.write(content, { expectedRevision, nowMs })).toEqual(expected);
       if (expected.ok) {
@@ -523,7 +462,7 @@ describe("cron job scratch store", () => {
       fixture.options,
     );
     expect(fixture.write("orphaned heartbeat scratch", { expectedRevision: 0, nowMs: 10 })).toEqual(
-      { ok: false, reason: "revision-conflict", currentRevision: 0 },
+      conflict(0),
     );
     expect(fixture.read()).toEqual({ currentRevision: 0 });
   });
@@ -547,11 +486,9 @@ describe("cron job scratch store", () => {
           ),
         fixture.options,
       );
-      expect(fixture.write("late write", { expectedRevision: previous.currentRevision })).toEqual({
-        ok: false,
-        reason: "revision-conflict",
-        currentRevision: 2,
-      });
+      expect(fixture.write("late write", { expectedRevision: previous.currentRevision })).toEqual(
+        conflict(2),
+      );
       expect(fixture.read()).toEqual(previous);
     },
   );

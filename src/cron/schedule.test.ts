@@ -1,8 +1,8 @@
-// Cron schedule tests cover schedule parsing and next-run calculations.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Cron } from "croner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "./schedule.js";
+import type { CronSchedule } from "./types.js";
 
 const cronConstructed = vi.hoisted(() => vi.fn());
 
@@ -16,6 +16,12 @@ vi.mock("croner", async (importOriginal) => {
   }
   return { ...actual, Cron: ObservedCron };
 });
+
+function expectOccurrences(schedule: CronSchedule, now: string, next?: string, previous?: string) {
+  const nowMs = Date.parse(now);
+  expect(computeNextRunAtMs(schedule, nowMs)).toBe(next ? Date.parse(next) : undefined);
+  expect(computePreviousRunAtMs(schedule, nowMs)).toBe(previous ? Date.parse(previous) : undefined);
+}
 
 describe("cron schedule", () => {
   beforeEach(() => {
@@ -49,78 +55,57 @@ describe("cron schedule", () => {
         previous: "2026-03-28T01:30:00.000Z",
       },
     ])("$label", ({ timezone, expression, now, next, previous }) => {
-      const schedule = { kind: "cron" as const, expr: expression, tz: timezone };
-      const nowMs = Date.parse(now);
-
-      expect(computeNextRunAtMs(schedule, nowMs)).toBe(Date.parse(next));
-      expect(computePreviousRunAtMs(schedule, nowMs)).toBe(Date.parse(previous));
+      expectOccurrences({ kind: "cron", expr: expression, tz: timezone }, now, next, previous);
     });
 
-    it.each(["30 2 * 3 SUN#2"])(
-      "skips nonexistent future occurrences but preserves historical timezone rules for %s",
-      (expression) => {
-        const schedule = { kind: "cron" as const, expr: expression, tz: "America/New_York" };
-        const nowMs = Date.parse("2026-01-01T00:00:00.000Z");
-
-        expect(computeNextRunAtMs(schedule, nowMs)).toBeUndefined();
-        expect(computePreviousRunAtMs(schedule, nowMs)).toBe(
-          Date.parse("2006-03-12T07:30:00.000Z"),
-        );
-      },
-    );
+    it("skips nonexistent future occurrences but preserves historical timezone rules", () => {
+      expectOccurrences(
+        { kind: "cron", expr: "30 2 * 3 SUN#2", tz: "America/New_York" },
+        "2026-01-01T00:00:00.000Z",
+        undefined,
+        "2006-03-12T07:30:00.000Z",
+      );
+    });
 
     it("never spills a nonexistent year-limited reminder into another year", () => {
-      const schedule = {
-        kind: "cron" as const,
-        expr: "0 30 2 14 3 * 2027",
-        tz: "America/New_York",
-      };
-      const nowMs = Date.parse("2026-07-01T00:00:00.000Z");
-
-      expect(computeNextRunAtMs(schedule, nowMs)).toBeUndefined();
-      expect(computePreviousRunAtMs(schedule, nowMs)).toBeUndefined();
+      expectOccurrences(
+        { kind: "cron", expr: "0 30 2 14 3 * 2027", tz: "America/New_York" },
+        "2026-07-01T00:00:00.000Z",
+      );
     });
 
     it("recovers the first occurrence of a year-limited reminder during its repeated hour", () => {
-      const schedule = {
-        kind: "cron" as const,
-        expr: "0 30 1 1 11 * 2026",
-        tz: "America/New_York",
-      };
-      const nowMs = Date.parse("2026-11-01T06:15:00.000Z");
-
-      expect(computeNextRunAtMs(schedule, nowMs)).toBeUndefined();
-      expect(computePreviousRunAtMs(schedule, nowMs)).toBe(Date.parse("2026-11-01T05:30:00.000Z"));
+      expectOccurrences(
+        { kind: "cron", expr: "0 30 1 1 11 * 2026", tz: "America/New_York" },
+        "2026-11-01T06:15:00.000Z",
+        undefined,
+        "2026-11-01T05:30:00.000Z",
+      );
     });
 
     it.each([
       {
         label: "next-second retry rejects a real spring-forward gap",
-        timezone: "America/New_York",
-        expression: "30 2 * * *",
         now: "2027-03-14T06:45:00.000Z",
-        prior: "2027-03-13T07:30:00.000Z",
         forcedPastCalls: 1,
-        expected: "2027-03-15T06:30:00.000Z",
       },
       {
         label: "tomorrow retry rejects a real spring-forward gap",
-        timezone: "America/New_York",
-        expression: "30 2 * * *",
         now: "2027-03-13T23:45:00.000Z",
-        prior: "2027-03-13T07:30:00.000Z",
         forcedPastCalls: 2,
-        expected: "2027-03-15T06:30:00.000Z",
       },
-    ])("$label", ({ timezone, expression, now, prior, forcedPastCalls, expected }) => {
+    ])("$label", ({ now, forcedPastCalls }) => {
       const spy = vi.spyOn(Cron.prototype, "nextRun");
       for (let count = 0; count < forcedPastCalls; count += 1) {
-        spy.mockImplementationOnce(() => new Date(prior));
+        spy.mockImplementationOnce(() => new Date("2027-03-13T07:30:00.000Z"));
       }
       try {
         expect(
-          computeNextRunAtMs({ kind: "cron", expr: expression, tz: timezone }, Date.parse(now)),
-        ).toBe(Date.parse(expected));
+          computeNextRunAtMs(
+            { kind: "cron", expr: "30 2 * * *", tz: "America/New_York" },
+            Date.parse(now),
+          ),
+        ).toBe(Date.parse("2027-03-15T06:30:00.000Z"));
       } finally {
         spy.mockRestore();
       }
@@ -129,22 +114,15 @@ describe("cron schedule", () => {
 
   it("throws a clear error when cron expr is missing at runtime", () => {
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
-    expect(() =>
-      computeNextRunAtMs(
-        {
-          kind: "cron",
-        } as unknown as { kind: "cron"; expr: string; tz?: string },
-        nowMs,
-      ),
-    ).toThrow("invalid cron schedule: expr is required");
+    const malformed = { kind: "cron" } as unknown as { kind: "cron"; expr: string; tz?: string };
+    expect(() => computeNextRunAtMs(malformed, nowMs)).toThrow(
+      "invalid cron schedule: expr is required",
+    );
   });
 
   it("computes next run for every schedule when anchorMs is not provided", () => {
     const now = Date.parse("2025-12-13T00:00:00.000Z");
-    const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000 }, now);
-
-    // Should return nowMs + everyMs, not nowMs (which would cause infinite loop)
-    expect(next).toBe(now + 30_000);
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 30_000 }, now)).toBe(now + 30_000);
   });
 
   it("rejects every schedule numbers outside the ECMAScript Date range", () => {
@@ -158,59 +136,32 @@ describe("cron schedule", () => {
     expect(computeNextRunAtMs({ kind: "every", everyMs: 1, anchorMs: -1 }, 0)).toBeUndefined();
   });
 
-  it.each([["NaN", Number.NaN]])(
-    "returns undefined instead of throwing for an invalid %s cursor",
-    (_label, nowMs) => {
-      expect(computeNextRunAtMs({ kind: "every", everyMs: 60_000 }, nowMs)).toBeUndefined();
-      expect(
-        computeNextRunAtMs({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, nowMs),
-      ).toBeUndefined();
-      expect(
-        computePreviousRunAtMs({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, nowMs),
-      ).toBeUndefined();
-    },
-  );
+  it("returns undefined instead of throwing for an invalid NaN cursor", () => {
+    expect(computeNextRunAtMs({ kind: "every", everyMs: 60_000 }, Number.NaN)).toBeUndefined();
+    expectOccurrences({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, "invalid");
+  });
 
   it("reuses compiled cron evaluators for the same expression/timezone", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    expect(
-      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs),
-    ).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
-    const initialConstructions = cronConstructed.mock.calls.length;
-    expect(
-      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs + 1_000),
-    ).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
-    expect(cronConstructed).toHaveBeenCalledTimes(initialConstructions);
-
-    expect(computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs)).toBe(
-      Date.parse("2026-03-01T08:00:00.000Z"),
-    );
-    const timezoneConstructions = cronConstructed.mock.calls.length;
-    expect(computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs + 1_000)).toBe(
-      Date.parse("2026-03-01T08:00:00.000Z"),
-    );
-    expect(cronConstructed).toHaveBeenCalledTimes(timezoneConstructions);
+    for (const [tz, next] of [
+      ["Asia/Shanghai", "2026-03-02T00:00:00.000Z"],
+      ["UTC", "2026-03-01T08:00:00.000Z"],
+    ] as const) {
+      const schedule = { kind: "cron" as const, expr: "0 8 * * *", tz };
+      expect(computeNextRunAtMs(schedule, nowMs)).toBe(Date.parse(next));
+      const constructions = cronConstructed.mock.calls.length;
+      expect(computeNextRunAtMs(schedule, nowMs + 1_000)).toBe(Date.parse(next));
+      expect(cronConstructed).toHaveBeenCalledTimes(constructions);
+    }
   });
 
-  describe("cron with specific seconds (6-field pattern)", () => {
-    // Pattern: fire at exactly second 0 of minute 0 of hour 12 every day
-    const dailyNoon = { kind: "cron" as const, expr: "0 0 12 * * *", tz: "UTC" };
+  it("advances to next day when job completes within same second it fired (#17821)", () => {
     const noonMs = Date.parse("2026-02-08T12:00:00.000Z");
-
-    it("advances to next day when job completes within same second it fired (#17821)", () => {
-      // Regression test for #17821: cron jobs that fire and complete within
-      // the same second (e.g., fire at 12:00:00.014, complete at 12:00:00.021)
-      // were getting nextRunAtMs set to the same second, causing a spin loop.
-      //
-      // Simulating: job scheduled for 12:00:00, fires at .014, completes at .021
-      const completedAtMs = noonMs + 21; // 12:00:00.021
-      const next = computeNextRunAtMs(dailyNoon, completedAtMs);
-      expect(next).toBe(noonMs + 86_400_000); // must be next day, NOT noonMs
-    });
+    // Returning the firing second here caused a scheduler spin loop.
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 0 12 * * *", tz: "UTC" }, noonMs + 21)).toBe(
+      noonMs + 86_400_000,
+    );
   });
-});
-
-describe("computeNextRunAtMs stream", () => {
   it("never reports a time-due run for event stream schedules", () => {
     expect(computeNextRunAtMs({ kind: "stream", command: ["node", "events.mjs"] }, 0)).toBe(
       undefined,

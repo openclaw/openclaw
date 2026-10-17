@@ -12,9 +12,10 @@ import {
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronRunRecord } from "./store/run-history.types.js";
 const JOB_ID = "history-job";
-function recordFromEntry(entry: CronRunLogEntry, index: number, storeKey: string): CronRunRecord {
+const BASE = { ts: 100, jobId: JOB_ID, action: "finished" } as const;
+function recordFromEntry(entry: CronRunLogEntry, storeKey = "/internal/cron/store"): CronRunRecord {
   return {
-    id: String(index),
+    id: "1",
     jobId: entry.jobId,
     createdAt: entry.runAtMs ?? entry.ts,
     endedAt: entry.ts,
@@ -27,24 +28,17 @@ function recordFromEntry(entry: CronRunLogEntry, index: number, storeKey: string
 }
 describe("cron history wire codec", () => {
   it.each([
-    { serialized: "{", expected: undefined },
-    { serialized: "null", expected: null },
-    {
-      serialized: '[1,{"state":[true,null,"retained"]}]',
-      expected: [1, { state: [true, null, "retained"] }],
-    },
-    { serialized: '{"overflow":1e400}', expected: { overflow: Infinity } },
-  ])("preserves stored JSON semantics for $serialized", ({ serialized, expected }) => {
+    ["{", undefined],
+    ["null", null],
+    ['[1,{"state":[true,null,"retained"]}]', [1, { state: [true, null, "retained"] }]],
+    ['{"overflow":1e400}', { overflow: Infinity }],
+  ] as const)("preserves stored JSON semantics for %s", (serialized, expected) => {
     expect(parseCronRunDetailJson(serialized)).toEqual(expected);
   });
 
   it("allowlists legacy wire fields and retains row fallbacks", () => {
     const storeKey = "/internal/cron/store";
-    const record = recordFromEntry(
-      { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
-      1,
-      storeKey,
-    );
+    const record = recordFromEntry({ ...BASE, status: "ok" });
     record.error = "legacy error";
     record.summary = "legacy summary";
     record.detail = {
@@ -61,33 +55,34 @@ describe("cron history wire codec", () => {
     Object.freeze(record);
     const entry = cronRunRecordToRunLogEntry(record);
     expect(entry).not.toBeNull();
-    expect(entry?.status).toBe("skipped");
-    expect(entry?.sessionId).toBe("old-generation");
+    expect(entry).toMatchObject({
+      status: "skipped",
+      sessionId: "old-generation",
+      error: "legacy error",
+      summary: "legacy summary",
+    });
     for (const key of ["delivered", "deliveryStatus", "deliveryError", "sessionId", "sessionKey"]) {
       expect(Object.hasOwn(entry ?? {}, key)).toBe(true);
     }
-    expect(Object.hasOwn(entry ?? {}, "storeKey")).toBe(false);
-    expect(Object.hasOwn(entry ?? {}, "internalFutureField")).toBe(false);
-    expect(Object.hasOwn(entry ?? {}, "triggerState")).toBe(false);
-    expect(entry).toMatchObject({ error: "legacy error", summary: "legacy summary" });
+    for (const key of ["storeKey", "internalFutureField", "triggerState"]) {
+      expect(Object.hasOwn(entry ?? {}, key)).toBe(false);
+    }
     expect(entry?.delivery).toBeUndefined();
     expect(entry?.failureNotificationDelivery).toBeUndefined();
   });
 
   it.each([
-    { status: "error", delivered: undefined, deliveryStatus: undefined, expected: "failed" },
-    { status: "ok", delivered: undefined, deliveryStatus: "delivered", expected: "succeeded" },
-    { status: "ok", delivered: true, deliveryStatus: undefined, expected: "succeeded" },
-    { status: "ok", delivered: undefined, deliveryStatus: "not-requested", expected: "succeeded" },
-    { status: "ok", delivered: undefined, deliveryStatus: "not-delivered", expected: "unknown" },
+    ["error", undefined, undefined, "failed"],
+    ["ok", undefined, "delivered", "succeeded"],
+    ["ok", true, undefined, "succeeded"],
+    ["ok", undefined, "not-requested", "succeeded"],
+    ["ok", undefined, "not-delivered", "unknown"],
   ] as const)(
-    "derives legacy $status/$deliveryStatus completion as $expected",
-    ({ status, delivered, deliveryStatus, expected }) => {
+    "derives legacy %s/%s/%s completion as %s",
+    (status, delivered, deliveryStatus, expected) => {
       expect(
         parseCronRunLogEntryObject({
-          ts: 100,
-          jobId: JOB_ID,
-          action: "finished",
+          ...BASE,
           status,
           completionStatus: "partial",
           ...(delivered === undefined ? {} : { delivered }),
@@ -98,22 +93,10 @@ describe("cron history wire codec", () => {
   );
 
   it("keeps quiet-trigger recovery detail out of run history", () => {
-    const record = recordFromEntry(
-      { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
-      1,
-      "/internal/cron/store",
-    );
-    record.detail = cronQuietTriggerDetail("/internal/cron/store", {
-      fired: false,
-      stateChanged: true,
-      state: { ready: false },
-    });
-
-    expect(cronRunRecordToTriggerEval(record)).toEqual({
-      fired: false,
-      stateChanged: true,
-      state: { ready: false },
-    });
+    const record = recordFromEntry({ ...BASE, status: "ok" });
+    const evaluation = { fired: false, stateChanged: true, state: { ready: false } } as const;
+    record.detail = cronQuietTriggerDetail("/internal/cron/store", evaluation);
+    expect(cronRunRecordToTriggerEval(record)).toEqual(evaluation);
     expect(cronRunRecordToRunLogEntry(record)).toBeNull();
   });
 
@@ -143,9 +126,7 @@ describe("cron history wire codec", () => {
     },
   ])("preserves retained JSON bytes with $name", ({ fields, wireFields, detailFields }) => {
     const entry = parseCronRunLogEntryObject({
-      ts: 100,
-      jobId: JOB_ID,
-      action: "finished",
+      ...BASE,
       status: "error",
       internalFutureField: "discard",
       ...fields,
@@ -158,7 +139,7 @@ describe("cron history wire codec", () => {
       wireFields +
       "}";
     expect(JSON.stringify(entry)).toBe(wire);
-    const record = recordFromEntry(entry, 1, "cron-store");
+    const record = recordFromEntry(entry, "cron-store");
     expect(JSON.stringify(record.detail)).toBe(
       '{"kind":"cron-run","status":"error","completionStatus":"failed","error":null,"summary":null,"storeKey":"cron-store"' +
         detailFields +
@@ -189,10 +170,9 @@ describe("cron history wire codec", () => {
   });
 
   it("rejects invalid legacy run-history scalar and timestamp fields", () => {
-    const base = { ts: 100, jobId: JOB_ID, action: "finished" } as const;
     expect(
       parseCronRunLogEntryObject({
-        ...base,
+        ...BASE,
         status: "invalid",
         summary: 42,
         runAtMs: -1,
@@ -202,7 +182,7 @@ describe("cron history wire codec", () => {
         usage: { input_tokens: Number.NaN, output_tokens: -1 },
       }),
     ).toEqual({
-      ...base,
+      ...BASE,
       status: undefined,
       completionStatus: "unknown",
       error: undefined,
@@ -218,9 +198,9 @@ describe("cron history wire codec", () => {
       provider: undefined,
       usage: undefined,
     });
-    expect(parseCronRunLogEntryObject({ ...base, usage: [] })?.usage).toBeUndefined();
+    expect(parseCronRunLogEntryObject({ ...BASE, usage: [] })?.usage).toBeUndefined();
     expect(
-      parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0, future_tokens: 1 } })?.usage,
+      parseCronRunLogEntryObject({ ...BASE, usage: { input_tokens: 0, future_tokens: 1 } })?.usage,
     ).toEqual({
       input_tokens: 0,
       output_tokens: undefined,
@@ -229,9 +209,9 @@ describe("cron history wire codec", () => {
       cache_write_tokens: undefined,
     });
     expect(
-      parseCronRunLogEntryObject({ ...base, usage: { future_tokens: 1 } })?.usage,
+      parseCronRunLogEntryObject({ ...BASE, usage: { future_tokens: 1 } })?.usage,
     ).toBeUndefined();
-    expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
-    expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
+    expect(parseCronRunLogEntryObject({ ...BASE, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
+    expect(parseCronRunLogEntryObject({ ...BASE, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
   });
 });
