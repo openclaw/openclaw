@@ -3756,7 +3756,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       const gatewayTargets = targetedPlans("test/vitest/vitest.gateway-server.config.ts").map(
         (plan) => plan.forwardedArgs,
       );
-      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
       expect(gatewayTargets.flat()).toEqual(
         listGitTrackedFiles({ pathspecs: "src/gateway" })
           ?.filter(isGatewayServerTestFile)

@@ -940,7 +940,6 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
-src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts

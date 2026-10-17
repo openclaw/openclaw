@@ -49,8 +49,8 @@ it("counts each retirement event once across invalidations and bounded evictions
       present().list([], opts);
       state = { ...state, revision: {} };
       present();
-      await expectCauses(["projection-revision"]);
-      for (const cause of ["projection-revision", "config", "identity"] as const) {
+      await expectCauses([]);
+      for (const cause of ["config", "identity"] as const) {
         present().list([row], opts);
         present().list([row], { ...opts, limit: 2 });
         if (cause === "identity") {

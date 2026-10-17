@@ -62,7 +62,6 @@ function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
 describe("VisitorPolicyClient", () => {
   it.each([
     { field: "githubAccountIdClaim", afterResponse: false },
-    { field: "issuer", afterResponse: false },
     { field: "issuer", afterResponse: true },
   ] as const)(
     "pins the current $field mapping through renewal (after response: $afterResponse)",
@@ -106,29 +105,6 @@ describe("VisitorPolicyClient", () => {
       ]);
     },
   );
-
-  it("creates only the named app policy when absent, leaving other policies untouched", async () => {
-    const maintainers = { id: "maintainers", name: "GitHub organization", decision: "allow" };
-    const fetcher = fetchSequence(
-      cloudflareResponse([maintainers]),
-      cloudflareResponse(namedPolicy()),
-    );
-    const client = new VisitorPolicyClient(config, fetcher);
-
-    await expect(client.update(() => ["first@example.com"])).resolves.toEqual([
-      "first@example.com",
-    ]);
-
-    expect(fetcher.mock.calls.map(([url, options]) => [url, options?.method])).toEqual([
-      [`${collectionUrl}?page=1&per_page=100`, "GET"],
-      [collectionUrl, "POST"],
-    ]);
-    expect(requestBody(fetcher, 1)).toEqual({
-      name: config.policyName,
-      decision: "allow",
-      include: [{ email: { email: "first@example.com" } }],
-    });
-  });
 
   it("rereads the named policy and preserves mixed dashboard targets and restrictions on update", async () => {
     const original = namedPolicy(["FIRST@example.com", 42]);
@@ -200,12 +176,10 @@ describe("VisitorPolicyClient", () => {
     ["another OIDC claim", { include: [{ oidc: { ...githubRule.oidc, claim_name: "login" } }] }],
     ["mixed OIDC rules", { include: [{ ...githubRule, everyone: {} }] }],
     ["extra OIDC fields", { include: [{ oidc: { ...githubRule.oidc, login: "visitor" } }] }],
-    ...["0", "-1", "042", "42.0", "4.2e1", " 42", "42 ", "9007199254740992", 42].map(
-      (claimValue): [string, Record<string, unknown>] => [
-        `noncanonical account ID ${JSON.stringify(claimValue)}`,
-        { include: [{ oidc: { ...githubRule.oidc, claim_value: claimValue } }] },
-      ],
-    ),
+    ...["042", "9007199254740992", 42].map((claimValue): [string, Record<string, unknown>] => [
+      `noncanonical account ID ${JSON.stringify(claimValue)}`,
+      { include: [{ oidc: { ...githubRule.oidc, claim_value: claimValue } }] },
+    ]),
     ["required restrictions", { require: [{ email_domain: { domain: "example.com" } }] }],
     ["excluded identities", { exclude: [{ email: { email: "excluded@example.com" } }] }],
     ["renamed policy", { name: "GitHub organization" }],

@@ -12,7 +12,8 @@ import {
 import { runClaudeCliNodeCommand } from "./invoke-agent-cli-claude.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
-import type { NodeInvokeRequestPayload, RunResult, SkillBinsProvider } from "./invoke-types.js";
+import type { NodeInvokeRequestPayload, RunResult } from "./invoke-types.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 export type NodeHostInvokeRuntime = {
   claudePath?: string;

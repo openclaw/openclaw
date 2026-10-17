@@ -2,7 +2,7 @@ import type { GatewayClientId } from "../../packages/gateway-protocol/src/client
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 
 /** Process totals for retained session-list views and their estimated memory. */
-export type DiagnosticSessionsListRetentionFields = {
+type DiagnosticSessionsListRetentionFields = {
   type: "sessions.list.retention";
   views: number;
   refs: number;
@@ -11,7 +11,7 @@ export type DiagnosticSessionsListRetentionFields = {
 
 export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
 
-export type DiagnosticSessionsListBaselineRetiredFields = {
+type DiagnosticSessionsListBaselineRetiredFields = {
   type: "sessions.list.baseline.retired";
   cause:
     | "projection-revision"
@@ -31,7 +31,7 @@ type SessionsListAttribution = {
 };
 
 /** Payload-free facts from authenticated Gateway WebSocket request owners. */
-export type DiagnosticGatewayRpcFields = {
+type DiagnosticGatewayRpcFields = {
   type: "gateway.rpc";
   /** Registered method name, or a fixed other/unknown bucket. */
   method: string;
@@ -97,7 +97,7 @@ export type GatewayWsSessionEventAttribution = {
 };
 
 /** Payload-free observations from the physical WebSocket transport. */
-export type DiagnosticGatewayWsFields =
+type DiagnosticGatewayWsFields =
   | {
       type: "gateway.ws.event";
       event: string;

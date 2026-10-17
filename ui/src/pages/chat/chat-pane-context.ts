@@ -485,7 +485,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           clearLocalRun: true,
           clearToolStream: true,
           clearRunStatus: true,
-          requestUpdate: false,
+          publishRunState: false,
         });
         state.pendingAbort = null;
       }
