@@ -40,6 +40,16 @@ const WhatsAppCommonShape = {
       messageReceived: z.boolean().optional(),
     })
     .optional(),
+  /**
+   * Who may approve exec and plugin requests on WhatsApp. Unset keeps `allowFrom` as the
+   * approver list; set, only these numbers may approve, while `allowFrom` keeps deciding who
+   * may message the agent.
+   */
+  execApprovals: z
+    .strictObject({
+      approvers: z.array(z.union([z.string(), z.number()])).optional(),
+    })
+    .optional(),
 };
 
 const WhatsAppAccountSchema = z.strictObject({

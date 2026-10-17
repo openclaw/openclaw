@@ -233,7 +233,20 @@ WhatsApp can render exec and plugin approval prompts as `👍`/`👎` reactions,
 
 `approvals.exec` and `approvals.plugin` are independent; enabling WhatsApp as a channel only links the transport and sends nothing unless the matching approval family is enabled and routed there. Session mode delivers native emoji approvals only for approvals that originate from WhatsApp. Target mode uses the shared forwarding pipeline for explicit targets and does not create separate approver-DM fanout.
 
-WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`). `defaultTo` sets ordinary default message targets, not an approver list. Manual `/approve` commands still pass the normal WhatsApp sender-authorization path before approval resolution.
+WhatsApp approval reactions require explicit approvers. By default the approvers are the `allowFrom` numbers (or `"*"`). To let people message the agent without letting them approve, name the approvers separately:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      allowFrom: ["+15551234567", "+15557654321"],
+      execApprovals: { approvers: ["+15551234567"] },
+    },
+  },
+}
+```
+
+With `execApprovals.approvers` set, only those numbers may approve exec and plugin requests, by reaction or with `/approve`; the other `allowFrom` numbers can still message the agent. A session-mode prompt for a chat whose peer is not an approver goes to the approvers' own chats instead. `execApprovals.approvers` is also accepted per account (`channels.whatsapp.accounts.<id>.execApprovals.approvers`). `defaultTo` sets ordinary default message targets, not an approver list. Manual `/approve` commands still pass the normal WhatsApp sender-authorization path before approval resolution.
 
 <a id="question-reactions" />
 

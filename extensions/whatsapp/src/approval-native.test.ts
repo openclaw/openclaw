@@ -186,4 +186,56 @@ describe("whatsapp approval capability", () => {
       accountId: "default",
     });
   });
+
+  it("with named approvers, sends a direct-chat prompt to an approver's own chat instead of a non-approver's", async () => {
+    const owner = "+15551230000";
+    const contact = "+15559990000";
+    const unnamed = buildConfig({
+      channel: { allowFrom: [owner, contact] },
+      approvals: { exec: { enabled: true } },
+    });
+    const named = {
+      ...unnamed,
+      channels: {
+        ...unnamed.channels,
+        whatsapp: { ...unnamed.channels?.whatsapp, execApprovals: { approvers: [owner] } },
+      },
+    };
+    const native = whatsappApprovalCapability.nativeAsync;
+    const fromContact = buildExecRequest(contact);
+
+    expect(
+      await native?.resolveOriginTarget?.({
+        cfg: named,
+        accountId: "default",
+        approvalKind: "exec",
+        request: fromContact,
+      }),
+    ).toBeNull();
+    expect(
+      await native?.resolveApproverDmTargets?.({
+        cfg: named,
+        accountId: "default",
+        approvalKind: "exec",
+        request: fromContact,
+      }),
+    ).toEqual([{ to: owner, accountId: "default" }]);
+    expect(
+      await native?.resolveOriginTarget?.({
+        cfg: named,
+        accountId: "default",
+        approvalKind: "exec",
+        request: buildExecRequest(owner),
+      }),
+    ).toEqual({ to: owner, accountId: "default" });
+    // Unchanged without execApprovals: the contact's own chat still gets the prompt.
+    expect(
+      await native?.resolveOriginTarget?.({
+        cfg: unnamed,
+        accountId: "default",
+        approvalKind: "exec",
+        request: fromContact,
+      }),
+    ).toEqual({ to: contact, accountId: "default" });
+  });
 });

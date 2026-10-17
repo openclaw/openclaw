@@ -21,4 +21,15 @@ describe("WhatsAppConfigSchema", () => {
       WhatsAppConfigSchema.parse({ pluginHooks: { messageReceived: false } }).pluginHooks,
     ).toEqual({ messageReceived: false });
   });
+
+  it("accepts execApprovals.approvers at root and account scope and rejects unknown keys", () => {
+    const config = {
+      execApprovals: { approvers: ["+15551230000"] },
+      accounts: { work: { execApprovals: { approvers: ["+15557654321", 15550001111] } } },
+    };
+    expect(WhatsAppConfigSchema.parse(config)).toMatchObject(config);
+    expect(() =>
+      WhatsAppConfigSchema.parse({ execApprovals: { approver: ["+15551230000"] } }),
+    ).toThrow();
+  });
 });

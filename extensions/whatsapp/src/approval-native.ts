@@ -14,7 +14,12 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
 } from "./accounts.js";
-import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import {
+  getWhatsAppApprovalApprovers,
+  hasExplicitWhatsAppApprovers,
+  normalizeWhatsAppApproverId,
+  whatsappApprovalAuth,
+} from "./approval-auth.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 
 function isWhatsAppApprovalTransportEnabled(params: {
@@ -36,16 +41,28 @@ const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
     normalizeTo: normalizeWhatsAppMessagingTarget,
     resolveApprovers: getWhatsAppApprovalApprovers,
     // Group conversations require explicit approvers; implicit same-chat auth
-    // would otherwise let any participant approve the request.
-    isOriginTargetAllowed: ({ cfg, accountId, target }) =>
-      !isWhatsAppGroupJid(target.to) || getWhatsAppApprovalApprovers({ cfg, accountId }).length > 0,
+    // would otherwise let any participant approve the request. With named
+    // approvers (`execApprovals.approvers`), a direct chat only gets the prompt
+    // when its peer may approve it; otherwise the prompt goes to the approvers'
+    // own chats instead of sitting with someone who cannot act on it.
+    isOriginTargetAllowed: ({ cfg, accountId, target }) => {
+      const approvers = getWhatsAppApprovalApprovers({ cfg, accountId });
+      if (isWhatsAppGroupJid(target.to)) {
+        return approvers.length > 0;
+      }
+      if (!hasExplicitWhatsAppApprovers({ cfg, accountId }) || approvers.includes("*")) {
+        return true;
+      }
+      const peer = normalizeWhatsAppApproverId(target.to);
+      return peer !== undefined && approvers.includes(peer);
+    },
   },
   describeExecApprovalSetup: ({ accountId }) => {
     const prefix =
       accountId && accountId !== "default"
         ? `channels.whatsapp.accounts.${accountId}`
         : "channels.whatsapp";
-    return `WhatsApp supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows WhatsApp. Link WhatsApp and keep the gateway running; configure \`${prefix}.allowFrom\` to restrict approvers.`;
+    return `WhatsApp supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows WhatsApp. Link WhatsApp and keep the gateway running; configure \`${prefix}.execApprovals.approvers\` to name who may approve (it falls back to \`${prefix}.allowFrom\`).`;
   },
   render: {
     exec: {

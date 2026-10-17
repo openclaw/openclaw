@@ -24,6 +24,16 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Direct Chat Overrides",
     help: 'Per-conversation overrides keyed by WhatsApp DM id. Applied after a DM is already admitted by dmPolicy; "*" supplies a default without admitting anyone.',
   },
+  execApprovals: {
+    label: "WhatsApp Approvals",
+    help: "Who may approve exec and plugin requests on WhatsApp. Routing stays under the top-level approvals.exec and approvals.plugin settings.",
+  },
+  "execApprovals.approvers": {
+    label: "WhatsApp Approval Approvers",
+    help: "Phone numbers allowed to approve exec and plugin requests for this account. When unset, every allowFrom number may approve. When set, other allowFrom numbers can still message the agent but cannot approve, and prompts for their chats go to these numbers instead.",
+    presentation: "phone-number",
+  },
+  "accounts.*.execApprovals.approvers.*": { presentation: "phone-number" },
   pluginHooks: {
     label: "WhatsApp Plugin Hooks",
     help: "Opt in to broadcasting inbound WhatsApp events to plugins. Payloads carry personal content, so only enable it for plugins you trust.",
