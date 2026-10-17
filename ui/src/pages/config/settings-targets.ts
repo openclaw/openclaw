@@ -5,6 +5,7 @@ import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   SETTINGS_ROUTE_TARGETS,
 } from "./route-data.ts";
+import { sessionSourcePresentations } from "./session-source-presentation.ts";
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -369,10 +370,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.sessionSources.title",
     searchKeys: [
       "configView.sessionSources.hint",
-      "configView.sessionSources.claude",
-      "configView.sessionSources.codex",
-      "configView.sessionSources.opencode",
-      "configView.sessionSources.pi",
+      ...sessionSourcePresentations.map((source) => source.labelKey),
     ],
     aliases:
       "automatic auto discover discovery native external conversations show hide sidebar claude sessions",

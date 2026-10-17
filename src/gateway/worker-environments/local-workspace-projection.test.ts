@@ -712,8 +712,7 @@ describe("local sandbox workspace reconciliation", () => {
         import("../../agents/worktrees/service.js"),
         import("../../agents/worktrees/provisioned-files.js"),
       ]);
-      let now = Date.now();
-      const service = new ManagedWorktreeService({ now: () => now });
+      const service = new ManagedWorktreeService();
       owner.worktree.repoFingerprint = (
         await service.resolveRepositoryIdentity(owner.worktree.path)
       ).fingerprint;
@@ -762,7 +761,9 @@ describe("local sandbox workspace reconciliation", () => {
       expect(legacyState).toEqual([{ path: ".env.allowed", mode: expect.any(Number), chunks: 1 }]);
       await closeOpenClawStateDatabaseAsync();
       if (mode === "retention") {
-        now += SNAPSHOT_RETENTION_MS + 1;
+        await updateRegistryWorktree(process.env, owner.worktree.id, {
+          removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+        });
         await fs.writeFile(path.join(projection, "guest-ignored/data"), "unaccepted newer bytes");
         expect((await service.gc()).snapshotsPruned).toBe(0);
         expect(
@@ -827,7 +828,7 @@ describe("local sandbox workspace reconciliation", () => {
         expect(existsSync(path.join(owner.worktree.path, "guest-ignored/data"))).toBe(false);
         await updateRegistryWorktree(process.env, owner.worktree.id, {
           removedAt: undefined,
-          lastActiveAt: now + 1,
+          lastActiveAt: Date.now(),
           provisionedPaths: legacyState.map((entry) => entry.path),
         });
         await closeOpenClawStateDatabaseAsync();

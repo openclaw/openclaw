@@ -381,7 +381,9 @@ or protocol-version change.
   Clients must not delete a replacement with a different ID. A key-only delete event
   or a rowless global notification invalidates the saved session list; it does
   not identify the current generation as deleted.
-- `presence`: system presence snapshot updates.
+- `presence`: system presence snapshot updates, or keyed resets/deltas for clients
+  advertising `presence-deltas`. See [presence deltas](/gateway/protocol/presence#opt-in-presence-deltas)
+  for version matching, ordering, and full-snapshot recovery.
 - `tick`: periodic keepalive/liveness event.
 - `health`: gateway health snapshot update.
 - `heartbeat`: heartbeat event stream update.

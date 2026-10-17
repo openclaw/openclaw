@@ -8,9 +8,15 @@ import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-p
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
-import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  ensureOpenClawAgentSchema,
+} from "./openclaw-agent-db-schema.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
 import {
@@ -198,7 +204,7 @@ describe("agent JSON predicate migration", () => {
   });
 
   it.each(["commit", "rollback", "without-outbox", "missing-additive-indexes"] as const)(
-    "publishes both version markers only with the complete migration (%s)",
+    "publishes both version markers only with the complete v26 migration (%s)",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const pathname = state.path("predicates-v25.sqlite");
@@ -222,13 +228,19 @@ describe("agent JSON predicate migration", () => {
           database.setAuthorizer((action, name, value) =>
             action === constants.SQLITE_PRAGMA &&
             name === "user_version" &&
-            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+            value === String(AGENT_JSON_PREDICATE_SCHEMA_VERSION)
               ? constants.SQLITE_DENY
               : constants.SQLITE_OK,
           );
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          const migrate = () => admit(database, pathname, state.env);
+          const migrate = () =>
+            ensureOpenClawAgentSchema(
+              database,
+              "main",
+              pathname,
+              AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+            );
           if (outcome === "rollback") {
             expect(migrate).toThrow(/authoriz/u);
           } else {
@@ -241,8 +253,6 @@ describe("agent JSON predicate migration", () => {
                 "session_windows",
                 "transcript_events",
                 "context_engine_turn_outbox",
-                "transcript_event_identities",
-                "memory_entry_origins",
                 "sqlite_stat1",
                 "sqlite_stat4",
               ],
@@ -251,7 +261,7 @@ describe("agent JSON predicate migration", () => {
           }
         });
         database.setAuthorizer(null);
-        const expectedVersion = outcome === "rollback" ? 25 : OPENCLAW_AGENT_SCHEMA_VERSION;
+        const expectedVersion = outcome === "rollback" ? 25 : AGENT_JSON_PREDICATE_SCHEMA_VERSION;
         expectVersion(database, expectedVersion);
         expect(assertOpenClawMigrationWitnessPreserved(original, witness(database))).toEqual({
           warnings: [],

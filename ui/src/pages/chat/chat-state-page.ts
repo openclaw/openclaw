@@ -25,6 +25,7 @@ import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { projectChatErrors } from "./chat-error-projection.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
@@ -247,6 +248,7 @@ export function createPageState(
     browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: initialSessionKey,
+    currentSessionId: undefined,
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatSending: false,
@@ -270,6 +272,7 @@ export function createPageState(
     chatStreamStartedAt: null,
     chatRunStartup: null,
     chatRunError: null,
+    chatReplyTarget: null,
     agentsError: null,
     chatStreamSegments: [],
     chatReasoning: null,
@@ -673,5 +676,16 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
-  return projectChatRun(projectChatOutboxQueue(state));
+  return projectChatFields(projectChatErrors(projectChatRun(projectChatOutboxQueue(state))), [
+    "chatSending",
+    "chatLoading",
+    "chatHistoryPagination",
+    "chatDisplayedLeafEntryId",
+    "chatBranches",
+    "chatBranchesSessionKey",
+    "chatBranchesConnectionEpoch",
+    "currentSessionId",
+    "chatGoalDraftMode",
+    "chatReplyTarget",
+  ]);
 }

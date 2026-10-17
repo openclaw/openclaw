@@ -64,6 +64,8 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
         VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}', 1, 1);
       INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
         VALUES ('retained', 'agent:main:retained', 1, 1);
+      INSERT INTO cache_entries (scope, key, value_json, updated_at)
+        VALUES ('planner-proof', 'retained', '{}', 1);
     `);
     source
       .prepare(
@@ -82,7 +84,7 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
       .run(archive, createHash("sha256").update(archive).digest("hex"), archiveName);
     source.exec(`
       ANALYZE;
-      UPDATE sqlite_stat1 SET stat = '7 1 1 1 1' WHERE idx = 'idx_agent_trajectory_runtime_run';
+      UPDATE sqlite_stat1 SET stat = '7 1 1 1' WHERE idx = 'idx_agent_cache_updated';
     `);
   }
   registerOpenClawAgentDatabase({ agentId: "main", env, path: pathname, schemaVersion: 25 });
@@ -170,10 +172,9 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
       migrated.prepare("SELECT event_json FROM trajectory_runtime_events").get()?.event_json,
     ).toBe(trajectory);
     expect(
-      migrated
-        .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_agent_trajectory_runtime_run'")
-        .get()?.stat,
-    ).toBe("7 1 1 1 1");
+      migrated.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_agent_cache_updated'").get()
+        ?.stat,
+    ).toBe("7 1 1 1");
     expect(
       migrated.prepare("SELECT archive_blob, published_at FROM session_transcript_archives").get(),
     ).toEqual({
