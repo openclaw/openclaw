@@ -61,6 +61,14 @@ consumes them in the next step:
 - `cf-access-jwt-assertion` — Access's signed assertion. OpenClaw checks only that this
   header is present and non-blank; it does not verify the JWT signature.
 
+### Email-code sign-in
+
+Cloudflare Access one-time PIN sign-in resolves a person by verified email.
+OpenClaw checks the Access identity endpoint and requires its email to match the
+authenticated user header before creating or reusing a profile. This sign-in
+method does not supply GitHub identity or credit. Keep the Access policy limited
+to the email addresses you intend to admit.
+
 ### OIDC sign-in and existing people
 
 For OIDC sign-in, configure an Access policy that admits the intended users through

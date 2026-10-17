@@ -39,6 +39,7 @@ const GITHUB_ETAG_MAX_LENGTH = 1_024;
 type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
 type ResolvedCloudflareAccessIdentity =
   | { provider: "github"; accountId: number; initialDisplayName?: string }
+  | { provider: "onetimepin"; accountId?: undefined }
   | { provider: "oidc"; accountId?: number };
 type GitHubIdentityLookup = { identity: ResolvedGitHubUserIdentity; refreshed: boolean };
 type GitHubIdentityMetadataCache = {
@@ -113,6 +114,9 @@ async function resolveCloudflareAccessIdentity(
   }
   if (!isRecord(payload.idp)) {
     throw new Error("Cloudflare Access identity provider is invalid");
+  }
+  if (payload.idp.type === "onetimepin") {
+    return { provider: "onetimepin" };
   }
   if (payload.idp.type === "oidc") {
     const fields = Object.hasOwn(payload, "oidc_fields") ? payload.oidc_fields : payload.custom;
