@@ -1,20 +1,18 @@
-import { scanSkillContent, scanSource, type SkillScanFinding } from "./scanner.js";
+import { scanLiteralSecrets, type SkillScanFinding } from "./scanner.js";
 
 export type SkillBundleScan = {
   critical: number;
   findings: SkillScanFinding[];
 };
 
-/** Scans one skill file's content with the skill-instruction and embedded-source rules. */
+/** Authoring admission checks credentials; full code scans remain explicit audit diagnostics. */
 export function scanSkillFile(content: string, label: string): SkillScanFinding[] {
-  return [...scanSkillContent(content, label), ...scanSource(content, label)];
+  return scanLiteralSecrets(content, label);
 }
 
 /** Support-file paths are checked for literal secrets only. */
 export function scanSupportFilePath(path: string): SkillScanFinding[] {
-  return scanSkillContent(path, "support-file-path").filter(
-    (finding) => finding.ruleId === "literal-secret",
-  );
+  return scanLiteralSecrets(path, "support-file-path");
 }
 
 /** Scans SKILL.md plus support files and their paths. */

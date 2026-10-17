@@ -17,9 +17,10 @@ the Workshop workflow by default; explicitly ask for a personal-library skill
 when that is the intended destination.
 
 Personal create and update operations publish complete managed revisions after
-validation and scanning. The response identifies the skill and revision and
-explains when it becomes available. Publication does not replace the current
-session's selection: ask to attach or refresh it explicitly for the next turn.
+validation, recognized-credential checks, and operator install policy. Generic
+code heuristics do not block publication. The response identifies the skill and
+revision and explains when it becomes available. Publication does not replace the
+current session's selection: ask to attach or refresh it explicitly for the next turn.
 Read before updating: the response includes the human-facing `slug`, generated
 command `name`, revision, and personal edit permission. The update parameter
 `name` means the slug, not the command name. Omit `name` or `proposal_content`

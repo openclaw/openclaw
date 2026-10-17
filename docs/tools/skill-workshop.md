@@ -168,8 +168,9 @@ Writes are validated before they land:
   `description` of 1-1024 bytes (aim for about 160). It must fit within `skills.workshop.maxSkillBytes`.
 - Support files go under `references/`, `templates/`, `scripts/`, or `assets/`,
   up to 256 KiB each. Absolute paths, traversal, and symlinks are refused.
-- A critical security-scanner finding, including a literal secret, refuses the
-  write and names the file, line, and rule.
+- A recognized literal credential refuses the write and names the file, line,
+  and rule. Ordinary command examples and environment-token API code are allowed.
+  Generic code diagnostics remain available through explicit security audits.
 
 The background review must `view` an existing skill before it can `patch`,
 `write_file`, `remove_file`, or `archive` it, and its archives need
