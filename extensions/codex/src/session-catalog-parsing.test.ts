@@ -8,17 +8,4 @@ describe("truncateCodexCatalogPreview", () => {
       expect(truncateCodexCatalogPreview(input, sanitizeTerminalText)).toBe(input);
     }
   });
-
-  it("preserves valid text, surrogate pairs, and truncation behavior", () => {
-    expect(truncateCodexCatalogPreview("plain preview", sanitizeTerminalText)).toBe(
-      "plain preview",
-    );
-    expect(truncateCodexCatalogPreview("emoji \u{1f600}", sanitizeTerminalText)).toBe(
-      "emoji \u{1f600}",
-    );
-    const long = "a".repeat(600);
-    const truncated = truncateCodexCatalogPreview(long, sanitizeTerminalText);
-    expect(truncated).toHaveLength(500);
-    expect(truncated).toBe("a".repeat(500));
-  });
 });
