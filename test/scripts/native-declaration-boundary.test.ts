@@ -134,13 +134,14 @@ function createNativeFixture(root: string, declared = root) {
     'import type { Marker } from "synthetic-wrapper";\nexport type { Marker };\nexport const inferredOrigin = declarationOrigin;\n',
   );
   const boundary = createDeclarationInputBoundary(declared);
-  const compile = () =>
+  const compile = (options: Partial<Parameters<typeof emitNativeDeclarations>[0]> = {}) =>
     emitNativeDeclarations({
       cwd: declared,
       compilerRoot: declared,
       configFile: path.join(declared, "tsconfig.json"),
       roots: [path.join(declared, "src/index.ts")],
       assertInput: (file) => boundary.assert(file),
+      ...options,
     });
   return { native, write, compile };
 }
@@ -169,16 +170,10 @@ it.each<{
     const root = fs.realpathSync.native(roots.make("native-declaration-errors-"));
     const fixture = createNativeFixture(root);
     fixture.write("src/index.ts", source);
-    const boundary = createDeclarationInputBoundary(root);
     await expect(
-      emitNativeDeclarations({
-        cwd: root,
-        compilerRoot: root,
-        configFile: path.join(root, "tsconfig.json"),
-        roots: [path.join(root, "src/index.ts")],
+      fixture.compile({
         diagnostics,
         compilerOptions: { lib: ["es5"] },
-        assertInput: (file) => boundary.assert(file),
       }),
     ).rejects.toThrow(error);
   },
@@ -211,7 +206,6 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
   const root = path.join(ancestor, ".worktrees/validation");
   const fixture = createNativeFixture(root);
   const entry = path.join(root, "src/index.ts");
-  const boundary = createDeclarationInputBoundary(root);
   const localTypes = "node_modules/synthetic-fetch/index.d.ts";
   const requestTypes = (origin: string) => `export interface RequestInit { origin: "${origin}" }\n`;
   const config = JSON.parse(fs.readFileSync(path.join(root, "tsconfig.json"), "utf8"));
@@ -257,15 +251,7 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
     "src/index.ts",
     'import type { Options } from "synthetic-sdk";\nexport type { Fallback } from "synthetic-sdk";\nexport function origin(options: Options) { return options.origin; }\n',
   );
-  const emit = () =>
-    emitNativeDeclarations({
-      cwd: root,
-      compilerRoot: root,
-      configFile: path.join(root, "tsconfig.json"),
-      roots: [entry],
-      assertInput: (file) => boundary.assert(file),
-    });
-  const first = await emit();
+  const first = await fixture.compile();
   expect(first.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
   expect(first.inputs).toEqual(
     expect.arrayContaining(
@@ -287,12 +273,12 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
     path.join(ancestor, "node_modules/synthetic-js/package.json"),
     '{"name":"synthetic-js","version":"2.0.0","main":"missing.js"}',
   );
-  const ancestorChanged = await emit();
+  const ancestorChanged = await fixture.compile();
   expect(ancestorChanged.declarations.get(entry)).toEqual(first.declarations.get(entry));
   expect(ancestorChanged.inputs).toEqual(first.inputs);
 
   fixture.write(localTypes, requestTypes("changed-local"));
-  const localChanged = await emit();
+  const localChanged = await fixture.compile();
   expect(localChanged.declarations.get(entry)?.code).toContain(
     'origin(options: Options): "changed-local"',
   );
@@ -376,7 +362,6 @@ it("preserves original nested config paths and explicit override precedence duri
   const widget = "packages/widget";
   const entry = path.join(root, widget, "src/entry.ts");
   const configFile = path.join(root, widget, "tsconfig.json");
-  const boundary = createDeclarationInputBoundary(root);
   const commonOptions = {
     module: "NodeNext",
     moduleResolution: "NodeNext",
@@ -391,13 +376,10 @@ it("preserves original nested config paths and explicit override precedence duri
       JSON.stringify({ compilerOptions: { ...commonOptions, ...compilerOptions } }),
     );
   const emit = (compilerOptions?: Record<string, unknown>) =>
-    emitNativeDeclarations({
-      cwd: root,
-      compilerRoot: root,
+    fixture.compile({
       configFile,
       roots: [entry],
       compilerOptions,
-      assertInput: (file) => boundary.assert(file),
     });
   fixture.write(`${widget}/package.json`, '{"type":"module"}');
   fixture.write(
@@ -506,9 +488,7 @@ it("preserves default-glob emission with inherited path mappings", async () => {
   const root = fs.realpathSync.native(roots.make("native-declaration-config-mutation-"));
   const fixture = createNativeFixture(root);
   const entry = path.join(root, "src/index.ts");
-  const configFile = path.join(root, "tsconfig.json");
   const artifacts = path.join(root, ".artifacts");
-  const boundary = createDeclarationInputBoundary(root);
   const configuration = (origin: string) =>
     JSON.stringify({
       compilerOptions: {
@@ -526,17 +506,8 @@ it("preserves default-glob emission with inherited path mappings", async () => {
     "src/index.ts",
     'import { origin } from "#contract";\nexport const resolvedOrigin = origin;\n',
   );
-  const emit = () =>
-    emitNativeDeclarations({
-      cwd: root,
-      compilerRoot: root,
-      configFile,
-      roots: [entry],
-      assertInput: (file) => boundary.assert(file),
-    });
-
   // No files/include/exclude: the original default glob must not admit its private output.
-  const stable = await emit();
+  const stable = await fixture.compile();
   expect(stable.declarations.get(entry)?.code).toMatch(/resolvedOrigin\s*(?::|=)\s*"before"/u);
   expect(stable.inputs).not.toContain(path.join(root, "contracts/after.ts"));
   expect(fs.readdirSync(artifacts)).toEqual([]);
