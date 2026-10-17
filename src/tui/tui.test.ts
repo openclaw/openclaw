@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -29,10 +30,14 @@ import {
   isTuiBusyActivityStatus,
   resolveTuiCtrlCAction,
   resolveTuiLocalAuthCliInvocation,
-  resolveTuiSessionKey,
   resolveTuiSessionSelection,
   stopTuiSafely,
 } from "./tui.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it("resolveFinalAssistantText formats malformed fragments when final and streamed text are empty", () => {
   expect(
@@ -49,6 +54,7 @@ it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CL
   try {
     const cliEntry = path.resolve("openclaw.mjs");
     const loaderArgs = ["--import", "/repo/node_modules/tsx/dist/loader.mjs"];
+    const authArgs = ["models", "auth", "login", "--provider", "test-provider"];
     process.argv[1] = cliEntry;
 
     expect(
@@ -58,16 +64,7 @@ it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CL
       }),
     ).toStrictEqual({
       command: process.execPath,
-      args: [
-        ...loaderArgs,
-        "--trace-warnings",
-        cliEntry,
-        "models",
-        "auth",
-        "login",
-        "--provider",
-        "test-provider",
-      ],
+      args: [...loaderArgs, "--trace-warnings", cliEntry, ...authArgs],
       cwd: path.resolve("."),
     });
   } finally {
@@ -84,18 +81,6 @@ it.each([
   ["idle", false, "tools collapsed"],
 ] as const)("resolves the tool toggle while %s", (currentStatus, toolsExpanded, expected) => {
   expect(resolveTuiToolsToggleActivityStatus({ currentStatus, toolsExpanded })).toBe(expected);
-});
-
-it("resolveTuiSessionKey uses global only as the default when scope is global", () => {
-  const resolve = (raw: string) =>
-    resolveTuiSessionKey({
-      raw,
-      sessionScope: "global",
-      currentAgentId: "main",
-      sessionMainKey: "agent:main:main",
-    });
-  expect(resolve("")).toBe("global");
-  expect(resolve("test123")).toBe("agent:main:test123");
 });
 
 describe("resolveInitialTuiAgentId", () => {
@@ -120,15 +105,10 @@ describe("resolveInitialTuiAgentId", () => {
   });
 
   it("falls back when the working directory was deleted", () => {
-    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+    vi.spyOn(process, "cwd").mockImplementation(() => {
       throw new Error("ENOENT: uv_cwd");
     });
-
-    try {
-      expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
-    } finally {
-      cwdSpy.mockRestore();
-    }
+    expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
   });
 
   it("keeps an ownerless explicit fleet selection-required", () => {
@@ -156,26 +136,34 @@ describe("resolveInitialTuiAgentId", () => {
   });
 });
 
-it.each(["incident-42", "agent:ops:global"])("keeps the owner and key for %s", (raw) => {
-  const agents: NonNullable<OpenClawConfig["agents"]> = {
-    ownership: "explicit",
-    entries: { ops: {}, research: {} },
-  };
-  const cfg: OpenClawConfig = { agents };
-  if (raw === "incident-42") {
-    cfg.session = { store: "/tmp/shared.sqlite" };
-    agents.defaults = { sessionStore: { agentId: "ops" } };
-  }
-  expect(
-    resolveTuiSessionSelection({
-      raw,
-      cfg,
-      sessionScope: "per-sender",
-      currentAgentId: "research",
-      sessionMainKey: "main",
-    }),
-  ).toEqual({ key: raw, agentId: "ops" });
-});
+it.each([
+  ["", "global", "main", "global", "main"],
+  ["test123", "global", "main", "agent:main:test123", "main"],
+  ["incident-42", "per-sender", "research", "incident-42", "ops"],
+  ["agent:ops:global", "per-sender", "research", "agent:ops:global", "ops"],
+] as const)(
+  "selects owner and canonical key for %j",
+  (raw, sessionScope, currentAgentId, key, agentId) => {
+    const agents: NonNullable<OpenClawConfig["agents"]> = {
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+    };
+    const cfg: OpenClawConfig = currentAgentId === "research" ? { agents } : {};
+    if (raw === "incident-42") {
+      cfg.session = { store: "/tmp/shared.sqlite" };
+      agents.defaults = { sessionStore: { agentId: "ops" } };
+    }
+    expect(
+      resolveTuiSessionSelection({
+        raw,
+        cfg,
+        sessionScope,
+        currentAgentId,
+        sessionMainKey: sessionScope === "global" ? "agent:main:main" : "main",
+      }),
+    ).toEqual({ key, agentId });
+  },
+);
 
 describe("resolveGatewayDisconnectState", () => {
   it.each([
@@ -294,79 +282,57 @@ it.each([
 
 it("createTuiConnectionLineage keeps a startup retry before the first hello out of reconnect recovery", () => {
   const lineage = createTuiConnectionLineage();
-
-  lineage.disconnect();
-  expect(lineage.wasDisconnected()).toBe(false);
-  expect(lineage.connect()).toBe(false);
-
-  lineage.disconnect();
-  expect(lineage.wasDisconnected()).toBe(true);
-  expect(lineage.connect()).toBe(true);
+  for (const reconnect of [false, true]) {
+    lineage.disconnect();
+    expect([lineage.wasDisconnected(), lineage.connect()]).toEqual([reconnect, reconnect]);
+  }
 });
 
 describe("TUI shutdown safety", () => {
-  const beginTestShutdown = (overrides: Partial<Parameters<typeof beginTuiShutdown>[0]> = {}) =>
-    beginTuiShutdown({
-      stopClient: vi.fn(),
-      stopTui: vi.fn(),
-      disposeStatus: vi.fn(),
-      requestFinish: vi.fn(),
-      onError: vi.fn(),
-      ...overrides,
-    });
+  type Shutdown = Parameters<typeof beginTuiShutdown>[0];
   const reject = (error: Error) => async () => {
     throw error;
   };
-  function shutdownFixture() {
+  function shutdownFixture(overrides: Partial<Shutdown> = {}) {
     const calls: string[] = [];
     const record = (name: string) =>
       vi.fn(() => {
         calls.push(name);
       });
-    const stopTui = record("tui");
-    const requestFinish = record("finish");
-    const onError = vi.fn<(error: unknown) => void>();
+    const tasks = {
+      stopClient: vi.fn(),
+      stopTui: record("tui"),
+      disposeStatus: vi.fn(),
+      requestFinish: record("finish"),
+      onError: vi.fn<(error: unknown) => void>(),
+    };
     return {
+      ...tasks,
       calls,
       record,
-      stopTui,
-      requestFinish,
-      onError,
-      begin: (overrides: Partial<Parameters<typeof beginTuiShutdown>[0]> = {}) =>
-        beginTestShutdown({ stopTui, requestFinish, onError, ...overrides }),
+      begin: (options: Partial<Shutdown> = {}) =>
+        beginTuiShutdown({ ...tasks, ...overrides, ...options }),
     };
   }
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
 
   it("disposes every status animation before teardown and after it settles", async () => {
     vi.useFakeTimers();
     const tick = vi.fn();
-    const statusTimer = setInterval(tick, 1000);
-    const waitingTimer = setInterval(tick, 120);
-    const loaderTimer = setInterval(tick, 80);
+    const timers = [1000, 120, 80].map((delay) => setInterval(tick, delay));
     const statusTimeout = setTimeout(tick, 5000);
-    const loader = { stop: vi.fn(() => clearInterval(loaderTimer)) };
     const disposeStatus = vi.fn(() => {
-      clearInterval(statusTimer);
-      clearInterval(waitingTimer);
+      timers.forEach(clearInterval);
       clearTimeout(statusTimeout);
-      loader.stop();
     });
 
-    const shutdown = beginTestShutdown({ disposeStatus });
+    const shutdown = shutdownFixture({ disposeStatus }).begin();
 
     expect(disposeStatus).toHaveBeenCalledOnce();
-    expect(loader.stop).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
 
     await shutdown;
 
     expect(disposeStatus).toHaveBeenCalledTimes(2);
-    expect(loader.stop).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
 
     await vi.advanceTimersByTimeAsync(5000);
@@ -390,9 +356,7 @@ describe("TUI shutdown safety", () => {
       }),
     ).rejects.toThrow("boom");
 
-    expect(drainInput).toHaveBeenCalledOnce();
     expect(drainInput).toHaveBeenCalledWith(500, 100);
-    expect(stop).toHaveBeenCalledOnce();
     expect(calls).toEqual(["drain", "stop"]);
   });
 
@@ -439,14 +403,11 @@ describe("TUI shutdown safety", () => {
     const finish = vi.fn();
 
     deferredFinish.requestFinish();
-    expect(finish).not.toHaveBeenCalled();
-
     deferredFinish.setFinish(finish);
     expect(finish).toHaveBeenCalledTimes(1);
   });
 
   it("completes shutdown after resources and terminal settle", async () => {
-    vi.useFakeTimers();
     const { calls, record, begin } = shutdownFixture();
     await begin({
       stopCommandScopes: record("scopes"),
@@ -486,14 +447,10 @@ describe("TUI shutdown safety", () => {
     terminal.resolve();
     await shutdown;
     expect(calls).toEqual(["client", "tui", "error", "finish"]);
-    expect(stopTui).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-    expect(onError).toHaveBeenCalledOnce();
-    expect(requestFinish).toHaveBeenCalledOnce();
   });
 
   it("reports transport and terminal shutdown errors in phase order", async () => {
-    vi.useFakeTimers();
     const scopeError = new Error("command scope stop failed");
     const transportError = new Error("transport stop failed");
     const terminalError = new Error("terminal stop failed");
@@ -608,38 +565,31 @@ describe("embedded TUI state ownership", () => {
           throw new Error("state lock release failed");
         }
       });
-      const acquire = vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockResolvedValue({
+      vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockResolvedValue({
         release,
       });
       const signals = new EventEmitter();
-      try {
-        const run = withEmbeddedTuiStateLock(
-          async () => {
-            expect(signals.listenerCount("SIGINT")).toBe(1);
-            expect(signals.listenerCount("SIGTERM")).toBe(1);
-            if (outcome === "error") {
-              throw new Error("local TUI failed");
-            }
-            if (outcome === "early return") {
-              return undefined;
-            }
-            return "complete";
-          },
-          { process: signals },
+      const run = withEmbeddedTuiStateLock(
+        async () => {
+          expect(signals.listenerCount("SIGINT")).toBe(1);
+          expect(signals.listenerCount("SIGTERM")).toBe(1);
+          if (outcome === "error") {
+            throw new Error("local TUI failed");
+          }
+          return outcome === "success" ? "complete" : undefined;
+        },
+        { process: signals },
+      );
+      if (releaseFails || outcome === "error") {
+        await expect(run).rejects.toThrow(
+          releaseFails ? "state lock release failed" : "local TUI failed",
         );
-        if (releaseFails || outcome === "error") {
-          await expect(run).rejects.toThrow(
-            releaseFails ? "state lock release failed" : "local TUI failed",
-          );
-        } else {
-          await expect(run).resolves.toBe(outcome === "success" ? "complete" : undefined);
-        }
-        expect(release).toHaveBeenCalledOnce();
-        expect(signals.listenerCount("SIGINT")).toBe(0);
-        expect(signals.listenerCount("SIGTERM")).toBe(0);
-      } finally {
-        acquire.mockRestore();
+      } else {
+        await expect(run).resolves.toBe(outcome === "success" ? "complete" : undefined);
       }
+      expect(release).toHaveBeenCalledOnce();
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
     },
   );
 
@@ -647,10 +597,7 @@ describe("embedded TUI state ownership", () => {
     await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);
       const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-      expect(gatewayLock).not.toBeNull();
-      if (!gatewayLock) {
-        throw new Error("Expected live Gateway fixture lock");
-      }
+      assert(gatewayLock, "Expected live Gateway fixture lock");
       const run = vi.fn(async () => undefined);
       try {
         await expect(
