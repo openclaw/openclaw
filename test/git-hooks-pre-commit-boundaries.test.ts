@@ -44,6 +44,7 @@ function fixture(dir = hooks.createContentGuardFixture(tempDirs)) {
     },
   };
 }
+type Repo = ReturnType<typeof fixture>;
 
 function expectBlocked(output: string, name: string): void {
   expect(output).toContain("Blocked staged content");
@@ -53,12 +54,7 @@ function expectBlocked(output: string, name: string): void {
 }
 
 // Emit the working-tree input; stdin-mode additionally echoes the staged blob.
-function diagnosticFormatter(
-  r: ReturnType<typeof fixture>,
-  stream: number,
-  exitCode: number,
-  echoStdin = false,
-) {
+function diagnosticFormatter(r: Repo, stream: number, exitCode: number, echoStdin = false) {
   r.formatter(`#!/usr/bin/env node
 const fs = require("node:fs");
 ${echoStdin ? "fs.writeSync(1, fs.readFileSync(0));" : ""}
@@ -83,11 +79,8 @@ function captureFixture(stream: number, oversized = false) {
   return r;
 }
 
-const recordFormatting = (r: ReturnType<typeof fixture>) =>
-  hooks.installFormattingRecorder(
-    r.dir,
-    "printf '// formatted\\n' >> changed.ts\nprintf formatted",
-  );
+const formatterBody = "printf '// formatted\\n' >> changed.ts\nprintf formatted";
+const recordFormatting = (r: Repo) => hooks.installFormattingRecorder(r.dir, formatterBody);
 
 describe("pre-commit Git path identity", () => {
   it("blocks the only BOM-prefixed path when staged", () => {
@@ -164,16 +157,12 @@ describe("pre-commit Git path identity", () => {
     r.stage(name, "original\n");
     r.stage("excluded.txt", "original excluded\n");
     r.git(["commit", "-qm", "initial fixture"]);
-    const alternateIndex = path.join(r.dir, ".git/selected-index");
-    fs.copyFileSync(path.join(r.dir, ".git/index"), alternateIndex);
+    const indexFile = path.join(r.dir, ".git/selected-index");
+    fs.copyFileSync(path.join(r.dir, ".git/index"), indexFile);
     r.stage("excluded.txt", literals[0]);
     const env =
       index === "alternate"
-        ? {
-            GIT_INDEX_FILE: alternateIndex,
-            GIT_DIR: path.join(r.dir, ".git"),
-            GIT_WORK_TREE: r.dir,
-          }
+        ? { GIT_INDEX_FILE: indexFile, GIT_DIR: path.join(r.dir, ".git"), GIT_WORK_TREE: r.dir }
         : undefined;
     const select = flag === "--glob-pathspecs" ? "chosen*.txt" : "CHOSEN[1].TXT";
     const args = [flag, ...commitArgs, ...(index === "only" ? ["--only", "--", select] : [])];

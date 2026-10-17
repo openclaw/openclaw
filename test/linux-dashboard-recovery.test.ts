@@ -6,6 +6,10 @@ import { test } from "vitest";
 import { createDeferred } from "./helpers/promise.js";
 
 const dashboardSource = readFileSync(new URL("../apps/linux/ui/main.js", import.meta.url), "utf8");
+const manualUpdateMessage = "Install the latest system package from the release page.";
+type Payload = Record<string, unknown>;
+// Let cross-realm promise continuations finish rendering after settlement.
+const settle = (pending: Promise<unknown>) => pending.then(yieldToDashboard);
 
 function fakeElement() {
   const classes = new Set(["hidden"]);
@@ -16,11 +20,7 @@ function fakeElement() {
       contains: (name: string) => classes.has(name),
       toggle(name: string, force?: boolean) {
         const enabled = force ?? !classes.has(name);
-        if (enabled) {
-          classes.add(name);
-        } else {
-          classes.delete(name);
-        }
+        classes[enabled ? "add" : "delete"](name);
       },
     },
     disabled: false,
@@ -45,50 +45,34 @@ async function mountDashboard(
   search: string,
   openReleasePage = () => Promise.resolve(),
   bootstrap = { phase: "connected", setupError: undefined as string | undefined },
-  invokeOverride?: (command: string, args?: Record<string, unknown>) => unknown,
+  invokeOverride?: (command: string, args?: Payload) => unknown,
 ) {
   const elements = new Map<string, ReturnType<typeof fakeElement>>();
-  const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
-  const listeners = new Map<string, (event: { payload: Record<string, unknown> }) => void>();
+  const calls: Array<{ command: string; args?: Payload }> = [];
+  const listeners = new Map<string, (event: { payload: Payload }) => void>();
   const document = {
     createElement: fakeElement,
     querySelector(selector: string) {
-      if (!elements.has(selector)) {
-        elements.set(selector, fakeElement());
-      }
-      return elements.get(selector);
+      return elements.get(selector) ?? elements.set(selector, fakeElement()).get(selector);
     },
   };
+  function invoke(command: string, args?: Payload) {
+    calls.push({ command, args });
+    if (invokeOverride) {
+      return invokeOverride(command, args);
+    }
+    if (command === "open_release_page") {
+      return openReleasePage();
+    }
+    const snapshot = command === "bootstrap" ? bootstrap : { phase: "connected" };
+    return Promise.resolve(command === "discover_gateways" ? [] : snapshot);
+  }
+  async function listen(name: string, listener: (event: { payload: Payload }) => void) {
+    listeners.set(name, listener);
+    return () => {};
+  }
   const window = {
-    __TAURI__: {
-      core: {
-        invoke(command: string, args?: Record<string, unknown>) {
-          calls.push({ command, args });
-          if (invokeOverride) {
-            return invokeOverride(command, args);
-          }
-          if (command === "discover_gateways") {
-            return Promise.resolve([]);
-          }
-          if (command === "open_release_page") {
-            return openReleasePage();
-          }
-          if (command === "bootstrap") {
-            return Promise.resolve(bootstrap);
-          }
-          return Promise.resolve({ phase: "connected" });
-        },
-      },
-      event: {
-        async listen(
-          name: string,
-          listener: (event: { payload: Record<string, unknown> }) => void,
-        ) {
-          listeners.set(name, listener);
-          return () => {};
-        },
-      },
-    },
+    __TAURI__: { core: { invoke }, event: { listen } },
     location: { search },
     setInterval() {},
   };
@@ -112,7 +96,7 @@ async function mountDashboard(
     click: (selector: string) => element(selector).click(),
     called: (command: string) => calls.some((call) => call.command === command),
     callsFor: (command: string) => calls.filter((call) => call.command === command),
-    emit: (name: string, payload: Record<string, unknown> = {}) => {
+    emit: (name: string, payload: Payload = {}) => {
       const listener = listeners.get(name);
       assert.ok(listener);
       listener({ payload });
@@ -121,12 +105,10 @@ async function mountDashboard(
 }
 
 test("automatic setup failure returns to Gateway choices with the native error", async () => {
-  const h = await mountDashboard("", undefined, {
-    phase: "missingCli",
-    setupError: "Bundled runtime could not be installed.",
-  });
+  const setupError = "Bundled runtime could not be installed.";
+  const h = await mountDashboard("", undefined, { phase: "missingCli", setupError });
   assert.equal(h.text("#title"), "Where should your assistant live?");
-  assert.equal(h.text("#description"), "Bundled runtime could not be installed.");
+  assert.equal(h.text("#description"), setupError);
   assert.equal(h.hidden("#connection-choices"), false);
   assert.equal(h.hidden("#welcome-screen"), true);
   assert.equal(h.called("install_cli"), false);
@@ -150,15 +132,9 @@ test("CLI recovery errors offer both retry and reinstall", async () => {
 });
 
 test.each([
-  {
-    event: "updater://available",
-    message: "Downloading in the background…",
-  },
-  {
-    event: "updater://available-manual",
-    message: "Install the latest system package from the release page.",
-  },
-])("$event keeps release markup out of the status banner", async ({ event, message }) => {
+  ["updater://available", "Downloading in the background…"],
+  ["updater://available-manual", manualUpdateMessage],
+])("%s keeps release markup out of the status banner", async (event, message) => {
   const h = await mountDashboard("?mode=missingCli");
   h.emit(event, {
     version: "2026.9.10",
@@ -179,9 +155,7 @@ test("failed release-page opening retains a retry that clears the error on succe
   assert.equal(h.text("#update-action"), "Open download page");
   h.click("#update-action");
   opening.reject(new Error("Browser unavailable"));
-  await opening.promise.catch(() => {});
-  // Let the VM's cross-realm promise continuation finish rendering.
-  await yieldToDashboard();
+  await settle(opening.promise.catch(() => {}));
 
   assert.equal(h.text("#update-title"), "Could not open release page");
   assert.equal(h.text("#update-message"), "Browser unavailable");
@@ -191,13 +165,9 @@ test("failed release-page opening retains a retry that clears the error on succe
   h.click("#update-action");
   assert.equal(attempts, 2);
   retry.resolve();
-  await retry.promise;
-  await yieldToDashboard();
+  await settle(retry.promise);
   assert.equal(h.text("#update-title"), "Update available v2026.9.10");
-  assert.equal(
-    h.text("#update-message"),
-    "Install the latest system package from the release page.",
-  );
+  assert.equal(h.text("#update-message"), manualUpdateMessage);
   assert.equal(h.hidden("#update-banner"), false);
   assert.equal(h.callsFor("open_release_page").length, 2);
 });
@@ -222,8 +192,7 @@ test.each(
   } else {
     opening.resolve();
   }
-  await opening.promise.catch(() => {});
-  await yieldToDashboard();
+  await settle(opening.promise.catch(() => {}));
   if (action === "ready") {
     assert.equal(h.text("#update-title"), "Update ready");
     assert.equal(h.text("#update-action"), "Restart to update");
@@ -242,18 +211,14 @@ test.each([
     remote: { transport: "direct", url: "https://gateway.example.com" },
   },
   { name: "failed return", failure: true },
-  { name: "late retry after Edit", entry: "startup", lateRetry: true },
-  { name: "recovery return", entry: "recovery" },
+  { name: "late retry after Edit", mode: "", lateRetry: true },
+  { name: "recovery return", mode: "remoteError" },
 ])(
   "Connection Settings preserves a native Back action for $name",
-  async ({ remote = null, failure = false, entry = "settings", lateRetry = false }) => {
+  async ({ remote = null, failure = false, mode = "connectionSettings", lateRetry = false }) => {
     const retry = createDeferred<{ phase: string }>();
     const h = await mountDashboard(
-      entry === "settings"
-        ? "?mode=connectionSettings"
-        : entry === "recovery"
-          ? "?mode=remoteError"
-          : "",
+      mode ? `?mode=${mode}` : "",
       undefined,
       undefined,
       async (command, args) => {
@@ -271,9 +236,9 @@ test.each([
       },
     );
 
-    if (entry !== "settings") {
+    if (mode !== "connectionSettings") {
       assert.equal(h.text("#title"), "Connection needs attention");
-      if (entry === "recovery") {
+      if (mode === "remoteError") {
         assert.equal(h.called("bootstrap"), false);
       }
       if (lateRetry) {
