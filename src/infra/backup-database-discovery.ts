@@ -1,4 +1,8 @@
 import { parentPort, workerData } from "node:worker_threads";
+import {
+  resolveActivatedPluginBackupInventory,
+  type ActivatedPluginBackupInventory,
+} from "../plugins/manifest-backup-resources.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { discoverBackupDatabasePaths } from "./backup-sqlite-snapshot.js";
 import { resolveDatabaseEngineSelection } from "./database-engine/config.js";
@@ -8,11 +12,14 @@ import { statePortProvider } from "./database-engine/state-port.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
-type Input = Parameters<typeof discoverBackupDatabasePaths>[0];
+type Input = Parameters<typeof discoverBackupDatabasePaths>[0] & {
+  workspaceDirs?: readonly string[];
+};
 type Reply = {
   paths: string[];
   stateRoots: readonly string[];
   pluginOwners: DatabasePortPluginOwners;
+  pluginInventory: ActivatedPluginBackupInventory;
 };
 
 /** Plugin discovery may read shared state, so PostgreSQL discovery belongs in a worker. */
@@ -23,8 +30,8 @@ export async function preparePostgresBackupDiscovery(input: Input) {
     workerOptions: { workerData: { databaseDiscovery: true } },
   });
   try {
-    const { stateDir, config, env, agentRegistry } = input;
-    return await pool.run({ stateDir, config, env, agentRegistry }, {});
+    const { stateDir, config, env, agentRegistry, workspaceDirs } = input;
+    return await pool.run({ stateDir, config, env, agentRegistry, workspaceDirs }, {});
   } finally {
     await pool.close();
   }
@@ -56,6 +63,7 @@ if (parentPort && workerData?.databaseDiscovery === true) {
           plugins,
         }),
         pluginOwners,
+        pluginInventory: resolveActivatedPluginBackupInventory(input),
       };
     });
   });

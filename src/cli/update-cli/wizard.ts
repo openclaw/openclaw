@@ -133,6 +133,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       restart,
       timeout: opts.timeout,
       acceptCapabilities: opts.acceptCapabilities,
+      fullIntegrityCheck: opts.fullIntegrityCheck,
     });
   } catch (err) {
     if (err instanceof ExitError) {

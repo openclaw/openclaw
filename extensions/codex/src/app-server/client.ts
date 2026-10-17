@@ -449,6 +449,7 @@ export class CodexAppServerClient {
       attempt.catalogProjection = {
         preview: options.catalogPreviewCache,
         remainingRows: options.catalogRows,
+        singleThread: method === "thread/list" && isJsonObject(params) && params.limit === 1,
       };
     }
     // Stateful ownership assertions remain pre-write checks.

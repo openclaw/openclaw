@@ -16,9 +16,9 @@ remains the default. See the [store support matrix](/reference/database-engines#
 for coverage; selecting PostgreSQL does not move every local file into the server.
 
 <Warning>
-  Mixed-engine lifecycle operations and mixed PostgreSQL agent configurations
-  remain pending. Native credential and execution-approval work is not fully
-  cut over. Full-archive extraction also does not recreate PostgreSQL namespaces;
+  PostgreSQL and mixed-engine operation remain experimental. Native credential
+  and execution-approval work is not fully cut over. Full-archive extraction also
+  does not recreate PostgreSQL namespaces;
   read [Backup and restore](#backup-and-restore) before relying on it for recovery.
 </Warning>
 
@@ -47,6 +47,10 @@ The prepared `client/credentials.sqlite` format is also fixed local, but current
 production credential consumers have not all moved to it. Do not infer that
 every device/native credential or execution-approval path is independent of
 shared state yet. See the [native credential contract](/reference/database-schemas/versioning#local-credential-store-preparation).
+
+When present, the local credential store is captured as a fixed-local resource,
+outside the engine families. User backups apply its credential sanitization;
+updater recovery captures it exactly.
 
 ## Requirements
 
@@ -217,21 +221,34 @@ agents and plugin stores:
 }
 ```
 
-Any mixture of state/plugin engines is allowed with SQLite agents. PostgreSQL
-agents require **every configurable family** to select PostgreSQL. A PostgreSQL
-agent paired with a SQLite family is refused with
-`DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED`; mixed-agent support is pending.
+Both SQLite and PostgreSQL agents are supported with either shared-state engine.
+Workboard, Logbook, and Team Reports can independently select either engine.
+Matrix account and token-hash roots belong to the state family and follow its
+effective engine, including retained and disabled accounts.
 
-Family-scoped port and recovery support is also pending. Current database port,
-database backup/restore, and update operations refuse mixed-engine installations.
-Port and update additionally reject explicit family maps, even homogeneous ones.
-For a homogeneous installation, set `database.engine` to its effective engine
-and remove redundant overrides before using those commands, preserving every
-store's current engine. Config-only archive export remains available.
+Use a scoped port to change an existing family:
+
+```bash
+openclaw database port --family workboard --to postgres --dry-run
+openclaw database port --family workboard --to postgres
+openclaw database port --family agent --to postgres
+openclaw database port --family workboard --to sqlite
+```
+
+Each operation ports every existing physical store of that family and publishes
+only its override. The default and unrelated families remain unchanged. A
+destination equal to the default removes the redundant override. Unscoped ports
+retain whole-installation behavior for homogeneous eligible families; mixed
+selections require `--family`.
+
+Mixed installations support matched backup/restore and compatible updates.
+Whole-installation backups containing any PostgreSQL store require offline
+custody. Archive extraction still does not recreate PostgreSQL namespaces.
+Updates require candidate proof of family-override support as well as support
+for each selected or retained PostgreSQL family.
 
 Do not change a populated family's engine to evade a refusal. Configuration does
-not migrate data. Prefer a homogeneous installation when you need the lifecycle
-operations below.
+not migrate data.
 
 ## Migrate an existing installation
 
@@ -247,9 +264,11 @@ This is the legacy migration gate. Port preflight refuses pending declared
 migrations, including native task assignments, Matrix inbound dedupe, and legacy
 memory-index sidecars. Upgrade older shared state with a compatible binary and
 Doctor before retrying. Agent schema upgrades can run in the port's private copy.
+A scoped port checks only migrations declared for that family. Fresh Matrix
+roots without legacy inbound-dedupe rows do not require a completion receipt.
 
-Provision PostgreSQL and add `database.postgres.connection`, but leave
-`database.engine` on SQLite. Stop the Gateway through its service owner and stop
+Provision PostgreSQL and add `database.postgres.connection`, but leave the source
+engine selections unchanged. Stop the Gateway through its service owner and stop
 embedded writers using the same state directory. Port never stops or restarts
 services for you.
 
@@ -298,16 +317,17 @@ openclaw database port --rollback <stateDir>/recovery/database-port/manifest.jso
 
 Resume revalidates captured evidence and finishes the operation. Rollback
 restores its original stores and config. These options are mutually exclusive
-and cannot be combined with `--to` or `--dry-run`. Preserve unreadable or damaged
-manifests and their captures for diagnosis. A completed, archived manifest is
+and cannot be combined with `--family`, `--to`, or `--dry-run`. Preserve unreadable
+or damaged manifests and their captures for diagnosis. A completed, archived manifest is
 not an undo operation after runtime writes have resumed.
 
 ### Understand refusals
 
-Port refuses live or unverifiable writer ownership, mixed engines or explicit
-family maps, pending legacy migrations, unsupported stores or source schema,
-schema drift, mismatched anchors, insufficient namespace ownership/privileges,
-and changed recovery evidence. PostgreSQL cannot represent NUL-containing text;
+Port refuses live or unverifiable writer ownership, an ambiguous unscoped mixed
+selection, pending legacy migrations for the affected families, unsupported
+stores or source schema, schema drift, mismatched anchors, insufficient namespace
+ownership/privileges, and changed recovery evidence. PostgreSQL cannot represent
+NUL-containing text;
 invalid source data can therefore refuse a port. Duplicate-key voice JSON also
 refuses rather than silently losing data. Follow the reported repair and retain
 the original data; never edit metadata or discard an anchor to force admission.
@@ -322,8 +342,8 @@ Stop the Gateway and embedded writers before capturing PostgreSQL. Then run:
 openclaw backup create --output ~/Backups/openclaw --verify
 ```
 
-The archive combines local files with each selected PostgreSQL store's matched
-**format-2 envelope**: original anchor, portable SQLite export image, and manifest
+The archive combines local files and SQLite images with each actual PostgreSQL
+store's matched **format-2 envelope**: original anchor, portable SQLite export image, and manifest
 containing identity, schema versions, active fragments, allocation facts, sizes,
 and hashes. The DSN is not in that envelope. The surrounding archive contains
 config and may contain other credentials; protect it accordingly. Supply external
@@ -378,8 +398,8 @@ To recover these scopes:
 2. Stage the backed-up config and files using the [archive restore workflow](/install/backups#restore-a-full-archive).
    Set the recovery installation's state/config paths and agent directories;
    supply its external connection secret separately, pointing at the recovery
-   database. Keep `database.engine: "postgres"` and use a compatible OpenClaw
-   version and matching plugins.
+   database. Preserve the matching `database.engine` and `database.families`
+   selections, and use a compatible OpenClaw version and matching plugins.
 3. Restore each Git scope from the **same recorded commit** to a nonexistent
    local target, outside the backup repository:
 
@@ -404,10 +424,13 @@ To recover these scopes:
 
 ## Updates and schema migrations
 
-Use `openclaw update` for supported update admission. It checks the target's
-declared PostgreSQL engine/family support before stopping the previous Gateway
-or changing data. A target without that support is refused; a raw package-manager
-downgrade does not provide this guard.
+Use `openclaw update` for supported update admission. Before stopping the previous
+Gateway or changing data, it checks the target's declared engine and PostgreSQL
+family support against selected families and retained physical stores. Explicit
+family overrides also require successful candidate admission of the complete
+selection; global PostgreSQL support alone is insufficient. A target without
+that proof is refused. A raw package-manager downgrade does not provide this
+guard.
 
 Before mutation, the updater captures exact PostgreSQL rows, sequence allocation
 state, schema facts, and matching anchors alongside local SQLite state and config.
@@ -467,7 +490,7 @@ returning empty search results. Reopen the store after installing the extension.
 Use `openclaw doctor` for configured family selections and physical shared-state
 root checks. A line such as `physical=postgres, namespace=...` identifies the
 anchor's physical selection; a configured line alone does not prove connectivity.
-An engine mismatch or `Shared state roots could not be inspected.` needs
+An engine mismatch or `Database roots could not all be inspected.` needs
 investigation before restart or migration.
 
 `openclaw status` summarizes Gateway reachability, services, sessions, and memory
@@ -509,6 +532,13 @@ stop all writers. Run a **new reverse port**:
 ```bash
 openclaw database port --to sqlite --dry-run
 openclaw database port --to sqlite
+```
+
+For a mixed installation, port one family at a time instead:
+
+```bash
+openclaw database port --family workboard --to sqlite --dry-run
+openclaw database port --family workboard --to sqlite
 ```
 
 The new port carries writes accepted since the earlier migration. Restoring an

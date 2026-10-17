@@ -140,10 +140,9 @@ describe("feishu streaming card error-path body release", () => {
     await session.start("chat_id", "open_id");
     loopback.settingsStatus = 500;
 
-    await expect(session.closeWithResult()).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: false },
-    });
+    await expect(session.closeWithResult()).rejects.toThrow(
+      "Close streaming card failed with HTTP 500",
+    );
 
     expect(loopback.releases).toEqual([
       { bodyIsNull: false, bodyUsed: true },

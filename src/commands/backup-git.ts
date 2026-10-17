@@ -1,7 +1,6 @@
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { captureRuntimeConfigAsyncReader, readConfigFileSnapshot } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
@@ -66,7 +65,6 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
     assertNotUpdateCapturePath(globalPath, resolveStateDir());
   }
   const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
-  assertHomogeneousDatabaseEngines(config, "backup");
   let agents: Array<{ agentId: string; databasePath: string }> = [];
   if (options.all || normalizedAgents.length > 0) {
     const agentIds = options.all
@@ -233,8 +231,6 @@ export async function backupGitRestoreCommand(
     json?: boolean;
   },
 ) {
-  const config = await readConfigFileSnapshot({ observe: false });
-  assertHomogeneousDatabaseEngines(config.config, "restore");
   const result = await restoreGitBackupRef({
     repositoryPath: resolveRequiredBackupPath(options.repository, "--repository"),
     identity: resolveOneIdentity(options),

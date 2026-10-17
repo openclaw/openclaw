@@ -28,6 +28,7 @@ import type {
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import { readSessionTranscriptAccountingFromReplica } from "./session-transcript-accounting-replica.js";
 import type {
   SessionColdMetadataWorkerInput,
   SessionColdMetadataWorkerResult,
@@ -284,6 +285,19 @@ export async function readSessionHistoryPageInWorker(
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     };
+    if (capturedRequest.kind === "active-accounting" && !admission && normalizedSessionKey) {
+      const accounting = readSessionTranscriptAccountingFromReplica(
+        {
+          path: currentSource.path,
+          sessionKey: normalizedSessionKey,
+          sessionId: resolved.sessionId,
+        },
+        capturedRequest.params.options,
+      );
+      if (accounting) {
+        return accounting;
+      }
+    }
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
       // Only display-history projections resolve subagent lineage across stores.
