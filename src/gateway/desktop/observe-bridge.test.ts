@@ -461,12 +461,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       const received: Buffer[] = [];
       let blocked = true;
       let releaseWrite: (() => void) | undefined;
-      let gatewaySocket: WebSocket | undefined;
-      const pause = NpmWebSocket.prototype.pause;
-      vi.spyOn(NpmWebSocket.prototype, "pause").mockImplementation(function (this: WebSocket) {
-        gatewaySocket = this;
-        pause.call(this);
-      });
+      const pause = vi.spyOn(NpmWebSocket.prototype, "pause");
       const stream = new Duplex({
         writableHighWaterMark: 1,
         read() {},
@@ -492,6 +487,10 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       const handshake = Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 1])]);
       harness.ws.send(handshake);
       await expect.poll(() => releaseWrite).toBeDefined();
+      const gatewaySocket = pause.mock.contexts.at(-1);
+      if (!(gatewaySocket instanceof NpmWebSocket)) {
+        throw new Error("Expected the paused Gateway WebSocket.");
+      }
       expect(gatewaySocket?.isPaused).toBe(true);
       expect(stream.writableLength).toBe(handshake.length);
 
