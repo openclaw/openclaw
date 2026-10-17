@@ -65,12 +65,21 @@ async function readProxyPayload(response: Response | UndiciResponse): Promise<st
 }
 
 async function fetchPayload(dispatcher: ReturnType<typeof createHttp1ProxyAgent>) {
-  try {
+  await withDispatcher(dispatcher, async () => {
     const response = await undiciFetch(TARGET_URL, {
       dispatcher,
       signal: AbortSignal.timeout(5_000),
     });
     expect(await readProxyPayload(response)).toBe(PAYLOAD);
+  });
+}
+
+async function withDispatcher<T>(
+  dispatcher: ReturnType<typeof createHttp1ProxyAgent>,
+  run: () => Promise<T>,
+) {
+  try {
+    return await run();
   } finally {
     await dispatcher.destroy();
   }
@@ -113,15 +122,13 @@ describe("SOCKS proxy protocol boundaries", () => {
       };
       url.password = encodeURIComponent(`${credentials.password}-wrong`);
       const rejected = create();
-      try {
+      await withDispatcher(rejected, async () => {
         await expect(
           undiciFetch(TARGET_URL, { dispatcher: rejected, signal: AbortSignal.timeout(5_000) }),
         ).rejects.toMatchObject({ cause: { code: "UND_ERR_SOCKS5_AUTH_FAILED" } });
         expect(connections).toEqual([]);
         expect(originRoutes).toEqual([]);
-      } finally {
-        await rejected.destroy();
-      }
+      });
       url.password = encodeURIComponent(credentials.password);
       await fetchPayload(create());
       expect(connections).toEqual([`socks:${TARGET_HOST}`]);
@@ -176,25 +183,20 @@ describe("SOCKS proxy protocol boundaries", () => {
   it.each([
     {
       name: "target despite wrapper budget",
-      mode: "fixed",
       stall: "target",
       target: 100,
-      proxy: 0,
       budget: 5_000,
     },
     {
       name: "request TLS override",
-      mode: "fixed",
       stall: "target",
       target: 0,
-      proxy: 0,
       request: 100,
       budget: 5_000,
     },
-    { name: "proxy TLS override", mode: "fixed", stall: "proxy", target: 0, proxy: 100 },
+    { name: "proxy TLS override", stall: "proxy", target: 0, proxy: 100 },
     {
       name: "wrapper over null proxy default",
-      mode: "fixed",
       stall: "proxy",
       target: 0,
       proxy: null,
@@ -213,10 +215,10 @@ describe("SOCKS proxy protocol boundaries", () => {
   ])(
     "preserves the independent $name deadline",
     async ({
-      mode,
+      mode = "fixed",
       stall,
       target,
-      proxy,
+      proxy = 0,
       request,
       budget,
       protocol,
@@ -317,7 +319,7 @@ describe("SOCKS proxy protocol boundaries", () => {
         const auth = { "pRoXy-AuThOrIzAtIoN": "Basic fixture-proxy-only" };
         const inherited = {};
         Object.setPrototypeOf(inherited, auth);
-        try {
+        await withDispatcher(dispatcher, async () => {
           const request = dispatcher.request({
             origin: `http://${TARGET_HOST}`,
             path: "/media",
@@ -336,9 +338,7 @@ describe("SOCKS proxy protocol boundaries", () => {
           });
           expect(await readProxyPayload(new UndiciResponse(response.body))).toBe(PAYLOAD);
           expect(connections).toEqual([`socks:${TARGET_HOST}`]);
-        } finally {
-          await dispatcher.destroy();
-        }
+        });
       });
     },
   );
@@ -395,7 +395,7 @@ describe("SOCKS proxy protocol boundaries", () => {
           },
           5_000,
         );
-        try {
+        await withDispatcher(dispatcher, async () => {
           const plain = await undiciFetch(`http://${TARGET_HOST}/media`, { dispatcher });
           expect(await readProxyPayload(plain)).toBe(PAYLOAD);
           const protocol = waitForProxyProtocol();
@@ -403,9 +403,7 @@ describe("SOCKS proxy protocol boundaries", () => {
           expect(await readProxyPayload(secure)).toBe(PAYLOAD);
           expect(await protocol).toBe("http/1.1");
           expect(connections).toEqual([`socks:${TARGET_HOST}`, `https:${TARGET_HOST}`]);
-        } finally {
-          await dispatcher.destroy();
-        }
+        });
         await waitForSocketsClosed();
       },
     );
@@ -427,14 +425,12 @@ describe("SOCKS proxy protocol boundaries", () => {
         ...(proxy === "HTTPS" ? {} : { proxyTls: { servername: TARGET_HOST } }),
       };
       const untrusted = createHttp1EnvHttpProxyAgent(options, 5_000);
-      try {
+      await withDispatcher(untrusted, async () => {
         await expect(undiciFetch(TARGET_URL, { dispatcher: untrusted })).rejects.toMatchObject({
           cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" },
         });
         expect(connections).toEqual([]);
-      } finally {
-        await untrusted.destroy();
-      }
+      });
       await fetchPayload(
         createHttp1EnvHttpProxyAgent(
           { ...options, proxyTls: { ...options.proxyTls, ca: certificate } },
@@ -485,7 +481,7 @@ describe("SOCKS proxy protocol boundaries", () => {
             noProxy,
             connect: { ca: certificate },
           });
-          try {
+          await withDispatcher(dispatcher, async () => {
             const response = await undiciFetch(`${httpsOrigin}/media`, {
               dispatcher,
               signal: AbortSignal.timeout(5_000),
@@ -493,9 +489,7 @@ describe("SOCKS proxy protocol boundaries", () => {
             expect(await readProxyPayload(response)).toBe(PAYLOAD);
             expect(connections).toEqual([]);
             expect(originRoutes).toEqual(["direct"]);
-          } finally {
-            await dispatcher.destroy();
-          }
+          });
         },
       );
     },
@@ -504,7 +498,7 @@ describe("SOCKS proxy protocol boundaries", () => {
   it("joins an in-flight graceful close while the SOCKS response drains", async () => {
     await withProxyFixture(async ({ socksProxy, waitForSocketsClosed }) => {
       const dispatcher = createHttp1EnvHttpProxyAgent({ httpProxy: socksProxy, noProxy: "" });
-      try {
+      await withDispatcher(dispatcher, async () => {
         const response = await undiciFetch(`http://${TARGET_HOST}/stall`, { dispatcher });
         const first = dispatcher.close();
         // Empty native children finish through microtasks; the SOCKS response still owns work.
@@ -520,9 +514,7 @@ describe("SOCKS proxy protocol boundaries", () => {
         expect(await second).toBe("closed");
         expect(Reflect.get(dispatcher, "destroyed")).toBe(true);
         await waitForSocketsClosed();
-      } finally {
-        await dispatcher.destroy();
-      }
+      });
     });
   });
 

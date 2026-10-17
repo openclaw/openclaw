@@ -26,6 +26,10 @@ async function withinDeadline<T>(operation: Promise<T>): Promise<T> {
   }
 }
 
+async function readText(response: Response, limit: number) {
+  return (await readResponseWithLimit(response, limit)).toString("utf8");
+}
+
 describe("guarded request release", () => {
   it.each([
     { name: "Blob content type", init: {} },
@@ -73,9 +77,7 @@ describe("guarded request release", () => {
           },
         });
         try {
-          expect((await readResponseWithLimit(result.response, 32)).toString("utf8")).toBe(
-            "complete",
-          );
+          expect(await readText(result.response, 32)).toBe("complete");
           expect(requests).toEqual(
             ["/start", "/complete"].map((path) => ({
               path,
@@ -85,9 +87,7 @@ describe("guarded request release", () => {
             })),
           );
           expect(admissions).toBe(2);
-          expect(
-            (await readResponseWithLimit(new Response(body), body.size)).toString("utf8"),
-          ).toBe(payload);
+          expect(await readText(new Response(body), body.size)).toBe(payload);
         } finally {
           await result.release();
         }
@@ -260,12 +260,9 @@ describe("guarded request release", () => {
             expect(completedClone.type).toBe(completed.response.type);
             expect(() => completed.response.headers.set("x-openclaw-test", "1")).toThrow();
             expect(() => completedClone.headers.set("x-openclaw-test", "1")).toThrow();
-            const [completedBody, completedCloneBody] = await Promise.all([
-              readResponseWithLimit(completed.response, 32),
-              readResponseWithLimit(completedClone, 32),
-            ]);
-            expect(completedBody.toString("utf8")).toBe("complete");
-            expect(completedCloneBody.toString("utf8")).toBe("complete");
+            expect(
+              await Promise.all([readText(completed.response, 32), readText(completedClone, 32)]),
+            ).toEqual(["complete", "complete"]);
             await completed.release();
             expect(await withinDeadline(captures.get("/complete")!.promise)).toMatchObject({
               kind: "response",
@@ -285,55 +282,36 @@ describe("guarded request release", () => {
     },
   );
 
-  it("preserves cancellation from init.signal without a timeout", async () => {
-    const parent = new AbortController();
-    const reason = new Error("caller stopped");
-    await withServer(
-      (_request, response) => response.write("unfinished"),
-      async (baseUrl) => {
-        const result = await fetchWithSsrFGuard({
-          url: baseUrl,
-          init: { signal: parent.signal },
-          policy: { allowPrivateNetwork: true },
-        });
-        const body = readResponseWithLimit(result.response, 32);
-        try {
-          parent.abort(reason);
-          await expect(withinDeadline(body)).rejects.toBe(reason);
-          await result.release();
-          expect(parent.signal.reason).toBe(reason);
-        } finally {
-          parent.abort();
-          await result.release();
-        }
-      },
-    );
-  });
-
-  it("gives the explicit caller signal precedence over init.signal with a timeout", async () => {
-    const parent = new AbortController();
-    const ignored = new AbortController();
-    const reason = new Error("explicit caller stopped");
-    await withServer(
-      (_request, response) => response.write("unfinished"),
-      async (baseUrl) => {
-        const result = await fetchWithSsrFGuard({
-          url: baseUrl,
-          signal: parent.signal,
-          init: { signal: ignored.signal },
-          timeoutMs: 5_000,
-          policy: { allowPrivateNetwork: true },
-        });
-        const body = readResponseWithLimit(result.response, 32);
-        try {
-          ignored.abort(new Error("ignored init signal"));
-          parent.abort(reason);
-          await expect(withinDeadline(body)).rejects.toBe(reason);
-        } finally {
-          parent.abort();
-          await result.release();
-        }
-      },
-    );
-  });
+  it.each([false, true])(
+    "preserves caller cancellation (explicit signal: %s)",
+    async (explicit) => {
+      const parent = new AbortController();
+      const ignored = new AbortController();
+      const reason = new Error("caller stopped");
+      await withServer(
+        (_request, response) => response.write("unfinished"),
+        async (baseUrl) => {
+          const result = await fetchWithSsrFGuard({
+            url: baseUrl,
+            ...(explicit ? { signal: parent.signal, timeoutMs: 5_000 } : {}),
+            init: { signal: explicit ? ignored.signal : parent.signal },
+            policy: { allowPrivateNetwork: true },
+          });
+          const body = readResponseWithLimit(result.response, 32);
+          try {
+            if (explicit) {
+              ignored.abort(new Error("ignored init signal"));
+            }
+            parent.abort(reason);
+            await expect(withinDeadline(body)).rejects.toBe(reason);
+            await result.release();
+            expect(parent.signal.reason).toBe(reason);
+          } finally {
+            parent.abort();
+            await result.release();
+          }
+        },
+      );
+    },
+  );
 });

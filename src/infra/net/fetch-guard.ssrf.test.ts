@@ -55,6 +55,15 @@ const okResponse = (body = "ok") => new Response(body);
 const redirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });
 const fetchStub = () => vi.fn(async () => okResponse());
+function fetchSequence(...responses: Response[]) {
+  const fetch = vi.fn();
+  for (const response of responses) {
+    fetch.mockResolvedValueOnce(response);
+  }
+  return fetch;
+}
+const redirectFetch = (location: string, status = 302) =>
+  fetchSequence(redirectResponse(location, status), okResponse());
 
 function dispatchAttached(input: RequestInfo | URL, init?: DispatcherAwareRequestInit) {
   if (!init?.dispatcher) {
@@ -68,6 +77,10 @@ function dispatchAttached(input: RequestInfo | URL, init?: DispatcherAwareReques
   init.dispatcher.dispatch({ origin: url.origin, path: url.pathname + url.search, method }, {});
   return okResponse();
 }
+const dispatchFetch = () =>
+  vi.fn(async (input: RequestInfo | URL, init?: DispatcherAwareRequestInit) =>
+    dispatchAttached(input, init),
+  );
 function expectDispatch(owner: typeof agentCtor, origin: string, path: string, method = "GET") {
   const record = createRequireRecord("record", "expected-record")(owner.mock.instances[0]);
   expect(record.dispatch).toHaveBeenCalledExactlyOnceWith({ origin, path, method }, {});
@@ -295,10 +308,7 @@ describe("redirect boundaries", () => {
     "rewrites %s %s (cross-origin=%s, replay=%s)",
     async (status, method, crossOrigin, replay, nextMethod, body) => {
       const destination = crossOrigin ? "https://cdn.example/next" : "/next";
-      const fetchImpl = vi
-        .fn()
-        .mockResolvedValueOnce(redirectResponse(destination, status))
-        .mockResolvedValueOnce(okResponse());
+      const fetchImpl = redirectFetch(destination, status);
       const result = await guardedRequest(fetchImpl, {
         allowCrossOriginUnsafeRedirectReplay: replay,
         init: {
@@ -339,10 +349,7 @@ describe("redirect boundaries", () => {
       value: new Set(["authorization"]),
       enumerable: false,
     });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(redirectResponse("https://cdn.example/asset"))
-      .mockResolvedValueOnce(okResponse());
+    const fetchImpl = redirectFetch("https://cdn.example/asset");
     const result = await guardedRequest(fetchImpl, { init: { headers } });
     expect(Object.getOwnPropertySymbols(recordedCall(fetchImpl.mock.calls)[1].headers)).toEqual([]);
     expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
@@ -355,10 +362,7 @@ describe("redirect boundaries", () => {
   });
 
   it("never restores authorization on an HTTPS-to-HTTP downgrade", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(redirectResponse("http://cdn.example/asset"))
-      .mockResolvedValueOnce(okResponse());
+    const fetchImpl = redirectFetch("http://cdn.example/asset");
     const result = await guardedRequest(fetchImpl, {
       init: { headers: { Authorization: "Bearer secret", Accept: "application/json" } },
       retainAuthorizationRedirectHostnameAllowlist: ["cdn.example"],
@@ -386,10 +390,7 @@ describe("redirect boundaries", () => {
       error: /too many redirects/i,
     },
   ])("rejects redirects violating $error", async ({ responses, options, error }) => {
-    const fetchImpl = vi.fn();
-    for (const response of responses) {
-      fetchImpl.mockResolvedValueOnce(response);
-    }
+    const fetchImpl = fetchSequence(...responses);
     await expect(guardedRequest(fetchImpl, options)).rejects.toThrow(error);
     expect(fetchImpl).toHaveBeenCalledTimes(responses.length);
   });
@@ -401,15 +402,13 @@ describe("redirect boundaries", () => {
     const cancel = vi.fn(() => {
       throw new Error("redirect cancellation failed");
     });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(new ReadableStream<Uint8Array>({ cancel }), {
-          status: 302,
-          headers: { location: "https://cdn.example.com/asset" },
-        }),
-      )
-      .mockResolvedValueOnce(okResponse("redirected"));
+    const fetchImpl = fetchSequence(
+      new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        status: 302,
+        headers: { location: "https://cdn.example.com/asset" },
+      }),
+      okResponse("redirected"),
+    );
     process.on("unhandledRejection", onUnhandledRejection);
     let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
 
@@ -440,7 +439,7 @@ describe("redirect boundaries", () => {
         headers: location ? { location } : {},
       });
       const capture = response.clone();
-      const fetchImpl = vi.fn().mockResolvedValueOnce(response).mockResolvedValueOnce(okResponse());
+      const fetchImpl = fetchSequence(response, okResponse());
       const request = guardedRequest(fetchImpl, { url: "https://public.example/start" }).then(
         async (result) => {
           try {
@@ -540,9 +539,7 @@ describe("proxy routing and trust", () => {
         vi.stubEnv("NO_PROXY", "public.example");
       }
       const lookupFn = createPublicLookup();
-      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: DispatcherAwareRequestInit) =>
-        dispatchAttached(input, init),
-      );
+      const fetchImpl = dispatchFetch();
       const result = await guardedRequest(fetchImpl, { lookupFn, mode });
       expect(lookupFn).toHaveBeenCalledTimes(proxy ? 0 : 1);
       expect(agentCtor).toHaveBeenCalledTimes(proxy ? 0 : 1);
@@ -625,11 +622,11 @@ describe("proxy routing and trust", () => {
     installRuntime();
     const lookupFn = vi.fn(async (_hostname: string) => [publicAddress]);
     const beforeRequest = vi.fn();
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(redirectResponse("https://direct.example/second"))
-      .mockResolvedValueOnce(redirectResponse("https://proxied.example/third"))
-      .mockResolvedValueOnce(okResponse());
+    const fetchImpl = fetchSequence(
+      redirectResponse("https://direct.example/second"),
+      redirectResponse("https://proxied.example/third"),
+      okResponse(),
+    );
     const result = await guardedRequest(fetchImpl, {
       url: "https://proxied.example/first",
       lookupFn,
@@ -725,20 +722,15 @@ describe("configured local-origin bypass", () => {
     vi.stubEnv("no_proxy", "127.0.0.1");
     const checkServerIdentity = vi.fn();
     const baseUrl = "https://127.0.0.1:18789";
-    const result = await localRequest(
-      vi.fn(async (input: RequestInfo | URL, init?: DispatcherAwareRequestInit) =>
-        dispatchAttached(input, init),
-      ),
-      {
-        url: `${baseUrl}/dashboard/`,
-        configuredLocalOriginBaseUrl: baseUrl,
-        policy: { allowedOrigins: [baseUrl] },
-        dispatcherPolicy: {
-          mode: "direct",
-          connect: { ca: "gateway-certificate", checkServerIdentity },
-        },
+    const result = await localRequest(dispatchFetch(), {
+      url: `${baseUrl}/dashboard/`,
+      configuredLocalOriginBaseUrl: baseUrl,
+      policy: { allowedOrigins: [baseUrl] },
+      dispatcherPolicy: {
+        mode: "direct",
+        connect: { ca: "gateway-certificate", checkServerIdentity },
       },
-    );
+    });
     expect(proxyAgentCtor).toHaveBeenCalledWith(
       expect.objectContaining({ requestTls: { ca: "gateway-certificate", checkServerIdentity } }),
     );
@@ -765,10 +757,7 @@ describe("configured local-origin bypass", () => {
   it("does not carry direct routing across redirects to another loopback port", async () => {
     managedProxy();
     const nextBase = "http://127.0.0.1:11435";
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(redirectResponse(`${nextBase}/api/embed`))
-      .mockResolvedValueOnce(okResponse());
+    const fetchImpl = redirectFetch(`${nextBase}/api/embed`);
     const result = await localRequest(fetchImpl, {
       policy: { allowedOrigins: [localBase, nextBase], allowPrivateNetwork: true },
     });

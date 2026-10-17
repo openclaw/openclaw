@@ -1,5 +1,3 @@
-// Pinned dispatcher tests cover undici family policy, pinned lookup injection,
-// timeout propagation, and proxy dispatcher construction.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Dispatcher } from "undici";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,9 +42,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  agentCtor.mockClear();
-  envHttpProxyAgentCtor.mockClear();
-  proxyAgentCtor.mockClear();
+  vi.clearAllMocks();
   getDefaultAutoSelectFamily.mockReturnValue(true);
   isWSL2SyncMock.mockReturnValue(false);
   (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -95,7 +91,7 @@ function dispatchToOwner(
 ): Record<string, unknown> {
   const owners = [agentCtor, envHttpProxyAgentCtor, proxyAgentCtor].flatMap((owner) =>
     owner.mock.instances.map((instance) => {
-      const candidate = requireRecord(instance, "mock dispatcher");
+      const candidate = requireRecord(instance);
       const dispatch = candidate.dispatch;
       if (!vi.isMockFunction(dispatch)) {
         throw new Error("expected dispatcher spy");
@@ -163,39 +159,21 @@ describe("createPinnedDispatcher", () => {
   });
 
   it("rejects pinned override addresses that violate SSRF policy", () => {
-    const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned: PinnedHostname = {
-      hostname: "api.telegram.org",
-      addresses: ["149.154.167.221"],
-      lookup: originalLookup,
-    };
-
     expect(() =>
-      createPinnedDispatcher(
-        pinned,
-        {
-          mode: "direct",
-          pinnedHostname: {
-            hostname: "api.telegram.org",
-            addresses: ["127.0.0.1"],
-          },
+      createPinnedDispatcher(createPinnedTelegramHost(vi.fn(), "149.154.167.221"), {
+        mode: "direct",
+        pinnedHostname: {
+          hostname: "api.telegram.org",
+          addresses: ["127.0.0.1"],
         },
-        undefined,
-      ),
+      }),
     ).toThrow(/private|internal|blocked/i);
   });
 
   it("rejects a trusted private hostname override rebound to loopback", () => {
-    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
-    const pinned: PinnedHostname = {
-      hostname: "model.lan",
-      addresses: ["192.168.1.25"],
-      lookup,
-    };
-
     expect(() =>
       createPinnedDispatcher(
-        pinned,
+        { hostname: "model.lan", addresses: ["192.168.1.25"], lookup: vi.fn() },
         {
           mode: "direct",
           pinnedHostname: {

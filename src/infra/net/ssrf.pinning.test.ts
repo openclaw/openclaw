@@ -1,5 +1,3 @@
-// SSRF pinning tests cover DNS pinning behavior, blocked DNS results, hostname
-// allowlists, and IPv4/IPv6 address ordering.
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -14,6 +12,30 @@ import {
 
 function createPublicLookupMock(): LookupFn {
   return vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+}
+
+function lookupResult(
+  lookup: ReturnType<typeof createPinnedLookup>,
+  options?: { family?: number; all?: boolean },
+) {
+  let called = false;
+  const pending = new Promise<unknown>((resolve, reject) => {
+    const callback = (error: Error | null, address: string | unknown[], family?: number) => {
+      called = true;
+      if (error) {
+        reject(error);
+      } else {
+        resolve(Array.isArray(address) ? address : { address, family });
+      }
+    };
+    if (options) {
+      lookup("example.com", options, callback);
+    } else {
+      lookup("example.com", callback);
+    }
+  });
+  expect(called).toBe(false);
+  return pending;
 }
 
 describe("ssrf pinning", () => {
@@ -56,96 +78,43 @@ describe("ssrf pinning", () => {
   );
 
   it("keeps single-address lookups on IPv4 while exposing both validated families to Happy Eyeballs", async () => {
-    const { lookup } = await resolvePinnedHostnameWithPolicy("api.anthropic.com", {
+    const { lookup } = await resolvePinnedHostnameWithPolicy("example.com", {
       lookupFn: async () => [
         { address: "2607:6bc0::10", family: 6 },
         { address: "160.79.104.10", family: 4 },
       ],
     });
-    const lookupDefault = () => {
-      let called = false;
-      const pending = new Promise<{ address: string; family?: number }>((resolve, reject) => {
-        lookup("api.anthropic.com", (err, address, family) => {
-          called = true;
-          if (err) {
-            reject(err);
-          } else {
-            resolve({ address, family });
-          }
-        });
-      });
-      expect(called).toBe(false);
-      return pending;
-    };
-    const lookupWithOptions = (options: { family?: number }) =>
-      new Promise<{ address: string; family?: number }>((resolve, reject) => {
-        lookup("api.anthropic.com", options, (err, address, family) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve({ address, family });
-          }
-        });
-      });
-
-    await expect(lookupDefault()).resolves.toEqual({ address: "160.79.104.10", family: 4 });
-    await expect(lookupDefault()).resolves.toEqual({ address: "160.79.104.10", family: 4 });
-
-    let allCalled = false;
-    const all = new Promise<unknown>((resolve, reject) => {
-      lookup("api.anthropic.com", { all: true }, (err, addresses) => {
-        allCalled = true;
-        if (err) {
-          reject(err);
-        } else {
-          resolve(addresses);
-        }
-      });
-    });
-    expect(allCalled).toBe(false);
-    await expect(all).resolves.toEqual([
+    await expect(lookupResult(lookup)).resolves.toEqual({ address: "160.79.104.10", family: 4 });
+    await expect(lookupResult(lookup)).resolves.toEqual({ address: "160.79.104.10", family: 4 });
+    await expect(lookupResult(lookup, { all: true })).resolves.toEqual([
       { address: "160.79.104.10", family: 4 },
       { address: "2607:6bc0::10", family: 6 },
     ]);
 
-    await expect(lookupWithOptions({ family: 6 })).resolves.toEqual({
+    await expect(lookupResult(lookup, { family: 6 })).resolves.toEqual({
       address: "2607:6bc0::10",
       family: 6,
     });
   });
 
-  it.each([{ address: "2607:6bc0::10", family: 6 }])(
-    "supports IPv$family-only DNS answers for all-address lookups",
-    async ({ address, family }) => {
-      const { lookup } = await resolvePinnedHostnameWithPolicy("example.com", {
-        lookupFn: async () => [{ address, family }],
-      });
-      const all = new Promise<unknown>((resolve, reject) => {
-        lookup("example.com", { all: true }, (err, addresses) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(addresses);
-          }
-        });
-      });
-      await expect(all).resolves.toEqual([{ address, family }]);
-    },
-  );
+  it("supports IPv6-only DNS answers for all-address lookups", async () => {
+    const record = { address: "2607:6bc0::10", family: 6 };
+    const { lookup } = await resolvePinnedHostnameWithPolicy("example.com", {
+      lookupFn: async () => [record],
+    });
+    await expect(lookupResult(lookup, { all: true })).resolves.toEqual([record]);
+  });
 
-  it.each([["public IPv4/private IPv6", "160.79.104.10", "fd00::1"]])(
-    "rejects the entire %s DNS answer before creating a pinned lookup",
-    async (_, ipv4, ipv6) => {
-      await expect(
-        resolvePinnedHostnameWithPolicy("example.com", {
-          lookupFn: async () => [
-            { address: ipv4, family: 4 },
-            { address: ipv6, family: 6 },
-          ],
-        }),
-      ).rejects.toThrow(SsrFBlockedError);
-    },
-  );
+  it("rejects mixed public IPv4/private IPv6 answers before pinning", async () => {
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: async () => [
+          { address: "160.79.104.10", family: 4 },
+          { address: "fd00::1", family: 6 },
+        ],
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
 
   it("fails loud when a pinned lookup is created without any addresses", () => {
     expect(() =>

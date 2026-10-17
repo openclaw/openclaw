@@ -1,6 +1,5 @@
-// Proxy fetch tests cover FormData conversion, metadata markers, env proxy
-// dispatch, and proxy env recovery.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getProxyUrlFromFetch, makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -11,10 +10,6 @@ const PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
-const ORIGINAL_PROXY_ENV = Object.fromEntries(
-  PROXY_ENV_KEYS.map((key) => [key, process.env[key]]),
-) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
-
 const {
   EnvHttpProxyAgent,
   MockUndiciFormData,
@@ -24,9 +19,9 @@ const {
   createHttp1ProxyAgent,
   loadUndiciRuntimeDeps,
 } = vi.hoisted(() => {
-  const undiciFetchLocal = vi.fn();
-  const envAgentSpyLocal = vi.fn();
-  class MockUndiciFormDataLocal {
+  const fetchMock = vi.fn<typeof fetch>();
+  const agentSpy = vi.fn();
+  class FormDataMock {
     readonly entriesList: [string, unknown, string | undefined][] = [];
 
     append(key: string, value: unknown, filename?: string): void {
@@ -38,48 +33,38 @@ const {
     }
   }
   const ProxyAgent = vi.fn();
-  class EnvHttpProxyAgentLocal {
-    static lastCreated: EnvHttpProxyAgentLocal | undefined;
+  class EnvAgent {
+    static lastCreated: EnvAgent | undefined;
     constructor(options?: Record<string, unknown>) {
-      EnvHttpProxyAgentLocal.lastCreated = this;
-      envAgentSpyLocal(options);
+      EnvAgent.lastCreated = this;
+      agentSpy(options);
     }
   }
-  const loadUndiciRuntimeDepsLocal = vi.fn(() => ({
-    ProxyAgent,
-    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
-    FormData: MockUndiciFormDataLocal,
-    fetch: undiciFetchLocal,
-  }));
-  const createHttp1ProxyAgentLocal = vi.fn(
-    (options: { uri?: string; proxyTls?: unknown } | string) => new ProxyAgent(options),
-  );
-  const createHttp1EnvHttpProxyAgentLocal = vi.fn(
-    (options?: Record<string, unknown>) => new EnvHttpProxyAgentLocal(options),
-  );
-
   return {
-    EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
-    MockUndiciFormData: MockUndiciFormDataLocal,
-    undiciFetch: undiciFetchLocal,
-    envAgentSpy: envAgentSpyLocal,
-    createHttp1EnvHttpProxyAgent: createHttp1EnvHttpProxyAgentLocal,
-    createHttp1ProxyAgent: createHttp1ProxyAgentLocal,
-    loadUndiciRuntimeDeps: loadUndiciRuntimeDepsLocal,
+    EnvHttpProxyAgent: EnvAgent,
+    MockUndiciFormData: FormDataMock,
+    undiciFetch: fetchMock,
+    envAgentSpy: agentSpy,
+    createHttp1EnvHttpProxyAgent: vi.fn(
+      (options?: Record<string, unknown>) => new EnvAgent(options),
+    ),
+    createHttp1ProxyAgent: vi.fn(
+      (options: { uri?: string; proxyTls?: unknown } | string) => new ProxyAgent(options),
+    ),
+    loadUndiciRuntimeDeps: vi.fn(() => ({
+      ProxyAgent,
+      EnvHttpProxyAgent: EnvAgent,
+      FormData: FormDataMock,
+      fetch: fetchMock,
+    })),
   };
 });
-
-const mockedModuleIds = ["./undici-runtime.js"] as const;
 
 vi.mock("./undici-runtime.js", () => ({
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   loadUndiciRuntimeDeps,
 }));
-
-let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
-let makeProxyFetch: typeof import("./proxy-fetch.js").makeProxyFetch;
-let resolveProxyFetchFromEnv: typeof import("./proxy-fetch.js").resolveProxyFetchFromEnv;
 
 function requireProxyFetch(
   fetchFn: ReturnType<typeof resolveProxyFetchFromEnv>,
@@ -90,7 +75,7 @@ function requireProxyFetch(
   return fetchFn;
 }
 
-function requireUndiciFetchCall(index = 0): unknown[] {
+function requireUndiciFetchCall(index = 0) {
   const call = undiciFetch.mock.calls[index];
   if (!call) {
     throw new Error(`expected undici fetch call at index ${index}`);
@@ -98,52 +83,26 @@ function requireUndiciFetchCall(index = 0): unknown[] {
   return call;
 }
 
-function requireUndiciFetchInit(index = 0): Record<string, unknown> {
+function requireUndiciFetchInit(index = 0) {
   const init = requireUndiciFetchCall(index)[1];
-  if (!init || typeof init !== "object" || Array.isArray(init)) {
+  if (!init) {
     throw new Error(`expected undici fetch init at index ${index}`);
   }
-  return init as Record<string, unknown>;
+  return init;
 }
 
-function requireHeadersInit(value: unknown, label: string): HeadersInit {
-  if (value === undefined || value instanceof Headers || Array.isArray(value)) {
-    return value as HeadersInit;
-  }
-  if (value && typeof value === "object") {
-    return value as HeadersInit;
-  }
-  throw new Error(`expected ${label} headers`);
-}
-
-function clearProxyEnv(): void {
+beforeEach(() => {
+  vi.clearAllMocks();
   for (const key of PROXY_ENV_KEYS) {
-    delete process.env[key];
+    vi.stubEnv(key, undefined);
   }
-}
+});
+afterEach(() => vi.unstubAllEnvs());
+afterAll(() => vi.doUnmock("./undici-runtime.js"));
 
-function restoreProxyEnv(): void {
-  clearProxyEnv();
-  for (const key of PROXY_ENV_KEYS) {
-    const value = ORIGINAL_PROXY_ENV[key];
-    if (typeof value === "string") {
-      process.env[key] = value;
-    }
-  }
-}
-
-describe("makeProxyFetch", () => {
-  beforeAll(async () => {
-    ({ getProxyUrlFromFetch, makeProxyFetch, resolveProxyFetchFromEnv } =
-      await import("./proxy-fetch.js"));
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
+describe("proxy fetch", () => {
   it("converts global FormData bodies before dispatching through undici", async () => {
-    undiciFetch.mockResolvedValue({ ok: true });
+    undiciFetch.mockResolvedValue(new Response());
 
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");
     const form = new globalThis.FormData();
@@ -160,18 +119,18 @@ describe("makeProxyFetch", () => {
     });
 
     const passedInit = requireUndiciFetchInit();
-    expect(passedInit.body).toBeInstanceOf(MockUndiciFormData);
-    const passedBody = passedInit.body as InstanceType<typeof MockUndiciFormData>;
+    const passedBody = passedInit.body;
+    expect(passedBody).toBeInstanceOf(MockUndiciFormData);
+    if (!(passedBody instanceof MockUndiciFormData)) {
+      throw new Error("expected converted FormData");
+    }
     expect(passedBody.get("model")).toBe("whisper-1");
     expect(passedBody.get("file")).toBeInstanceOf(Blob);
     expect(passedBody.entriesList.find(([key]) => key === "file")?.[2]).toBe("voice.ogg");
-    const sentHeaders = new Headers(requireHeadersInit(passedInit.headers, "FormData proxy"));
+    const sentHeaders = new Headers(passedInit.headers);
     expect(sentHeaders.has("content-length")).toBe(false);
     expect(sentHeaders.has("content-type")).toBe(false);
   });
-});
-
-describe("getProxyUrlFromFetch", () => {
   it("returns undefined for plain fetch functions or blank metadata", () => {
     const plainFetch = vi.fn() as unknown as typeof fetch;
     const blankMetadataFetch = makeProxyFetch("   ");
@@ -179,21 +138,8 @@ describe("getProxyUrlFromFetch", () => {
     expect(getProxyUrlFromFetch(plainFetch)).toBeUndefined();
     expect(getProxyUrlFromFetch(blankMetadataFetch)).toBeUndefined();
   });
-});
-
-describe("resolveProxyFetchFromEnv", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.unstubAllEnvs();
-    clearProxyEnv();
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    restoreProxyEnv();
-  });
-
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
-    undiciFetch.mockResolvedValue({ ok: true });
+    undiciFetch.mockResolvedValue(new Response());
 
     const fetchFn = requireProxyFetch(
       resolveProxyFetchFromEnv({
@@ -207,10 +153,10 @@ describe("resolveProxyFetchFromEnv", () => {
 
     await fetchFn("https://api.example.com");
     expect(undiciFetch).toHaveBeenCalledOnce();
-    const [input] = requireUndiciFetchCall();
-    const init = requireUndiciFetchInit();
-    expect(input).toBe("https://api.example.com");
-    expect(init.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
+    expect(requireUndiciFetchCall()).toEqual([
+      "https://api.example.com",
+      expect.objectContaining({ dispatcher: EnvHttpProxyAgent.lastCreated }),
+    ]);
   });
 
   it("returns undefined when EnvHttpProxyAgent constructor throws", () => {
@@ -226,10 +172,4 @@ describe("resolveProxyFetchFromEnv", () => {
     });
     expect(fetchFn).toBeUndefined();
   });
-});
-
-afterAll(() => {
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
 });

@@ -12,6 +12,34 @@ import { openProviderWebSocket } from "./provider-websocket.js";
 import * as ssrf from "./ssrf.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const providerUrl = "wss://provider.example/audio";
+
+function openSocket(
+  url: string,
+  options: Partial<Parameters<typeof openProviderWebSocket>[0]> = {},
+) {
+  return openProviderWebSocket({
+    url,
+    baseUrl: url,
+    allowPrivateNetwork: false,
+    timeoutMs: 1000,
+    trustConfiguredBaseUrlOrigin: false,
+    ...options,
+  });
+}
+
+async function listen(server: ReturnType<typeof createHttpServer>) {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return (server.address() as AddressInfo).port;
+}
+
+function closeServer(server: ReturnType<typeof createHttpServer>) {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
 
 async function createStalledHandshakeServer(event: "upgrade" | "connect") {
   const server = createHttpServer();
@@ -30,17 +58,12 @@ async function createStalledHandshakeServer(event: "upgrade" | "connect") {
     socket.resume();
     received.resolve(socket);
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
+  const port = await listen(server);
   cleanups.push(async () => {
     for (const socket of connections) {
       socket.destroy();
     }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeServer(server);
   });
   return {
     url: `http://127.0.0.1:${port}`,
@@ -89,10 +112,7 @@ async function createLocalWebSocketServer(options: { tls?: boolean } = {}) {
       websocketServer.emit("connection", client, request);
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
+  const port = await listen(server);
   cleanups.push(
     async () =>
       await new Promise<void>((resolve, reject) => {
@@ -123,16 +143,8 @@ async function createConnectProxy(proxyHostname = "127.0.0.1") {
       clientSocket.pipe(targetSocket);
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
+  const port = await listen(server);
+  cleanups.push(() => closeServer(server));
   return { connectCount: () => connectCount, url: `http://${proxyHostname}:${port}` };
 }
 
@@ -150,16 +162,11 @@ describe("openProviderWebSocket", () => {
       const proxy = await createStalledHandshakeServer("connect");
       configureProxyEnvironment(proxy.url);
       resolveProviderToLoopback();
-      const opening = openProviderWebSocket({
-        allowPrivateNetwork: false,
-        baseUrl: "wss://provider.example/audio",
+      const opening = openSocket(providerUrl, {
         dispatcherPolicy:
           mode === "explicit-proxy"
             ? { mode, proxyUrl: proxy.url, allowPrivateProxy: true }
             : { mode },
-        timeoutMs: 1000,
-        trustConfiguredBaseUrlOrigin: false,
-        url: "wss://provider.example/audio",
       }).then((socket) => {
         socket.on("error", () => {});
         socket.terminate();
@@ -184,14 +191,7 @@ describe("openProviderWebSocket", () => {
       vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     }
     resolveProviderToLoopback();
-    const socket = await openProviderWebSocket({
-      allowPrivateNetwork: false,
-      baseUrl: "wss://provider.example/audio",
-      dispatcherPolicy,
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: "wss://provider.example/audio",
-    });
+    const socket = await openSocket(providerUrl, { dispatcherPolicy });
     socket.on("error", () => {});
     const peer = await withTestTimeout(proxy.received, 2000, "Proxy did not receive CONNECT");
     const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) });
@@ -209,16 +209,9 @@ describe("openProviderWebSocket", () => {
         vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
       }
       resolveProviderToLoopback();
-      await expect(
-        openProviderWebSocket({
-          allowPrivateNetwork: false,
-          baseUrl: "wss://provider.example/audio",
-          dispatcherPolicy,
-          timeoutMs: 1000,
-          trustConfiguredBaseUrlOrigin: false,
-          url: "wss://provider.example/audio",
-        }),
-      ).rejects.toThrow(/private|loopback|blocked/iu);
+      await expect(openSocket(providerUrl, { dispatcherPolicy })).rejects.toThrow(
+        /private|loopback|blocked/iu,
+      );
       expect(proxy.connectionCount()).toBe(0);
     },
   );
@@ -230,13 +223,7 @@ describe("openProviderWebSocket", () => {
       vi.stubEnv(name, undefined);
     }
     resolveProviderToLoopback();
-    const opening = openProviderWebSocket({
-      allowPrivateNetwork: false,
-      baseUrl: "wss://provider.example/audio",
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: "wss://provider.example/audio",
-    }).then((socket) => {
+    const opening = openSocket(providerUrl).then((socket) => {
       socket.on("error", () => {});
       socket.terminate();
       return socket;
@@ -257,13 +244,9 @@ describe("openProviderWebSocket", () => {
     });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const url = server.url.replace("http:", "ws:");
-    const opening = openProviderWebSocket({
+    const opening = openSocket(url, {
       allowPrivateNetwork: true,
-      baseUrl: url,
       dispatcherPolicy: { mode: "direct" },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url,
     });
     await lookupStarted.promise;
     await vi.advanceTimersByTimeAsync(600);
@@ -289,14 +272,10 @@ describe("openProviderWebSocket", () => {
       const proxy = await createStalledHandshakeServer("connect");
       const controller = new AbortController();
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const socket = await openProviderWebSocket({
+      const socket = await openSocket("wss://127.0.0.1/audio", {
         allowPrivateNetwork: true,
-        baseUrl: "wss://127.0.0.1/audio",
         dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: proxy.url },
         signal: controller.signal,
-        timeoutMs: 1000,
-        trustConfiguredBaseUrlOrigin: false,
-        url: "wss://127.0.0.1/audio",
       });
       socket.on("error", () => {});
       const peer = await proxy.received;
@@ -322,14 +301,10 @@ describe("openProviderWebSocket", () => {
   ])("does not open a $name socket", async (testCase) => {
     const server = await createLocalWebSocketServer();
     await expect(
-      openProviderWebSocket({
+      openSocket(server.url, {
         allowPrivateNetwork: testCase.allowPrivateNetwork,
-        baseUrl: server.url,
         headers: { authorization: "Token test" },
         ...(testCase.signal ? { signal: testCase.signal } : {}),
-        timeoutMs: 1000,
-        trustConfiguredBaseUrlOrigin: false,
-        url: server.url,
       }),
     ).rejects.toThrow(/private|loopback|blocked|aborted/iu);
     expect(server.requestHeaders).toHaveLength(0);
@@ -337,13 +312,9 @@ describe("openProviderWebSocket", () => {
 
   it("applies target TLS settings to the WebSocket handshake", async () => {
     const server = await createLocalWebSocketServer({ tls: true });
-    const socket = await openProviderWebSocket({
+    const socket = await openSocket(server.url, {
       allowPrivateNetwork: true,
-      baseUrl: server.url,
       dispatcherPolicy: { mode: "direct", connect: { rejectUnauthorized: false } },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: server.url,
     });
     await once(socket, "open");
     expect(server.requestHeaders).toHaveLength(1);
@@ -355,13 +326,9 @@ describe("openProviderWebSocket", () => {
     const target = await createLocalWebSocketServer();
     const connectSpy = vi.spyOn(net, "connect");
     const proxy = await createConnectProxy("localhost");
-    const socket = await openProviderWebSocket({
+    const socket = await openSocket(target.url, {
       allowPrivateNetwork: true,
-      baseUrl: target.url,
       dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: proxy.url },
-      timeoutMs: 1000,
-      trustConfiguredBaseUrlOrigin: false,
-      url: target.url,
     });
     await once(socket, "open");
     expect(proxy.connectCount()).toBe(1);
