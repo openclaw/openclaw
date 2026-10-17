@@ -37,10 +37,9 @@ import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
   type SessionPlacementAdmissionProvider,
-  withLocalSessionPlacementTurnSettlement,
-  withSessionPlacementTurnAdmission,
+  withLocalSessionPlacementTurnSettlement as settleLocalTurn,
+  withSessionPlacementTurnAdmission as admitTurn,
 } from "./session-placement-admission.js";
-import type { LocalTurnPlacementClaim } from "./session-placement-admission.types.js";
 
 let uninstallProvider: (() => void) | undefined;
 const assertCompactionSuccessorAllowed = () => {};
@@ -76,6 +75,18 @@ const yieldedResult = (runId?: string): EmbeddedAgentRunResult => ({
   acceptedSessionSpawns: [acceptedSpawn(runId)],
   meta: { durationMs: 1, yielded: true },
 });
+function recordSettlement(events: string[]) {
+  settleRequesterAfterSessionSpawns.mockImplementation(async () => {
+    events.push("settle");
+    return true;
+  });
+}
+async function recordTurn<T>(events: string[], task: () => Promise<T>): Promise<T> {
+  events.push("claim");
+  const result = await task();
+  events.push("release");
+  return result;
+}
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
@@ -149,16 +160,8 @@ describe("local turn placement admission", () => {
     timeoutMs: 1_000,
     runId: "run-1",
   };
-  const claimFor = (sessionId: string, runId = sessionId): LocalTurnPlacementClaim => ({
-    sessionId,
-    runId,
-  });
   const admit = (sessionId: string, runId: string) =>
-    withSessionPlacementTurnAdmission(
-      claimFor(sessionId, runId),
-      { ...turnParams, sessionId, runId },
-      async () => completed(),
-    );
+    admitTurn({ sessionId, runId }, { ...turnParams, sessionId, runId }, async () => completed());
 
   it.each(["local CLI", "embedded"])(
     "queues a CLI follow-up until the active %s session turn releases its placement",
@@ -195,14 +198,13 @@ describe("local turn placement admission", () => {
       };
       const parent =
         runtime === "local CLI"
-          ? withLocalSessionPlacementTurnSettlement(claim, parentTask)
+          ? settleLocalTurn(claim, parentTask)
           : enqueueCommandInLane("session:agent:main:busy", () =>
-              withSessionPlacementTurnAdmission(claim, turnParams, parentTask),
+              admitTurn(claim, turnParams, parentTask),
             );
       await turnStarted.promise;
-      const followup = withLocalSessionPlacementTurnSettlement(
-        { ...claim, runId: "completion" },
-        async () => completed("completion visible"),
+      const followup = settleLocalTurn({ ...claim, runId: "completion" }, async () =>
+        completed("completion visible"),
       );
       const result = followup.then(
         (value) => ({ value }),
@@ -263,7 +265,7 @@ describe("local turn placement admission", () => {
     if (blocker) {
       await started.promise;
     }
-    const run = withLocalSessionPlacementTurnSettlement(
+    const run = settleLocalTurn(
       { sessionId: "fenced", sessionKey: "agent:main:fenced", runId: "fenced-run" },
       task,
       { abortSignal: abort.signal },
@@ -302,62 +304,73 @@ describe("local turn placement admission", () => {
     }
   });
 
-  it("delegates the final turn decision to the installed provider", async () => {
-    await withTestRunAdmission(turnParams, async (admittedRunContext) => {
-      const activeParams = { ...turnParams, admittedRunContext };
+  it.each(["embedded", "standalone CLI", "CLI candidate"] as const)(
+    "releases placement before settling %s ownership",
+    async (runtime) => {
+      const embedded = runtime === "embedded";
       const events: string[] = [];
-      settleRequesterAfterSessionSpawns.mockImplementation(async () => {
-        events.push("settle");
-        return true;
-      });
+      let activeParams = turnParams;
+      recordSettlement(events);
+      const task = async () => {
+        events.push("turn");
+        const result = yieldedResult();
+        if (embedded) {
+          result.meta.executionTrace = { runner: "cli", attempts: [], fallbackUsed: false };
+        }
+        return result;
+      };
       installProvider({
+        executeLocalTurn: (_claim, runLocal) => recordTurn(events, runLocal),
         executeTurn: async (claim, params, runLocal) => {
-          events.push("claim");
           expect(claim).toEqual({
             sessionId: "session-1",
             sessionKey: "agent:main:main",
             runId: "run-1",
           });
           expect(params).toEqual({ ...activeParams, abortSignal: expect.any(AbortSignal) });
-          const result = await runLocal();
-          events.push("release");
-          return result;
+          return recordTurn(events, runLocal);
         },
       });
-
-      const result = await withSessionPlacementTurnAdmission(
-        {
-          sessionId: "session-1",
-          sessionKey: "agent:main:main",
-          runId: "run-1",
-        },
-        activeParams,
-        async () => {
-          events.push("turn");
-          return {
-            ...yieldedResult(),
-            meta: {
-              durationMs: 1,
-              yielded: true,
-              executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-            },
-          };
-        },
-        () => events.push("admitted"),
-      );
-
-      expect(result.meta.durationMs).toBe(1);
-      expect(events).toEqual(["claim", "admitted", "turn", "release", "settle"]);
-    });
-  });
+      if (embedded) {
+        await withTestRunAdmission(turnParams, async (admittedRunContext) => {
+          activeParams = { ...turnParams, admittedRunContext };
+          const result = await admitTurn(
+            { sessionId: "session-1", sessionKey: "agent:main:main", runId: "run-1" },
+            activeParams,
+            task,
+            () => events.push("admitted"),
+          );
+          expect(result.meta.durationMs).toBe(1);
+        });
+      } else {
+        await settleLocalTurn(
+          {
+            sessionId: "session-cli",
+            sessionKey: "agent:main:cli",
+            agentId: "main",
+            runId: "run-cli",
+          },
+          task,
+          { isFinalFallbackAttempt: runtime === "CLI candidate" ? false : undefined },
+        );
+      }
+      expect(events).toEqual([
+        "claim",
+        ...(embedded ? ["admitted"] : []),
+        "turn",
+        "release",
+        ...(runtime === "CLI candidate" ? [] : ["settle"]),
+      ]);
+    },
+  );
 
   it("does not start a local turn when the provider routes remotely", async () => {
     const turn = vi.fn(async () => completed());
     const onAdmitted = vi.fn();
     const remoteTurn = vi.fn<SessionPlacementAdmissionProvider["executeTurn"]>(
-      async (_claim, _params, _runLocal, admitTurn) => {
-        admitTurn?.();
-        admitTurn?.();
+      async (_claim, _params, _runLocal, notifyAdmitted) => {
+        notifyAdmitted?.();
+        notifyAdmitted?.();
         return {
           payloads: [{ text: "remote" }],
           meta: { durationMs: 2 },
@@ -366,7 +379,7 @@ describe("local turn placement admission", () => {
     );
     installProvider({ executeTurn: remoteTurn });
 
-    const result = await withSessionPlacementTurnAdmission(
+    const result = await admitTurn(
       { sessionId: "session-2", runId: "run-2" },
       { ...turnParams, sessionId: "session-2", runId: "run-2" },
       turn,
@@ -382,13 +395,13 @@ describe("local turn placement admission", () => {
   it("admits once when a provider signals before calling the local turn", async () => {
     const events: string[] = [];
     installProvider({
-      executeTurn: async (_claim, _params, runLocal, admitTurn) => {
-        admitTurn?.();
+      executeTurn: async (_claim, _params, runLocal, notifyAdmitted) => {
+        notifyAdmitted?.();
         return await runLocal();
       },
     });
 
-    await withSessionPlacementTurnAdmission(
+    await admitTurn(
       { sessionId: "session-once", runId: "run-once" },
       { ...turnParams, sessionId: "session-once", runId: "run-once" },
       async () => {
@@ -426,9 +439,9 @@ describe("local turn placement admission", () => {
       sessionKey: "agent:main:continuation",
       runId: "parent",
     };
-    await expect(
-      withLocalSessionPlacementTurnSettlement(claim, async () => yieldedResult("child")),
-    ).rejects.toThrow("could not transfer terminal delivery");
+    await expect(settleLocalTurn(claim, async () => yieldedResult("child"))).rejects.toThrow(
+      "could not transfer terminal delivery",
+    );
   });
 
   it.each([
@@ -450,7 +463,7 @@ describe("local turn placement admission", () => {
             { admittedRunContext: destination, runId: "fallback-parent" },
             async (activeContext) => {
               mergeAcceptedSessionSpawnsForRun(originContext.operationalRunInstance, [accepted]);
-              const result = await withLocalSessionPlacementTurnSettlement(
+              const result = await settleLocalTurn(
                 {
                   sessionId: "fallback-session",
                   sessionKey: "agent:main:fallback",
@@ -484,7 +497,7 @@ describe("local turn placement admission", () => {
       { admittedRunContext: createTestAdmittedRunContext(runId), runId },
       async (admittedRunContext) => {
         await expect(
-          withLocalSessionPlacementTurnSettlement(
+          settleLocalTurn(
             { sessionId: runId, sessionKey: "agent:main:revoked-cli", runId },
             async () => {
               closeAdmittedRunDelegatedAuthority(admittedRunContext);
@@ -498,49 +511,6 @@ describe("local turn placement admission", () => {
     );
   });
 
-  it.each([undefined, false])(
-    "settles only standalone CLI ownership after placement releases (candidate marker=%s)",
-    async (isFinalFallbackAttempt) => {
-      const events: string[] = [];
-      settleRequesterAfterSessionSpawns.mockImplementation(async () => {
-        events.push("settle");
-        return true;
-      });
-      installProvider({
-        async executeLocalTurn<T>(
-          _claim: LocalTurnPlacementClaim,
-          runLocal: () => Promise<T>,
-        ): Promise<T> {
-          events.push("claim");
-          const result = await runLocal();
-          events.push("release");
-          return result;
-        },
-      });
-
-      await withLocalSessionPlacementTurnSettlement(
-        {
-          sessionId: "session-cli",
-          sessionKey: "agent:main:cli",
-          agentId: "main",
-          runId: "run-cli",
-        },
-        async () => {
-          events.push("turn");
-          return yieldedResult();
-        },
-        { isFinalFallbackAttempt },
-      );
-
-      expect(events).toEqual([
-        "claim",
-        "turn",
-        "release",
-        ...(isFinalFallbackAttempt === undefined ? ["settle"] : []),
-      ]);
-    },
-  );
-
   it.each(["settled", "reset-with-successor"] as const)(
     "closes a standalone CLI settlement assertion after its lane task is %s",
     async (ending) => {
@@ -548,21 +518,18 @@ describe("local turn placement admission", () => {
       const started = createDeferredCore();
       const release = createDeferredCore();
       let retained: (() => void) | undefined;
-      const running = withLocalSessionPlacementTurnSettlement(
-        { sessionId, runId: sessionId },
-        async (assertCurrent) => {
-          retained = assertCurrent;
-          assertCurrent();
-          started.resolve();
-          await release.promise;
-          return completed();
-        },
-      );
+      const running = settleLocalTurn({ sessionId, runId: sessionId }, async (assertCurrent) => {
+        retained = assertCurrent;
+        assertCurrent();
+        started.resolve();
+        await release.promise;
+        return completed();
+      });
       await started.promise;
       try {
         if (ending !== "settled") {
           expect(resetCommandLane(resolveSessionLane(sessionId))).toBe(1);
-          await withLocalSessionPlacementTurnSettlement(
+          await settleLocalTurn(
             { sessionId, runId: `${sessionId}-replacement` },
             async (assertCurrent) => {
               assertCurrent();

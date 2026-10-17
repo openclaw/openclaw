@@ -112,12 +112,10 @@ describe("assertSandboxPath", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlink-then-dot-dot traversal for existing and new files",
     async () => {
-      const parent = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-symlink-dotdot-")),
-      );
-      const root = path.join(parent, "workspace");
-      const outside = path.join(parent, "outside");
-      try {
+      await withSandboxRoot(async (dir) => {
+        const parent = await fs.realpath(dir);
+        const root = path.join(parent, "workspace");
+        const outside = path.join(parent, "outside");
         await fs.mkdir(path.join(root, "sub"), { recursive: true });
         await fs.mkdir(outside);
         await fs.symlink("..", path.join(root, "sub", "up"));
@@ -154,9 +152,7 @@ describe("assertSandboxPath", () => {
           sandboxPath(root, `${root}/in-root-link/../real/new.txt`),
         ).resolves.toBeTruthy();
         await expect(sandboxPath(root, root)).resolves.toBeTruthy();
-      } finally {
-        await fs.rm(parent, { recursive: true, force: true });
-      }
+      });
     },
   );
 

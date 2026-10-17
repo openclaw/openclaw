@@ -109,38 +109,30 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "--gpus", ["device=GPU-123"]);
   });
 
-  it.each([
-    {
-      name: "dangerous Docker socket bind mounts",
-      cfg: createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
-      expected: /blocked path/,
-    },
-    {
-      name: "bind source covering Docker socket directory",
-      cfg: createSandboxConfig({}, ["/var:/var"]),
-      expected: /covers blocked path/,
-    },
-    {
-      name: "network host mode",
-      cfg: createSandboxConfig({ network: "host" }),
-      expected: /network mode "host" is blocked/,
-    },
-    {
-      name: "network container namespace join",
-      cfg: createSandboxConfig({ network: "container:peer" }),
-      expected: /network mode "container:peer" is blocked by default/,
-    },
-    {
-      name: "seccomp unconfined",
-      cfg: createSandboxConfig({ seccompProfile: "unconfined" }),
-      expected: /seccomp profile "unconfined" is blocked/,
-    },
-    {
-      name: "apparmor unconfined",
-      cfg: createSandboxConfig({ apparmorProfile: "unconfined" }),
-      expected: /apparmor profile "unconfined" is blocked/,
-    },
-  ])("throws on $name", ({ cfg, expected }) => {
+  it.each<[string, SandboxDockerConfig, RegExp]>([
+    [
+      "Docker socket bind",
+      createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
+      /blocked path/,
+    ],
+    ["Docker socket ancestor bind", createSandboxConfig({}, ["/var:/var"]), /covers blocked path/],
+    ["host networking", createSandboxConfig({ network: "host" }), /network mode "host" is blocked/],
+    [
+      "container namespace",
+      createSandboxConfig({ network: "container:peer" }),
+      /network mode "container:peer" is blocked by default/,
+    ],
+    [
+      "seccomp unconfined",
+      createSandboxConfig({ seccompProfile: "unconfined" }),
+      /seccomp profile "unconfined" is blocked/,
+    ],
+    [
+      "apparmor unconfined",
+      createSandboxConfig({ apparmorProfile: "unconfined" }),
+      /apparmor profile "unconfined" is blocked/,
+    ],
+  ])("throws on %s", (_name, cfg, expected) => {
     expect(() => build(cfg)).toThrow(expected);
   });
 
