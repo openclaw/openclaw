@@ -1,19 +1,33 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import {
-  createTestOverlays as createApplicationOverlays,
   disposeTestOverlays,
+  runTest,
+  settleAtCleanup,
+  pendingReply,
   updateHello,
   updateStatusRequest,
 } from "./overlays-update.test-support.ts";
-import { updateRunHarness } from "./update-run.test-support.ts";
 
-afterEach(() => {
-  disposeTestOverlays();
+function admissionTest(status: (sent: boolean) => unknown, getRun: () => unknown = () => ({})) {
+  const admission = pendingReply({});
+  let sent = false;
+  const request = vi.fn<RequestFn>(async (method, _params, options) => {
+    if (method === "update.run") {
+      options?.onSent?.("update-run-request");
+      sent = true;
+      return admission.promise;
+    }
+    return method === "update.status" ? status(sent) : method === "update.runs.get" ? getRun() : {};
+  });
+  return { ...runTest(request), admission, request };
+}
+
+afterEach(async () => {
+  await disposeTestOverlays();
   vi.restoreAllMocks();
 });
 
@@ -26,8 +40,7 @@ describe("update run response races", () => {
       finishedAtMs: 3_000,
     });
     const request = updateStatusRequest(() => ({ lastRun: run }));
-    const harness = updateRunHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
+    const { harness, overlays, expectState } = runTest(request);
     await flushMicrotasks();
     expect(overlays.snapshot.updateRun).toEqual(run);
     expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
@@ -39,15 +52,12 @@ describe("update run response races", () => {
       hello: updateHello(undefined, "operator.read"),
     });
     harness.update({ phase: "connected" });
-    expect(overlays.snapshot.updateRun).toBeNull();
-    expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
-    expect(overlays.snapshot.updateStatusBanner).toBeNull();
+    expectState({ updateRun: null, recordedUpdateAttempt: null, updateStatusBanner: null });
   });
 
   it.each(["activeRun", "lastRun"] as const)(
     "discovers %s when disconnect wins the admission reply",
     async (field) => {
-      const admission = deferred<unknown>();
       const run = updateRunFixture(
         field === "lastRun"
           ? {
@@ -58,80 +68,58 @@ describe("update run response races", () => {
             }
           : {},
       );
-      let admitted = false;
-      const request = vi.fn<RequestFn>(async (method, _params, options) => {
-        if (method === "update.run") {
-          options?.onSent?.("update-run-request");
-          admitted = true;
-          return admission.promise;
-        }
-        return method === "update.status" && admitted ? { [field]: run } : {};
-      });
-      const harness = updateRunHarness(request);
-      const overlays = createApplicationOverlays(harness.gateway);
+      const { overlays, admission, request, reconnect } = admissionTest((sent) =>
+        sent ? { [field]: run } : {},
+      );
       await flushMicrotasks();
-      const running = overlays.runUpdate();
-      try {
-        await flushMicrotasks();
-        harness.update({ phase: "reconnecting" });
-        harness.update({ phase: "connected" });
-        await flushMicrotasks();
-        expect(overlays.snapshot.updateRun).toEqual(run);
-        admission.reject(new Error("old socket closed"));
-        await running;
-        expect(overlays.snapshot.updateRun).toEqual(run);
-        expect(overlays.snapshot.updateStatusBanner).toBeNull();
-        expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
-      } finally {
-        admission.resolve({});
-        await running;
-        overlays.dispose();
-      }
+      const running = settleAtCleanup(overlays.runUpdate());
+      await flushMicrotasks();
+      reconnect();
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toEqual(run);
+      admission.reject(new Error("old socket closed"));
+      await running;
+      expect(overlays.snapshot.updateRun).toEqual(run);
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
     },
   );
 
   it.each(["Gateway", "profile", "administrator", "dispose"] as const)(
     "discards a run read after changing %s",
     async (boundary) => {
-      const pending = deferred<unknown>();
+      const pending = pendingReply({});
       const run = updateRunFixture();
       const request = vi.fn<RequestFn>(async (method) =>
         method === "update.runs.get" ? pending.promise : {},
       );
-      const harness = updateRunHarness(request);
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        await flushMicrotasks();
-        harness.emitEvent("update.run.changed", run);
-        await flushMicrotasks();
-        expect(request.mock.calls.some(([method]) => method === "update.runs.get")).toBe(true);
-        if (boundary === "Gateway") {
-          harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
-          harness.update({ phase: "connecting", client: null, hello: null });
-        } else if (boundary === "profile") {
-          harness.update({
-            selfUser: { id: "other" } as NonNullable<ApplicationGatewaySnapshot["selfUser"]>,
-          });
-        } else if (boundary === "administrator") {
-          harness.update({
-            hello: updateHello(undefined, "operator.read"),
-          });
-        } else {
-          overlays.dispose();
-        }
-        pending.resolve({ run });
-        await flushMicrotasks();
-        expect(overlays.snapshot.updateRun).toBeNull();
-        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
-      } finally {
-        pending.resolve({});
+      const { harness, overlays, expectState } = runTest(request);
+      await flushMicrotasks();
+      harness.emitEvent("update.run.changed", run);
+      await flushMicrotasks();
+      expect(request.mock.calls.some(([method]) => method === "update.runs.get")).toBe(true);
+      if (boundary === "Gateway") {
+        harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
+        harness.update({ phase: "connecting", client: null, hello: null });
+      } else if (boundary === "profile") {
+        harness.update({
+          selfUser: { id: "other" } as NonNullable<ApplicationGatewaySnapshot["selfUser"]>,
+        });
+      } else if (boundary === "administrator") {
+        harness.update({
+          hello: updateHello(undefined, "operator.read"),
+        });
+      } else {
         overlays.dispose();
       }
+      pending.resolve({ run });
+      await flushMicrotasks();
+      expectState({ updateRun: null, recordedUpdateAttempt: null });
     },
   );
 
   it("ignores a retired reconnect response after a replacement connection reads the final row", async () => {
-    const pending = deferred<unknown>();
+    const pending = pendingReply({});
     const run = updateRunFixture();
     let reads = 0;
     const firstRequest = vi.fn<RequestFn>(async (method) => {
@@ -154,48 +142,34 @@ describe("update run response races", () => {
     const replacement = vi.fn<RequestFn>(async (method) =>
       method === "update.runs.get" ? { run: finished } : {},
     );
-    const harness = updateRunHarness(firstRequest);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await overlays.runUpdate();
-      harness.update({ phase: "reconnecting" });
-      harness.update({ phase: "connected" });
-      await flushMicrotasks();
-      harness.update({ phase: "reconnecting" });
-      harness.update({ phase: "connected", client: client(replacement) });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(finished);
-      pending.resolve({ run: { ...run, phase: "verifying", updatedAtMs: 3_000 } });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(finished);
-    } finally {
-      pending.resolve({});
-      overlays.dispose();
-    }
+    const { harness, overlays, reconnect } = runTest(firstRequest);
+    await overlays.runUpdate();
+    reconnect();
+    await flushMicrotasks();
+    harness.update({ phase: "reconnecting" });
+    harness.update({ phase: "connected", client: client(replacement) });
+    await flushMicrotasks();
+    expect(overlays.snapshot.updateRun).toEqual(finished);
+    pending.resolve({ run: { ...run, phase: "verifying", updatedAtMs: 3_000 } });
+    await flushMicrotasks();
+    expect(overlays.snapshot.updateRun).toEqual(finished);
   });
 
   it("does not send an update after the config-write barrier loses its authority", async () => {
-    const drained = deferred();
+    const drained = pendingReply(undefined);
     const request = vi.fn<RequestFn>(async () => ({}));
-    const harness = updateRunHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway, {
+    const { harness, overlays } = runTest(request, {
       drainConfigWrites: () => drained.promise,
     });
-    const running = overlays.runUpdate();
-    try {
-      expect(overlays.snapshot.updateRunning).toBe(true);
-      harness.update({
-        hello: updateHello(undefined, "operator.read"),
-      });
-      drained.resolve();
-      await running;
-      expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
-      expect(overlays.snapshot.updateRunning).toBe(false);
-    } finally {
-      drained.resolve();
-      await running;
-      overlays.dispose();
-    }
+    const running = settleAtCleanup(overlays.runUpdate());
+    expect(overlays.snapshot.updateRunning).toBe(true);
+    harness.update({
+      hello: updateHello(undefined, "operator.read"),
+    });
+    drained.resolve(undefined);
+    await running;
+    expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
+    expect(overlays.snapshot.updateRunning).toBe(false);
   });
   it.each([
     { baseline: "unknown", discovered: "old", attach: false },
@@ -207,7 +181,6 @@ describe("update run response races", () => {
   ] as const)(
     "reconciles lost admission using $baseline history and $discovered run identity",
     async ({ baseline, discovered, attach }) => {
-      const admission = deferred<unknown>();
       const previous = updateRunFixture({
         status: "succeeded",
         phase: "finished",
@@ -221,81 +194,68 @@ describe("update run response races", () => {
               ? {}
               : { status: "succeeded", phase: "finished", finishedAtMs: 4_000 }),
           });
-      let requested = false;
-      const request = vi.fn<RequestFn>(async (method, _params, options) => {
-        if (method === "update.run") {
-          options?.onSent?.("update-run-request");
-          requested = true;
-          return admission.promise;
-        }
-        if (method === "update.runs.get") {
-          return { run: found };
-        }
-        if (method !== "update.status") {
-          return {};
-        }
-        if (!requested) {
-          if (baseline === "unknown") {
-            throw new Error("Initial history unavailable");
+      const { harness, overlays, expectState, admission, request } = admissionTest(
+        (requested) => {
+          if (!requested) {
+            if (baseline === "unknown") {
+              throw new Error("Initial history unavailable");
+            }
+            return baseline === "previous" ? { lastRun: previous } : {};
           }
-          return baseline === "previous" ? { lastRun: previous } : {};
-        }
-        return found.status === "running" ? { activeRun: found } : { lastRun: found };
-      });
-      const harness = updateRunHarness(request);
-      const overlays = createApplicationOverlays(harness.gateway);
-      let operation: Promise<void> | undefined;
+          return found.status === "running" ? { activeRun: found } : { lastRun: found };
+        },
+        () => ({ run: found }),
+      );
       const outcome =
         discovered === "old after disconnect" ? "outcome is unknown" : "Admission reply lost";
-      try {
-        await flushMicrotasks();
-        operation = overlays.runUpdate();
-        await flushMicrotasks();
-        if (discovered === "old after disconnect") {
-          harness.update({ phase: "reconnecting" });
-        }
-        admission.reject(new Error("Admission reply lost"));
-        if (discovered === "old after disconnect") {
-          harness.update({ phase: "connected" });
-        }
-        await operation;
-        await flushMicrotasks();
-        if (attach) {
-          expect(overlays.snapshot.updateRun).toEqual(found);
-          if (discovered === "active") {
-            found = {
-              ...found,
-              status: "succeeded",
-              phase: "finished",
-              finishedAtMs: 4_000,
-              updatedAtMs: 4_000,
-            };
-            harness.emitEvent("update.run.changed", found);
-            await flushMicrotasks();
-            expect(overlays.snapshot.updateRun).toEqual(found);
-          }
-        } else {
-          expect(overlays.snapshot.updateRun).toBeNull();
-          expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
-          expect(overlays.snapshot.updateRunning).toBe(false);
-          harness.update({ phase: "reconnecting" });
-          harness.update({ phase: "connected" });
-          await flushMicrotasks();
-          harness.emitEvent("update.run.changed", { ...previous, updatedAtMs: 4_000 });
-          await flushMicrotasks();
-          expect(overlays.snapshot.updateRun).toBeNull();
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
-          await overlays.refreshUpdateStatus();
-          expect(overlays.snapshot.updateRun).toBeNull();
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain(outcome);
-        }
-        expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
-      } finally {
-        admission.resolve({});
-        await operation;
-        overlays.dispose();
+      await flushMicrotasks();
+      const operation = settleAtCleanup(overlays.runUpdate());
+      await flushMicrotasks();
+      if (discovered === "old after disconnect") {
+        harness.update({ phase: "reconnecting" });
       }
+      admission.reject(new Error("Admission reply lost"));
+      if (discovered === "old after disconnect") {
+        harness.update({ phase: "connected" });
+      }
+      await operation;
+      await flushMicrotasks();
+      if (attach) {
+        expect(overlays.snapshot.updateRun).toEqual(found);
+        if (discovered === "active") {
+          found = {
+            ...found,
+            status: "succeeded",
+            phase: "finished",
+            finishedAtMs: 4_000,
+            updatedAtMs: 4_000,
+          };
+          harness.emitEvent("update.run.changed", found);
+          await flushMicrotasks();
+          expect(overlays.snapshot.updateRun).toEqual(found);
+        }
+      } else {
+        expectState({
+          updateRun: null,
+          updateStatusBanner: { tone: "danger", text: expect.stringContaining(outcome) },
+          updateRunning: false,
+        });
+        harness.update({ phase: "reconnecting" });
+        harness.update({ phase: "connected" });
+        await flushMicrotasks();
+        harness.emitEvent("update.run.changed", { ...previous, updatedAtMs: 4_000 });
+        await flushMicrotasks();
+        expectState({
+          updateRun: null,
+          updateStatusBanner: { text: expect.stringContaining(outcome) },
+        });
+        await overlays.refreshUpdateStatus();
+        expectState({
+          updateRun: null,
+          updateStatusBanner: { text: expect.stringContaining(outcome) },
+        });
+      }
+      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
     },
   );
 });
