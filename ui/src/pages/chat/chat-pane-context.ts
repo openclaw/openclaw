@@ -674,9 +674,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         selectedChatSessionRow(state),
       );
     }
-    // Hello precedes recovery readiness. Wake parked outboxes on that publication;
+    // Hello precedes recovery readiness. Wake draft restoration and parked outboxes;
     // the shared admission check still holds any recovered initial turn.
     if (resumeOutboxes && !catalogRouteKey) {
+      this.chatState.composerPersistence.persistChangedState();
       void resumeStoredChatOutboxes(state);
     }
     this.reconcileWaitingApprovalSnapshot();
