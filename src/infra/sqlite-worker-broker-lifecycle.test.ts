@@ -25,7 +25,10 @@ beforeEach(() => {
 });
 
 describe("SQLite worker slots", () => {
-  function runtimeFixture(autoExit = true) {
+  function runtimeFixture(
+    autoExit = true,
+    overrides: Partial<Parameters<typeof createSqliteWorkerLifecycle>[0]> = {},
+  ) {
     const workers: (EventEmitter & {
       unref: ReturnType<typeof vi.fn>;
       terminate: ReturnType<typeof vi.fn>;
@@ -53,6 +56,7 @@ describe("SQLite worker slots", () => {
       fail: (slot, reason) => {
         slot.failed = reason instanceof Error ? reason : new Error(String(reason));
       },
+      ...overrides,
     });
     const options = captureSqliteWorkerOpen({
       moduleUrl: new URL("file:///openclaw/dist/backend.js"),
@@ -134,24 +138,9 @@ describe("SQLite worker slots", () => {
           assertCurrent,
         ),
       );
-      createCpuTrackedWorker.mockReturnValueOnce(
-        Object.assign(new EventEmitter(), { unref: vi.fn() }),
-      );
-      const lifecycle = createSqliteWorkerLifecycle({
-        explicitSqliteCloseReleasesNativeResources: true,
-        actors: new Map(),
-        slots: new Set(),
-        stores: new Map(),
-        enqueueClose: vi.fn(),
-        fail: vi.fn(),
-      });
+      const { lifecycle, replyOwner } = runtimeFixture();
       owner.current = !revoked;
-      const dispatch = () =>
-        lifecycle.createSlot(opening, false, () => ({
-          fail: vi.fn(),
-          finish: vi.fn(),
-          dispatch: vi.fn(),
-        }));
+      const dispatch = () => lifecycle.createSlot(opening, false, replyOwner);
       if (revoked) {
         expect(dispatch).toThrow(refusal);
         expect(createCpuTrackedWorker).not.toHaveBeenCalled();
@@ -197,23 +186,13 @@ describe("SQLite worker slots", () => {
       value: { ...process.versions, bun },
     });
     try {
-      createCpuTrackedWorker.mockReturnValueOnce(
-        Object.assign(new EventEmitter(), { unref: vi.fn() }),
-      );
-      const lifecycle = createSqliteWorkerLifecycle({
-        explicitSqliteCloseReleasesNativeResources: true,
-        actors: new Map(),
-        slots: new Set(),
-        stores: new Map(),
-        enqueueClose: vi.fn(),
-        fail: vi.fn(),
-      });
+      const { lifecycle, replyOwner } = runtimeFixture();
       lifecycle.createSlot(
         {
           carrierUrl: new URL("file:///openclaw/src/infra/sqlite-store.worker.ts"),
         },
         false,
-        () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
+        replyOwner,
       );
       expect(createCpuTrackedWorker).toHaveBeenLastCalledWith(
         expect.any(URL),
@@ -235,21 +214,11 @@ describe("SQLite worker slots", () => {
     "settles native custody after close or required exit (capable: $capable, failed: $closeFails)",
     async ({ capable, closeFails }) => {
       const terminating = createDeferredCore();
-      const worker = Object.assign(new EventEmitter(), {
-        unref: vi.fn(),
-        terminate: vi.fn(() => {
-          terminating.resolve();
-          return Promise.resolve(0);
-        }),
-      });
-      createCpuTrackedWorker.mockReturnValueOnce(worker);
       const actors = new Map<string, Actor>();
       const error = new Error("native close failed");
-      const lifecycle = createSqliteWorkerLifecycle({
+      const { lifecycle, workers, replyOwner } = runtimeFixture(false, {
         explicitSqliteCloseReleasesNativeResources: capable,
         actors,
-        slots: new Set(),
-        stores: new Map(),
         enqueueClose: closeFails
           ? vi.fn().mockRejectedValue(error)
           : vi.fn().mockResolvedValue(undefined),
@@ -260,8 +229,13 @@ describe("SQLite worker slots", () => {
           carrierUrl: new URL("file:///openclaw/dist/sqlite-store.worker.js"),
         },
         false,
-        () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() }),
+        replyOwner,
       );
+      const worker = workers[0]!;
+      worker.terminate.mockImplementation(() => {
+        terminating.resolve();
+        return Promise.resolve(0);
+      });
       const nativeStopped = createDeferredCore();
       const markNativeStopped = vi.fn(nativeStopped.resolve);
       const custody = slot.custody.createRequest();

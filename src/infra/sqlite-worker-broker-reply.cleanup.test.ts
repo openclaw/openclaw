@@ -49,21 +49,20 @@ vi.mock("./sqlite-worker-transfer.js", () => ({
 }));
 
 function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched = true) {
+  const record = (event: string) => {
+    effects.events.push(event);
+  };
   const slotCustody = new SqliteWorkerSlotCustody();
   const custody = slotCustody.createRequest();
   custody.activate();
   if (dispatched) {
     custody.accept();
   }
-  const resolve = vi.fn((_value: unknown) => {
-    effects.events.push("resolve");
-  });
-  const reject = vi.fn((_error: unknown) => {
-    effects.events.push("reject");
-  });
-  const settleNative = vi.fn((_settlement: SqliteWorkerOperationSettlement) => {
-    effects.events.push("settle-native");
-  });
+  const resolve = vi.fn((_value: unknown) => record("resolve"));
+  const reject = vi.fn((_error: unknown) => record("reject"));
+  const settleNative = vi.fn((_settlement: SqliteWorkerOperationSettlement) =>
+    record("settle-native"),
+  );
   const admission: SqliteWorkerOperationAdmission = {
     get port(): MessagePort {
       return effects.forbidden();
@@ -77,9 +76,7 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
     observeRequests: effects.forbidden,
     service: effects.forbidden,
     bindDatabaseAuthority: effects.forbidden,
-    finish() {
-      effects.events.push("finish-admission");
-    },
+    finish: () => record("finish-admission"),
   };
   const job: Job = {
     custody,
@@ -88,16 +85,12 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
     bytes: 0,
     operationAdmission: {
       admission,
-      releaseService() {
-        effects.events.push("release-service");
-      },
+      releaseService: () => record("release-service"),
     },
     settleNative,
     resolve,
     reject,
-    detach() {
-      effects.events.push("detach");
-    },
+    detach: () => record("detach"),
   };
   return { job, resolve, reject, settleNative, slotCustody };
 }
@@ -251,9 +244,8 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
     expect(resolve.mock.calls.length).toBe(0);
     const outer = assertCleanupLineage(reject.mock.calls[0]?.[0], original, cleanup);
     expect("code" in outer).toBe(false);
-    expect(settleNative.mock.calls.length).toBe(1);
-    expect(settleNative.mock.calls[0]?.[0].kind).toBe("completed");
-    expect(Object.keys(settleNative.mock.calls[0]?.[0] ?? {})).toEqual(["kind"]);
+    expect(settleNative).toHaveBeenCalledOnce();
+    expect(settleNative.mock.calls[0]?.[0]).toStrictEqual({ kind: "completed" });
     expect(effects.events).toEqual([
       "settle-native",
       "finish-admission",

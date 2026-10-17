@@ -7,19 +7,43 @@ import {
 } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
 
-type Operations = { write: { input: string; output: string } };
 const closedError = { code: "closed", message: "SQLite worker store is closed" };
+type DiagnosticOperations = Record<string, { input: unknown; output: string }>;
+type ClientOptions = Parameters<typeof createSqliteWorkerClient<DiagnosticOperations>>[0];
+function clientFixture<
+  Operations extends DiagnosticOperations = { write: { input: string; output: string } },
+>(options: Partial<Parameters<typeof createSqliteWorkerClient<Operations>>[0]> = {}) {
+  return createSqliteWorkerClient<Operations>({
+    actor: createSqliteWorkerClientActor(),
+    isDraining: () => false,
+    isAvailable: () => true,
+    dispatch: vi.fn(async () => "committed"),
+    release: async () => {},
+    ...options,
+  });
+}
+function expectDispatch(
+  dispatch: ClientOptions["dispatch"],
+  command: unknown,
+  requestClass: string,
+) {
+  expect(dispatch).toHaveBeenLastCalledWith(
+    serialize(command),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    requestClass,
+  );
+}
 
 it.each(["missing", "sealed"] as const)(
   "refuses a %s client before entering an operation or dispatching work",
   async (boundary) => {
     const dispatch = vi.fn(async () => "committed");
-    const { client, store } = createSqliteWorkerClient<Operations>({
-      actor: createSqliteWorkerClientActor(),
+    const { client, store } = clientFixture({
       isDraining: () => boundary === "sealed",
-      isAvailable: () => true,
       dispatch,
-      release: async () => {},
     });
     const operation = vi.fn(() => store.execute({ type: "write", input: "must not enter" }));
     const track = vi.fn(() => () => {});
@@ -48,17 +72,10 @@ it.each(["missing", "sealed"] as const)(
 );
 
 it("attributes queued commands without changing wire bytes or exposing private command suffixes", async () => {
-  type DiagnosticOperations = Record<string, { input: unknown; output: string }>;
   const dispatch = vi
     .fn<Parameters<typeof createSqliteWorkerClient<DiagnosticOperations>>[0]["dispatch"]>()
     .mockResolvedValue("committed");
-  const { store } = createSqliteWorkerClient<DiagnosticOperations>({
-    actor: createSqliteWorkerClientActor(),
-    isDraining: () => false,
-    isAvailable: () => true,
-    dispatch,
-    release: async () => {},
-  });
+  const { store } = clientFixture<DiagnosticOperations>({ dispatch });
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
     ["audit.writer.prune", "audit.writer.prune"],
@@ -85,78 +102,35 @@ it("attributes queued commands without changing wire bytes or exposing private c
     for (const [type, requestClass] of cases) {
       const command = { type, input: { value: "synthetic-private-payload" } };
       await expect(store.execute(command)).resolves.toBe("committed");
-      expect(dispatch).toHaveBeenLastCalledWith(
-        serialize(command),
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        requestClass,
-      );
+      expectDispatch(dispatch, command, requestClass);
     }
     const projectionModule =
       "file:///synthetic-private-root/config/sessions/session-transcript-projection-publication.worker";
+    const js = `${projectionModule}.js`;
     const domainCases = [
-      [
-        "database.domain.publish",
-        `${projectionModule}.js`,
-        "preflight",
-        "transcript-projection.preflight",
-      ],
-      ["database.domain.publish", `${projectionModule}.ts`, "sweep", "transcript-projection.sweep"],
-      ["database.domain.publish", `${projectionModule}.js`, "claim", "transcript-projection.claim"],
-      [
-        "database.domain.publish",
-        `${projectionModule}.js`,
-        "deleteChunk",
-        "transcript-projection.deleteChunk",
-      ],
-      [
-        "database.domain.publish",
-        `${projectionModule}.js`,
-        "appendChunk",
-        "transcript-projection.appendChunk",
-      ],
-      [
-        "database.domain.publish",
-        `${projectionModule}.js`,
-        "finalize",
-        "transcript-projection.finalize",
-      ],
-      [
-        "database.domain.publish",
-        `${projectionModule}.js`,
-        "private-customer-123",
-        "domain_execute",
-      ],
-      [
-        "database.domain.publish",
-        "file:///synthetic-private-root/another.worker.js",
-        "claim",
-        "domain_execute",
-      ],
-      ["database.domain.publish", `${projectionModule}.js.private`, "claim", "domain_execute"],
-      ["database.domain.execute", undefined, "claim", "domain_execute"],
-      ["database.domain.execute", undefined, "transcript.prepare", "transcript.prepare"],
-      ["database.domain.execute", undefined, "transcript.commit", "transcript.commit"],
+      ["publish", js, "preflight", "transcript-projection.preflight"],
+      ["publish", `${projectionModule}.ts`, "sweep", "transcript-projection.sweep"],
+      ["publish", js, "claim", "transcript-projection.claim"],
+      ["publish", js, "deleteChunk", "transcript-projection.deleteChunk"],
+      ["publish", js, "appendChunk", "transcript-projection.appendChunk"],
+      ["publish", js, "finalize", "transcript-projection.finalize"],
+      ["publish", js, "private-customer-123", "domain_execute"],
+      ["publish", "file:///synthetic-private-root/another.worker.js", "claim", "domain_execute"],
+      ["publish", `${js}.private`, "claim", "domain_execute"],
+      ["execute", undefined, "claim", "domain_execute"],
+      ["execute", undefined, "transcript.prepare", "transcript.prepare"],
+      ["execute", undefined, "transcript.commit", "transcript.commit"],
     ] as const;
     for (const [type, moduleUrl, innerType, requestClass] of domainCases) {
       const command = {
-        type,
+        type: `database.domain.${type}`,
         input: {
           moduleUrl,
           command: { type: innerType, input: { value: "synthetic-private-payload" } },
         },
       };
       await expect(store.execute(command)).resolves.toBe("committed");
-      expect(dispatch).toHaveBeenLastCalledWith(
-        serialize(command),
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        requestClass,
-      );
+      expectDispatch(dispatch, command, requestClass);
     }
     expect(dispatch).toHaveBeenCalledTimes(cases.length + domainCases.length);
   } finally {
@@ -170,10 +144,7 @@ it.each(["scope", "command"] as const)(
     const finish = createDeferredCore<string>();
     const release = vi.fn(async (_reclaiming: boolean) => {});
     const retireIdle = vi.fn(() => store.close());
-    const { client, store } = createSqliteWorkerClient<Operations>({
-      actor: createSqliteWorkerClientActor(),
-      isDraining: () => false,
-      isAvailable: () => true,
+    const { client, store } = clientFixture({
       dispatch: () => finish.promise,
       release,
       retireIdle,

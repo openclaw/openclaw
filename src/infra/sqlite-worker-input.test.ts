@@ -30,6 +30,7 @@ const { stores, databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worke
 });
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const payload = (mib: number) => "x".repeat(mib * 1024 * 1024);
+const frameSizes = (bytes: Uint8Array) => [bytes.byteLength, bytes.buffer.byteLength];
 
 async function expectRows(store: SqliteWorkerStore<FixtureOperations>, expected: string[]) {
   const rows = await store.execute({ type: "read", input: undefined });
@@ -85,9 +86,9 @@ describe("SQLite worker staged input", () => {
     );
     const replyTimings: Array<NonNullable<DiagnosticWorkerRequestFields["timing"]>> = [];
     const value = payload(72);
-    const inputFrames: Array<{ visible: number; backing: number }> = [];
+    const inputFrames: number[][] = [];
     const dispatchedInputs: Uint8Array[] = [];
-    const receivedFrames: Array<{ visible: number; backing: number; framed: boolean }> = [];
+    const receivedFrames: Array<{ sizes: number[]; framed: boolean }> = [];
     const commands: SqliteWorkerRequest["type"][] = [];
     // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
     const originalPost = Worker.prototype.postMessage;
@@ -101,10 +102,7 @@ describe("SQLite worker staged input", () => {
         dispatchedInputs.push(request.input);
       }
       if (request.type === "execute-frame") {
-        inputFrames.push({
-          visible: request.input.byteLength,
-          backing: request.input.buffer.byteLength,
-        });
+        inputFrames.push(frameSizes(request.input));
       }
       return originalPost.call(this, request, transferList);
     });
@@ -121,8 +119,7 @@ describe("SQLite worker staged input", () => {
           replyTimings.push(reply.timing);
         }
         receivedFrames.push({
-          visible: reply.value.byteLength,
-          backing: reply.value.buffer.byteLength,
+          sizes: frameSizes(reply.value),
           framed: reply.transfer === "frame",
         });
       }
@@ -162,16 +159,16 @@ describe("SQLite worker staged input", () => {
     expect(readTiming?.replyReceived).toBeGreaterThanOrEqual(readTiming!.replied!);
     await store.close();
     await expectRows(await open(file), [value]);
-    for (const frame of inputFrames) {
-      expect(frame.visible).toBeLessThanOrEqual(SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024);
-      expect(frame.backing).toBeLessThanOrEqual(SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024);
+    for (const size of inputFrames.flat()) {
+      expect(size).toBeLessThanOrEqual(SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024);
     }
     for (const frame of receivedFrames) {
       const limit = frame.framed
         ? SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024
         : SQLITE_WORKER_MAX_RESULT_BYTES;
-      expect(frame.visible).toBeLessThanOrEqual(limit);
-      expect(frame.backing).toBeLessThanOrEqual(limit);
+      for (const size of frame.sizes) {
+        expect(size).toBeLessThanOrEqual(limit);
+      }
     }
     expect(receivedFrames.some((frame) => frame.framed)).toBe(true);
   });
