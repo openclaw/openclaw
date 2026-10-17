@@ -322,23 +322,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
   }
 
-  function runCodexBytePreflight(
-    entry: SessionEntry | undefined,
-    overrides: Partial<PreflightCompactionTestParams> = {},
-  ) {
-    return runDefaultPreflight(entry, {
-      cfg: compactionConfig({ maxActiveTranscriptBytes: "10b" }),
-      followupRun: createTestFollowupRun({
-        provider: "openai",
-        model: "gpt-5.5",
-        sessionKey: overrides.sessionKey ?? "main",
-      }),
-      defaultModel: "gpt-5.5",
-      modelContextTokens: 1_000_000,
-      ...overrides,
-    });
-  }
-
   async function createRequiredPreflight(
     entryOverrides: Partial<SessionEntry> = {},
     sessionKey = "agent:main:main",
@@ -1567,7 +1550,18 @@ describe("runMemoryFlushIfNeeded", () => {
           : []),
       ]);
       const before = readSessionTranscriptMessageEvents(scope);
-      const entry = await runCodexBytePreflight(sessionEntry, { sessionKey, storePath });
+      const entry = await runDefaultPreflight(sessionEntry, {
+        cfg: compactionConfig({ maxActiveTranscriptBytes: "10b" }),
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionKey,
+        }),
+        defaultModel: "gpt-5.5",
+        modelContextTokens: 1_000_000,
+        sessionKey,
+        storePath,
+      });
       expect(entry).toBe(sessionEntry);
       expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
       expect(incrementCompactionCountMock).not.toHaveBeenCalled();

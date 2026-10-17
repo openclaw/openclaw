@@ -28,6 +28,10 @@ import type {
 
 type SeedSourceScope = <T>(run: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
 
+function combineSignals(first?: AbortSignal, second?: AbortSignal) {
+  return first && second ? AbortSignal.any([first, second]) : (first ?? second);
+}
+
 /** The admitted host owns summary persistence; native threads only consume the bounded view. */
 export function bindBoundedSeed(
   input: Partial<EmbeddedRunAttemptInternalParams>,
@@ -48,7 +52,6 @@ export function bindBoundedSeed(
     !storePath ||
     !workspaceDir ||
     maxBytes === undefined ||
-    contextEngine?.info.ownsCompaction ||
     (contextEngine && contextEngine.info.id !== "legacy")
   ) {
     return undefined;
@@ -59,11 +62,7 @@ export function bindBoundedSeed(
   const attempt = {
     ...input,
     sessionTarget,
-    abortSignal: hostSignal
-      ? input.abortSignal
-        ? AbortSignal.any([hostSignal, input.abortSignal])
-        : hostSignal
-      : input.abortSignal,
+    abortSignal: combineSignals(hostSignal, input.abortSignal),
   };
   const prepareMedia = media?.capabilities.prepareContextMedia;
   const preparedMedia = new WeakMap<AgentMessage, AgentHarnessContextMedia>();
@@ -77,10 +76,7 @@ export function bindBoundedSeed(
     signal: callerSignal,
     tokenBudget: requestedTokenBudget,
   }) => {
-    const signal =
-      callerSignal && attempt.abortSignal
-        ? AbortSignal.any([callerSignal, attempt.abortSignal])
-        : (callerSignal ?? attempt.abortSignal);
+    const signal = combineSignals(callerSignal, attempt.abortSignal);
     const assert = () => {
       signal?.throwIfAborted();
       assertSource();

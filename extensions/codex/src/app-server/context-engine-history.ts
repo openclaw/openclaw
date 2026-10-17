@@ -139,12 +139,12 @@ export async function prepareCodexContextEngineHistory(params: {
     : prepareSeed
       ? async (assertSeedCurrent: () => void) => {
           // Retain the host's message identities and their prepared media snapshots.
-          const seed = Array.from(
+          const seed = (
             await prepareSeed({
               assertCurrent: assertSeedCurrent,
               signal: params.runtimeParams.abortSignal,
               tokenBudget: params.historyTokenBudget,
-            }),
+            })
           ).filter(includeMessage);
           assertSeedCurrent();
           return buildSeed(seed);
@@ -152,11 +152,7 @@ export async function prepareCodexContextEngineHistory(params: {
       : await buildSeed(messages);
   const historyDeltaItems =
     configured && selection?.prefixLength !== undefined && !projectionDecision.project
-      ? await buildCodexSelectedHistoryItems({
-          messages: messages.slice(selection.prefixLength),
-          tokenBudget: params.historyTokenBudget,
-          prepareFileContext: projectionParams.prepareFileContext,
-        })
+      ? await buildSeed(messages.slice(selection.prefixLength))
       : undefined;
   assertCurrent();
   return {

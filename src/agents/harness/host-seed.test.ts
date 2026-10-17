@@ -27,6 +27,7 @@ import { withSessionCompactionPersistenceAsync } from "../sessions/session-compa
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { prepareHarnessContextMedia } from "./context-media-runtime.js";
+import type { AgentHarnessContextMediaRequest } from "./host-capability-types.js";
 import { bindBoundedSeed } from "./host-seed.js";
 
 // mock-isolation: Keep real transcript and atomic persistence, replacing only summary model execution.
@@ -34,44 +35,27 @@ vi.mock("../embedded-agent-runner/compact.js", () => ({
   compactEmbeddedAgentSessionDirect: vi.fn(),
 }));
 
+function seedTarget(storePath: string, sessionId: string) {
+  return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
+}
+
+const allowance = {
+  oldBytes: 1000,
+  maxBytes: 8192,
+  contextTokens: 128,
+  requestTokens: 128,
+  expectedBytes: 512,
+};
+
 const generatedSummary = "covered old discussion; recent request";
 it.each([
   { name: "small history", oldBytes: 20, summary: undefined, expected: 0 },
   { name: "unsummarized history", oversizedTail: true },
   { name: "declined summary", summary: "existing", decline: true, oversizedTail: true },
-  {
-    name: "narrow delivery allowance",
-    oldBytes: 1000,
-    maxBytes: 8192,
-    contextTokens: 1024,
-    requestTokens: 128,
-    expectedBytes: 512,
-  },
-  {
-    name: "larger allowance cannot widen host",
-    oldBytes: 1000,
-    maxBytes: 8192,
-    contextTokens: 128,
-    requestTokens: 1024,
-    expectedBytes: 512,
-  },
-  {
-    name: "invalid allowance is ignored",
-    oldBytes: 1000,
-    maxBytes: 8192,
-    contextTokens: 128,
-    requestTokens: Infinity,
-    expectedBytes: 512,
-  },
-  {
-    name: "oversized summary is bounded again",
-    oldBytes: 1000,
-    maxBytes: 8192,
-    contextTokens: 128,
-    requestTokens: 128,
-    expectedBytes: 512,
-    oversizedSummary: true,
-  },
+  { ...allowance, name: "narrow delivery allowance", contextTokens: 1024 },
+  { ...allowance, name: "larger allowance cannot widen host", requestTokens: 1024 },
+  { ...allowance, name: "invalid allowance is ignored", requestTokens: Infinity },
+  { ...allowance, name: "oversized summary is bounded again", oversizedSummary: true },
   {
     name: "omitted existing summary",
     summary: "summary ".repeat(1024),
@@ -102,12 +86,7 @@ it.each([
   }) => {
     await withOpenClawTestState({ label: "native-seed" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const target = {
-        agentId: "main",
-        sessionId: "seed",
-        sessionKey: "agent:main:seed",
-        storePath: state.statePath("sessions.sqlite"),
-      };
+      const target = seedTarget(state.statePath("sessions.sqlite"), "seed");
       await upsertSessionEntryCore(target, {
         sessionId: target.sessionId,
         updatedAt: 1,
@@ -196,7 +175,7 @@ it.each([
         );
         return { ok: true, compacted: true };
       });
-      const prepare = bindBoundedSeed(
+      const maybePrepare = bindBoundedSeed(
         {
           sessionTarget: { ...target, expectedWriterRunId: "seed-writer" },
           workspaceDir: state.workspaceDir,
@@ -207,10 +186,7 @@ it.each([
         () => {},
         async (run) => run(),
       )?.prepareBoundedSeed;
-      expect(prepare).toBeDefined();
-      if (!prepare) {
-        throw new Error("missing seed capability");
-      }
+      const prepare = expectDefined(maybePrepare, "missing seed capability");
       const result = prepare({ assertCurrent, tokenBudget: requestTokens });
       if (revoke || replaceWriter) {
         await expect(result).rejects.toThrow(
@@ -256,12 +232,7 @@ it.each([false, true])(
   async (refresh) => {
     await withOpenClawTestState({ label: "native-refresh-seed" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const target = {
-        agentId: "main",
-        sessionId: "refresh",
-        sessionKey: "agent:main:refresh",
-        storePath: state.statePath("sessions.sqlite"),
-      };
+      const target = seedTarget(state.statePath("sessions.sqlite"), "refresh");
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       await manager.appendMessageAsync(makeUserMessage("Earlier history".repeat(600), 1));
@@ -272,10 +243,7 @@ it.each([false, true])(
         },
         target: { ...target, sessionEntry: loadSessionEntry(target), cwd: state.workspaceDir },
       });
-      const persisted = await recorder.persistApproved();
-      if (!persisted) {
-        throw new Error("fixture did not persist its original task");
-      }
+      const persisted = expectDefined(await recorder.persistApproved(), "persisted original task");
       const stale = makeAssistantMessageFixture({
         content: [{ type: "text", text: "stale persisted tail" }],
       });
@@ -284,7 +252,7 @@ it.each([false, true])(
       });
       const afterAdmission = await SessionManager.openAsync(target, state.workspaceDir);
       await afterAdmission.appendMessageAsync(stale);
-      const prepare = bindBoundedSeed(
+      const maybePrepare = bindBoundedSeed(
         {
           sessionTarget: target,
           workspaceDir: state.workspaceDir,
@@ -299,9 +267,7 @@ it.each([false, true])(
         () => {},
         async (run) => run(),
       )?.prepareBoundedSeed;
-      if (!prepare) {
-        throw new Error("fixture has no seed capability");
-      }
+      const prepare = expectDefined(maybePrepare, "fixture has no seed capability");
       const seed = await prepare({ assertCurrent: () => {} });
       expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
       expect(
@@ -325,12 +291,7 @@ it.each([1, 2])(
   async (imageCount) => {
     await withOpenClawTestState({ label: "native-media-seed" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const target = {
-        agentId: "main",
-        sessionId: "media",
-        sessionKey: "agent:main:media",
-        storePath: state.statePath("sessions.sqlite"),
-      };
+      const target = seedTarget(state.statePath("sessions.sqlite"), "media");
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const paths = Array.from({ length: imageCount }, (_, index) =>
         path.join(state.workspaceDir, `image-${index}.png`),
@@ -359,22 +320,15 @@ it.each([1, 2])(
         );
         return { ok: true, compacted: true };
       });
-      const restore = vi.fn((request: Parameters<typeof prepareHarnessContextMedia>[0]) =>
-        prepareHarnessContextMedia(request),
+      const restore = vi.fn((request: AgentHarnessContextMediaRequest) =>
+        prepareHarnessContextMedia({
+          ...request,
+          workspaceDir: state.workspaceDir,
+          modelInput: ["text", "image"],
+          assertCurrent: () => {},
+        }),
       );
-      const media = {
-        capabilities: {
-          prepareContextMedia: (
-            request: Pick<Parameters<typeof prepareHarnessContextMedia>[0], "message" | "maxChars">,
-          ) =>
-            restore({
-              ...request,
-              workspaceDir: state.workspaceDir,
-              modelInput: ["text", "image"],
-              assertCurrent: () => {},
-            }),
-        },
-      };
+      const media = { capabilities: { prepareContextMedia: restore } };
       const source = new AbortController();
       const bound = bindBoundedSeed(
         {
@@ -388,10 +342,8 @@ it.each([1, 2])(
         source.signal,
         media,
       );
-      if (!bound?.prepareBoundedSeed) {
-        throw new Error("Missing media seed capability");
-      }
-      const seed = await bound.prepareBoundedSeed({
+      const prepare = expectDefined(bound?.prepareBoundedSeed, "media seed capability");
+      const seed = await prepare({
         assertCurrent: () => {},
         tokenBudget: imageCount === 1 ? 4096 : 2048,
       });
@@ -402,23 +354,20 @@ it.each([1, 2])(
         expect(imageMessage).toBeUndefined();
         expect(compact).toHaveBeenCalledOnce();
       } else {
-        if (!imageMessage) {
-          throw new Error("Fitting image turn was omitted");
-        }
+        const fittingImage = expectDefined(imageMessage, "Fitting image turn was omitted");
         const calls = restore.mock.calls.length;
         await Promise.all(paths.map((file) => unlink(file)));
-        const restoreFromSeed = bound.prepareContextMedia ?? media.capabilities.prepareContextMedia;
-        const prepared = await restoreFromSeed({ message: imageMessage, maxChars: 8192 });
+        const restoreFromSeed =
+          bound?.prepareContextMedia ?? media.capabilities.prepareContextMedia;
+        const prepared = await restoreFromSeed({ message: fittingImage, maxChars: 8192 });
         expect(prepared.images).toHaveLength(1);
         expect(restore).toHaveBeenCalledTimes(calls);
         expect(compact).not.toHaveBeenCalled();
         source.abort(new Error("seed source closed"));
-        await expect(restoreFromSeed({ message: imageMessage, maxChars: 8192 })).rejects.toThrow(
+        await expect(restoreFromSeed({ message: fittingImage, maxChars: 8192 })).rejects.toThrow(
           "seed source closed",
         );
-        await expect(bound.prepareBoundedSeed({ assertCurrent: () => {} })).rejects.toThrow(
-          "seed source closed",
-        );
+        await expect(prepare({ assertCurrent: () => {} })).rejects.toThrow("seed source closed");
         expect(restore).toHaveBeenCalledTimes(calls);
       }
     });
