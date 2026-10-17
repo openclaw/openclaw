@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fsSync, { type BigIntStats, type Stats } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
@@ -9,39 +10,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { publishVerifiedSqliteFile, createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { prepareUpdateDatabaseRestoreSourceInProcess } from "./update-database-restore-source.js";
 
-const directories = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
-
-function assertSnapshot(file: string) {
-  using db = new DatabaseSync(file, { readOnly: true });
-  expect(db.prepare("SELECT rowid,value FROM evidence").all()).toEqual([
-    { rowid: 71, value: "keep" },
-  ]);
-  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-}
-
-function fixture(target = "target.sqlite") {
-  const directory = fsSync.realpathSync(directories.make("sqlite-snapshot-file-"));
-  const sourcePath = path.join(directory, "source.sqlite");
-  {
-    using database = new DatabaseSync(sourcePath);
-    database.exec(
-      "CREATE TABLE evidence(value TEXT); INSERT INTO evidence(rowid,value) VALUES(71,'keep');",
-    );
+const directories: string[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  for (const directory of directories.splice(0)) {
+    await fs.rm(directory, { recursive: true, force: true });
   }
-  return {
-    directory,
-    sourcePath,
-    targetPath: path.join(directory, target),
-    bytes: fsSync.readFileSync(sourcePath),
-  };
-}
-
-function changeSnapshotBytes(file: string) {
-  const bytes = fsSync.readFileSync(file);
-  bytes.write("lost", 100);
-  fsSync.writeFileSync(file, bytes, { flag: "r+" });
-}
+});
 
 it.each([
   "publication",
@@ -51,12 +26,25 @@ it.each([
   "restore",
 ] as const)("preserves exact file identities above 2^53 (%s)", async (operationKind) => {
   const replace = operationKind.startsWith("replacement");
-  const { directory, sourcePath, targetPath, bytes } = fixture();
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "sqlite-file-id-")));
+  directories.push(directory);
+  const sourcePath = path.join(directory, "source.sqlite");
+  const targetPath = path.join(directory, "target.sqlite");
   const displacedPath = path.join(directory, "displaced.sqlite");
+  const database = new DatabaseSync(sourcePath);
+  try {
+    database.exec(
+      "CREATE TABLE evidence(value TEXT); INSERT INTO evidence(rowid,value) VALUES(71,'keep');",
+    );
+  } finally {
+    database.close();
+  }
+  const bytes = await fs.readFile(sourcePath);
   const native = getFsSafeNativeConfig();
   const open = fs.open.bind(fs);
   const lstat = fs.lstat.bind(fs);
   const lstatSync = fsSync.lstatSync.bind(fsSync);
+  const statSync = fsSync.statSync.bind(fsSync);
   const fstatSync = fsSync.fstatSync.bind(fsSync);
   const ids = new Map<string, bigint>();
   const createdId = 2n ** 54n + 1n;
@@ -83,13 +71,14 @@ it.each([
     // Model only OS stat representation. All copying, receipts, hashing and publication are real.
     // The Node fallback lets the same observations reach the dependency's descriptor fences.
     configureFsSafeNative({ mode: "off" });
-    for (const method of ["lstatSync", "statSync"] as const) {
-      const original = fsSync[method].bind(fsSync);
-      vi.spyOn(fsSync, method).mockImplementation((...args) => {
-        const stat = original(...args);
-        return stat ? project(stat, observe(args[0])) : stat;
-      });
-    }
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      const stat = lstatSync(...args);
+      return stat ? project(stat, observe(args[0])) : stat;
+    });
+    vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
+      const stat = statSync(...args);
+      return stat ? project(stat, observe(args[0])) : stat;
+    });
     vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
       project(fstatSync(...args), fstatSync(args[0], { bigint: true })),
     );
@@ -170,7 +159,17 @@ it.each([
     } else {
       await operation;
       await expect(fs.readFile(targetPath)).resolves.toEqual(bytes);
-      assertSnapshot(targetPath);
+      const reopened = new DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(reopened.prepare("SELECT rowid,value FROM evidence").all()).toEqual([
+          { rowid: 71, value: "keep" },
+        ]);
+        expect(reopened.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+      } finally {
+        reopened.close();
+      }
     }
     await expect(fs.readFile(sourcePath)).resolves.toEqual(bytes);
     expect((await fs.readdir(directory)).toSorted()).toEqual(
@@ -182,6 +181,9 @@ it.each([
   }
 });
 
+const fuseDirectories = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
 it.each([
   ["async", false],
   ["async", true],
@@ -192,7 +194,12 @@ it.each([
 ] as const)(
   "verifies snapshot bytes despite FUSE timestamp drift (%s, changed bytes=%s)",
   async (mode, changeBytes) => {
-    const { sourcePath, targetPath } = fixture("snapshot.bak");
+    const directory = fuseDirectories.make("sqlite-fuse-");
+    const sourcePath = path.join(directory, "source.sqlite");
+    const targetPath = path.join(directory, "snapshot.bak");
+    const source = new DatabaseSync(sourcePath);
+    source.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('keep');");
+    source.close();
     const originalOpen = fs.open.bind(fs);
     let observations = 0;
     function settleMetadata(value: BigIntStats) {
@@ -201,7 +208,12 @@ it.each([
       value.birthtimeNs = value.ctimeNs;
       if (changeBytes && observations === 2) {
         // The first hash has read the original bytes; retain size and inode.
-        changeSnapshotBytes(targetPath);
+        const writer = fsSync.openSync(targetPath, "r+");
+        try {
+          fsSync.writeSync(writer, Buffer.from("lost"), 0, 4, 100);
+        } finally {
+          fsSync.closeSync(writer);
+        }
       }
       return value;
     }
@@ -242,7 +254,12 @@ it.each([
           });
           guard.assertTargetUnchanged(() => {
             if (changeBytes) {
-              changeSnapshotBytes(targetPath);
+              const writer = fsSync.openSync(targetPath, "r+");
+              try {
+                fsSync.writeSync(writer, Buffer.from("lost"), 0, 4, 100);
+              } finally {
+                fsSync.closeSync(writer);
+              }
             }
           });
           return;
@@ -261,11 +278,15 @@ it.each([
     } else {
       const result = await operation;
       const bytes = fsSync.readFileSync(targetPath);
-      expect(result).toMatchObject({
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-        sizeBytes: bytes.length,
-      });
-      assertSnapshot(targetPath);
+      expect(result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      expect(result.sizeBytes).toBe(bytes.length);
+      const snapshot = new DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM records").all()).toEqual([{ value: "keep" }]);
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      } finally {
+        snapshot.close();
+      }
     }
     expect(observations).toBeGreaterThan(1);
   },

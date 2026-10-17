@@ -29,12 +29,14 @@ function files(root: string) {
     read: (name: string) => fs.readFileSync(path.join(root, name), "utf8"),
     json: (name: string) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")),
     append: (name: string, text: string) => fs.appendFileSync(path.join(root, name), text),
-    write(name: string, content: string) {
+    write: (name: string, content: string) => {
       fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
       fs.writeFileSync(path.join(root, name), content);
     },
     exists: (name: string) => fs.existsSync(path.join(root, name)),
-    linkDependencies(type: "junction" | "dir" = process.platform === "win32" ? "junction" : "dir") {
+    linkDependencies: (
+      type: "junction" | "dir" = process.platform === "win32" ? "junction" : "dir",
+    ) => {
       fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), type);
     },
   };
@@ -115,6 +117,7 @@ function findNestedGroup(pages: NavGroup["pages"] | undefined, name: string): Na
       return found;
     }
   }
+  return undefined;
 }
 const findNestedGroupByPage = (pages: NavGroup["pages"] | undefined, page: string) =>
   pages?.find((entry) => typeof entry !== "string" && collectPages(entry.pages).includes(page));
@@ -455,7 +458,7 @@ it("keeps generated locale navigation aligned with English routes", () => {
     ["Yetenekler", "Araçlar", "Tarayıcı", "tr/tools/browser/setup"],
     ["Gateway ve operasyonlar", "Gateway", "OpenTelemetry", "tr/gateway/opentelemetry/setup"],
     ["Başvuru", "CLI komutları", "Gateway", "tr/cli/gateway/running"],
-  ]) {
+  ] as const) {
     const parentGroup = findTab(turkish, tab)?.groups.find((entry) => entry.group === parent);
     expect(findNestedGroup(parentGroup?.pages, child)).toEqual(
       expect.objectContaining({ pages: expect.arrayContaining([page]) }),

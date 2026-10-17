@@ -1,5 +1,7 @@
+// Browser auth hardening tests cover origin, trusted-proxy, signed-device,
+// bootstrap-token, and scope checks for control UI WebSocket clients.
 import { randomUUID } from "node:crypto";
-import { beforeEach, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
@@ -34,20 +36,15 @@ const TRUSTED_PROXY_BROWSER_HEADERS = {
 };
 
 type GatewayConnectResponse = Awaited<ReturnType<typeof connectReq>>;
-type GatewayTestClient = NonNullable<NonNullable<Parameters<typeof connectReq>[1]>["client"]>;
-type SignedBrowserDevice = Awaited<ReturnType<typeof createSignedDevice>>;
-type OriginCase = {
-  name: string;
-  proxy: boolean;
-  client: GatewayTestClient;
-  headers: Record<string, string>;
+type GatewayTestClient = {
+  id: string;
+  version: string;
+  platform: string;
+  mode: string;
 };
+type SignedBrowserDevice = Awaited<ReturnType<typeof createSignedDevice>>;
 
-async function withTrustedProxyBrowserWs(
-  origin: string,
-  run: (ws: WebSocket) => Promise<void>,
-  password?: string,
-) {
+async function writeTrustedProxyBrowserAuthConfig(password?: string) {
   const { writeConfigFile } = await import("../config/config.js");
   const auth = {
     mode: "trusted-proxy" as const,
@@ -67,15 +64,19 @@ async function withTrustedProxyBrowserWs(
       publicOrigin: ALLOWED_BROWSER_ORIGIN,
     },
   });
-  await withBrowserWs(run, () => ({ origin, ...TRUSTED_PROXY_BROWSER_HEADERS }));
 }
 
-async function withBrowserWs(
+async function withTrustedProxyBrowserWs(
+  origin: string,
   run: (ws: WebSocket) => Promise<void>,
-  headers: (port: number) => Record<string, string> = (port) => ({ origin: originForPort(port) }),
+  password?: string,
 ) {
+  await writeTrustedProxyBrowserAuthConfig(password);
   await withGatewayServer(async ({ port }) => {
-    const ws = await openWs(port, headers(port));
+    const ws = await openWs(port, {
+      origin,
+      ...TRUSTED_PROXY_BROWSER_HEADERS,
+    });
     try {
       await run(ws);
     } finally {
@@ -85,13 +86,21 @@ async function withBrowserWs(
 }
 
 function expectOriginNotAllowed(res: GatewayConnectResponse) {
-  expect(res).toMatchObject({
-    ok: false,
-    error: {
-      message: expect.stringContaining("origin not allowed"),
-      details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
-    },
-  });
+  expect(res.ok).toBe(false);
+  expect(res.error?.message ?? "").toContain("origin not allowed");
+  expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+    ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+  );
+}
+
+function expectRetryLater(res: GatewayConnectResponse, retryLater: boolean) {
+  expect(res.ok).toBe(false);
+  const expectation = expect(res.error?.message ?? "");
+  if (retryLater) {
+    expectation.toContain("retry later");
+  } else {
+    expectation.not.toContain("retry later");
+  }
 }
 
 async function expectWrongTokenRejected(params: {
@@ -104,14 +113,39 @@ async function expectWrongTokenRejected(params: {
   try {
     const request = params.device === null ? { token: "wrong", device: null } : { token: "wrong" };
     const res = await connectReq(ws, request);
-    expect(res.ok).toBe(false);
-    expect((res.error?.message ?? "").includes("retry later")).toBe(params.retryLater);
+    expectRetryLater(res, params.retryLater);
   } finally {
     ws.close();
   }
 }
 
+async function createSignedBrowserDevice(
+  browserWs: WebSocket,
+  client: GatewayTestClient,
+  identityName: string,
+) {
+  const nonce = await readConnectChallengeNonce(browserWs);
+  expect(typeof nonce).toBe("string");
+  return createSignedDevice({
+    token: "secret",
+    scopes: ["operator.admin"],
+    clientId: client.id,
+    clientMode: client.mode,
+    identityPath: makeIdentityPath(`openclaw-${identityName}-device-${randomUUID()}.sqlite`),
+    nonce: nonce ?? "",
+  });
+}
+
+function enableSingleAttemptLoopbackTokenAuth() {
+  testState.gatewayAuth = {
+    mode: "token",
+    token: "secret",
+    rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: true },
+  };
+}
+
 async function withSignedBrowserConnect(
+  port: number,
   client: GatewayTestClient,
   identityName: string,
   run: (session: {
@@ -119,17 +153,9 @@ async function withSignedBrowserConnect(
     res: GatewayConnectResponse;
   }) => void | Promise<void>,
 ) {
-  await withBrowserWs(async (browserWs) => {
-    const nonce = await readConnectChallengeNonce(browserWs);
-    expect(typeof nonce).toBe("string");
-    const { identity, device } = await createSignedDevice({
-      token: "secret",
-      scopes: ["operator.admin"],
-      clientId: client.id,
-      clientMode: client.mode,
-      identityPath: makeIdentityPath(`openclaw-${identityName}-device-${randomUUID()}.sqlite`),
-      nonce: nonce ?? "",
-    });
+  const browserWs = await openWs(port, { origin: originForPort(port) });
+  try {
+    const { identity, device } = await createSignedBrowserDevice(browserWs, client, identityName);
     const res = await connectReq(browserWs, {
       token: "secret",
       scopes: ["operator.admin"],
@@ -137,171 +163,253 @@ async function withSignedBrowserConnect(
       device,
     });
     await run({ identity, res });
-  });
+  } finally {
+    browserWs.close();
+  }
 }
 
-beforeEach(() => {
-  testState.gatewayAuth = { mode: "token", token: "secret" };
-});
+describe("gateway auth browser hardening", () => {
+  test("rejects trusted-proxy browser connects from origins outside the allowlist", async () => {
+    await withTrustedProxyBrowserWs("https://evil.example", async (ws) => {
+      const res = await connectReq(ws, {
+        client: TEST_OPERATOR_CLIENT,
+        device: null,
+      });
+      expectOriginNotAllowed(res);
+    });
+  });
 
-test.each<OriginCase>([
-  {
-    name: "trusted-proxy browser",
-    proxy: true,
-    client: TEST_OPERATOR_CLIENT,
-    headers: { origin: "https://evil.example", ...TRUSTED_PROXY_BROWSER_HEADERS },
-  },
-  {
-    name: "browser claiming to be TUI",
-    proxy: false,
-    client: {
-      ...TEST_OPERATOR_CLIENT,
-      id: GATEWAY_CLIENT_NAMES.TUI,
-      platform: "macos",
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    headers: { origin: "https://attacker.example" },
-  },
-  {
-    name: "forwarded control-ui forging loopback",
-    proxy: false,
-    client: {
-      ...TEST_OPERATOR_CLIENT,
-      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    headers: { origin: "http://localhost:5173", "x-forwarded-for": "203.0.113.50" },
-  },
-])("rejects non-allowlisted origin for $name", async ({ proxy, client, headers }) => {
-  const reject = async (ws: WebSocket) => {
-    expectOriginNotAllowed(await connectReq(ws, { client, device: null }));
-  };
-  if (proxy) {
-    await withTrustedProxyBrowserWs(headers.origin, reject);
-  } else {
+  test("accepts trusted-proxy publicOrigin despite an unused redacted password", async () => {
+    await withTrustedProxyBrowserWs(
+      ALLOWED_BROWSER_ORIGIN,
+      async (ws) => {
+        const payload = await connectOk(ws, {
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+          skipDefaultAuth: true,
+        });
+        expect(payload.type).toBe("hello-ok");
+      },
+      REDACTED_SENTINEL,
+    );
+  });
+
+  test("clears scopes for trusted-proxy non-control-ui browser sessions", async () => {
+    await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {
+      const payload = await connectOk(ws, {
+        client: TEST_OPERATOR_CLIENT,
+        device: null,
+        scopes: ["operator.read"],
+      });
+      expect(payload.type).toBe("hello-ok");
+
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
+    });
+  });
+
+  test("accepts an exactly allowlisted Tauri origin", async () => {
     const { writeConfigFile } = await import("../config/config.js");
-    if ("x-forwarded-for" in headers) {
-      await writeConfigFile({
-        gateway: { trustedProxies: ["127.0.0.1"], controlUi: { allowedOrigins: [] } },
-      });
-    }
-    await withBrowserWs(reject, () => headers);
-  }
-});
+    const origin = "tauri://localhost";
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await writeConfigFile({ gateway: { controlUi: { allowedOrigins: [origin] } } });
 
-test("accepts trusted-proxy publicOrigin despite an unused redacted password", async () => {
-  await withTrustedProxyBrowserWs(
-    ALLOWED_BROWSER_ORIGIN,
-    async (ws) => {
-      await connectOk(ws, {
-        client: TEST_OPERATOR_CLIENT,
-        device: null,
-        skipDefaultAuth: true,
-      });
-    },
-    REDACTED_SENTINEL,
-  );
-});
-
-test("clears scopes for trusted-proxy non-control-ui browser sessions", async () => {
-  await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {
-    await connectOk(ws, {
-      client: TEST_OPERATOR_CLIENT,
-      device: null,
-      scopes: ["operator.read"],
-    });
-
-    expect(await rpcReq(ws, "status")).toMatchObject({
-      ok: false,
-      error: { message: expect.stringContaining("missing scope") },
-    });
-  });
-});
-
-test("accepts an exactly allowlisted Tauri origin", async () => {
-  const { writeConfigFile } = await import("../config/config.js");
-  const origin = "tauri://localhost";
-  await writeConfigFile({ gateway: { controlUi: { allowedOrigins: [origin] } } });
-  await withBrowserWs(
-    async (ws) => {
-      await connectOk(ws, {
-        client: TEST_OPERATOR_CLIENT,
-        device: null,
-      });
-    },
-    () => ({ origin }),
-  );
-});
-
-test("rate-limits non-browser remote auth failures by default", async () => {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
-
-  await withGatewayServer(async ({ port }) => {
-    const request = { port, headers: { "x-forwarded-for": "203.0.113.50" }, device: null };
-    for (let attempt = 1; attempt <= 10; attempt += 1) {
-      await expectWrongTokenRejected({ ...request, retryLater: false });
-    }
-    await expectWrongTokenRejected({ ...request, retryLater: true });
-  });
-});
-
-test("isolates loopback browser-origin auth lockouts per origin", async () => {
-  testState.gatewayAuth = {
-    mode: "token",
-    token: "secret",
-    rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: true },
-  };
-  await withGatewayServer(async ({ port }) => {
-    const firstOrigin = originForPort(port);
-    const secondOrigin = "http://localhost:5173";
-
-    await expectWrongTokenRejected({ port, headers: { origin: firstOrigin }, retryLater: false });
-    await expectWrongTokenRejected({
-      port,
-      headers: { origin: secondOrigin },
-      retryLater: false,
-    });
-    await expectWrongTokenRejected({ port, headers: { origin: firstOrigin }, retryLater: true });
-  });
-});
-
-test("omits sensitive gateway paths from low-privilege hello-ok snapshots", async () => {
-  await withBrowserWs(async (ws) => {
-    const payload = await connectOk(ws, {
-      scopes: ["operator.read"],
-      device: null,
-    });
-    // Assert effective scopes after unbound-scope clearing, not self-declared scopes.
-    const { snapshot } = payload as {
-      type: "hello-ok";
-      snapshot: { configPath?: unknown; stateDir?: unknown; authMode?: unknown };
-    };
-    expect(snapshot).toBeDefined();
-    for (const field of ["configPath", "stateDir", "authMode"] as const) {
-      expect(snapshot[field]).toBeUndefined();
-    }
-  });
-});
-
-test.each([
-  { name: "non-control-ui", client: TEST_OPERATOR_CLIENT, paired: false },
-  { name: "control-ui", client: CONTROL_UI_CLIENT, paired: true },
-])(
-  "restricts loopback token auto-pairing for $name browser clients",
-  async ({ name, client, paired }) => {
-    const { listDevicePairing } = await import("../infra/device-pairing.js");
-    await withSignedBrowserConnect(client, name, async ({ identity, res }) => {
-      expect(res.ok).toBe(paired);
-      const pairing = await listDevicePairing();
-      const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
-      if (paired) {
-        expect(pending).toBeUndefined();
-        expect(pairing.paired.some((entry) => entry.deviceId === identity.deviceId)).toBe(true);
-      } else {
-        expect(res.error?.message ?? "").toContain("pairing required");
-        expect(pending).toMatchObject({ silent: false });
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+      } finally {
+        ws.close();
       }
     });
-  },
-);
+  });
+
+  test("rejects browser-origin connects that claim to be tui clients", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: "https://attacker.example" });
+      try {
+        expectOriginNotAllowed(
+          await connectReq(ws, {
+            token: "secret",
+            client: {
+              id: GATEWAY_CLIENT_NAMES.TUI,
+              version: "1.0.0",
+              platform: "macos",
+              mode: GATEWAY_CLIENT_MODES.UI,
+            },
+            device: null,
+          }),
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("rate-limits non-browser remote auth failures by default", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+      },
+    });
+
+    await withGatewayServer(async ({ port }) => {
+      const remoteHeaders = { "x-forwarded-for": "203.0.113.50" };
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        await expectWrongTokenRejected({
+          port,
+          headers: remoteHeaders,
+          retryLater: false,
+          device: null,
+        });
+      }
+
+      await expectWrongTokenRejected({
+        port,
+        headers: remoteHeaders,
+        retryLater: true,
+        device: null,
+      });
+    });
+  });
+
+  test("isolates loopback browser-origin auth lockouts per origin", async () => {
+    enableSingleAttemptLoopbackTokenAuth();
+    await withGatewayServer(async ({ port }) => {
+      const firstOrigin = originForPort(port);
+      const secondOrigin = "http://localhost:5173";
+
+      await expectWrongTokenRejected({ port, headers: { origin: firstOrigin }, retryLater: false });
+      await expectWrongTokenRejected({
+        port,
+        headers: { origin: secondOrigin },
+        retryLater: false,
+      });
+      await expectWrongTokenRejected({ port, headers: { origin: firstOrigin }, retryLater: true });
+    });
+  });
+
+  test("omits sensitive gateway paths from low-privilege hello-ok snapshots", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: originForPort(port) });
+      try {
+        const payload = (await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          device: null,
+        })) as {
+          type: "hello-ok";
+          snapshot?: {
+            configPath?: unknown;
+            stateDir?: unknown;
+            authMode?: unknown;
+          };
+        };
+        // connectReq scopes are evaluated after auth and unbound-scope clearing, so this assertion
+        // verifies the effective low-privilege session view rather than self-declared client scopes.
+        const snapshot = payload.snapshot as
+          | { configPath?: unknown; stateDir?: unknown; authMode?: unknown }
+          | undefined;
+        if (!snapshot) {
+          throw new Error("expected hello-ok snapshot for low-privilege browser session");
+        }
+        expect(snapshot.configPath).toBeUndefined();
+        expect(snapshot.stateDir).toBeUndefined();
+        expect(snapshot.authMode).toBeUndefined();
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("does not silently auto-pair non-control-ui browser clients on loopback", async () => {
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+
+    await withGatewayServer(async ({ port }) => {
+      await withSignedBrowserConnect(
+        port,
+        TEST_OPERATOR_CLIENT,
+        "browser",
+        async ({ identity, res }) => {
+          expect(res.ok).toBe(false);
+          expect(res.error?.message ?? "").toContain("pairing required");
+
+          const pairing = await listDevicePairing();
+          const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
+          if (!pending) {
+            throw new Error(
+              "expected non-control browser client to create pending pairing request",
+            );
+          }
+          expect(pending.silent).toBe(false);
+        },
+      );
+    });
+  });
+
+  test("silently auto-pairs control-ui browser clients on loopback with a valid gateway token", async () => {
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+
+    await withGatewayServer(async ({ port }) => {
+      await withSignedBrowserConnect(
+        port,
+        CONTROL_UI_CLIENT,
+        "control-ui",
+        async ({ identity, res }) => {
+          expect(res.ok).toBe(true);
+
+          const pairing = await listDevicePairing();
+          expect(pairing.pending.some((entry) => entry.deviceId === identity.deviceId)).toBe(false);
+          expect(pairing.paired.some((entry) => entry.deviceId === identity.deviceId)).toBe(true);
+        },
+      );
+    });
+  });
+
+  test("rejects forged loopback origin for control-ui when proxy headers make client non-local", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [],
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: "http://localhost:5173",
+        "x-forwarded-for": "203.0.113.50",
+      });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: {
+            ...TEST_OPERATOR_CLIENT,
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+});

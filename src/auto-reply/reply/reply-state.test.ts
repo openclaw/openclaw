@@ -235,7 +235,7 @@ describe("incrementCompactionCount", () => {
       storePath: durableStorePath,
     });
 
-    expect((await loadStoredEntry(scopedStorePath, sessionKey)).compactionCount).toBe(1);
+    expect(loadStoredEntry(scopedStorePath, sessionKey).compactionCount).toBe(1);
     expect(durableDatabasePath).toBeDefined();
     await expect(
       fs.stat(expectDefined(durableDatabasePath, "durable database path")),
@@ -266,12 +266,13 @@ describe("incrementCompactionCount", () => {
       tokensAfter: 12_000,
     });
 
-    expect(await loadStoredEntry(storePath, sessionKey)).toMatchObject({
+    const persisted = loadStoredEntry(storePath, sessionKey);
+    expect(persisted).toMatchObject({
       compactionCount: 1,
       totalTokens: 12_000,
       totalTokensFresh: true,
-      inputTokens: undefined,
-      outputTokens: undefined,
     });
+    expect(persisted.inputTokens).toBeUndefined();
+    expect(persisted.outputTokens).toBeUndefined();
   });
 });

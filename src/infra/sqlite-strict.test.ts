@@ -109,7 +109,7 @@ describe("migrateSqliteSchemaToStrict", () => {
       INSERT INTO children (id, parent_id, score) VALUES (2, 1, 3);
     `);
 
-    const result = migrateSqliteSchemaToStrict(
+    const result = migrate(
       database,
       `
         CREATE TABLE IF NOT EXISTS parents (
@@ -126,8 +126,7 @@ describe("migrateSqliteSchemaToStrict", () => {
     );
 
     expect(result.migratedTables).toEqual(["children", "parents"]);
-    expect(readStrictFlag(database, "parents")).toBe(1);
-    expect(readStrictFlag(database, "children")).toBe(1);
+    expect(strictFlags(database, "parents", "children")).toEqual([1, 1]);
     expect(database.prepare("SELECT * FROM parents").all()).toEqual([{ id: 1, name: "parent" }]);
     expect(database.prepare("SELECT * FROM children").all()).toEqual([
       { id: 2, parent_id: 1, score: 3 },

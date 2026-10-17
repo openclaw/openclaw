@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Agent, createServer } from "node:https";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
@@ -32,13 +32,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
-import {
-  closeHttpServer,
-  commandSecretFixture,
-  listenLoopback,
-  readRequestText,
-  respondJson,
-} from "./helpers/gateway-integration-fixtures.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "./helpers/tls-fixture.js";
 
 const transport = vi.hoisted(() => ({ agent: undefined as Agent | undefined }));
@@ -52,16 +45,17 @@ const ALLOWED = "oc_allowed";
 const BLOCKED = "oc_blocked";
 const DIRECT = "oc_direct";
 const SELF = "ou_current_sender";
+const MEMBER = "ou_group_member";
 const OTHER = "ou_other_member";
 const MESSAGE = "om_allowed";
 const AUTH_PATH = "/open-apis/auth/v3/tenant_access_token/internal";
 const MESSAGE_PATH = `/open-apis/im/v1/messages/${MESSAGE}`;
 const CHAT_PATH = `/open-apis/im/v1/chats/${ALLOWED}`;
+const MEMBERS_PATH = `${CHAT_PATH}/members`;
 const PINS_PATH = "/open-apis/im/v1/pins";
 const USER_PATH = `/open-apis/contact/v3/users/${MEMBER}`;
 const PEERS_PATH = "/open-apis/contact/v3/users";
 const PEERS_PAGE_TOKEN = "peers/next+%2F=";
-const READ = { action: "read", channel: "feishu", target: `chat:${ALLOWED}`, messageId: MESSAGE };
 type ActionResult = NonNullable<Awaited<ReturnType<typeof dispatchChannelMessageAction>>>;
 type ProviderRequest = { method: string; path: string; query: URLSearchParams };
 
@@ -119,7 +113,13 @@ function createOriginatingRun(currentChat = CURRENT) {
           messageActionTurnCapability: turnCapability,
           ...toolContext,
           config,
-          ...commandSecretFixture,
+          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+          resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
+            resolvedConfig,
+            diagnostics: [],
+            targetStatesByPath: {},
+            hadUnresolvedTargets: false,
+          }),
         }),
         {
           agentId: "main",
@@ -179,7 +179,10 @@ beforeAll(async () => {
   }));
   server = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM }, (request, response) => {
     void (async () => {
-      const raw = await readRequestText(request);
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      }
       const url = new URL(request.url ?? "/", origin);
       const recorded = {
         method: request.method ?? "",
@@ -188,21 +191,26 @@ beforeAll(async () => {
       };
       requests.push(recorded);
       beforeReply?.(recorded);
+      response.setHeader("content-type", "application/json");
       if (url.pathname === AUTH_PATH) {
-        const body = JSON.parse(raw) as Record<string, unknown>;
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
         if (
           request.method !== "POST" ||
           body.app_id !== appId ||
           body.app_secret !== "loopback-placeholder"
         ) {
-          respondJson(response, { code: 99991663, msg: "invalid fixture application" }, 401);
+          response.writeHead(401);
+          response.end(JSON.stringify({ code: 99991663, msg: "invalid fixture application" }));
           return;
         }
-        respondJson(response, { code: 0, tenant_access_token: `tat_${appId}`, expire: 7200 });
+        response.end(
+          JSON.stringify({ code: 0, tenant_access_token: `tat_${appId}`, expire: 7200 }),
+        );
         return;
       }
       if (request.method !== "GET" || request.headers.authorization !== `Bearer tat_${appId}`) {
-        respondJson(response, { code: 99991663, msg: "unexpected fixture request" }, 401);
+        response.writeHead(401);
+        response.end(JSON.stringify({ code: 99991663, msg: "unexpected fixture request" }));
         return;
       }
       let data: unknown;
@@ -217,8 +225,26 @@ beforeAll(async () => {
             },
           ],
         };
+      } else if (url.pathname === `${MESSAGE_PATH}/reactions`) {
+        data = {
+          items: [
+            {
+              reaction_id: "reaction-1",
+              reaction_type: { emoji_type: "THUMBSUP" },
+              operator: { operator_type: "user", operator_id: MEMBER },
+            },
+          ],
+          has_more: false,
+        };
       } else if (url.pathname === PINS_PATH) {
         data = { items: [{ message_id: MESSAGE, chat_id: ALLOWED }], has_more: false };
+      } else if (url.pathname === MEMBERS_PATH) {
+        const next = url.searchParams.get("page_token") === "members-next";
+        data = {
+          items: [{ member_id: next ? MEMBER : OTHER, member_id_type: "open_id" }],
+          has_more: !next,
+          ...(next ? {} : { page_token: "members-next" }),
+        };
       } else if (url.pathname === "/open-apis/im/v1/chats") {
         const next = url.searchParams.get("page_token") === "groups-next";
         data = {
@@ -243,15 +269,25 @@ beforeAll(async () => {
         const id = url.pathname.split("/").at(-1);
         data = { user: { open_id: id, name: id === SELF ? "Current sender" : "Allowed member" } };
       } else {
-        respondJson(response, { code: 404, msg: "unhandled fixture route" }, 404);
+        response.writeHead(404);
+        response.end(JSON.stringify({ code: 404, msg: "unhandled fixture route" }));
         return;
       }
-      respondJson(response, { code: 0, data });
+      response.end(JSON.stringify({ code: 0, data }));
     })().catch((error: unknown) => {
-      respondJson(response, { error: String(error) }, 500);
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: String(error) }));
     });
   });
-  origin = await listenLoopback(server, "https");
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected loopback TCP listener");
+  }
+  origin = `https://127.0.0.1:${address.port}`;
 });
 
 afterEach(async () => {
@@ -269,7 +305,10 @@ afterEach(async () => {
 
 afterAll(async () => {
   transport.agent?.destroy();
-  await closeHttpServer(server);
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
   vi.doUnmock("openclaw/plugin-sdk/extension-shared");
   vi.resetModules();
 });
@@ -348,27 +387,7 @@ function createFixture(
         ...overrides,
       }),
     );
-  const retire = {
-    plugin: () => {
-      record.enabled = false;
-    },
-    turn: run.revokeTurn,
-    claim: run.releaseClaim,
-  };
-  const atRequest = (path: string, effect: () => void) => {
-    beforeReply = (request) => {
-      if (request.path === path) {
-        effect();
-      }
-    };
-  };
-  const localTool = (config: OpenClawConfig = cfg) => {
-    setRuntimeConfigSnapshot(config, config);
-    const tool = run.createTool(config);
-    return (params: Record<string, unknown> = READ, signal?: AbortSignal) =>
-      track(tool.execute(randomUUID(), params, signal));
-  };
-  return { cfg, settings, dispatch, retire, atRequest, localTool };
+  return { cfg, settings, record, run, dispatch };
 }
 
 const readCases: Array<{
@@ -451,37 +470,56 @@ it("filters live directory pages before applying the limit", async () => {
   expect(contentRequests()).toContain("/open-apis/contact/v3/users");
 });
 
-it.each([false, true])(
-  "paginates live peers while the plugin is current (retired: %s)",
-  async (retired) => {
-    const fixture = createFixture();
-    fixture.settings.allowFrom = ["*"];
-    if (retired) {
-      fixture.atRequest(PEERS_PATH, fixture.retire.plugin);
+it("finds a live peer on later pages through the registered channel-list action", async () => {
+  const fixture = createFixture();
+  fixture.settings.allowFrom = ["*"];
+
+  expectResult(
+    await fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
+    { peers: [{ kind: "user", id: OTHER, name: "Other" }] },
+  );
+  const pages = requests.filter((request) => request.path === PEERS_PATH);
+  expect(pages).toHaveLength(2);
+  expect(pages[0]?.query.get("page_token")).toBeNull();
+  expect(pages[1]?.query.get("page_token")).toBe(PEERS_PAGE_TOKEN);
+  expect(contentRequests()).toEqual([PEERS_PATH, PEERS_PATH]);
+});
+
+it("stops live peer pagination when the plugin retires between pages", async () => {
+  const fixture = createFixture();
+  fixture.settings.allowFrom = ["*"];
+  beforeReply = (request) => {
+    if (request.path !== PEERS_PATH) {
+      return;
     }
-    const result = fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 });
-    if (retired) {
-      await expect(result).rejects.toThrow("no longer active");
-    } else {
-      expectResult(await result, { peers: [{ kind: "user", id: OTHER, name: "Other" }] });
-      const pages = requests.filter((request) => request.path === PEERS_PATH);
-      expect(pages.map(({ query }) => query.get("page_token"))).toEqual([null, PEERS_PAGE_TOKEN]);
-    }
-    expect(contentRequests()).toEqual(retired ? [PEERS_PATH] : [PEERS_PATH, PEERS_PATH]);
-  },
-);
+    fixture.record.enabled = false;
+  };
+
+  await expect(
+    fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
+  ).rejects.toThrow("no longer active");
+  expect(contentRequests()).toEqual([PEERS_PATH]);
+});
 
 it("cancels live peer pagination through the local message tool", async () => {
   const fixture = createFixture();
   fixture.settings.allowFrom = ["*"];
-  const execute = fixture.localTool();
+  setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
+  const tool = fixture.run.createTool(fixture.cfg);
   const controller = new AbortController();
-  fixture.atRequest(PEERS_PATH, () => controller.abort());
+  beforeReply = (request) => {
+    if (request.path === PEERS_PATH) {
+      controller.abort();
+    }
+  };
 
   await expect(
-    execute(
-      { action: "channel-list", channel: "feishu", scope: "peers", query: "Other", limit: 1 },
-      controller.signal,
+    track(
+      tool.execute(
+        "feishu-peer-directory",
+        { action: "channel-list", channel: "feishu", scope: "peers", query: "Other", limit: 1 },
+        controller.signal,
+      ),
     ),
   ).rejects.toMatchObject({ name: "AbortError" });
   expect(contentRequests()).toEqual([PEERS_PATH]);
@@ -505,42 +543,44 @@ it.each([SELF, OTHER])(
   },
 );
 
-it.each([
-  ["account", "current provider and account"],
-  ["origin", "current provider and account"],
-  ["target", "not allowed"],
-  ["reactions", "disabled"],
-  ["sticker", "disabled"],
-  ["catalog", "this account's appId"],
-] as const)("retains the %s denial before provider I/O", async (kind, error) => {
-  const fixture = createFixture();
-  let action: ChannelMessageActionName = "read";
-  let params: Record<string, unknown> = {
-    chatId: kind === "target" ? BLOCKED : ALLOWED,
-    messageId: MESSAGE,
-  };
-  const overrides =
-    kind === "account"
-      ? { requesterAccountId: "other" }
-      : kind === "origin"
-        ? { toolContext: undefined }
-        : {};
-  if (kind === "reactions") {
-    action = "reactions";
-    fixture.settings.actions.reactions = false;
-  }
-  if (kind === "sticker" || kind === "catalog") {
-    action = "sticker-search";
-    params = { query: "thumbs" };
-    if (kind === "sticker") {
-      fixture.settings.actions.sticker = false;
-    } else {
-      delete fixture.settings.stickerSets[fixture.settings.appId];
+it.each(["account", "origin", "target", "reactions", "sticker", "catalog"] as const)(
+  "retains the %s denial before provider I/O",
+  async (kind) => {
+    const fixture = createFixture();
+    let action: ChannelMessageActionName = "read";
+    let params: Record<string, unknown> = { chatId: ALLOWED, messageId: MESSAGE };
+    let overrides: Partial<ChannelMessageActionContext> = {};
+    let error = "current provider and account";
+    if (kind === "account") {
+      overrides = { requesterAccountId: "other" };
     }
-  }
-  await expect(fixture.dispatch(action, params, overrides)).rejects.toThrow(error);
-  expect(requests).toEqual([]);
-});
+    if (kind === "origin") {
+      overrides = { toolContext: undefined };
+    }
+    if (kind === "target") {
+      params.chatId = BLOCKED;
+      error = "not allowed";
+    }
+    if (kind === "reactions") {
+      action = "reactions";
+      fixture.settings.actions.reactions = false;
+      error = "disabled";
+    }
+    if (kind === "sticker" || kind === "catalog") {
+      action = "sticker-search";
+      params = { query: "thumbs" };
+      if (kind === "sticker") {
+        fixture.settings.actions.sticker = false;
+        error = "disabled";
+      } else {
+        delete fixture.settings.stickerSets[fixture.settings.appId];
+        error = "this account's appId";
+      }
+    }
+    await expect(fixture.dispatch(action, params, overrides)).rejects.toThrow(error);
+    expect(requests).toEqual([]);
+  },
+);
 
 it.each([
   ["plugin", "metadata"],
@@ -549,42 +589,90 @@ it.each([
   ["claim", "result"],
 ] as const)("rejects %s retirement at %s", async (owner, phase) => {
   const fixture = createFixture();
-  fixture.atRequest(phase === "metadata" ? CHAT_PATH : PINS_PATH, fixture.retire[owner]);
+  beforeReply = (request) => {
+    if (request.path !== (phase === "metadata" ? CHAT_PATH : PINS_PATH)) {
+      return;
+    }
+    if (owner === "plugin") {
+      fixture.record.enabled = false;
+    }
+    if (owner === "turn") {
+      fixture.run.revokeTurn();
+    }
+    if (owner === "claim") {
+      fixture.run.releaseClaim();
+    }
+  };
   await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
     "no longer active",
   );
   expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
 
-it.each([
-  ["sticker-search", "claim", { query: "thumbs" }, { stickers: [{ fileId: "file_allowed" }] }],
-  ["channel-list", "plugin", {}, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] }],
-  ["member-info", "turn", { chatId: DIRECT }, { members: [{ member_id: SELF }] }],
-] as const)("rejects a retired local %s result", async (action, owner, params, details) => {
-  const fixture = createFixture({ currentChat: action === "member-info" ? DIRECT : CURRENT });
-  let observed: ActionResult | undefined;
-  afterProviderResult = (result) => {
-    observed = result;
-    fixture.retire[owner]();
-  };
-  await expect(fixture.dispatch(action, params)).rejects.toThrow("no longer active");
-  expectResult(observed ?? null, details);
-  expect(contentRequests()).toEqual(
-    action === "member-info" ? [`/open-apis/im/v1/chats/${DIRECT}`] : [],
-  );
-});
+it.each(["sticker-search", "channel-list", "member-info"] as const)(
+  "rejects a retired local %s result",
+  async (action) => {
+    const fixture = createFixture({ currentChat: action === "member-info" ? DIRECT : CURRENT });
+    let observed: ActionResult | undefined;
+    afterProviderResult = (result) => {
+      observed = result;
+      if (action === "sticker-search") {
+        fixture.run.releaseClaim();
+      }
+      if (action === "channel-list") {
+        fixture.record.enabled = false;
+      }
+      if (action === "member-info") {
+        fixture.run.revokeTurn();
+      }
+    };
+    const params =
+      action === "sticker-search"
+        ? { query: "thumbs" }
+        : action === "member-info"
+          ? { chatId: DIRECT }
+          : {};
+    await expect(fixture.dispatch(action, params)).rejects.toThrow("no longer active");
+    if (action === "sticker-search") {
+      expectResult(observed ?? null, { stickers: [{ fileId: "file_allowed" }] });
+    }
+    if (action === "channel-list") {
+      expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
+    }
+    if (action === "member-info") {
+      expectResult(observed ?? null, { members: [{ member_id: SELF }] });
+    }
+    expect(contentRequests()).toEqual(
+      action === "member-info" ? [`/open-apis/im/v1/chats/${DIRECT}`] : [],
+    );
+  },
+);
 
 it.each(["allowed", "turn", "claim"] as const)(
   "uses the normal local message tool (%s)",
   async (mode) => {
     const fixture = createFixture();
-    const execute = fixture.localTool();
-    fixture.atRequest(CHAT_PATH, () => {
-      if (mode !== "allowed") {
-        fixture.retire[mode]();
+    setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
+    const tool = fixture.run.createTool(fixture.cfg);
+    beforeReply = (request) => {
+      if (request.path !== CHAT_PATH) {
+        return;
       }
-    });
-    const result = execute();
+      if (mode === "turn") {
+        fixture.run.revokeTurn();
+      }
+      if (mode === "claim") {
+        fixture.run.releaseClaim();
+      }
+    };
+    const result = track(
+      tool.execute("feishu-read", {
+        action: "read",
+        channel: "feishu",
+        target: `chat:${ALLOWED}`,
+        messageId: MESSAGE,
+      }),
+    );
     if (mode === "allowed") {
       expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
     } else {
@@ -604,7 +692,8 @@ it("rejects a configured account disabled after local message-tool creation", as
       },
     },
   } satisfies OpenClawConfig;
-  const execute = fixture.localTool(cfg);
+  setRuntimeConfigSnapshot(cfg, cfg);
+  const tool = fixture.run.createTool(cfg);
   cfg.channels.feishu.accounts.default.enabled = false;
   setRuntimeConfigSnapshot(cfg, cfg);
   expect(feishuPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
@@ -612,8 +701,16 @@ it("rejects a configured account disabled after local message-tool creation", as
     enabled: false,
   });
 
-  await expect(execute({ ...READ, accountId: "default" })).rejects.toThrow(
-    'Account "default" for channel feishu is disabled.',
-  );
+  await expect(
+    track(
+      tool.execute("feishu-disabled-read", {
+        action: "read",
+        channel: "feishu",
+        accountId: "default",
+        target: `chat:${ALLOWED}`,
+        messageId: MESSAGE,
+      }),
+    ),
+  ).rejects.toThrow('Account "default" for channel feishu is disabled.');
   expect(requests).toEqual([]);
 });

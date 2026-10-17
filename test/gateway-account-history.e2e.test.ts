@@ -107,7 +107,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
   const origin = await listenLoopback(transport);
   const instance = await createModelGatewayProof({
     name: "account-history",
-    baseUrl: origin,
+    baseUrl: `${origin}/v1`,
     modelId: "history-proof",
     config: (base) => {
       const defaults = base.agents!.defaults!;

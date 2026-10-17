@@ -118,7 +118,10 @@ function observeInputAdmission(
                 }
                 counts.committed++;
                 const owned = expectDefined(admission, "real staging admission");
-                const committedInput = expectDefined(isRecord(input) ? input : undefined);
+                const committedInput = expectDefined(
+                  isRecord(input) ? input : undefined,
+                  "committed input",
+                );
                 expect(owned.committed?.facts).toMatchObject(
                   actor
                     ? {

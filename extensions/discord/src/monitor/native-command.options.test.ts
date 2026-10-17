@@ -59,7 +59,7 @@ function createNativeCommand(
       ? listNativeCommandSpecs({ provider: "discord" }).find((entry) => entry.name === spec)
       : spec;
   if (!command) {
-    throw new Error(`missing native command: ${spec}`);
+    throw new Error(`missing native command: ${typeof spec === "string" ? spec : spec.name}`);
   }
   return createDiscordNativeCommand({
     readPolicy,

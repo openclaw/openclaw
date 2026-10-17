@@ -31,7 +31,8 @@ vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/command-status-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/command-status-runtime")>()),
   resolveDirectStatusReplyForSession: runtimeModuleMocks.resolveDirectStatusReplyForSession,
 }));
 
@@ -40,7 +41,8 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   recordDeliveredCommandExchange: runtimeModuleMocks.recordDeliveredCommandExchange,
 }));
 
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
   loadWebMedia: runtimeModuleMocks.loadWebMedia,
 }));
 

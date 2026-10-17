@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   AcpxRuntime as BaseAcpxRuntime,
+  type AcpRuntimeOptions,
   createAgentRegistry,
   createFileSessionStore,
 } from "acpx/runtime";
@@ -220,7 +221,7 @@ it("binds the prepared launch command to its selected ACP agent", async () => {
       permissionMode: "deny-all",
     },
     {
-      probeRunner: async (options) => {
+      probeRunner: async (options: AcpRuntimeOptions) => {
         expect(options.agentRegistry.resolve("codex")).toEqual(codex);
         expect(options.agentRegistry.resolve("claude")).toEqual(claude);
         return { ok: true, message: "ready" };

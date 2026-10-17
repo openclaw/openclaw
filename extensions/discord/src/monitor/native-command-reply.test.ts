@@ -16,7 +16,10 @@ import {
 } from "./native-command-reply.js";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/web-media", () => ({ loadWebMedia: loadWebMediaMock }));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: loadWebMediaMock,
+}));
 
 function createInteraction() {
   return {

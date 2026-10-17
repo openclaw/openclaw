@@ -6,6 +6,7 @@ import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
 import {
   SOURCE_FENCE_ACCEPTED,
   SQLITE_WORKER_SOURCE_FENCE,
+  type SqliteSourceFence,
   type SqliteSourceFenceIdentity,
 } from "./sqlite-source-fence-contract.js";
 import type { SqliteWorkerPreparedBackend } from "./sqlite-worker-contract.js";
@@ -50,44 +51,54 @@ export type FenceFixtureOperations = {
   };
 };
 
+type FixtureBackend = SqliteWorkerPreparedBackend<FenceFixtureOperations> & {
+  [SQLITE_WORKER_SOURCE_FENCE](command: {
+    type: "persist";
+    input: FenceFixtureCommand;
+  }): SqliteSourceFence;
+};
+
 export const openExistingSqliteWorkerBackend = createSqliteWorkerBackend;
 
-function openBinding(identity: SqliteSourceFenceIdentity, path = identity.physical.canonicalPath) {
-  return { identity, database: openNodeSqliteDatabase(resolveExistingSqliteFileUri(path)) };
-}
-
-function readRevision(database: ReturnType<typeof openNodeSqliteDatabase>) {
-  return Number(database.prepare("SELECT revision FROM authority WHERE id = 1").get()?.revision);
-}
-
 /** Worker-only fault injection keeps barriers at the real native transaction boundary. */
-export function createSqliteWorkerBackend(
-  input: FenceFixtureInput,
-): SqliteWorkerPreparedBackend<FenceFixtureOperations> {
+export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBackend {
   const words: unknown = getEnvironmentData(FENCE_FIXTURE_ENV);
   assert(words instanceof SharedArrayBuffer);
   const barrier = new Int32Array(words);
-  const destinationBinding = openBinding(input.destination);
-  const sourceBinding = openBinding(input.source);
-  const aliasBinding = input.aliasPath ? openBinding(input.source, input.aliasPath) : undefined;
-  const { database: destination } = destinationBinding;
-  const { database: source } = sourceBinding;
-  const databases = [destination, source, ...(aliasBinding ? [aliasBinding.database] : [])];
+  const destination = openNodeSqliteDatabase(
+    resolveExistingSqliteFileUri(input.destination.physical.canonicalPath),
+  );
+  const source = openNodeSqliteDatabase(
+    resolveExistingSqliteFileUri(input.source.physical.canonicalPath),
+  );
+  const alias = input.aliasPath
+    ? openNodeSqliteDatabase(resolveExistingSqliteFileUri(input.aliasPath))
+    : undefined;
+  const sources = [source, ...(alias ? [alias] : [])];
+  const destinationBinding = { database: destination, identity: input.destination };
+  const sourceBinding = { database: source, identity: input.source };
+  const aliasBinding = alias ? { database: alias, identity: input.source } : undefined;
   let current: FenceFixtureCommand | undefined;
   let sourceRevision = -1;
   let validatedSource = source;
   let retryObserved = false;
-  const pause = (stage: number) => {
-    assert(current?.barrier !== undefined);
+  const signal = (stage: number) => {
+    if (current?.barrier === undefined) {
+      return;
+    }
     const offset = current.barrier * 4;
     Atomics.store(barrier, offset, stage);
     Atomics.notify(barrier, offset);
-    const release = offset + 1;
+  };
+  const pause = (stage: number) => {
+    assert(current?.barrier !== undefined);
+    signal(stage);
+    const release = current.barrier * 4 + 1;
     while (Atomics.load(barrier, release) === 0) {
       Atomics.wait(barrier, release, 0);
     }
   };
-  for (const db of databases) {
+  for (const db of [destination, ...sources]) {
     db.exec("PRAGMA busy_timeout = 10000");
     const exec = db.exec.bind(db);
     db.exec = (sql: string) => {
@@ -113,7 +124,9 @@ export function createSqliteWorkerBackend(
       try {
         exec(sql);
       } catch (error) {
-        retryObserved ||= sql === "BEGIN IMMEDIATE" && current?.observeRetry === true;
+        if (sql === "BEGIN IMMEDIATE" && current?.observeRetry) {
+          retryObserved = true;
+        }
         throw error;
       }
       if (sql === "ROLLBACK" && retryObserved) {
@@ -132,12 +145,11 @@ export function createSqliteWorkerBackend(
         validate(resolve) {
           const db = resolve(selected);
           validatedSource = db;
-          sourceRevision = readRevision(db);
-          assert.equal(
-            sourceRevision,
-            current?.expectedRevision,
-            "Fixture source authority was revoked",
-          );
+          const row = db.prepare("SELECT revision FROM authority WHERE id = 1").get();
+          sourceRevision = Number(row?.revision);
+          if (sourceRevision !== current?.expectedRevision) {
+            throw new Error("Fixture source authority was revoked");
+          }
           if (current.pause === "validate") {
             pause(1);
           }
@@ -152,7 +164,9 @@ export function createSqliteWorkerBackend(
       destination
         .prepare("INSERT INTO requests (id, revision) VALUES (?, ?)")
         .run(id, sourceRevision);
-      assert.notEqual(fault, "kernel", "Fixture mutation failed between destination rows");
+      if (fault === "kernel") {
+        throw new Error("Fixture mutation failed between destination rows");
+      }
       destination.prepare("INSERT INTO lifecycles (id) VALUES (?)").run(id);
       const result: FenceFixtureOperations["persist"]["output"] = { id, revision: sourceRevision };
       if (fault === "host-admission") {
@@ -165,7 +179,10 @@ export function createSqliteWorkerBackend(
         assert(
           deferSqlitePostCommitPublication(destination, () => {
             validatedSource.prepare("UPDATE authority SET revision = 2 WHERE id = 1").run();
-            result.notifiedRevision = readRevision(validatedSource);
+            result.notifiedRevision = Number(
+              validatedSource.prepare("SELECT revision FROM authority WHERE id = 1").get()
+                ?.revision,
+            );
           }),
         );
       }
@@ -175,13 +192,14 @@ export function createSqliteWorkerBackend(
       return result;
     },
     assertSettled() {
-      assert(
-        databases.every((db) => !db.isOpen || !db.isTransaction),
-        "Fixture native transaction did not settle",
-      );
+      for (const db of [destination, ...sources]) {
+        if (db.isOpen && db.isTransaction) {
+          throw new Error("Fixture native transaction did not settle");
+        }
+      }
     },
     close() {
-      for (const db of databases) {
+      for (const db of [destination, ...sources]) {
         if (db.isOpen) {
           db.close();
         }

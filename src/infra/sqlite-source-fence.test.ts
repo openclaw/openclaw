@@ -146,7 +146,7 @@ async function pausedPersist(
     awaitGateBeforeSettlement(gate.reached(stage), operation.result, `${phase} gate not reached`),
     signal,
   );
-  return { ...operation, release: gate.release };
+  return { ...operation, release: () => gate.release() };
 }
 
 function owner(identity: SqliteSourceFenceIdentity) {

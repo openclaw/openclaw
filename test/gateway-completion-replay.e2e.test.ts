@@ -46,7 +46,7 @@ it(
     servers.push(model);
     const instance = await createModelGatewayProof({
       name: "gateway-completion-replay",
-      baseUrl: model.url,
+      baseUrl: `${model.url}/v1`,
       modelId: "completion-replay",
       toolProfile: "coding",
       config: (base) => ({

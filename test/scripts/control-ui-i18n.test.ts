@@ -359,14 +359,14 @@ describe("control-ui-i18n generated ownership", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     const catalog: unknown = JSON.parse(result.stdout);
-    const source = flattenControlUiCatalog(catalog, "en");
+    const source = flattenCatalog(catalog, "en");
     for (const fragment of [
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
-      const lazyCopy = flattenControlUiCatalog(fragment, "lazy copy");
+      const lazyCopy = flattenCatalog(fragment, "lazy copy");
       for (const [key, value] of lazyCopy) {
         expect(source.get(key), key).toBe(value);
       }

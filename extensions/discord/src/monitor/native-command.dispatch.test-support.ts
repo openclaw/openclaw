@@ -27,14 +27,15 @@ export function forwardNativeCommand(
       cfg: plan.cfg,
       dispatcherOptions: {
         ...plan.dispatcherOptions,
-        deliver: requireDelivery
-          ? async (payload, info) => {
-              if (!deliver) {
-                throw new Error("expected core-managed Discord delivery");
-              }
-              await deliver(payload, info);
+        deliver: async (payload, info) => {
+          if (!deliver) {
+            if (requireDelivery) {
+              throw new Error("expected core-managed Discord delivery");
             }
-          : deliver,
+            return;
+          }
+          await deliver(payload, info);
+        },
         onError: plan.delivery.onError,
       },
       replyOptions: plan.replyOptions,
