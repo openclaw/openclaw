@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
@@ -203,7 +202,6 @@ it("retains the borrowed source through pending preparation and failed published
   await started.promise;
   const closing = closePath(options.path).catch((error: unknown) => error);
   expectCalls(0, release, mock.read);
-  assert(finishProducer);
   finishProducer();
   expect(await closing).toMatchObject({
     message: expect.stringMatching(/snapshot cleanup failed/),
@@ -302,7 +300,7 @@ it("retries transport stop and settles the already-selected query", async () => 
 
 it("joins maintenance reads and retries their transport before closing scoped handles", async () => {
   const scope = createMaintenance();
-  const { started } = startPendingRead();
+  const { started, finish } = startPendingRead();
   const events: string[] = [];
   const failure = new Error("transport stop not acknowledged");
   mock.close
@@ -320,7 +318,7 @@ it("joins maintenance reads and retries their transport before closing scoped ha
   const closing = scope.close();
   const closeAssertion = expect(closing).rejects.toBe(failure);
   expect(events).toEqual([]);
-  finishProducer();
+  finish();
   await assertion;
   await closeAssertion;
   expect(events).toEqual([]);
