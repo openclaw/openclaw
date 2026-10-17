@@ -38,7 +38,9 @@ describe("AppSidebar agent-only roster", () => {
     expect(working().querySelector(".sidebar-child-session-toggle__count")).toBeNull();
 
     result.sessions = result.sessions.map((row) =>
-      row.agentId === "working" ? { ...row, hasActiveRun: false, status: "done" } : row,
+      row.agentId === "working"
+        ? Object.assign({}, row, { hasActiveRun: false, status: "done" })
+        : row,
     );
     await rosterActivityStore(context).refresh();
     await settleRoster(sidebar);

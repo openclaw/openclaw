@@ -5,6 +5,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
@@ -21,7 +22,7 @@ const agentsList: AgentsListResult = {
     { id: "writing", name: "Writing", identity: { avatarUrl: imageAvatar } },
   ],
 };
-const rows: GatewaySessionRow[] = [
+const rows: Array<GatewaySessionRow & ControlUiSessionFixture> = [
   {
     key: "agent:main:project",
     agentId: "main",

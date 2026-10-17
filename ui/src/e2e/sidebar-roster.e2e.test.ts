@@ -5,6 +5,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
@@ -19,28 +20,30 @@ const agentsList: AgentsListResult = {
     { id: "scout", name: "Scout", identity: { emoji: "🔭" } },
   ],
 };
-const rows: GatewaySessionRow[] = agentsList.agents.flatMap((agent) => [
-  {
-    key: `agent:${agent.id}:main`,
-    agentId: agent.id,
-    kind: "direct",
-    isMain: true,
-    updatedAt: 100,
-    lastAssistantMessage: {
-      text: `${agent.name} is ready for the next task.`,
-      timestamp: 100,
+const rows: Array<GatewaySessionRow & ControlUiSessionFixture> = agentsList.agents.flatMap(
+  (agent) => [
+    {
+      key: `agent:${agent.id}:main`,
+      agentId: agent.id,
+      kind: "direct",
+      isMain: true,
+      updatedAt: 100,
+      lastAssistantMessage: {
+        text: `${agent.name} is ready for the next task.`,
+        timestamp: 100,
+      },
     },
-  },
-  {
-    key: `agent:${agent.id}:project`,
-    agentId: agent.id,
-    kind: "direct",
-    updatedAt: 99,
-    hasActiveRun: agent.id === "forge",
-    status: agent.id === "forge" ? "running" : "done",
-    unread: agent.id === "scout",
-  },
-]);
+    {
+      key: `agent:${agent.id}:project`,
+      agentId: agent.id,
+      kind: "direct",
+      updatedAt: 99,
+      hasActiveRun: agent.id === "forge",
+      status: agent.id === "forge" ? "running" : "done",
+      unread: agent.id === "scout",
+    },
+  ],
+);
 const sessions: SessionsListResult = {
   ts: 100,
   path: "",
@@ -138,7 +141,7 @@ suite.define(() => {
         await expect
           .poll(async () =>
             (await gateway.getRequests("sessions.list")).some(
-              (request) => request.params?.agentId === "forge",
+              (request) => (request.params as { agentId?: string })?.agentId === "forge",
             ),
           )
           .toBe(true);
