@@ -91,15 +91,13 @@ function fakeBroker() {
   };
 }
 
-function desktopHarness(
-  record: WorkerEnvironmentRecord,
-  options: {
-    getRecord?: () => WorkerEnvironmentRecord | undefined;
-    isProofCurrent?: () => boolean;
-  } = {},
-) {
+function desktopHarness(record: WorkerEnvironmentRecord, mutableRecord = false) {
   const proof = nodeProof(record.nodeDeviceId!);
-  const isProofCurrent = options.isProofCurrent ?? (() => true);
+  const authority: { record: WorkerEnvironmentRecord | undefined; proofCurrent: boolean } = {
+    record,
+    proofCurrent: true,
+  };
+  const isProofCurrent = () => authority.proofCurrent;
   const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(
     async (request) =>
       new Promise((resolve) => {
@@ -122,7 +120,7 @@ function desktopHarness(
   const streamed = fakeBroker();
   const registry = createDesktopSessionRegistry();
   const carrier = createWorkerNodeDesktopCarrier({
-    store: options.getRecord ? { get: options.getRecord } : support.testState.store,
+    store: mutableRecord ? { get: () => authority.record } : support.testState.store,
     desktopRegistry: registry,
   });
   carrier.bindRuntime({ transport: nodeTransport, streamBroker: streamed.broker });
@@ -132,7 +130,16 @@ function desktopHarness(
   });
   const waitInvoked = (count = 1) =>
     support.waitForFast(() => expect(invoke).toHaveBeenCalledTimes(count));
-  return { carrier, registry, proof, invoke, transport: nodeTransport, streamed, waitInvoked };
+  return {
+    authority,
+    carrier,
+    registry,
+    proof,
+    invoke,
+    transport: nodeTransport,
+    streamed,
+    waitInvoked,
+  };
 }
 
 support.setupWorkerEnvironmentServiceSuite();
@@ -227,9 +234,7 @@ it.each(["connection close", "token release"] as const)(
   "releases abandoned observer slots on %s without disturbing another viewer",
   async (release) => {
     const record = await support.seedReadyNodeDesktop("worker-desktop-abandon");
-    const { carrier, registry, streamed, waitInvoked } = desktopHarness(record, {
-      getRecord: () => record,
-    });
+    const { carrier, registry, streamed, waitInvoked } = desktopHarness(record, true);
     const controller = new AbortController();
     const requester = desktopRequester(controller);
     const closeKeeper = vi.fn();
@@ -297,10 +302,10 @@ it.each(["observation release", "epoch replacement"] as const)(
   "joins retiring invocation settlement when stop overlaps %s",
   async (retirement) => {
     const record = await support.seedReadyNodeDesktop("worker-desktop-release-stop");
-    let current = record;
-    const { carrier, registry, invoke, streamed, waitInvoked } = desktopHarness(record, {
-      getRecord: () => current,
-    });
+    const { authority, carrier, registry, invoke, streamed, waitInvoked } = desktopHarness(
+      record,
+      true,
+    );
     const invocation = deferred<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
     const completionOrder: string[] = [];
     invoke.mockImplementation(async () => {
@@ -325,7 +330,8 @@ it.each(["observation release", "epoch replacement"] as const)(
       await waitInvoked();
       const stream = streamed.attachNext();
       const observed = await observing;
-      current = replacing ? { ...record, ownerEpoch: record.ownerEpoch + 1 } : record;
+      const current = replacing ? { ...record, ownerEpoch: record.ownerEpoch + 1 } : record;
+      authority.record = current;
       const retiring = replacing
         ? carrier.observe({ record: current, control: false, requester }).then(
             () => true,
@@ -374,12 +380,7 @@ it.each([undefined, "worker"])(
     }
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    let current: WorkerEnvironmentRecord | undefined = record;
-    let proofCurrent = true;
-    const { carrier, invoke, streamed, waitInvoked } = desktopHarness(record, {
-      getRecord: () => current,
-      isProofCurrent: () => proofCurrent,
-    });
+    const { authority, carrier, invoke, streamed, waitInvoked } = desktopHarness(record, true);
 
     const observing = carrier.observe({ record, control: false, requester });
     await waitInvoked();
@@ -424,8 +425,8 @@ it.each([undefined, "worker"])(
       }),
     );
 
-    current = undefined;
-    proofCurrent = false;
+    authority.record = undefined;
+    authority.proofCurrent = false;
     await carrier.stop(record.environmentId, record.ownerEpoch);
     expect(streamed.streams[0]?.destroyed).toBe(true);
   },
@@ -437,7 +438,7 @@ it.each([
 ])("rejects cloud ARD metadata without managed account authentication: %j", async (metadata) => {
   const record = await support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
   record.desktop = { ...record.desktop!, username: "worker" };
-  const { carrier, streamed, waitInvoked } = desktopHarness(record, { getRecord: () => record });
+  const { carrier, streamed, waitInvoked } = desktopHarness(record, true);
   const observing = carrier.observe({ record, control: false });
   await waitInvoked();
   const stream = streamed.attachNext(metadata);
@@ -491,17 +492,15 @@ it.each([
   if (record.leaseId === null) {
     throw new Error("Expected a leased desktop fixture");
   }
-  let current: WorkerEnvironmentRecord | undefined = record;
-  let proofCurrent = true;
-  const { carrier, streamed, waitInvoked } = desktopHarness(record, {
-    ...(_name === "pairing proof" ? {} : { getRecord: () => current }),
-    isProofCurrent: () => proofCurrent,
-  });
+  const { authority, carrier, streamed, waitInvoked } = desktopHarness(
+    record,
+    _name !== "pairing proof",
+  );
 
   const observing = carrier.observe({ record, control: true });
   await waitInvoked();
-  current = mutate(record);
-  proofCurrent = _name !== "pairing proof";
+  authority.record = mutate(record);
+  authority.proofCurrent = _name !== "pairing proof";
   const stream = streamed.attachNext();
 
   await expect(observing).rejects.toThrow(
@@ -547,12 +546,7 @@ it.each([
   const record = await support.seedReadyNodeDesktop(
     `worker-node-desktop-${name.replaceAll(" ", "-")}`,
   );
-  let current: WorkerEnvironmentRecord | undefined = record;
-  let proofCurrent = true;
-  const { carrier, invoke, waitInvoked } = desktopHarness(record, {
-    ...(stale ? { getRecord: () => current } : {}),
-    isProofCurrent: () => proofCurrent,
-  });
+  const { authority, carrier, invoke, waitInvoked } = desktopHarness(record, Boolean(stale));
   const invocation = deferred<{ ok: boolean; payloadJSON: string | null }>();
   invoke.mockImplementation(async () =>
     stale ? await invocation.promise : { ok: true, payloadJSON },
@@ -561,9 +555,9 @@ it.each([
   if (stale) {
     await waitInvoked();
     if (stale === "durable owner") {
-      current = { ...record, ownerEpoch: record.ownerEpoch + 1 };
+      authority.record = { ...record, ownerEpoch: record.ownerEpoch + 1 };
     } else {
-      proofCurrent = false;
+      authority.proofCurrent = false;
     }
     invocation.resolve({ ok: true, payloadJSON });
   }

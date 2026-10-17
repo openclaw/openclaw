@@ -204,32 +204,30 @@ it.each(["operator", "gateway"] as const)(
 );
 
 it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", async () => {
+  using cleanup = new DisposableStack();
   const sql = observeLocalWorkspaceStoreSql();
-  try {
-    sql.calibrate();
-    const projection = await prepare();
-    await writeText(projection, "source.txt", "worker-persisted edit\n");
-    await synchronize();
-    await expectText(canonical, "source.txt", "worker-persisted edit\n");
-    const baseline = await withLocalWorkspaceStore(
-      { worktreeId: owner.worktree.id },
-      async (store) => {
-        const row = store.get()!;
-        const value = row.baseline_json + " ".repeat(6 * 1024 * 1024);
-        await store.update(row, {
-          baseline_json: value,
-          baseline_ref: "sha256:" + createHash("sha256").update(value).digest("hex"),
-        });
-        return value;
-      },
-    );
-    await withLocalWorkspaceProjection(owner, async (state) => {
-      expect(state.current().baseline_json).toBe(baseline);
-    });
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+  cleanup.defer(sql.restore);
+  sql.calibrate();
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "worker-persisted edit\n");
+  await synchronize();
+  await expectText(canonical, "source.txt", "worker-persisted edit\n");
+  const baseline = await withLocalWorkspaceStore(
+    { worktreeId: owner.worktree.id },
+    async (store) => {
+      const row = store.get()!;
+      const value = row.baseline_json + " ".repeat(6 * 1024 * 1024);
+      await store.update(row, {
+        baseline_json: value,
+        baseline_ref: "sha256:" + createHash("sha256").update(value).digest("hex"),
+      });
+      return value;
+    },
+  );
+  await withLocalWorkspaceProjection(owner, async (state) => {
+    expect(state.current().baseline_json).toBe(baseline);
+  });
+  sql.expectIdle();
 });
 
 it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
