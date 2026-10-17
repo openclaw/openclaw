@@ -67,6 +67,31 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 Sets `huggingface/deepseek-ai/DeepSeek-R1` as the default model.
 
+## Device-code login
+
+If you have a [Hugging Face public OAuth app](https://huggingface.co/docs/hub/oauth)
+with the `inference-api` scope enabled and no client secret, sign in with:
+
+```bash
+openclaw models auth login --provider huggingface --method oauth
+```
+
+Enter your app's public client ID, then open the displayed Hugging Face URL on
+any device and enter the code. The Gateway host does not need a browser or an
+inbound callback port. An `HF_TOKEN` is an access token, not an OAuth client ID.
+OpenClaw does not register an app or borrow another application's client ID.
+
+OpenClaw saves the client ID with refreshable credentials in its existing auth
+profile store. Access-token expiry comes from Hugging Face's `expires_in` response.
+When a refresh token is issued, OpenClaw refreshes access automatically and saves
+any rotated refresh token. If Hugging Face issues only an access token, OpenClaw
+stores it as an expiring token and you must sign in again after expiry. Revoked
+or expired refresh grants also require a new login.
+
+The app needs only `inference-api`; this flow does not request Hub repository,
+organization, profile, or email permissions. API-key onboarding remains available
+without an OAuth app.
+
 ## Model IDs
 
 Model refs use the form `huggingface/<org>/<model>` (Hub-style IDs). OpenClaw's built-in catalog:
