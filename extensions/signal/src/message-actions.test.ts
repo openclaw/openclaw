@@ -63,31 +63,21 @@ describe("signalMessageActions", () => {
     removeReactionSignalMock.mockClear();
   });
 
-  it("lists actions based on configured accounts and reaction gates", () => {
+  it.each([
+    ["unconfigured", {}, undefined, []],
+    [
+      "reactions disabled",
+      { channels: { signal: { account: "+15550001111", actions: { reactions: false } } } },
+      undefined,
+      ["send"],
+    ],
+    ["any enabled account", createSignalAccountOverrideCfg(), undefined, ["send", "react"]],
+    ["default account", createSignalAccountOverrideCfg(), "default", ["send"]],
+    ["work account", createSignalAccountOverrideCfg(), "work", ["send", "react"]],
+  ] as const)("discovers actions for %s", (_name, cfg, accountId, actions) => {
     expect(
-      signalMessageActions.describeMessageTool?.({ cfg: {} as OpenClawConfig })?.actions ?? [],
-    ).toStrictEqual([]);
-    expect(
-      signalMessageActions.describeMessageTool?.({
-        cfg: {
-          channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
-        } as OpenClawConfig,
-      })?.actions,
-    ).toEqual(["send"]);
-    expect(
-      signalMessageActions.describeMessageTool?.({ cfg: createSignalAccountOverrideCfg() })
-        ?.actions,
-    ).toEqual(["send", "react"]);
-  });
-
-  it("honors account-scoped reaction gates during discovery", () => {
-    const cfg = createSignalAccountOverrideCfg();
-    expect(
-      signalMessageActions.describeMessageTool?.({ cfg, accountId: "default" })?.actions,
-    ).toEqual(["send"]);
-    expect(signalMessageActions.describeMessageTool?.({ cfg, accountId: "work" })?.actions).toEqual(
-      ["send", "react"],
-    );
+      signalMessageActions.describeMessageTool?.({ cfg, accountId })?.actions ?? [],
+    ).toStrictEqual(actions);
   });
 
   it("supports only reactions for plugin dispatch", () => {
@@ -206,35 +196,25 @@ describe("signalMessageActions", () => {
     }
   });
 
-  it("binds provider reactions to the canonical target", async () => {
-    const added = await react({
-      to: "+15559999999",
-      recipient: "+15558888888",
-      messageId: "123",
-      emoji: "✅",
-    });
-    expect(sendReactionSignalMock).toHaveBeenCalledWith(
-      "+15559999999",
-      123,
-      "✅",
-      expect.objectContaining({ accountId: "default" }),
-    );
-    expect(added?.details).toEqual({ ok: true, added: "✅" });
-    const removed = await react({
-      to: "+15559999999",
-      recipient: "+15558888888",
-      messageId: "123",
-      emoji: "✅",
-      remove: true,
-    });
-    expect(removeReactionSignalMock).toHaveBeenCalledWith(
-      "+15559999999",
-      123,
-      "✅",
-      expect.objectContaining({ accountId: "default" }),
-    );
-    expect(removed?.details).toEqual({ ok: true, removed: "✅" });
-  });
+  it.each([false, true])(
+    "binds provider reactions to the canonical target (remove=%s)",
+    async (remove) => {
+      const result = await react({
+        to: "+15559999999",
+        recipient: "+15558888888",
+        messageId: "123",
+        emoji: "✅",
+        ...(remove ? { remove } : {}),
+      });
+      expect(remove ? removeReactionSignalMock : sendReactionSignalMock).toHaveBeenCalledWith(
+        "+15559999999",
+        123,
+        "✅",
+        expect.objectContaining({ accountId: "default" }),
+      );
+      expect(result?.details).toEqual({ ok: true, [remove ? "removed" : "added"]: "✅" });
+    },
+  );
 
   it.each([
     {
