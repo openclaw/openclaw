@@ -17,31 +17,40 @@ afterEach(() => {
   resetDatabaseEngineSelectionForTest();
 });
 
-it("selects the fresh target only after the reset owner's old-engine cleanup", async () => {
+it.each([
+  { scope: "config+creds+sessions", sourceEngine: "postgres" },
+  { scope: "config", sourceEngine: undefined },
+] as const)("selects the fresh target after $scope cleanup", async ({ scope, sourceEngine }) => {
   resetDatabaseEngineSelectionForTest();
-  await withOpenClawTestState({ label: "onboard-reset-engine" }, async (state) => {
-    await state.writeConfig({
-      database: {
-        engine: "postgres",
-        postgres: {
-          connection: "postgresql://127.0.0.1:1/synthetic",
-          schemaPrefix: "reset_source",
+  await withOpenClawTestState(
+    { label: "onboard-reset-engine", env: { OPENCLAW_TEST_RESET_DSN_UNAVAILABLE: undefined } },
+    async (state) => {
+      await state.writeConfig({
+        database: {
+          engine: "postgres",
+          postgres: {
+            connection:
+              scope === "config"
+                ? { source: "env", provider: "default", id: "OPENCLAW_TEST_RESET_DSN_UNAVAILABLE" }
+                : "postgresql://127.0.0.1:1/synthetic",
+            schemaPrefix: "reset_source",
+          },
         },
-      },
-      plugins: { enabled: false },
-    });
-    vi.spyOn(interactive, "hasInteractiveOnboardingTty").mockReturnValue(true);
-    // Exercise the real owner without performing any Trash operation.
-    const cleanup = vi.spyOn(helpers, "handleReset").mockImplementation(async () => {
-      expect(getScopedDatabaseEngineSelection()?.effectiveEngines.state).toBe("postgres");
-      await fs.unlink(state.configPath);
-    });
-    const setup = vi.spyOn(guided, "runGuidedOnboarding").mockImplementation(async () => {
-      expect(getScopedDatabaseEngineSelection()).toBeUndefined();
-      expect(getDatabaseEngineSelection()?.effectiveEngines.state).toBe("sqlite");
-    });
-    await setupWizardCommand({ reset: true, resetScope: "config" }, createTestRuntime());
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(setup).toHaveBeenCalledOnce();
-  });
+        plugins: { enabled: false },
+      });
+      vi.spyOn(interactive, "hasInteractiveOnboardingTty").mockReturnValue(true);
+      // Exercise the real owner without performing any Trash operation.
+      const cleanup = vi.spyOn(helpers, "handleReset").mockImplementation(async () => {
+        expect(getScopedDatabaseEngineSelection()?.effectiveEngines.state).toBe(sourceEngine);
+        await fs.unlink(state.configPath);
+      });
+      const setup = vi.spyOn(guided, "runGuidedOnboarding").mockImplementation(async () => {
+        expect(getScopedDatabaseEngineSelection()).toBeUndefined();
+        expect(getDatabaseEngineSelection()?.effectiveEngines.state).toBe("sqlite");
+      });
+      await setupWizardCommand({ reset: true, resetScope: scope }, createTestRuntime());
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(setup).toHaveBeenCalledOnce();
+    },
+  );
 });
