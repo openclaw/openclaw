@@ -139,6 +139,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     does not rerun tools. Rejections of full input and failures after response
     events remain terminal.
 
+    Terminal "Rustponses cannot replay" rejections show a saved-state continuation
+    explanation in replies and chat history, with a reminder to check completed
+    actions before retrying and a pointer to Gateway logs. This message does not
+    mean that recovery succeeded or that completed tools should be rerun.
+
     Related OpenAI docs:
     - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
     - [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
