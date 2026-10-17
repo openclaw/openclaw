@@ -1,10 +1,11 @@
-// Real SDK ids and aggregations protect RPC parents, phase timing, and signal gating.
 import { context, metrics, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
   MeterProvider,
+  type MetricData,
+  type MeterProviderOptions,
   PeriodicExportingMetricReader,
 } from "@opentelemetry/sdk-metrics";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
@@ -16,8 +17,9 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import { emitInternalDiagnosticEventForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
   startOtelService,
@@ -33,95 +35,179 @@ function spanNamed(spans: ReadableSpan[], name: string) {
   return spans.find((span) => span.name === name);
 }
 
-test("exports untimed response observations on their trusted turn without counting usage twice", async () => {
-  const reader = new PeriodicExportingMetricReader({
-    exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
-  });
-  const meterProvider = new MeterProvider({ readers: [reader] });
-  metrics.disable();
-  expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
-  try {
-    await startOtelService({ traces: true, metrics: true });
-    const turn = {
-      runId: "response-run",
-      callId: "response-turn",
-      provider: "openai",
-      model: "test-model",
-      observationUnit: "turn" as const,
-      trace: createDiagnosticTraceContext(),
-    };
-    emit({ type: "model.call.started", ...turn });
-    const response = {
-      ...turn,
-      type: "model.response.observed" as const,
-      timestampSource: "receipt" as const,
-      usageSource: "native-normalized" as const,
-      usageScope: "response" as const,
-      upstreamRequestIdHash: "sha256:0123456789abcdef",
-      usage: {
-        input: 6,
-        output: 4,
-        cacheRead: 3,
-        cacheWrite: 1,
-        reasoningTokens: 2,
-        total: 14,
-        promptTokens: 10,
-      },
-    };
-    emitDiagnosticEvent(response);
-    emit(response);
-    emit({
-      ...response,
-      upstreamRequestIdHash: "sha256:fedcba9876543210",
-      usage: { cacheRead: 3 },
-    });
-    emit({ type: "model.call.completed", ...turn, durationMs: 20 });
-    emit({ type: "model.usage", provider: "openai", model: "test-model", usage: response.usage });
-    await waitForDiagnosticEventsDrained();
-    const span = spanNamed(sdk.exporter.getFinishedSpans(), "openclaw.model.call");
-    expect(span?.events).toHaveLength(2);
-    expect(span?.events[0]).toMatchObject({
-      name: "openclaw.model.response.observed",
-      attributes: {
-        "openclaw.upstreamRequestIdHash": response.upstreamRequestIdHash,
-        "openclaw.model_response.timestamp_source": "receipt",
-        "openclaw.model_response.usage_source": "native-normalized",
-        "openclaw.model_response.usage_scope": "response",
-        "openclaw.model_call.usage.input_tokens": 6,
-        "openclaw.model_call.usage.output_tokens": 4,
-        "openclaw.model_call.usage.reasoning_output_tokens": 2,
-        "gen_ai.usage.input_tokens": 10,
-      },
-    });
-    expect(span?.events[1]?.attributes).not.toHaveProperty("gen_ai.usage.input_tokens");
-    expect(
-      sdk.exporter
-        .getFinishedSpans()
-        .map((item) => item.name)
-        .toSorted(),
-    ).toEqual(["openclaw.model.call", "openclaw.model.usage"]);
-    const { resourceMetrics } = await reader.collect();
-    const tokenMetrics = resourceMetrics.scopeMetrics
-      .flatMap((scope) => scope.metrics)
-      .find((metric) => metric.descriptor.name === "openclaw.tokens");
-    expect(
-      tokenMetrics?.dataPoints.find((point) => point.attributes["openclaw.token"] === "total")
-        ?.value,
-    ).toBe(14);
-    emit(response);
-    await waitForDiagnosticEventsDrained();
-    expect(span?.events).toHaveLength(2);
-  } finally {
-    await stopStartedOtelServices();
-    await meterProvider.shutdown();
-  }
-});
+function rpc(
+  overrides: Partial<
+    Extract<Parameters<typeof emit>[0], { type: "gateway.rpc"; phase: "response" }>
+  > = {},
+) {
+  return {
+    type: "gateway.rpc",
+    method: "health",
+    phase: "response",
+    outcome: "ok",
+    durationMs: 10,
+    ...overrides,
+  } as const;
+}
 
-test("keeps runtime phase parents explicit when observations arrive under another trace", async () => {
+function installContext() {
   context.disable();
   expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
     true,
   );
+}
+
+async function collectMetrics(reader: PeriodicExportingMetricReader, prefix = "") {
+  const { resourceMetrics, errors } = await reader.collect();
+  expect(errors).toEqual([]);
+  return resourceMetrics.scopeMetrics
+    .flatMap((scope) => scope.metrics)
+    .filter((metric) => metric.descriptor.name.startsWith(prefix));
+}
+
+function installMeter(views?: MeterProviderOptions["views"]) {
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const reader = new PeriodicExportingMetricReader({
+    exporter: metricExporter,
+    ...(views ? { exportIntervalMillis: 60_000 } : {}),
+  });
+  const meterProvider = new MeterProvider({ readers: [reader], views });
+  metrics.disable();
+  expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
+  if (!views) {
+    onTestFinished(async () => {
+      try {
+        await stopStartedOtelServices();
+      } finally {
+        await meterProvider.shutdown();
+      }
+    });
+  }
+  return { reader, meterProvider, metricExporter };
+}
+
+function prefixedAttrs(prefix: string, values: Record<string, string | number>) {
+  return Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [`${prefix}.${key}`, value]),
+  );
+}
+
+function metricSnapshot(data: MetricData[], prefix = "openclaw.") {
+  return Object.fromEntries(
+    data.map(({ descriptor, dataPoints }) => [
+      descriptor.name.replace(prefix, ""),
+      {
+        unit: descriptor.unit,
+        points: dataPoints.map(({ attributes, value }) => ({ attributes, value })),
+      },
+    ]),
+  );
+}
+
+function countEvents(types: string[]) {
+  const counts = Object.fromEntries(types.map((type) => [type, 0]));
+  return {
+    counts,
+    configure(ctx: OpenClawPluginServiceContext) {
+      const bridge = ctx.internalDiagnostics!;
+      ctx.internalDiagnostics = {
+        ...bridge,
+        onEvent(listener, filter) {
+          return bridge.onEvent((event, metadata, privateData) => {
+            if (Object.hasOwn(counts, event.type)) {
+              counts[event.type]++;
+            }
+            listener(event, metadata, privateData);
+          }, filter);
+        },
+      };
+    },
+  };
+}
+
+function metricPoint(attributes: Record<string, string | number>, value: unknown) {
+  return expect.objectContaining({ attributes, value });
+}
+
+function histogramPoint(attributes: Record<string, string | number>, count: number, sum: number) {
+  return metricPoint(attributes, expect.objectContaining({ count, sum }));
+}
+
+test("exports untimed response observations on their trusted turn without counting usage twice", async () => {
+  const { reader } = installMeter();
+  await startOtelService({ traces: true, metrics: true });
+  const turn = {
+    runId: "response-run",
+    callId: "response-turn",
+    provider: "openai",
+    model: "test-model",
+    observationUnit: "turn" as const,
+    trace: createDiagnosticTraceContext(),
+  };
+  emit({ type: "model.call.started", ...turn });
+  const response = {
+    ...turn,
+    type: "model.response.observed" as const,
+    timestampSource: "receipt" as const,
+    usageSource: "native-normalized" as const,
+    usageScope: "response" as const,
+    upstreamRequestIdHash: "sha256:0123456789abcdef",
+    usage: {
+      input: 6,
+      output: 4,
+      cacheRead: 3,
+      cacheWrite: 1,
+      reasoningTokens: 2,
+      total: 14,
+      promptTokens: 10,
+    },
+  };
+  emitDiagnosticEvent(response);
+  emit(response);
+  emit({
+    ...response,
+    upstreamRequestIdHash: "sha256:fedcba9876543210",
+    usage: { cacheRead: 3 },
+  });
+  emit({ type: "model.call.completed", ...turn, durationMs: 20 });
+  emit({ type: "model.usage", provider: "openai", model: "test-model", usage: response.usage });
+  await waitForDiagnosticEventsDrained();
+  const span = spanNamed(sdk.exporter.getFinishedSpans(), "openclaw.model.call");
+  expect(span?.events).toHaveLength(2);
+  expect(span?.events[0]).toMatchObject({
+    name: "openclaw.model.response.observed",
+    attributes: {
+      "openclaw.upstreamRequestIdHash": response.upstreamRequestIdHash,
+      "openclaw.model_response.timestamp_source": "receipt",
+      "openclaw.model_response.usage_source": "native-normalized",
+      "openclaw.model_response.usage_scope": "response",
+      "openclaw.model_call.usage.input_tokens": 6,
+      "openclaw.model_call.usage.output_tokens": 4,
+      "openclaw.model_call.usage.reasoning_output_tokens": 2,
+      "gen_ai.usage.input_tokens": 10,
+    },
+  });
+  expect(span?.events[1]?.attributes).not.toHaveProperty("gen_ai.usage.input_tokens");
+  expect(
+    sdk.exporter
+      .getFinishedSpans()
+      .map((item) => item.name)
+      .toSorted(),
+  ).toEqual(["openclaw.model.call", "openclaw.model.usage"]);
+  const { resourceMetrics } = await reader.collect();
+  const tokenMetrics = resourceMetrics.scopeMetrics
+    .flatMap((scope) => scope.metrics)
+    .find((metric) => metric.descriptor.name === "openclaw.tokens");
+  expect(
+    tokenMetrics?.dataPoints.find((point) => point.attributes["openclaw.token"] === "total")?.value,
+  ).toBe(14);
+  emit(response);
+  await waitForDiagnosticEventsDrained();
+  expect(span?.events).toHaveLength(2);
+});
+
+test("keeps runtime phase parents explicit when observations arrive under another trace", async () => {
+  installContext();
   await startOtelService({ traces: true });
   await waitForDiagnosticEventsDrained();
   const tracer = sdk.provider.getTracer("phase-caller");
@@ -156,16 +242,12 @@ test("keeps runtime phase parents explicit when observations arrive under anothe
       await waitForDiagnosticEventsDrained();
     });
     const spans = sdk.exporter.getFinishedSpans();
-    const provider = spans.find(
-      (span) => span.attributes["openclaw.phase"] === "sessions.catalog.list.provider",
-    )!;
-    const planning = spans.find(
-      (span) => span.attributes["openclaw.phase"] === "sessions.catalog.list.planning",
-    )!;
-    const delivery = spans.find(
-      (span) => span.attributes["openclaw.phase"] === "sessions.catalog.list.delivery",
-    )!;
-    const startup = spans.find((span) => span.attributes["openclaw.phase"] === "startup.fixture")!;
+    const phaseSpan = (name: string) =>
+      spans.find((span) => span.attributes["openclaw.phase"] === name)!;
+    const provider = phaseSpan("sessions.catalog.list.provider");
+    const planning = phaseSpan("sessions.catalog.list.planning");
+    const delivery = phaseSpan("sessions.catalog.list.delivery");
+    const startup = phaseSpan("startup.fixture");
     expect(provider.parentSpanContext?.spanId).toBe(caller.spanContext().spanId);
     expect(provider.spanContext().traceId).toBe(caller.spanContext().traceId);
     expect(planning.parentSpanContext).toBeUndefined();
@@ -189,114 +271,66 @@ test.each([
 ])(
   "honors preloaded signal toggles (traces=$traces metrics=$metricsEnabled)",
   async ({ traces, metricsEnabled }) => {
-    const reader = new PeriodicExportingMetricReader({
-      exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+    const { reader } = installMeter();
+    const { counts, configure } = countEvents([
+      "diagnostic.phase.completed",
+      "gateway.ws.event",
+      "gateway.ws.connections",
+      "sessions.list.retention",
+    ]);
+    await startOtelService({ traces, metrics: metricsEnabled, configure });
+    emit(rpc());
+    emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
+    emit({ type: "gateway.ws.connections", operators: 1 });
+    emit({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
+    emit({
+      type: "model.usage",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 5, output: 3, total: 8 },
     });
-    const meterProvider = new MeterProvider({ readers: [reader] });
-    try {
-      metrics.disable();
-      expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
-      let deliveredPhases = 0;
-      let deliveredWebSocketMetrics = 0;
-      let deliveredRetentionMetrics = 0;
-      await startOtelService({
-        traces,
-        metrics: metricsEnabled,
-        configure(serviceContext) {
-          const bridge = serviceContext.internalDiagnostics!;
-          serviceContext.internalDiagnostics = {
-            ...bridge,
-            onEvent(listener, filter) {
-              return bridge.onEvent((event, metadata, privateData) => {
-                if (event.type === "diagnostic.phase.completed") {
-                  deliveredPhases++;
-                }
-                if (event.type === "gateway.ws.event" || event.type === "gateway.ws.connections") {
-                  deliveredWebSocketMetrics++;
-                }
-                if (event.type === "sessions.list.retention") {
-                  deliveredRetentionMetrics++;
-                }
-                listener(event, metadata, privateData);
-              }, filter);
-            },
-          };
-        },
-      });
-      emit({
-        type: "gateway.rpc",
-        method: "health",
-        phase: "response",
-        outcome: "ok",
-        durationMs: 10,
-      });
-      emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
-      emit({ type: "gateway.ws.connections", operators: 1 });
-      emit({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
-      emit({
-        type: "model.usage",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: { input: 5, output: 3, total: 8 },
-      });
-      emit({
-        type: "diagnostic.phase.completed",
-        name: "sessions.catalog.list.provider",
-        startedAt: Date.now() - 10,
-        durationMs: 10,
-      });
-      await waitForDiagnosticEventsDrained();
+    emit({
+      type: "diagnostic.phase.completed",
+      name: "sessions.catalog.list.provider",
+      startedAt: Date.now() - 10,
+      durationMs: 10,
+    });
+    await waitForDiagnosticEventsDrained();
 
-      expect(deliveredPhases).toBe(traces ? 1 : 0);
-      expect(deliveredWebSocketMetrics).toBe(metricsEnabled ? 2 : 0);
-      expect(deliveredRetentionMetrics).toBe(metricsEnabled ? 1 : 0);
-      for (const name of [
-        "openclaw.gateway.rpc.response",
-        "openclaw.model.usage",
-        "openclaw.diagnostic.phase",
-      ]) {
-        expect(Boolean(spanNamed(sdk.exporter.getFinishedSpans(), name))).toBe(traces);
-      }
-      const { resourceMetrics, errors } = await reader.collect();
-      expect(errors).toEqual([]);
-      const names = resourceMetrics.scopeMetrics.flatMap((scope) =>
-        scope.metrics.map((metric) => metric.descriptor.name),
-      );
-      if (metricsEnabled) {
-        expect(names).toEqual(
-          expect.arrayContaining(["openclaw.gateway.rpc.first_response_ms", "openclaw.tokens"]),
-        );
-      } else {
-        expect(names).toEqual([]);
-      }
-    } finally {
-      try {
-        await stopStartedOtelServices();
-      } finally {
-        await meterProvider.shutdown();
-      }
+    expect({
+      phases: counts["diagnostic.phase.completed"],
+      sockets: counts["gateway.ws.event"] + counts["gateway.ws.connections"],
+      retention: counts["sessions.list.retention"],
+    }).toEqual({
+      phases: traces ? 1 : 0,
+      sockets: metricsEnabled ? 2 : 0,
+      retention: metricsEnabled ? 1 : 0,
+    });
+    for (const name of [
+      "openclaw.gateway.rpc.response",
+      "openclaw.model.usage",
+      "openclaw.diagnostic.phase",
+    ]) {
+      expect(Boolean(spanNamed(sdk.exporter.getFinishedSpans(), name))).toBe(traces);
     }
+    const names = (await collectMetrics(reader)).map((metric) => metric.descriptor.name);
+    expect(names).toEqual(
+      metricsEnabled
+        ? expect.arrayContaining(["openclaw.gateway.rpc.first_response_ms", "openclaw.tokens"])
+        : [],
+    );
   },
 );
 
 test("keeps parentless Gateway RPC spans out of unrelated ambient OpenTelemetry traces", async () => {
-  context.disable();
-  expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
-    true,
-  );
+  installContext();
   const unrelated = sdk.provider.getTracer("unrelated").startSpan("unrelated.request");
   try {
     await startOtelService({ traces: true });
     await waitForDiagnosticEventsDrained();
     const diagnosticRoot = createDiagnosticTraceContext();
     await context.with(trace.setSpan(context.active(), unrelated), async () => {
-      emit({
-        type: "gateway.rpc",
-        method: "health",
-        phase: "response",
-        outcome: "ok",
-        durationMs: 10,
-      });
+      emit(rpc());
       emit({
         type: "gateway.rpc",
         method: "health",
@@ -336,12 +370,8 @@ test("keeps parentless Gateway RPC spans out of unrelated ambient OpenTelemetry 
 });
 
 test("exports Gateway RPC phase metrics with real SDK aggregation and upstream trace parents", async () => {
-  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-  const reader = new PeriodicExportingMetricReader({ exporter: metricExporter });
-  const meterProvider = new MeterProvider({ readers: [reader] });
-  metrics.disable();
-  metrics.setGlobalMeterProvider(meterProvider);
-  const { service, ctx } = await startOtelService({ traces: true, metrics: true });
+  const { reader } = installMeter();
+  await startOtelService({ traces: true, metrics: true });
   const upstream = sdk.provider.getTracer("rpc-peer").startSpan("peer.request");
   const upstreamContext = upstream.spanContext();
   const parent = createDiagnosticTraceContext({
@@ -349,22 +379,14 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
     spanId: upstreamContext.spanId,
     traceFlags: "01",
   });
-  const base = {
-    type: "gateway.rpc" as const,
-    method: "sessions.list",
-    trace: createChildDiagnosticTraceContext(parent),
-  };
+  const rpcTrace = createChildDiagnosticTraceContext(parent);
+  const base = { type: "gateway.rpc" as const, method: "sessions.list", trace: rpcTrace };
+  const observe = (event: Parameters<typeof rpc>[0]) =>
+    emit(rpc({ method: "sessions.list", trace: rpcTrace, ...event }));
   try {
     emit({ ...base, phase: "received" });
-    emit({ ...base, phase: "response", outcome: "ok", durationMs: 250 });
-    emit({
-      ...base,
-      phase: "response",
-      outcome: "ok",
-      durationMs: 750,
-      responseBytes: 8192,
-      firstResponse: false,
-    });
+    observe({ durationMs: 250 });
+    observe({ durationMs: 750, responseBytes: 8192, firstResponse: false });
     emit({ ...base, phase: "handler", outcome: "returned", durationMs: 400, admissionMs: 100 });
     emit({
       ...base,
@@ -374,37 +396,31 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
       queueWaitMs: 75,
       response: "sent",
     });
-    emit({ ...base, method: "health", phase: "response", outcome: "ok", durationMs: 10 });
-    emit({ ...base, method: "health", phase: "response", outcome: "error", durationMs: 20 });
-    const rejected = { ...base, method: "unknown" };
-    emit({ ...rejected, phase: "received" });
-    emit({ ...rejected, phase: "response", outcome: "unavailable", durationMs: 20 });
-    emit({ ...rejected, phase: "response", outcome: "suppressed", durationMs: 30 });
+    observe({ method: "health" });
+    observe({ method: "health", outcome: "error", durationMs: 20 });
+    emit({ ...base, method: "unknown", phase: "received" });
+    observe({ method: "unknown", outcome: "unavailable", durationMs: 20 });
+    observe({ method: "unknown", outcome: "suppressed", durationMs: 30 });
     emit({
-      ...rejected,
+      ...base,
+      method: "unknown",
       phase: "dispatch",
       outcome: "rejected",
       durationMs: 30,
       response: "suppressed",
     });
-    emitDiagnosticEvent({ ...rejected, phase: "response", outcome: "ok", durationMs: 50 });
+    emitDiagnosticEvent(rpc({ method: "unknown", trace: rpcTrace, durationMs: 50 }));
     await waitForDiagnosticEventsDrained();
 
-    const { resourceMetrics, errors } = await reader.collect();
-    expect(errors).toEqual([]);
-    const rpcMetrics = resourceMetrics.scopeMetrics
-      .flatMap((scope) => scope.metrics)
-      .filter((metric) => metric.descriptor.name.startsWith("openclaw.gateway.rpc."));
+    const rpcMetrics = await collectMetrics(reader, "openclaw.gateway.rpc.");
+    const pointsFor = (name: string) =>
+      rpcMetrics.find((metric) => metric.descriptor.name === `openclaw.gateway.rpc.${name}`)
+        ?.dataPoints;
     const methodAttrs = { "openclaw.gateway.rpc.method": "sessions.list" };
-    expect(
-      rpcMetrics.find((metric) => metric.descriptor.name.endsWith(".requests"))?.dataPoints,
-    ).toEqual(
+    expect(pointsFor("requests")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ attributes: methodAttrs, value: 1 }),
-        expect.objectContaining({
-          attributes: { "openclaw.gateway.rpc.method": "unknown" },
-          value: 1,
-        }),
+        metricPoint(methodAttrs, 1),
+        metricPoint({ "openclaw.gateway.rpc.method": "unknown" }, 1),
       ]),
     );
     for (const [metric, sum] of [
@@ -413,51 +429,22 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
       ["admission", 100],
       ["queue_wait", 75],
     ]) {
-      const points = rpcMetrics.find(
-        (entry) => entry.descriptor.name === `openclaw.gateway.rpc.${metric}_ms`,
-      )?.dataPoints;
-      expect(points).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            attributes: methodAttrs,
-            value: expect.objectContaining({ count: 1, sum }),
-          }),
-        ]),
-      );
+      const points = pointsFor(`${metric}_ms`);
+      expect(points).toEqual(expect.arrayContaining([histogramPoint(methodAttrs, 1, sum)]));
       expect(
         points?.some((point) => point.attributes["openclaw.gateway.rpc.method"] === "unknown"),
       ).toBe(false);
     }
-    const outcomes = rpcMetrics.find((metric) =>
-      metric.descriptor.name.endsWith(".outcomes"),
-    )?.dataPoints;
-    expect(
-      rpcMetrics.find((metric) => metric.descriptor.name.endsWith(".first_response_ms"))
-        ?.dataPoints,
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          attributes: { "openclaw.gateway.rpc.method": "health" },
-          value: expect.objectContaining({ count: 2, sum: 30 }),
-        }),
-      ]),
+    const outcomes = pointsFor("outcomes");
+    expect(pointsFor("first_response_ms")).toEqual(
+      expect.arrayContaining([histogramPoint({ "openclaw.gateway.rpc.method": "health" }, 2, 30)]),
     );
+    const outcomePoint = (phase: string, outcome: string, value: number) =>
+      metricPoint(prefixedAttrs("openclaw.gateway.rpc", { phase, outcome }), value);
     expect(outcomes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          attributes: {
-            "openclaw.gateway.rpc.phase": "response",
-            "openclaw.gateway.rpc.outcome": "ok",
-          },
-          value: 2,
-        }),
-        expect.objectContaining({
-          attributes: {
-            "openclaw.gateway.rpc.phase": "dispatch",
-            "openclaw.gateway.rpc.outcome": "rejected",
-          },
-          value: 1,
-        }),
+        outcomePoint("response", "ok", 2),
+        outcomePoint("dispatch", "rejected", 1),
       ]),
     );
     expect(outcomes?.every((point) => !("openclaw.gateway.rpc.method" in point.attributes))).toBe(
@@ -485,8 +472,6 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
     ).toBe(true);
   } finally {
     upstream.end();
-    await service.stop?.(ctx);
-    await meterProvider.shutdown();
   }
 });
 
@@ -547,11 +532,9 @@ test("exports the producing agent identity on run, harness, message, tool-loop, 
       .getFinishedSpans()
       .filter((span) => span.name === name)
       .map((span) => span.attributes["openclaw.agent"]);
-  expect(spanAgent("openclaw.run")).toEqual(["ops"]);
-  expect(spanAgent("openclaw.harness.run")).toEqual(["ops"]);
-  expect(spanAgent("openclaw.message.processed")).toEqual(["ops"]);
-  expect(spanAgent("openclaw.tool.loop")).toEqual(["ops"]);
-  expect(spanAgent("openclaw.model.call")).toEqual(["ops"]);
+  for (const name of ["run", "harness.run", "message.processed", "tool.loop", "model.call"]) {
+    expect(spanAgent(`openclaw.${name}`)).toEqual(["ops"]);
+  }
 });
 
 test("adds plugin attribution only from trusted exporter-private provenance", async () => {
@@ -577,30 +560,16 @@ test("adds plugin attribution only from trusted exporter-private provenance", as
     },
     "llm-task",
   );
+  const publicUsage = { type: "model.usage", provider: "openai", model: "gpt-5.5" } as const;
   emitTrustedDiagnosticEvent({
-    type: "model.usage",
-    provider: "openai",
-    model: "gpt-5.5",
+    ...publicUsage,
     usage: { input: 2 },
     pluginId: "public-emitter-spoof",
   } as Parameters<typeof emitTrustedDiagnosticEvent>[0] & { pluginId: string });
-  emitTrustedDiagnosticEvent({
-    type: "model.usage",
-    provider: "openai",
-    model: "gpt-5.5",
-    usage: { input: 3 },
-  });
-  emitTrustedDiagnosticEventWithPrivateData(
-    {
-      type: "model.usage",
-      provider: "openai",
-      model: "gpt-5.5",
-      usage: { input: 5 },
-    },
-    { hostPluginId: "private-data-spoof" } as Parameters<
-      typeof emitTrustedDiagnosticEventWithPrivateData
-    >[1] & { hostPluginId: string },
-  );
+  emitTrustedDiagnosticEvent({ ...publicUsage, usage: { input: 3 } });
+  emitTrustedDiagnosticEventWithPrivateData({ ...publicUsage, usage: { input: 5 } }, {
+    hostPluginId: "private-data-spoof",
+  } as Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[1] & { hostPluginId: string });
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
@@ -642,16 +611,9 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
   try {
     context.disable();
     context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const observedParents: Array<string | undefined> = [];
-    meterProvider = new MeterProvider({
-      readers: [
-        new PeriodicExportingMetricReader({
-          exporter: metricExporter,
-          exportIntervalMillis: 60_000,
-        }),
-      ],
-      views: ["openclaw.gateway.event_loop.*", "openclaw.gc.duration_ms"].map((instrumentName) => ({
+    const installed = installMeter(
+      ["openclaw.gateway.event_loop.*", "openclaw.gc.duration_ms"].map((instrumentName) => ({
         instrumentName,
         attributesProcessors: [
           {
@@ -664,29 +626,16 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
           },
         ],
       })),
-    });
-    metrics.disable();
-    expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
-    let deliveredSamples = 0;
+    );
+    meterProvider = installed.meterProvider;
+    const { metricExporter } = installed;
+    const { counts, configure } = countEvents(["gateway.event_loop.sample", "diagnostic.gc"]);
     await startOtelService({
       endpoint: receiver.endpoint,
       traces: true,
       metrics: true,
       logs: true,
-      configure(serviceContext) {
-        const bridge = serviceContext.internalDiagnostics!;
-        serviceContext.internalDiagnostics = {
-          ...bridge,
-          onEvent(listener, filter) {
-            return bridge.onEvent((event, metadata, privateData) => {
-              if (event.type === "gateway.event_loop.sample" || event.type === "diagnostic.gc") {
-                deliveredSamples++;
-              }
-              listener(event, metadata, privateData);
-            }, filter);
-          },
-        };
-      },
+      configure,
     });
     await waitForDiagnosticEventsDrained();
     const ambientTraceId = "11111111111111111111111111111111";
@@ -695,33 +644,25 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
       spanId: "1111111111111111",
       traceFlags: 1,
     });
-    const sampleMetrics = () =>
-      Object.fromEntries(
-        (
-          metricExporter
-            .getMetrics()
-            .at(-1)
-            ?.scopeMetrics.flatMap((scope) => scope.metrics) ?? []
-        )
-          .filter(
-            (metric) =>
-              metric.descriptor.name.startsWith("openclaw.gateway.event_loop.") ||
-              metric.descriptor.name === "openclaw.gc.duration_ms",
-          )
-          .map(
-            (metric) =>
-              [
-                metric.descriptor.name,
-                {
-                  unit: metric.descriptor.unit,
-                  points: metric.dataPoints.map(({ attributes, value }) => ({
-                    attributes,
-                    value,
-                  })),
-                },
-              ] as const,
-          ),
+    const sampleMetrics = () => {
+      const data =
+        metricExporter
+          .getMetrics()
+          .at(-1)
+          ?.scopeMetrics.flatMap((scope) => scope.metrics) ?? [];
+      return metricSnapshot(
+        data.filter(
+          ({ descriptor: { name } }) =>
+            name.startsWith("openclaw.gateway.event_loop.") || name === "openclaw.gc.duration_ms",
+        ),
       );
+    };
+    const samplePoint = (value: number | { count: number; sum: number }, attributes = {}) => ({
+      unit: "ms",
+      points: [
+        { attributes, value: typeof value === "number" ? value : expect.objectContaining(value) },
+      ],
+    });
     for (const [intervalMs, delayMaxMs, totalMs, count, sum] of [
       [2_000, 1_250, 2_000, 1, 1_250],
       [8_000, 20, 10_000, 2, 1_270],
@@ -742,24 +683,13 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
         await waitForDiagnosticEventsDrained();
       });
       await meterProvider.forceFlush();
-      expect(sampleMetrics()).toMatchObject({
-        "openclaw.gateway.event_loop.delay_max_ms": {
-          unit: "ms",
-          points: [{ attributes: {}, value: { count, sum } }],
-        },
-        "openclaw.gateway.event_loop.observed_ms": {
-          unit: "ms",
-          points: [{ attributes: {}, value: totalMs }],
-        },
-        "openclaw.gc.duration_ms": {
-          unit: "ms",
-          points: [
-            {
-              attributes: { "openclaw.gc.kind": "scavenge", "openclaw.gc.thread": "main" },
-              value: { count, sum },
-            },
-          ],
-        },
+      expect(sampleMetrics()).toEqual({
+        "gateway.event_loop.delay_max_ms": samplePoint({ count, sum }),
+        "gateway.event_loop.observed_ms": samplePoint(totalMs),
+        "gc.duration_ms": samplePoint(
+          { count, sum },
+          prefixedAttrs("openclaw.gc", { kind: "scavenge", thread: "main" }),
+        ),
       });
     }
     const retained = sampleMetrics();
@@ -772,17 +702,6 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
     await waitForDiagnosticEventsDrained();
     await meterProvider.forceFlush();
     expect(sampleMetrics()).toEqual(retained);
-    expect(
-      Object.values(sampleMetrics()).flatMap((metric) =>
-        metric.points.map(({ attributes }) => attributes),
-      ),
-    ).toEqual(
-      expect.arrayContaining([
-        {},
-        {},
-        { "openclaw.gc.kind": "scavenge", "openclaw.gc.thread": "main" },
-      ]),
-    );
     emitInternalDiagnosticEventForTest({
       type: "diagnostic.gc",
       kind: "mark_sweep_compact",
@@ -792,26 +711,19 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
     });
     await waitForDiagnosticEventsDrained();
     await meterProvider.forceFlush();
-    expect(sampleMetrics()["openclaw.gc.duration_ms"]?.points).toContainEqual(
-      expect.objectContaining({
-        attributes: {
-          "openclaw.gc.kind": "mark_sweep_compact",
-          "openclaw.gc.thread": "code-mode-node.worker.js",
-          "openclaw.gc.worker_slot": 2,
-        },
-        value: expect.objectContaining({ count: 1, sum: 8 }),
-      }),
+    expect(sampleMetrics()["gc.duration_ms"]?.points).toContainEqual(
+      histogramPoint(
+        prefixedAttrs("openclaw.gc", {
+          kind: "mark_sweep_compact",
+          thread: "code-mode-node.worker.js",
+          worker_slot: 2,
+        }),
+        1,
+        8,
+      ),
     );
-    expect(deliveredSamples).toBe(7);
-    expect(observedParents).toEqual([
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    ]);
+    expect(counts["gateway.event_loop.sample"] + counts["diagnostic.gc"]).toBe(7);
+    expect(observedParents).toEqual(Array.from({ length: 7 }, () => undefined));
     await stopStartedOtelServices();
     expect(sdk.exporter.getFinishedSpans()).toEqual([]);
     expect(receiver.requests).toEqual([]);
