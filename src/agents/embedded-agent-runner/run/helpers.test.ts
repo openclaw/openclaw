@@ -1,5 +1,3 @@
-// Embedded run helper tests cover final assistant text extraction and error
-// metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
@@ -39,12 +37,9 @@ describe("resolveEmbeddedAttemptBasePrompt", () => {
   );
 
   it("keeps non-Anthropic prompts byte-for-byte", () => {
-    expect(
-      resolveEmbeddedAttemptBasePrompt({
-        provider: "openai",
-        prompt: refusalTrigger,
-      }),
-    ).toBe(refusalTrigger);
+    expect(resolveEmbeddedAttemptBasePrompt({ provider: "openai", prompt: refusalTrigger })).toBe(
+      refusalTrigger,
+    );
   });
 });
 
@@ -52,8 +47,6 @@ function makeAssistantMessage(
   content: AssistantMessage["content"],
   phase?: string,
 ): AssistantMessage {
-  // Minimal assistant fixture with usage fields required by the SDK type; the
-  // tested helpers only care about content, phase, and final metadata.
   return {
     api: "responses",
     provider: "openai",
@@ -67,21 +60,40 @@ function makeAssistantMessage(
   };
 }
 
+function signedText(text: string, phase: "commentary" | "final_answer") {
+  return {
+    type: "text" as const,
+    text,
+    textSignature: JSON.stringify({
+      v: 1,
+      id: phase === "commentary" ? "item_commentary" : "item_final",
+      phase,
+    }),
+  };
+}
+function accumulated(...usages: NormalizedUsage[]) {
+  const accumulator = createUsageAccumulator();
+  for (const usage of usages) {
+    mergeUsageIntoAccumulator(accumulator, usage);
+  }
+  return accumulator;
+}
+function errorMeta(overrides: Partial<Parameters<typeof buildErrorAgentMeta>[0]>) {
+  return buildErrorAgentMeta({
+    sessionId: "session-error",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    usageAccumulator: createUsageAccumulator(),
+    lastRunPromptUsage: undefined,
+    ...overrides,
+  });
+}
+
 describe("resolveFinalAssistantVisibleText", () => {
   it("prefers final_answer text over commentary blocks", () => {
-    // Commentary can be streamed before the final answer; user-visible result
-    // extraction must choose the signed final phase when present.
     const lastAssistant = makeAssistantMessage([
-      {
-        type: "text",
-        text: "Working...",
-        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-      },
-      {
-        type: "text",
-        text: "Section 1\nSection 2",
-        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-      },
+      signedText("Working...", "commentary"),
+      signedText("Section 1\nSection 2", "final_answer"),
     ]);
 
     expect(resolveFinalAssistantVisibleText(lastAssistant)).toBe("Section 1\nSection 2");
@@ -89,16 +101,8 @@ describe("resolveFinalAssistantVisibleText", () => {
 
   it("returns undefined when the final visible text is empty", () => {
     const lastAssistant = makeAssistantMessage([
-      {
-        type: "text",
-        text: "Working...",
-        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-      },
-      {
-        type: "text",
-        text: "   ",
-        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-      },
+      signedText("Working...", "commentary"),
+      signedText("   ", "final_answer"),
     ]);
 
     expect(resolveFinalAssistantVisibleText(lastAssistant)).toBeUndefined();
@@ -106,11 +110,7 @@ describe("resolveFinalAssistantVisibleText", () => {
 
   it("preserves raw final answer text without visible-text sanitization", () => {
     const lastAssistant = makeAssistantMessage([
-      {
-        type: "text",
-        text: "<final>keep this</final>",
-        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-      },
+      signedText("<final>keep this</final>", "final_answer"),
     ]);
 
     expect(resolveFinalAssistantRawText(lastAssistant)).toBe("<final>keep this</final>");
@@ -127,30 +127,18 @@ describe("resolveLatestCallUsage", () => {
         carriedUsage: previous,
         transcriptFallback: undefined,
       }),
-    ).toEqual({
-      currentAttempt: undefined,
-      latest: previous,
-    });
+    ).toEqual({ currentAttempt: undefined, latest: previous });
   });
 });
 
 describe("buildUsageAgentMetaFields", () => {
   it("keeps cumulative usage separate from the latest context snapshot", () => {
-    const usageAccumulator = createUsageAccumulator();
-    mergeUsageIntoAccumulator(usageAccumulator, {
-      input: 100,
-      output: 50,
-      total: 150,
-    });
+    const usageAccumulator = accumulated({ input: 100, output: 50, total: 150 });
     const latestCallUsage = {
       input: 80,
       output: 20,
       cacheRead: 100,
-      contextUsage: {
-        state: "available",
-        promptTokens: 180,
-        totalTokens: 200,
-      },
+      contextUsage: { state: "available", promptTokens: 180, totalTokens: 200 },
       total: 200,
     } satisfies NormalizedUsage;
     mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
@@ -194,8 +182,7 @@ describe("buildUsageAgentMetaFields", () => {
   });
 
   it("does not label aggregate attempt usage as last-call usage", () => {
-    const usageAccumulator = createUsageAccumulator();
-    mergeUsageIntoAccumulator(usageAccumulator, {
+    const usageAccumulator = accumulated({
       input: 497_720,
       output: 7_485,
       cacheRead: 1_323_520,
@@ -216,11 +203,7 @@ describe("buildUsageAgentMetaFields", () => {
 
 describe("buildErrorAgentMeta", () => {
   it("does not promote current CLI usage without context provenance", () => {
-    const fields = buildErrorAgentMeta({
-      sessionId: "session-error",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      usageAccumulator: createUsageAccumulator(),
+    const fields = errorMeta({
       lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
       currentAttemptAssistant: {
         api: "cli",
@@ -233,21 +216,11 @@ describe("buildErrorAgentMeta", () => {
   });
 
   it("keeps cumulative usage separate from the latest call on error exits", () => {
-    const usageAccumulator = createUsageAccumulator();
-    mergeUsageIntoAccumulator(usageAccumulator, {
-      input: 100,
-      output: 50,
-      total: 150,
-    });
-    const latestCallUsage = {
-      input: 150,
-      output: 50,
-      total: 200,
-    } satisfies NormalizedUsage;
+    const usageAccumulator = accumulated({ input: 100, output: 50, total: 150 });
+    const latestCallUsage = { input: 150, output: 50, total: 200 } satisfies NormalizedUsage;
     mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
 
-    const fields = buildErrorAgentMeta({
-      sessionId: "session-error",
+    const fields = errorMeta({
       sessionFile: "/tmp/session-error.jsonl",
       provider: "anthropic",
       model: "claude-opus-4-6",
@@ -260,24 +233,17 @@ describe("buildErrorAgentMeta", () => {
       sessionId: "session-error",
       sessionFile: "/tmp/session-error.jsonl",
     });
-    expect(fields.usage).toMatchObject({
-      input: 250,
-      output: 100,
-      total: 350,
-    });
+    expect(fields.usage).toMatchObject({ input: 250, output: 100, total: 350 });
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
   });
 
   it("keeps the run's context provenance on error exits", () => {
     const build = (contextTokensSource?: "resolved-v1") =>
-      buildErrorAgentMeta({
-        sessionId: "session-error",
+      errorMeta({
         provider: "opencode-go",
         model: "deepseek-v4.1-flash",
         contextTokens: 1_000_000,
         contextTokensSource,
-        usageAccumulator: createUsageAccumulator(),
-        lastRunPromptUsage: undefined,
       });
 
     expect(build("resolved-v1")).toMatchObject({
