@@ -50,23 +50,83 @@ function mockRequest(method: string, reply: (params?: unknown) => unknown) {
   });
 }
 
-describe("session list replacement options", () => {
-  it.each([{ filter: "involving me", options: { involvingMe: true } }])(
-    "keeps an explicit $filter query single-phase",
-    async ({ options }) => {
-      const request = mockRequest("sessions.list", async () => {
-        return sessionsResult([], 1);
-      });
-      const sessions = createSessions(request, "agent:main:main", "profile-ada");
+function listRequest(read: (call: number, params?: unknown) => unknown, patch?: () => unknown) {
+  let calls = 0;
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (method === "sessions.list") {
+      return read(++calls, params);
+    }
+    if (method === "sessions.patch" && patch) {
+      return patch();
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+}
 
-      await sessions.refresh({ agentId: "main", ...options, force: true });
+function archiveReceipt(key: string, sessionId: string, updatedAt: number) {
+  return {
+    ok: true,
+    key,
+    path: "(multiple)",
+    entry: { sessionId, archivedAt: updatedAt, updatedAt },
+  };
+}
 
-      const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
-      expect(listCalls).toHaveLength(1);
-      expect(listCalls[0]?.[1]).toEqual(expect.objectContaining(options));
-      sessions.dispose();
-    },
+function modelHarness(twoRequests = false) {
+  const key = "global";
+  const pending = createDeferred<unknown>();
+  const replacement = createDeferred<unknown>();
+  let calls = 0;
+  const sessions = createSessions(
+    mockRequest("sessions.patch", () =>
+      ++calls === 1 || !twoRequests ? pending.promise : replacement.promise,
+    ),
+    key,
   );
+  return {
+    key,
+    sessions,
+    pending,
+    replacement,
+    patch: (model: string, ownsModelOverride?: () => boolean) =>
+      sessions.patch(
+        key,
+        { model },
+        {
+          deferListRefresh: true,
+          ...(ownsModelOverride ? { ownsModelOverride } : {}),
+        },
+      ),
+  };
+}
+
+async function settleModelPatch(
+  pending: ReturnType<typeof createDeferred<unknown>>,
+  operation: Promise<unknown>,
+  outcome: "resolve" | "reject",
+  message = "agent A patch failed",
+) {
+  if (outcome === "resolve") {
+    pending.resolve({ ok: true, path: "", key: "global", entry: {} });
+    await expect(operation).resolves.toMatchObject({ ok: true, key: "global" });
+  } else {
+    pending.reject(new Error(message));
+    await expect(operation).rejects.toThrow(message);
+  }
+}
+
+describe("session list replacement options", () => {
+  it("keeps an explicit involving-me query single-phase", async () => {
+    const options = { involvingMe: true };
+    const request = mockRequest("sessions.list", async () => sessionsResult([], 1));
+    const sessions = createSessions(request, "agent:main:main", "profile-ada");
+
+    await sessions.refresh({ agentId: "main", ...options, force: true });
+
+    const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
+    expect(listCalls).toHaveLength(1);
+    expect(listCalls[0]?.[1]).toEqual(expect.objectContaining(options));
+  });
 
   it("keeps derived titles when a foreground refresh queues behind an archive replacement", async () => {
     const key = "agent:main:untitled";
@@ -76,40 +136,26 @@ describe("session list replacement options", () => {
     });
     const archiveReplacementStarted = createDeferred();
     const archiveReplacement = createDeferred<SessionsListResult>();
-    let listCallCount = 0;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "sessions.list") {
-        listCallCount += 1;
-        const includeDerivedTitles =
-          typeof params === "object" &&
-          params !== null &&
-          "includeDerivedTitles" in params &&
-          params.includeDerivedTitles === true;
-        const result = sessionsResult(
+    const request = listRequest(
+      (call, params) => {
+        if (call === 2) {
+          archiveReplacementStarted.resolve();
+          return archiveReplacement.promise;
+        }
+        return sessionsResult(
           [
             sessionRow(key, "title-session", 1, {
               label: key,
-              ...(includeDerivedTitles ? { derivedTitle: titled.derivedTitle } : {}),
+              ...(asOptionalRecord(params)?.includeDerivedTitles === true
+                ? { derivedTitle: titled.derivedTitle }
+                : {}),
             }),
           ],
           1,
         );
-        if (listCallCount === 2) {
-          archiveReplacementStarted.resolve();
-          return await archiveReplacement.promise;
-        }
-        return result;
-      }
-      if (method === "sessions.patch") {
-        return {
-          ok: true,
-          key,
-          path: "(multiple)",
-          entry: { sessionId: "title-session", archivedAt: 2, updatedAt: 2 },
-        };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
+      },
+      () => archiveReceipt(key, "title-session", 2),
+    );
     const sessions = createSessions(request, key);
 
     await sessions.refresh(enrichedOptions);
@@ -134,40 +180,20 @@ describe("session list replacement options", () => {
     expect(sessions.state.result?.sessions[0]?.archived).toBe(true);
     expect(archiveReverted).toBe(false);
     stop();
-    sessions.dispose();
   });
 
   it("retains the routed archived descriptor through its foreground replacement", async () => {
     const key = "agent:main:dashboard:archived";
-    let listCallCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        return {
-          ok: true,
-          key,
-          path: "(multiple)",
-          entry: { sessionId: "archived-session", archivedAt: 2, updatedAt: 2 },
-        };
-      }
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      listCallCount += 1;
-      return sessionsResult(
-        listCallCount === 1
-          ? [
-              {
-                key,
-                kind: "direct",
-                sessionId: "archived-session",
-                updatedAt: 1,
-                derivedTitle: "Readable archived title",
-              },
-            ]
-          : [{ key: "agent:main:main", kind: "direct", updatedAt: 2 }],
-        listCallCount,
-      );
-    });
+    const request = listRequest(
+      (call) =>
+        sessionsResult(
+          call === 1
+            ? [sessionRow(key, "archived-session", 1, { derivedTitle: "Readable archived title" })]
+            : [{ key: "agent:main:main", kind: "direct", updatedAt: 2 }],
+          call,
+        ),
+      () => archiveReceipt(key, "archived-session", 2),
+    );
     const sessions = createSessions(request, key);
 
     await sessions.refresh(enrichedOptions);
@@ -185,7 +211,6 @@ describe("session list replacement options", () => {
       ]),
     );
     stop();
-    sessions.dispose();
   });
 
   it("retains confirmed archive state after the routed row is evicted", async () => {
@@ -198,31 +223,18 @@ describe("session list replacement options", () => {
       assistantAgentId: "main",
       hello: null,
     };
-    let listCallCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        return {
-          ok: true,
-          key,
-          path: "(multiple)",
-          entry: { sessionId: "archived-session", archivedAt: 20, updatedAt: 20 },
-        };
-      }
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      listCallCount += 1;
-      if (listCallCount === 3) {
-        return sessionsResult([{ key: otherKey, kind: "direct", updatedAt: 30 }], listCallCount);
-      }
-      return sessionsResult(
-        [
-          { key, kind: "direct", sessionId: "archived-session", updatedAt: 10, archived: false },
-          { key: otherKey, kind: "direct", updatedAt: 30 },
-        ],
-        listCallCount,
-      );
-    });
+    const request = listRequest(
+      (call) => {
+        const other = { key: otherKey, kind: "direct" as const, updatedAt: 30 };
+        return sessionsResult(
+          call === 3
+            ? [other]
+            : [sessionRow(key, "archived-session", 10, { archived: false }), other],
+          call,
+        );
+      },
+      () => archiveReceipt(key, "archived-session", 20),
+    );
     snapshot.client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(snapshot.client);
     const sessions = createTestSessionCapability({
@@ -259,43 +271,32 @@ describe("session list replacement options", () => {
       },
     });
     expect(sessions.state.result?.sessions.find((row) => row.key === key)?.archived).toBe(false);
-    sessions.dispose();
   });
 
   it.each(["before", "after"] as const)(
     "preserves a replacement session observed %s archive acknowledgement",
     async (replacementTiming) => {
       const key = "agent:main:dashboard:replaced";
-      const confirmation = {
-        ok: true,
-        key,
-        path: "(multiple)",
-        entry: { sessionId: "archived-session", archivedAt: 20, updatedAt: 20 },
-      };
+      const confirmation = archiveReceipt(key, "archived-session", 20);
       const response = createDeferred<typeof confirmation>();
-      let listCallCount = 0;
       let failRefresh = false;
       const snapshots: GatewaySessionRow[] = [
         { key, kind: "direct", sessionId: "archived-session", updatedAt: 10 },
         { key, kind: "direct", updatedAt: 30, archived: false },
         { key, kind: "direct", sessionId: "replacement-session", updatedAt: 40, archived: false },
       ];
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.patch") {
-          return response.promise;
-        }
-        if (method !== "sessions.list") {
-          throw new Error(`Unexpected request: ${method}`);
-        }
-        if (failRefresh) {
-          throw new Error("Archive list refresh unavailable");
-        }
-        listCallCount += 1;
-        return sessionsResult(
-          [snapshots[listCallCount - 1] ?? { key, kind: "direct", updatedAt: 50, archived: false }],
-          listCallCount,
-        );
-      });
+      const request = listRequest(
+        (call) => {
+          if (failRefresh) {
+            throw new Error("Archive list refresh unavailable");
+          }
+          return sessionsResult(
+            [snapshots[call - 1] ?? { key, kind: "direct", updatedAt: 50, archived: false }],
+            call,
+          );
+        },
+        () => response.promise,
+      );
       const sessions = createSessions(request, key);
       let archive: Promise<unknown> | undefined;
       try {
@@ -500,42 +501,42 @@ describe("session list replacement options", () => {
     },
   );
 
-  it("keeps derived titles while an enriched roster response is temporarily degraded", async () => {
-    const key = "agent:main:dashboard:session-1";
-    let listCallCount = 0;
-    const request = mockRequest("sessions.list", async () => {
-      listCallCount += 1;
-      return sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            sessionId: "session-1",
-            updatedAt: listCallCount,
-            ...(listCallCount === 1
-              ? {
-                  derivedTitle: "Readable planning title",
-                  lastMessagePreview: "Latest visible reply",
-                }
-              : {}),
-          },
-        ],
-        listCallCount,
+  it.each([false, true])(
+    "preserves enrichment only within the same session (reset: %s)",
+    async (reset) => {
+      const key = reset ? "agent:main:dashboard:session" : "agent:main:dashboard:session-1";
+      const enrichment = reset
+        ? { derivedTitle: "Previous session title" }
+        : {
+            derivedTitle: "Readable planning title",
+            lastMessagePreview: "Latest visible reply",
+          };
+      const request = listRequest((call) =>
+        sessionsResult(
+          [
+            sessionRow(
+              key,
+              reset ? `session-${call}` : "session-1",
+              call,
+              call === 1 ? enrichment : {},
+            ),
+          ],
+          call,
+        ),
       );
-    });
-    const sessions = createSessions(request, key);
-
-    await sessions.refresh(enrichedOptions);
-    await sessions.refresh(enrichedOptions);
-
-    expect(sessions.state.result?.sessions[0]).toMatchObject({
-      key,
-      updatedAt: 2,
-      derivedTitle: "Readable planning title",
-      lastMessagePreview: "Latest visible reply",
-    });
-    sessions.dispose();
-  });
+      const sessions = createSessions(request, key);
+      await sessions.refresh(enrichedOptions);
+      await sessions.refresh(enrichedOptions);
+      expect(sessions.state.result?.sessions[0]).toMatchObject(
+        reset
+          ? { key, sessionId: "session-2", updatedAt: 2 }
+          : { key, updatedAt: 2, ...enrichment },
+      );
+      if (reset) {
+        expect(sessions.state.result?.sessions[0]?.derivedTitle).toBeUndefined();
+      }
+    },
+  );
 
   it("does not preserve another agent's raw-global row through background hydration", async () => {
     const opsGoal: SessionGoal = {
@@ -589,57 +590,16 @@ describe("session list replacement options", () => {
 
     expect(sessions.state.agentId).toBe("research");
     expect(sessions.state.result?.sessions).toEqual([]);
-    sessions.dispose();
-  });
-
-  it("does not preserve a derived title across a session reset", async () => {
-    const key = "agent:main:dashboard:session";
-    let listCallCount = 0;
-    const request = mockRequest("sessions.list", async () => {
-      listCallCount += 1;
-      return sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            sessionId: `session-${listCallCount}`,
-            updatedAt: listCallCount,
-            ...(listCallCount === 1 ? { derivedTitle: "Previous session title" } : {}),
-          },
-        ],
-        listCallCount,
-      );
-    });
-    const sessions = createSessions(request, key);
-
-    await sessions.refresh(enrichedOptions);
-    await sessions.refresh(enrichedOptions);
-
-    expect(sessions.state.result?.sessions[0]).toMatchObject({
-      key,
-      sessionId: "session-2",
-      updatedAt: 2,
-    });
-    expect(sessions.state.result?.sessions[0]?.derivedTitle).toBeUndefined();
-    sessions.dispose();
   });
 
   it("captures foreground list options before concurrent mutation refreshes", async () => {
     const key = "agent:main:concurrent";
     const firstList = createDeferred<SessionsListResult>();
-    let listCalls = 0;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        listCalls += 1;
-        return listCalls === 1
-          ? await firstList.promise
-          : sessionsResult([{ key, kind: "direct", updatedAt: 2 }], 1);
-      }
-      if (method === "sessions.patch") {
-        return { ok: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
+    const request = listRequest(
+      (call) =>
+        call === 1 ? firstList.promise : sessionsResult([{ key, kind: "direct", updatedAt: 2 }], 1),
+      () => ({ ok: true }),
+    );
     const sessions = createSessions(request, key);
 
     const foreground = sessions.refresh({
@@ -661,14 +621,13 @@ describe("session list replacement options", () => {
       limit: 30,
       includeDerivedTitles: true,
     });
-    sessions.dispose();
   });
 
   it("drops pagination while preserving filters when refreshing after session patches", async () => {
     const key = "agent:main:page-b";
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        return sessionsResult(
+    const request = listRequest(
+      () =>
+        sessionsResult(
           [
             {
               key,
@@ -679,13 +638,9 @@ describe("session list replacement options", () => {
             },
           ],
           2,
-        );
-      }
-      if (method === "sessions.patch") {
-        return { ok: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
+        ),
+      () => ({ ok: true }),
+    );
     const sessions = createSessions(request, key);
 
     const baseListOptions = {
@@ -716,60 +671,26 @@ describe("session list replacement options", () => {
     });
     expect(listCalls[2]?.[1]).not.toHaveProperty("append");
     expect(listCalls[2]?.[1]).not.toHaveProperty("offset");
-    sessions.dispose();
   });
 
-  it("does not publish a model override when the captured UI owner is already retired", async () => {
-    const pendingPatch = createDeferred<unknown>();
-    const request = mockRequest("sessions.patch", async () => {
-      return await pendingPatch.promise;
-    });
-    const key = "global";
-    const sessions = createSessions(request, key);
-
-    const operation = sessions.patch(
-      key,
-      { model: "openai/gpt-new" },
-      { deferListRefresh: true, ownsModelOverride: () => false },
-    );
-
-    expect(sessions.state.modelOverrides[key]).toBeUndefined();
-    pendingPatch.resolve({ ok: true, path: "", key, entry: {} });
-    await expect(operation).resolves.toMatchObject({ ok: true, key });
-    expect(sessions.state.modelOverrides[key]).toBeUndefined();
-    sessions.dispose();
-  });
-
-  it.each(["resolve", "reject"] as const)(
-    "retires an optimistic model patch after the UI owner changes and the request %s",
-    async (outcome) => {
-      const pendingPatch = createDeferred<unknown>();
-      const request = mockRequest("sessions.patch", async () => {
-        return await pendingPatch.promise;
-      });
-      const key = "global";
-      const sessions = createSessions(request, key);
-      let ownsModelOverride = true;
-
-      const operation = sessions.patch(
-        key,
-        { model: "openai/gpt-agent-a" },
-        { deferListRefresh: true, ownsModelOverride: () => ownsModelOverride },
-      );
-      expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-agent-a");
-
+  it.each([
+    ["before", "resolve"],
+    ["after", "resolve"],
+    ["after", "reject"],
+  ] as const)(
+    "retires a model claim when its owner changes %s admission and the request %s",
+    async (timing, outcome) => {
+      const { key, sessions, pending, patch } = modelHarness();
+      let ownsModelOverride = timing !== "before";
+      const model = timing === "before" ? "openai/gpt-new" : "openai/gpt-agent-a";
+      const operation = patch(model, () => ownsModelOverride);
+      expect(sessions.state.modelOverrides[key]).toBe(timing === "before" ? undefined : model);
       ownsModelOverride = false;
-      if (outcome === "resolve") {
-        pendingPatch.resolve({ ok: true, path: "", key, entry: {} });
-        await expect(operation).resolves.toMatchObject({ ok: true, key });
-      } else {
-        pendingPatch.reject(new Error("agent A patch failed"));
-        await expect(operation).rejects.toThrow("agent A patch failed");
-      }
-
+      await settleModelPatch(pending, operation, outcome);
       expect(sessions.state.modelOverrides[key]).toBeUndefined();
-      expect(sessions.state.error).toBeNull();
-      sessions.dispose();
+      if (timing === "after") {
+        expect(sessions.state.error).toBeNull();
+      }
     },
   );
 
@@ -781,82 +702,33 @@ describe("session list replacement options", () => {
   ] as const)(
     "preserves a newer equal-value model claim when an older request %s (owner active: %s)",
     async (outcome, ownerActive) => {
-      const pendingPatch = createDeferred<unknown>();
-      const replacementPatch = createDeferred<unknown>();
-      let patchCount = 0;
-      const request = mockRequest("sessions.patch", async () => {
-        return await (++patchCount === 1 ? pendingPatch.promise : replacementPatch.promise);
-      });
-      const key = "global";
-      const sessions = createSessions(request, key);
+      const { key, sessions, pending, replacement, patch } = modelHarness(true);
       let ownsModelOverride = true;
-
-      const operation = sessions.patch(
-        key,
-        { model: "openai/gpt-shared" },
-        { deferListRefresh: true, ownsModelOverride: () => ownsModelOverride },
-      );
+      const operation = patch("openai/gpt-shared", () => ownsModelOverride);
       expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-shared");
-
       ownsModelOverride = ownerActive;
-      const replacement = sessions.patch(
-        key,
-        { model: "openai/gpt-shared" },
-        { deferListRefresh: true },
-      );
-      if (outcome === "resolve") {
-        pendingPatch.resolve({ ok: true, path: "", key, entry: {} });
-        await expect(operation).resolves.toMatchObject({ ok: true, key });
-      } else {
-        pendingPatch.reject(new Error("agent A patch failed"));
-        await expect(operation).rejects.toThrow("agent A patch failed");
-      }
-
+      const newer = patch("openai/gpt-shared");
+      await settleModelPatch(pending, operation, outcome);
       expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-shared");
       expect(sessions.state.error).toBe(
         ownerActive && outcome === "reject" ? "agent A patch failed" : null,
       );
-      replacementPatch.resolve({ ok: true, key, entry: {} });
-      await replacement;
-      sessions.dispose();
+      replacement.resolve({ ok: true, key, entry: {} });
+      await newer;
     },
   );
 
   it("does not reuse a retired owner's model baseline for the next owner", async () => {
-    const agentAPatch = createDeferred<unknown>();
-    const agentBPatch = createDeferred<unknown>();
-    let patchCount = 0;
-    const request = mockRequest("sessions.patch", async () => {
-      patchCount += 1;
-      return await (patchCount === 1 ? agentAPatch.promise : agentBPatch.promise);
-    });
-    const key = "global";
-    const sessions = createSessions(request, key);
-
-    const agentAOperation = sessions.patch(
-      key,
-      { model: "openai/gpt-agent-a-new" },
-      { deferListRefresh: true },
-    );
+    const { key, sessions, pending, replacement, patch } = modelHarness(true);
+    const agentAOperation = patch("openai/gpt-agent-a-new");
     expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-agent-a-new");
-
     sessions.retireModelOverride(key);
     expect(sessions.state.modelOverrides[key]).toBeUndefined();
-
-    const agentBOperation = sessions.patch(
-      key,
-      { model: "openai/gpt-agent-b" },
-      { deferListRefresh: true },
-    );
+    const agentBOperation = patch("openai/gpt-agent-b");
     expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-agent-b");
-
-    agentBPatch.reject(new Error("agent B patch failed"));
-    await expect(agentBOperation).rejects.toThrow("agent B patch failed");
+    await settleModelPatch(replacement, agentBOperation, "reject", "agent B patch failed");
     expect(sessions.state.modelOverrides[key]).toBeUndefined();
-
-    agentAPatch.resolve({ ok: true, path: "", key, entry: {} });
-    await expect(agentAOperation).resolves.toMatchObject({ ok: true, key });
+    await settleModelPatch(pending, agentAOperation, "resolve");
     expect(sessions.state.modelOverrides[key]).toBeUndefined();
-    sessions.dispose();
   });
 });

@@ -2,11 +2,16 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createTestSessionCapability } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "./session-capability.test-support.ts";
 import type { SessionCapability } from "./session-capability.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 
 const subscriptionRequestOptions = { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
+type Params = Record<string, unknown>;
+type SubscribeOptions = NonNullable<Parameters<SessionCapability["subscribeMessages"]>[1]>;
 
 function wireCall(action: "subscribe" | "unsubscribe", params: Record<string, unknown>) {
   return [
@@ -16,24 +21,12 @@ function wireCall(action: "subscribe" | "unsubscribe", params: Record<string, un
   ];
 }
 
-function createGateway(
-  request: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
-) {
-  return {
-    snapshot: {
-      client: { request } as unknown as GatewayBrowserClient,
-      phase: "connected" as const,
-      sessionKey: "agent:main:main",
-      assistantAgentId: "main",
-      hello: null,
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  };
+function createGateway(request: (method: string, params?: Params) => Promise<unknown>) {
+  return createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway;
 }
 
-function observerRequest(reply: (params?: Record<string, unknown>) => unknown) {
-  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
+function observerRequest(reply: (params?: Params) => unknown) {
+  return vi.fn(async (method: string, params?: Params) => {
     if (method === "sessions.messages.subscribe") {
       return reply(params);
     }
@@ -46,38 +39,25 @@ function observerRequest(reply: (params?: Record<string, unknown>) => unknown) {
 
 describe("createSessionCapability message subscriptions", () => {
   it("retains the requested subscription intent while admission is pending", async () => {
-    const request = vi.fn(async (_method: string, params?: Record<string, unknown>) => ({
+    const request = vi.fn(async (_method: string, params?: Params) => ({
       key: params?.key,
       agentId: params?.agentId,
     }));
     const sessions = createTestSessionCapability(createGateway(request));
-    const options: NonNullable<Parameters<SessionCapability["subscribeMessages"]>[1]> = {
-      agentId: " Main ",
-      mode: "narration",
-      includeApprovals: true,
-    };
+    const intent = { agentId: "main", mode: "narration", includeApprovals: true } as const;
+    const options: SubscribeOptions = { ...intent, agentId: " Main " };
     const pending = sessions.subscribeMessages("global", options);
-    options.agentId = "work";
-    options.mode = undefined;
-    options.includeApprovals = false;
+    Object.assign(options, { agentId: "work", mode: undefined, includeApprovals: false });
     const subscription = await pending;
 
-    expect(request.mock.calls).toEqual([
-      wireCall("subscribe", {
-        key: "global",
-        agentId: "main",
-        mode: "narration",
-        includeApprovals: true,
-      }),
-    ]);
+    expect(request.mock.calls).toEqual([wireCall("subscribe", { key: "global", ...intent })]);
     await sessions.unsubscribeMessages(subscription);
-    sessions.dispose();
   });
 
   it.each(["reconnect", "dispose"])(
     "does not create a wire observer when %s retires an acquisition before admission",
     async (retirement) => {
-      const request = vi.fn(async (_method: string, params?: Record<string, unknown>) => ({
+      const request = vi.fn(async (_method: string, params?: Params) => ({
         key: params?.key,
       }));
       const client = { request } as unknown as GatewayBrowserClient;
@@ -117,20 +97,19 @@ describe("createSessionCapability message subscriptions", () => {
       second.subscribeMessages("agent:main:main"),
     ]);
 
-    expect(request.mock.calls[0]).toEqual(
+    expect(request.mock.calls).toEqual([
       wireCall("subscribe", { key: "main", mode: "narration" }),
-    );
-    expect(request.mock.calls[1]).toEqual(wireCall("subscribe", { key: "agent:main:main" }));
+      wireCall("subscribe", { key: "agent:main:main" }),
+    ]);
     await first.unsubscribeMessages(firstLease);
     expect(request).toHaveBeenCalledTimes(2);
     await second.unsubscribeMessages(secondLease);
     expect(request.mock.calls.at(-1)).toEqual(wireCall("unsubscribe", { key: "agent:main:main" }));
-    first.dispose();
-    second.dispose();
   });
 
   it("upgrades a plain observer for approvals without downgrading existing owners", async () => {
     const replay = { approvals: [{ id: "approval-1" }] };
+    const opts = { includeApprovals: true } as const;
     const request = observerRequest((params) => ({
       key: params?.key,
       ...(params?.includeApprovals ? { approvalReplay: replay } : {}),
@@ -138,31 +117,23 @@ describe("createSessionCapability message subscriptions", () => {
     const sessions = createTestSessionCapability(createGateway(request));
 
     const plain = await sessions.subscribeMessages("main");
-    const approval = await sessions.subscribeMessages("main", { includeApprovals: true });
+    const approval = await sessions.subscribeMessages("main", opts);
     const anotherPlain = await sessions.subscribeMessages("main");
 
-    expect(approval).toEqual({
-      key: "main",
-      agentId: null,
-      includeApprovals: true,
-      approvalReplay: replay,
-    });
-    expect(request.mock.calls[1]).toEqual(
-      wireCall("subscribe", { key: "main", includeApprovals: true }),
-    );
+    expect(approval).toEqual({ key: "main", agentId: null, ...opts, approvalReplay: replay });
+    expect(request.mock.calls[1]).toEqual(wireCall("subscribe", { key: "main", ...opts }));
     await sessions.unsubscribeMessages(approval);
     await sessions.unsubscribeMessages(plain);
     expect(request).toHaveBeenCalledTimes(2);
     await sessions.unsubscribeMessages(anotherPlain);
     expect(request).toHaveBeenCalledTimes(3);
-    sessions.dispose();
   });
 
   it.each(["global", "qualified main alias"])(
     "retains each global observer owner through %s acknowledgment and release",
     async (keyForm) => {
       const observers = new Map<string, boolean>();
-      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      const request = vi.fn(async (method: string, params?: Params) => {
         const key = params?.key;
         const agentId =
           params?.agentId ??
@@ -201,16 +172,13 @@ describe("createSessionCapability message subscriptions", () => {
       expect(observers.size).toBe(0);
       expect(main).toEqual({ key: "global", agentId: "main" });
       expect(work).toEqual({ key: "global", agentId: "work" });
-      expect(request.mock.calls[0]).toEqual(
+      expect(request.mock.calls.slice(0, 2)).toEqual([
         wireCall("subscribe", { key: keyFor("main"), agentId: "main" }),
-      );
-      expect(request.mock.calls[1]).toEqual(
         wireCall("subscribe", { key: keyFor("work"), agentId: "work" }),
-      );
+      ]);
       expect(request.mock.calls.at(-1)).toEqual(
         wireCall("unsubscribe", { key: "global", agentId: "work" }),
       );
-      sessions.dispose();
     },
   );
 });

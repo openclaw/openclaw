@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -21,6 +21,57 @@ const child = {
 const initialChild = { ...child, label: "Initial child" };
 const query = { ownerId: "ada", agentId: "main" };
 const refreshOptions = { agentId: "main", force: true };
+
+function setup(request: Parameters<typeof createTestGatewayClient>[0], listQuery?: typeof query) {
+  vi.useFakeTimers();
+  const client = createTestGatewayClient(request);
+  const { gateway, emitEvent } = createGatewayHarness(client);
+  const sessions = createTestSessionCapability(gateway);
+  const unsubscribe = listQuery && sessions.subscribeList(listQuery, () => {});
+  onTestFinished(() => {
+    unsubscribe?.();
+    vi.useRealTimers();
+  });
+  return {
+    client,
+    sessions,
+    emitChange: (payload: Record<string, unknown>) =>
+      emitEvent({ type: "event", event: "sessions.changed", payload }),
+    list: () => sessions.listSnapshot(listQuery ?? query).result,
+    row: () => sessions.listSnapshot(listQuery ?? query).result?.sessions[0],
+    primary: () => sessions.state.result?.sessions[0],
+    refresh: async () => {
+      await sessions.refresh(refreshOptions);
+      if (listQuery) {
+        await sessions.refreshList(listQuery);
+      }
+    },
+  };
+}
+
+function sibling<T extends GatewaySessionRow>(row: T, label: string) {
+  return { ...row, key: "agent:main:sibling", sessionId: "session-sibling", label };
+}
+
+function expectInvalidated(
+  row: GatewaySessionRow | undefined,
+  identity: Partial<GatewaySessionRow>,
+  soft = false,
+) {
+  const assert = soft ? expect.soft : expect;
+  assert(row).toMatchObject(identity);
+  for (const field of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
+    assert(row).not.toHaveProperty(field);
+  }
+}
+
+function thinkingCatalog(...levels: string[]) {
+  return {
+    thinkingLevels: levels.map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) })),
+    thinkingOptions: levels,
+    thinkingDefault: levels.at(-1),
+  };
+}
 
 function publishLineage(
   sessions: ReturnType<typeof createTestSessionCapability>,
@@ -74,7 +125,6 @@ describe("supplemental session reconciliation", () => {
   it.each(["model", "runtime"] as const)(
     "keeps thinking catalog invalidation after a %s change crosses an older list",
     async (changedIdentity) => {
-      vi.useFakeTimers();
       const initial = {
         ...child,
         updatedAt: 20,
@@ -82,12 +132,7 @@ describe("supplemental session reconciliation", () => {
         modelProvider: "test-provider",
         model: "model-a",
         agentRuntime: { id: "runtime-a", source: "model" as const },
-        thinkingLevels: [
-          { id: "low", label: "Low" },
-          { id: "high", label: "High" },
-        ],
-        thinkingOptions: ["low", "high"],
-        thinkingDefault: "high",
+        ...thinkingCatalog("low", "high"),
       };
       const selected = {
         modelProvider: initial.modelProvider,
@@ -100,57 +145,41 @@ describe("supplemental session reconciliation", () => {
       const catalog = {
         ...initial,
         ...selected,
-        thinkingLevels: [{ id: "medium", label: "Medium" }],
-        thinkingOptions: ["medium"],
-        thinkingDefault: "medium",
+        ...thinkingCatalog("medium"),
       };
       const delayed = createDeferred<ReturnType<typeof sessionsResult>>();
       let hold = false;
       let reply = initial;
-      const client = createTestGatewayClient(async (method) => {
+      const { sessions, emitChange, primary } = setup(async (method) => {
         expect(method).toBe("sessions.list");
         return hold ? delayed.promise : sessionsResult([{ ...reply }], 20);
       });
-      const { gateway, emitEvent } = createGatewayHarness(client);
-      const sessions = createTestSessionCapability(gateway);
       const options = { agentId: "main", includeLastMessage: true, force: true };
       let pending: Promise<void> | undefined;
       try {
         await sessions.refresh(options);
         hold = true;
         pending = sessions.refresh(options);
-        emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            sessionKey: key,
-            agentId: "main",
-            sessionId: initial.sessionId,
-            kind: "direct",
-            reason: "patch",
-            updatedAt: 20,
-            archived: false,
-            ...selected,
-          },
+        emitChange({
+          sessionKey: key,
+          agentId: "main",
+          sessionId: initial.sessionId,
+          kind: "direct",
+          reason: "patch",
+          updatedAt: 20,
+          archived: false,
+          ...selected,
         });
-        const changed = sessions.state.result?.sessions[0];
-        expect(changed).toMatchObject(selected);
-        for (const field of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
-          expect(changed).not.toHaveProperty(field);
-        }
+        expectInvalidated(primary(), selected);
 
         delayed.resolve(sessionsResult([{ ...initial }], 20));
         await pending;
-        const current = sessions.state.result?.sessions[0];
-        expect.soft(current).toMatchObject(selected);
-        for (const field of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
-          expect.soft(current).not.toHaveProperty(field);
-        }
+        expectInvalidated(primary(), selected, true);
 
         hold = false;
         reply = catalog;
         await sessions.refresh(options);
-        const refreshed = sessions.state.result?.sessions[0];
+        const refreshed = primary();
         expect(refreshed).toMatchObject(selected);
         expect(refreshed?.thinkingLevels).toEqual(catalog.thinkingLevels);
         expect(refreshed?.thinkingOptions).toEqual(catalog.thinkingOptions);
@@ -158,8 +187,6 @@ describe("supplemental session reconciliation", () => {
       } finally {
         delayed.resolve(sessionsResult([initial], 20));
         await pending;
-        sessions.dispose();
-        vi.useRealTimers();
       }
     },
   );
@@ -167,18 +194,13 @@ describe("supplemental session reconciliation", () => {
   it.each(["sibling", "duplicate"] as const)(
     "keeps an earlier captured child read current after appending a %s page",
     async (page) => {
-      vi.useFakeTimers();
       const initial = { ...child, label: "Page one child" };
       const later =
         page === "duplicate"
           ? { ...initial, updatedAt: 30, label: "Discarded duplicate" }
-          : {
-              ...initial,
-              key: "agent:main:sibling",
-              sessionId: "session-sibling",
-              label: "Page two sibling",
-            };
-      const request = vi.fn(async (method, params) => {
+          : sibling(initial, "Page two sibling");
+      const pageQuery = { ...query, limit: 1 };
+      const { sessions, list, refresh } = setup(async (method, params) => {
         expect(method).toBe("sessions.list");
         const offset = (params as { offset?: number }).offset;
         return {
@@ -187,35 +209,23 @@ describe("supplemental session reconciliation", () => {
           hasMore: !offset,
           nextOffset: offset ? null : 1,
         };
-      });
-      const sessions = createTestSessionCapability(
-        createGatewayHarness(createTestGatewayClient(request)).gateway,
+      }, pageQuery);
+      await refresh();
+      const reconcile = sessions.captureReconcile();
+      await sessions.refreshList({ ...pageQuery, append: true, offset: 1 });
+      const listed = list();
+      expect(listed?.sessions[0]?.label).toBe(initial.label);
+      expect(listed?.sessions.map((row) => row.key)).toEqual(
+        page === "duplicate" ? [key] : [key, later.key],
       );
-      const pageQuery = { ...query, limit: 1 };
-      const unsubscribe = sessions.subscribeList(pageQuery, () => {});
-      try {
-        await sessions.refresh(refreshOptions);
-        await sessions.refreshList(pageQuery);
-        const reconcile = sessions.captureReconcile();
-        await sessions.refreshList({ ...pageQuery, append: true, offset: 1 });
-        const listed = sessions.listSnapshot(pageQuery).result;
-        expect(listed?.sessions[0]?.label).toBe(initial.label);
-        expect(listed?.sessions.map((row) => row.key)).toEqual(
-          page === "duplicate" ? [key] : [key, later.key],
-        );
-        const fresh = { ...initial, updatedAt: 20, label: "Accepted child" };
-        expect(reconcile(fresh)).toBe(true);
-        expect(sessions.listSnapshot(pageQuery).result).toMatchObject({
-          totalCount: 2,
-          hasMore: false,
-          nextOffset: null,
-          sessions: page === "duplicate" ? [fresh] : [fresh, later],
-        });
-      } finally {
-        unsubscribe();
-        sessions.dispose();
-        vi.useRealTimers();
-      }
+      const fresh = { ...initial, updatedAt: 20, label: "Accepted child" };
+      expect(reconcile(fresh)).toBe(true);
+      expect(list()).toMatchObject({
+        totalCount: 2,
+        hasMore: false,
+        nextOffset: null,
+        sessions: page === "duplicate" ? [fresh] : [fresh, later],
+      });
     },
   );
 
@@ -235,41 +245,38 @@ describe("supplemental session reconciliation", () => {
   ])(
     "preserves managed-row observation order across $scenario (permission: $permission, primary: $primaryPresent)",
     async ({ scenario, permission, primaryPresent }) => {
-      vi.useFakeTimers();
       const initial = {
         ...initialChild,
         placement: placement("available"),
         permissionMode: "guarded" as const,
       };
       let current = initial;
-      const sibling = {
-        ...initial,
-        key: "agent:main:sibling",
-        sessionId: "session-sibling",
-        label: "Initial sibling",
-      };
+      const other = sibling(initial, "Initial sibling");
       const delayed = createDeferred<ReturnType<typeof sessionsResult>>();
       let holdManaged = false;
       let omitPrimary = false;
-      const request = vi.fn(async (method, params) => {
+      const {
+        sessions,
+        emitChange,
+        list,
+        row,
+        primary,
+        refresh: load,
+      } = setup(async (method, params) => {
         expect(method).toBe("sessions.list");
         if (holdManaged && (params as { ownerId?: string }).ownerId) {
           return delayed.promise;
         }
         return sessionsResult(
           omitPrimary && !(params as { ownerId?: string }).ownerId
-            ? [sibling]
-            : [{ ...current }, ...(scenario === "older response" ? [sibling] : [])],
+            ? [other]
+            : [{ ...current }, ...(scenario === "older response" ? [other] : [])],
           current.updatedAt,
         );
-      });
-      const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
-      const sessions = createTestSessionCapability(gateway);
-      const unsubscribe = sessions.subscribeList(query, () => {});
+      }, query);
       let refresh: Promise<void> | undefined;
       try {
-        await sessions.refresh(refreshOptions);
-        await sessions.refreshList(query);
+        await load();
         if (scenario === "older response") {
           holdManaged = true;
           refresh = sessions.refreshList({ ...query, force: true });
@@ -283,28 +290,22 @@ describe("supplemental session reconciliation", () => {
         };
         if (scenario === "older response") {
           expect(reconcile(accepted)).toBe(true);
-          expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(accepted);
+          expect(row()).toMatchObject(accepted);
           if (permission !== undefined) {
-            emitEvent({
-              type: "event",
-              event: "sessions.changed",
-              payload: {
-                key,
-                sessionId: initial.sessionId,
-                updatedAt: 30,
-                permissionMode: permission,
-              },
+            emitChange({
+              key,
+              sessionId: initial.sessionId,
+              updatedAt: 30,
+              permissionMode: permission,
             });
-            expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(
-              permission ?? undefined,
-            );
+            expect(primary()?.permissionMode).toBe(permission ?? undefined);
             if (!primaryPresent) {
               omitPrimary = true;
               await sessions.refresh(refreshOptions);
-              expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([sibling.key]);
+              expect(sessions.state.result?.sessions.map((item) => item.key)).toEqual([other.key]);
             }
           }
-          const queriedSibling = { ...sibling, label: "Queried sibling" };
+          const queriedSibling = { ...other, label: "Queried sibling" };
           delayed.resolve({
             ...sessionsResult([{ ...initial }, queriedSibling], 30),
             totalCount: 40,
@@ -313,37 +314,31 @@ describe("supplemental session reconciliation", () => {
           });
           await refresh;
           const { permissionMode: initialMode, ...descriptor } = accepted;
-          expect(sessions.listSnapshot(query).result).toMatchObject({
+          expect(list()).toMatchObject({
             totalCount: 40,
             hasMore: true,
             nextOffset: 10,
             sessions: [
               { ...descriptor, updatedAt: permission === undefined ? accepted.updatedAt : 30 },
-              primaryPresent ? queriedSibling : sibling,
+              primaryPresent ? queriedSibling : other,
             ],
           });
-          expect(sessions.listSnapshot(query).result?.sessions[0]?.permissionMode).toBe(
+          expect(row()?.permissionMode).toBe(
             permission === undefined ? initialMode : (permission ?? undefined),
           );
           if (permission === null) {
-            expect(sessions.listSnapshot(query).result?.sessions[0]).not.toHaveProperty(
-              "permissionMode",
-            );
+            expect(row()).not.toHaveProperty("permissionMode");
           }
         } else if (scenario === "deletion") {
-          emitEvent({
-            type: "event",
-            event: "sessions.changed",
-            payload: {
-              key,
-              sessionId: initial.sessionId,
-              agentId: "main",
-              reason: "delete",
-            },
+          emitChange({
+            key,
+            sessionId: initial.sessionId,
+            agentId: "main",
+            reason: "delete",
           });
           expect(reconcile(accepted)).toBe(false);
           expect(sessions.state.result?.sessions).toEqual([]);
-          expect(sessions.listSnapshot(query).result?.sessions).toEqual([]);
+          expect(list()?.sessions).toEqual([]);
         } else {
           current = {
             ...initial,
@@ -353,31 +348,26 @@ describe("supplemental session reconciliation", () => {
             placement: placement("offline"),
           };
           await sessions.refreshList({ ...query, force: true });
-          const primary = sessions.state.result;
+          const before = sessions.state.result;
           expect(reconcile(accepted)).toBe(false);
-          expect(sessions.state.result).toBe(primary);
-          expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(current);
+          expect(sessions.state.result).toBe(before);
+          expect(row()).toMatchObject(current);
         }
       } finally {
         delayed.resolve(sessionsResult([initial], 30));
         await refresh;
-        unsubscribe();
-        sessions.dispose();
-        vi.useRealTimers();
       }
     },
   );
 
   it("coalesces changed-row query refreshes without refreshing ignored or unchanged rows", async () => {
-    vi.useFakeTimers();
     let current = initialChild;
     const request = vi.fn(async (method) => {
       return method === "sessions.describe"
         ? { session: current }
         : sessionsResult([current], current.updatedAt);
     });
-    const client = createTestGatewayClient(request);
-    const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+    const { client, sessions, list, refresh } = setup(request, query);
     const readDescription = async () => {
       const reconcile = sessions.captureReconcile();
       const result = await client.request<{ session: typeof current }>("sessions.describe", {
@@ -385,41 +375,33 @@ describe("supplemental session reconciliation", () => {
       });
       expect(reconcile(result.session)).toBe(true);
     };
-    const unsubscribe = sessions.subscribeList(query, () => {});
-    try {
-      await sessions.refresh(refreshOptions);
-      await sessions.refreshList(query);
-      request.mockClear();
-      current = { ...current, updatedAt: 20, label: "Updated child" };
-      await readDescription();
-      current = { ...current, updatedAt: 30, label: "Current child" };
-      await readDescription();
-      request.mockClear();
-      await vi.advanceTimersByTimeAsync(5_000);
+    await refresh();
+    request.mockClear();
+    current = { ...current, updatedAt: 20, label: "Updated child" };
+    await readDescription();
+    current = { ...current, updatedAt: 30, label: "Current child" };
+    await readDescription();
+    request.mockClear();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-      expect(request).toHaveBeenCalledExactlyOnceWith(
-        "sessions.list",
-        expect.objectContaining(query),
-      );
-      expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe(current.label);
-      request.mockClear();
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.list",
+      expect.objectContaining(query),
+    );
+    expect(list()?.sessions[0]?.label).toBe(current.label);
+    request.mockClear();
 
-      sessions.reconcile(current);
-      sessions.captureReconcile()(current);
-      sessions.reconcile({ ...current, updatedAt: 10, label: "Older child" });
-      sessions.reconcile(current, {
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        contextTokens: 128_000,
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(request).not.toHaveBeenCalled();
-      expect(sessions.state.result?.sessions[0]?.label).toBe(current.label);
-    } finally {
-      unsubscribe();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
+    sessions.reconcile(current);
+    sessions.captureReconcile()(current);
+    sessions.reconcile({ ...current, updatedAt: 10, label: "Older child" });
+    sessions.reconcile(current, {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      contextTokens: 128_000,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).not.toHaveBeenCalled();
+    expect(sessions.state.result?.sessions[0]?.label).toBe(current.label);
   });
 
   it("publishes an owner change but not unchanged lineage rows and defaults", async () => {
