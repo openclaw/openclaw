@@ -15,6 +15,7 @@ import { migrationsHandlers } from "./migrations.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
@@ -22,17 +23,14 @@ afterEach(() => {
 
 type Fixture = ReturnType<typeof createMigrationResourceFixture>;
 async function withFixture(fixture: Fixture, run: () => Promise<void>) {
-  try {
-    await withEnvAsync(
-      {
-        OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
-      },
-      run,
-    );
-  } finally {
-    fixture.cleanup();
-  }
+  using _ = { [Symbol.dispose]: fixture.cleanup };
+  await withEnvAsync(
+    {
+      OPENCLAW_STATE_DIR: path.join(fixture.root, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(fixture.root, "state", "openclaw.json"),
+    },
+    run,
+  );
 }
 
 function requests(fixture: Fixture, extra: Partial<GatewayRequestContext> = {}) {
@@ -42,6 +40,7 @@ function requests(fixture: Fixture, extra: Partial<GatewayRequestContext> = {}) 
     ...extra,
   } as GatewayRequestContext;
   return (method: keyof typeof migrationsHandlers, params: Record<string, unknown>) => {
+    const handler = expectDefined(migrationsHandlers[method], method);
     const frames: string[] = [];
     const respond = vi.fn<RespondFn>((ok, payload, error, meta) => {
       frames.push(JSON.stringify({ ok, payload, error, meta }));
@@ -50,10 +49,7 @@ function requests(fixture: Fixture, extra: Partial<GatewayRequestContext> = {}) 
       respond,
       frames,
       run: () =>
-        expectDefined(
-          migrationsHandlers[method],
-          method,
-        )({
+        handler({
           params,
           respond,
           context,
@@ -65,6 +61,27 @@ function requests(fixture: Fixture, extra: Partial<GatewayRequestContext> = {}) 
   };
 }
 
+async function applyParams(
+  invoke: ReturnType<typeof requests>,
+  providerId: string,
+  idempotencyKey: string,
+) {
+  const plan = invoke("migrations.memory.plan", { agentId: "main" });
+  await plan.run();
+  expect(plan.frames).toHaveLength(1);
+  const preview = JSON.parse(plan.frames[0] ?? "{}");
+  expect(preview.ok).toBe(true);
+  const fingerprint: unknown = preview.payload.providers[0]?.planFingerprint;
+  expect(fingerprint).toEqual(expect.any(String));
+  return {
+    agentId: "main",
+    providerId,
+    itemIds: ["memory:one"],
+    idempotencyKey,
+    planFingerprint: fingerprint,
+  };
+}
+
 describe("memory migration registration resources", () => {
   it.each(["success", "cleanup failure", "encoding failure"] as const)(
     "replays a terminal %s after native resources close without applying again",
@@ -73,134 +90,107 @@ describe("memory migration registration resources", () => {
       const logGateway = createSubsystemLogger("migration-native-test");
       const warn = vi.spyOn(logGateway, "warn").mockImplementation(() => {});
       const invoke = requests(fixture, { logGateway });
-      try {
-        await withFixture(fixture, async () => {
-          const plan = invoke("migrations.memory.plan", { agentId: "main" });
-          await plan.run();
-          expect(plan.frames).toHaveLength(1);
-          const preview = JSON.parse(plan.frames[0] ?? "{}");
-          expect(preview.ok).toBe(true);
-          const fingerprint: unknown = preview.payload.providers[0]?.planFingerprint;
-          expect(fingerprint).toEqual(expect.any(String));
-          expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
-          fixture.state.failCleanup = mode === "cleanup failure";
-          fixture.state.failEncoding = mode === "encoding failure";
-          const params = {
-            agentId: "main",
-            providerId: fixture.id,
-            itemIds: ["memory:one"],
-            idempotencyKey: "native-memory-import",
-            planFingerprint: fingerprint,
-          };
-          const first = invoke("migrations.memory.apply", params);
-          const firstRun = first.run();
-          try {
-            await Promise.race([fixture.state.applying.promise, firstRun]);
-            expect(fixture.state.applyCalls).toBe(1);
-            expect(fixture.state.connections[1]?.database.isOpen, first.frames.join("\n")).toBe(
-              true,
+      await withFixture(fixture, async () => {
+        const params = await applyParams(invoke, fixture.id, "native-memory-import");
+        expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
+        fixture.state.failCleanup = mode === "cleanup failure";
+        fixture.state.failEncoding = mode === "encoding failure";
+        const first = invoke("migrations.memory.apply", params);
+        const firstRun = first.run();
+        try {
+          await Promise.race([fixture.state.applying.promise, firstRun]);
+          expect(fixture.state.applyCalls).toBe(1);
+          expect(fixture.state.connections[1]?.database.isOpen, first.frames.join("\n")).toBe(true);
+          const retry = invoke("migrations.memory.apply", params);
+          const retryRun = retry.run();
+          fixture.state.resumeApply.resolve();
+          await Promise.all([firstRun, retryRun]);
+          expect(first.frames).toHaveLength(1);
+          expect(retry.frames).toHaveLength(1);
+          const initial = JSON.parse(first.frames[0] ?? "{}");
+          const joined = JSON.parse(retry.frames[0] ?? "{}");
+          expect(joined).toEqual({ ...initial, meta: { cached: true } });
+          expect(initial.ok).toBe(mode !== "encoding failure");
+          if (mode === "encoding failure") {
+            expect(initial.error.message).toContain(
+              "apply completed, but its result could not be returned",
             );
-            const retry = invoke("migrations.memory.apply", params);
-            const retryRun = retry.run();
-            fixture.state.resumeApply.resolve();
-            await Promise.all([firstRun, retryRun]);
-            expect(first.frames).toHaveLength(1);
-            expect(retry.frames).toHaveLength(1);
-            const initial = JSON.parse(first.frames[0] ?? "{}");
-            const joined = JSON.parse(retry.frames[0] ?? "{}");
-            expect(joined).toEqual({ ...initial, meta: { cached: true } });
-            expect(initial.ok).toBe(mode !== "encoding failure");
-            if (mode === "encoding failure") {
-              expect(initial.error.message).toContain(
-                "apply completed, but its result could not be returned",
-              );
-            } else {
-              expect(initial.payload.items[0].details).toEqual({ value: 42 });
-            }
-            expect(fixture.state.connections).toHaveLength(2);
-            expect(
-              fixture.state.connections.every(
-                ({ database, disposals }) => !database.isOpen && disposals === 1,
-              ),
-            ).toBe(true);
-            const reads = fixture.state.jsonReads;
-            expect(reads).toBeGreaterThan(0);
-            const later = invoke("migrations.memory.apply", params);
-            await later.run();
-            expect(later.frames).toEqual(retry.frames);
-            expect(fixture.state.jsonReads).toBe(reads);
-            expect(fixture.state.applyCalls).toBe(1);
-            expect(warn.mock.calls.length).toBe(mode === "cleanup failure" ? 1 : 0);
-            const readback = new DatabaseSync(path.join(fixture.root, "source.sqlite"));
-            try {
-              expect(readback.prepare("SELECT count(*) AS count FROM imports").get()).toEqual({
-                count: 1,
-              });
-            } finally {
-              readback.close();
-            }
-          } finally {
-            fixture.state.resumeApply.resolve();
-            await firstRun;
+          } else {
+            expect(initial.payload.items[0].details).toEqual({ value: 42 });
           }
-        });
-      } finally {
-        warn.mockRestore();
-      }
+          expect(fixture.state.connections).toHaveLength(2);
+          expect(
+            fixture.state.connections.every(
+              ({ database, disposals }) => !database.isOpen && disposals === 1,
+            ),
+          ).toBe(true);
+          const reads = fixture.state.jsonReads;
+          expect(reads).toBeGreaterThan(0);
+          const later = invoke("migrations.memory.apply", params);
+          await later.run();
+          expect(later.frames).toEqual(retry.frames);
+          expect(fixture.state.jsonReads).toBe(reads);
+          expect(fixture.state.applyCalls).toBe(1);
+          expect(warn.mock.calls.length).toBe(mode === "cleanup failure" ? 1 : 0);
+          using readback = new DatabaseSync(path.join(fixture.root, "source.sqlite"));
+          expect(readback.prepare("SELECT count(*) AS count FROM imports").get()).toEqual({
+            count: 1,
+          });
+        } finally {
+          fixture.state.resumeApply.resolve();
+          await firstRun;
+        }
+      });
     },
   );
 
   it("joins fresh planning before releasing its database when a raw active provider getter rejects", async () => {
     const active = createMigrationResourceFixture();
+    using _ = { [Symbol.dispose]: active.cleanup };
     const fresh = createMigrationResourceFixture({ pausePlan: true });
     const plan = requests(fresh)("migrations.memory.plan", { agentId: "main" });
-    try {
-      await withFixture(fresh, async () => {
-        const raw = await loadAndActivateRootPluginRegistry({ config: active.config });
-        expect(raw.migrationProviders).toHaveLength(1);
-        active.state.failLabel = true;
-        fresh.state.failPlan = true;
-        let settled = false;
-        const request = plan.run();
-        const completion = Promise.resolve(request).then(
-          () => {
-            settled = true;
-            return undefined;
-          },
-          (error: unknown) => {
-            settled = true;
-            return error;
-          },
-        );
-        try {
-          await Promise.race([fresh.state.planning.promise, completion]);
-          // Let already-issued promise reactions run without unblocking the native plan.
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          expect(fresh.state.planCalls).toBe(1);
-          expect(fresh.state.connections).toHaveLength(1);
-          expect(fresh.state.connections[0]?.database.isOpen).toBe(true);
-          expect(settled).toBe(false);
-          fresh.state.resumePlan.resolve();
-          expect(await completion).toBe(active.state.labelError);
-          await fresh.state.planFinished.promise;
-          expect(plan.respond).not.toHaveBeenCalled();
-          expect(fresh.state.connections[0]?.disposals).toBe(1);
-          expect(fresh.state.connections[0]?.database.isOpen).toBe(false);
-          expect(active.state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual(
-            { value: 42 },
-          );
-          expect(active.state.connections[0]?.disposals).toBe(0);
-        } finally {
-          fresh.state.resumePlan.resolve();
-          await completion;
-          await fresh.state.planFinished.promise;
-        }
-      });
-    } finally {
-      active.cleanup();
-    }
+    await withFixture(fresh, async () => {
+      const raw = await loadAndActivateRootPluginRegistry({ config: active.config });
+      expect(raw.migrationProviders).toHaveLength(1);
+      active.state.failLabel = true;
+      fresh.state.failPlan = true;
+      let settled = false;
+      const request = plan.run();
+      const completion = Promise.resolve(request)
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await Promise.race([fresh.state.planning.promise, completion]);
+        // Let already-issued promise reactions run without unblocking the native plan.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(fresh.state).toMatchObject({
+          planCalls: 1,
+          connections: [{ database: { isOpen: true } }],
+        });
+        expect(fresh.state.connections).toHaveLength(1);
+        expect(settled).toBe(false);
+        fresh.state.resumePlan.resolve();
+        expect(await completion).toBe(active.state.labelError);
+        await fresh.state.planFinished.promise;
+        expect(plan.respond).not.toHaveBeenCalled();
+        expect(fresh.state.connections[0]).toMatchObject({
+          disposals: 1,
+          database: { isOpen: false },
+        });
+        expect(active.state.connections[0]?.database.prepare("SELECT 42 AS value").get()).toEqual({
+          value: 42,
+        });
+        expect(active.state.connections[0]?.disposals).toBe(0);
+      } finally {
+        fresh.state.resumePlan.resolve();
+        await completion;
+        await fresh.state.planFinished.promise;
+      }
+    });
   });
 
   it("reserves same-key requests before a real cold acquisition resolves", async () => {
@@ -209,16 +199,7 @@ describe("memory migration registration resources", () => {
     const releaseAcquisition = createDeferredCore();
     const invoke = requests(fixture);
     await withFixture(fixture, async () => {
-      const plan = invoke("migrations.memory.plan", { agentId: "main" });
-      await plan.run();
-      const preview = JSON.parse(plan.frames[0] ?? "{}").payload;
-      const params = {
-        agentId: "main",
-        providerId: fixture.id,
-        itemIds: ["memory:one"],
-        idempotencyKey: "pending-acquisition",
-        planFingerprint: preview.providers[0].planFingerprint,
-      };
+      const params = await applyParams(invoke, fixture.id, "pending-acquisition");
       const acquire = loader.acquirePluginRegistryForInspection;
       const spy = vi
         .spyOn(loader, "acquirePluginRegistryForInspection")

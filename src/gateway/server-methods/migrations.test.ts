@@ -55,13 +55,21 @@ let config = createConfig();
 let sourceRoot = "";
 let dedupe: Map<string, { ts: number; ok: boolean; payload?: unknown }>;
 
-function memoryPlan(): MigrationPlan {
+function memoryPlan(memoryOnly = false): MigrationPlan {
+  const item = (id: string, kind: "memory" | "workspace", file: string) => ({
+    id,
+    kind,
+    action: "copy" as const,
+    status: "planned" as const,
+    source: path.join(sourceRoot, file),
+    target: `/tmp/workspace-research/${kind === "memory" ? "memory/imports/codex/" : ""}${file}`,
+  });
   return {
     providerId: "codex",
     source: sourceRoot,
     target: "/tmp/workspace-research",
     summary: {
-      total: 2,
+      total: memoryOnly ? 1 : 2,
       planned: 2,
       migrated: 0,
       skipped: 0,
@@ -70,22 +78,8 @@ function memoryPlan(): MigrationPlan {
       sensitive: 0,
     },
     items: [
-      {
-        id: "memory:one",
-        kind: "memory",
-        action: "copy",
-        status: "planned",
-        source: path.join(sourceRoot, "MEMORY.md"),
-        target: "/tmp/workspace-research/memory/imports/codex/MEMORY.md",
-      },
-      {
-        id: "workspace:ignored",
-        kind: "workspace",
-        action: "copy",
-        status: "planned",
-        source: path.join(sourceRoot, "AGENTS.md"),
-        target: "/tmp/workspace-research/AGENTS.md",
-      },
+      item("memory:one", "memory", "MEMORY.md"),
+      ...(memoryOnly ? [] : [item("workspace:ignored", "workspace", "AGENTS.md")]),
     ],
   };
 }
@@ -101,8 +95,7 @@ function provider(plan = memoryPlan()): MigrationProviderPlugin {
       confidence: "high" as const,
     })),
     plan: vi.fn(async (ctx) => {
-      expect(ctx.targetAgentId).toBe("research");
-      expect(ctx.itemKinds).toEqual(["memory"]);
+      expect(ctx).toMatchObject({ targetAgentId: "research", itemKinds: ["memory"] });
       return plan;
     }),
     apply: vi.fn(),
@@ -221,35 +214,29 @@ describe("memory migration gateway handlers", () => {
     });
   });
 
-  it("rejects an unknown destination agent", async () => {
-    const [ok, , error] = await response("migrations.memory.plan", { agentId: "missing" });
+  it.each([
+    ["missing", "unknown agent id"],
+    ["research!!!", "invalid agent id"],
+  ])("rejects destination agent %s before normalization", async (agentId, message) => {
+    const [ok, , error] = await response("migrations.memory.plan", { agentId });
     expect(ok).toBe(false);
-    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(error?.message).toContain("unknown agent id");
+    expect(error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: expect.stringContaining(message),
+    });
   });
 
-  it("rejects a malformed destination agent before normalization", async () => {
-    const [ok, , error] = await response("migrations.memory.plan", { agentId: "research!!!" });
-    expect(ok).toBe(false);
-    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(error?.message).toContain("invalid agent id");
-  });
-
-  it("rejects apply when source bytes changed after preview", async () => {
-    const planFingerprint = await loadPlanFingerprint();
-    await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed memory", "utf8");
-    await expectRejectedApply(planFingerprint, "plan changed");
-  });
-
-  it("binds conflict source bytes when replacement is enabled", async () => {
+  it.each([false, true])("binds source bytes after preview (overwrite=%s)", async (overwrite) => {
     const plan = memoryPlan();
-    plan.items[0]!.status = "conflict";
-    plan.items[0]!.reason = "target exists";
-    plan.summary = { ...plan.summary, planned: 1, conflicts: 1 };
+    if (overwrite) {
+      plan.items[0]!.status = "conflict";
+      plan.items[0]!.reason = "target exists";
+      plan.summary = { ...plan.summary, planned: 1, conflicts: 1 };
+    }
     mocks.providers = [provider(plan)];
-    const planFingerprint = await loadPlanFingerprint(true);
+    const planFingerprint = await loadPlanFingerprint(overwrite);
     await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed memory", "utf8");
-    await expectRejectedApply(planFingerprint, "plan changed", { overwrite: true });
+    await expectRejectedApply(planFingerprint, "plan changed", { overwrite });
   });
 
   it("reports unsupported actionable memory operations during planning", async () => {
@@ -263,24 +250,20 @@ describe("memory migration gateway handlers", () => {
     });
   });
 
-  it("rejects apply when an operation changed after preview", async () => {
-    const plan = memoryPlan();
-    mocks.providers = [provider(plan)];
-    const planFingerprint = await loadPlanFingerprint();
-    plan.items[0]!.action = "append";
-    await expectRejectedApply(planFingerprint, "only supports copy actions");
-  });
-
   it.each([
     ["metadata", (plan: MigrationPlan) => (plan.metadata = { revision: "new" })],
     ["warnings", (plan: MigrationPlan) => (plan.warnings = ["updated warning"])],
     ["item message", (plan: MigrationPlan) => (plan.items[0]!.message = "updated message")],
-  ])("rejects apply when plan %s changes after preview", async (_field, mutatePlan) => {
+    ["operation", (plan: MigrationPlan) => (plan.items[0]!.action = "append")],
+  ])("rejects apply when plan %s changes after preview", async (field, mutatePlan) => {
     const plan = memoryPlan();
     mocks.providers = [provider(plan)];
     const planFingerprint = await loadPlanFingerprint();
     mutatePlan(plan);
-    await expectRejectedApply(planFingerprint, "plan changed");
+    await expectRejectedApply(
+      planFingerprint,
+      field === "operation" ? "only supports copy actions" : "plan changed",
+    );
   });
 
   it("rejects stale item ids from a freshly rebuilt apply plan", async () => {
@@ -322,15 +305,9 @@ describe("memory migration gateway handlers", () => {
   });
 
   it("replays a completed import when its idempotency key is retried", async () => {
-    const applied = memoryPlan();
-    applied.items = [applied.items[0]!];
-    applied.summary.total = 1;
-    mocks.runMigrationApply.mockResolvedValue(applied);
+    mocks.runMigrationApply.mockResolvedValue(memoryPlan(true));
     const planFingerprint = await loadPlanFingerprint();
-    const params = {
-      idempotencyKey: "memory-import-retry",
-      ...applyParams(planFingerprint),
-    };
+    const params = applyParams(planFingerprint, { idempotencyKey: "memory-import-retry" });
     const first = invoke("migrations.memory.apply", params);
     await first.run();
     await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed after import", "utf8");
@@ -345,9 +322,7 @@ describe("memory migration gateway handlers", () => {
   });
 
   it("joins identical in-flight retries and rejects mismatched key reuse", async () => {
-    const applied = memoryPlan();
-    applied.items = [applied.items[0]!];
-    applied.summary.total = 1;
+    const applied = memoryPlan(true);
     let finishApply!: (result: MigrationPlan) => void;
     mocks.runMigrationApply.mockImplementation(
       async () =>
@@ -356,10 +331,7 @@ describe("memory migration gateway handlers", () => {
         }),
     );
     const planFingerprint = await loadPlanFingerprint();
-    const params = {
-      idempotencyKey: "memory-import-in-flight",
-      ...applyParams(planFingerprint),
-    };
+    const params = applyParams(planFingerprint, { idempotencyKey: "memory-import-in-flight" });
     const first = invoke("migrations.memory.apply", params);
     const firstRun = first.run();
     await vi.waitFor(() => expect(mocks.runMigrationApply).toHaveBeenCalledOnce());

@@ -95,6 +95,12 @@ vi.mock("../mcp-app-reconstruction.js", () => ({ restoreMcpAppView: async () => 
 
 const sessionKey = "agent:main:parts";
 const serverName = "parts";
+const resourceUri = "ui://parts/search";
+const resourceContent = {
+  mimeType: "text/html;profile=mcp-app",
+  text: "<html>Parts search</html>",
+};
+const toolResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
 type ApprovalEvent = { id: string; request: PluginApprovalRequestPayload };
 type Path = "model-created" | "extension-runtime";
 let state: OpenClawTestState;
@@ -155,19 +161,12 @@ function createRuntime() {
     getCatalog: async () => catalog,
     peekCatalog: () => catalog,
     readResource: async (_serverName: string, uri: string) => ({
-      contents: [
-        {
-          uri,
-          mimeType: "text/html;profile=mcp-app",
-          text: "<html>Parts search</html>",
-          _meta: { ui: {} },
-        },
-      ],
+      contents: [{ uri, ...resourceContent, _meta: { ui: {} } }],
     }),
     callTool: vi.fn<SessionMcpRuntime["callTool"]>(
       async (_server, toolName, _input, callOptions) => {
         callOptions?.assertCurrent?.();
-        return { content: [{ type: "text", text: toolName }] };
+        return toolResult(toolName);
       },
     ),
   } satisfies SessionMcpRuntime;
@@ -219,7 +218,7 @@ async function openView(path: Path, params: { viewId?: string; requesterId?: str
     agentId: "main",
     serverName,
     toolName: "search",
-    uiResourceUri: "ui://parts/search",
+    uiResourceUri: resourceUri,
     toolInput: {},
     toolResult: { content: [] },
     allowedAppToolNames: new Set(["search", "details"]),
@@ -239,11 +238,10 @@ function call(
 ) {
   const request = options(
     {
-      sessionKey,
+      sessionKey: params.sessionKey || sessionKey,
       viewId,
       toolName,
       arguments: { query: "bolt" },
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     },
     params.requesterId,
   );
@@ -294,6 +292,17 @@ function expectDenied(respond: unknown, message: string) {
   expectRpcError(respond, { message: expect.stringContaining(message) });
 }
 
+async function expectUnprompted(pending: ReturnType<typeof call>, message: string) {
+  await awaitGateBeforeSettlement(pending, nextApproval.promise, message);
+  expect(await pending).toHaveBeenCalledWith(true, expect.anything());
+}
+
+function releaseViews() {
+  for (const viewId of views) {
+    releaseMcpAppView(viewId, runtime);
+  }
+}
+
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "mcp-app-view-grants" });
   aux = createGatewayAuxHandlers({
@@ -340,10 +349,9 @@ beforeEach(() => {
     fingerprint: "view-grant-fixture",
     safeServerNamesByServer: new Map([[serverName, serverName]]),
   }));
-  const projection = {
+  mocks.projection.mockReturnValue({
     sharingTarget: () => ({ agentId: "main", canonicalKey: sessionKey, entry }),
-  };
-  mocks.projection.mockReturnValue(projection);
+  });
   mocks.policy.mockReset();
   mocks.native.mockImplementation(async () => ({ runtime, releaseLease: () => {} }));
   mocks.registered.mockReturnValue({
@@ -374,9 +382,7 @@ afterEach(async () => {
     await aux.pluginApprovalManager.resolve(record.id, "deny");
   }
   await Promise.allSettled(pendingCalls);
-  for (const viewId of views) {
-    releaseMcpAppView(viewId, runtime);
-  }
+  releaseViews();
   for (const authority of retained) {
     authority.release();
   }
@@ -412,13 +418,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         ],
       });
       expect(first.request).not.toHaveProperty("mcpTool");
-      const second = call(viewId);
-      await awaitGateBeforeSettlement(
-        second,
-        nextApproval.promise,
-        "Same view/tool unexpectedly prompted again",
-      );
-      expect(await second).toHaveBeenCalledWith(true, expect.anything());
+      await expectUnprompted(call(viewId), "Same view/tool unexpectedly prompted again");
       expect(approvals).toHaveLength(1);
       await approvedCall(viewId, "allow-once", "details");
       const otherView = await openView(path);
@@ -514,13 +514,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       async (mode) => {
         server.codex = { defaultToolsApprovalMode: mode };
         const viewId = await openView(path);
-        const pending = call(viewId);
-        await awaitGateBeforeSettlement(
-          pending,
-          nextApproval.promise,
-          "Existing server policy unexpectedly prompted",
-        );
-        expect(await pending).toHaveBeenCalledWith(true, expect.anything());
+        await expectUnprompted(call(viewId), "Existing server policy unexpectedly prompted");
         expect(approvals).toHaveLength(0);
         expect(runtime.callTool).toHaveBeenCalledOnce();
       },
@@ -542,18 +536,16 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
       {
         name: "search",
         inputSchema: { type: "object", properties: {} },
-        _meta: { ui: { visibility: ["app"], resourceUri: "ui://parts/search" } },
+        _meta: { ui: { visibility: ["app"], resourceUri } },
       },
     ],
   }));
   mcp.setRequestHandler(ReadResourceRequestSchema, async ({ params }) => ({
-    contents: [
-      { uri: params.uri, mimeType: "text/html;profile=mcp-app", text: "<html>Parts search</html>" },
-    ],
+    contents: [{ uri: params.uri, ...resourceContent }],
   }));
   mcp.setRequestHandler(CallToolRequestSchema, async () => {
     toolCalls += 1;
-    return { content: [{ type: "text", text: "search" }] };
+    return toolResult("search");
   });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
   await mcp.connect(transport);
@@ -598,9 +590,7 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
     await runtime.getCatalog();
     const viewId = await openView("model-created", { requesterId: "alice" });
     await approvedCall(viewId, "allow-always");
-    const reused = call(viewId);
-    await awaitGateBeforeSettlement(reused, nextApproval.promise, "Cached grant prompted again");
-    expect(await reused).toHaveBeenCalledWith(true, expect.anything());
+    await expectUnprompted(call(viewId), "Cached grant prompted again");
     expect(toolCalls).toBe(2);
     expect(approvals).toHaveLength(1);
     const beforeDenied = posts;
@@ -627,9 +617,7 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
   } finally {
     resume.resolve();
     await Promise.allSettled(pendingCalls);
-    for (const viewId of views) {
-      releaseMcpAppView(viewId, runtime);
-    }
+    releaseViews();
     await runtime.dispose();
     await runtime.joinCleanup?.();
     await mcp.close();
