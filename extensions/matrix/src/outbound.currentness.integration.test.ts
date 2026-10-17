@@ -28,6 +28,40 @@ const ROOM_ID = "!room:example.org";
 const MEDIA_ROOT = "/matrix-currentness";
 const MEDIA_BYTES = Buffer.from("Matrix fixture attachment");
 
+function guardedCaller(caller: AbortController) {
+  return {
+    signal: caller.signal,
+    assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+    onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
+  };
+}
+
+function expectAccepted(result: SendOutcome<unknown>, id: string) {
+  expect(result.error).toBeUndefined();
+  expect(result.value).toMatchObject({ messageId: id, receipt: { platformMessageIds: [id] } });
+}
+
+function queueForRoom(client: MatrixJsClient, roomId: string) {
+  const event = new MatrixEvent({
+    room_id: roomId,
+    type: "m.room.message",
+    content: { msgtype: "m.text", body: "fixture" },
+  });
+  return () =>
+    client
+      .getScheduler()
+      ?.getQueueForEvent(event)
+      ?.map((queued) => queued.getRoomId());
+}
+
+function observedSdkClient(sdkSend: { mock: { contexts: unknown[] } }) {
+  const client = sdkSend.mock.contexts[0];
+  if (!(client instanceof MatrixJsClient)) {
+    throw new Error("real Matrix SDK sender was not observed");
+  }
+  return client;
+}
+
 function registeredSenders(registration: Registration) {
   const sendText =
     registration === "outbound"
@@ -276,9 +310,7 @@ describe("registered Matrix sender currentness", () => {
           const result = await senders.sendText({
             ...context,
             text: "accepted final body",
-            signal: caller.signal,
-            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
+            ...guardedCaller(caller),
             onDeliveryResult: (value: unknown) => {
               delivered.push(value);
             },
@@ -330,9 +362,7 @@ describe("registered Matrix sender currentness", () => {
                   reads.push(path);
                   return MEDIA_BYTES;
                 },
-                signal: caller.signal,
-                assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-                onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
+                ...guardedCaller(caller),
                 onDeliveryResult: (value: unknown) => {
                   delivered.push(value);
                 },
@@ -421,9 +451,7 @@ describe("registered Matrix sender currentness", () => {
             ...context,
             to: `user:${peer}`,
             text: "canceled DM",
-            signal: caller.signal,
-            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
+            ...guardedCaller(caller),
           }),
         );
         try {
@@ -442,9 +470,7 @@ describe("registered Matrix sender currentness", () => {
             ...context,
             to: `user:${peer}`,
             text: "valid DM after canceled repair",
-            signal: freshCaller.signal,
-            assertDirectAdapterHandoff: () => freshCaller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => freshCaller.signal.throwIfAborted(),
+            ...guardedCaller(freshCaller),
           });
           expect(sent).toMatchObject({
             messageId: "$accepted",
@@ -480,8 +506,7 @@ describe("registered Matrix sender currentness", () => {
           senders.sendText({
             ...context,
             text: "first sender",
-            signal: firstCaller.signal,
-            assertDirectAdapterHandoff: () => firstCaller.signal.throwIfAborted(),
+            ...guardedCaller(firstCaller),
             onPlatformSendDispatch: async () => {},
           }),
         );
@@ -492,8 +517,7 @@ describe("registered Matrix sender currentness", () => {
             senders.sendText({
               ...context,
               text: "second sender",
-              signal: secondCaller.signal,
-              assertDirectAdapterHandoff: () => secondCaller.signal.throwIfAborted(),
+              ...guardedCaller(secondCaller),
               onPlatformSendDispatch: async () => {},
             }),
           );
@@ -503,16 +527,8 @@ describe("registered Matrix sender currentness", () => {
           firstCaller.abort(new Error("first Matrix caller retired after request acceptance"));
           resumeFirstResponse.resolve();
           const [firstResult, secondResult] = await Promise.all([first, second]);
-          expect(firstResult.error).toBeUndefined();
-          expect(firstResult.value).toMatchObject({
-            messageId: "$first-accepted",
-            receipt: { platformMessageIds: ["$first-accepted"] },
-          });
-          expect(secondResult.error).toBeUndefined();
-          expect(secondResult.value).toMatchObject({
-            messageId: "$second-accepted",
-            receipt: { platformMessageIds: ["$second-accepted"] },
-          });
+          expectAccepted(firstResult, "$first-accepted");
+          expectAccepted(secondResult, "$second-accepted");
           expect(timeline).toHaveLength(2);
           expect(timeline.every((path) => path.includes(`/rooms/${ROOM_ID}/`))).toBe(true);
         } finally {
@@ -549,8 +565,7 @@ describe("registered Matrix sender currentness", () => {
             ...context,
             to: awareRoom,
             text: "sender with currentness inputs",
-            signal: awareCaller.signal,
-            assertDirectAdapterHandoff: () => awareCaller.signal.throwIfAborted(),
+            ...guardedCaller(awareCaller),
             onPlatformSendDispatch: async () => {},
           }),
         );
@@ -564,37 +579,14 @@ describe("registered Matrix sender currentness", () => {
               text: "legacy sender without currentness callbacks",
             }),
           );
-          const sdkClient = sdkSend.mock.contexts[0];
-          if (!(sdkClient instanceof MatrixJsClient)) {
-            throw new Error("real Matrix SDK sender was not observed");
-          }
-          const legacyEvent = new MatrixEvent({
-            room_id: legacyRoom,
-            type: "m.room.message",
-            content: { msgtype: "m.text", body: "fixture" },
-          });
-          await expect
-            .poll(() =>
-              sdkClient
-                .getScheduler()
-                ?.getQueueForEvent(legacyEvent)
-                ?.map((event) => event.getRoomId()),
-            )
-            .toEqual([awareRoom, legacyRoom]);
+          const sdkClient = observedSdkClient(sdkSend);
+          await expect.poll(queueForRoom(sdkClient, legacyRoom)).toEqual([awareRoom, legacyRoom]);
           expect(timeline).toHaveLength(1);
           awareCaller.abort(new Error("aware Matrix caller retired after request acceptance"));
           resumeAwareResponse.resolve();
           const [awareResult, legacyResult] = await Promise.all([aware, legacy]);
-          expect(awareResult.error).toBeUndefined();
-          expect(awareResult.value).toMatchObject({
-            messageId: "$aware-accepted",
-            receipt: { platformMessageIds: ["$aware-accepted"] },
-          });
-          expect(legacyResult.error).toBeUndefined();
-          expect(legacyResult.value).toMatchObject({
-            messageId: "$legacy-accepted",
-            receipt: { platformMessageIds: ["$legacy-accepted"] },
-          });
+          expectAccepted(awareResult, "$aware-accepted");
+          expectAccepted(legacyResult, "$legacy-accepted");
           expect(timeline).toHaveLength(2);
           expect(timeline[0]).toContain(`/rooms/${awareRoom}/`);
           expect(timeline[1]).toContain(`/rooms/${legacyRoom}/`);
@@ -685,25 +677,9 @@ describe("registered Matrix sender currentness", () => {
                 },
               }),
             );
-            const sdkClient = sdkSend.mock.contexts[0];
-            if (!(sdkClient instanceof MatrixJsClient)) {
-              throw new Error("real Matrix SDK sender was not observed");
-            }
-            const secondRoomEvent = new MatrixEvent({
-              room_id: secondRoom,
-              type: "m.room.message",
-              content: { msgtype: "m.text", body: "fixture" },
-            });
+            const queuedRooms = queueForRoom(observedSdkClient(sdkSend), secondRoom);
             // Admit B before starting C so asynchronous preparation cannot change their queue order.
-            await expect
-              .poll(
-                () =>
-                  sdkClient
-                    .getScheduler()
-                    ?.getQueueForEvent(secondRoomEvent)
-                    ?.some((event) => event.getRoomId() === secondRoom) ?? false,
-              )
-              .toBe(true);
+            await expect.poll(() => queuedRooms()?.includes(secondRoom) ?? false).toBe(true);
             third = settle(
               senders.sendText({
                 ...context,
@@ -716,11 +692,6 @@ describe("registered Matrix sender currentness", () => {
                 },
               }),
             );
-            const queuedRooms = () =>
-              sdkClient
-                .getScheduler()
-                ?.getQueueForEvent(secondRoomEvent)
-                ?.map((event) => event.getRoomId());
             await expect.poll(queuedRooms).toEqual([firstRoom, secondRoom, thirdRoom]);
             expect(requestOrder).toEqual([firstRoom]);
             expect(survivorResults).toEqual([]);
@@ -735,11 +706,7 @@ describe("registered Matrix sender currentness", () => {
                 message: expect.stringContaining(cancellation.message),
               });
             } else {
-              expect(firstResult.error).toBeUndefined();
-              expect(firstResult.value).toMatchObject({
-                messageId: "$first-retried",
-                receipt: { platformMessageIds: ["$first-retried"] },
-              });
+              expectAccepted(firstResult, "$first-retried");
             }
             await waitForBoundary(
               secondRequestEntered.promise,
@@ -754,16 +721,8 @@ describe("registered Matrix sender currentness", () => {
             expect(survivorResults).toEqual([]);
             resumeSecondResponse.resolve();
             const [secondResult, thirdResult] = await Promise.all([second, third]);
-            expect(secondResult.error).toBeUndefined();
-            expect(secondResult.value).toMatchObject({
-              messageId: "$second-accepted",
-              receipt: { platformMessageIds: ["$second-accepted"] },
-            });
-            expect(thirdResult.error).toBeUndefined();
-            expect(thirdResult.value).toMatchObject({
-              messageId: "$third-accepted",
-              receipt: { platformMessageIds: ["$third-accepted"] },
-            });
+            expectAccepted(secondResult, "$second-accepted");
+            expectAccepted(thirdResult, "$third-accepted");
             expect(firstRoomAttempts).toBe(canceled ? 1 : 2);
             expect(requestOrder).toEqual(
               canceled

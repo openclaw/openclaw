@@ -21,20 +21,12 @@ const sessionRoot = tempDirs.make("matrix-session-route-");
 const currentDmSessionKey = "agent:main:matrix:channel:!dm:example.org";
 type MatrixChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>;
 
-const perRoomDmMatrixConfig = {
-  dm: {
-    sessionScope: "per-room",
-  },
-} satisfies MatrixChannelConfig;
+const perRoomDmMatrixConfig = { dm: { sessionScope: "per-room" } } satisfies MatrixChannelConfig;
 
 const defaultAccountPerRoomDmMatrixConfig = {
   defaultAccount: "ops",
   accounts: {
-    ops: {
-      dm: {
-        sessionScope: "per-room",
-      },
-    },
+    ops: perRoomDmMatrixConfig,
   },
 } satisfies MatrixChannelConfig;
 
@@ -52,12 +44,8 @@ async function createMatrixRouteConfig(
   matrix: MatrixChannelConfig = perRoomDmMatrixConfig,
 ): Promise<OpenClawConfig> {
   return {
-    session: {
-      store: await createTempStore(entries),
-    },
-    channels: {
-      matrix,
-    },
+    session: { store: await createTempStore(entries) },
+    channels: { matrix },
   } satisfies OpenClawConfig;
 }
 
@@ -68,8 +56,6 @@ function createStoredDirectDmSession(
     accountId?: string | null;
     nativeChannelId?: string;
     nativeDirectUserId?: string;
-    lastTo?: string;
-    lastAccountId?: string;
   } = {},
 ): SessionEntry {
   const accountId = params.accountId === null ? undefined : (params.accountId ?? "ops");
@@ -119,19 +105,20 @@ function createStoredChannelSession(): SessionEntry {
   };
 }
 
-function resolveUserRoute(params: { cfg: OpenClawConfig; accountId?: string; target?: string }) {
+function resolveUserRoute(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  target?: string;
+  currentSessionKey?: string;
+}) {
   const target = params.target ?? "@alice:example.org";
   return resolveMatrixOutboundSessionRoute({
     cfg: params.cfg,
     agentId: "main",
     ...(params.accountId ? { accountId: params.accountId } : {}),
-    currentSessionKey: currentDmSessionKey,
+    currentSessionKey: params.currentSessionKey ?? currentDmSessionKey,
     target,
-    resolvedTarget: {
-      to: target,
-      kind: "user",
-      source: "normalized",
-    },
+    resolvedTarget: { to: target, kind: "user", source: "normalized" },
   });
 }
 
@@ -156,15 +143,15 @@ async function resolveUserRouteForCurrentSession(params: {
 function expectCurrentDmRoomRoute(
   route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>,
 ) {
-  const currentRoute = expectRoute(route);
-  expect(currentRoute.sessionKey).toBe(currentDmSessionKey);
-  expect(currentRoute.baseSessionKey).toBe(currentDmSessionKey);
-  expect(currentRoute.peer.kind).toBe("channel");
-  expect(currentRoute.peer.id).toBe("!dm:example.org");
-  expect(currentRoute.chatType).toBe("direct");
-  expect(currentRoute.from).toBe("matrix:@alice:example.org");
-  expect(currentRoute.to).toBe("room:!dm:example.org");
-  expect(currentRoute.recipientSessionExact).toBe(true);
+  expect(expectRoute(route)).toMatchObject({
+    sessionKey: currentDmSessionKey,
+    baseSessionKey: currentDmSessionKey,
+    peer: { kind: "channel", id: "!dm:example.org" },
+    chatType: "direct",
+    from: "matrix:@alice:example.org",
+    to: "room:!dm:example.org",
+    recipientSessionExact: true,
+  });
 }
 
 function expectFallbackUserRoute(
@@ -174,15 +161,15 @@ function expectFallbackUserRoute(
   },
 ) {
   const userId = params?.userId ?? "@alice:example.org";
-  const fallbackRoute = expectRoute(route);
-  expect(fallbackRoute.sessionKey).toBe("agent:main:main");
-  expect(fallbackRoute.baseSessionKey).toBe("agent:main:main");
-  expect(fallbackRoute.peer.kind).toBe("direct");
-  expect(fallbackRoute.peer.id).toBe(userId);
-  expect(fallbackRoute.chatType).toBe("direct");
-  expect(fallbackRoute.from).toBe(`matrix:${userId}`);
-  expect(fallbackRoute.to).toBe(`room:${userId}`);
-  expect(fallbackRoute.recipientSessionExact).toBe(false);
+  expect(expectRoute(route)).toMatchObject({
+    sessionKey: "agent:main:main",
+    baseSessionKey: "agent:main:main",
+    peer: { kind: "direct", id: userId },
+    chatType: "direct",
+    from: `matrix:${userId}`,
+    to: `room:${userId}`,
+    recipientSessionExact: false,
+  });
 }
 
 function expectRoute(route: Awaited<ReturnType<typeof resolveMatrixOutboundSessionRoute>>) {
@@ -193,6 +180,13 @@ function expectRoute(route: Awaited<ReturnType<typeof resolveMatrixOutboundSessi
 }
 
 describe("resolveMatrixOutboundSessionRoute", () => {
+  const driftedSession = () =>
+    createStoredDirectDmSession({
+      from: "matrix:@bob:example.org",
+      to: "room:@bob:example.org",
+      nativeChannelId: "!dm:example.org",
+      nativeDirectUserId: "@alice:example.org",
+    });
   it("falls back to user-scoped routing when the current session belongs to another Matrix account", async () => {
     const route = await resolveUserRouteForCurrentSession({
       storedSession: createStoredDirectDmSession(),
@@ -204,14 +198,7 @@ describe("resolveMatrixOutboundSessionRoute", () => {
 
   it("reuses the canonical DM room after user-target outbound metadata overwrites latest to fields", async () => {
     const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession({
-        from: "matrix:@bob:example.org",
-        to: "room:@bob:example.org",
-        nativeChannelId: "!dm:example.org",
-        nativeDirectUserId: "@alice:example.org",
-        lastTo: "room:@bob:example.org",
-        lastAccountId: "ops",
-      }),
+      storedSession: driftedSession(),
       accountId: "ops",
     });
 
@@ -220,14 +207,7 @@ describe("resolveMatrixOutboundSessionRoute", () => {
 
   it("does not reuse the canonical DM room for a different Matrix user after latest metadata drift", async () => {
     const route = await resolveUserRouteForCurrentSession({
-      storedSession: createStoredDirectDmSession({
-        from: "matrix:@bob:example.org",
-        to: "room:@bob:example.org",
-        nativeChannelId: "!dm:example.org",
-        nativeDirectUserId: "@alice:example.org",
-        lastTo: "room:@bob:example.org",
-        lastAccountId: "ops",
-      }),
+      storedSession: driftedSession(),
       accountId: "ops",
       target: "@bob:example.org",
     });
@@ -253,28 +233,20 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expectCurrentDmRoomRoute(route);
   });
 
-  it.each([
-    {
-      name: "uses the Matrix thread root when replying to a child event",
-      threadId: "$ThreadRoot:Example.Org",
-      replyToId: "$ReplyChild:Example.Org",
-      expectedThreadId: "$ThreadRoot:Example.Org",
-    },
-  ])("$name", async ({ threadId, replyToId, expectedThreadId }) => {
+  it("uses the Matrix thread root when replying to a child event", async () => {
+    const threadId = "$ThreadRoot:Example.Org";
     const route = expectRoute(
       await resolveMatrixOutboundSessionRoute({
         cfg: {},
         agentId: "main",
         target: "room:!ops:example.org",
         threadId,
-        replyToId,
+        replyToId: "$ReplyChild:Example.Org",
       }),
     );
 
-    expect(route.threadId).toBe(expectedThreadId);
-    expect(route.sessionKey).toBe(
-      `agent:main:matrix:channel:!ops:example.org:thread:${expectedThreadId}`,
-    );
+    expect(route.threadId).toBe(threadId);
+    expect(route.sessionKey).toBe(`agent:main:matrix:channel:!ops:example.org:thread:${threadId}`);
   });
 
   it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", async () => {
@@ -289,47 +261,26 @@ describe("resolveMatrixOutboundSessionRoute", () => {
   });
 
   it("resolves per-room DM metadata from the base key when currentSessionKey has a thread suffix", async () => {
-    const storedSession = createStoredDirectDmSession();
-    const route = await resolveUserRoute({
+    const threadedRoute = await resolveUserRoute({
       cfg: await createMatrixRouteConfig({
-        [currentDmSessionKey]: storedSession,
+        [currentDmSessionKey]: createStoredDirectDmSession(),
       }),
       accountId: "ops",
-      target: "@alice:example.org",
-    });
-    const threadedRoute = await resolveMatrixOutboundSessionRoute({
-      cfg: await createMatrixRouteConfig({
-        [route?.baseSessionKey ?? currentDmSessionKey]: storedSession,
-      }),
-      agentId: "main",
-      accountId: "ops",
-      target: "@alice:example.org",
-      resolvedTarget: {
-        to: "@alice:example.org",
-        kind: "user",
-        source: "normalized",
-      },
-      currentSessionKey: `${route?.baseSessionKey}:thread:$DmRoot:Example.Org`,
+      currentSessionKey: `${currentDmSessionKey}:thread:$DmRoot:Example.Org`,
     });
 
     const dmThreadRoute = expectRoute(threadedRoute);
-    expect(dmThreadRoute.sessionKey).toBe(`${route?.baseSessionKey}:thread:$DmRoot:Example.Org`);
-    expect(dmThreadRoute.baseSessionKey).toBe(route?.baseSessionKey);
+    expect(dmThreadRoute.sessionKey).toBe(`${currentDmSessionKey}:thread:$DmRoot:Example.Org`);
+    expect(dmThreadRoute.baseSessionKey).toBe(currentDmSessionKey);
     expect(dmThreadRoute.to).toBe("room:!dm:example.org");
     expect(dmThreadRoute.threadId).toBe("$DmRoot:Example.Org");
   });
 
   it('does not recover currentSessionKey threads for shared dmScope "main" DMs', async () => {
-    const route = await resolveMatrixOutboundSessionRoute({
+    const route = await resolveUserRoute({
       cfg: {},
-      agentId: "main",
       target: "@alice:example.org",
       currentSessionKey: "agent:main:main:thread:$DmRoot:Example.Org",
-      resolvedTarget: {
-        to: "@alice:example.org",
-        kind: "user",
-        source: "normalized",
-      },
     });
 
     const dmRoute = expectRoute(route);

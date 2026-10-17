@@ -27,6 +27,17 @@ const target = { roomId, messageId: "$msg" };
 const account = { accountId: "ops" };
 const authorizedOpts = { cfg, ...account, client: mocks.matrixClient };
 const mediaLocalRoots = ["/tmp/openclaw-matrix-test"];
+const blockedMessage = "Matrix read target is not allowed.";
+function blockReadTarget() {
+  mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(new Error(blockedMessage));
+}
+const readParams = {
+  roomId: `room:${roomId}`,
+  limit: 7,
+  before: "before",
+  after: "after",
+  threadId: "$thread",
+};
 
 describe("Matrix public message actions", () => {
   beforeEach(resetMatrixActionMocks);
@@ -100,9 +111,7 @@ describe("Matrix public message actions", () => {
   });
 
   it("authorizes the room before reading the poll", async () => {
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
+    blockReadTarget();
     await expect(
       runMatrixAction(
         "poll-vote",
@@ -148,9 +157,7 @@ describe("Matrix public message actions", () => {
       }),
     ).rejects.toThrow("Matrix reactions are disabled.");
     expect(mocks.withAuthorizedMatrixReadTarget).not.toHaveBeenCalled();
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
+    blockReadTarget();
     await expect(runMatrixAction("emoji-list", params, emptyCfg)).rejects.toThrow(
       "Matrix read target is not allowed.",
     );
@@ -164,9 +171,7 @@ describe("Matrix public message actions", () => {
   ] as const)(
     "rejects blocked $action before mutating Matrix",
     async ({ action, params, providerCall }) => {
-      mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-        new Error("Matrix read target is not allowed."),
-      );
+      blockReadTarget();
       await expect(
         runMatrixAction(action, { ...target, roomId: "!blocked:example", ...params }, cfg),
       ).rejects.toThrow("Matrix read target is not allowed.");
@@ -177,12 +182,7 @@ describe("Matrix public message actions", () => {
   it("passes account-scoped opts to remove reactions", async () => {
     await runMatrixAction(
       "react",
-      {
-        room_id: roomId,
-        message_id: "$msg",
-        emoji: "👍",
-        remove: true,
-      },
+      { room_id: roomId, message_id: "$msg", emoji: "👍", remove: true },
       cfg,
       account,
     );
@@ -195,11 +195,7 @@ describe("Matrix public message actions", () => {
   it("passes account-scoped opts and limit to reaction listing", async () => {
     const result = await runMatrixAction(
       "reactions",
-      {
-        room_id: roomId,
-        message_id: "$msg",
-        limit: "5",
-      },
+      { room_id: roomId, message_id: "$msg", limit: "5" },
       cfg,
       account,
     );
@@ -262,19 +258,7 @@ describe("Matrix public message actions", () => {
       nextBatch: "next",
       prevBatch: "previous",
     });
-    const result = await runMatrixAction(
-      "read",
-      {
-        roomId: `room:${roomId}`,
-        messageId: "   ",
-        limit: 7,
-        before: "before",
-        after: "after",
-        threadId: "$thread",
-      },
-      cfg,
-      account,
-    );
+    const result = await runMatrixAction("read", { ...readParams, messageId: "   " }, cfg, account);
     expect(mocks.readMatrixMessages).toHaveBeenCalledWith(roomId, {
       ...authorizedOpts,
       limit: 7,
@@ -303,22 +287,16 @@ describe("Matrix public message actions", () => {
   });
 
   it("reads exactly the requested message id instead of room history", async () => {
-    mocks.readMatrixMessage.mockResolvedValueOnce({
+    const older = {
       eventId: "$older",
       sender: "@alice:example.org",
       body: "older",
       timestamp: 1000,
-    });
+    };
+    mocks.readMatrixMessage.mockResolvedValueOnce(older);
     const result = await runMatrixAction(
       "read",
-      {
-        roomId: `room:${roomId}`,
-        messageId: "  $older  ",
-        limit: 5,
-        before: "before",
-        after: "after",
-        threadId: "$thread",
-      },
+      { ...readParams, limit: 5, messageId: "  $older  " },
       cfg,
       account,
     );
@@ -329,10 +307,7 @@ describe("Matrix public message actions", () => {
       roomId,
       messages: [
         {
-          eventId: "$older",
-          sender: "@alice:example.org",
-          body: "older",
-          timestamp: 1000,
+          ...older,
           ts: "1970-01-01T00:00:01.000Z",
           id: "$older",
           authorTag: "@alice:example.org",
@@ -374,9 +349,7 @@ describe("Matrix public message actions", () => {
   });
 
   it("retains the read-policy gate before exact event selection", async () => {
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
+    blockReadTarget();
     await expect(
       runMatrixAction("read", { roomId: "!blocked:example", messageId: "$older" }, emptyCfg, {
         ...account,
@@ -432,9 +405,7 @@ describe("Matrix public message actions", () => {
   );
 
   it("rejects blocked pins before reading or mutating pinned state", async () => {
-    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
-      new Error("Matrix read target is not allowed."),
-    );
+    blockReadTarget();
     await expect(
       runMatrixAction("pin", { roomId: "!blocked:example", messageId: "$pin" }, cfg),
     ).rejects.toThrow("Matrix read target is not allowed.");

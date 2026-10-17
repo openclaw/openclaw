@@ -31,10 +31,29 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 const peer = "@owner:example.org";
 const roomId = "!created:example.org";
 const homeserver = "http://127.0.0.1:54321";
+const unrelated = { "@other:example.org": ["!other:example.org"] };
+const repaired = { ...unrelated, [peer]: [roomId] };
+const identity = { accountId: "ops", remoteUserId: peer, selfUserId: "@ops:example.org" };
+
+async function runCli(operation: "repair" | "inspect", client: ReturnType<typeof createClient>) {
+  createMatrixClient.mockResolvedValue(client);
+  const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const program = new Command();
+  registerMatrixCli({ program });
+  await program.parseAsync(
+    ["matrix", "direct", operation, "--account", "ops", "--user-id", peer, "--json"],
+    { from: "user" },
+  );
+  return JSON.parse(String(output.mock.calls.at(-1)?.[0]));
+}
 
 function createClient() {
   const events: string[] = [];
-  let direct: Record<string, string[]> = { "@other:example.org": ["!other:example.org"] };
+  let direct: Record<string, string[]> = structuredClone(unrelated);
+  const record = (event: string) =>
+    vi.fn(async () => {
+      events.push(event);
+    });
   return {
     events,
     getUserId: vi.fn(async () => "@ops:example.org"),
@@ -53,17 +72,11 @@ function createClient() {
       events.push("write");
       direct = structuredClone(content);
     }),
-    prepareForOneOff: vi.fn(async () => {
-      events.push("prepare");
-    }),
-    start: vi.fn(async () => {
-      events.push("start");
-    }),
+    prepareForOneOff: record("prepare"),
+    start: record("start"),
     quiesceSync: vi.fn(async () => {}),
     drainPendingDecryptions: vi.fn(async () => {}),
-    stopAndPersist: vi.fn(async () => {
-      events.push("persist");
-    }),
+    stopAndPersist: record("persist"),
     stopWithoutPersist: vi.fn(async () => {}),
   };
 }
@@ -124,10 +137,7 @@ async function seed(cfg: CoreConfig) {
 
 function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolean) {
   expect(client.createDirectRoom).toHaveBeenCalledWith(peer, { encrypted });
-  expect(client.setAccountData).toHaveBeenCalledWith("m.direct", {
-    "@other:example.org": ["!other:example.org"],
-    [peer]: [roomId],
-  });
+  expect(client.setAccountData).toHaveBeenCalledWith("m.direct", repaired);
   expect(client.events.filter((event) => event !== "start" && event !== "persist")).toEqual([
     "read",
     "create",
@@ -203,19 +213,8 @@ describe.each([true, false])(
       const cfg = config(encrypted);
       await seed(cfg);
       const client = createClient();
-      createMatrixClient.mockResolvedValue(client);
-      const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-      const program = new Command();
-      registerMatrixCli({ program });
-      await program.parseAsync(
-        ["matrix", "direct", "repair", "--account", "ops", "--user-id", peer, "--json"],
-        { from: "user" },
-      );
-      const result = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
-      expect(result).toEqual({
-        accountId: "ops",
-        remoteUserId: "@owner:example.org",
-        selfUserId: "@ops:example.org",
+      expect(await runCli("repair", client)).toEqual({
+        ...identity,
         mappedRoomIds: [],
         mappedRooms: [],
         discoveredStrictRoomIds: [],
@@ -223,11 +222,8 @@ describe.each([true, false])(
         encrypted,
         createdRoomId: roomId,
         changed: true,
-        directContentBefore: { "@other:example.org": ["!other:example.org"] },
-        directContentAfter: {
-          "@other:example.org": ["!other:example.org"],
-          "@owner:example.org": ["!created:example.org"],
-        },
+        directContentBefore: unrelated,
+        directContentAfter: repaired,
       });
       expectRepair(client, encrypted);
       expect(client.events[0]).toBe("start");
@@ -254,20 +250,8 @@ it("runs Commander inspect with strict and unavailable mapped rooms without star
     }
     return ["@ops:example.org", "@owner:example.org"];
   });
-  createMatrixClient.mockResolvedValue(client);
-  const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-  const program = new Command();
-  registerMatrixCli({ program });
-
-  await program.parseAsync(
-    ["matrix", "direct", "inspect", "--account", "ops", "--user-id", peer, "--json"],
-    { from: "user" },
-  );
-
-  expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual({
-    accountId: "ops",
-    remoteUserId: "@owner:example.org",
-    selfUserId: "@ops:example.org",
+  expect(await runCli("inspect", client)).toEqual({
+    ...identity,
     mappedRoomIds: ["!strict:example.org", "!unavailable:example.org"],
     mappedRooms: [
       {
