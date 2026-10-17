@@ -39,6 +39,12 @@ const sessionKey = `agent:main:${channel}:direct:room-1`;
 const acceptedPayload = { ok: true, messageId: "accepted-1" };
 const closed = new Error("delivery caller closed");
 
+function registerChannel(plugin: ChannelPlugin) {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: plugin.id, plugin, source: "test", origin: "bundled" }]),
+  );
+}
+
 function registerPlugin(overrides: Partial<ChannelPlugin> = {}): ChannelPlugin {
   const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({ id: channel }),
@@ -51,9 +57,7 @@ function registerPlugin(overrides: Partial<ChannelPlugin> = {}): ChannelPlugin {
     },
     ...overrides,
   };
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: channel, plugin, source: "test", origin: "bundled" }]),
-  );
+  registerChannel(plugin);
   return plugin;
 }
 
@@ -428,28 +432,19 @@ describe("annotateSourceDelivery thread replies", () => {
       const proof = createDeferred<boolean>();
       const matchesCurrentConversation = vi.fn(() => true);
       const matchesCurrentConversationAsync = vi.fn(() => proof.promise);
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "testchat",
-            source: "test",
-            origin: "bundled",
-            plugin: {
-              ...annotationParams.channelPlugin,
-              actions: {
-                describeMessageTool: () => ({ actions: ["thread-reply"] }),
-                messageActionTargetAliases: {
-                  "thread-reply": {
-                    aliases: ["threadId"],
-                    matchesCurrentConversation,
-                    matchesCurrentConversationAsync,
-                  },
-                },
-              },
+      registerChannel({
+        ...annotationParams.channelPlugin,
+        actions: {
+          describeMessageTool: () => ({ actions: ["thread-reply"] }),
+          messageActionTargetAliases: {
+            "thread-reply": {
+              aliases: ["threadId"],
+              matchesCurrentConversation,
+              matchesCurrentConversationAsync,
             },
           },
-        ]),
-      );
+        },
+      });
       const actionResult = {
         ...threadResult,
         payload: { ok: true },
@@ -477,41 +472,28 @@ describe("annotateSourceDelivery thread replies", () => {
     },
   );
 
-  it("marks both payload and tool details after local plugin dispatch", async () => {
-    const receipt = { threadId: "thread-1" };
+  it.each([
+    ["thread-1", "current-source"],
+    ["other-thread", undefined],
+  ] as const)("annotates a delivered receipt for %s", async (threadId, sourceReplyRoute) => {
+    const payload = { receipt: { threadId } };
     const result = await annotateSourceDelivery(
       {
         ...threadResult,
-        payload: { receipt },
-        toolResult: {
-          content: [{ type: "text" as const, text: "delivered" }],
-          details: { receipt },
-        },
-        dryRun: false,
+        payload,
+        toolResult: { content: [{ type: "text", text: "delivered" }], details: payload },
       },
       annotationParams,
       false,
     );
-
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-    expect(result).toHaveProperty(
-      "toolResult.details",
-      expect.objectContaining({ sourceReplyRoute: "current-source" }),
-    );
-  });
-
-  it("leaves a different-thread receipt unmarked", async () => {
-    const result = await annotateSourceDelivery(
-      {
-        ...threadResult,
-        payload: { receipt: { threadId: "other-thread" } },
-        dryRun: false,
-      },
-      annotationParams,
-      false,
-    );
-
-    expect(result.payload).not.toHaveProperty("sourceReplyRoute");
+    if (sourceReplyRoute) {
+      expect(result).toMatchObject({
+        payload: { sourceReplyRoute },
+        toolResult: { details: { sourceReplyRoute } },
+      });
+    } else {
+      expect(result.payload).not.toHaveProperty("sourceReplyRoute");
+    }
   });
 });
 
@@ -522,15 +504,10 @@ describe("runMessageAction reply-type plugin actions", () => {
   afterEach(() => setActivePluginRegistry(createTestRegistry([])));
 
   it.each([
-    { name: "inbound message", messageId: "1783", route: "current-source" },
-    { name: "numeric inbound id", messageId: 1783, route: "current-source" },
-    {
-      name: "explicit other target",
-      messageId: "1783",
-      to: "direct:someone-else",
-      route: undefined,
-    },
-  ])("annotates replies to $name", async ({ messageId, to, route }) => {
+    ["inbound message", "1783", undefined, "current-source"],
+    ["numeric inbound id", 1783, undefined, "current-source"],
+    ["explicit other target", "1783", "direct:someone-else", undefined],
+  ] as const)("annotates replies to %s", async (_name, messageId, to, route) => {
     const result = await runReplyAction({
       actionParams: { message: "visible reply", messageId, ...(to ? { to } : {}) },
       currentMessageId: "1783",
@@ -557,13 +534,7 @@ describe("runMessageAction reply-type plugin actions", () => {
   });
 });
 
-const pollerConfig = {
-  channels: {
-    poller: {
-      botToken: "poller-test",
-    },
-  },
-} as OpenClawConfig;
+const pollerConfig = { channels: { poller: { botToken: "poller-test" } } } as OpenClawConfig;
 
 type PollerSendPoll = NonNullable<NonNullable<ChannelPlugin["outbound"]>["sendPoll"]>;
 
@@ -616,38 +587,21 @@ const pollerTestPlugin: ChannelPlugin = {
   },
 };
 
-async function runPollAction(params: {
-  actionParams: Record<string, unknown>;
-  toolContext?: ChannelThreadingToolContext;
-}) {
-  const target = params.actionParams.target;
-  if (typeof target !== "string") {
-    throw new Error("poll test target is required");
-  }
-  const actionParams = { ...params.actionParams, to: target };
-  const result = await executeMessagePoll({
+function runPollAction(
+  actionParams: Record<string, unknown> & { target: string },
+  toolContext?: ChannelThreadingToolContext,
+) {
+  const params = { ...actionParams, to: actionParams.target };
+  return executeMessagePoll({
     cfg: pollerConfig,
-    params: actionParams,
+    params,
     channel: "poller",
     channelPlugin: pollerTestPlugin,
     mediaAccess: {},
     accountId: "default",
     dryRun: false,
-    input: {
-      cfg: pollerConfig,
-      action: "poll",
-      params: actionParams,
-      toolContext: params.toolContext,
-    },
+    input: { cfg: pollerConfig, action: "poll", params, toolContext },
   });
-  if (result.kind !== "poll") {
-    throw new Error(`expected poll result, got ${result.kind}`);
-  }
-  const call = pollerSendPoll.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("expected poller sendPoll call");
-  }
-  return { call, result };
 }
 
 describe("executeMessagePoll", () => {
@@ -667,8 +621,8 @@ describe("executeMessagePoll", () => {
   });
 
   it("passes normalized poll fields and auto threadId to the provider", async () => {
-    const { call, result } = await runPollAction({
-      actionParams: {
+    const result = await runPollAction(
+      {
         target: "poller:123",
         message: "    Choose carefully  ",
         pollQuestion: "Lunch?",
@@ -676,37 +630,30 @@ describe("executeMessagePoll", () => {
         pollDurationHours: 2,
         silent: true,
       },
-      toolContext: {
-        currentChannelId: "poller:123",
-        currentThreadTs: "42",
-      },
-    });
+      { currentChannelId: "poller:123", currentThreadTs: "42" },
+    );
 
-    expect(call.poll).toMatchObject({
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      durationHours: 2,
-      maxSelections: 1,
-    });
-    expect(call.threadId).toBe("42");
-    expect(call.content).toBe("    Choose carefully  ");
-    expect(call.silent).toBe(true);
     expect(pollerSendPoll).toHaveBeenCalledOnce();
-    expect(result.pollResult?.result).toMatchObject({
-      messageId: "poll-test",
-      receipt: { primaryPlatformMessageId: "poll-test", threadId: "42" },
+    expect(pollerSendPoll.mock.calls[0]?.[0]).toMatchObject({
+      poll: { question: "Lunch?", options: ["Pizza", "Sushi"], durationHours: 2, maxSelections: 1 },
+      threadId: "42",
+      content: "    Choose carefully  ",
+      silent: true,
+    });
+    expect(result).toMatchObject({
+      kind: "poll",
+      pollResult: {
+        result: {
+          messageId: "poll-test",
+          receipt: { primaryPlatformMessageId: "poll-test", threadId: "42" },
+        },
+      },
     });
   });
 
   it("requires at least two poll options", async () => {
     await expect(
-      runPollAction({
-        actionParams: {
-          target: "poller:123",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza"],
-        },
-      }),
+      runPollAction({ target: "poller:123", pollQuestion: "Lunch?", pollOption: ["Pizza"] }),
     ).rejects.toThrow(/pollOption requires at least two values/i);
   });
 });

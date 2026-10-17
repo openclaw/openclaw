@@ -1,7 +1,8 @@
-// Covers core message-action send fallback, TTS application, and durable send
-// policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelPlugin,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -51,32 +52,46 @@ function registerSlackTextPlugin(accountIds = ["default"]) {
   );
 }
 
+type ActionInput = Parameters<typeof runMessageAction>[0];
+function sourceInput(
+  toolContext: ChannelThreadingToolContext,
+  input: Partial<ActionInput> = {},
+): ActionInput {
+  return {
+    cfg: {},
+    action: "send",
+    params: {},
+    toolContext,
+    messageActionAuthorization: {
+      requesterAccountId: "default",
+      toolContext: { currentSourceTurnId: "source-turn-1", ...toolContext },
+    },
+    defaultAccountId: "default",
+    sourceReplyDeliveryMode: "message_tool_only",
+    dryRun: false,
+    ...input,
+  };
+}
+
 const slackSourceContext = {
   currentChannelProvider: "slack",
   currentChannelId: "channel:C123",
 };
 
-function runSlackSourceReply(input: Partial<Parameters<typeof runMessageAction>[0]> = {}) {
-  return runMessageAction({
-    cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
-    action: "send",
-    toolContext: slackSourceContext,
-    messageActionAuthorization: {
-      requesterAccountId: "default",
-      toolContext: { ...slackSourceContext, currentSourceTurnId: "source-turn-1" },
-    },
-    sessionKey: "agent:main:slack:channel:C123",
-    defaultAccountId: "default",
-    sourceReplyDeliveryMode: "message_tool_only",
-    dryRun: false,
-    ...input,
-    params: {
-      channel: "slack",
-      target: "channel:C123",
-      message: "visible source reply",
-      ...input.params,
-    },
-  });
+function runSlackSourceReply(input: Partial<ActionInput> = {}) {
+  return runMessageAction(
+    sourceInput(slackSourceContext, {
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      sessionKey: "agent:main:slack:channel:C123",
+      ...input,
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "visible source reply",
+        ...input.params,
+      },
+    }),
+  );
 }
 
 describe("runMessageAction core send routing", () => {
@@ -114,16 +129,7 @@ describe("runMessageAction core send routing", () => {
         replyToMode,
         hasRepliedRef: { value: false },
       };
-      const input = {
-        cfg: {},
-        action: "send" as const,
-        toolContext,
-        messageActionAuthorization: { requesterAccountId: "default", toolContext },
-        sessionKey: "agent:main:discord:channel:thread",
-        defaultAccountId: "default",
-        sourceReplyDeliveryMode: "message_tool_only" as const,
-        dryRun: false,
-      };
+      const input = sourceInput(toolContext, { sessionKey: "agent:main:discord:channel:thread" });
       const result = await runMessageAction({
         ...input,
         params: { channel: "discord", message: "first thread reply" },
@@ -141,73 +147,45 @@ describe("runMessageAction core send routing", () => {
     },
   );
 
-  // Regression for #157277: a Telegram topic send reports the bare chat id at
-  // top level with the topic only inside the receipt. The delivered reply must
-  // still be recognized as delivered to the topic-qualified current source.
+  // #157277: the transport reports a bare chat ID; the receipt supplies its topic.
   it("marks a Telegram topic reply as current-source when the receipt reports the topic", async () => {
-    const targetIdentity = (raw: string) => {
-      const body = raw.replace(/^telegram:/i, "");
-      const index = body.indexOf(":topic:");
-      return {
-        chatId: index === -1 ? body : body.slice(0, index),
-        threadId: index === -1 ? undefined : body.slice(index + ":topic:".length),
-      };
-    };
-    const matchesToolContextTarget = ({
-      target,
-      toolContext,
-    }: {
-      target: string;
-      toolContext: { currentMessagingTarget?: string; currentChannelId?: string };
-    }) => {
-      const delivered = targetIdentity(target);
-      return [toolContext.currentMessagingTarget, toolContext.currentChannelId].some((current) => {
-        if (typeof current !== "string") {
-          return false;
-        }
-        const source = targetIdentity(current);
-        return delivered.chatId === source.chatId && delivered.threadId === source.threadId;
-      });
-    };
+    const topicTarget = "telegram:-100123:topic:77";
+    const normalizeTarget = (target: string) => target.replace(/^telegram:/i, "");
     const telegramPlugin = registerTextPlugin("telegram", {
       threading: {
-        matchesToolContextTarget,
-        resolveCurrentChannelId: ({ to, threadId }) => {
-          if (threadId == null) {
-            return to;
-          }
-          return targetIdentity(to).threadId != null ? to : `${to}:topic:${threadId}`;
-        },
+        matchesToolContextTarget: ({ target, toolContext }) =>
+          [toolContext.currentMessagingTarget, toolContext.currentChannelId].some(
+            (current) =>
+              typeof current === "string" && normalizeTarget(current) === normalizeTarget(target),
+          ),
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null || to.includes(":topic:") ? to : `${to}:topic:${threadId}`,
       },
     });
 
-    const input = {
-      cfg: {},
-      action: "send" as const,
-      params: {
-        channel: "telegram",
-        target: "telegram:-100123:topic:77",
-        message: "visible source reply",
+    const input = sourceInput(
+      {
+        currentChannelProvider: "telegram",
+        currentChannelId: topicTarget,
+        currentThreadTs: "77",
+        currentSourceTurnId: "source-turn-1",
       },
-      messageActionAuthorization: {
-        requesterAccountId: "default",
-        toolContext: {
-          currentChannelProvider: "telegram",
-          currentChannelId: "telegram:-100123:topic:77",
-          currentThreadTs: "77",
-          currentSourceTurnId: "source-turn-1",
+      {
+        params: {
+          channel: "telegram",
+          target: topicTarget,
+          message: "visible source reply",
         },
+        sessionKey: "agent:main:telegram:group:telegram:-100123:topic:77",
       },
-      sessionKey: "agent:main:telegram:group:telegram:-100123:topic:77",
-      defaultAccountId: "default",
-    };
+    );
     const result = await annotateSourceDelivery(
       {
         kind: "send" as const,
         channel: "telegram" as const,
         action: "send" as const,
         handledBy: "core" as const,
-        to: input.params.target,
+        to: topicTarget,
         payload: {
           channel: "telegram",
           messageId: "m1",
@@ -276,24 +254,17 @@ describe("runMessageAction core send routing", () => {
       currentChannelId: testCase.currentChannelId,
       currentSourceTurnId: "source-turn-1",
     };
-    const result = await runMessageAction({
-      cfg: { channels: { telegram: { enabled: true } } } as OpenClawConfig,
-      action: "send",
-      params: {
-        channel: "telegram",
-        target: testCase.target,
-        message: "visible source reply",
-      },
-      toolContext,
-      messageActionAuthorization: {
-        requesterAccountId: "default",
-        toolContext,
-      },
-      sessionKey: `agent:main:telegram:group:${testCase.currentChannelId}`,
-      defaultAccountId: "default",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
-    });
+    const result = await runMessageAction(
+      sourceInput(toolContext, {
+        cfg: { channels: { telegram: { enabled: true } } } as OpenClawConfig,
+        params: {
+          channel: "telegram",
+          target: testCase.target,
+          message: "visible source reply",
+        },
+        sessionKey: `agent:main:telegram:group:${testCase.currentChannelId}`,
+      }),
+    );
 
     expect(result.kind).toBe("send");
     expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBe(
