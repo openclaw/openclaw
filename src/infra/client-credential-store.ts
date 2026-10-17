@@ -200,6 +200,10 @@ export function openClientCredentialCustody(
       if (closed) {
         throw new Error("Client credential custody is closed.");
       }
+      if (options.readOnly) {
+        // Invalid credential reads may throw without publishing any database writes.
+        return runSqliteImmediateTransactionSync(database, operation);
+      }
       return runUpdateSqliteMigration(
         database,
         pathname,
