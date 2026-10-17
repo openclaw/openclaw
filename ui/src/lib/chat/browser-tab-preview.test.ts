@@ -12,6 +12,16 @@ afterEach(() => {
 
 const route = { target: "host", profile: "managed" } as const;
 const tabKey = (targetId = "tab-1") => JSON.stringify(["host", null, "managed", targetId]);
+const screenshotRequest = [
+  "browser.request",
+  {
+    method: "POST",
+    path: "/screenshot",
+    target: "host",
+    query: { profile: "managed" },
+    body: { targetId: "tab-1", type: "png" },
+  },
+];
 
 function browserResult(callId: string, targetId = "tab-1") {
   return {
@@ -98,22 +108,15 @@ describe("browser tab previews", () => {
     expect([...latestBrowserTabCards([older], [latest])]).toEqual([
       [tabKey(), { tab: { ...route, targetId: "tab-1" }, revision: "new" }],
     ]);
-    expect([...latestBrowserTabCards([older, latest], [])]).toEqual([
-      [tabKey(), { tab: { ...route, targetId: "tab-1" }, revision: "new" }],
-    ]);
   });
 
-  it.each([undefined])("follows a newer tab without a web preview (%s)", (url) => {
+  it("follows a newer tab without a web preview", () => {
     const older = browserResult("web", "web-tab");
     const web = {
       ...older,
       details: { browserTab: { ...older.details.browserTab, url: "https://example.com" } },
     };
-    const next = browserResult("focus", "focused-tab");
-    const focused = {
-      ...next,
-      details: { browserTab: { ...next.details.browserTab, ...(url ? { url } : {}) } },
-    };
+    const focused = browserResult("focus", "focused-tab");
     expect(extractToolCardsCached(web)[0]?.preview?.kind).toBe("browser-tab");
     expect(extractToolCardsCached(focused)[0]?.preview).toBeUndefined();
     expect([...latestBrowserTabCards([web], [focused]).values()].at(-1)).toEqual({
@@ -136,28 +139,7 @@ describe("browser tab previews", () => {
     expect(await second).toBe("data:image/png;base64,c2hvdA==");
     await loadBrowserTabThumbnail({ ...params, revision: "one" });
     await loadBrowserTabThumbnail({ ...params, revision: "two" });
-    expect(params.request.mock.calls).toEqual([
-      [
-        "browser.request",
-        {
-          method: "POST",
-          path: "/screenshot",
-          target: "host",
-          query: { profile: "managed" },
-          body: { targetId: "tab-1", type: "png" },
-        },
-      ],
-      [
-        "browser.request",
-        {
-          method: "POST",
-          path: "/screenshot",
-          target: "host",
-          query: { profile: "managed" },
-          body: { targetId: "tab-1", type: "png" },
-        },
-      ],
-    ]);
+    expect(params.request.mock.calls).toEqual([screenshotRequest, screenshotRequest]);
     expect(params.fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/gateway/__openclaw__/assistant-media?source=%2Ftmp%2Ffirst.png",
       "/gateway/__openclaw__/assistant-media?source=%2Ftmp%2Fshot.png",

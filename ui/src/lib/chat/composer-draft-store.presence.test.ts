@@ -21,6 +21,17 @@ const now = 1_800_000_000_000;
 const chatKey = (name: string) => `agent:main:${name}\u0000agent:main`;
 const scope = (name: string) => ({ ...owner, scopeKey: `chat:v3:${chatKey(name)}` });
 
+function textlessDrafts() {
+  return [
+    {
+      name: "attachment",
+      attachments: [{ blob: new Blob(["saved"]), mimeType: "text/plain", fileName: "saved.txt" }],
+    },
+    { name: "goal", goalMode: { action: "start" as const } },
+    { name: "reply", replyTarget: { messageId: "message", text: "quoted" } },
+  ];
+}
+
 function storedRecord(scopeKey: string, overrides: Record<string, unknown> = {}) {
   return {
     ...owner,
@@ -45,6 +56,14 @@ async function seedRecords(records: unknown[]) {
   }
   await transactionComplete(transaction);
   return database;
+}
+
+async function readStoredRecord(key: string) {
+  const database = await openControlUiDatabase();
+  const transaction = database.transaction("composerDrafts", "readonly");
+  const record = await requestResult(transaction.objectStore("composerDrafts").get(key));
+  await transactionComplete(transaction);
+  return record;
 }
 
 beforeEach(() => {
@@ -72,14 +91,7 @@ describe("durable recovery", () => {
   }
 
   it("preserves textless draft metadata and ignores clear fences without deleting them", async () => {
-    const drafts = [
-      {
-        name: "attachment",
-        attachments: [{ blob: new Blob(["saved"]), mimeType: "text/plain", fileName: "saved.txt" }],
-      },
-      { name: "goal", goalMode: { action: "start" } },
-      { name: "reply", replyTarget: { messageId: "message", text: "quoted" } },
-    ];
+    const drafts = textlessDrafts();
     await seedRecords([
       ...drafts.map(({ name, ...draft }) =>
         storedRecord("global\u0000agent:" + name, { text: "", ...draft }),
@@ -126,14 +138,7 @@ describe("durable recovery", () => {
       status: "discarded",
     });
     expect(await prepareDurableComposerRecovery(owner)).toEqual({ status: "ready", entries: [] });
-    const database = await openControlUiDatabase();
-    const transaction = database.transaction("composerDrafts", "readonly");
-    const record = await requestResult(
-      transaction
-        .objectStore("composerDrafts")
-        .get(JSON.stringify([owner.gatewayOwner, owner.recoveryScope, legacyScope.scopeKey])),
-    );
-    await transactionComplete(transaction);
+    const record = await readStoredRecord(storedRecord(legacyScope.scopeKey).key);
     expect(record).toMatchObject({ text: "", attachments: [] });
     expect(record.revision).toBeGreaterThan(entry.revision);
     expect(
@@ -202,18 +207,7 @@ describe("durable chat draft presence", () => {
   it("reports every chat draft kind and retirement fence for only the requested owner", async () => {
     const drafts = [
       { name: "text", text: "unsent", attachments: [] },
-      {
-        name: "attachment",
-        text: "",
-        attachments: [{ blob: new Blob(["attachment"]), mimeType: "text/plain" }],
-      },
-      { name: "goal", text: "", attachments: [], goalMode: { action: "start" as const } },
-      {
-        name: "reply",
-        text: "",
-        attachments: [],
-        replyTarget: { messageId: "message-1", text: "quoted message" },
-      },
+      ...textlessDrafts().map((draft) => Object.assign({ text: "", attachments: [] }, draft)),
     ];
     for (const draft of drafts) {
       expect(
@@ -273,12 +267,7 @@ describe("durable chat draft presence", () => {
       expect(blobText).not.toHaveBeenCalled();
       expect(blobBytes).not.toHaveBeenCalled();
       expect(listener).not.toHaveBeenCalled();
-      const transaction = database.transaction("composerDrafts", "readonly");
-      const stored = await requestResult(
-        transaction.objectStore("composerDrafts").get(expired.key),
-      );
-      await transactionComplete(transaction);
-      expect(stored).toEqual(expired);
+      expect(await readStoredRecord(expired.key)).toEqual(expired);
     } finally {
       unsubscribe();
     }
