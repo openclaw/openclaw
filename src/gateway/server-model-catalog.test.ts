@@ -113,15 +113,11 @@ describe("gateway prepared model catalog", () => {
         },
       ],
     });
-    const absent = createPreparedGatewayModelCatalog({ entries: [] });
-    const present = createPreparedGatewayModelCatalog({
-      entries: [],
-      metadataSnapshot: capturedMetadata,
-    });
-    const current = createPreparedGatewayModelCatalog({
-      entries: [],
-      metadataSnapshot: currentMetadata,
-    });
+    const catalogFor = (metadataSnapshot?: typeof capturedMetadata) =>
+      createPreparedGatewayModelCatalog({ entries: [], metadataSnapshot });
+    const absent = catalogFor();
+    const present = catalogFor(capturedMetadata);
+    const current = catalogFor(currentMetadata);
     withPluginRuntimeGenerationScope({ metadataSnapshot: currentMetadata }, () => {
       expect(readPreparedGatewayModelMetadata({})).toBe(currentMetadata);
       expect(readPreparedGatewayModelMetadata({}, absent)).toBeNull();
