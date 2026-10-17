@@ -121,6 +121,8 @@ describe("playback transcode policy", () => {
     ["audio/aac", "audio", "transcode", "aac"],
     ["audio/x-caf", "audio", "transcode", "pcm_s16le"],
     ["video/mp4", "video", "native", "h264"],
+    ["video/x-m4v", "video", "native", "h264"],
+    ["video/x-m4v", "video", "transcode", "mpeg4"],
   ] as const)(
     "classifies accepted $0 $1 as $2 through the public source resolver",
     async (mimeType, kind, expected, codec) => {
@@ -144,6 +146,12 @@ describe("playback transcode policy", () => {
           kind,
         }),
       ).resolves.toMatchObject({ playback: expected, durationMs: 1000 });
+      if (expected === "native") {
+        await expect(
+          playback.resolvePlaybackTranscode({ ...source, mimeType, kind }),
+        ).resolves.toEqual({ kind: "passthrough" });
+        expect(runFfmpeg).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -160,6 +168,7 @@ describe("playback transcode policy", () => {
     ["audio/x-caf", "audio", "caf"],
     ["audio/x-ms-asf", "audio", "asf"],
     ["video/mp4", "video", "mov"],
+    ["video/x-m4v", "video", "mov"],
     ["video/vnd.avi", "video", "avi"],
     ["video/flv", "video", "flv"],
     ["video/matroska", "video", "matroska,webm"],
@@ -220,23 +229,26 @@ describe("playback transcode policy", () => {
 });
 
 describe("resolvePlaybackTranscode", () => {
-  it("falls back before ffmpeg when source duration exceeds the transcode limit", async () => {
-    const source = await createSource("long-video.mkv");
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
-      durationMs: 20 * 60 * 1000 + 1,
-      videoCodec: "hevc",
-      videoStreamIndex: 0,
-    });
+  it.each(["video/x-matroska", "video/x-m4v"])(
+    "falls back before ffmpeg when %s duration exceeds the transcode limit",
+    async (mimeType) => {
+      const source = await createSource(`long-${mimeType.replaceAll("/", "-")}`);
+      probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
+        durationMs: 20 * 60 * 1000 + 1,
+        videoCodec: "hevc",
+        videoStreamIndex: 0,
+      });
 
-    await expect(
-      playback.resolvePlaybackTranscode({
-        ...source,
-        mimeType: "video/x-matroska",
-        kind: "video",
-      }),
-    ).resolves.toEqual({ kind: "fallback" });
-    expect(runFfmpeg).not.toHaveBeenCalled();
-  });
+      await expect(
+        playback.resolvePlaybackTranscode({
+          ...source,
+          mimeType,
+          kind: "video",
+        }),
+      ).resolves.toEqual({ kind: "fallback" });
+      expect(runFfmpeg).not.toHaveBeenCalled();
+    },
+  );
 
   it("scopes cached codec classification by media kind and MIME", async () => {
     const source = await createSource("dual-track.mp4");
@@ -267,52 +279,60 @@ describe("resolvePlaybackTranscode", () => {
   });
 
   it.each([
-    ["hevc", undefined],
-    ["h264", "native"],
-  ] as const)("only advertises native playback for oversized %s media", async (codec, expected) => {
-    const source = await createSource(`oversized-${codec}.mp4`);
-    await fs.truncate(source.sourcePath, 16 * 1024 * 1024 + 1);
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
-      durationMs: 1000,
-      videoCodec: codec,
-      videoProfile: "high",
-      videoPixelFormat: "yuv420p",
-      videoStreamIndex: 0,
-    });
+    ["video/mp4", "hevc", undefined],
+    ["video/mp4", "h264", "native"],
+    ["video/x-m4v", "hevc", undefined],
+    ["video/x-m4v", "h264", "native"],
+  ] as const)(
+    "only advertises native playback for oversized %s %s media",
+    async (mimeType, codec, expected) => {
+      const source = await createSource(`oversized-${mimeType.replaceAll("/", "-")}-${codec}`);
+      await fs.truncate(source.sourcePath, 16 * 1024 * 1024 + 1);
+      probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
+        durationMs: 1000,
+        videoCodec: codec,
+        videoProfile: "high",
+        videoPixelFormat: "yuv420p",
+        videoStreamIndex: 0,
+      });
 
-    const currentStat = await fs.stat(source.sourcePath);
-    const metadata = await playback.resolvePlaybackMetadataForSource({
-      sourcePath: source.sourcePath,
-      sourceStat: {
-        size: currentStat.size,
-        mtimeMs: currentStat.mtimeMs,
-        ctimeMs: currentStat.ctimeMs,
-        exactIdentity: await fs.stat(source.sourcePath, { bigint: true }),
-      },
-      mimeType: "video/mp4",
-      kind: "video",
-    });
-    expect(metadata.playback).toBe(expected);
-  });
-
-  it("transcodes nonportable H.264 profiles and pixel formats", async () => {
-    const source = await createSource("high-10.mp4");
-    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
-      durationMs: 1000,
-      videoCodec: "h264",
-      videoProfile: "high 10",
-      videoPixelFormat: "yuv420p10le",
-      videoStreamIndex: 0,
-    });
-
-    await expect(
-      playback.resolvePlaybackMetadataForSource({
-        ...source,
-        mimeType: "video/mp4",
+      const currentStat = await fs.stat(source.sourcePath);
+      const metadata = await playback.resolvePlaybackMetadataForSource({
+        sourcePath: source.sourcePath,
+        sourceStat: {
+          size: currentStat.size,
+          mtimeMs: currentStat.mtimeMs,
+          ctimeMs: currentStat.ctimeMs,
+          exactIdentity: await fs.stat(source.sourcePath, { bigint: true }),
+        },
+        mimeType,
         kind: "video",
-      }),
-    ).resolves.toMatchObject({ playback: "transcode" });
-  });
+      });
+      expect(metadata.playback).toBe(expected);
+    },
+  );
+
+  it.each(["video/mp4", "video/x-m4v"])(
+    "transcodes nonportable H.264 profiles and pixel formats in %s",
+    async (mimeType) => {
+      const source = await createSource(`high-10-${mimeType.replaceAll("/", "-")}`);
+      probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
+        durationMs: 1000,
+        videoCodec: "h264",
+        videoProfile: "high 10",
+        videoPixelFormat: "yuv420p10le",
+        videoStreamIndex: 0,
+      });
+
+      await expect(
+        playback.resolvePlaybackMetadataForSource({
+          ...source,
+          mimeType,
+          kind: "video",
+        }),
+      ).resolves.toMatchObject({ playback: "transcode" });
+    },
+  );
 
   it("transcodes known-incompatible MP4 audio when H.264 profile facts are unknown", async () => {
     const source = await createSource("unknown-profile-opus.mp4");

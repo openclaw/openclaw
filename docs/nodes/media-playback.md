@@ -36,6 +36,9 @@ browser, Apple players, and Android Media3:
 | Audio | MP3; AAC in M4A/MP4; PCM WAV                                                            | AAC, AIFF, AMR/AMR-WB, CAF, FLAC, Ogg/Opus/Vorbis, WebM audio, WMA | AAC in M4A (`audio/mp4`)                                 |
 | Video | H.264 MP4 with a portable profile and 4:2:0 pixel format; AAC or MP3 audio when present | AVI, FLV, Matroska/MKV, QuickTime/MOV, WebM, ASF, WMV              | H.264/AAC MP4 with 4:2:0 pixel format, at most 1920×1080 |
 
+M4V files use the same codec checks and playback path as MP4: portable H.264
+passes through unchanged, while non-portable codecs use the MP4 rendition.
+
 The Linux companion can also play formats supplied by its installed GStreamer
 plugins. Browser and operating-system updates may add native formats, but the
 table above is the cross-client contract OpenClaw targets.
