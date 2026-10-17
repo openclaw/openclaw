@@ -14,9 +14,11 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
+  managedServiceState,
   recordVerifiedGatewayRun,
   successfulPluginUpdate,
   validConfigSnapshot,
@@ -82,17 +84,14 @@ export function registerCurrentCoreServiceReceiptTests({
         const service = createMockGatewayService({ stop: nativeStop });
         vi.spyOn(daemonService, "resolveGatewayService").mockReturnValue(service);
         mocks.readServiceState.mockImplementation(async () => ({
-          installed: true,
-          loadState: { status: "loaded" },
+          ...managedServiceState(env, {
+            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+            environment: env,
+          }),
           running,
           runtime: {
             status: running ? "running" : "stopped",
             pid: running ? Math.max(process.pid, process.ppid) + 1 : undefined,
-          },
-          env,
-          command: {
-            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-            environment: env,
           },
         }));
         mocks.stopService.mockImplementation(maybeStopManagedServiceBeforeMutableUpdate);
@@ -148,18 +147,22 @@ export function registerCurrentCoreServiceReceiptTests({
               downgradeRisk: false,
               storedChannel: "stable",
               preManagedServiceStop: before,
-              result: {
+              result: resultFixture(root, {
                 status: "skipped",
                 reason: "already-current",
-                mode: "npm",
-                root,
                 before: { version: VERSION },
                 after: { version: VERSION },
-                steps: [],
-                durationMs: 0,
-              },
+              }),
             },
           );
+          const expectPendingDoctor = async () => {
+            expect(events).toEqual([]);
+            expect(nativeStop).not.toHaveBeenCalled();
+            expect(await getUpdateRunAsync(run.runId, { env })).toMatchObject({
+              phase: "activating",
+              status: "running",
+            });
+          };
           try {
             const reached = await Promise.race([
               committed.promise.then(() => "receipt"),
@@ -167,12 +170,7 @@ export function registerCurrentCoreServiceReceiptTests({
               finishing.then(() => "finished"),
             ]);
             expect(reached).toBe("receipt");
-            expect(events).toEqual([]);
-            expect(nativeStop).not.toHaveBeenCalled();
-            expect(await getUpdateRunAsync(run.runId, { env })).toMatchObject({
-              phase: "activating",
-              status: "running",
-            });
+            await expectPendingDoctor();
             currentRequester = outcome === "current";
             release.resolve();
             if (currentRequester) {
@@ -181,12 +179,7 @@ export function registerCurrentCoreServiceReceiptTests({
               expect(nativeStop).toHaveBeenCalledOnce();
             } else {
               await expect(finishing).rejects.toThrow("requester-revoked");
-              expect(events).toEqual([]);
-              expect(nativeStop).not.toHaveBeenCalled();
-              expect(await getUpdateRunAsync(run.runId, { env })).toMatchObject({
-                phase: "activating",
-                status: "running",
-              });
+              await expectPendingDoctor();
             }
           } finally {
             release.resolve();

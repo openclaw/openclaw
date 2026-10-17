@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withDoctorConfigPreflightHome } from "../../commands/doctor-config-preflight.test-support.js";
 import { prepareWriterContext } from "../../commands/doctor-gateway-services.writer-order.test-support.js";
@@ -18,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
+import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -36,9 +37,7 @@ const mocks = vi.hoisted(() => ({
   plan: vi.fn(),
 }));
 
-// Keep the finalizer, convergence, fresh-Doctor result consumer, config planner,
-// writer and service-deferral policy real. Only subprocess/native/package effects
-// are substituted; this is not delegated-executor or native installation proof.
+// Keep config ownership and finalization real; substitute subprocess/native/package effects.
 vi.mock("../../commands/doctor-gateway-services.js", async (original) => ({
   ...(await original<typeof import("../../commands/doctor-gateway-services.js")>()),
   maybeScanExtraGatewayServices: vi.fn(),
@@ -159,195 +158,184 @@ vi.mock("./update-command-result.js", async (original) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: vi.fn(async () => undefined),
 }));
 
-describe("update finalization waits for Doctor's config owner", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-  });
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    vi.restoreAllMocks();
-  });
-
-  it.each(["success", "validation-refusal", "service-failure"] as const)(
-    "preserves actual committed bytes and the finalization barrier (%s)",
-    async (outcome) => {
-      await withDoctorConfigPreflightHome(async (home) => {
-        const identity = createManagedServiceIdentityFixture(home);
-        try {
-          await withEnvAsync(
-            {
-              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-              OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-              OPENCLAW_CONFIG_READONLY: undefined,
-              OPENCLAW_NIX_MODE: undefined,
-              OPENCLAW_GATEWAY_TOKEN: undefined,
-              OPENCLAW_GATEWAY_PASSWORD: undefined,
-              OPENCLAW_WRAPPER: undefined,
-            },
-            async () => {
-              const root = path.join(home, "candidate");
-              await fs.mkdir(root);
-              await fs.writeFile(
-                path.join(root, "package.json"),
-                JSON.stringify({ name: "openclaw", version: VERSION }),
-              );
-              await fs.mkdir(path.join(root, "dist"));
-              await fs.writeFile(
-                path.join(root, "dist", "index.js"),
-                "// fixture entrypoint; transport is mocked\n",
-              );
-              const configPath = await writeOpenClawConfig(home, {
-                gateway: { mode: "local" },
-                plugins: { enabled: false },
-              });
-              const preUpdate = `${configPath}.pre-update`;
-              const original = await fs.readFile(configPath, "utf8");
-              await fs.writeFile(preUpdate, original);
-              const ctx = await prepareWriterContext(configPath);
-              ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
-              await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
-              const paths = [configPath, `${configPath}.bak`, preUpdate];
-              const bytes = () => Promise.all(paths.map((p) => fs.readFile(p, "utf8")));
-              const initial = await bytes();
-              const priorBaseline = ctx.cfgForPersistence;
-              const argv = [process.execPath, path.join(root, "dist", "index.js"), "gateway"];
-              mocks.command.mockResolvedValue({
-                programArguments: argv,
-                environment: { OPENCLAW_GATEWAY_TOKEN: "service-only-token" },
-              });
-              mocks.plan.mockResolvedValue({ programArguments: argv, environment: {} });
-              mocks.state.mockResolvedValue(
-                managedServiceState(process.env, {
-                  programArguments: argv,
-                  environment: Object.fromEntries(
-                    Object.entries(process.env).filter(
-                      (entry): entry is [string, string] => entry[1] !== undefined,
-                    ),
-                  ),
-                }),
-              );
-              const entered = createDeferred();
-              const release = createDeferred();
-              const events: string[] = [];
-              let committed: string[] | undefined;
-              let childCompleted = false;
-              mocks.child.mockImplementation(async (_command, args, options) => {
-                if (!options || typeof options === "number") {
-                  throw new Error("Doctor must supply its child environment");
-                }
-                expect(args).toContain("doctor");
-                expect(options.env?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
-                expect(options.env?.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
-                return withEnvAsync(options.env ?? {}, async () => {
-                  ctx.prompter.confirmRuntimeRepair = async () => true;
-                  await runGatewayServicesHealth(ctx);
-                  expect(mocks.install).not.toHaveBeenCalled();
-                  expect(mocks.stage).not.toHaveBeenCalled();
-                  expect(mocks.directRestart).not.toHaveBeenCalled();
-                  expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
-                  ctx.cfg = {
-                    ...ctx.cfg,
-                    gateway: {
-                      ...ctx.cfg.gateway,
-                      port: outcome === "validation-refusal" ? 0 : 19091,
-                      auth: { mode: "token", token: "doctor-owned-token" },
-                    },
-                  };
-                  entered.resolve();
-                  await release.promise;
-                  const persisted = await captureUpdateDoctorConfigWrites(
-                    configPath,
-                    async (capture) => {
-                      const result = await runWriteConfigHealth(ctx, {
-                        runPostWriteRepairs: false,
-                      });
-                      await writeUpdatePostInstallDoctorResult({
-                        resultPath: options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
-                        result: {
-                          status: result ? "ok" : "error",
-                          configHash: capture.hash,
-                          configWriteRefusal: capture.configWriteRefusal,
-                        },
-                      });
-                      return result;
-                    },
-                  );
-                  events.push(persisted ? "doctor-committed" : "doctor-refused");
-                  committed = await bytes();
-                  childCompleted = true;
-                  if (!persisted) {
-                    throw Object.assign(new Error("Doctor config write refused"), {
-                      failed: true,
-                      exitCode: 1,
-                      stdout: "",
-                      stderr: "Doctor config write refused",
-                    });
-                  }
-                  return { stdout: "", stderr: "" };
-                });
-              });
-              mocks.restart.mockImplementation(async () => {
-                expect(childCompleted).toBe(true);
-                expect(await bytes()).toEqual(committed);
-                expect((await readConfigFileSnapshot()).sourceConfig.gateway?.auth?.token).toBe(
-                  "doctor-owned-token",
-                );
-                events.push("service");
-                if (outcome === "service-failure") {
-                  throw new Error("fixture finalization service failed");
-                }
-                return "ok";
-              });
-              const finishing = finishSuccessfulPackageSwitch(
-                { packageRoot: root, restartEnvironment: process.env },
-                { configSnapshot: await readConfigFileSnapshot() },
-              );
-              // Attach rejection handling immediately; release the child even if the barrier assertion fails.
-              const settled = finishing.then(
-                () => ({ ok: true as const }),
-                (error: unknown) => ({ ok: false as const, error }),
-              );
-              try {
-                await Promise.race([
-                  entered.promise,
-                  settled.then((result) => {
-                    throw new Error(`finalizer never reached Doctor: ${JSON.stringify(result)}`);
-                  }),
-                ]);
-                expect(mocks.restart).not.toHaveBeenCalled();
-                expect(await bytes()).toEqual(initial);
-              } finally {
-                release.resolve();
-              }
-              const result = await settled;
-              expect(mocks.child).toHaveBeenCalledOnce();
-              if (outcome === "validation-refusal") {
-                expect(result.ok).toBe(false);
-                expect(events).toEqual(["doctor-refused"]);
-                expect(ctx.configWriteRefusal).toBe("validation");
-                expect(ctx.cfgForPersistence).toBe(priorBaseline);
-                expect(mocks.restart).not.toHaveBeenCalled();
-                expect(await bytes()).toEqual(initial);
-              } else {
-                expect(result.ok).toBe(outcome === "success");
-                expect(events).toEqual(["doctor-committed", "service"]);
-                expect(mocks.restart).toHaveBeenCalledOnce();
-                expect(ctx.cfgForPersistence.gateway?.auth?.token).toBe("doctor-owned-token");
-                expect((await bytes())[2]).toBe(original);
-              }
-              expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(
-                outcome !== "validation-refusal",
-              );
-              expect(await bytes()).toEqual(committed);
-            },
-          );
-        } finally {
-          identity.restore();
-        }
-      });
-    },
-  );
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+  vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  for (const key of [
+    "OPENCLAW_UPDATE_IN_PROGRESS",
+    "OPENCLAW_CONFIG_READONLY",
+    "OPENCLAW_NIX_MODE",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
+    "OPENCLAW_WRAPPER",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
 });
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+it.each(["success", "validation-refusal", "service-failure"] as const)(
+  "preserves actual committed bytes and the finalization barrier (%s)",
+  (outcome) =>
+    withDoctorConfigPreflightHome(async (home) => {
+      const identity = createManagedServiceIdentityFixture(home);
+      try {
+        return await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const root = path.join(home, "candidate");
+          await writeOpenClawPackageFixture(root, VERSION, {
+            entrySource: "// fixture entrypoint; transport is mocked\n",
+          });
+          const configPath = await writeOpenClawConfig(home, {
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const preUpdate = `${configPath}.pre-update`;
+          const original = await fs.readFile(configPath, "utf8");
+          await fs.writeFile(preUpdate, original);
+          const ctx = await prepareWriterContext(configPath);
+          const writeConfig = () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+          ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
+          await writeConfig();
+          const paths = [configPath, `${configPath}.bak`, preUpdate];
+          const bytes = () => Promise.all(paths.map((p) => fs.readFile(p, "utf8")));
+          const initial = await bytes();
+          const priorBaseline = ctx.cfgForPersistence;
+          const argv = [process.execPath, path.join(root, "dist", "index.js"), "gateway"];
+          mocks.command.mockResolvedValue({
+            programArguments: argv,
+            environment: { OPENCLAW_GATEWAY_TOKEN: "service-only-token" },
+          });
+          mocks.plan.mockResolvedValue({ programArguments: argv, environment: {} });
+          mocks.state.mockResolvedValue(
+            managedServiceState(process.env, {
+              programArguments: argv,
+              environment: Object.fromEntries(
+                Object.entries(process.env).filter(
+                  (entry): entry is [string, string] => entry[1] !== undefined,
+                ),
+              ),
+            }),
+          );
+          const entered = createDeferred();
+          const release = createDeferred();
+          const events: string[] = [];
+          let committed: string[] | undefined;
+          let childCompleted = false;
+          mocks.child.mockImplementation(async (_command, args, options) => {
+            if (!options || typeof options === "number") {
+              throw new Error("Doctor must supply its child environment");
+            }
+            expect(args).toContain("doctor");
+            expect(options.env).toMatchObject({
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+              OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+            });
+            return withEnvAsync(options.env ?? {}, async () => {
+              ctx.prompter.confirmRuntimeRepair = async () => true;
+              await runGatewayServicesHealth(ctx);
+              expect(
+                [mocks.install, mocks.stage, mocks.directRestart].map((mock) => mock.mock.calls),
+              ).toEqual([[], [], []]);
+              expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
+              ctx.cfg = {
+                ...ctx.cfg,
+                gateway: {
+                  ...ctx.cfg.gateway,
+                  port: outcome === "validation-refusal" ? 0 : 19091,
+                  auth: { mode: "token", token: "doctor-owned-token" },
+                },
+              };
+              entered.resolve();
+              await release.promise;
+              const persisted = await captureUpdateDoctorConfigWrites(
+                configPath,
+                async (capture) => {
+                  const result = await writeConfig();
+                  await writeUpdatePostInstallDoctorResult({
+                    resultPath: options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
+                    result: {
+                      status: result ? "ok" : "error",
+                      configHash: capture.hash,
+                      configWriteRefusal: capture.configWriteRefusal,
+                    },
+                  });
+                  return result;
+                },
+              );
+              events.push(persisted ? "doctor-committed" : "doctor-refused");
+              committed = await bytes();
+              childCompleted = true;
+              if (!persisted) {
+                throw Object.assign(new Error("Doctor config write refused"), {
+                  failed: true,
+                  exitCode: 1,
+                  stdout: "",
+                  stderr: "Doctor config write refused",
+                });
+              }
+              return { stdout: "", stderr: "" };
+            });
+          });
+          mocks.restart.mockImplementation(async () => {
+            expect(childCompleted).toBe(true);
+            expect(await bytes()).toEqual(committed);
+            expect((await readConfigFileSnapshot()).sourceConfig.gateway?.auth?.token).toBe(
+              "doctor-owned-token",
+            );
+            events.push("service");
+            if (outcome === "service-failure") {
+              throw new Error("fixture finalization service failed");
+            }
+            return "ok";
+          });
+          const finishing = finishSuccessfulPackageSwitch(
+            { packageRoot: root, restartEnvironment: process.env },
+            { configSnapshot: await readConfigFileSnapshot() },
+          );
+          // Attach rejection handling immediately; release the child even if the barrier assertion fails.
+          const settled = finishing.then(
+            () => ({ ok: true as const }),
+            (error: unknown) => ({ ok: false as const, error }),
+          );
+          try {
+            await Promise.race([
+              entered.promise,
+              settled.then((result) => {
+                throw new Error(`finalizer never reached Doctor: ${JSON.stringify(result)}`);
+              }),
+            ]);
+            expect(mocks.restart).not.toHaveBeenCalled();
+            expect(await bytes()).toEqual(initial);
+          } finally {
+            release.resolve();
+          }
+          const result = await settled;
+          expect(mocks.child).toHaveBeenCalledOnce();
+          if (outcome === "validation-refusal") {
+            expect(result.ok).toBe(false);
+            expect(events).toEqual(["doctor-refused"]);
+            expect(ctx.configWriteRefusal).toBe("validation");
+            expect(ctx.cfgForPersistence).toBe(priorBaseline);
+            expect(mocks.restart).not.toHaveBeenCalled();
+            expect(await bytes()).toEqual(initial);
+          } else {
+            expect(result.ok).toBe(outcome === "success");
+            expect(events).toEqual(["doctor-committed", "service"]);
+            expect(mocks.restart).toHaveBeenCalledOnce();
+            expect(ctx.cfgForPersistence.gateway?.auth?.token).toBe("doctor-owned-token");
+            expect((await bytes())[2]).toBe(original);
+          }
+          expect(await writeConfig()).toBe(outcome !== "validation-refusal");
+          expect(await bytes()).toEqual(committed);
+        });
+      } finally {
+        identity.restore();
+      }
+    }),
+);
