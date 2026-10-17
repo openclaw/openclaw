@@ -101,22 +101,20 @@ afterEach(() => {
 describe("chat sidebar region", () => {
   it("builds unopened panel options only when the operator opens the type menu", async () => {
     const readIcon = vi.fn(() => "terminal" as const);
-    const definitions = sidebarPanelDefinitions().map((definition) => ({
-      ...definition,
-      available: definition.slot === "terminal",
-      get icon() {
-        return definition.slot === "terminal" ? readIcon() : definition.icon;
-      },
-    }));
+    const definitions = sidebarPanelDefinitions().map((definition) =>
+      Object.defineProperty(
+        Object.assign({}, definition, { available: definition.slot === "terminal" }),
+        "icon",
+        { get: () => (definition.slot === "terminal" ? readIcon() : definition.icon) },
+      ),
+    );
     const region = await createRegion(openSlot({ columns: [] }, "detail"), definitions);
     expect(readIcon).not.toHaveBeenCalled();
-    region.panelDefinitions = definitions.map((definition) => ({
-      ...definition,
-      label: "Updated terminal",
-      get icon() {
-        return definition.slot === "terminal" ? readIcon() : definition.icon;
-      },
-    }));
+    region.panelDefinitions = definitions.map((definition) =>
+      Object.defineProperty(Object.assign({}, definition, { label: "Updated terminal" }), "icon", {
+        get: () => (definition.slot === "terminal" ? readIcon() : definition.icon),
+      }),
+    );
     readIcon.mockClear();
     await region.updateComplete;
     expect(readIcon).not.toHaveBeenCalled();
