@@ -1,4 +1,3 @@
-// Covers SSH target parsing and tunnel startup preflight behavior.
 import { EventEmitter } from "node:events";
 import net from "node:net";
 import { PassThrough } from "node:stream";
@@ -34,6 +33,22 @@ import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-cla
 import type { PortUsage } from "./ports-types.js";
 import { PortInUseError } from "./ports.js";
 import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
+
+function syntheticChild() {
+  const child = Object.assign(new EventEmitter(), {
+    killed: false,
+    pid: 4242,
+    stderr: Object.assign(new EventEmitter(), { setEncoding: (_encoding: string) => {} }),
+    kill: (signal?: string) => {
+      child.killed = true;
+      queueMicrotask(() => child.emit("exit", 0, signal ?? null));
+      return true;
+    },
+  });
+  return child;
+}
+
+const spawnedChild = () => mocks.spawn.mock.results[0]?.value as ReturnType<typeof syntheticChild>;
 
 describe("parseSshTarget", () => {
   it("parses OpenSSH tokens and refuses invalid ports or config injection", () => {
@@ -143,23 +158,7 @@ describe("startSshPortForward", () => {
         server.listen(localPort, "127.0.0.1");
       }
 
-      const child = new EventEmitter() as EventEmitter & {
-        killed: boolean;
-        pid: number;
-        stderr: EventEmitter & { setEncoding: (enc: string) => void };
-        kill: (signal?: string) => boolean;
-      };
-      child.killed = false;
-      child.pid = 4242;
-      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
-      stderr.setEncoding = () => {};
-      child.stderr = stderr;
-      child.kill = (signal?: string) => {
-        child.killed = true;
-        queueMicrotask(() => child.emit("exit", 0, signal ?? null));
-        return true;
-      };
-      return child;
+      return syntheticChild();
     });
   }
 
@@ -231,9 +230,7 @@ describe("startSshPortForward", () => {
       );
       spawnFakeSsh();
 
-      const tunnel = await startTunnel({
-        localPortPreferred: preferredPort,
-      });
+      const tunnel = await startTunnel({ localPortPreferred: preferredPort });
 
       expect(tunnel.localPort).not.toBe(preferredPort);
       expect(tunnel.localPort).toBeGreaterThan(0);
@@ -270,7 +267,7 @@ describe("startSshPortForward", () => {
         "cannot verify SSH tunnel listener ownership",
       );
 
-      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+      const child = spawnedChild();
       expect(child.killed).toBe(true);
       expect(mocks.inspectPortUsage).toHaveBeenCalledWith(localPort, {
         probeHosts: ["127.0.0.1"],
@@ -301,7 +298,7 @@ describe("startSshPortForward", () => {
     const rejection = expect(forwarding).rejects.toThrow(
       "ssh exited before tunnel listener ownership was verified",
     );
-    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+    const child = spawnedChild();
     child.emit("close", 0, null);
     inspection.resolve({
       port: localPort,
@@ -318,13 +315,8 @@ describe("startSshPortForward", () => {
     "keeps every stop caller pending until the child exits after %s",
     async (exitAfter) => {
       spawnFakeSsh();
-      const tunnel = await startTunnel({
-        localPortPreferred: await getClaimedPort(),
-      });
-      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
-        killed: boolean;
-        kill: (signal?: string) => boolean;
-      };
+      const tunnel = await startTunnel({ localPortPreferred: await getClaimedPort() });
+      const child = spawnedChild();
       const signals: string[] = [];
       child.kill = (signal = "SIGTERM") => {
         child.killed = true;
@@ -361,7 +353,7 @@ describe("startSshPortForward", () => {
       localPortPreferred: await getClaimedPort(),
       signal: controller.signal,
     });
-    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+    const child = spawnedChild();
 
     controller.abort();
 
@@ -370,13 +362,7 @@ describe("startSshPortForward", () => {
   });
 
   it("keeps startup abort pending until the SSH child exits", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      pid: number;
-      stderr: EventEmitter & { setEncoding: (enc: string) => void };
-      kill: (signal?: string) => boolean;
-    };
-    child.pid = 4242;
-    child.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+    const child = syntheticChild();
     child.kill = vi.fn(() => true);
     mocks.spawn.mockReturnValue(child);
     const controller = new AbortController();
@@ -549,21 +535,12 @@ describe("startSshPortForward", () => {
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",
     async (phase) => {
-      // Real timers only. The fake spawn opens a real socket, and
-      // waitForLocalListener retries on setTimeout against a monotonic budget.
-      // Under fake timers neither advances, so a listener that loses the race on the
-      // first probe hangs to the suite timeout instead of failing on its own budget.
+      // Real sockets need real timers to advance the monotonic readiness budget.
       spawnFakeSsh();
       const localPort = await getClaimedPort();
 
-      const tunnel = await startTunnel({
-        localPortPreferred: localPort,
-      });
-
-      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
-        killed: boolean;
-        stderr: EventEmitter;
-      };
+      const tunnel = await startTunnel({ localPortPreferred: localPort });
+      const child = spawnedChild();
       const stopping = phase === "teardown" ? tunnel.stop() : undefined;
       expect(child.killed).toBe(phase === "teardown");
       expect(() => child.stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();

@@ -28,22 +28,52 @@ import {
   runSqliteWorkerStoreOperation,
 } from "./sqlite-worker-store.js";
 
+async function preparedStore(captured: OpenClawStateWorkerContext) {
+  await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
+  const store = await openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
+    {
+      moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
+      databasePath: captured.admission.databasePath,
+    },
+    captured,
+  );
+  if (!store) {
+    throw new Error("Expected the prepared shared-state worker");
+  }
+  return store;
+}
+
+function relayWrite(index: number, relayId = "queued-writer-relay") {
+  return {
+    type: "nativeHookRelay.write",
+    input: { record: { ...relayRecord(index), relayId }, updatedAtMs: index },
+  } as const;
+}
+
+function readRelay(captured: OpenClawStateWorkerContext, relayId = "queued-writer-relay") {
+  return executeOpenClawStateWorker(captured, {
+    type: "nativeHookRelay.read",
+    input: { relayId },
+  });
+}
+
+function checkedAdmission(captured: OpenClawStateWorkerContext) {
+  return {
+    nativeLocations: [captured.admission.databasePath],
+    admission: createSqliteWorkerOperationAdmission((request, grant) => {
+      expect(request.stage).toBe("transaction");
+      captured.admission.assertCurrent();
+      expect(grant()).toBe(true);
+    }),
+  };
+}
+
 export function registerSharedStateWorkerAdmissionTests(
   createContext: () => OpenClawStateWorkerContext,
 ): void {
   it("requires the exact live maintenance owner through the worker commit grant", async () => {
     const captured = createContext();
-    await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
-    const store = await openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
-      {
-        moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
-        databasePath: captured.admission.databasePath,
-      },
-      captured,
-    );
-    if (!store) {
-      throw new Error("Expected the prepared shared-state worker");
-    }
+    const store = await preparedStore(captured);
     const options = { path: captured.admission.databasePath, env: captured.environment };
     const database = openOpenClawStateDatabase(options);
     const owner = acquireGatewayStateOwner({ databasePath: database.path });
@@ -154,17 +184,7 @@ export function registerSharedStateWorkerAdmissionTests(
 
   it("services direct broker commit admission while a native writer waits for its SQLite transaction", async () => {
     const captured = createContext();
-    await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
-    const store = await openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
-      {
-        moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
-        databasePath: captured.admission.databasePath,
-      },
-      captured,
-    );
-    if (!store) {
-      throw new Error("Expected the prepared shared-state worker");
-    }
+    const store = await preparedStore(captured);
     const stages: string[] = [];
     let nativeFailure: unknown;
     const workerInput = {
@@ -233,15 +253,9 @@ export function registerSharedStateWorkerAdmissionTests(
         await runOpenClawStateWorkerOperation(
           captured,
           async (scope) => {
-            const head = scope.execute({
-              type: "nativeHookRelay.write",
-              input: { record: relayRecord(0), updatedAtMs: 0 },
-            });
+            const head = scope.execute(relayWrite(0));
             const headOutcome = Promise.allSettled([head]);
-            const pending = scope.execute(
-              { type: "nativeHookRelay.write", input: { record: relayRecord(1), updatedAtMs: 1 } },
-              { signal: canceled.signal },
-            );
+            const pending = scope.execute(relayWrite(1), { signal: canceled.signal });
             const outcome = pending.then(
               () => ({ error: undefined }),
               (error: unknown) => ({ error }),
@@ -286,10 +300,7 @@ export function registerSharedStateWorkerAdmissionTests(
         posts.mockRestore();
         foreign.close();
       }
-      const stored = await executeOpenClawStateWorker(captured, {
-        type: "nativeHookRelay.read",
-        input: { relayId: "queued-writer-relay" },
-      });
+      const stored = await readRelay(captured);
       expect(stored).toEqual(stop === "abort" ? relayRecord(0) : undefined);
     },
   );
@@ -303,20 +314,10 @@ export function registerSharedStateWorkerAdmissionTests(
     await runOpenClawStateWorkerOperation(
       captured,
       async (scope) => {
-        const head = scope.execute(
-          {
-            type: "nativeHookRelay.write",
-            input: {
-              record: { ...relayRecord(0), relayId: "canceled-before-post" },
-              updatedAtMs: 0,
-            },
-          },
-          { signal: canceled.signal },
-        );
-        const follower = scope.execute({
-          type: "nativeHookRelay.write",
-          input: { record: relayRecord(1), updatedAtMs: 1 },
+        const head = scope.execute(relayWrite(0, "canceled-before-post"), {
+          signal: canceled.signal,
         });
+        const follower = scope.execute(relayWrite(1));
         const [first, second] = await Promise.allSettled([head, follower]);
         expect(first).toEqual({ status: "rejected", reason: stopped });
         expect(second.status).toBe("fulfilled");
@@ -326,30 +327,13 @@ export function registerSharedStateWorkerAdmissionTests(
           if (++factories === 1) {
             canceled.abort(stopped);
           }
-          return {
-            nativeLocations: [captured.admission.databasePath],
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              expect(request.stage).toBe("transaction");
-              captured.admission.assertCurrent();
-              expect(grant()).toBe(true);
-            }),
-          };
+          return checkedAdmission(captured);
         },
       },
     );
     expect(factories).toBe(2);
-    expect(
-      await executeOpenClawStateWorker(captured, {
-        type: "nativeHookRelay.read",
-        input: { relayId: "canceled-before-post" },
-      }),
-    ).toBeUndefined();
-    expect(
-      await executeOpenClawStateWorker(captured, {
-        type: "nativeHookRelay.read",
-        input: { relayId: "queued-writer-relay" },
-      }),
-    ).toEqual(relayRecord(1));
+    expect(await readRelay(captured, "canceled-before-post")).toBeUndefined();
+    expect(await readRelay(captured)).toEqual(relayRecord(1));
   });
 
   it("retains FIFO and bounded capacity when canceling a queued write behind a native writer", async () => {
@@ -387,13 +371,7 @@ export function registerSharedStateWorkerAdmissionTests(
         captured,
         async (scope) => {
           const write = (index: number, signal?: AbortSignal) =>
-            scope.execute(
-              {
-                type: "nativeHookRelay.write",
-                input: { record: relayRecord(index), updatedAtMs: index },
-              },
-              { signal },
-            );
+            scope.execute(relayWrite(index), { signal });
           const cancelOverflow = async () => {
             const controller = new AbortController();
             const waiting = write(999, controller.signal);
@@ -440,25 +418,13 @@ export function registerSharedStateWorkerAdmissionTests(
         {
           createAdmission: () => {
             factories += 1;
-            return {
-              nativeLocations: [captured.admission.databasePath],
-              admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                expect(request.stage).toBe("transaction");
-                captured.admission.assertCurrent();
-                expect(grant()).toBe(true);
-              }),
-            };
+            return checkedAdmission(captured);
           },
         },
       );
       expect(dispatched).toEqual([0, ...Array.from({ length: 255 }, (_, index) => index + 2)]);
       expect(factories).toBe(256);
-      expect(
-        await executeOpenClawStateWorker(captured, {
-          type: "nativeHookRelay.read",
-          input: { relayId: "queued-writer-relay" },
-        }),
-      ).toEqual(relayRecord(256));
+      expect(await readRelay(captured)).toEqual(relayRecord(256));
     } finally {
       posts.mockRestore();
       foreign.close();

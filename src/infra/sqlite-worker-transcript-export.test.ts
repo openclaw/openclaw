@@ -19,6 +19,18 @@ import type {
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
 import { transcriptSessionExportKey, TranscriptsStore } from "../transcripts/store.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
+
+const digest = (text: string) => createHash("sha256").update(text).digest("hex");
+const jsonLines = (text: string): unknown[] =>
+  text
+    ? text
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+    : [];
+const storedUtterances = (sessionId: string, utterances: TranscriptUtterance[]) =>
+  utterances.map((utterance) => ({ ...utterance, sessionId }));
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -78,22 +90,13 @@ async function seedDigestRecovery(
   }
   const artifacts = await store.materializeSessionArtifacts(session, "transcript");
   const original = await fs.readFile(artifacts.transcriptPath, "utf8");
-  expect(
-    original
-      ? original
-          .trimEnd()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-      : [],
-  ).toEqual(
-    utterances.map((utterance) => Object.assign({}, utterance, { sessionId: session.sessionId })),
-  );
-  const expectedHash = createHash("sha256").update(original).digest("hex");
+  expect(jsonLines(original)).toEqual(storedUtterances(session.sessionId, utterances));
+  const expectedHash = digest(original);
   const database = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   }).db;
-  const readManifest = () =>
-    database
+  const readManifest = () => {
+    const row = database
       .prepare(
         "SELECT export_manifest_json, export_pending_json FROM meeting_transcript_sessions WHERE session_id = ? AND started_at = ?",
       )
@@ -101,9 +104,14 @@ async function seedDigestRecovery(
       export_manifest_json: string;
       export_pending_json: string;
     };
+    return {
+      manifest: JSON.parse(row.export_manifest_json) as Record<string, string>,
+      pending: JSON.parse(row.export_pending_json) as unknown[],
+    };
+  };
   const row = readManifest();
-  expect(JSON.parse(row.export_pending_json)).toEqual([]);
-  const manifest = JSON.parse(row.export_manifest_json) as Record<string, string>;
+  expect(row.pending).toEqual([]);
+  const manifest = row.manifest;
   expect(manifest["transcript.jsonl"]).toBe(expectedHash);
   delete manifest["transcript.jsonl"];
   if (missingMetadata) {
@@ -189,7 +197,7 @@ describe("transcript export digest worker", () => {
     const { store, session, artifacts, original, expectedHash, readManifest } =
       await seedDigestRecovery(suiteStateDir, 1);
     await store.materializeSessionArtifacts(session, "metadata");
-    expect(JSON.parse(readManifest().export_manifest_json)["transcript.jsonl"]).toBe(expectedHash);
+    expect(readManifest().manifest["transcript.jsonl"]).toBe(expectedHash);
     await store.appendUtteranceForSession(session, {
       id: "unpublished",
       text: "Speech saved after the acknowledged export",
@@ -215,10 +223,10 @@ describe("transcript export digest worker", () => {
       expect(revoked).toBe(true);
       const published = await fs.readFile(artifacts.transcriptPath, "utf8");
       expect(published).toBe(original);
-      expect(createHash("sha256").update(published).digest("hex")).toBe(expectedHash);
+      expect(digest(published)).toBe(expectedHash);
       const manifest = readManifest();
-      expect(JSON.parse(manifest.export_manifest_json)["transcript.jsonl"]).toBe(expectedHash);
-      expect(JSON.parse(manifest.export_pending_json)).toContain("transcript.jsonl");
+      expect(manifest.manifest["transcript.jsonl"]).toBe(expectedHash);
+      expect(manifest.pending).toContain("transcript.jsonl");
       expect((await fs.readdir(artifacts.sessionDir)).toSorted()).toEqual(filesBefore.toSorted());
     } finally {
       openSpy.mockRestore();
@@ -276,28 +284,17 @@ describe("transcript export digest worker", () => {
         await store.materializeSessionArtifacts(session, "transcript");
         expect(changed).toBe(true);
         expect(await fs.readFile(artifacts.transcriptPath, "utf8")).toBe(original);
-        expect(JSON.parse(readManifest().export_manifest_json)["transcript.jsonl"]).toBe(
-          expectedHash,
-        );
+        expect(readManifest().manifest["transcript.jsonl"]).toBe(expectedHash);
       } finally {
         openSpy.mockRestore();
       }
       await store.materializeSessionArtifacts(session, "transcript");
       const refreshed = await fs.readFile(artifacts.transcriptPath, "utf8");
-      expect(
-        refreshed
-          .trimEnd()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      ).toEqual(
-        [...(change === "append" ? utterances : []), added].map((utterance) =>
-          Object.assign({}, utterance, { sessionId: session.sessionId }),
-        ),
+      expect(jsonLines(refreshed)).toEqual(
+        storedUtterances(session.sessionId, [...(change === "append" ? utterances : []), added]),
       );
-      expect(JSON.parse(readManifest().export_manifest_json)["transcript.jsonl"]).toBe(
-        createHash("sha256").update(refreshed).digest("hex"),
-      );
-      expect(JSON.parse(readManifest().export_pending_json)).toEqual([]);
+      expect(readManifest().manifest["transcript.jsonl"]).toBe(digest(refreshed));
+      expect(readManifest().pending).toEqual([]);
     },
   );
 
@@ -344,10 +341,8 @@ describe("transcript export digest worker", () => {
         }
         expect(await fs.readFile(artifacts.transcriptPath, "utf8")).toBe(expectedBytes);
         const repaired = readManifest();
-        expect(JSON.parse(repaired.export_pending_json)).toEqual([]);
-        expect(JSON.parse(repaired.export_manifest_json)["transcript.jsonl"]).toBe(
-          modified ? undefined : expectedHash,
-        );
+        expect(repaired.pending).toEqual([]);
+        expect(repaired.manifest["transcript.jsonl"]).toBe(modified ? undefined : expectedHash);
         expect(observed, "artifact recovery read transcript rows on the caller thread").toEqual([]);
       } finally {
         prepareSpy.mockRestore();
@@ -369,36 +364,19 @@ describe("transcript export digest worker", () => {
       const selected = createDeferred();
       const resume = createDeferred();
       let sessionReads = 0;
-      const runOperation = stateWorker.runOpenClawStateWorkerOperation;
-      const workerSpy = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-        new Proxy(runOperation, {
-          apply(target, receiver, [context, operation, options]: Parameters<typeof runOperation>) {
-            return Reflect.apply(target, receiver, [
-              context,
-              (scope: Parameters<typeof operation>[0]) =>
-                operation({
-                  execute: new Proxy(scope.execute, {
-                    async apply(execute, executeReceiver, args: Parameters<typeof scope.execute>) {
-                      const result = await Reflect.apply(execute, executeReceiver, args);
-                      if (
-                        (change === "append-after-digest" &&
-                          args[0].type === "transcripts.summary") ||
-                        (change !== "append-after-digest" &&
-                          args[0].type === "transcripts.session" &&
-                          ++sessionReads === 2)
-                      ) {
-                        selected.resolve();
-                        await resume.promise;
-                      }
-                      return result;
-                    },
-                  }),
-                }),
-              options,
-            ]);
-          },
-        }),
-      );
+      const workerSpy = probe.command(stateWorker, async (command, options, scope) => {
+        const result = await scope.execute(command, options);
+        if (
+          (change === "append-after-digest" && command.type === "transcripts.summary") ||
+          (change !== "append-after-digest" &&
+            command.type === "transcripts.session" &&
+            ++sessionReads === 2)
+        ) {
+          selected.resolve();
+          await resume.promise;
+        }
+        return result;
+      });
       const appended = { id: "later", text: "Speech admitted during recovery", final: false };
       let recovery: Promise<string> | undefined;
       try {
@@ -417,8 +395,8 @@ describe("transcript export digest worker", () => {
         }
         expect(await fs.readFile(artifacts.transcriptPath, "utf8")).toBe(original);
         const row = readManifest();
-        expect(JSON.parse(row.export_pending_json)).toEqual([]);
-        expect(JSON.parse(row.export_manifest_json)["transcript.jsonl"]).toBe(
+        expect(row.pending).toEqual([]);
+        expect(row.manifest["transcript.jsonl"]).toBe(
           change === "append-before-digest" ? undefined : expectedHash,
         );
         if (change === "metadata-before-digest") {
@@ -428,9 +406,7 @@ describe("transcript export digest worker", () => {
           expect((await store.readSession(session.sessionId))?.title).toBe("New canonical title");
         } else {
           expect(await store.readUtterancesForSession(session)).toEqual(
-            [...utterances, appended].map((utterance) =>
-              Object.assign({}, utterance, { sessionId: session.sessionId }),
-            ),
+            storedUtterances(session.sessionId, [...utterances, appended]),
           );
         }
       } finally {
@@ -442,19 +418,10 @@ describe("transcript export digest worker", () => {
         await runTranscriptsCli(["path", session.sessionId, "--transcript"]);
         const refreshed = await fs.readFile(artifacts.transcriptPath, "utf8");
         expect(refreshed.startsWith(original)).toBe(true);
-        expect(
-          refreshed
-            .trimEnd()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
-        ).toEqual(
-          [...utterances, appended].map((utterance) =>
-            Object.assign({}, utterance, { sessionId: session.sessionId }),
-          ),
+        expect(jsonLines(refreshed)).toEqual(
+          storedUtterances(session.sessionId, [...utterances, appended]),
         );
-        expect(JSON.parse(readManifest().export_manifest_json)["transcript.jsonl"]).toBe(
-          createHash("sha256").update(refreshed).digest("hex"),
-        );
+        expect(readManifest().manifest["transcript.jsonl"]).toBe(digest(refreshed));
       }
     },
   );

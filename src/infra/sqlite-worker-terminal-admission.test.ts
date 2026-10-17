@@ -49,26 +49,23 @@ function fixture() {
   };
 }
 
-function observeMainDatabaseWork() {
+async function withoutMainDatabaseWork(run: () => Promise<void>) {
   const sql = observeMainThreadSql();
   const hash = vi.spyOn(fileDescriptor, "hashFileDescriptorSync");
-  return {
-    expectIdle: () => {
-      sql.expectIdle();
-      expect(hash).not.toHaveBeenCalled();
-    },
-    restore: () => {
-      sql.restore();
-      hash.mockRestore();
-    },
-  };
+  try {
+    await run();
+    sql.expectIdle();
+    expect(hash).not.toHaveBeenCalled();
+  } finally {
+    sql.restore();
+    hash.mockRestore();
+  }
 }
 
 describe("shared-state worker terminal admission", () => {
   it("rejects fresh domain reads after a parent failure with only a worker open, then recovers on clear", async () => {
     const state = fixture();
-    const main = observeMainDatabaseWork();
-    try {
+    await withoutMainDatabaseWork(async () => {
       expect(await state.read()).toEqual([]);
       expect(isOpenClawStateDatabaseOpen(state.pathname)).toBe(false);
       const failure = new Error("verified shared-state failure");
@@ -77,10 +74,7 @@ describe("shared-state worker terminal admission", () => {
       clearOpenClawStateDatabaseOpenFailure(state.pathname);
       expect(await state.read()).toEqual([]);
       expect(isOpenClawStateDatabaseOpen(state.pathname)).toBe(false);
-      main.expectIdle();
-    } finally {
-      main.restore();
-    }
+    });
   });
 
   it("retains a terminal fact when worker inspection fails, then recovers after a stable mismatch", async () => {
@@ -99,38 +93,29 @@ describe("shared-state worker terminal admission", () => {
       await import("../state/openclaw-state-db-cache.js");
     const wal = `${state.pathname}-wal`;
     mkdirSync(wal);
-    let main = observeMainDatabaseWork();
     try {
-      await expect(
-        getOpenClawStateDatabaseTerminalFailureAsync(state.capture()),
-      ).rejects.toBeInstanceOf(Error);
-      main.expectIdle();
+      await withoutMainDatabaseWork(async () => {
+        await expect(
+          getOpenClawStateDatabaseTerminalFailureAsync(state.capture()),
+        ).rejects.toBeInstanceOf(Error);
+      });
     } finally {
-      main.restore();
       rmdirSync(wal);
     }
     // Removing the unreadable sidecar leaves the original recorded generation intact.
-    main = observeMainDatabaseWork();
-    try {
+    await withoutMainDatabaseWork(async () => {
       await expect(state.read()).rejects.toBe(failure);
-      main.expectIdle();
-    } finally {
-      main.restore();
-    }
+    });
     const database = new DatabaseSync(state.pathname);
     try {
       database.exec("PRAGMA application_id = 321");
     } finally {
       database.close();
     }
-    main = observeMainDatabaseWork();
-    try {
+    await withoutMainDatabaseWork(async () => {
       expect(await state.read()).toEqual([]);
       expect(isOpenClawStateDatabaseOpen(state.pathname)).toBe(false);
-      main.expectIdle();
-    } finally {
-      main.restore();
-    }
+    });
   });
 
   it("does not create absent state while checking a recorded failure or an existing-only read", async () => {
@@ -138,8 +123,7 @@ describe("shared-state worker terminal admission", () => {
     const failure = new Error("recorded failure before first open");
     recordOpenClawStateDatabaseOpenFailure(state.pathname, failure);
     const inspect = vi.fn(async () => "unexpected domain call");
-    const main = observeMainDatabaseWork();
-    try {
+    await withoutMainDatabaseWork(async () => {
       await expect(
         runOpenClawStateWorkerOperation(state.capture(), inspect, { existingOnly: true }),
       ).rejects.toBe(failure);
@@ -150,10 +134,7 @@ describe("shared-state worker terminal admission", () => {
       ).toBeUndefined();
       expect(inspect).not.toHaveBeenCalled();
       expect(existsSync(state.pathname)).toBe(false);
-      main.expectIdle();
-    } finally {
-      main.restore();
-    }
+    });
   });
 
   it("rejects a queued domain job before dispatch after record and clear while completing the dispatched read", async () => {
