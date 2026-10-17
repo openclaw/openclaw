@@ -7,7 +7,6 @@ import {
   registerSignalExitBarrier,
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   adoptPreparedLocation,
   registerRetainedSnapshotTempDirectory,
@@ -40,6 +39,8 @@ function fixture(strict = false, onCleanupFailure?: () => void) {
     prepared: adoptPreparedLocation(location, ownedRoot, strict, onCleanupFailure),
   };
 }
+
+const busyError = () => Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
 
 it("retains bytes after a serviced cleanup failure and retries the same directory owner", () => {
   const { ownedRoot: directory, location, prepared } = fixture();
@@ -95,36 +96,30 @@ it.each([false, true])(
   "retains cancelled orphan cleanup for retry (strict: %s)",
   async (strict) => {
     const { ownedRoot, sibling, prepared } = fixture(strict);
-    const produced = createDeferredCore();
+    const { resume, hold } = createReadBarrier();
     const tracked: Promise<unknown>[] = [];
     const controller = new AbortController();
     const pending = prepareSingleFlightSqliteSnapshot(
       path.join(ownedRoot, "source.sqlite"),
       "orphan-retry",
-      async () => {
-        await produced.promise;
-        return prepared;
-      },
+      () => hold(prepared),
       controller.signal,
       { trackProducer: (producer) => tracked.push(producer) },
     );
     controller.abort(new Error("cancelled before publication"));
     await expect(pending).rejects.toThrow("cancelled before publication");
     const remove = fs.promises.rm;
-    const failedRemoval = vi
-      .spyOn(fs.promises, "rm")
-      .mockImplementation(async (target, options) => {
+    try {
+      using _ = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
         if (String(target) === ownedRoot) {
-          throw Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
+          throw busyError();
         }
         return remove(target, options);
       });
-    try {
-      produced.resolve();
+      resume.resolve();
       await expect(tracked[0]).rejects.toThrow(/cleanup/);
       expect(fs.existsSync(prepared.location)).toBe(true);
     } finally {
-      failedRemoval.mockRestore();
       await cleanupSnapshotOperations();
     }
     expect(fs.existsSync(ownedRoot)).toBe(false);
@@ -139,16 +134,12 @@ it("keeps a best-effort lease read successful when shared removal stays busy", a
     "best-effort-lease",
     async () => prepared,
   );
-  const busy = vi
-    .spyOn(fs.promises, "rm")
-    .mockRejectedValueOnce(Object.assign(new Error("snapshot busy"), { code: "EBUSY" }));
-  try {
+  {
+    using _ = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(busyError());
     expect(await snapshot.cleanupAsync()).toBe(false);
     expect(snapshot.cleanup()).toBe(false);
     expect(report).toHaveBeenCalledOnce();
     expect(fs.existsSync(prepared.location)).toBe(true);
-  } finally {
-    busy.mockRestore();
   }
   await cleanupSnapshotOperations();
   expect(fs.existsSync(ownedRoot)).toBe(false);
@@ -177,17 +168,15 @@ it.each([false, true])(
       }
       remove(target, options);
     };
-    const stub = asynchronous
-      ? vi
-          .spyOn(fs.promises, "rm")
-          .mockImplementation(async (target, options) => failDataRemoval(target, options))
-      : vi.spyOn(fs, "rmSync").mockImplementation(failDataRemoval);
-    try {
+    {
+      using _ = asynchronous
+        ? vi
+            .spyOn(fs.promises, "rm")
+            .mockImplementation(async (target, options) => failDataRemoval(target, options))
+        : vi.spyOn(fs, "rmSync").mockImplementation(failDataRemoval);
       expect(asynchronous ? await prepared.cleanupAsync() : prepared.cleanup()).toBe(false);
       expect(fs.existsSync(location)).toBe(true);
       expect(tokens.every((token) => fs.existsSync(token))).toBe(true);
-    } finally {
-      stub.mockRestore();
     }
     expect(await prepared.cleanupAsync()).toBe(true);
     expect(fs.existsSync(ownedRoot)).toBe(false);
@@ -266,8 +255,7 @@ it.each([
   async ({ strict, retry }) => {
     const report = vi.fn();
     const { ownedRoot, prepared } = fixture(strict, report);
-    const failure = Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
-    const remove = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(failure);
+    const remove = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(busyError());
     const first = prepared.cleanupAsync();
     if (strict) {
       await expect(first).rejects.toThrow("snapshot cleanup failed");

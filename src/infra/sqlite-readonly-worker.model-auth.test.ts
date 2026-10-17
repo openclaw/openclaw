@@ -68,10 +68,10 @@ const inState = (run: (state: OpenClawTestState) => Promise<void>) => () =>
 const keyProfile = (key: string) => ({ type: "api_key" as const, provider: PROVIDER, key });
 const tokenProfile = (token: string) => ({ type: "token" as const, provider: PROVIDER, token });
 
-function fixtureStore(key: string): AuthProfileStore {
+function fixtureStore(key: string, token = false): AuthProfileStore {
   return {
     version: 1,
-    profiles: { [PROFILE_ID]: keyProfile(key) },
+    profiles: { [PROFILE_ID]: token ? tokenProfile(key) : keyProfile(key) },
   };
 }
 
@@ -282,11 +282,7 @@ it.each([false, true])(
           return header;
         };
         const previousHeader = readHeader();
-        const rotated: AuthProfileStore = {
-          version: 1,
-          profiles: { [PROFILE_ID]: tokenProfile("fixture-published") },
-        };
-        writePersistedAuthProfileStoreRaw(rotated, agentDir);
+        writePersistedAuthProfileStoreRaw(fixtureStore("fixture-published", true), agentDir);
         const committedHeader = readHeader();
         expect(committedHeader).not.toEqual(previousHeader);
         const walStamp = () => {
@@ -459,39 +455,30 @@ it.each(["snapshot", "native owner"] as const)(
   async (publication) =>
     withOpenClawTestState({ label: "model-auth-rotation" }, async (state) => {
       await state.writeAuthProfiles(fixtureStore("fixture-original"));
-      const read = vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker");
+      using read = vi.spyOn(sqliteWorker, "runSqliteReadOnlyWorker");
       const databasePath = resolveAuthProfileDatabasePath(state.agentDir());
       const reads = () => read.mock.calls.filter(([pathname]) => pathname === databasePath);
       const resolve = modelResolver(state);
-      try {
-        for (let turn = 0; turn < 8; turn += 1) {
-          expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
-        }
-        expect.soft(reads()).toHaveLength(1);
-        const rotated: AuthProfileStore = {
-          version: 1,
-          profiles: { [PROFILE_ID]: tokenProfile("fixture-rotated") },
-        };
-        if (publication === "snapshot") {
-          rotated.profiles[`${PROVIDER}:added`] = keyProfile("fixture-added");
-        }
-        if (publication === "native owner") {
-          writePersistedAuthProfileStoreRaw(rotated, state.agentDir());
-        } else {
-          await state.writeAuthProfiles(rotated);
-        }
-        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
-        if (publication === "snapshot") {
-          expect((await resolve(`${PROVIDER}:added`)).model?.name).toBe(
-            `${PROVIDER}:added:api_key`,
-          );
-        }
-        const current = await readStore(state.agentDir());
-        expect(current.profiles).toEqual(rotated.profiles);
-        expect.soft(reads()).toHaveLength(2);
-      } finally {
-        read.mockRestore();
+      for (let turn = 0; turn < 8; turn += 1) {
+        expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:api_key`);
       }
+      expect.soft(reads()).toHaveLength(1);
+      const rotated = fixtureStore("fixture-rotated", true);
+      if (publication === "snapshot") {
+        rotated.profiles[`${PROVIDER}:added`] = keyProfile("fixture-added");
+      }
+      if (publication === "native owner") {
+        writePersistedAuthProfileStoreRaw(rotated, state.agentDir());
+      } else {
+        await state.writeAuthProfiles(rotated);
+      }
+      expect((await resolve()).model?.name).toBe(`${PROFILE_ID}:token`);
+      if (publication === "snapshot") {
+        expect((await resolve(`${PROVIDER}:added`)).model?.name).toBe(`${PROVIDER}:added:api_key`);
+      }
+      const current = await readStore(state.agentDir());
+      expect(current.profiles).toEqual(rotated.profiles);
+      expect.soft(reads()).toHaveLength(2);
     }),
 );
 

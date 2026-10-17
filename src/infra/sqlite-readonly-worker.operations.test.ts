@@ -51,6 +51,9 @@ let env: NodeJS.ProcessEnv;
 let child: ChildProcess;
 let sourceDigest: string;
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+const spawns = vi.mocked(spawn);
+const blocker = { blocker: "survivor" };
+const lastChild = (): ChildProcess => spawns.mock.results.at(-1)?.value;
 
 function readCommand(pathname = source) {
   return {
@@ -71,6 +74,8 @@ const beginCommand = () => ({
   type: "pageCache.begin" as const,
   input: { kind: "agent" as const, maxBytes: 1024, now: Date.now() },
 });
+const begin = (request: ReturnType<typeof createSqliteReadOnlyWorkerScope>) =>
+  request.run(() => runSqliteReadOnlyOperation(source, beginCommand(), readOptions()));
 
 function pauseTransfer(processChild: ChildProcess) {
   const emit = processChild.emit.bind(processChild);
@@ -137,27 +142,22 @@ beforeAll(async () => {
   expectedIdentity = readDatabasePathIdentitySync(source).key;
   sourceDigest = digest(readFileSync(source));
   await read();
-  child = vi.mocked(spawn).mock.results[0]?.value;
+  child = lastChild();
 });
 
 it("preserves off-thread reads, queued inputs, and cancellation ownership", async ({ signal }) => {
-  const sql = [
-    ...(["exec", "prepare", "close"] as const).map((method) =>
-      vi.spyOn(DatabaseSync.prototype, method),
-    ),
-    ...(["all", "get", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
-  try {
-    await expect(read()).resolves.toEqual({ blocker: "survivor" });
+  {
+    using exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    using close = vi.spyOn(DatabaseSync.prototype, "close");
+    using all = vi.spyOn(StatementSync.prototype, "all");
+    using get = vi.spyOn(StatementSync.prototype, "get");
+    using run = vi.spyOn(StatementSync.prototype, "run");
+    using iterate = vi.spyOn(StatementSync.prototype, "iterate");
+    await expect(read()).resolves.toEqual(blocker);
     expect(digest(readFileSync(source))).toBe(sourceDigest);
-    for (const operation of sql) {
+    for (const operation of [exec, prepare, close, all, get, run, iterate]) {
       expect(operation).not.toHaveBeenCalled();
-    }
-  } finally {
-    for (const operation of sql) {
-      operation.mockRestore();
     }
   }
   await waitForDiagnosticEventsDrained();
@@ -211,8 +211,8 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
     expect(events.at(-1)).toMatchObject({ phase: "completed", queueDepth: 1 });
     now = 25;
     release();
-    await expect(first).resolves.toEqual({ blocker: "survivor" });
-    await expect(captured).resolves.toEqual({ blocker: "survivor" });
+    await expect(first).resolves.toEqual(blocker);
+    await expect(captured).resolves.toEqual(blocker);
     await rejectedQueued;
     const requests = () =>
       send.mock.calls.flatMap(([message]) =>
@@ -276,7 +276,7 @@ it("reuses workers across closed scopes without carrying database or inspection 
   createCurrentOpenClawAgentDatabaseFixtures(path.join(root, "template.sqlite"), [
     { path: other, agentId: "other" },
   ]);
-  const start = vi.mocked(spawn).mock.calls.length;
+  const start = spawns.mock.calls.length;
   const query = async (pathname: string, artifactPreserving?: true) => {
     const request = createSqliteReadOnlyWorkerScope();
     try {
@@ -292,34 +292,32 @@ it("reuses workers across closed scopes without carrying database or inspection 
       await request.close();
     }
   };
-  await expect(query(source, true)).resolves.toEqual({ blocker: "survivor" });
+  await expect(query(source, true)).resolves.toEqual(blocker);
   await expect(query(other)).resolves.toEqual({ blocker: undefined });
-  await expect(runRead()).resolves.toEqual({ blocker: "survivor" });
-  expect(vi.mocked(spawn).mock.calls.length - start).toBe(1);
-  const reusedChild = vi.mocked(spawn).mock.results.at(-1)?.value;
+  await expect(runRead()).resolves.toEqual(blocker);
+  expect(spawns.mock.calls.length - start).toBe(1);
+  const reusedChild = lastChild();
   expect(reusedChild.exitCode).toBeNull();
   reusedChild.kill("SIGKILL");
   await new Promise<void>((resolve) => {
     reusedChild.once("close", resolve);
   });
   await expect(query(other)).resolves.toEqual({ blocker: undefined });
-  expect(vi.mocked(spawn).mock.calls.length - start).toBe(2);
+  expect(spawns.mock.calls.length - start).toBe(2);
 });
 
 it("closes a queued scope without waiting for an unrelated active transfer", async ({ signal }) => {
-  const command = readCommand();
-  const options = readOptions();
-  await runSqliteReadOnlyOperation(source, command, options);
-  const activeChild = vi.mocked(spawn).mock.results.at(-1)?.value;
+  await runRead();
+  const activeChild = lastChild();
   const transfer = pauseTransfer(activeChild);
   const firstScope = createSqliteReadOnlyWorkerScope();
   const secondScope = createSqliteReadOnlyWorkerScope();
-  const active = firstScope.run(() => runSqliteReadOnlyOperation(source, command, options));
+  const active = firstScope.run(() => runRead());
   const release = await withinTest(
     awaitGateBeforeSettlement(transfer.ready, active, "Active read did not reach transfer"),
     signal,
   );
-  const queued = secondScope.run(() => runSqliteReadOnlyOperation(source, beginCommand(), options));
+  const queued = begin(secondScope);
   const rejected = expect(queued).rejects.toThrow("scope closed");
   const closing = secondScope.close();
   const observation = observeSettlement(closing);
@@ -334,7 +332,7 @@ it("closes a queued scope without waiting for an unrelated active transfer", asy
     await Promise.allSettled([active, queued, closing]);
     await firstScope.close();
   }
-  await expect(active).resolves.toEqual({ blocker: "survivor" });
+  await expect(active).resolves.toEqual(blocker);
 });
 
 it("bounds concurrent incompatible launches to four live reader processes", async () => {
@@ -342,7 +340,7 @@ it("bounds concurrent incompatible launches to four live reader processes", asyn
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   let live = 0;
   let peak = 0;
-  vi.mocked(spawn).mockImplementation((...args) => {
+  spawns.mockImplementation((...args) => {
     const processChild = actual.spawn(...args);
     peak = Math.max(peak, ++live);
     processChild.once("close", () => {
@@ -359,11 +357,11 @@ it("bounds concurrent incompatible launches to four live reader processes", asyn
         }),
       ),
     );
-    expect(rows).toEqual(Array.from({ length: 8 }, () => ({ blocker: "survivor" })));
+    expect(rows).toEqual(Array.from({ length: 8 }, () => blocker));
     expect(peak).toBeLessThanOrEqual(4);
   } finally {
     await cleanupSnapshotOperations();
-    vi.mocked(spawn).mockImplementation(actual.spawn);
+    spawns.mockImplementation(actual.spawn);
   }
 });
 
@@ -371,29 +369,28 @@ it("quarantines failed cleanup without poisoning healthy capacity or launching a
   await cleanupSnapshotOperations();
   const qualified = sqliteRuntime.getSqliteRuntimeCapabilities();
   const unqualified = { ...qualified, explicitSqliteCloseReleasesNativeResources: false };
-  const capabilities = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
-    ...unqualified,
-  });
+  const capabilities = vi
+    .spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities")
+    .mockReturnValue(unqualified);
   const pool = failingClosePool();
   const { closeMocks } = pool;
-  const start = vi.mocked(spawn).mock.calls.length;
-  const readOwner = () => pool.run();
+  const start = spawns.mock.calls.length;
   try {
     for (let index = 0; index < 4; index++) {
-      await expect(readOwner()).rejects.toThrow("SQLite read and child cleanup failed");
-      expect(vi.mocked(spawn).mock.calls.length - start).toBe(index + 1);
+      await expect(pool.run()).rejects.toThrow("SQLite read and child cleanup failed");
+      expect(spawns.mock.calls.length - start).toBe(index + 1);
       expect(closeMocks[index]).toHaveBeenCalledTimes(2);
       if (index < 3) {
         capabilities.mockReturnValue(qualified);
-        await expect(readOwner()).resolves.toEqual({
+        await expect(pool.run()).resolves.toEqual({
           operation: "agentRetirement.sessionStoreBlocker",
-          value: { blocker: "survivor" },
+          value: blocker,
         });
         capabilities.mockReturnValue(unqualified);
       }
     }
-    await expect(readOwner()).rejects.toThrow("capacity is held by unconfirmed cleanup");
-    expect(vi.mocked(spawn).mock.calls.length - start).toBe(4);
+    await expect(pool.run()).rejects.toThrow("capacity is held by unconfirmed cleanup");
+    expect(spawns.mock.calls.length - start).toBe(4);
     for (const close of closeMocks) {
       expect(close).toHaveBeenCalledTimes(2);
     }
@@ -408,7 +405,7 @@ it.skipIf(process.platform !== "linux")(
   async () => {
     const pool = failingClosePool();
     const warmers = Array.from({ length: 4 }, () => createSqliteReadOnlyWorkerScope());
-    const start = vi.mocked(spawn).mock.calls.length;
+    const start = spawns.mock.calls.length;
     try {
       for (const request of warmers) {
         await request.run(() => pool.run(beginCommand()));
@@ -419,7 +416,7 @@ it.skipIf(process.platform !== "linux")(
         await expect(request.close()).rejects.toThrow("scope cleanup failed");
       }
       await rejected;
-      expect(vi.mocked(spawn).mock.calls.length - start).toBe(4);
+      expect(spawns.mock.calls.length - start).toBe(4);
     } finally {
       await pool.close();
       await Promise.allSettled(warmers.map((request) => request.close()));
@@ -433,13 +430,11 @@ it.skipIf(process.platform !== "linux")(
     await cleanupSnapshotOperations();
     const first = createSqliteReadOnlyWorkerScope();
     const second = createSqliteReadOnlyWorkerScope();
-    const begin = (request: typeof first) =>
-      request.run(() => runSqliteReadOnlyOperation(source, beginCommand(), readOptions()));
     try {
       expect((await begin(first)).complete).toBe(false);
-      const firstChild: ChildProcess = vi.mocked(spawn).mock.results.at(-1)?.value;
+      const firstChild = lastChild();
       expect((await begin(second)).complete).toBe(false);
-      const secondChild: ChildProcess = vi.mocked(spawn).mock.results.at(-1)?.value;
+      const secondChild = lastChild();
       expect(secondChild).not.toBe(firstChild);
       for (let index = 0; index < 5; index++) {
         await runRead({
@@ -472,13 +467,9 @@ it.skipIf(process.platform !== "linux")(
     const warmers = Array.from({ length: 4 }, () => createSqliteReadOnlyWorkerScope());
     const waiting = createSqliteReadOnlyWorkerScope();
     const aborting = createSqliteReadOnlyWorkerScope();
-    const start = vi.mocked(spawn).mock.calls.length;
+    const start = spawns.mock.calls.length;
     try {
-      await Promise.all(
-        warmers.map((request) =>
-          request.run(() => runSqliteReadOnlyOperation(source, beginCommand(), readOptions())),
-        ),
-      );
+      await Promise.all(warmers.map(begin));
       const queued = waiting.run(() => runRead());
       const observation = observeSettlement(queued);
       const cancelled = aborting.run(() => runRead());
@@ -487,9 +478,9 @@ it.skipIf(process.platform !== "linux")(
       await rejected;
       await nextTurn();
       expect(observation.settled).toBe(false);
-      expect(vi.mocked(spawn).mock.calls.length - start).toBe(4);
+      expect(spawns.mock.calls.length - start).toBe(4);
       await warmers[0]!.close();
-      await expect(withinTest(queued, signal)).resolves.toEqual({ blocker: "survivor" });
+      await expect(withinTest(queued, signal)).resolves.toEqual(blocker);
     } finally {
       await Promise.all([...warmers, waiting, aborting].map((request) => request.close()));
     }
@@ -520,7 +511,7 @@ it.skipIf(process.platform !== "linux")(
       expect(performance.now() - started).toBeLessThan(GRACEFUL_CANCEL_TIMEOUT_MS);
       expect(firstChild).toMatchObject({ exitCode: 0, connected: false });
       expect(secondChild.exitCode).toBeNull();
-      await expect(runWithSpawnBroker(second, readOwner)).resolves.toEqual({ blocker: "survivor" });
+      await expect(runWithSpawnBroker(second, readOwner)).resolves.toEqual(blocker);
       expect(secondSpawn).toHaveBeenCalledTimes(1);
       await expect(runWithSpawnBroker(first, readOwner)).rejects.toThrow("broker is closing");
     } finally {

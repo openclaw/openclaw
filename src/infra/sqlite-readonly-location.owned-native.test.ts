@@ -32,6 +32,11 @@ vi.mock("./sqlite-snapshot-staging.js", async (importOriginal) => ({
 
 let database: DatabaseSync;
 let directory: string;
+let owner: {
+  current: boolean;
+  lostAt?: "allocation" | "backup";
+  beforeAllocation?: () => Promise<void>;
+};
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     mocks.retire.mockResolvedValue();
@@ -45,30 +50,38 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 beforeEach(() => {
+  owner = { current: true };
   directory = path.join(tempDirs.make("owned-native-snapshot-"), "copy");
   database = new (requireNodeSqlite().DatabaseSync)(":memory:");
   mocks.retire.mockReset().mockResolvedValue();
   mocks.retireSync.mockReset();
   mocks.allocate.mockReset().mockImplementation(async (_root, _legacy, _signal, asynchronous) => {
+    if (owner.beforeAllocation) {
+      await owner.beforeAllocation();
+    }
     fs.mkdirSync(directory);
     if (asynchronous) {
       registerRetainedSnapshotTempDirectory(directory, () => {
         const cleanup = createRetainedOperation<void>(() => {});
         void mocks
           .retire()
-          .then(async () => {
-            await fs.promises.rm(directory, { recursive: true, force: true });
-          })
+          .then(() => fs.promises.rm(directory, { recursive: true, force: true }))
           .then(() => cleanup.resolve(), cleanup.reject);
         return cleanup.operation;
       });
     } else {
       registerSnapshotTempDirectory(directory, synchronousToken);
     }
+    if (owner.lostAt === "allocation") {
+      owner.current = false;
+    }
     return directory;
   });
   mocks.backup.mockReset().mockImplementation(async (_source, target) => {
-    fs.writeFileSync(target, "private backup fixture; never opened as SQLite");
+    fs.writeFileSync(target, "backup");
+    if (owner.lostAt === "backup") {
+      owner.current = false;
+    }
     return 1;
   });
 });
@@ -78,8 +91,7 @@ function prepare(assertCurrent = () => {}, signal?: AbortSignal) {
 }
 
 function expectOwnership(exists: boolean) {
-  expect(fs.existsSync(directory)).toBe(exists);
-  expect(database.isOpen).toBe(true);
+  expect([fs.existsSync(directory), database.isOpen]).toEqual([exists, true]);
 }
 
 it.each(["sync", "async"] as const)(
@@ -103,8 +115,7 @@ it.each(["sync", "async"] as const)(
         await Promise.race([entered.promise, closing]);
         expect(mocks.retire).toHaveBeenCalledOnce();
         expect(observation.settled).toBe(false);
-        expect(fs.existsSync(prepared.location)).toBe(true);
-        expect(database.isOpen).toBe(true);
+        expect([fs.existsSync(prepared.location), database.isOpen]).toEqual([true, true]);
       } finally {
         resume.resolve();
         await closing;
@@ -144,33 +155,13 @@ it.each(["allocation", "backup", "cancelled allocation"] as const)(
     );
     const controller = new AbortController();
     const { entered, resume, hold } = createReadBarrier();
-    let current = true;
-    const assertCurrent = () => {
-      if (!current) {
+    owner.lostAt = phase === "cancelled allocation" ? undefined : phase;
+    owner.beforeAllocation = phase === "cancelled allocation" ? () => hold(undefined) : undefined;
+    const result = prepare(() => {
+      if (!owner.current) {
         throw failure;
       }
-    };
-    if (phase === "backup") {
-      const backup = mocks.backup.getMockImplementation()!;
-      mocks.backup.mockImplementation(async (...args) => {
-        const result = await backup(...args);
-        current = false;
-        return result;
-      });
-    } else {
-      const allocate = mocks.allocate.getMockImplementation()!;
-      mocks.allocate.mockImplementation(async (...args) => {
-        if (phase === "cancelled allocation") {
-          await hold(undefined);
-        }
-        const result = await allocate(...args);
-        if (phase === "allocation") {
-          current = false;
-        }
-        return result;
-      });
-    }
-    const result = prepare(assertCurrent, controller.signal);
+    }, controller.signal);
     const rejected = expect(result).rejects.toBe(failure);
     try {
       if (phase === "cancelled allocation") {

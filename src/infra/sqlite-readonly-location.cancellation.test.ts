@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -33,9 +34,7 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts?.close();
-});
+afterAll(() => receipts?.close());
 
 async function fixtureReadyBeforeSettlement(ready: string, operation: Promise<unknown>) {
   const settled = operation.then(
@@ -74,11 +73,7 @@ beforeEach(async () => {
   processMocks.execFile.mockReset().mockImplementation((file, args, options, callback) => {
     const child = actual.execFile(file, args, options, callback);
     if (isWorkerMode(args, "reclaim")) {
-      reclamationChildren.push(
-        new Promise<ChildProcess>((resolve) => {
-          child.once("close", () => resolve(child));
-        }),
-      );
+      reclamationChildren.push(once(child, "close").then(() => child));
     }
     return child;
   });
@@ -87,13 +82,6 @@ beforeEach(async () => {
   cacheRoot = tempDirs.make("openclaw-readonly-cancellation-cache-");
   vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
 });
-
-const reclaimFixture = `
-  if (process.argv[3] === "reclaim") {
-    process.stdout.write(JSON.stringify({ ok: true, warnings: [] }));
-    process.exit(0);
-  }
-`;
 
 function installWorker(
   reply: "hold" | "valid" | "invalid",
@@ -108,7 +96,10 @@ function installWorker(
         import fs from "node:fs";
         import path from "node:path";
         ${receipt ? fixtureReceiptClientSource(receipts.endpoint) : ""}
-        ${reclaimFixture}
+        if (process.argv[3] === "reclaim") {
+          process.stdout.write(JSON.stringify({ ok: true, warnings: [] }));
+          process.exit(0);
+        }
         const reply = ${JSON.stringify(reply)};
         ${reply === "valid" ? "" : 'process.on("SIGTERM", () => {});'}
         const block = (stagingRoot, id) => {
@@ -187,15 +178,15 @@ it("joins an idle child that ignores graceful shutdown after its bounded fallbac
 });
 
 it.for([
-  { preserveSourceArtifacts: true, stop: "abort" },
-  { preserveSourceArtifacts: true, stop: "scope-close" },
-  { preserveSourceArtifacts: true, stop: "invalid-response" },
-  { preserveSourceArtifacts: false, stop: "abort" },
-  { preserveSourceArtifacts: false, stop: "invalid-response" },
-  { preserveSourceArtifacts: false, stop: "signal-exit" },
+  { raw: true, stop: "abort" },
+  { raw: true, stop: "scope-close" },
+  { raw: true, stop: "invalid-response" },
+  { raw: false, stop: "abort" },
+  { raw: false, stop: "invalid-response" },
+  { raw: false, stop: "signal-exit" },
 ] as const)(
-  "joins a scoped child and removes its unpublished snapshot on $stop (raw=$preserveSourceArtifacts)",
-  async ({ stop, preserveSourceArtifacts }, { signal }) => {
+  "joins a child and removes its unpublished snapshot on $stop (raw=$raw)",
+  async ({ stop, raw }, { signal }) => {
     const { source, ready } = installWorker(stop === "invalid-response" ? "invalid" : "hold");
     const controller = new AbortController();
     const reason = new Error("startup stopped");
@@ -204,16 +195,14 @@ it.for([
       await withSqliteReadOnlyWorkerScope(async () => {
         operation = prepareSqliteReadOnlyLocation(source, {
           signal: controller.signal,
-          preserveSourceArtifacts,
+          preserveSourceArtifacts: raw,
         });
         void operation.catch(() => {});
         await withinTest(fixtureReadyBeforeSettlement(ready, operation), signal);
         if (stop === "abort") {
-          const child = inspectionChild(preserveSourceArtifacts ? "session" : "async");
+          const child = inspectionChild(raw ? "session" : "async");
           expect(child).toBeDefined();
-          const closed = new Promise<void>((resolve) => {
-            child.once("close", () => resolve());
-          });
+          const closed = once(child, "close");
           expect(fs.existsSync(path.join(fs.readFileSync(ready, "utf8"), "partial.sqlite"))).toBe(
             true,
           );
@@ -227,8 +216,8 @@ it.for([
           await expect(operation).rejects.toThrow("returned an invalid result");
         }
       });
-      const child = inspectionChild(preserveSourceArtifacts ? "session" : "async");
-      if (!preserveSourceArtifacts && stop === "invalid-response") {
+      const child = inspectionChild(raw ? "session" : "async");
+      if (!raw && stop === "invalid-response") {
         expect(child.exitCode).toBe(0);
       } else {
         expect(child.signalCode).toBe("SIGKILL");

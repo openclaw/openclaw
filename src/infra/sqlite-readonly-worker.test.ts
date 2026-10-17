@@ -1,7 +1,6 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -56,27 +55,26 @@ beforeEach(() => {
 
 function createDatabase(paddingBytes: number | null, sql = ""): string {
   const source = path.join(tempDirs.make("openclaw-snapshot-budget-"), "source.sqlite");
-  const database = new (requireNodeSqlite().DatabaseSync)(source);
-  try {
-    if (sql) {
-      database.exec(sql);
-    }
-    if (paddingBytes !== null) {
-      database.exec("CREATE TABLE padding (data BLOB)");
-      database.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(paddingBytes);
-    }
-  } finally {
-    database.close();
+  using database = new (requireNodeSqlite().DatabaseSync)(source);
+  if (sql) {
+    database.exec(sql);
+  }
+  if (paddingBytes !== null) {
+    database.exec("CREATE TABLE padding (data BLOB)");
+    database.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(paddingBytes);
   }
   return source;
 }
 
-async function withWriter<T>(source: string, run: (writer: DatabaseSync) => Promise<T>) {
-  const writer = new (requireNodeSqlite().DatabaseSync)(source);
+async function withWorker<T>(
+  run: (worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>) => Promise<T>,
+  launch = captureSqliteReadOnlyWorkerLaunch(),
+) {
+  const worker = createScopedSqliteReadOnlyWorker(launch);
   try {
-    return await run(writer);
+    return await run(worker);
   } finally {
-    writer.close();
+    await worker.close();
   }
 }
 
@@ -87,12 +85,8 @@ async function readSnapshotVersion(source: string) {
 }
 
 function readQueries(location: string, ...queries: string[]) {
-  const snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
-  try {
-    return queries.map((sql) => snapshot.prepare(sql).get());
-  } finally {
-    snapshot.close();
-  }
+  using snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+  return queries.map((sql) => snapshot.prepare(sql).get());
 }
 
 describe("scoped SQLite read-only children", () => {
@@ -117,71 +111,64 @@ describe("scoped SQLite read-only children", () => {
         });
         return child;
       });
-      const failed = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
-      try {
+      await withWorker(async (failed) => {
         await expect(failed.run(stagingRoot, { mode: "staging-create" })).rejects.toBe(failure);
         expect(vi.mocked(spawn).mock.results[0]?.value.signalCode).toBe("SIGKILL");
-      } finally {
-        await failed.close();
-      }
-      const replacement = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
-      try {
+      });
+      await withWorker(async (replacement) => {
         const directory = await replacement.run(stagingRoot, { mode: "staging-create" });
         if (typeof directory !== "string") {
           throw new Error("Expected a staging directory");
         }
         expect(fs.existsSync(directory)).toBe(true);
         await replacement.run(directory, { mode: "staging-retire" });
-      } finally {
-        await replacement.close();
-      }
+      });
       expect(spawn).toHaveBeenCalledTimes(2);
     },
   );
 
   it("reuses fresh raw snapshots while joining backup-capable children before returning", async () => {
     const source = createDatabase(1024 * 1024);
-    await withWriter(source, async (writer) => {
-      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-      await withSqliteReadOnlyWorkerScope(async () => {
-        for (const [index, mode] of (["sync", "async", "sync"] as const).entries()) {
-          writer.exec(`PRAGMA user_version = ${index + 1}`);
-          if (mode === "sync") {
-            expect(await readSnapshotVersion(source)).toBe(index + 1);
-          } else {
-            const prepared = await prepareSqliteReadOnlyLocation(source);
-            try {
-              expect(
-                readQueries(
-                  prepared.location,
-                  "PRAGMA user_version",
-                  "SELECT length(data) AS length FROM padding",
-                ),
-              ).toEqual([{ user_version: index + 1 }, { length: 1024 * 1024 }]);
-            } finally {
-              expect(await prepared.cleanupAsync()).toBe(true);
-            }
-            const child = vi.mocked(execFile).mock.results.at(-1)?.value;
-            expect(child).toMatchObject({ exitCode: 0, connected: false });
+    using writer = new (requireNodeSqlite().DatabaseSync)(source);
+    writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+    await withSqliteReadOnlyWorkerScope(async () => {
+      for (const [index, mode] of (["sync", "async", "sync"] as const).entries()) {
+        writer.exec(`PRAGMA user_version = ${index + 1}`);
+        if (mode === "sync") {
+          expect(await readSnapshotVersion(source)).toBe(index + 1);
+        } else {
+          const prepared = await prepareSqliteReadOnlyLocation(source);
+          try {
+            expect(
+              readQueries(
+                prepared.location,
+                "PRAGMA user_version",
+                "SELECT length(data) AS length FROM padding",
+              ),
+            ).toEqual([{ user_version: index + 1 }, { length: 1024 * 1024 }]);
+          } finally {
+            expect(await prepared.cleanupAsync()).toBe(true);
           }
-          expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBeNull();
+          const child = vi.mocked(execFile).mock.results.at(-1)?.value;
+          expect(child).toMatchObject({ exitCode: 0, connected: false });
         }
-      });
-      expect(spawn).toHaveBeenCalledTimes(1);
-      const children = vi.mocked(execFile).mock.calls.flatMap(([, args], index) => {
-        const marker = args?.indexOf(SQLITE_READONLY_CHILD_ARG) ?? -1;
-        return marker < 0
-          ? []
-          : [{ mode: args?.[marker + 1], child: vi.mocked(execFile).mock.results[index]?.value }];
-      });
-      expect(children.filter(({ mode }) => mode !== "reclaim").map(({ mode }) => mode)).toEqual([
-        "async",
-      ]);
-      for (const { child } of children) {
-        expect(child).toMatchObject({ exitCode: 0, connected: false });
+        expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBeNull();
       }
-      expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
     });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const children = vi.mocked(execFile).mock.calls.flatMap(([, args], index) => {
+      const marker = args?.indexOf(SQLITE_READONLY_CHILD_ARG) ?? -1;
+      return marker < 0
+        ? []
+        : [{ mode: args?.[marker + 1], child: vi.mocked(execFile).mock.results[index]?.value }];
+    });
+    expect(children.filter(({ mode }) => mode !== "reclaim").map(({ mode }) => mode)).toEqual([
+      "async",
+    ]);
+    for (const { child } of children) {
+      expect(child).toMatchObject({ exitCode: 0, connected: false });
+    }
+    expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
   });
 
   it("keeps concurrent source inspections in separate processes", async () => {
@@ -278,30 +265,27 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
 
   it("budgets the WAL family while copying committed data from an open writer", async () => {
     const source = createDatabase(null);
-    await withWriter(source, async (writer) => {
-      writer.exec(
-        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE padding (data BLOB)",
-      );
-      writer.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(32 * 1024 * 1024);
-      const mainBytes = fs.statSync(source).size;
-      const walBytes = fs.statSync(`${source}-wal`).size;
-      expect(mainBytes).toBeLessThan(32 * 1024);
-      expect(walBytes).toBeGreaterThan(32 * 1024 * 1024);
-      const snapshot = await run(source);
-      if (mode === "async") {
-        expect(fs.existsSync(`${snapshot}-wal`)).toBe(false);
-        expect(fs.existsSync(`${snapshot}-shm`)).toBe(false);
-      }
-      const copied = new (requireNodeSqlite().DatabaseSync)(snapshot, { readOnly: true });
-      try {
-        expect(copied.prepare("SELECT length(data) AS bytes FROM padding").all()).toEqual([
-          { bytes: 32 * 1024 * 1024 },
-        ]);
-      } finally {
-        copied.close();
-      }
-      expectBudget(341_000);
-    });
+    using writer = new (requireNodeSqlite().DatabaseSync)(source);
+    writer.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE padding (data BLOB)",
+    );
+    writer.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(32 * 1024 * 1024);
+    const mainBytes = fs.statSync(source).size;
+    const walBytes = fs.statSync(`${source}-wal`).size;
+    expect(mainBytes).toBeLessThan(32 * 1024);
+    expect(walBytes).toBeGreaterThan(32 * 1024 * 1024);
+    const snapshot = await run(source);
+    if (mode === "async") {
+      expect(fs.existsSync(`${snapshot}-wal`)).toBe(false);
+      expect(fs.existsSync(`${snapshot}-shm`)).toBe(false);
+    }
+    {
+      using copied = new (requireNodeSqlite().DatabaseSync)(snapshot, { readOnly: true });
+      expect(copied.prepare("SELECT length(data) AS bytes FROM padding").all()).toEqual([
+        { bytes: 32 * 1024 * 1024 },
+      ]);
+    }
+    expectBudget(341_000);
   });
 
   it("reports the applied size budget for a timed-out snapshot", async () => {
@@ -381,20 +365,18 @@ it.each(["source", "allocation", "staging"] as const)(
     });
     let observed: unknown;
     try {
-      try {
-        if (input === "source") {
-          await startSqliteReadOnlyLocationAsync("relative.sqlite").result;
-        } else if (input === "allocation") {
-          await allocateWorkerOwnedSqliteSnapshotDirectory("relative-staging", false);
-        } else {
-          sqliteReadOnlyWorkerRequestArgs(source, {
-            mode: "sync",
-            stagingRoot: "relative-staging",
-          });
-        }
-      } catch (error) {
-        observed = error;
+      if (input === "source") {
+        await startSqliteReadOnlyLocationAsync("relative.sqlite").result;
+      } else if (input === "allocation") {
+        await allocateWorkerOwnedSqliteSnapshotDirectory("relative-staging", false);
+      } else {
+        sqliteReadOnlyWorkerRequestArgs(source, {
+          mode: "sync",
+          stagingRoot: "relative-staging",
+        });
       }
+    } catch (error) {
+      observed = error;
     } finally {
       cwd.mockRestore();
     }
@@ -468,21 +450,16 @@ it("distinguishes actual worker startup from serialized directory creation failu
   expect(fs.readFileSync(notDirectory, "utf8")).toBe("preserved");
 
   const cwd = path.join(root, "missing-cwd");
-  const worker = createScopedSqliteReadOnlyWorker({
-    cwd,
-    env: { ...process.env },
-    transport: { kind: "native" },
-    retainLifetime: false,
-  });
-  try {
-    const startupError = await worker
-      .run(root, { mode: "staging-create" })
-      .catch((error: unknown) => error);
-    expect(startupError).toMatchObject({ code: "ENOENT", cause: { code: "ENOENT" } });
-    expect((startupError as Error).message).toContain(process.execPath);
-    expect((startupError as Error).message).toContain(cwd);
-    expect((startupError as Error).message).not.toContain("XDG_CACHE_HOME");
-  } finally {
-    await worker.close();
-  }
+  await withWorker(
+    async (worker) => {
+      const startupError = await worker
+        .run(root, { mode: "staging-create" })
+        .catch((error: unknown) => error);
+      expect(startupError).toMatchObject({ code: "ENOENT", cause: { code: "ENOENT" } });
+      expect((startupError as Error).message).toContain(process.execPath);
+      expect((startupError as Error).message).toContain(cwd);
+      expect((startupError as Error).message).not.toContain("XDG_CACHE_HOME");
+    },
+    { cwd, env: { ...process.env }, transport: { kind: "native" }, retainLifetime: false },
+  );
 });

@@ -32,40 +32,44 @@ afterEach(() => {
 });
 
 async function readFailure(stdout: string, mode: SqliteReadOnlyWorkerMode, failure?: string) {
-  const { readSqliteReadOnlyWorkerValue } = await import("./sqlite-readonly-worker-protocol.js");
+  const { readSqliteReadOnlyWorkerValue, SqliteReadOnlyInspectionContentionError } =
+    await import("./sqlite-readonly-worker-protocol.js");
+  const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
   let received: unknown;
   try {
     readSqliteReadOnlyWorkerValue(
-      {
-        kind: "launched",
-        stdout,
-        stderr: "",
-        status: 0,
-        ...(failure === undefined ? {} : { failure }),
-      },
+      { kind: "launched", stdout, stderr: "", status: 0, failure },
       mode,
     );
   } catch (error) {
     received = error;
   }
   expect(received).toBeInstanceOf(Error);
-  return received;
+  return {
+    contention: received instanceof SqliteReadOnlyInspectionContentionError,
+    refused: isPrivateDirectoryCreationRefused(received),
+  };
 }
 
-async function expectWorkerFailure(
-  error: unknown,
-  message: string,
+type FailureOptions = {
+  mode?: "sync" | "async" | "staging-create" | "staging-create-legacy";
+  refused?: boolean;
+  contention?: boolean;
+  allocationRefused?: boolean;
+};
+async function expectWorkerFailure({
+  error,
+  message,
   contention = false,
-  mode: "sync" | "async" | "staging-create" | "staging-create-legacy" = "async",
+  mode = "async",
   allocationRefused = false,
-): Promise<void> {
-  process.argv = [
-    process.execPath,
-    "sqlite-readonly-location.worker.ts",
-    "--openclaw-sqlite-readonly-child",
-    mode,
-    "/synthetic/database.sqlite",
-  ];
+  refused,
+}: ReturnType<typeof failureCase>): Promise<void> {
+  if (refused) {
+    const { markPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
+    markPrivateDirectoryCreationRefused(error);
+  }
+  process.argv = [process.execPath, "worker", "--openclaw-sqlite-readonly-child", mode, "/db"];
   const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
   if (mode === "async") {
     prepare.mockRejectedValueOnce(error);
@@ -83,23 +87,15 @@ async function expectWorkerFailure(
   const stdout = JSON.stringify({ ok: false, message: `${prefix}${message}` });
   expect(write).toHaveBeenCalledExactlyOnceWith(stdout);
   expect(process.exitCode).toBe(1);
-  const { SqliteReadOnlyInspectionContentionError } =
-    await import("./sqlite-readonly-worker-protocol.js");
-  const received = await readFailure(stdout, mode);
-  expect(received instanceof SqliteReadOnlyInspectionContentionError).toBe(contention);
-  const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
-  expect(isPrivateDirectoryCreationRefused(received)).toBe(contention && allocationRefused);
+  expect(await readFailure(stdout, mode)).toEqual({
+    contention,
+    refused: contention && allocationRefused,
+  });
 }
 
-const codedError = (message: string, fields: { code?: string; errcode?: number }) =>
-  Object.assign(new Error(message), fields);
+const codedError = (fields: { code?: string; errcode?: number }) =>
+  Object.assign(new Error("failure"), fields);
 
-type FailureOptions = {
-  mode?: Parameters<typeof expectWorkerFailure>[3];
-  refused?: boolean;
-  contention?: boolean;
-  allocationRefused?: boolean;
-};
 const failureCase = (error: unknown, message: string, options: FailureOptions = {}) => ({
   error,
   message,
@@ -135,26 +131,23 @@ function deepFailure() {
 }
 
 it.each([
-  failureCase(
-    codedError("parent token admission failed", { errcode: 5 }),
-    "parent token admission failed (errcode=5)",
-    { mode: "sync", refused: true, contention: true },
-  ),
-  failureCase(
-    codedError("parent token admission failed", { errcode: 6 }),
-    "parent token admission failed (errcode=6)",
-    { mode: "staging-create-legacy", refused: true, contention: true, allocationRefused: true },
-  ),
-  failureCase(
-    codedError("parent admission refused", { code: "EACCES" }),
-    "parent admission refused (code=EACCES)",
-    { mode: "staging-create", refused: true, allocationRefused: true },
-  ),
-  failureCase(
-    codedError("allocation failed", { code: "ENOENT" }),
-    "allocation failed (code=ENOENT)",
-    { mode: "staging-create" },
-  ),
+  failureCase(codedError({ errcode: 5 }), "failure (errcode=5)", {
+    mode: "sync",
+    refused: true,
+    contention: true,
+  }),
+  failureCase(codedError({ errcode: 6 }), "failure (errcode=6)", {
+    mode: "staging-create-legacy",
+    refused: true,
+    contention: true,
+    allocationRefused: true,
+  }),
+  failureCase(codedError({ code: "EACCES" }), "failure (code=EACCES)", {
+    mode: "staging-create",
+    refused: true,
+    allocationRefused: true,
+  }),
+  failureCase(codedError({ code: "ENOENT" }), "failure (code=ENOENT)", { mode: "staging-create" }),
   failureCase(new SourceChangedError("source changed"), "source changed", {
     contention: true,
   }),
@@ -163,37 +156,20 @@ it.each([
     deepFailure(),
     "staging failure (code=E0, errcode=0, code=E1, errcode=1, code=E2, errcode=2, code=E3, errcode=3, code=E4, errcode=4, code=E5, errcode=5, code=E6, errcode=6, code=E7, errcode=7)",
   ),
-  failureCase(codedError("failure", { code: "EIO\n", errcode: 11 }), "failure (errcode=11)"),
+  failureCase(codedError({ code: "EIO\n", errcode: 11 }), "failure (errcode=11)"),
   ...[-1, 1.5, 2 ** 31].map((errcode) =>
-    failureCase(codedError("failure", { code: "EIO", errcode }), "failure (code=EIO)"),
+    failureCase(codedError({ code: "EIO", errcode }), "failure (code=EIO)"),
   ),
-])(
-  "serializes $message through the worker boundary",
-  async ({
-    error,
-    message,
-    mode = "async",
-    refused,
-    contention = false,
-    allocationRefused = false,
-  }) => {
-    if (refused) {
-      const { markPrivateDirectoryCreationRefused } =
-        await import("./private-directory-creation.js");
-      markPrivateDirectoryCreationRefused(error);
-    }
-    await expectWorkerFailure(error, message, contention, mode, allocationRefused);
-  },
-);
+])("serializes $message through the worker boundary", expectWorkerFailure);
 
 it.each([
-  { kind: "wrong-mode", contention: true },
-  { kind: "transport-failure", contention: false },
-  { kind: "empty-failure", contention: true },
-  { kind: "malformed-result", contention: false },
+  ["wrong-mode", true, "async", undefined],
+  ["transport-failure", false, "staging-create", "native transport failed"],
+  ["empty-failure", true, "staging-create", ""],
+  ["malformed-result", false, "staging-create", undefined],
 ] as const)(
-  "does not accept an allocation refusal receipt with $kind (contention: $contention)",
-  async ({ kind, contention }) => {
+  "does not accept an allocation refusal receipt with %s (contention: %s)",
+  async (kind, contention, mode, failure) => {
     const stdout = JSON.stringify({
       ok: false,
       message:
@@ -201,16 +177,7 @@ it.each([
         "SQLite snapshot directory creation refused: root unavailable",
       ...(kind === "malformed-result" ? { unexpected: true } : {}),
     });
-    const received = await readFailure(
-      stdout,
-      kind === "wrong-mode" ? "async" : "staging-create",
-      kind === "transport-failure"
-        ? "native transport failed"
-        : kind === "empty-failure"
-          ? ""
-          : undefined,
-    );
-    const { isPrivateDirectoryCreationRefused } = await import("./private-directory-creation.js");
-    expect(isPrivateDirectoryCreationRefused(received)).toBe(false);
+    const received = await readFailure(stdout, mode, failure);
+    expect(received.refused).toBe(false);
   },
 );
