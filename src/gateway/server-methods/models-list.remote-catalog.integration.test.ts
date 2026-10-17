@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
@@ -13,14 +12,21 @@ import {
 import { retainPreparedPluginGeneration } from "../../agents/prepared-model-runtime.plugin-lifetime.js";
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as updateStartup from "../../infra/update-startup.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import * as pricing from "../../model-catalog/pricing.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../test-helpers.e2e.js";
+import {
+  closeCatalogServer,
+  createCatalogState,
+  listenCatalogServer,
+  startCatalogGateway,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -36,17 +42,8 @@ it.for([1, 2])(
     const unexpectedRestart = vi.fn(() => {
       throw new Error("Remote catalog publication unexpectedly requested a Gateway restart");
     });
-    const state = await createOpenClawTestState({
-      label: "remote-catalog-publication",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      },
+    const state = await createCatalogState("remote-catalog-publication", {
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     });
     const generatedAt = Date.now() + 86_400_000;
     const modelMetadata = {
@@ -56,45 +53,23 @@ it.for([1, 2])(
       contextWindow: 32768,
       maxTokens: 4096,
     };
-    const first = {
+    const makeModel = (id: string, name: string, input: number) => ({
+      ...modelMetadata,
+      id,
+      name,
+      cost: { input, output: input * 2 },
+    });
+    const makeCatalog = (generation: number, models: ReturnType<typeof makeModel>[]) => ({
       schemaVersion: 1,
-      generatedAt,
+      generatedAt: generatedAt + generation,
       sourceCommit: "remote-catalog-fixture",
-      providers: {
-        kimi: {
-          models: [
-            {
-              ...modelMetadata,
-              id: "remote-first",
-              name: "Remote First",
-              cost: { input: 1, output: 2 },
-            },
-          ],
-        },
-      },
-    };
-    const next = {
-      ...first,
-      generatedAt: generatedAt + 1,
-      providers: {
-        kimi: {
-          models: [
-            {
-              ...modelMetadata,
-              id: "remote-first",
-              name: "Remote First",
-              cost: { input: 7, output: 14 },
-            },
-            {
-              ...modelMetadata,
-              id: "remote-next",
-              name: "Remote Next",
-              cost: { input: 9, output: 18 },
-            },
-          ],
-        },
-      },
-    };
+      providers: { kimi: { models } },
+    });
+    const first = makeCatalog(0, [makeModel("remote-first", "Remote First", 1)]);
+    const next = makeCatalog(1, [
+      makeModel("remote-first", "Remote First", 7),
+      makeModel("remote-next", "Remote Next", 9),
+    ]);
     const encode = (catalog: typeof first) =>
       JSON.stringify(
         schemaVersion === 1
@@ -130,27 +105,12 @@ it.for([1, 2])(
         replyProvider(response);
       }
     });
-    let phase = "fixture setup";
-    const reportInterruptedPhase = () => {
-      console.warn(`[remote-catalog-test] v${schemaVersion} interrupted during ${phase}`);
-    };
-    signal.addEventListener("abort", reportInterruptedPhase, { once: true });
     try {
-      endpoint.listen(0, "127.0.0.1");
-      await once(endpoint, "listening");
-      const address = endpoint.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Remote catalog fixture did not bind a TCP port");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const baseUrl = await listenCatalogServer(endpoint);
       const provider = "remote-catalog-fixture";
-      await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-        id: provider,
-        providers: [provider],
-        configSchema: { type: "object", additionalProperties: false },
-      });
-      const pluginPath = await state.writeText(
-        "catalog-plugin/index.cjs",
+      const pluginPath = await writeCatalogPlugin(
+        state,
+        provider,
         `module.exports = {
       id: ${JSON.stringify(provider)}, register(api) {
         api.registerProvider({ id: ${JSON.stringify(provider)}, label: "Catalog fixture", auth: [],
@@ -217,17 +177,11 @@ it.for([1, 2])(
         },
       });
       setRemoteModelCatalogOverlaySourcesForTest({ bundledGeneratedAt });
-      phase = "initial catalog refresh";
       const initialRefresh = await refresh();
       expect(initialRefresh.status, redactSensitiveText(JSON.stringify(initialRefresh))).toBe(
         "updated",
       );
-      phase = "Gateway startup";
-      const { client, server } = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin"],
+      const { client, server } = await startCatalogGateway(state, cfg, token, {
         hotReloadRecovery: unexpectedRestart,
       });
       const preparing = createDeferred();
@@ -243,7 +197,6 @@ it.for([1, 2])(
         return result;
       });
       try {
-        phase = "Gateway startup settlement";
         await server.startupSettled;
         const list = (refreshCatalog = false) =>
           client.request<ModelsListResult>("models.list", { view: "all", refresh: refreshCatalog });
@@ -273,13 +226,14 @@ it.for([1, 2])(
             stop();
           }
         };
-        const currentPrice = (model = "remote-first") =>
+        const price = (config: OpenClawConfig, model = "remote-first") =>
           resolveModelCostConfig({
-            config: getRuntimeConfig(),
+            config,
             agentDir: state.agentDir(),
             provider: "kimi",
             model,
           })?.input;
+        const currentPrice = (model = "remote-first") => price(getRuntimeConfig(), model);
         const settleInterrupted = async (pending: Promise<ModelsListResult>) => {
           const outcome = await withinTest(
             pending.then(
@@ -292,7 +246,6 @@ it.for([1, 2])(
             expect(outcome.error).toMatchObject({ code: "UNAVAILABLE" });
           }
         };
-        phase = "initial catalog publication";
         expect(kimiIds(await list(true))).toContain("remote-first");
         // Remote rows can precede executable provider publication; admit only its completed pair.
         await waitForRows(
@@ -310,7 +263,6 @@ it.for([1, 2])(
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
         };
-        phase = "retained runtime and catalog replacement";
         await using oldRun = await acquireAgentRunPreparedModelRuntime(input, {
           catalogMode: "static",
         });
@@ -335,36 +287,15 @@ it.for([1, 2])(
             ),
           ).toBe(true);
         }
-        expect(
-          resolveModelCostConfig({
-            config,
-            agentDir: state.agentDir(),
-            provider: "kimi",
-            model: "remote-first",
-          })?.input,
-        ).toBe(1);
+        expect(price(config)).toBe(1);
         pausePublication = false;
         commit.resolve();
         const published = await waitForRows("remote-next");
         expect(kimiIds(published)).toContain("remote-next");
+        expect(price(config, "remote-next")).toBe(9);
         expect(
-          resolveModelCostConfig({
-            config,
-            agentDir: state.agentDir(),
-            provider: "kimi",
-            model: "remote-next",
-          })?.input,
-        ).toBe(9);
-        expect(
-          withPreparedModelRuntimePluginGenerationScope(
-            oldRun.pluginGeneration,
-            () =>
-              resolveModelCostConfig({
-                config,
-                agentDir: state.agentDir(),
-                provider: "kimi",
-                model: "remote-first",
-              })?.input,
+          withPreparedModelRuntimePluginGenerationScope(oldRun.pluginGeneration, () =>
+            price(config),
           ),
         ).toBe(1);
         expect(oldModel.cost.input).toBe(1);
@@ -417,30 +348,15 @@ it.for([1, 2])(
           body = rejected;
           expect((await refresh()).status).toBe("error");
           expect(kimiIds(await list())).toContain("remote-next");
-          expect(
-            resolveModelCostConfig({
-              config,
-              agentDir: state.agentDir(),
-              provider: "kimi",
-              model: "remote-first",
-            })?.input,
-          ).toBe(7);
+          expect(price(config)).toBe(7);
         }
         body = encode(first);
         const stale = await refresh();
         expect(stale).toMatchObject({ status: "unchanged", generatedAt: generatedAt + 1 });
         expect(kimiIds(await list())).toContain("remote-next");
-        expect(
-          resolveModelCostConfig({
-            config,
-            agentDir: state.agentDir(),
-            provider: "kimi",
-            model: "remote-first",
-          })?.input,
-        ).toBe(7);
+        expect(price(config)).toBe(7);
 
         const committedThread = providerThread;
-        phase = "catalog worker recovery";
         exitWorkerOnce = true;
         await settleInterrupted(list(true));
         await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
@@ -449,29 +365,11 @@ it.for([1, 2])(
         expect(providerThread).not.toBe(committedThread);
         expect(currentPrice()).toBe(7);
 
-        const finalCatalog = {
-          ...next,
-          generatedAt: generatedAt + 2,
-          providers: {
-            kimi: {
-              models: [
-                {
-                  ...modelMetadata,
-                  id: "remote-first",
-                  name: "Remote First",
-                  cost: { input: 11, output: 22 },
-                },
-                ...next.providers.kimi.models.slice(1),
-                {
-                  ...modelMetadata,
-                  id: "remote-last",
-                  name: "Remote Last",
-                  cost: { input: 13, output: 26 },
-                },
-              ],
-            },
-          },
-        };
+        const finalCatalog = makeCatalog(2, [
+          makeModel("remote-first", "Remote First", 11),
+          ...next.providers.kimi.models.slice(1),
+          makeModel("remote-last", "Remote Last", 13),
+        ]);
         body = encode(finalCatalog);
         expect((await refresh()).status).toBe("updated");
         await list(true);
@@ -484,7 +382,6 @@ it.for([1, 2])(
         ).toBe(7);
 
         const beforeDisable = await client.request<{ hash: string }>("config.get", {});
-        phase = "catalog disablement";
         await client.request("config.patch", {
           baseHash: beforeDisable.hash,
           raw: JSON.stringify({ models: { catalogRefresh: { enabled: false } } }),
@@ -505,20 +402,14 @@ it.for([1, 2])(
         expect([oldModel.cost.input, newModel.cost.input]).toEqual([1, 7]);
         expect(unexpectedRestart).not.toHaveBeenCalled();
       } finally {
-        phase = "Gateway cleanup";
         commit.resolve();
         await disconnectGatewayClient(client);
         await server.close();
       }
     } finally {
-      phase = "fixture cleanup";
-      endpoint.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        endpoint.close(() => resolve());
-      });
+      await closeCatalogServer(endpoint);
       setRemoteModelCatalogOverlaySourcesForTest();
       await state.cleanup();
-      signal.removeEventListener("abort", reportInterruptedPhase);
     }
   },
 );

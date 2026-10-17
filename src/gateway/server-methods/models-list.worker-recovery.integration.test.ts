@@ -17,26 +17,23 @@ import {
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "../../agents/prepared-model-runtime.owner.js";
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
+import {
+  catalogReply,
+  closeCatalogServer,
+  createCatalogState,
+  expectAssistantReply,
+  listenCatalogServer,
+  startCatalogGateway,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
 
 it("model reads recover a failed shared-worker publication and retain the failed renewal", async ({
   signal,
 }) => {
-  const state = await createOpenClawTestState({
-    label: "catalog-worker-recovery",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-  });
+  const state = await createCatalogState("catalog-worker-recovery");
   const provider = "recovery-fixture";
   const sibling = "healthy-fixture";
   const providers = [provider, sibling];
@@ -78,20 +75,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
         inferenceRequests.push({ authorization: request.headers.authorization, model: body.model });
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(
-          `data: ${JSON.stringify({
-            id: "chatcmpl-recovered-runtime",
-            object: "chat.completion.chunk",
-            created: 0,
-            model: body.model,
-            choices: [
-              {
-                index: 0,
-                delta: { role: "assistant", content: "RECOVERED_RUNTIME_REPLY" },
-                finish_reason: "stop",
-              },
-            ],
-            usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
-          })}\n\ndata: [DONE]\n\n`,
+          catalogReply("chatcmpl-recovered-runtime", body.model, "RECOVERED_RUNTIME_REPLY"),
         );
       })();
       providerWork.push(work);
@@ -115,20 +99,10 @@ it("model reads recover a failed shared-worker publication and retain the failed
     events.emit("request");
   });
   try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Catalog fixture did not bind a TCP port");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}`;
-    await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-      id: provider,
+    const baseUrl = await listenCatalogServer(endpoint);
+    const pluginPath = await writeCatalogPlugin(
+      state,
       providers,
-      configSchema: { type: "object", additionalProperties: false },
-    });
-    const pluginPath = await state.writeText(
-      "catalog-plugin/index.cjs",
       `module.exports = {
         id: ${JSON.stringify(provider)}, register(api) {
           for (const provider of ${JSON.stringify(providers)}) api.registerProvider({
@@ -167,13 +141,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
     const token = "catalog-recovery-gateway-token";
     const cfg: OpenClawConfig = {
       models: {
-        providers: {
-          [provider]: {
-            baseUrl,
-            models: [],
-            request: { allowPrivateNetwork: true },
-          },
-        },
+        providers: { [provider]: { baseUrl, models: [], request: { allowPrivateNetwork: true } } },
       },
       agents: {
         defaults: {
@@ -198,12 +166,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
         ]),
       ),
     });
-    const { client, server } = await startGatewayWithClient({
-      cfg,
-      configPath: state.configPath,
-      token,
-      scopes: ["operator.admin"],
-    });
+    const { client, server } = await startCatalogGateway(state, cfg, token);
     let releasePublication: (() => void) | undefined;
     try {
       await server.startupSettled;
@@ -229,11 +192,13 @@ it("model reads recover a failed shared-worker publication and retain the failed
           .map((row) => row.id)
           .toSorted(),
       ).toEqual(["healthy", "original"]);
-      const original = getPreparedModelRuntimeSnapshot({
-        agentId: "main",
-        agentDir: state.agentDir(),
-        config: cfg,
-      });
+      const readSnapshot = () =>
+        getPreparedModelRuntimeSnapshot({
+          agentId: "main",
+          agentDir: state.agentDir(),
+          config: cfg,
+        });
+      const original = readSnapshot();
       expect(original).toBeDefined();
       const providerFacts = resolvePreparedModelRuntimeOwnerBySnapshot(
         original!,
@@ -294,11 +259,6 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const worker = workers.get(heldThread);
       expect(worker).toBeDefined();
       expect(heldThread).toBeGreaterThan(0);
-      console.info("terminating fixture catalog thread", {
-        pid: process.pid,
-        cwd: process.cwd(),
-        threadId: heldThread,
-      });
       // A real provider preparation failure rejects the automatic publication, after
       // the old worker has exited. No synthetic owner or publication event is installed.
       failedPreparations = 1;
@@ -338,16 +298,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const history = await client.request<{ messages: unknown[] }>("chat.history", {
         sessionKey: session.key,
       });
-      expect(history.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            role: "assistant",
-            content: expect.arrayContaining([
-              expect.objectContaining({ type: "text", text: "RECOVERED_RUNTIME_REPLY" }),
-            ]),
-          }),
-        ]),
-      );
+      expectAssistantReply(history.messages, "RECOVERED_RUNTIME_REPLY");
       expect(inferenceRequests).toEqual([
         { authorization: `Bearer synthetic-${provider}`, model: "original" },
       ]);
@@ -358,22 +309,17 @@ it("model reads recover a failed shared-worker publication and retain the failed
         expect(requests).toBe(failedRequests);
         expect(siblingRequests).toBe(healthyRequests);
       }
-      const replacement = getPreparedModelRuntimeSnapshot({
-        agentId: "main",
-        agentDir: state.agentDir(),
-        config: cfg,
-      })!;
-      const replacementAuth = getPreparedModelFullCatalogAuth(
-        replacement.readFullModelCatalog!()!,
-      )!;
-      expect({
-        ...replacementAuth,
-        authStore: { profiles: replacementAuth.authStore.profiles },
-      }).toEqual(acceptedAuth);
-      expect(replacement.readPublishedModels!()).toEqual(acceptedRuntime);
-      expect(replacement.config.agents?.defaults?.model).toEqual({
-        primary: `${provider}/original`,
-      });
+      const expectRetainedSnapshot = () => {
+        const snapshot = readSnapshot()!;
+        const auth = getPreparedModelFullCatalogAuth(snapshot.readFullModelCatalog!()!)!;
+        expect({ ...auth, authStore: { profiles: auth.authStore.profiles } }).toEqual(acceptedAuth);
+        expect(snapshot.readPublishedModels!()).toEqual(acceptedRuntime);
+        expect(snapshot.config.agents?.defaults?.model).toEqual({
+          primary: `${provider}/original`,
+        });
+        return snapshot;
+      };
+      const replacement = expectRetainedSnapshot();
       await refreshPreparedModelRuntimeSnapshots(replacement.config, {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
@@ -383,19 +329,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const reloaded = await list();
       expect(reloaded.models).toEqual(initial.models);
       expect(reloaded.refreshFailed).toBe(true);
-      const reloadedOwner = getPreparedModelRuntimeSnapshot({
-        agentId: "main",
-        agentDir: state.agentDir(),
-        config: cfg,
-      })!;
-      const reloadedAuth = getPreparedModelFullCatalogAuth(reloadedOwner.readFullModelCatalog!()!)!;
-      expect({ ...reloadedAuth, authStore: { profiles: reloadedAuth.authStore.profiles } }).toEqual(
-        acceptedAuth,
-      );
-      expect(reloadedOwner.readPublishedModels!()).toEqual(acceptedRuntime);
-      expect(reloadedOwner.config.agents?.defaults?.model).toEqual({
-        primary: `${provider}/original`,
-      });
+      expectRetainedSnapshot();
       expect(await fs.readFile(state.configPath, "utf8")).toBe(savedConfig);
       expect(requests).toBe(failedRequests);
       expect((await refresh(sibling)).refreshFailed).toBe(true);
@@ -421,10 +355,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
     }
   } finally {
     workerChannel.unsubscribe(recordWorker);
-    endpoint.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      endpoint.close(() => resolve());
-    });
+    await closeCatalogServer(endpoint);
     await Promise.all(providerWork);
     await state.cleanup();
   }

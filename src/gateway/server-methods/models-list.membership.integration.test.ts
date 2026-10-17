@@ -1,13 +1,19 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, type TestContext } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../../test/helpers/qa-gateway-test-lifetime.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
+import {
+  closeCatalogServer,
+  createCatalogModel,
+  createCatalogState,
+  listenCatalogServer,
+  startCatalogGateway,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
 
 function runMembershipCase(
   context: Pick<TestContext, "signal" | "onTestFinished">,
@@ -19,8 +25,8 @@ function runMembershipCase(
   const expected = secondHook
     ? ["account-only", "manual", "sibling-only"]
     : ["account-only", "manual"];
-  let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  let state: Awaited<ReturnType<typeof createCatalogState>> | undefined;
+  let gateway: Awaited<ReturnType<typeof startCatalogGateway>> | undefined;
   let requests = 0;
   const advertisedModelIds = ["manual", "account-only"];
   const endpoint = createServer((request, response) => {
@@ -33,32 +39,11 @@ function runMembershipCase(
   return runQaGatewayTestFixture(
     context,
     async ({ signal }) => {
-      state = await createOpenClawTestState({
-        label: "catalog-membership",
-        env: {
-          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
-      });
-      endpoint.listen(0, "127.0.0.1");
-      await once(endpoint, "listening");
-      const address = endpoint.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Catalog fixture did not bind a TCP port");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
-      await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-        id: provider,
-        providers: secondHook ? [provider, "membership-sibling"] : [provider],
-        configSchema: { type: "object", additionalProperties: false },
-      });
-      const pluginPath = await state.writeText(
-        "catalog-plugin/index.cjs",
+      state = await createCatalogState("catalog-membership");
+      const baseUrl = await listenCatalogServer(endpoint);
+      const pluginPath = await writeCatalogPlugin(
+        state,
+        secondHook ? [provider, "membership-sibling"] : provider,
         `module.exports = {
           id: "membership-fixture", register(api) {
             for (const [id, suffix] of ${JSON.stringify(
@@ -107,17 +92,7 @@ function runMembershipCase(
             [provider]: {
               baseUrl,
               api: "openai-completions" as const,
-              models: [
-                {
-                  id: "manual",
-                  name: "Manual model",
-                  reasoning: false,
-                  input: ["text" as const],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 32768,
-                  maxTokens: 4096,
-                },
-              ],
+              models: [createCatalogModel("manual", "Manual model")],
             },
           },
         },
@@ -141,25 +116,13 @@ function runMembershipCase(
       if (!secondHook) {
         await state.writeAuthProfiles(authProfiles, "restricted");
       }
-      gateway = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin"],
-      });
+      gateway = await startCatalogGateway(state, cfg, token);
 
       const { client, server } = gateway;
       await server.startupSettled;
       signal.throwIfAborted();
       const read = (refresh = false, agentId = "main") =>
-        client.request<ModelsListResult>(
-          "models.list",
-          {
-            agentId,
-            refresh,
-          },
-          { signal },
-        );
+        client.request<ModelsListResult>("models.list", { agentId, refresh }, { signal });
       const modelIds = (result: ModelsListResult) =>
         result.models
           .filter((row) => row.provider === provider)
@@ -213,18 +176,11 @@ function runMembershipCase(
         expect(requests).toBe(acquired);
       }
 
-      const previousConfig = await client.request<{ config: typeof cfg }>(
-        "config.get",
-        {},
-        { signal },
-      );
+      const getConfig = () => client.request<{ config: typeof cfg }>("config.get", {}, { signal });
+      const previousConfig = await getConfig();
       advertisedModelIds.push("next-release");
       expect(await refresh()).toEqual([...expected, "next-release"].toSorted());
-      const currentConfig = await client.request<{ config: typeof cfg }>(
-        "config.get",
-        {},
-        { signal },
-      );
+      const currentConfig = await getConfig();
       expect(currentConfig.config.models.providers[provider].models).toEqual(
         previousConfig.config.models.providers[provider].models,
       );
@@ -239,11 +195,10 @@ function runMembershipCase(
       await gateway?.server.close({ reason: "catalog membership test complete" });
     },
     async () => {
-      endpoint.closeAllConnections();
       if (endpoint.listening) {
-        await new Promise<void>((resolve, reject) => {
-          endpoint.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeCatalogServer(endpoint, true);
+      } else {
+        endpoint.closeAllConnections();
       }
     },
     async () => {
