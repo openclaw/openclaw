@@ -356,7 +356,7 @@ describe("runDoctorLintCli", () => {
   it("rejects unknown --only health check ids instead of reporting a false-clean run", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
 
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const outputSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
@@ -364,7 +364,7 @@ describe("runDoctorLintCli", () => {
       });
 
       expect(exitCode).toBe(1);
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      const payload = JSON.parse(String(outputSpy.mock.calls.at(-1)?.[0]));
       expect(payload).toMatchObject({
         ok: false,
         checksRun: 0,
@@ -377,7 +377,7 @@ describe("runDoctorLintCli", () => {
         ],
       });
     } finally {
-      stdout.mockRestore();
+      outputSpy.mockRestore();
     }
   });
 
