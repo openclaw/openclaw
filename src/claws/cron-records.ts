@@ -20,10 +20,10 @@ export type PersistedClawCronRef = {
   updatedAtMs: number;
 };
 
-export type CronRefDatabase = Pick<DB, "claw_cron_refs">;
-export type CronRefRow = Selectable<CronRefDatabase["claw_cron_refs"]>;
+type CronRefDatabase = Pick<DB, "claw_cron_refs">;
+type CronRefRow = Selectable<CronRefDatabase["claw_cron_refs"]>;
 
-export function rowToClawCronRef(row: CronRefRow): PersistedClawCronRef {
+function rowToClawCronRef(row: CronRefRow): PersistedClawCronRef {
   return {
     schemaVersion: row.schema_version,
     agentId: row.agent_id,
@@ -37,21 +37,6 @@ export function rowToClawCronRef(row: CronRefRow): PersistedClawCronRef {
     ...(row.error ? { error: row.error } : {}),
     createdAtMs: sqliteNumber(row.created_at_ms),
     updatedAtMs: sqliteNumber(row.updated_at_ms),
-  };
-}
-
-export function clawCronRefToRow(ref: PersistedClawCronRef): CronRefRow {
-  return {
-    schema_version: ref.schemaVersion,
-    agent_id: ref.agentId,
-    manifest_id: ref.manifestId,
-    declaration_key: ref.declarationKey,
-    scheduler_job_id: ref.schedulerJobId ?? null,
-    status: ref.status,
-    job_json: JSON.stringify(ref.job),
-    error: ref.error ?? null,
-    created_at_ms: ref.createdAtMs,
-    updated_at_ms: ref.updatedAtMs,
   };
 }
 

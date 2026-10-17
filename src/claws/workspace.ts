@@ -3,12 +3,7 @@ import { realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
-import {
-  persistClawWorkspaceFileForAdd,
-  readClawWorkspaceFileForAdd,
-  updateClawWorkspaceFileStatusForAdd,
-  type ClawAddStateOptions,
-} from "./add-state-write.js";
+import type { ClawAddStateOptions } from "./add-state-write.js";
 import { digestClawBytes } from "./digest.js";
 import { clawContainedRelativePath } from "./path-containment.js";
 import { parseClawMarkdown } from "./reader.js";
@@ -77,26 +72,11 @@ async function readClawWorkspaceActionSource(params: {
   return { content: parsed.body, sourceRelative };
 }
 
-function sameWorkspaceFileOwner(
-  existing: PersistedClawWorkspaceFile,
-  expected: PersistedClawWorkspaceFile,
-): boolean {
-  return (
-    existing.schemaVersion === expected.schemaVersion &&
-    existing.agentId === expected.agentId &&
-    existing.workspace === expected.workspace &&
-    existing.path === expected.path &&
-    existing.sourcePath === expected.sourcePath &&
-    existing.contentDigest === expected.contentDigest
-  );
-}
-
 export async function createClawWorkspaceFiles(
   plan: ClawAddPlan,
   options: ClawAddStateOptions & {
     nowMs?: number;
     assertForwardCurrent?: () => void;
-    stateless?: boolean;
   } = {},
 ): Promise<PersistedClawWorkspaceFile[]> {
   const actions = plan.actions.filter((action) => action.kind === "workspaceFile");
@@ -122,7 +102,6 @@ export async function createClawWorkspaceFiles(
     options.assertCurrent?.();
     options.assertForwardCurrent?.();
   };
-  const forwardStateOptions = { ...options, assertCurrent: assertForwardCurrent };
 
   for (const action of actions) {
     const writeError = (code: string, message: string) =>
@@ -164,91 +143,18 @@ export async function createClawWorkspaceFiles(
         createdAtMs: nowMs,
         updatedAtMs: nowMs,
       };
-      if (options.stateless) {
-        if (await workspace.exists(targetRelative)) {
-          throw writeError(
-            "workspace_file_collision",
-            `Workspace destination ${JSON.stringify(targetRelative)} already exists.`,
-          );
-        }
-        await workspace.write(targetRelative, resolvedSource.content, {
-          mkdir: true,
-          overwrite: false,
-          assertBeforeMutation: assertForwardCurrent,
-        });
-        createdFiles.push({ ...expectedRecord, status: "complete" });
-        continue;
-      }
-      const existingRecord = await readClawWorkspaceFileForAdd(
-        expectedRecord.agentId,
-        expectedRecord.path,
-        options,
-      );
-      if (existingRecord && !sameWorkspaceFileOwner(existingRecord, expectedRecord)) {
-        throw writeError(
-          "workspace_file_ownership_conflict",
-          `Workspace destination ${JSON.stringify(targetRelative)} is already claimed by different Claw provenance.`,
-        );
-      }
       if (await workspace.exists(targetRelative)) {
-        if (!existingRecord || existingRecord.status === "failed") {
-          throw writeError(
-            "workspace_file_collision",
-            `Workspace destination ${JSON.stringify(targetRelative)} already exists.`,
-          );
-        }
-        const existingTarget = await workspace.read(targetRelative, {
-          hardlinks: "reject",
-          maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
-          symlinks: "reject",
-        });
-        if (digestClawBytes(existingTarget.buffer) !== expectedRecord.contentDigest) {
-          throw writeError(
-            "workspace_file_drift",
-            `Claw-owned workspace destination ${JSON.stringify(targetRelative)} no longer matches its recorded content.`,
-          );
-        }
-        const previousStatus = existingRecord.status;
-        existingRecord.status = "complete";
-        existingRecord.updatedAtMs = nowMs;
-        await updateClawWorkspaceFileStatusForAdd(
-          existingRecord,
-          [previousStatus],
-          forwardStateOptions,
+        throw writeError(
+          "workspace_file_collision",
+          `Workspace destination ${JSON.stringify(targetRelative)} already exists.`,
         );
-        createdFiles.push(existingRecord);
-        continue;
       }
-      const record = existingRecord ?? expectedRecord;
-      if (existingRecord) {
-        const previousStatus = record.status;
-        record.status = "pending";
-        record.updatedAtMs = nowMs;
-        await updateClawWorkspaceFileStatusForAdd(record, [previousStatus], forwardStateOptions);
-      } else {
-        await persistClawWorkspaceFileForAdd(record, forwardStateOptions);
-      }
-      try {
-        assertForwardCurrent();
-        await workspace.write(targetRelative, resolvedSource.content, {
-          mkdir: true,
-          overwrite: false,
-          assertBeforeMutation: assertForwardCurrent,
-        });
-        record.status = "complete";
-        await updateClawWorkspaceFileStatusForAdd(record, ["pending"], forwardStateOptions);
-        createdFiles.push(record);
-      } catch (error) {
-        record.status = "failed";
-        try {
-          await updateClawWorkspaceFileStatusForAdd(record, ["pending"], options);
-        } catch {
-          // A pending row intentionally remains as evidence of uncertain owner state.
-          record.status = "pending";
-        }
-        createdFiles.push(record);
-        throw error;
-      }
+      await workspace.write(targetRelative, resolvedSource.content, {
+        mkdir: true,
+        overwrite: false,
+        assertBeforeMutation: assertForwardCurrent,
+      });
+      createdFiles.push({ ...expectedRecord, status: "complete" });
     } catch (error) {
       if (error instanceof ClawWorkspaceWriteError) {
         throw error;

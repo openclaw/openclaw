@@ -115,18 +115,13 @@ export async function buildGatewayClawAddPlan(
 
 export function projectGatewayClawAddPlan(
   plan: ClawAddPlan,
-  sourceRootOrSource: string | VerifiedClawSource,
+  source: VerifiedClawSource,
   trust: ClawHubClawTrust,
   config: OpenClawConfig,
 ): ClawLifecyclePlanResult {
-  const source = typeof sourceRootOrSource === "string" ? undefined : sourceRootOrSource;
-  const sourceRoot =
-    typeof sourceRootOrSource === "string"
-      ? sourceRootOrSource
-      : sourceRootOrSource.source.packageRoot;
   const pluginReviews = projectClawPluginCapabilityReviews(plan);
   return bindClawLifecycleTrust(
-    projectClawAddPlan(plan, sourceRoot, pluginReviews, config, source),
+    projectClawAddPlan(plan, source.source.packageRoot, pluginReviews, config, source),
     trust,
   );
 }
