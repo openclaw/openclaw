@@ -16,7 +16,7 @@ import {
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
-import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
+import { buildBackupArchivePath } from "./backup-shared.js";
 
 const recoveryPath = z
   .string()
@@ -581,35 +581,20 @@ export type NormalizedArchiveEntry = {
   type?: string;
 };
 
-export async function extractManifest(params: {
-  archivePath: string;
-  manifestEntryPath: string;
-}): Promise<string> {
-  let manifestContentPromise: Promise<Buffer | Error> | undefined;
-  await tar.t({
-    file: params.archivePath,
-    gzip: true,
-    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
-    filter: (entryPath) => entryPath === params.manifestEntryPath,
-    onReadEntry: (entry) => {
-      manifestContentPromise = Promise.resolve(
-        backupManifestSizeError(entry.size) ??
-          entry.concat().catch((error: unknown) => toStringifiedError(error)),
-      );
-    },
-  });
-
-  if (!manifestContentPromise) {
-    throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
+/** Collect during listing; defer content errors until the complete entry inventory is checked. */
+export async function readBackupManifestEntry(entry: tar.ReadEntry): Promise<string | Error> {
+  const sizeError = backupManifestSizeError(entry.size);
+  if (sizeError) {
+    return sizeError;
   }
-  const content = await manifestContentPromise;
-  if (content instanceof Error) {
-    throw content;
+  try {
+    const content = await entry.concat();
+    return isUtf8(content)
+      ? content.toString("utf8")
+      : new Error("Backup manifest must be valid UTF-8.");
+  } catch (error) {
+    return toStringifiedError(error);
   }
-  if (!isUtf8(content)) {
-    throw new Error("Backup manifest must be valid UTF-8.");
-  }
-  return content.toString("utf8");
 }
 
 export function isRegularArchiveFile(entryType: string | undefined): boolean {

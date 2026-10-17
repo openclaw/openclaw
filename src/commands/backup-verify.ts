@@ -30,7 +30,7 @@ import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup
 import {
   type BackupManifest,
   type NormalizedArchiveEntry,
-  extractManifest,
+  readBackupManifestEntry,
   isRegularArchiveFile,
   isRootBackupManifestEntry,
   parseBackupManifest,
@@ -44,11 +44,8 @@ const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
 type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
 
-type ArchiveEntry = {
-  path: string;
+type ArchiveEntry = NormalizedArchiveEntry & {
   linkpath?: string;
-  size?: number;
-  type?: string;
 };
 
 type SqliteSnapshotIdentity = { role: "global" } | { role: "agent"; agentId: string };
@@ -58,6 +55,8 @@ type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotOwner;
 async function listArchiveEntries(archivePath: string) {
   const entries: ArchiveEntry[] = [];
   let invalidReason: string | undefined;
+  let pathError: unknown;
+  let manifestContent: Promise<string | Error> | undefined;
   await tar.t({
     file: archivePath,
     gzip: true,
@@ -69,15 +68,31 @@ async function listArchiveEntries(archivePath: string) {
       }
     },
     onReadEntry: (entry) => {
+      if (pathError) {
+        return;
+      }
+      let normalized: string;
+      try {
+        normalized = normalizeArchivePath(entry.path, "Archive entry");
+      } catch (error) {
+        pathError ??= error;
+        return;
+      }
       entries.push({
-        path: entry.path,
+        raw: entry.path,
+        normalized,
         ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
         ...(Number.isSafeInteger(entry.size) && entry.size >= 0 ? { size: entry.size } : {}),
         ...(entry.type ? { type: entry.type } : {}),
       });
+      // tar resumes the entry after this callback. Capture only one bounded body;
+      // duplicate manifests are rejected after the entire archive has drained.
+      if (!manifestContent && isRootBackupManifestEntry(normalized)) {
+        manifestContent = readBackupManifestEntry(entry);
+      }
     },
   });
-  return { entries, invalidReason };
+  return { entries, invalidReason, pathError, manifestContent };
 }
 
 function formatResult(result: BackupVerifyResult): string {
@@ -548,17 +563,13 @@ async function verifyResolvedBackupArchive(
       `Archive is not a valid OpenClaw backup. ${listing.invalidReason.replace(/[.!?]*$/u, ".")} Choose another archive or create a new one with \`openclaw backup create\`.`,
     );
   }
-  const rawEntries = listing.entries;
-
-  const entries = rawEntries.map((entry) => ({
-    raw: entry.path,
-    normalized: normalizeArchivePath(entry.path, "Archive entry"),
-    ...(entry.size !== undefined ? { size: entry.size } : {}),
-    ...(entry.type ? { type: entry.type } : {}),
-  }));
-  const symbolicLinks = rawEntries
+  if (listing.pathError) {
+    throw listing.pathError;
+  }
+  const entries = listing.entries;
+  const symbolicLinks = entries
     .filter((entry) => entry.type === "SymbolicLink")
-    .map((entry) => ({ entryPath: entry.path, linkpath: entry.linkpath }));
+    .map((entry) => ({ entryPath: entry.raw, linkpath: entry.linkpath }));
   const rawEntryPaths = new Map<string, string>();
   let duplicateEntryPath: string | undefined;
   // Keep the first duplicate for validation below; manifest-count errors still win.
@@ -583,21 +594,23 @@ async function verifyResolvedBackupArchive(
       `Archive contains a portable path collision: ${portablePathCollision.first} and ${portablePathCollision.second}`,
     );
   }
-  const manifestEntryPath = manifestMatches[0]?.raw;
-  if (!manifestEntryPath) {
+  if (!listing.manifestContent) {
     throw new Error("Backup archive manifest entry could not be resolved.");
   }
 
-  const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
+  const manifestRaw = await listing.manifestContent;
+  if (manifestRaw instanceof Error) {
+    throw manifestRaw;
+  }
   const manifest = parseBackupManifest(manifestRaw);
   verifyBackupManifestEntries(manifest, normalizedEntrySet);
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const hardlinkTargets = new Map<string, string>();
-  for (const entry of rawEntries) {
+  for (const entry of entries) {
     if (entry.type === "Link") {
       const target = normalizeArchivePath(
         entry.linkpath ?? "",
-        `Archive hardlink target for ${entry.path}`,
+        `Archive hardlink target for ${entry.raw}`,
       );
       // Older backups omit the archive root. Resolve once, retaining the actual
       // entry spelling: normalization is a lookup key, not a filename rewrite.
@@ -607,10 +620,10 @@ async function verifyResolvedBackupArchive(
       const rawTarget = rawEntryPaths.get(resolved);
       if (!rawTarget) {
         throw new Error(
-          `Archive hardlink target is missing from archive entries: ${entry.path} -> ${resolved}`,
+          `Archive hardlink target is missing from archive entries: ${entry.raw} -> ${resolved}`,
         );
       }
-      hardlinkTargets.set(entry.path, rawTarget);
+      hardlinkTargets.set(entry.raw, rawTarget);
     }
   }
   const preparedSymbolicLinks: BackupSymbolicLink[] = [];
@@ -685,7 +698,7 @@ async function verifyResolvedBackupArchive(
     createdAt: manifest.createdAt,
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
-    entryCount: rawEntries.length,
+    entryCount: entries.length,
     symlinkCount: symbolicLinks.length,
     sqliteInventoryVerified: manifest.sqliteSnapshots !== undefined,
     ...(warnings.length ? { warnings } : {}),
