@@ -49,6 +49,11 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
   defaultRuntime: lifecycleTestRuntime,
 }));
 
+// Config admission has its own guard tests; these service scenarios use valid config.
+vi.mock("./lifecycle-action-preflight.js", () => ({
+  getServiceActionPreflightFailure: async () => null,
+}));
+
 vi.mock("../../infra/restart-intent.js", () => ({
   prepareGatewayRestartIntentLegacyProcess: async () => undefined,
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),

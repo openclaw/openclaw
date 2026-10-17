@@ -77,15 +77,18 @@ serveOwnedWorkerTasks(
               if (!isPostgresSqlConnection(db)) {
                 throw new Error("PostgreSQL discovery snapshot requires PostgreSQL state");
               }
+              // sqlite-allow-raw: This PostgreSQL transaction must outlive the asynchronous snapshot consumer.
               db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-              const snapshot = db
-                .prepare("SELECT pg_export_snapshot() AS snapshot")
-                .get()?.snapshot;
+              const snapshot =
+                /* sqlite-allow-raw: PostgreSQL exports the retained transaction's MVCC snapshot. */ db
+                  .prepare("SELECT pg_export_snapshot() AS snapshot")
+                  .get()?.snapshot;
               const response = await channel.request(snapshot);
               response.consumed();
             } finally {
               try {
                 if (db.isTransaction) {
+                  // sqlite-allow-raw: Release the exporting PostgreSQL transaction after its consumer settles.
                   db.exec("ROLLBACK");
                 }
               } finally {

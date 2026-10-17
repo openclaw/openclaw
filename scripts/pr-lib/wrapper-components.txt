@@ -1975,6 +1975,8 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
+src/state/openclaw-state-postgres-snapshot-context.ts
+src/state/openclaw-state-postgres-snapshot.ts
 src/state/openclaw-state-schema-retired.ts
 src/state/openclaw-state-schema-runtime.ts
 src/state/postgres-schema.generated/agent-runtime.ts

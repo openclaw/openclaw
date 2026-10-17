@@ -284,6 +284,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
               () => {
                 const snapshot = postgresStateReadSnapshot.getStore();
                 if (snapshot?.path === pathname) {
+                  // sqlite-allow-raw: PostgreSQL imports the retained worker's MVCC snapshot before any read.
                   opened.database.db.exec(
                     `SET TRANSACTION SNAPSHOT '${snapshot.snapshot.replaceAll("'", "''")}'`,
                   );
