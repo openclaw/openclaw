@@ -245,7 +245,7 @@ describe("ordinary shared-state reader admission", () => {
     }
   });
 
-  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function").each([true])(
+  it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function").each([false, true])(
     "rechecks content-marker authorization after a successful read (admitted=%s)",
     (admitted) => {
       const { options } = createExistingState();
@@ -276,7 +276,7 @@ describe("ordinary shared-state reader admission", () => {
 });
 
 describe("existing shared-state schema admission", () => {
-  it.each(["ordinary", "existing"] as const)(
+  it.each(["ordinary", "required", "existing"] as const)(
     "checks read-only integrity once per %s admission and refuses later corruption",
     async (policy) => {
       const { options, before } = createExistingState();
@@ -284,7 +284,7 @@ describe("existing shared-state schema admission", () => {
         const read = () =>
           openExistingOpenClawStateDatabaseReadOnly({
             ...options,
-            requireCanonicalSchema: false,
+            requireCanonicalSchema: policy === "required",
           });
         return policy === "existing" ? withExistingOpenClawStateSchema(options, read) : read();
       };
@@ -713,12 +713,37 @@ describe("existing shared-state schema admission", () => {
       expectedError: SqliteSchemaMismatchError,
     },
     {
+      name: "missing startup column",
+      sql: "ALTER TABLE worker_environments DROP COLUMN preparation_purpose;",
+    },
+    {
+      name: "missing startup table",
+      sql: "DROP TABLE worker_session_tool_operations;",
+    },
+    {
+      name: "drifted canonical index",
+      sql: `DROP INDEX idx_plugin_state_listing;
+            CREATE INDEX idx_plugin_state_listing
+              ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);`,
+    },
+    {
       name: "retired cron history",
       sql: `CREATE TABLE cron_run_logs (
               store_key TEXT NOT NULL, job_id TEXT NOT NULL,
               seq INTEGER NOT NULL, ts INTEGER NOT NULL,
               PRIMARY KEY (store_key, job_id, seq)
             );`,
+    },
+    {
+      name: "incompatible existing lazy table",
+      sql: "CREATE TABLE node_worker_prepared_workspaces (preparation_key INTEGER PRIMARY KEY) STRICT;",
+    },
+    {
+      name: "foreign-key corruption",
+      sql: `PRAGMA foreign_keys = OFF;
+            INSERT INTO acp_replay_events
+              (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
+              VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0);`,
     },
   ])(
     "refuses $name without migrating or repairing the file",
@@ -854,7 +879,7 @@ describe("existing shared-state schema admission", () => {
     });
   });
 
-  it.each(["close"] as const)(
+  it.each(["close", "dispose"] as const)(
     "revalidates a schema cookie after native %s and same-object reopen",
     (action) => {
       const { options } = createExistingState();
