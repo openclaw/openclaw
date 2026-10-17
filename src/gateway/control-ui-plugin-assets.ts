@@ -97,6 +97,59 @@ function browserOwners(registry: PluginRegistry): PluginRecord[] {
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
+async function staticBrowserImports(
+  entryUrl: string,
+  assets: ReadonlyMap<string, PluginControlUiAsset>,
+  assetUrl: (name: string) => string,
+): Promise<string[]> {
+  const { build } = await import("esbuild");
+  const modules = new Map(
+    [...assets]
+      .filter(([name]) => /\.m?js$/u.test(name))
+      .map(([name, asset]) => [new URL(assetUrl(name), "http://localhost").href, asset]),
+  );
+  const entry = new URL(entryUrl, "http://localhost").href;
+  const visited = new Set([entry]);
+  const pending = [entry];
+  for (const url of pending) {
+    const asset = modules.get(url);
+    if (!asset) {
+      continue;
+    }
+    let imports;
+    try {
+      // The native compiler reads imports without constructing a JavaScript AST on the Gateway.
+      const result = await build({
+        stdin: { contents: asset.body.toString("utf8"), loader: "js" },
+        format: "esm",
+        treeShaking: false,
+        write: false,
+        metafile: true,
+        logLevel: "silent",
+      });
+      imports = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
+    } catch {
+      // Preloading is optional; parser support must not change browser build admission.
+      continue;
+    }
+    for (const imported of imports) {
+      const specifier = imported.path;
+      if (
+        imported.kind !== "import-statement" ||
+        (!specifier.startsWith("./") && !specifier.startsWith("../"))
+      ) {
+        continue;
+      }
+      const target = new URL(specifier, url).href;
+      if (modules.has(target) && !visited.has(target)) {
+        visited.add(target);
+        pending.push(target);
+      }
+    }
+  }
+  return pending.slice(1).map((url) => new URL(url).pathname);
+}
+
 async function snapshotBrowserBuild(
   record: PluginRecord,
   declaration = record.controlUi,
@@ -120,6 +173,7 @@ async function snapshotBrowserBuild(
   const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
     `${prefix}${name.split("/").map(encodeURIComponent).join("/")}`;
+  const imports = await staticBrowserImports(assetUrl(entryName), assets, assetUrl);
   return {
     assets,
     bytes,
@@ -128,6 +182,7 @@ async function snapshotBrowserBuild(
       name: record.name,
       revision,
       entryUrl: assetUrl(entryName),
+      imports,
       styles: styles.map(assetUrl),
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
       ...(hasCanonicalPluginDistribution(record) && record.packageName && record.packageVersion
