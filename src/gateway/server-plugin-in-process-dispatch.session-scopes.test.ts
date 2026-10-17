@@ -112,6 +112,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const client = roleClient("view", "native-session-scope");
   client.connect.scopes = ["operator.sessions.write"];
   const profileId = expectDefined(client.authenticatedUserProfile, "original person").profileId;
+  const person = { type: "human", source: "profile", id: profileId } as const;
   const parentScope = { agentId: "main", sessionKey: parentKey, storePath };
   const childScope = { ...parentScope, sessionKey: childKey };
   await upsertSessionEntryCore(parentScope, {
@@ -119,9 +120,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     updatedAt: 1,
     sandbox: "required",
     permissionMode: "full",
-    ...(source === "scheduled"
-      ? {}
-      : { createdActor: { type: "human" as const, source: "profile" as const, id: profileId } }),
+    ...(source === "scheduled" ? {} : { createdActor: person }),
   });
   expect(loadSessionEntry(parentScope)?.sessionId).toBe("scope-parent-session");
   const context = createDirectChatContext({
@@ -191,10 +190,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       );
       const original = expectDefined(captured, "original source").authority;
       expect(options.client?.internal?.operatorRunAuthority?.source).toBe(original.source);
-      expect(options.client?.internal?.operatorRoleActor).toEqual({
-        kind: "operator",
-        profileId,
-      });
+      expect(options.client?.internal?.operatorRoleActor).toEqual({ kind: "operator", profileId });
     } else {
       expect(options.client?.internal?.operatorRunAuthority).toBeUndefined();
       expect(options.client?.internal?.operatorRoleActor).toEqual({ kind: "system" });
@@ -213,12 +209,13 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
         "chat.send": chatHandler,
       }),
     );
+  const withCaller = <T>(run: () => T) => withGatewayToolCallerIdentity(caller, run);
   const create = (
     params: Record<string, unknown> = {},
     creation: Partial<TrustedSessionCreation> = {},
   ) => {
     const invoke = () =>
-      withGatewayToolCallerIdentity(caller, () =>
+      withCaller(() =>
         callInProcessGatewayToolWithCreation<{ key: string; sessionId: string }>(
           "sessions.create",
           {
@@ -250,7 +247,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       invoke,
     );
   };
-  const tool = await withGatewayToolCallerIdentity(caller, () => createSessionsCreateTool());
+  const tool = await withCaller(createSessionsCreateTool);
   return {
     tool,
     toolCreate: (
@@ -258,7 +255,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       toolCallId = "create-independent",
       signal?: AbortSignal,
     ) =>
-      withGatewayToolCallerIdentity(caller, async () => {
+      withCaller(async () => {
         if (!tool) {
           throw new Error("Session creation unavailable");
         }
@@ -266,7 +263,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       }),
     create,
     spawn: (mode: SessionEntry["permissionMode"], agentId?: string) =>
-      withGatewayToolCallerIdentity(caller, () =>
+      withCaller(() =>
         maybeSpawnVisibleSession({
           raw: { visible: true, model: "test-provider/scope-model" },
           task: "Inspect the isolated workspace.",
@@ -298,7 +295,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     handler,
     chatHandler,
     send: (key: string) =>
-      withGatewayToolCallerIdentity(caller, () =>
+      withCaller(() =>
         callInProcessGatewayTool("chat.send", {
           sessionKey: key,
           message: "Follow up",
@@ -309,11 +306,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     revoke: () => sourceController.abort(new Error("original native source revoked")),
     profileId,
     dispose: async () => {
-      if (scheduled) {
-        scheduled.close();
-      } else {
-        parent.close();
-      }
+      (scheduled ?? parent).close();
       captured?.release();
       // Retire the embedded placement owner before removing this fixture's state directory.
       await drainGlobalSingletonLifecycleState();
@@ -407,8 +400,7 @@ describe("hosted visible spawn permission inheritance", () => {
     "persists effective $mode permission for $agentId from $source without granting admin scope",
     async ({ mode, agentId, source }) => {
       await withHostedCreation(async (fixture) => {
-        // A turn can narrow a saved full-access session. The child's next turn
-        // must retain the runtime policy, not recover the broader stored value.
+        // Runtime narrowing must survive the child's next turn, not reload full access.
         expect(fixture.read(parentKey)?.permissionMode).toBe("full");
         const result = await fixture.spawn(mode, agentId);
         expect(result).toMatchObject({
@@ -426,7 +418,6 @@ describe("hosted visible spawn permission inheritance", () => {
           spawnDepth: 1,
           sandbox: "required",
         });
-        // No prepared policy also must not manufacture full access from storage.
         expect(child?.permissionMode).toBe(mode);
       }, source);
     },
