@@ -15,113 +15,82 @@ type GatewayHandler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 type CliRegistrar = Parameters<OpenClawPluginApi["registerCli"]>[0];
 type ToolFactory = Parameters<OpenClawPluginApi["registerTool"]>[0];
 
+const lazyModules = [
+  "./src/create.js",
+  "./src/runtime.js",
+  "./src/node-host.js",
+  "./src/node-invoke-policy.js",
+  "./src/cli.js",
+  "openclaw/plugin-sdk/gateway-runtime",
+  "openclaw/plugin-sdk/param-readers",
+  "openclaw/plugin-sdk/routing",
+  "openclaw/plugin-sdk/transcripts",
+];
+
+async function loadPolicy() {
+  const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
+  return createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
+}
+
 describe("google-meet lazy imports", () => {
   afterEach(() => {
-    for (const moduleId of [
-      "./src/create.js",
-      "./src/runtime.js",
-      "./src/node-host.js",
-      "./src/node-invoke-policy.js",
-      "./src/cli.js",
-      "openclaw/plugin-sdk/gateway-runtime",
-      "openclaw/plugin-sdk/param-readers",
-      "openclaw/plugin-sdk/routing",
-      "openclaw/plugin-sdk/transcripts",
-    ]) {
+    for (const moduleId of lazyModules) {
       vi.doUnmock(moduleId);
     }
     vi.resetModules();
   });
 
   it("loads each runtime owner only on first use", async () => {
-    let createImports = 0;
-    let runtimeImports = 0;
-    let nodeHostImports = 0;
+    const imports = Object.fromEntries(lazyModules.map((id) => [id, 0]));
+    function mockImport(id: string, factory: () => Record<string, unknown>) {
+      vi.doMock(id, () => {
+        imports[id] += 1;
+        return factory();
+      });
+    }
     let nodeHostBusy = false;
-    let nodePolicyImports = 0;
-    let cliImports = 0;
-    let gatewayRuntimeImports = 0;
-    let paramReaderImports = 0;
-    let routingImports = 0;
-    let transcriptSdkImports = 0;
 
-    vi.doMock("./src/create.js", () => {
-      createImports += 1;
-      return {
-        createMeetFromParams: async () => ({ meetingUri: "https://meet.google.com/abc-defg-hij" }),
-      };
-    });
+    mockImport("./src/create.js", () => ({
+      createMeetFromParams: async () => ({ meetingUri: "https://meet.google.com/abc-defg-hij" }),
+    }));
     // mock-isolation: Keep the real runtime graph cold while observing its first lazy import.
-    vi.doMock("./src/runtime.js", () => {
-      runtimeImports += 1;
-      return {
-        GoogleMeetRuntime: class {
-          async reconcileTranscriptPolicy() {}
-
-          async status() {
-            return { sessions: [] };
-          }
-
-          async testListen() {
-            return { ok: true };
-          }
-
-          startTranscriptSource = async () => ({ ok: true });
-          stopTranscriptSource = async () => ({ ok: true });
+    mockImport("./src/runtime.js", () => ({
+      GoogleMeetRuntime: class {
+        async reconcileTranscriptPolicy() {}
+        status = async () => ({ sessions: [] });
+        testListen = async () => ({ ok: true });
+        startTranscriptSource = async () => ({ ok: true });
+        stopTranscriptSource = async () => ({ ok: true });
+      },
+    }));
+    mockImport("./src/node-host.js", () => ({
+      handleGoogleMeetNodeHostCommand: Object.assign(
+        async () => {
+          nodeHostBusy = true;
+          return JSON.stringify({ ok: true });
         },
-      };
-    });
-    vi.doMock("./src/node-host.js", () => {
-      nodeHostImports += 1;
-      return {
-        handleGoogleMeetNodeHostCommand: Object.assign(
-          async () => {
-            nodeHostBusy = true;
-            return JSON.stringify({ ok: true });
-          },
-          { hasActiveWork: () => nodeHostBusy },
-        ),
-      };
-    });
-    vi.doMock("./src/node-invoke-policy.js", () => {
-      nodePolicyImports += 1;
-      return {
-        createGoogleMeetChromeNodeInvokePolicy: () => ({
-          commands: ["google-meet.chrome"],
-          dangerous: true,
-          handle: async () => ({ ok: true }),
-        }),
-      };
-    });
-    vi.doMock("./src/cli.js", () => {
-      cliImports += 1;
-      return {
-        registerGoogleMeetCli: () => {},
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/gateway-runtime", () => {
-      gatewayRuntimeImports += 1;
-      return {
-        callGatewayFromCli: async () => ({ ok: true }),
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/param-readers", () => {
-      paramReaderImports += 1;
-      return {
-        readPositiveIntegerParam: () => 2_500,
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/routing", () => {
-      routingImports += 1;
-      return {
-        normalizeAgentId: vi.fn((value: string) => value),
-        parseAgentSessionKey: () => ({ agentId: "main" }),
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/transcripts", () => {
-      transcriptSdkImports += 1;
-      return {};
-    });
+        { hasActiveWork: () => nodeHostBusy },
+      ),
+    }));
+    mockImport("./src/node-invoke-policy.js", () => ({
+      createGoogleMeetChromeNodeInvokePolicy: () => ({
+        commands: ["google-meet.chrome"],
+        dangerous: true,
+        handle: async () => ({ ok: true }),
+      }),
+    }));
+    mockImport("./src/cli.js", () => ({ registerGoogleMeetCli: () => {} }));
+    mockImport("openclaw/plugin-sdk/gateway-runtime", () => ({
+      callGatewayFromCli: async () => ({ ok: true }),
+    }));
+    mockImport("openclaw/plugin-sdk/param-readers", () => ({
+      readPositiveIntegerParam: () => 2_500,
+    }));
+    mockImport("openclaw/plugin-sdk/routing", () => ({
+      normalizeAgentId: vi.fn((value: string) => value),
+      parseAgentSessionKey: () => ({ agentId: "main" }),
+    }));
+    mockImport("openclaw/plugin-sdk/transcripts", () => ({}));
 
     const { default: googleMeetPlugin } = await import("./index.js");
     const gatewayMethods = new Map<string, GatewayHandler>();
@@ -149,27 +118,7 @@ describe("google-meet lazy imports", () => {
     );
 
     expect(nodeCommands[0]?.hasActiveWork?.()).toBe(false);
-    expect({
-      createImports,
-      runtimeImports,
-      nodeHostImports,
-      nodePolicyImports,
-      cliImports,
-      gatewayRuntimeImports,
-      paramReaderImports,
-      routingImports,
-      transcriptSdkImports,
-    }).toEqual({
-      createImports: 0,
-      runtimeImports: 0,
-      nodeHostImports: 0,
-      nodePolicyImports: 0,
-      cliImports: 0,
-      gatewayRuntimeImports: 0,
-      paramReaderImports: 0,
-      routingImports: 0,
-      transcriptSdkImports: 0,
-    });
+    expect(imports).toEqual(Object.fromEntries(lazyModules.map((id) => [id, 0])));
 
     const createHandler = gatewayMethods.get("googlemeet.create");
     const statusHandler = gatewayMethods.get("googlemeet.status");
@@ -178,7 +127,7 @@ describe("google-meet lazy imports", () => {
     const respond = vi.fn();
     await transcriptHandler?.({ params: {}, respond } as never);
     await transcriptHandler?.({ params: {}, respond } as never);
-    expect(gatewayRuntimeImports).toBe(0);
+    expect(imports["openclaw/plugin-sdk/gateway-runtime"]).toBe(0);
 
     await createHandler?.({ params: { join: false }, respond } as never);
     await createHandler?.({ params: { join: false }, respond } as never);
@@ -217,27 +166,9 @@ describe("google-meet lazy imports", () => {
     await cliRegistrars[0]?.({ program: {} } as never);
     await cliRegistrars[0]?.({ program: {} } as never);
 
-    expect({
-      createImports,
-      runtimeImports,
-      nodeHostImports,
-      nodePolicyImports,
-      cliImports,
-      gatewayRuntimeImports,
-      paramReaderImports,
-      routingImports,
-      transcriptSdkImports,
-    }).toEqual({
-      createImports: 1,
-      runtimeImports: 1,
-      nodeHostImports: 1,
-      nodePolicyImports: 1,
-      cliImports: 1,
-      gatewayRuntimeImports: 1,
-      paramReaderImports: 1,
-      routingImports: 1,
-      transcriptSdkImports: 0,
-    });
+    expect(imports).toEqual(
+      Object.fromEntries(lazyModules.map((id) => [id, id.endsWith("/transcripts") ? 0 : 1])),
+    );
   });
 
   it("loads and caches the node policy delegate", async () => {
@@ -253,8 +184,7 @@ describe("google-meet lazy imports", () => {
     vi.doMock("./src/node-invoke-policy.js", () => ({
       createGoogleMeetChromeNodeInvokePolicy: createPolicy,
     }));
-    const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
-    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
+    const policy = await loadPolicy();
 
     expect(policy.commands).toEqual([GOOGLE_MEET_NODE_COMMAND]);
     expect(policy.dangerous).toBe(true);
@@ -275,8 +205,7 @@ describe("google-meet lazy imports", () => {
     vi.doMock("./src/node-invoke-policy.js", () => {
       throw new Error("load failed");
     });
-    const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
-    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
+    const policy = await loadPolicy();
 
     await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).resolves.toMatchObject(
       {
@@ -300,8 +229,7 @@ describe("google-meet lazy imports", () => {
           },
         }) satisfies OpenClawPluginNodeInvokePolicy,
     }));
-    const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
-    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
+    const policy = await loadPolicy();
 
     await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).rejects.toBe(
       delegateError,

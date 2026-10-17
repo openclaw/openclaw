@@ -1,4 +1,3 @@
-// Google Meet tests cover node host plugin behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +42,33 @@ async function invokeNodeHost(params: Record<string, unknown>) {
 
 async function invokeNodeHostJson(params: Record<string, unknown>) {
   return JSON.parse(await invokeNodeHost(params));
+}
+
+function chromeLaunchFailure(error?: Error, stderr = "") {
+  vi.mocked(spawnSync).mockImplementationOnce(() => ({
+    pid: 123,
+    output: [null, "", stderr],
+    stdout: "",
+    stderr,
+    status: null,
+    signal: "SIGTERM",
+    ...(error ? { error } : {}),
+  }));
+}
+
+function commandPair(ignoreSigterm = false) {
+  const [output, input] = children;
+  if (!output || !input) {
+    throw new Error("expected Google Meet node host command-pair processes");
+  }
+  output.ignoreSigterm = input.ignoreSigterm = ignoreSigterm;
+  return [output, input] as const;
+}
+
+function expectKills(processes: readonly MockChild[], ...signals: NodeJS.Signals[]) {
+  for (const child of processes) {
+    expect(child.kill.mock.calls).toEqual(signals.map((signal) => [signal]));
+  }
 }
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -147,49 +173,26 @@ describe("google-meet node host bridge sessions", () => {
   });
 
   it("rejects Chrome launch when the command exits by signal", async () => {
-    vi.mocked(spawnSync).mockImplementationOnce(() => ({
-      pid: 123,
-      output: [null, "", ""],
-      stdout: "",
-      stderr: "",
-      status: null,
-      signal: "SIGTERM",
-    }));
-
+    chromeLaunchFailure();
     await expect(
       invokeNodeHost({ action: "start", url: MEET_URL, mode: "transcribe" }),
     ).rejects.toThrow("failed to launch Chrome for Meet: terminated by SIGTERM");
   });
 
   it("preserves timeout diagnostics when Chrome launch stderr is empty", async () => {
-    const error = Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" });
-    vi.mocked(spawnSync).mockImplementationOnce(() => ({
-      pid: 123,
-      output: [null, "", ""],
-      stdout: "",
-      stderr: "",
-      status: null,
-      signal: "SIGTERM",
-      error,
-    }));
-
+    chromeLaunchFailure(
+      Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" }),
+    );
     await expect(
       invokeNodeHost({ action: "start", url: MEET_URL, mode: "transcribe" }),
     ).rejects.toThrow("failed to launch Chrome for Meet: spawnSync open ETIMEDOUT");
   });
 
   it("preserves timeout diagnostics when Chrome launch also writes stderr", async () => {
-    const error = Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" });
-    vi.mocked(spawnSync).mockImplementationOnce(() => ({
-      pid: 123,
-      output: [null, "", "child warning"],
-      stdout: "",
-      stderr: "child warning",
-      status: null,
-      signal: "SIGTERM",
-      error,
-    }));
-
+    chromeLaunchFailure(
+      Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" }),
+      "child warning",
+    );
     await expect(
       invokeNodeHost({ action: "start", url: MEET_URL, mode: "transcribe" }),
     ).rejects.toThrow("failed to launch Chrome for Meet: spawnSync open ETIMEDOUT: child warning");
@@ -253,20 +256,17 @@ describe("google-meet node host bridge sessions", () => {
 
     await vi.advanceTimersByTimeAsync(1_999);
     expect(settled).toBe(false);
-    expect(retiredOutput.kill.mock.calls).toEqual([["SIGTERM"]]);
+    expectKills([retiredOutput], "SIGTERM");
 
     await vi.advanceTimersByTimeAsync(1);
     await stopPromise;
     expect(retiredOutput.signalCode).toBe("SIGKILL");
-    expect(retiredOutput.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    expectKills([retiredOutput], "SIGTERM", "SIGKILL");
   });
 
   it("closes once when command-pair streams fail together", async () => {
     const start = await invokeNodeHostJson(REALTIME_START);
-    const [outputProcess, inputProcess] = children;
-    if (!outputProcess || !inputProcess) {
-      throw new Error("expected Google Meet node host command-pair processes");
-    }
+    const [outputProcess, inputProcess] = commandPair();
 
     outputProcess.stderr?.emit("error", new Error("output stderr failed"));
     inputProcess.stdout?.emit("error", new Error("input stdout failed"));
@@ -274,22 +274,14 @@ describe("google-meet node host bridge sessions", () => {
 
     const status = await invokeNodeHostJson({ action: "status", bridgeId: start.bridgeId });
     expect(status.bridge.closed).toBe(true);
-    expect(outputProcess.kill).toHaveBeenCalledTimes(1);
-    expect(inputProcess.kill).toHaveBeenCalledTimes(1);
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expectKills([outputProcess, inputProcess], "SIGTERM");
   });
 
   it("waits for SIGTERM-resistant command-pair processes before acknowledging stop", async () => {
     vi.useFakeTimers();
 
     const start = await invokeNodeHostJson(REALTIME_START);
-    const [outputProcess, inputProcess] = children;
-    if (!outputProcess || !inputProcess) {
-      throw new Error("expected Google Meet node host command-pair processes");
-    }
-    outputProcess.ignoreSigterm = true;
-    inputProcess.ignoreSigterm = true;
+    const pair = commandPair(true);
     let settled = false;
     const stopPromise = invokeNodeHost({ action: "stop", bridgeId: start.bridgeId }).finally(() => {
       settled = true;
@@ -297,27 +289,19 @@ describe("google-meet node host bridge sessions", () => {
 
     await vi.advanceTimersByTimeAsync(1_999);
     expect(settled).toBe(false);
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+    expectKills(pair, "SIGTERM");
 
     await vi.advanceTimersByTimeAsync(1);
     await stopPromise;
-    expect(outputProcess.signalCode).toBe("SIGKILL");
-    expect(inputProcess.signalCode).toBe("SIGKILL");
-    expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
-    expect(inputProcess.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(pair.map((child) => child.signalCode)).toEqual(["SIGKILL", "SIGKILL"]);
+    expectKills(pair, "SIGTERM", "SIGKILL");
   });
 
   it("shares SIGTERM-resistant cleanup across concurrent stopByUrl calls", async () => {
     vi.useFakeTimers();
 
     await invokeNodeHost(REALTIME_START);
-    const [outputProcess, inputProcess] = children;
-    if (!outputProcess || !inputProcess) {
-      throw new Error("expected Google Meet node host command-pair processes");
-    }
-    outputProcess.ignoreSigterm = true;
-    inputProcess.ignoreSigterm = true;
+    const pair = commandPair(true);
     let firstSettled = false;
     let secondSettled = false;
     const stopParams = { action: "stopByUrl", url: MEET_URL, mode: "realtime" };
@@ -336,8 +320,7 @@ describe("google-meet node host bridge sessions", () => {
     const [firstResult, secondResult] = await Promise.all([firstStop, secondStop]);
     expect(firstResult).toEqual({ ok: true, stopped: 1 });
     expect(secondResult).toEqual({ ok: true, stopped: 0 });
-    expect(outputProcess.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
-    expect(inputProcess.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    expectKills(pair, "SIGTERM", "SIGKILL");
   });
 
   it("lists active bridge sessions and hides closed sessions", async () => {
