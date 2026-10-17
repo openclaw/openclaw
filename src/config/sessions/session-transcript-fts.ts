@@ -58,8 +58,8 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
             query
               .insertInto("session_transcript_fts_rows")
               .columns(["session_id", "message_id"])
-              .expression((query) =>
-                query
+              .expression((source) =>
+                source
                   .selectFrom("entries")
                   .select((eb) => [eb.val(sessionId).as("session_id"), "message_id"])
                   .orderBy("position"),
