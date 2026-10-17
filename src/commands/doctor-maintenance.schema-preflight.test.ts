@@ -16,7 +16,7 @@ import { testApi } from "../logging/logger.test-support.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -209,14 +209,12 @@ it("explicit Doctor repair preserves a quarantined audit index with missing dele
     } finally {
       damaged.close();
     }
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env: state.env,
-        kind: "state",
-        path: initial.path,
-        reason: `row 1 missing from index ${index}`,
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env: state.env,
+      kind: "state",
+      path: initial.path,
+      reason: `row 1 missing from index ${index}`,
+    });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const cleanupLog = state.path("snapshot-cleanup.log");
     let snapshotPath: string | undefined;
@@ -299,14 +297,12 @@ it("explicit Doctor repair preserves a quarantined audit index with missing dele
 
     // Model a committed REINDEX whose quarantine finalization was interrupted.
     closeOpenClawStateDatabaseForTest();
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env: state.env,
-        kind: "state",
-        path: initial.path,
-        reason: `row 1 missing from index ${index}`,
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env: state.env,
+      kind: "state",
+      path: initial.path,
+      reason: `row 1 missing from index ${index}`,
+    });
     runtime.exit.mockClear();
     runtime.error.mockClear();
     await runCommandWithRuntime(runtime, () =>

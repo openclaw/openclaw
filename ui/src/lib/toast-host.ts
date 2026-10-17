@@ -1,6 +1,6 @@
-import { createComponent, createEffect, lazy, Loading, Show } from "solid-js";
+import { createComponent, createEffect, lazy, Loading, onCleanup, Show } from "solid-js";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
-import { toastControllerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
+import { toastOwnerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
 
 const ToastView = lazy(() => import("./toast-view.tsx"), { export: "ToastView" });
 
@@ -9,17 +9,21 @@ if (typeof customElements !== "undefined") {
   defineSolidBridge<ToastProperties, ToastMethods>(
     "openclaw-toast-host",
     (props, host) => {
-      const controller = toastControllerFor(host);
+      const owner = toastOwnerFor(host);
       // Focus after the DOM commit determines whether the existing toast deadline pauses.
       createEffect(
         () => [props.toast, props.active],
-        () => controller.updated(),
+        () => owner.syncDismissTimer(),
       );
       return createComponent(Show, {
         get when() {
           return Boolean(props.toast);
         },
         children: (_shown) => {
+          onCleanup(() => {
+            owner.body = undefined;
+            owner.hover(false);
+          });
           return createComponent(Loading, {
             get children() {
               return createComponent(ToastView, {
@@ -30,10 +34,11 @@ if (typeof customElements !== "undefined") {
                   return props.active;
                 },
                 host,
-                hover: (hovered) => controller.hover(hovered),
-                focus: (focused) => controller.syncDismissTimer(focused),
-                dismiss: (reason) => controller.dismiss(reason),
-                transitionEnd: () => controller.transitionEnd(),
+                bodyRef: (element) => (owner.body = element),
+                hover: (hovered) => owner.hover(hovered),
+                focus: (focused) => owner.syncDismissTimer(focused),
+                dismiss: (reason) => owner.dismiss(reason),
+                transitionEnd: () => owner.transitionEnd(),
               });
             },
           });
@@ -45,9 +50,9 @@ if (typeof customElements !== "undefined") {
         toast: { default: null, attribute: false },
         active: { default: false, attribute: false },
       },
-      connected: (host) => toastControllerFor(host).connect(),
-      disconnected: (host) => toastControllerFor(host).disconnect(),
-      methods: { show: (host, options) => toastControllerFor(host).show(options) },
+      connected: (host) => toastOwnerFor(host).connect(),
+      disconnected: (host) => toastOwnerFor(host).disconnect(),
+      methods: { show: (host, options) => toastOwnerFor(host).show(options) },
     },
   );
 }

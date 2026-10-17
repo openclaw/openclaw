@@ -144,6 +144,7 @@ describe("chat transcript full-message recovery", () => {
       pane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary"),
       "recovered tool disclosure",
     ).click();
+    await vi.dynamicImportSettled();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-tool-term__out")?.textContent).toBe(output);
     expect(pane.textContent).not.toContain("This message is too large to display here.");

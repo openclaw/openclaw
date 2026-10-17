@@ -218,6 +218,7 @@ export function createRouterOutletPresentation<
     cancelNotFound();
     clearStartupRetry();
   }
+  // Synchronize the external router subscription and its navigation recovery timers.
   createEffect(
     () => ({
       router: props.router,

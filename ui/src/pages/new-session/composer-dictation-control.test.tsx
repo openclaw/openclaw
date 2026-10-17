@@ -7,8 +7,8 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
 import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
-import { createNewSessionComposerTextarea } from "./composer-controller.ts";
 import { NewSessionDictationView } from "./composer-dictation-view.tsx";
+import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 
 const dictationHarness = vi.hoisted(() => ({
   options: null as null | {

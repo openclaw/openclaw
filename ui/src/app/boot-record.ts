@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { notifyListeners, registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SessionGroupSettings } from "../lib/sessions/custom-groups.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
@@ -313,7 +314,8 @@ if (
   typeof document !== "undefined" &&
   typeof document.addEventListener === "function"
 ) {
-  window.addEventListener("storage", (event) => {
+  // The document owns these listeners, including across BFCache pagehide/pageshow.
+  listen(window, "storage", (event) => {
     if (event.key !== null && !event.key.startsWith(BOOT_RECORD_PREFIX)) {
       return;
     }
@@ -334,8 +336,8 @@ if (
     }
     notifyBootRecordChange({ scope, external: true, replacement, retiredOwner });
   });
-  window.addEventListener("pagehide", flushBootRecord);
-  document.addEventListener("visibilitychange", () => {
+  listen(window, "pagehide", flushBootRecord);
+  listen(document, "visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushBootRecord();
     }
