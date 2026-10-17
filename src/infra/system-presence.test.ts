@@ -32,15 +32,13 @@ describe("system-presence", () => {
         (entry) => entry.connectionId === "replacement",
       ),
     ).toBe(false);
-    expect(listSystemPresence({ includeConnectionId: "replacement" })).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ connectionId: "replacement", host: "updated host" }),
-      ]),
+    expect(listSystemPresence({ includeConnectionId: "replacement" })).toContainEqual(
+      expect.objectContaining({ connectionId: "replacement", host: "updated host" }),
     );
 
     commitPresence(key, "replacement");
-    expect(listSystemPresence()).toEqual(
-      expect.arrayContaining([expect.objectContaining({ connectionId: "replacement" })]),
+    expect(listSystemPresence()).toContainEqual(
+      expect.objectContaining({ connectionId: "replacement" }),
     );
   });
 
@@ -63,8 +61,10 @@ describe("system-presence", () => {
     });
 
     const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
-    expect(entry?.roles).toEqual(["operator", "node"]);
-    expect(entry?.scopes).toEqual(["operator.admin", "system.run"]);
+    expect(entry).toMatchObject({
+      roles: ["operator", "node"],
+      scopes: ["operator.admin", "system.run"],
+    });
   });
 
   it("keeps live operator tabs and only the last offline row per identity until expiry", () => {
@@ -127,21 +127,9 @@ describe("system-presence", () => {
 
   it("clears retained input activity on explicit null", () => {
     const instanceId = `presence-clear-${randomUUID()}`;
-    updateSystemPresence({
-      text: "Node: desk · mode ui",
-      instanceId,
-      host: "desk",
-      mode: "ui",
-      lastInputSeconds: 4,
-    });
-
-    updateSystemPresence({
-      text: "Node: desk · mode ui",
-      instanceId,
-      host: "desk",
-      mode: "ui",
-      lastInputSeconds: null,
-    });
+    const beacon = { text: "Node: desk · mode ui", instanceId, host: "desk", mode: "ui" };
+    updateSystemPresence({ ...beacon, lastInputSeconds: 4 });
+    updateSystemPresence({ ...beacon, lastInputSeconds: null });
 
     const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
     expect(entry?.host).toBe("desk");
@@ -151,20 +139,18 @@ describe("system-presence", () => {
   it("parses node presence text and normalizes the update key", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
-    const update = updateSystemPresence({
-      text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
-      instanceId: "  Mixed-Case-Node  ",
-    });
+    const text =
+      "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon";
+    const instanceId = "  Mixed-Case-Node  ";
+    const update = updateSystemPresence({ text, instanceId });
 
-    expect(update.key).toBe("mixed-case-node");
-    expect(update.changedKeys).toEqual(["host", "ip", "version", "mode", "reason"]);
     expect({ key: update.key, changedKeys: update.changedKeys, next: update.next }).toEqual({
       key: "mixed-case-node",
       changedKeys: ["host", "ip", "version", "mode", "reason"],
       next: {
-        instanceId: "  Mixed-Case-Node  ",
+        instanceId,
         lastInputSeconds: 7,
-        text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
+        text,
         ts: 1_778_472_000_000,
         host: "Relay-Host",
         ip: "10.0.0.9",
@@ -174,20 +160,13 @@ describe("system-presence", () => {
       },
     });
 
-    const refreshed = updateSystemPresence({
-      text: update.next.text,
-      instanceId: "mixed-case-node",
-      lastInputSeconds: 11,
-    });
+    const normalized = { text, instanceId: "mixed-case-node" };
+    const refreshed = updateSystemPresence({ ...normalized, lastInputSeconds: 11 });
     expect(refreshed.changedKeys).toEqual([]);
     expect(refreshed.next.lastInputSeconds).toBe(11);
     expect(update.next.lastInputSeconds).toBe(7);
 
-    const moved = updateSystemPresence({
-      text: update.next.text,
-      instanceId: "mixed-case-node",
-      ip: "10.0.0.10",
-    });
+    const moved = updateSystemPresence({ ...normalized, ip: "10.0.0.10" });
     expect(moved.changedKeys).toEqual(["ip"]);
     expect(moved.next.ip).toBe("10.0.0.10");
     expect(refreshed.next.ip).toBe("10.0.0.9");

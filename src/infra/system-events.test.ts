@@ -4,11 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/io.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   consumeSelectedSystemEventEntries as consumeSdkSystemEventEntries,
@@ -35,6 +31,14 @@ import {
   type SystemEvent,
 } from "./system-events.js";
 
+function enqueueEntry(text: string, sessionKey: string) {
+  return expectDefined(enqueueSystemEventEntry(text, { sessionKey }), text);
+}
+
+function claim(sessionKey: string, events: SystemEvent[], cancelled: () => void) {
+  return expectDefined(claimSystemEventTurn(sessionKey, events, cancelled), "turn owner");
+}
+
 describe("delivery-owned system event selection", () => {
   beforeEach(() => resetSystemEventsForTest());
   afterEach(() => resetSystemEventsForTest());
@@ -43,19 +47,13 @@ describe("delivery-owned system event selection", () => {
     "%s settles surviving batch members after one occurrence disappears",
     (action) => {
       const sessionKey = "agent:main:event-batch";
-      const first = expectDefined(enqueueSystemEventEntry("First", { sessionKey }), "first");
-      const second = expectDefined(enqueueSystemEventEntry("Second", { sessionKey }), "second");
+      const first = enqueueEntry("First", sessionKey);
+      const second = enqueueEntry("Second", sessionKey);
       const cancelled = vi.fn();
-      const owner = expectDefined(
-        claimSystemEventTurn(sessionKey, [first, second], cancelled),
-        "batch owner",
-      );
+      const owner = claim(sessionKey, [first, second], cancelled);
       expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual([]);
       consumeSelectedSystemEventEntries(sessionKey, [first]);
-      const replacement = expectDefined(
-        enqueueSystemEventEntry("Replacement", { sessionKey }),
-        "replacement",
-      );
+      const replacement = enqueueEntry("Replacement", sessionKey);
       expect(() => owner.start()).toThrow("cancelled before admission");
       expect(owner[action]()).toBe(true);
       expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual(
@@ -70,8 +68,8 @@ describe("delivery-owned system event selection", () => {
     "refuses an entire batch with a %s member before taking other occurrences",
     (invalid) => {
       const sessionKey = "agent:main:event-batch-admission";
-      const first = expectDefined(enqueueSystemEventEntry("First", { sessionKey }), "first");
-      const second = expectDefined(enqueueSystemEventEntry("Second", { sessionKey }), "second");
+      const first = enqueueEntry("First", sessionKey);
+      const second = enqueueEntry("Second", sessionKey);
       if (invalid === "missing") {
         consumeSelectedSystemEventEntries(sessionKey, [second]);
       } else if (invalid === "already-owned") {
@@ -90,35 +88,20 @@ describe("delivery-owned system event selection", () => {
 
   it("leaves an ordinary occurrence with its owner through periodic and user selection", async () => {
     const sessionKey = "agent:main:ordinary-event-owner";
-    const occurrence = expectDefined(
-      enqueueSystemEventEntry("Task completed", { sessionKey }),
-      "ordinary occurrence",
-    );
+    const occurrence = enqueueEntry("Task completed", sessionKey);
     const cancelled = vi.fn();
-    const sibling = expectDefined(
-      enqueueSystemEventEntry("Sibling completed", { sessionKey }),
-      "sibling occurrence",
-    );
+    const sibling = enqueueEntry("Sibling completed", sessionKey);
     const owner = expectDefined(
       claimSystemEventTurn(sessionKey, [occurrence, sibling], cancelled, "main"),
       "ordinary owner",
     );
     enqueueSystemEvent("Passive notice", { sessionKey });
-    const held = expectDefined(
-      enqueueSystemEventEntry("Exec finished (gateway id=uncertain, code 0)", { sessionKey }),
-      "held completion",
-    );
+    const held = enqueueEntry("Exec finished (gateway id=uncertain, code 0)", sessionKey);
     holdSystemEventDelivery(sessionKey, [held]);
     expect(peekDeliverableSystemEventEntries(sessionKey).map(({ text }) => text)).toEqual([
       "Passive notice",
     ]);
-    const prompt = await drainFormattedSystemEvents({
-      cfg: {},
-      agentId: "main",
-      sessionKey,
-      isMainSession: false,
-      isNewSession: false,
-    });
+    const prompt = await drainFormattedEvents(sessionKey);
     expect(prompt).toContain("Passive notice");
     expect(prompt).not.toContain("Task completed");
     expect(prompt).not.toContain("Sibling completed");
@@ -136,12 +119,9 @@ describe("delivery-owned system event selection", () => {
 
   it("retires ordinary owners on soft restart while keeping passive receipt custody", async () => {
     const sessionKey = "agent:main:ordinary-event-restart";
-    const occurrence = expectDefined(
-      enqueueSystemEventEntry("Ordinary task", { sessionKey }),
-      "ordinary occurrence",
-    );
+    const occurrence = enqueueEntry("Ordinary task", sessionKey);
     const cancelled = vi.fn();
-    const owner = expectDefined(claimSystemEventTurn(sessionKey, [occurrence], cancelled), "owner");
+    const owner = claim(sessionKey, [occurrence], cancelled);
     const passiveReceipt = expectDefined(
       enqueueSystemEventWithReceipt("Deferred notice", { sessionKey }),
       "passive receipt",
@@ -156,18 +136,12 @@ describe("delivery-owned system event selection", () => {
 
   it("returns only a rejected claim to passive custody and rejects its stale handles", () => {
     const sessionKey = "agent:main:ordinary-event-release";
-    const occurrence = expectDefined(enqueueSystemEventEntry("Deferred", { sessionKey }), "event");
+    const occurrence = enqueueEntry("Deferred", sessionKey);
     const cancelled = vi.fn();
-    const first = expectDefined(
-      claimSystemEventTurn(sessionKey, [occurrence], cancelled),
-      "first owner",
-    );
+    const first = claim(sessionKey, [occurrence], cancelled);
     expect(first.release()).toBe(true);
     expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual([occurrence]);
-    const successor = expectDefined(
-      claimSystemEventTurn(sessionKey, [occurrence], cancelled),
-      "new owner",
-    );
+    const successor = claim(sessionKey, [occurrence], cancelled);
     expect(first.release()).toBe(false);
     expect(first.cancel()).toBe(false);
     expect(() => first.start()).toThrow("cancelled before admission");
@@ -184,10 +158,7 @@ describe("delivery-owned system event selection", () => {
       const options = { sessionKey, contextKey: "task:completion" };
       const occurrence = expectDefined(enqueueSystemEventEntry("Original", options), "original");
       const cancelled = vi.fn();
-      const owner = expectDefined(
-        claimSystemEventTurn(sessionKey, [occurrence], cancelled),
-        "owner",
-      );
+      const owner = claim(sessionKey, [occurrence], cancelled);
       if (boundary === "replace") {
         enqueueSystemEvent("Replacement", { ...options, replace: true });
       } else if (boundary === "drain") {
@@ -219,12 +190,7 @@ describe("delivery-owned system event selection", () => {
         consumeSelectedSystemEventEntries(sessionKey, captured);
       }
       enqueueSystemEvent("Late arrival third", { sessionKey });
-      const text = await drainFormattedSystemEvents({
-        cfg: {},
-        agentId: "main",
-        sessionKey,
-        isMainSession: false,
-        isNewSession: false,
+      const text = await drainFormattedEvents(sessionKey, {
         events: captured,
         deferredEventIds: [retainedId],
       });
@@ -290,15 +256,12 @@ describe("system events (session routing)", () => {
       "Discord reaction added: ✅",
     ]);
 
-    // Main session gets no events — undefined returned
     const main = await drainFormattedEvents(mainKey, { isMainSession: true });
     expect(main).toBeUndefined();
-    // Discord events untouched by main drain
     expect(peekSystemEvents("agent:main:discord:group:123")).toEqual([
       "Discord reaction added: ✅",
     ]);
 
-    // Discord session gets its own events block
     const discord = await drainFormattedEvents("agent:main:discord:group:123");
     expect(discord).toMatch(/System:\s+\[[^\]]+\] Discord reaction added: ✅/);
     expect(peekSystemEvents("agent:main:discord:group:123")).toStrictEqual([]);
@@ -307,53 +270,42 @@ describe("system events (session routing)", () => {
   it.each(["main", "global", "unknown"])(
     "resolves SDK %s only at its explicitly selected owner boundary",
     (alias) => {
-      const previous = getRuntimeConfigSnapshot();
-      try {
-        setRuntimeConfigSnapshot({
-          agents: { entries: { alpha: {}, beta: {} } },
-          session: { mainKey: "work" },
-        });
-        expect(() => enqueueSystemEvent("Unbound", { sessionKey: alias })).toThrow(
-          "agent-qualified",
-        );
-        expect(
-          enqueueSdkSystemEvent("Legacy caller", { sessionKey: alias, agentId: "alpha" }),
-        ).toBe(true);
-        const suffix = alias === "main" ? "work" : alias;
-        expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
-        expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual([]);
-        enqueueRoutedSystemEvent("Owned caller", { agentId: " BETA ", sessionKey: alias });
-        expect(peekSdkSystemEventEntries(alias, " BETA ").map((event) => event.text)).toEqual([
-          "Owned caller",
-        ]);
-        expect(peekSdkSystemEventEntries(alias, "alpha").map((event) => event.text)).toEqual([
-          "Legacy caller",
-        ]);
-        expect(
-          enqueueSdkSystemEvent("Runtime owner", { sessionKey: alias, agentId: " BETA " }),
-        ).toBe(true);
-        expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual(["Owned caller", "Runtime owner"]);
-        expect(() =>
-          enqueueSdkSystemEvent("Mismatched owner", {
-            sessionKey: `agent:alpha:${suffix}`,
-            agentId: "beta",
-          }),
-        ).toThrow("owner does not match");
-        expect(() => peekSdkSystemEventEntries(`agent:alpha:${suffix}`, "beta")).toThrow(
-          "owner does not match",
-        );
-        setRuntimeConfigSnapshot({
-          agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-        });
-        expect(() => enqueueSdkSystemEvent("Ambiguous", { sessionKey: alias })).toThrow();
-        expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
-      } finally {
-        if (previous) {
-          setRuntimeConfigSnapshot(previous);
-        } else {
-          clearRuntimeConfigSnapshot();
-        }
-      }
+      setRuntimeConfigSnapshot({
+        agents: { entries: { alpha: {}, beta: {} } },
+        session: { mainKey: "work" },
+      });
+      expect(() => enqueueSystemEvent("Unbound", { sessionKey: alias })).toThrow("agent-qualified");
+      expect(enqueueSdkSystemEvent("Legacy caller", { sessionKey: alias, agentId: "alpha" })).toBe(
+        true,
+      );
+      const suffix = alias === "main" ? "work" : alias;
+      expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
+      expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual([]);
+      enqueueRoutedSystemEvent("Owned caller", { agentId: " BETA ", sessionKey: alias });
+      expect(peekSdkSystemEventEntries(alias, " BETA ").map((event) => event.text)).toEqual([
+        "Owned caller",
+      ]);
+      expect(peekSdkSystemEventEntries(alias, "alpha").map((event) => event.text)).toEqual([
+        "Legacy caller",
+      ]);
+      expect(enqueueSdkSystemEvent("Runtime owner", { sessionKey: alias, agentId: " BETA " })).toBe(
+        true,
+      );
+      expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual(["Owned caller", "Runtime owner"]);
+      expect(() =>
+        enqueueSdkSystemEvent("Mismatched owner", {
+          sessionKey: `agent:alpha:${suffix}`,
+          agentId: "beta",
+        }),
+      ).toThrow("owner does not match");
+      expect(() => peekSdkSystemEventEntries(`agent:alpha:${suffix}`, "beta")).toThrow(
+        "owner does not match",
+      );
+      setRuntimeConfigSnapshot({
+        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+      });
+      expect(() => enqueueSdkSystemEvent("Ambiguous", { sessionKey: alias })).toThrow();
+      expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
     },
   );
 
@@ -365,32 +317,23 @@ describe("system events (session routing)", () => {
     { agentId: "!!!", sessionKey: "global", operation: "routed" },
     { agentId: " ", sessionKey: "agent:main:global", operation: "routed" },
   ])("rejects SDK $operation with owner '$agentId' for $sessionKey", (params) => {
-    const previous = getRuntimeConfigSnapshot();
-    try {
-      setRuntimeConfigSnapshot({
-        agents: { entries: { main: {}, beta: {} } },
-        session: { scope: "global" },
-      });
-      enqueueSystemEvent("Main canary", { sessionKey: "agent:main:global" });
-      enqueueSystemEvent("Beta canary", { sessionKey: "agent:beta:global" });
-      expect(() => {
-        const { sessionKey, agentId, operation } = params;
-        if (operation === "peek") {
-          return peekSdkSystemEventEntries(sessionKey, agentId);
-        }
-        return operation === "routed"
-          ? enqueueRoutedSystemEvent("Invalid owner", { sessionKey, agentId })
-          : enqueueSdkSystemEvent("Invalid owner", { sessionKey, agentId });
-      }).toThrow(/agentId/);
-      expect(peekSystemEvents("agent:main:global")).toEqual(["Main canary"]);
-      expect(peekSystemEvents("agent:beta:global")).toEqual(["Beta canary"]);
-    } finally {
-      if (previous) {
-        setRuntimeConfigSnapshot(previous);
-      } else {
-        clearRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot({
+      agents: { entries: { main: {}, beta: {} } },
+      session: { scope: "global" },
+    });
+    enqueueSystemEvent("Main canary", { sessionKey: "agent:main:global" });
+    enqueueSystemEvent("Beta canary", { sessionKey: "agent:beta:global" });
+    expect(() => {
+      const { sessionKey, agentId, operation } = params;
+      if (operation === "peek") {
+        return peekSdkSystemEventEntries(sessionKey, agentId);
       }
-    }
+      return operation === "routed"
+        ? enqueueRoutedSystemEvent("Invalid owner", { sessionKey, agentId })
+        : enqueueSdkSystemEvent("Invalid owner", { sessionKey, agentId });
+    }).toThrow(/agentId/);
+    expect(peekSystemEvents("agent:main:global")).toEqual(["Main canary"]);
+    expect(peekSystemEvents("agent:beta:global")).toEqual(["Beta canary"]);
   });
 
   it("replaces one keyed event without evicting unrelated queued events", () => {

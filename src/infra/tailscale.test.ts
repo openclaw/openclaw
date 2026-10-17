@@ -38,19 +38,16 @@ function expectExecCall(
   args: readonly string[],
   options?: Record<string, unknown>,
 ) {
-  const call = exec.mock.calls[callNumber - 1];
-  if (!call) {
-    throw new Error(`Expected exec call ${callNumber}`);
-  }
-  expect(call[0]).toBe(command);
-  expect(call[1]).toEqual(args);
-  if (options) {
-    expect(call).toHaveLength(3);
-    expect(call[2]).toEqual(expect.objectContaining(options));
-  } else {
-    expect(call).toHaveLength(2);
-  }
+  expect(exec).toHaveBeenNthCalledWith(
+    callNumber,
+    command,
+    args,
+    ...(options ? [expect.objectContaining(options)] : []),
+  );
 }
+
+const jsonReply = (value: unknown) => ({ stdout: JSON.stringify(value) });
+const whois = (LoginName: string) => jsonReply({ UserProfile: { LoginName } });
 
 describe("tailscale helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -75,9 +72,7 @@ describe("tailscale helpers", () => {
   });
 
   it("falls back to IP when DNS missing", async () => {
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({ Self: { TailscaleIPs: ["100.2.2.2"] } }),
-    });
+    const exec = vi.fn().mockResolvedValue(jsonReply({ Self: { TailscaleIPs: ["100.2.2.2"] } }));
     const host = await getTailnetHostname(exec);
     expect(host).toBe("100.2.2.2");
   });
@@ -109,11 +104,9 @@ describe("tailscale helpers", () => {
     const exec = vi
       .fn()
       .mockRejectedValueOnce(new Error("failed to connect to local tailscaled"))
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          Self: { DNSName: "retry.tailnet.ts.net.", TailscaleIPs: ["100.7.7.7"] },
-        }),
-      });
+      .mockResolvedValueOnce(
+        jsonReply({ Self: { DNSName: "retry.tailnet.ts.net.", TailscaleIPs: ["100.7.7.7"] } }),
+      );
 
     const hostPromise = getTailnetHostnameAfterServe(exec);
     await vi.runAllTimersAsync();
@@ -182,9 +175,7 @@ describe("tailscale helpers", () => {
   it("bypasses existing whois results when the cache TTL is zero", async () => {
     const exec = vi
       .fn()
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify({ UserProfile: { LoginName: "before@example.com" } }),
-      })
+      .mockResolvedValueOnce(whois("before@example.com"))
       .mockRejectedValueOnce(new Error("no longer authorized"));
 
     await expect(readTailscaleWhoisIdentity("100.64.0.13", exec)).resolves.toEqual({
@@ -202,12 +193,8 @@ describe("tailscale helpers", () => {
     vi.setSystemTime(new Date(8_640_000_000_000_000));
     const exec = vi
       .fn()
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify({ UserProfile: { LoginName: "first@example.com" } }),
-      })
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify({ UserProfile: { LoginName: "second@example.com" } }),
-      });
+      .mockResolvedValueOnce(whois("first@example.com"))
+      .mockResolvedValueOnce(whois("second@example.com"));
 
     await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
       login: "first@example.com",
@@ -358,12 +345,12 @@ describe("tailscale helpers", () => {
 
   it("ignores Funnel handlers whose host is not allowed", async () => {
     const host = "device.tailnet.ts.net:443";
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({
+    const exec = vi.fn().mockResolvedValue(
+      jsonReply({
         AllowFunnel: { [host]: false },
         Web: { [host]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } } },
       }),
-    });
+    );
 
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
   });

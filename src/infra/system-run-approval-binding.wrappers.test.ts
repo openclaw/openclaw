@@ -14,6 +14,37 @@ import {
 } from "./system-run-approval-binding.js";
 
 const systemPath = "/usr/bin:/bin";
+const unresolved = {
+  ok: false,
+  message: "SYSTEM_RUN_DENIED: approval requires a resolved executable",
+};
+
+function requireBinding<T extends { ok: boolean }>(result: T): asserts result is T & { ok: true } {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("Expected executable binding");
+  }
+}
+
+async function bindShell(text: string, cwd?: string, env = { PATH: systemPath }) {
+  const prepared = await prepareSystemRunMutableFileBinding({
+    command: { kind: "shell", text },
+    cwd,
+    env,
+  });
+  requireBinding(prepared);
+  return prepared.binding;
+}
+
+function expectRevalidation(
+  binding: Parameters<typeof revalidateSystemRunMutableFileBinding>[0]["binding"],
+  cwd: string,
+  ok = true,
+) {
+  return expect(revalidateSystemRunMutableFileBinding({ binding, cwd })).resolves.toEqual(
+    ok ? { ok: true } : { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE },
+  );
+}
 
 describe.runIf(process.platform !== "win32")("dispatch wrapper executable binding", () => {
   it.each([
@@ -27,17 +58,10 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
   ])("requires complete dispatch binding for $command", async ({ command, eligible }) => {
     const env = { PATH: systemPath };
     const authorizationPlan = await planShellAuthorization({ command, env });
-    const prepared = await prepareSystemRunMutableFileBinding({
-      command: { kind: "shell", text: command },
-      env,
-    });
-    if (!prepared.ok) {
-      throw new Error(prepared.message);
-    }
-    expect(
-      resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding: prepared.binding })
-        .eligible,
-    ).toBe(eligible);
+    const binding = await bindShell(command, undefined, env);
+    expect(resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding }).eligible).toBe(
+      eligible,
+    );
   });
 
   it.each(["env", "ls"])(
@@ -46,25 +70,16 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
       const command = "env ls *.txt";
       const env = { PATH: systemPath };
       const authorizationPlan = await planShellAuthorization({ command, env });
-      const prepared = await prepareSystemRunMutableFileBinding({
-        command: { kind: "shell", text: command },
-        env,
-      });
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
-      expect(
-        resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding: prepared.binding })
-          .eligible,
-      ).toBe(true);
-      prepared.binding.operands = prepared.binding.operands.filter(
+      const binding = await bindShell(command, undefined, env);
+      expect(resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding }).eligible).toBe(
+        true,
+      );
+      binding.operands = binding.operands.filter(
         (operand) =>
           operand.snapshot.path !==
           fs.realpathSync(executable === "env" ? "/usr/bin/env" : "/bin/ls"),
       );
-      expect(
-        resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding: prepared.binding }),
-      ).toEqual({
+      expect(resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding })).toEqual({
         eligible: false,
         reason: "Exec auto-review skipped: dispatch chain cannot be bound",
       });
@@ -90,10 +105,7 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
         env,
         shellCommand,
       });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
+      requireBinding(prepared);
       expect(prepared.binding.operands.map((operand) => operand.snapshot.path)).toEqual([
         ...prefix.map(() => fs.realpathSync("/usr/bin/env")),
         carrierPath,
@@ -115,10 +127,7 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
           env,
           shellCommand: true,
         }),
-      ).toEqual({
-        ok: false,
-        message: "SYSTEM_RUN_DENIED: approval requires a resolved executable",
-      });
+      ).toEqual(unresolved);
     });
   });
 
@@ -133,31 +142,16 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
       fs.copyFileSync("/usr/bin/nice", nicePath);
       fs.chmodSync(envPath, 0o755);
       fs.chmodSync(nicePath, 0o755);
-      const prepared = await prepareSystemRunMutableFileBinding({
-        command: { kind: "shell", text: `'${envPath}' ./bin/nice -n 1 ls` },
-        cwd,
-        env: { PATH: systemPath },
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
+      const binding = await bindShell(`'${envPath}' ./bin/nice -n 1 ls`, cwd);
       expect(
-        prepared.binding.operands
+        binding.operands
           .filter((operand) => operand.executable)
           .map((operand) => operand.snapshot.path),
       ).toEqual([envPath, nicePath, fs.realpathSync("/bin/ls")]);
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({ ok: true });
+      await expectRevalidation(binding, cwd);
 
       fs.appendFileSync(nicePath, Buffer.from([0]));
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({
-        ok: false,
-        message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-      });
+      await expectRevalidation(binding, cwd, false);
     });
   });
 
@@ -168,28 +162,15 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
       fs.mkdirSync(binDir);
       const executable = path.join(binDir, "ls");
       fs.symlinkSync("/bin/ls", executable);
-      const prepared = await prepareSystemRunMutableFileBinding({
-        command: { kind: "shell", text: "env ls" },
-        cwd,
-        env: { PATH: `${binDir}${path.delimiter}${systemPath}` },
+      const binding = await bindShell("env ls", cwd, {
+        PATH: `${binDir}${path.delimiter}${systemPath}`,
       });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({ ok: true });
+      await expectRevalidation(binding, cwd);
 
       fs.unlinkSync(executable);
       fs.symlinkSync("/usr/bin/env", executable);
 
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
-      ).resolves.toEqual({
-        ok: false,
-        message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-      });
+      await expectRevalidation(binding, cwd, false);
     });
   });
 
@@ -201,10 +182,7 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
           cwd,
           env: { PATH: systemPath },
         }),
-      ).resolves.toEqual({
-        ok: false,
-        message: "SYSTEM_RUN_DENIED: approval requires a resolved executable",
-      });
+      ).resolves.toEqual(unresolved);
     });
   });
 });

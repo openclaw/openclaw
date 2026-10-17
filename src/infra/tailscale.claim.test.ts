@@ -28,6 +28,44 @@ import { claimTailscaleRoute, claimTailscaleServePort, findTailscaleBinary } fro
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function startExposure(
+  tailscaleMode: "serve" | "funnel" = "serve",
+  logTailscale = { info: vi.fn(), warn: vi.fn() },
+  signal?: AbortSignal,
+) {
+  return startGatewayTailscaleExposure({
+    tailscaleMode,
+    port: 18789,
+    backend: { port: 19000, host: "127.0.0.1" },
+    logTailscale,
+    signal,
+  });
+}
+
+function statusReply(args: string[]) {
+  return { stdout: args[0] === "status" ? '{"BackendState":"Running"}' : legacyRoutes, stderr: "" };
+}
+
+function pauseStatusRead() {
+  const started = createDeferred();
+  const release = createDeferred();
+  runExecMock.mockImplementation(async (_bin: string, args: string[]) => {
+    if (args[0] === "serve" && args[1] === "status") {
+      started.resolve();
+      await release.promise;
+    }
+    return statusReply(args);
+  });
+  return { started: started.promise, release: () => release.resolve() };
+}
+
+function installPathBinary(prefix: string) {
+  const binary = path.join(tempDirs.make(prefix), "tailscale");
+  fs.writeFileSync(binary, "", { mode: 0o755 });
+  vi.stubEnv("PATH", path.dirname(binary));
+  return binary;
+}
+
 // Gate worker readiness and exit explicitly: no subprocesses or live daemon writes.
 function queueOwner(
   options: {
@@ -104,10 +142,7 @@ const legacyRoutes = JSON.stringify({
 beforeEach(() => {
   vi.stubEnv("VITEST", "true");
   vi.stubEnv("OPENCLAW_TEST_TAILSCALE_BINARY", "tailscale");
-  runExecMock.mockImplementation(async (_bin: string, args: string[]) => ({
-    stdout: args[0] === "status" ? '{"BackendState":"Running"}' : legacyRoutes,
-    stderr: "",
-  }));
+  runExecMock.mockImplementation(async (_bin: string, args: string[]) => statusReply(args));
 });
 
 afterEach(() => {
@@ -129,12 +164,7 @@ describe("private Tailscale Serve claims", () => {
         ...(code === 0 ? { stdout: denial } : { failure: denial }),
       });
       const log = { info: vi.fn(), warn: vi.fn() };
-      const cleanup = await startGatewayTailscaleExposure({
-        tailscaleMode: "serve",
-        port: 18789,
-        backend: { port: 19000, host: "127.0.0.1" },
-        logTailscale: log,
-      });
+      const cleanup = await startExposure("serve", log);
       expect(cleanup).toBeNull();
       expect(pending.owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
       expect(getTailscalePublishedOrigin()).toBeUndefined();
@@ -164,14 +194,7 @@ describe("private Tailscale Serve claims", () => {
     if (options.failure === "permission denied") {
       queueOwner(options);
     }
-    await expect(
-      startGatewayTailscaleExposure({
-        tailscaleMode: options.mode,
-        port: 18789,
-        backend: { port: 19000, host: "127.0.0.1" },
-        logTailscale: { info: vi.fn(), warn: vi.fn() },
-      }),
-    ).rejects.toThrow(options.failure);
+    await expect(startExposure(options.mode)).rejects.toThrow(options.failure);
     expect(getTailscalePublishedOrigin()).toBeUndefined();
   });
 
@@ -180,12 +203,7 @@ describe("private Tailscale Serve claims", () => {
       failure: "Serve is not enabled on your tailnet.",
       stopFailure: "route termination was not confirmed",
     });
-    const error = await startGatewayTailscaleExposure({
-      tailscaleMode: "serve",
-      port: 18789,
-      backend: { port: 19000, host: "127.0.0.1" },
-      logTailscale: { info: vi.fn(), warn: vi.fn() },
-    }).catch((failure: unknown) => failure);
+    const error = await startExposure().catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(AggregateError);
     const failure = error as AggregateError;
     expect(failure.errors.map((cause: Error) => cause.message)).toEqual([
@@ -224,13 +242,9 @@ describe("private Tailscale Serve claims", () => {
         : {}),
     });
     const log = { info: vi.fn(), warn: vi.fn() };
-    const result = startGatewayTailscaleExposure({
-      tailscaleMode: scenario.mode,
-      port: 18789,
-      backend: { port: 19000, host: "127.0.0.1" },
-      signal: controller.signal,
-      logTailscale: log,
-    }).catch((error: unknown) => error);
+    const result = startExposure(scenario.mode, log, controller.signal).catch(
+      (error: unknown) => error,
+    );
     try {
       await pending.started;
       await vi.advanceTimersByTimeAsync(15_000);
@@ -282,26 +296,13 @@ describe("private Tailscale Serve claims", () => {
   it.each(["queue", "status"] as const)(
     "checks revoked authority after %s wait",
     async (boundary) => {
-      const readStarted = createDeferred();
-      const releaseRead = createDeferred();
       const previousOwner = boundary === "queue" ? queueOwner({ ready: false }) : undefined;
       const previous = previousOwner
         ? claimTailscaleRoute("serve", 19000, 18789, vi.fn())
         : undefined;
       await previousOwner?.started;
       const previousForks = forkMock.mock.calls.length;
-      if (boundary === "status") {
-        runExecMock.mockImplementation(async (_bin: string, args: string[]) => {
-          if (args[0] === "serve" && args[1] === "status") {
-            readStarted.resolve();
-            await releaseRead.promise;
-          }
-          return {
-            stdout: args[0] === "status" ? '{"BackendState":"Running"}' : legacyRoutes,
-            stderr: "",
-          };
-        });
-      }
+      const read = boundary === "status" ? pauseStatusRead() : undefined;
       queueOwner();
       let current = true;
       const denied = new Error("permission denied: caller authority expired");
@@ -310,11 +311,11 @@ describe("private Tailscale Serve claims", () => {
           throw denied;
         }
       });
-      if (boundary === "status") {
-        await readStarted.promise;
+      if (read) {
+        await read.started;
       }
       current = false;
-      releaseRead.resolve();
+      read?.release();
       previousOwner?.owner.emit("message", { type: "ready" });
       const settled = await starting.then(
         (claim) => ({ claim }),
@@ -336,18 +337,7 @@ describe("private Tailscale Serve claims", () => {
   it.each(["caller", "gateway", "service"] as const)(
     "does not create a portal route after %s authority closes during status discovery",
     async (owner) => {
-      const readStarted = createDeferred();
-      const releaseRead = createDeferred();
-      runExecMock.mockImplementation(async (_bin: string, args: string[]) => {
-        if (args[0] === "serve" && args[1] === "status") {
-          readStarted.resolve();
-          await releaseRead.promise;
-        }
-        return {
-          stdout: args[0] === "status" ? '{"BackendState":"Running"}' : legacyRoutes,
-          stderr: "",
-        };
-      });
+      const read = pauseStatusRead();
       queueOwner();
       const withdraw = prepareTailscalePublishedOrigin({
         origin: "https://fixture.tailnet.ts.net",
@@ -371,7 +361,7 @@ describe("private Tailscale Serve claims", () => {
         onClose: releaseTarget,
       });
       const rejected = expect(opening).rejects.toThrow();
-      await readStarted.promise;
+      await read.started;
       const listeners = [...httpServers];
       let closing: Promise<void> | undefined;
       if (owner === "caller") {
@@ -381,7 +371,7 @@ describe("private Tailscale Serve claims", () => {
       } else {
         closing = service.closeAll();
       }
-      releaseRead.resolve();
+      read.release();
       try {
         await rejected;
         await closing;
@@ -507,10 +497,7 @@ describe("private Tailscale Serve claims", () => {
 
 describe("findTailscaleBinary", () => {
   it("finds the PATH executable without spawning which and keeps CLI validation", async () => {
-    const root = tempDirs.make("openclaw-tailscale-discovery-");
-    const binary = path.join(root, "tailscale");
-    fs.writeFileSync(binary, "", { mode: 0o755 });
-    vi.stubEnv("PATH", root);
+    const binary = installPathBinary("openclaw-tailscale-discovery-");
     runExecMock.mockImplementation(async (command: string, args: string[]) => {
       if (command === "which") {
         return { stdout: `${binary}\n`, stderr: "" };
@@ -526,10 +513,7 @@ describe("findTailscaleBinary", () => {
   });
 
   it("rejects a PATH candidate whose version command fails", async () => {
-    const root = tempDirs.make("openclaw-tailscale-invalid-");
-    const binary = path.join(root, "tailscale");
-    fs.writeFileSync(binary, "", { mode: 0o755 });
-    vi.stubEnv("PATH", root);
+    const binary = installPathBinary("openclaw-tailscale-invalid-");
     runExecMock.mockImplementation(async (command: string) => {
       if (command === "locate") {
         return { stdout: "", stderr: "" };
