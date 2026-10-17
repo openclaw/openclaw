@@ -17,22 +17,19 @@ import { resolveInitialEmbeddedRunModel } from "./runtime-resolution.js";
 const provider = "first-selected";
 const otherProvider = "hook-selected";
 const selected = { provider, model: "middle", requestedRouteResolution: "resolved" } as const;
+const entry = { provider, model: "entry" };
+const modelRedirect = { modelOverride: "entry" };
 const cases = [
-  {
-    name: "configured default",
-    tier: "registry",
-    input: {},
-    expected: "middle",
-  },
+  { name: "configured default", tier: "registry", input: {}, expected: "middle" },
   ...(["registry", "prepared static"] as const).flatMap((tier) => [
-    { name: "raw entry", tier, input: { provider, model: "entry" }, expected: "middle" },
+    { name: "raw entry", tier, input: entry, expected: "middle" },
     { name: "selected middle", tier, input: selected, expected: "middle" },
   ]),
   {
     name: "selected model hook redirect",
     tier: "registry",
     input: selected,
-    hook: { modelOverride: "entry" },
+    hook: modelRedirect,
     expected: "middle",
   },
   {
@@ -46,14 +43,15 @@ const cases = [
     name: "locked selection ignores hook",
     tier: "registry",
     input: { ...selected, modelSelectionLocked: true },
-    hook: { modelOverride: "entry" },
+    hook: modelRedirect,
     expected: "middle",
   },
 ] as const;
 
 describe("initial model setup", () => {
   it.each(cases)("preserves $name through $tier materialization", async (scenario) => {
-    const { tier } = scenario;
+    const { tier, input, expected } = scenario;
+    const hook = "hook" in scenario ? scenario.hook : undefined;
     await withOpenClawTestState(
       { label: "initial-model-selection", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
@@ -99,28 +97,29 @@ describe("initial model setup", () => {
             maxTokens: 256,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           }) satisfies Model;
-        const models = ["middle", "final"].map((id) => createModel(provider, id));
-        const otherModels = [createModel(otherProvider, "other-final")];
+        const modelGroups: Array<[string, Model[]]> = [
+          [provider, ["middle", "final"].map((id) => createModel(provider, id))],
+          [otherProvider, [createModel(otherProvider, "other-final")]],
+        ];
         const stores = createEmptyAgentDiscoveryStores();
         if (tier === "registry") {
-          stores.modelRegistry.registerProvider(provider, {
-            api: "openai-completions",
-            baseUrl: "https://initial-model.example/v1",
-            models,
-          });
-          stores.modelRegistry.registerProvider(otherProvider, {
-            api: "openai-completions",
-            baseUrl: "https://initial-model.example/v1",
-            models: otherModels,
-          });
+          for (const [id, models] of modelGroups) {
+            stores.modelRegistry.registerProvider(id, {
+              api: "openai-completions",
+              baseUrl: "https://initial-model.example/v1",
+              models,
+            });
+          }
         }
         const configuredRuntimeModels =
           tier === "prepared static"
-            ? [...models, ...otherModels].map((model) => ({
-                provider: model.provider,
-                modelId: model.id,
-                model,
-              }))
+            ? modelGroups
+                .flatMap(([, models]) => models)
+                .map((model) => ({
+                  provider: model.provider,
+                  modelId: model.id,
+                  model,
+                }))
             : [];
         const snapshot: PreparedModelRuntimeSnapshot = {
           catalogOwner: undefined,
@@ -154,13 +153,9 @@ describe("initial model setup", () => {
             prompt: "Synthetic model selection",
             timeoutMs: 1000,
             agentHarnessId: "openclaw",
-            ...scenario.input,
+            ...input,
           };
-          const initial = resolveInitialEmbeddedRunModel({
-            ...runParams,
-            config: runParams.config,
-          });
-          const hook = "hook" in scenario ? scenario.hook : undefined;
+          const initial = resolveInitialEmbeddedRunModel(runParams);
           const setup = await resolveEmbeddedRunModelSetup({
             assertCurrent: () => {},
             runParams,
@@ -179,8 +174,7 @@ describe("initial model setup", () => {
             hook && "modelOverride" in hook && runParams.modelSelectionLocked !== true
               ? hook.modelOverride
               : initial.modelId;
-          expect(setup.requestedModelId).toBe(requestedModelId);
-          expect(setup.model.id).toBe(scenario.expected);
+          expect(setup).toMatchObject({ requestedModelId, model: { id: expected } });
           let currentModel = setup.model;
           let harness = setup.agentHarness;
           const auth = await prepareEmbeddedRunAuthPlan({
@@ -210,8 +204,8 @@ describe("initial model setup", () => {
             auth.activePreparedAuthPlan,
             true,
           );
-          expect(setup.modelId).toBe(scenario.expected);
-          expect(rematerialized?.id).toBe(scenario.expected);
+          expect(setup.modelId).toBe(expected);
+          expect(rematerialized?.id).toBe(expected);
         });
       },
     );
