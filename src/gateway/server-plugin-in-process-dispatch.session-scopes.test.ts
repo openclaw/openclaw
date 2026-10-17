@@ -50,6 +50,14 @@ vi.mock("./server-methods/chat-send-handler.js", () => ({
 
 const parentKey = "agent:main:scope-parent";
 const childKey = "agent:main:dashboard:scope-child";
+const missingAdmin = {
+  name: "GatewayClientRequestError",
+  details: {
+    code: "MISSING_SCOPE",
+    missingScope: "operator.admin",
+    requiredScopes: ["operator.admin"],
+  },
+};
 
 // These tests own spawn admission and persisted permissions, not model availability
 // or inference. The router and SQLite creation owner below are never replaced.
@@ -428,14 +436,7 @@ describe("hosted visible spawn permission inheritance", () => {
     await withHostedCreation(async (fixture) => {
       await expect(
         fixture.create({ permissionMode: "full" }, { inheritedPermissionMode: "full" }),
-      ).rejects.toMatchObject({
-        name: "GatewayClientRequestError",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      });
+      ).rejects.toMatchObject(missingAdmin);
       expect(fixture.handler).not.toHaveBeenCalled();
       expect(fixture.read()).toBeUndefined();
     });
@@ -568,14 +569,9 @@ describe("independent session creation tool", () => {
         /operator.admin/,
       );
       await expect(toolCreate({ cwd: "relative" }, "relative-cwd")).rejects.toThrow(/absolute/);
-      await expect(toolCreate({ cwd: "/" }, "outside-workspace")).rejects.toMatchObject({
-        name: "GatewayClientRequestError",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      });
+      await expect(toolCreate({ cwd: "/" }, "outside-workspace")).rejects.toMatchObject(
+        missingAdmin,
+      );
       expect(read()).toBeUndefined();
     });
   });

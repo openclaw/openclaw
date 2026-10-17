@@ -143,6 +143,10 @@ function createRecoveryFixture(
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
 
+function transcriptSource(providerId: string, channelId = "original-room") {
+  return { providerId, guildId: "guild", channelId, whenOccupied: true };
+}
+
 it.each(["gateway_stop", "runtime-lifecycle"] as const)(
   "reopens a shared resource closed by %s after a setting changes without restarting its sibling",
   (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
@@ -635,12 +639,8 @@ it.for([
   async (outcome, { signal }) => {
     const stateDir = makeTrackedTempDir("gateway-transcript-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const entry = (owner: string, channelId = "original-room") => ({
-        providerId: owner === "sibling" ? "sibling-capture" : `${owner}-room`,
-        guildId: "guild",
-        channelId,
-        whenOccupied: true,
-      });
+      const entry = (owner: string, channelId?: string) =>
+        transcriptSource(owner === "sibling" ? "sibling-capture" : `${owner}-room`, channelId);
       const config: OpenClawConfig = {
         plugins: { allow: ["first", "sibling"] },
         transcripts: { autoStart: [entry("first"), entry("sibling")] },
@@ -896,14 +896,7 @@ it("starts the first configured transcript capture after plugin reload", async (
       const config: OpenClawConfig = {
         ...fixture.getConfig(),
         transcripts: {
-          autoStart: [
-            {
-              providerId: "sibling-capture",
-              guildId: "guild",
-              channelId: "room",
-              whenOccupied: true,
-            },
-          ],
+          autoStart: [transcriptSource("sibling-capture", "room")],
         },
       };
       await fixture.reload(config, [], ["transcripts.autoStart"]);
@@ -929,12 +922,8 @@ it.for(["replace", "remove", "disable", "rollback"] as const)(
     });
     const stateDir = makeTrackedTempDir("gateway-transcript-config-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const entry = (owner: string, channelId = "original-room") => ({
-        providerId: `${owner}-capture`,
-        guildId: "guild",
-        channelId,
-        whenOccupied: true,
-      });
+      const entry = (owner: string, channelId?: string) =>
+        transcriptSource(`${owner}-capture`, channelId);
       const retainedSource = { ...entry("sibling", "retained-room"), guildId: "other-guild" };
       const config: OpenClawConfig = {
         plugins: { allow: ["first", "sibling"] },

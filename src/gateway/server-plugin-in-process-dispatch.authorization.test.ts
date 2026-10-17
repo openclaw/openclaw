@@ -18,7 +18,6 @@ import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
 import type {
   GatewayRequestContext,
@@ -85,6 +84,21 @@ async function dispatchScopedMethod(params: {
   );
 }
 
+function sessionContext(
+  method: string,
+  handler: (options: GatewayRequestHandlerOptions) => void | Promise<void>,
+  scope: "operator.read" | "operator.write" = "operator.write",
+) {
+  return createContext([[method, scope, "sessions", handler]]);
+}
+
+function syntheticOptions(
+  context: GatewayRequestContext,
+  options: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]> = {},
+) {
+  return { forceSyntheticClient: true, resolveGatewayContext: () => context, ...options };
+}
+
 describe("typed in-process agent authorization", () => {
   beforeEach(() => {
     startTurn.mockReset();
@@ -115,11 +129,7 @@ describe("typed in-process agent authorization", () => {
         dispatchGatewayMethodInProcess(
           "agent",
           { sessionKey, message: "synthetic child", idempotencyKey: "heap-child-run" },
-          {
-            forceSyntheticClient: true,
-            operatorRoleActor: { kind: "system" },
-            resolveGatewayContext: () => context,
-          },
+          syntheticOptions(context, { operatorRoleActor: { kind: "system" } }),
         ),
       ).resolves.toEqual({ runId: "heap-child-run", status: "accepted" });
       expect(listeners).toEqual(original);
@@ -162,7 +172,7 @@ describe("typed in-process agent authorization", () => {
             idempotencyKey: result.runId,
             sessionKey: launchedTarget.sessionKey,
           },
-          { forceSyntheticClient: true, resolveGatewayContext: () => context },
+          syntheticOptions(context),
         );
       try {
         await withOwnedSessionTranscriptWrites(
@@ -290,7 +300,10 @@ describe("typed in-process agent authorization", () => {
           profileId: ownerProfile.id,
           scopes: ["operator.write"],
         });
-        const context = createContext();
+        const patchHandler = vi.fn(({ respond }: GatewayRequestHandlerOptions) =>
+          respond(true, { ok: true }),
+        );
+        const context = sessionContext("sessions.patch", patchHandler);
         context.getRuntimeConfig = () => ({
           gateway: {
             roles: {
@@ -321,18 +334,6 @@ describe("typed in-process agent authorization", () => {
             createdActor: { type: "human", source: "profile", id: "maintainer" },
           },
         );
-        const patchHandler = vi.fn(({ respond }: GatewayRequestHandlerOptions) =>
-          respond(true, { ok: true }),
-        );
-        context.getGatewayMethodRegistry = () =>
-          createGatewayMethodRegistry([
-            {
-              name: "sessions.patch",
-              scope: "operator.write",
-              owner: { kind: "core", area: "sessions" },
-              handler: patchHandler,
-            },
-          ]);
         startTurn.mockImplementation(async ({ io }) =>
           io.emitAcceptance([true, { runId: "forbidden-run", status: "accepted" }, undefined]),
         );
@@ -371,12 +372,10 @@ describe("typed in-process agent authorization", () => {
                   message: "forbidden turn",
                   idempotencyKey: "forbidden-run",
                 },
-            {
-              forceSyntheticClient: true,
+            syntheticOptions(context, {
               operatorRoleActor: { kind: "system" },
               syntheticScopes: ["operator.write"],
-              resolveGatewayContext: () => context,
-            },
+            }),
           );
         if (scopedActor) {
           await expect(withOperatorToolGatewayAuthority(authority, dispatch)).resolves.toEqual({
@@ -407,18 +406,13 @@ describe("typed in-process agent authorization", () => {
   it.each(["explicit", "scoped"])(
     "does not fall back to ambient scope when a %s Gateway binding is retired",
     async (binding) => {
-      const ambient = createContext();
-      ambient.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "sessions.list",
-            scope: "operator.read",
-            owner: { kind: "core", area: "sessions" },
-            handler: ({ respond }: GatewayRequestHandlerOptions) => {
-              respond(true, { sessions: [] });
-            },
-          },
-        ]);
+      const ambient = sessionContext(
+        "sessions.list",
+        ({ respond }) => {
+          respond(true, { sessions: [] });
+        },
+        "operator.read",
+      );
 
       await withPluginRuntimeGatewayRequestScope(
         {
@@ -443,30 +437,21 @@ describe("typed in-process agent authorization", () => {
   );
 
   it("carries a scoped Gateway binding into the session mutation commit guard", async () => {
-    const admitted = createContext();
     const replacement = createContext();
-    let current = admitted;
     let committed = false;
     const setupStarted = createDeferredCore();
     const releaseSetup = createDeferredCore();
-    admitted.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "sessions.create",
-          scope: "operator.write",
-          owner: { kind: "core", area: "sessions" },
-          handler: async ({
-            respond,
-            sessionMutationCommitGuard,
-          }: GatewayRequestHandlerOptions) => {
-            setupStarted.resolve();
-            await releaseSetup.promise;
-            sessionMutationCommitGuard?.();
-            committed = true;
-            respond(true, { key: "agent:main:dashboard:child" });
-          },
-        },
-      ]);
+    const admitted = sessionContext(
+      "sessions.create",
+      async ({ respond, sessionMutationCommitGuard }) => {
+        setupStarted.resolve();
+        await releaseSetup.promise;
+        sessionMutationCommitGuard?.();
+        committed = true;
+        respond(true, { key: "agent:main:dashboard:child" });
+      },
+    );
+    let current = admitted;
 
     const dispatch = withPluginRuntimeGatewayRequestScope(
       {
@@ -495,7 +480,6 @@ describe("typed in-process agent authorization", () => {
   it.each(["explicit", "system-tool"])(
     "rejects a session commit after its %s authority closes",
     async (source) => {
-      const admitted = createContext();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let current = true;
@@ -504,34 +488,24 @@ describe("typed in-process agent authorization", () => {
           throw new Error("caller authority closed");
         }
       };
-      admitted.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "sessions.create",
-            scope: "operator.write",
-            owner: { kind: "core", area: "sessions" },
-            handler: async ({
-              respond,
-              sessionMutationCommitGuard,
-            }: GatewayRequestHandlerOptions) => {
-              entered.resolve();
-              await release.promise;
-              sessionMutationCommitGuard?.();
-              respond(true, { key: "agent:main:dashboard:child" });
-            },
-          },
-        ]);
+      const admitted = sessionContext(
+        "sessions.create",
+        async ({ respond, sessionMutationCommitGuard }) => {
+          entered.resolve();
+          await release.promise;
+          sessionMutationCommitGuard?.();
+          respond(true, { key: "agent:main:dashboard:child" });
+        },
+      );
 
       const dispatch = () =>
         dispatchGatewayMethodInProcess(
           "sessions.create",
           { agentId: "main" },
-          {
-            forceSyntheticClient: true,
-            resolveGatewayContext: () => admitted,
+          syntheticOptions(admitted, {
             sessionMutationCommitGuard: source === "explicit" ? assertCallerCurrent : undefined,
             syntheticScopes: ["operator.write"],
-          },
+          }),
         );
       const pending =
         source === "explicit"
@@ -560,20 +534,15 @@ describe("typed in-process agent authorization", () => {
         profileName: "spawn-owner",
         scopes: ["operator.write"],
       });
-      const context = createContext();
       let autonomousClient: GatewayRequestOptions["client"] = null;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "sessions.list",
-            scope: "operator.read",
-            owner: { kind: "core", area: "sessions" },
-            handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
-              autonomousClient = client;
-              respond(true, { sessions: [] });
-            },
-          },
-        ]);
+      const context = sessionContext(
+        "sessions.list",
+        ({ client, respond }) => {
+          autonomousClient = client;
+          respond(true, { sessions: [] });
+        },
+        "operator.read",
+      );
       startTurn.mockImplementation(async ({ principal, io }) => {
         expect(principal.authenticatedUserProfile).toBeUndefined();
         expect(principal.internal).toMatchObject({
@@ -585,11 +554,7 @@ describe("typed in-process agent authorization", () => {
         await dispatchGatewayMethodInProcess(
           "sessions.list",
           {},
-          {
-            forceSyntheticClient: true,
-            syntheticScopes: ["operator.read"],
-            resolveGatewayContext: () => context,
-          },
+          syntheticOptions(context, { syntheticScopes: ["operator.read"] }),
         );
         io.emitAcceptance([true, { runId: "autonomous-run", status: "accepted" }, undefined]);
       });
@@ -604,12 +569,10 @@ describe("typed in-process agent authorization", () => {
           await dispatchGatewayMethodInProcess(
             "agent",
             { message: "run child", idempotencyKey: "autonomous-run" },
-            {
-              forceSyntheticClient: true,
+            syntheticOptions(context, {
               agentRunTracking: "native_subagent",
               syntheticScopes: ["operator.write"],
-              resolveGatewayContext: () => context,
-            },
+            }),
           ),
       );
 
@@ -637,12 +600,10 @@ describe("typed in-process agent authorization", () => {
     await dispatchGatewayMethodInProcess(
       "agent",
       { message: "run child", idempotencyKey: "system-run" },
-      {
-        forceSyntheticClient: true,
+      syntheticOptions(context, {
         agentRunTracking: "native_subagent",
         syntheticScopes: ["operator.write"],
-        resolveGatewayContext: () => context,
-      },
+      }),
     );
   });
 
@@ -819,21 +780,19 @@ describe("typed in-process agent authorization", () => {
     };
     let authorityCurrent = true;
     const dispatched: { client: GatewayRequestOptions["client"] } = { client: null };
-    const context = createContext();
-    context.validateAgentRuntimeApprovalAuthority = (identity) =>
-      authorityCurrent && identity === agentRuntimeIdentity;
-    const methodRegistry = createGatewayMethodRegistry([
-      {
-        name: "node.invoke",
-        scope: "operator.write",
-        owner: { kind: "core", area: "nodes" },
-        handler: ({ client: resolvedClient, respond }: GatewayRequestHandlerOptions) => {
+    const context = createContext([
+      [
+        "node.invoke",
+        "operator.write",
+        "nodes",
+        ({ client: resolvedClient, respond }) => {
           dispatched.client = resolvedClient;
           respond(true, { ok: true });
         },
-      },
+      ],
     ]);
-    context.getGatewayMethodRegistry = () => methodRegistry;
+    context.validateAgentRuntimeApprovalAuthority = (identity) =>
+      authorityCurrent && identity === agentRuntimeIdentity;
 
     await withPluginRuntimeGatewayRequestScope(
       { client, context, isWebchatConnect: () => false },
