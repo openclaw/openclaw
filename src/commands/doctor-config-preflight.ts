@@ -177,7 +177,7 @@ async function runDoctorConfigPreflightOperation(
     const receipt =
       options.stateSchemaPreparation ??
       (await measurePreflightStep("state-schema", () =>
-        prepareLegacyStateDatabaseSchema(process.env),
+        prepareLegacyStateDatabaseSchema(process.env, options.integrityCheck),
       ));
     if (receipt.outcome !== "skipped") {
       stateMigrationStepReceipts.push(receipt);
@@ -299,6 +299,7 @@ async function runDoctorConfigPreflightOperation(
               env: process.env,
               doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
               invocationPurpose: options.invocationPurpose,
+              integrityCheck: options.integrityCheck,
               ...(options.agentDatabaseMigrationDiscovery
                 ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
                 : {}),
@@ -339,7 +340,7 @@ async function runDoctorConfigPreflightOperation(
       await import("../infra/state-migrations.media-persistence.js");
     noteDoctorStateMigrationResult(
       await measurePreflightStep("media-persistence-migration", () =>
-        migrateLegacyMediaPersistence({ env: process.env }),
+        migrateLegacyMediaPersistence({ env: process.env, integrityCheck: options.integrityCheck }),
       ),
     );
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");

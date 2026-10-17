@@ -54,8 +54,11 @@ existing foreign-key checks. This avoids checking every unrelated index against
 its table during a routine upgrade. Structural corruption anywhere in the
 database and corruption in the migration's affected tables still refuse the
 migration; quarantine and rollback behavior are unchanged.
-Historical migrations without a declared table scope, same-version Doctor
-repairs, and legacy transformed recovery archives retain full integrity checks.
+Historical upgrades use the same default even when recovery requires a full-file
+backup. Automatic original-state captures and disposable update rehearsals also
+honor the requested check. Same-version Doctor repairs, automatic rollback
+images, restore validation, and legacy transformed recovery archives retain full
+integrity checks.
 
 To request full integrity checking across every table and index during migration:
 

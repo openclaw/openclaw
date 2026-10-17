@@ -389,6 +389,9 @@ export function repairStateSchema(
         if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertCurrentStateRuntimeSchema(db, pathname);
         }
+        if (previousVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+          assertMigratedStateTableIntegrity(db, pathname, previousVersion, true);
+        }
         if (rebuiltIndexNames.size > 0) {
           applied.push(`Rebuilt canonical shared-state SQLite indexes (${rebuiltIndexNames.size})`);
         }
