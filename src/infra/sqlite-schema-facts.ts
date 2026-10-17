@@ -233,7 +233,12 @@ function trackSchemaChanges(
     const iterator = phase !== "bind" && !snapshot && !owner.capturing ? {} : undefined;
     const newSnapshot = snapshot && snapshot !== owner.snapshot && !owner.capturing;
     if (newSnapshot) {
-      if (!owner.transactionCatalogBound && database.isTransaction && owner.transactionRead) {
+      if (
+        !owner.transactionCatalogBound &&
+        database.isTransaction &&
+        owner.transactionRead &&
+        owner.processRevision !== getSqliteDatabaseSchemaRevision(database)
+      ) {
         invalidate(owner);
         owner.transactionalFacts = true;
       } else {
@@ -255,12 +260,13 @@ function trackSchemaChanges(
     }
     const wasTransaction = database.isTransaction;
     if (
-      writable &&
+      (writable || owner.processRevision === undefined) &&
       !wasTransaction &&
       (control?.kind === "BEGIN" || control?.kind === "SAVEPOINT")
     ) {
-      // Discover the physical admission before SQLite holds a transaction lock.
-      getSqliteDatabaseSchemaRevision(database);
+      // Capture the physical revision before this batch can pin a native snapshot.
+      const processRevision = getSqliteDatabaseSchemaRevision(database);
+      owner.processRevision ??= processRevision;
     }
     const openingMutationRevision =
       !wasTransaction && control?.kind === "BEGIN" && control.single
@@ -296,15 +302,9 @@ function trackSchemaChanges(
     if (dataChange || mutation.temporaryTableSchemaChange || control?.kind === "ROLLBACK") {
       owner.mutationRevision += 1;
     }
-    if (
-      phase !== "bind" &&
-      wasTransaction &&
-      !control &&
-      owner.readDepth === 0 &&
-      !owner.transactionCatalogBound
-    ) {
-      // SQLite has no public txn_state API here. A raw read might have established a
-      // historical snapshot; only a local catalog capture can qualify it afterward.
+    if (phase !== "bind" && wasTransaction && !control && !owner.transactionCatalogBound) {
+      // Constants and connection PRAGMAs do not pin MAIN. Qualify this transaction's
+      // native catalog if a sibling publishes DDL, even for managed reads.
       owner.transactionRead = true;
     }
     const changesReadScope = schemaChange || dataChange || control !== undefined;
@@ -330,14 +330,7 @@ function trackSchemaChanges(
     }
     return {
       stepped: () => {
-        if (
-          database.isTransaction &&
-          !control &&
-          !owner.transactionRead &&
-          !owner.transactionCatalogBound &&
-          owner.facts &&
-          owner.processRevision === getSqliteDatabaseSchemaRevision(database)
-        ) {
+        if (snapshot && owner.facts && database.isTransaction) {
           owner.transactionCatalogBound = true;
         }
       },
@@ -702,7 +695,10 @@ export function getAdmittedSqliteSchemaFacts(
   }
   const snapshot = getSqlitePinnedReadSnapshot(database);
   const unknownSnapshot =
-    (database.isTransaction && owner.transactionRead && !owner.transactionCatalogBound) ||
+    (database.isTransaction &&
+      owner.transactionRead &&
+      !owner.transactionCatalogBound &&
+      owner.processRevision !== getSqliteDatabaseSchemaRevision(database)) ||
     owner.unmanagedSnapshots.size > 0;
   const scopeChanged = observeSchemaLifetime(database, owner, snapshot);
   if (!owner.facts) {
