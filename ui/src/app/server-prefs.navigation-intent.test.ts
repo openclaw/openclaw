@@ -8,7 +8,39 @@ import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from ".
 import { loadSettings, patchSettings } from "./settings.ts";
 const scope = "ws://navigation";
 const pinsKey = "ui.railShortcuts";
+const usage = "route:usage",
+  cron = "route:cron",
+  plugins = "route:plugins",
+  systems = "route:systems";
 const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope;
+const hooks = { profileId: "a", canWrite: true };
+function holdFirstReply(
+  a: ReturnType<ReturnType<typeof createProfilePrefsServer>["connect"]>,
+  heldMethod = "users.prefs.set",
+  firstOnly = true,
+) {
+  const original = a.request.getMockImplementation()!;
+  const reply = createDeferred<unknown>();
+  const reached = createDeferred();
+  let held = false;
+  let result: unknown;
+  a.request.mockImplementation(async (method, params) => {
+    const value = await original(method, params);
+    if (method === heldMethod && (!firstOnly || !held)) {
+      held = true;
+      result = value;
+      reached.resolve();
+      return reply.promise;
+    }
+    return value;
+  });
+  return { reached: reached.promise, release: () => reply.resolve(result) };
+}
+const pushPins = (
+  a: ReturnType<ReturnType<typeof createProfilePrefsServer>["connect"]>,
+  sidebarEntries: string[],
+  sidebarEntriesBase: string[],
+) => pushServerUiPrefs(a.writer, { sidebarEntries, sidebarEntriesBase }, hooks);
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   resetServerUiPrefsSync();
@@ -23,38 +55,36 @@ it.each(["a", "b"])(
   "retains the authenticated offline outbox when selfUser clears and reconnects as %s",
   async (reconnectedId) => {
     const backend = createProfilePrefsServer({
-      a: { [pinsKey]: ["route:usage"] },
-      b: { [pinsKey]: ["route:cron"] },
+      a: { [pinsKey]: [usage] },
+      b: { [pinsKey]: [cron] },
     });
     const a = backend.connect("a");
     await a.refresh();
     Object.assign(a.writer.state, { connected: false });
     const before = loadSettings();
-    const next = patchSettings({ sidebarEntries: ["route:plugins"] });
+    const next = patchSettings({ sidebarEntries: [plugins] });
     pushServerUiPrefs(a.writer, changedServerUiPrefs(before, next)!, {
       profile: { selfUser: null, hello: null },
     });
     await vi.dynamicImportSettled();
     expect(JSON.parse(localStorage.getItem(pendingKey + ":profile:a") ?? "null")).toMatchObject({
-      railShortcuts: ["route:plugins"],
+      railShortcuts: [plugins],
     });
     expect(localStorage.getItem(pendingKey)).toBeNull();
     const reconnected = backend.connect(reconnectedId);
     flushServerUiPrefs(reconnected.writer, { profileId: reconnectedId, canWrite: true });
     await vi.dynamicImportSettled();
     expect(backend.profiles[reconnectedId]?.[pinsKey]).toEqual(
-      reconnectedId === "a" ? ["route:plugins"] : ["route:cron"],
+      reconnectedId === "a" ? [plugins] : [cron],
     );
     if (reconnectedId === "b") {
-      expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage"]);
+      expect(backend.profiles.a?.[pinsKey]).toEqual([usage]);
       flushServerUiPrefs(a.writer, { profileId: "a", canWrite: true });
       Object.assign(a.writer.state, { connected: true });
       flushServerUiPrefs(a.writer, { profileId: "a", canWrite: true });
       await vi.dynamicImportSettled();
     }
-    expect(backend.profiles.a).toEqual({
-      [pinsKey]: ["route:plugins"],
-    });
+    expect(backend.profiles.a).toEqual({ [pinsKey]: [plugins] });
   },
 );
 
@@ -62,60 +92,42 @@ it.each(["inverse", "inverse-with-remote", "new-pin"])(
   "replays authored order after an unknown acknowledgment reload (%s)",
   async (mode) => {
     const remoteSlot = mode === "inverse-with-remote";
-    const initial = ["route:usage", "route:cron"];
+    const initial = [usage, cron];
     const backend = createProfilePrefsServer({ a: { [pinsKey]: initial } });
     const a = backend.connect("a");
     await a.refresh();
-    const original = a.request.getMockImplementation()!;
-    const firstAck = createDeferred<unknown>();
-    const committed = createDeferred();
-    a.request.mockImplementation(async (method, params) => {
-      const result = await original(method, params);
-      if (method === "users.prefs.set") {
-        committed.resolve();
-        return firstAck.promise;
-      }
-      return result;
-    });
-    const hooks = { profileId: "a", canWrite: true };
-    const desired = mode === "new-pin" ? ["route:systems", ...initial] : initial;
+    const held = holdFirstReply(a, "users.prefs.set", false);
+    const desired = mode === "new-pin" ? [systems, ...initial] : initial;
     const first = patchSettings({
-      sidebarEntries: mode === "new-pin" ? [...initial, "route:systems"] : initial.toReversed(),
+      sidebarEntries: mode === "new-pin" ? [...initial, systems] : initial.toReversed(),
     });
-    pushServerUiPrefs(
-      a.writer,
-      { sidebarEntries: first.sidebarEntries, sidebarEntriesBase: initial },
-      hooks,
-    );
-    await committed.promise;
+    pushPins(a, first.sidebarEntries, initial);
+    await held.reached;
     const second = patchSettings({ sidebarEntries: desired });
     pushServerUiPrefs(a.writer, changedServerUiPrefs(first, second)!, hooks);
     resetServerUiPrefsSync();
-    firstAck.resolve({ status: "ok" });
+    held.release();
     if (remoteSlot) {
-      backend.profiles.a![pinsKey] = ["route:cron", "route:plugins", "route:usage"];
+      backend.profiles.a![pinsKey] = [cron, plugins, usage];
     }
     const reloaded = backend.connect("a");
     flushServerUiPrefs(reloaded.writer, hooks);
     await vi.dynamicImportSettled();
-    expect(backend.profiles.a?.[pinsKey]).toEqual(
-      remoteSlot ? ["route:usage", "route:plugins", "route:cron"] : desired,
-    );
+    expect(backend.profiles.a?.[pinsKey]).toEqual(remoteSlot ? [usage, plugins, cron] : desired);
   },
 );
 
 it.each([false, true])(
   "does not borrow identity for an unauthenticated offline gateway (other=%s)",
   async (other) => {
-    const backend = createProfilePrefsServer({ a: { [pinsKey]: ["route:usage"] } });
+    const backend = createProfilePrefsServer({ a: { [pinsKey]: [usage] } });
     if (other) {
       await backend.connect("a").refresh();
     }
     const destination = other ? "ws://other-gateway" : scope;
-    const offline = createProfilePrefsServer(
-      { b: { [pinsKey]: ["route:cron"] } },
-      destination,
-    ).connect("b");
+    const offline = createProfilePrefsServer({ b: { [pinsKey]: [cron] } }, destination).connect(
+      "b",
+    );
     Object.assign(offline.writer.state, { connected: false });
     pushServerUiPrefs(
       offline.writer,
@@ -136,41 +148,20 @@ it.each([false, true])(
 it.each([false, true])(
   "settles only newer authored ordering after a successful prior reorder (reverse=%s)",
   async (reverse) => {
-    const initial = ["route:usage", "route:cron", "route:systems"];
+    const initial = [usage, cron, systems];
     const backend = createProfilePrefsServer({ a: { [pinsKey]: initial } });
     const a = backend.connect("a");
-    const original = a.request.getMockImplementation()!;
-    const firstAck = createDeferred<unknown>();
-    const committed = createDeferred();
-    let writes = 0;
-    a.request.mockImplementation(async (method, params) => {
-      const result = await original(method, params);
-      if (method === "users.prefs.set" && ++writes === 1) {
-        committed.resolve();
-        return firstAck.promise;
-      }
-      return result;
-    });
-    const first = ["route:cron", "route:usage", "route:systems"];
-    const hooks = { profileId: "a", canWrite: true };
-    pushServerUiPrefs(a.writer, { sidebarEntries: first, sidebarEntriesBase: initial }, hooks);
-    await committed.promise;
-    pushServerUiPrefs(
-      a.writer,
-      {
-        sidebarEntries: reverse ? initial : [...first, "route:plugins"],
-        sidebarEntriesBase: first,
-      },
-      hooks,
-    );
+    const held = holdFirstReply(a);
+    const first = [cron, usage, systems];
+    pushPins(a, first, initial);
+    await held.reached;
+    pushPins(a, reverse ? initial : [...first, plugins], first);
     if (!reverse) {
       backend.profiles.a![pinsKey] = initial;
     }
-    firstAck.resolve({ status: "ok" });
+    held.release();
     await vi.dynamicImportSettled();
-    expect(backend.profiles.a?.[pinsKey]).toEqual(
-      reverse ? initial : [...initial, "route:plugins"],
-    );
+    expect(backend.profiles.a?.[pinsKey]).toEqual(reverse ? initial : [...initial, plugins]);
     expect(localStorage.getItem(pendingKey + ":profile:a")).toBeNull();
     for (const [method, params] of a.request.mock.calls) {
       if (method === "users.prefs.set") {
@@ -183,30 +174,12 @@ it.each([false, true])(
 it.each(["users.prefs.get", "users.prefs.set"])(
   "preserves foreign order-only intent with the same desired/base pair during %s",
   async (heldMethod) => {
-    const initial = ["route:usage", "route:cron"];
+    const initial = [usage, cron];
     const backend = createProfilePrefsServer({ a: { [pinsKey]: initial.toReversed() } });
     const a = backend.connect("a");
-    const original = a.request.getMockImplementation()!;
-    const reply = createDeferred<unknown>();
-    const reached = createDeferred();
-    let held = false;
-    let heldResult: unknown;
-    a.request.mockImplementation(async (method, params) => {
-      const result = await original(method, params);
-      if (method === heldMethod && !held) {
-        held = true;
-        heldResult = result;
-        reached.resolve();
-        return reply.promise;
-      }
-      return result;
-    });
-    pushServerUiPrefs(
-      a.writer,
-      { sidebarEntries: initial, sidebarEntriesBase: initial },
-      { profileId: "a", canWrite: true },
-    );
-    await reached.promise;
+    const held = holdFirstReply(a, heldMethod);
+    pushPins(a, initial, initial);
+    await held.reached;
     localStorage.setItem(
       pendingKey + ":profile:a",
       JSON.stringify({
@@ -215,7 +188,7 @@ it.each(["users.prefs.get", "users.prefs.set"])(
         railShortcutsOrder: true,
       }),
     );
-    reply.resolve(heldResult);
+    held.release();
     await vi.dynamicImportSettled();
     expect(backend.profiles.a?.[pinsKey]).toEqual(initial);
     expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(

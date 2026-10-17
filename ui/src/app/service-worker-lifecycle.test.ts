@@ -1,4 +1,3 @@
-// Service-worker activation and notification lifecycle contracts.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +26,7 @@ describe("Control UI service worker cache versioning", () => {
       claim: vi.fn(async () => undefined),
       matchAll: vi.fn(async () => [...included, ...excluded]),
     };
-    const context = vm.createContext({
+    new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8")).runInNewContext({
       URL,
       caches: {
         delete: cacheDelete,
@@ -49,7 +48,6 @@ describe("Control UI service worker cache versioning", () => {
         registration: { scope: "https://control.example/openclaw/" },
       },
     });
-    new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8")).runInContext(context);
     let activation: Promise<unknown> | undefined;
     listeners.get("activate")?.({
       waitUntil: (pending) => {
@@ -262,10 +260,13 @@ describe("Control UI service worker notification scope", () => {
           payload.url = target;
         }
         const notification = await worker.dispatchPush(payload);
-        expect(notification.title).toBe(payload.title);
-        expect(notification.options.body).toBe(payload.body);
-        expect(notification.options.data.url).toBe(target ?? scope);
-        expect(notification.options.data.explicitUrl).toBe(target !== null);
+        expect(notification).toMatchObject({
+          title: payload.title,
+          options: {
+            body: payload.body,
+            data: { url: target ?? scope, explicitUrl: target !== null },
+          },
+        });
         data = notification.options.data;
       }
       const close = await worker.dispatchNotificationClick(data);
@@ -277,23 +278,12 @@ describe("Control UI service worker notification scope", () => {
       });
 
       for (const [index, client] of worker.windowClients.entries()) {
-        if (index === focusedClientIndex) {
-          expect(client.focus).toHaveBeenCalledOnce();
-        } else {
-          expect(client.focus).not.toHaveBeenCalled();
-        }
-        if (index === (navigatedClientIndex ?? focusedClientIndex) && navigatedUrl) {
-          expect(client.navigate).toHaveBeenCalledExactlyOnceWith(navigatedUrl);
-        } else {
-          expect(client.navigate).not.toHaveBeenCalled();
-        }
+        expect(client.focus.mock.calls).toHaveLength(index === focusedClientIndex ? 1 : 0);
+        const navigates = index === (navigatedClientIndex ?? focusedClientIndex) && navigatedUrl;
+        expect(client.navigate.mock.calls).toEqual(navigates ? [[navigatedUrl]] : []);
       }
 
-      if (openedUrl === null) {
-        expect(worker.clients.openWindow).not.toHaveBeenCalled();
-      } else {
-        expect(worker.clients.openWindow).toHaveBeenCalledExactlyOnceWith(openedUrl);
-      }
+      expect(worker.clients.openWindow.mock.calls).toEqual(openedUrl === null ? [] : [[openedUrl]]);
     },
   );
 
@@ -345,12 +335,10 @@ type ServiceWorkerPushPayload = {
   icon?: string;
 };
 
-type ServiceWorkerNotificationOptions = {
-  body: string;
-  icon: string;
+type ServiceWorkerNotificationOptions = Required<
+  Omit<ServiceWorkerPushPayload, "title" | "url">
+> & {
   badge: string;
-  tag: string;
-  renotify: boolean;
   data: { url: string; explicitUrl: boolean };
 };
 
@@ -393,54 +381,54 @@ function createNotificationServiceWorker(
     async (_title: string, _options: ServiceWorkerNotificationOptions) => undefined,
   );
   const scopeUrl = new URL(scope);
-  const serviceWorkerGlobal = {
-    addEventListener(type: string, listener: (event: ServiceWorkerNotificationEventStub) => void) {
-      listeners.set(type, listener);
-    },
-    clients,
-    location: {
-      href: new URL("sw.js?v=notification-scope", scopeUrl).href,
-      origin: scopeUrl.origin,
-    },
-    registration: { scope, showNotification },
-    skipWaiting: vi.fn(),
-  };
-  const context = vm.createContext({
+  new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8"), {
+    filename: "ui/public/sw.js",
+  }).runInNewContext({
     URL,
     caches: {},
     fetch: vi.fn(),
-    self: serviceWorkerGlobal,
+    self: {
+      addEventListener(
+        type: string,
+        listener: (event: ServiceWorkerNotificationEventStub) => void,
+      ) {
+        listeners.set(type, listener);
+      },
+      clients,
+      location: {
+        href: new URL("sw.js?v=notification-scope", scopeUrl).href,
+        origin: scopeUrl.origin,
+      },
+      registration: { scope, showNotification },
+      skipWaiting: vi.fn(),
+    },
   });
-
-  new vm.Script(fs.readFileSync(serviceWorkerPath, "utf8"), {
-    filename: "ui/public/sw.js",
-  }).runInContext(context);
+  async function dispatch(
+    type: string,
+    event: Omit<ServiceWorkerNotificationEventStub, "waitUntil">,
+  ) {
+    const listener = listeners.get(type);
+    if (!listener) {
+      throw new Error(`Service worker did not register a ${type} handler`);
+    }
+    let completion: Promise<unknown> | undefined;
+    listener({
+      ...event,
+      waitUntil: (pending) => {
+        completion = pending;
+      },
+    });
+    if (!completion) {
+      throw new Error(`${type} did not register a completion promise`);
+    }
+    await completion;
+  }
 
   return {
     clients,
     windowClients,
     async dispatchPush(payload: ServiceWorkerPushPayload) {
-      const listener = listeners.get("push");
-      if (!listener) {
-        throw new Error("Service worker did not register a push handler");
-      }
-
-      let completion: Promise<unknown> | undefined;
-      listener({
-        data: {
-          json: () => payload,
-          text: () => payload.body,
-        },
-        waitUntil(promise) {
-          completion = promise;
-        },
-      });
-
-      if (!completion) {
-        throw new Error("Service worker push did not register a completion promise");
-      }
-      await completion;
-
+      await dispatch("push", { data: { json: () => payload, text: () => payload.body } });
       const notification = showNotification.mock.calls.at(-1);
       if (!notification) {
         throw new Error("Service worker push did not show a notification");
@@ -449,24 +437,8 @@ function createNotificationServiceWorker(
       return { title: notification[0], options: notification[1] };
     },
     async dispatchNotificationClick(data: { url: string; explicitUrl?: boolean }) {
-      const listener = listeners.get("notificationclick");
-      if (!listener) {
-        throw new Error("Service worker did not register a notification-click handler");
-      }
-
       const close = vi.fn();
-      let completion: Promise<unknown> | undefined;
-      listener({
-        notification: { close, data },
-        waitUntil(promise) {
-          completion = promise;
-        },
-      });
-
-      if (!completion) {
-        throw new Error("Notification click did not register a completion promise");
-      }
-      await completion;
+      await dispatch("notificationclick", { notification: { close, data } });
       return close;
     },
   };

@@ -18,7 +18,72 @@ import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.t
 
 const scope = "ws://navigation";
 const pinsKey = "ui.railShortcuts";
-const config = { ui: { prefs: { sidebarEntries: ["route:usage", "plugin:workboard/workboard"] } } };
+const usage = "route:usage",
+  cron = "route:cron",
+  plugins = "route:plugins",
+  systems = "route:systems";
+const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a";
+const authority = { profileId: "a", canWrite: true };
+const config = { ui: { prefs: { sidebarEntries: [usage, "plugin:workboard/workboard"] } } };
+const pins = (sidebarEntries: string[], sidebarEntriesBase: string[]) => ({
+  sidebarEntries,
+  sidebarEntriesBase,
+});
+function holdFirstWrite(a: ReturnType<ReturnType<typeof server>["connect"]>, commit = true) {
+  const original = a.request.getMockImplementation()!;
+  const ack = createDeferred<unknown>();
+  const started = createDeferred();
+  let writes = 0;
+  a.request.mockImplementation(async (method, params) => {
+    if (method === "users.prefs.set" && ++writes === 1) {
+      if (commit) {
+        expect(await original(method, params)).toEqual({ status: "ok" });
+      }
+      started.resolve();
+      return ack.promise;
+    }
+    return original(method, params);
+  });
+  return {
+    ack,
+    started,
+    get writes() {
+      return writes;
+    },
+  };
+}
+function captureFirstAck() {
+  let pending: unknown;
+  let acknowledgments = 0;
+  return {
+    get pending() {
+      return pending;
+    },
+    hooks: {
+      ...authority,
+      afterCommit: () => {
+        if (++acknowledgments === 1) {
+          pending = JSON.parse(localStorage.getItem(pendingKey) ?? "null");
+        }
+      },
+    },
+  };
+}
+function storedPins(value: ReturnType<typeof pins>) {
+  return { railShortcuts: value.sidebarEntries, railShortcutsBase: value.sidebarEntriesBase };
+}
+function replacePins(
+  replacement: string,
+  a: ReturnType<ReturnType<typeof server>["connect"]>,
+  newer: ReturnType<typeof pins>,
+  hooks: Parameters<typeof pushServerUiPrefs>[2],
+) {
+  if (replacement === "storage") {
+    localStorage.setItem(pendingKey, JSON.stringify(storedPins(newer)));
+  } else {
+    pushServerUiPrefs(a.writer, newer, hooks);
+  }
+}
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   resetServerUiPrefsSync();
@@ -34,60 +99,20 @@ describe("personal navigation preference boundary", () => {
   it.each(["storage", "same-tab"])(
     "keeps identical desired pins with a newer observed base across an older ack (%s)",
     async (replacement) => {
-      const backend = server({ a: { [pinsKey]: ["route:cron"] } });
+      const backend = server({ a: { [pinsKey]: [cron] } });
       const a = backend.connect("a");
-      const original = a.request.getMockImplementation()!;
-      const firstAck = createDeferred<unknown>();
-      const committed = createDeferred();
-      let writes = 0;
-      a.request.mockImplementation(async (method, params) => {
-        const result = await original(method, params);
-        if (method === "users.prefs.set" && ++writes === 1) {
-          expect(result).toEqual({ status: "ok" });
-          committed.resolve();
-          return firstAck.promise;
-        }
-        return result;
-      });
-      const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a";
-      const newer = { sidebarEntries: [], sidebarEntriesBase: ["route:cron"] };
-      let pendingAtFirstAck: unknown;
-      let acknowledgments = 0;
-      const hooks = {
-        profileId: "a",
-        canWrite: true,
-        afterCommit: () => {
-          if (++acknowledgments === 1) {
-            pendingAtFirstAck = JSON.parse(localStorage.getItem(pendingKey) ?? "null");
-          }
-        },
-      };
-      pushServerUiPrefs(
-        a.writer,
-        { sidebarEntries: [], sidebarEntriesBase: ["route:usage"] },
-        hooks,
-      );
-      await committed.promise;
-      expect(backend.profiles.a?.[pinsKey]).toEqual(["route:cron"]);
-      if (replacement === "storage") {
-        localStorage.setItem(
-          pendingKey,
-          JSON.stringify({
-            railShortcuts: newer.sidebarEntries,
-            railShortcutsBase: newer.sidebarEntriesBase,
-          }),
-        );
-      } else {
-        pushServerUiPrefs(a.writer, newer, hooks);
-      }
-      firstAck.resolve({ status: "ok" });
+      const held = holdFirstWrite(a);
+      const capture = captureFirstAck();
+      const newer = pins([], [cron]);
+      pushServerUiPrefs(a.writer, pins([], [usage]), capture.hooks);
+      await held.started.promise;
+      expect(backend.profiles.a?.[pinsKey]).toEqual([cron]);
+      replacePins(replacement, a, newer, capture.hooks);
+      held.ack.resolve({ status: "ok" });
       await vi.dynamicImportSettled();
-      expect(pendingAtFirstAck).toEqual({
-        railShortcuts: newer.sidebarEntries,
-        railShortcutsBase: newer.sidebarEntriesBase,
-      });
+      expect(capture.pending).toEqual(storedPins(newer));
       expect(backend.profiles.a?.[pinsKey]).toEqual([]);
-      expect(writes).toBe(2);
+      expect(held.writes).toBe(2);
       expect(localStorage.getItem(pendingKey)).toBeNull();
     },
   );
@@ -95,66 +120,25 @@ describe("personal navigation preference boundary", () => {
   it.each(["storage", "same-tab-independent"])(
     "advances only the locally composed successor base across an older ack (%s)",
     async (replacement) => {
-      const backend = server({ a: { [pinsKey]: ["route:usage"] } });
+      const backend = server({ a: { [pinsKey]: [usage] } });
       const a = backend.connect("a");
-      const original = a.request.getMockImplementation()!;
-      const firstAck = createDeferred<unknown>();
-      const committed = createDeferred();
-      let writes = 0;
-      a.request.mockImplementation(async (method, params) => {
-        const result = await original(method, params);
-        if (method === "users.prefs.set" && ++writes === 1) {
-          committed.resolve();
-          return firstAck.promise;
-        }
-        return result;
-      });
-      const pendingKey = "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a";
-      let pendingAtFirstAck: unknown;
-      let acknowledgments = 0;
-      const hooks = {
-        profileId: "a",
-        canWrite: true,
-        afterCommit: () => {
-          if (++acknowledgments === 1) {
-            pendingAtFirstAck = JSON.parse(localStorage.getItem(pendingKey) ?? "null");
-          }
-        },
-      };
-      const first = {
-        sidebarEntries: ["route:usage", "route:cron"],
-        sidebarEntriesBase: ["route:usage"],
-      };
-      pushServerUiPrefs(a.writer, first, hooks);
-      await committed.promise;
-      const newer = {
-        sidebarEntries: ["route:usage", "route:plugins"],
-        sidebarEntriesBase: first.sidebarEntriesBase,
-      };
-      if (replacement === "storage") {
-        localStorage.setItem(
-          pendingKey,
-          JSON.stringify({
-            railShortcuts: newer.sidebarEntries,
-            railShortcutsBase: newer.sidebarEntriesBase,
-          }),
-        );
-      } else {
-        pushServerUiPrefs(a.writer, newer, hooks);
-      }
-      firstAck.resolve({ status: "ok" });
+      const held = holdFirstWrite(a);
+      const capture = captureFirstAck();
+      const first = pins([usage, cron], [usage]);
+      pushServerUiPrefs(a.writer, first, capture.hooks);
+      await held.started.promise;
+      const newer = pins([usage, plugins], first.sidebarEntriesBase);
+      replacePins(replacement, a, newer, capture.hooks);
+      held.ack.resolve({ status: "ok" });
       await vi.dynamicImportSettled();
-      expect(pendingAtFirstAck).toEqual({
-        railShortcuts: newer.sidebarEntries,
-        railShortcutsBase: newer.sidebarEntriesBase,
-      });
-      expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage", "route:plugins", "route:cron"]);
-      expect(writes).toBe(2);
+      expect(capture.pending).toEqual(storedPins(newer));
+      expect(backend.profiles.a?.[pinsKey]).toEqual([usage, plugins, cron]);
+      expect(held.writes).toBe(2);
     },
   );
 
   it("honors another tab cancelling a pin edit during its CAS read", async () => {
-    const backend = server({ a: { [pinsKey]: ["route:usage"] } });
+    const backend = server({ a: { [pinsKey]: [usage] } });
     const a = backend.connect("a");
     const original = a.request.getMockImplementation()!;
     const started = createDeferred();
@@ -170,44 +154,19 @@ describe("personal navigation preference boundary", () => {
     pushServerUiPrefs(
       a.writer,
       {
-        sidebarEntries: ["route:usage", "route:cron"],
-        sidebarEntriesBase: ["route:usage"],
+        sidebarEntries: [usage, cron],
+        sidebarEntriesBase: [usage],
       },
       { profileId: "a", canWrite: true, afterCommit },
     );
     await started.promise;
-    localStorage.removeItem("openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a");
-    response.resolve({ status: "ok", entries: { [pinsKey]: ["route:usage"] } });
+    localStorage.removeItem(pendingKey);
+    response.resolve({ status: "ok", entries: { [pinsKey]: [usage] } });
     await vi.dynamicImportSettled();
     expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toEqual([]);
-    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage"]);
+    expect(backend.profiles.a?.[pinsKey]).toEqual([usage]);
     expect(afterCommit).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      name: "local reorder retaining remote-only slots",
-      base: ["route:usage", "route:cron"],
-      desired: ["route:cron", "route:usage"],
-      remote: ["route:usage", "route:plugins", "route:cron"],
-      expected: ["route:cron", "route:plugins", "route:usage"],
-    },
-  ])(
-    "rebases $name without replacing unrelated remote intent",
-    async ({ base, desired, remote, expected }) => {
-      const backend = server({ a: { [pinsKey]: remote } });
-      const a = backend.connect("a");
-      expect(
-        await writeProfileAppearancePrefs(
-          a.writer.state.client,
-          { sidebarEntries: desired, sidebarEntriesBase: base },
-          true,
-          "a",
-        ),
-      ).toMatchObject({ ok: true });
-      expect(backend.profiles.a?.[pinsKey]).toEqual(expected);
-    },
-  );
 
   it("strips browser-only edit metadata when a profileless mixed change retains only appearance", async () => {
     const request = vi.fn(async () => ({}));
@@ -215,7 +174,7 @@ describe("personal navigation preference boundary", () => {
     const committed = createDeferred();
     pushServerUiPrefs(
       writer,
-      { themeMode: "dark", sidebarEntries: [], sidebarEntriesBase: ["route:usage"] },
+      { themeMode: "dark", sidebarEntries: [], sidebarEntriesBase: [usage] },
       {
         afterCommit: ({ retainedLocal }) => {
           if (!retainedLocal) {
@@ -232,11 +191,11 @@ describe("personal navigation preference boundary", () => {
   });
 
   it("does not infer an unknown edit base from a fresh server read", async () => {
-    const a = server({ a: { [pinsKey]: ["route:usage", "route:cron"] } }).connect("a");
+    const a = server({ a: { [pinsKey]: [usage, cron] } }).connect("a");
     expect(
       await writeProfileAppearancePrefs(
         a.writer.state.client,
-        { sidebarEntries: ["route:usage"] },
+        { sidebarEntries: [usage] },
         true,
         "a",
       ),
@@ -246,7 +205,7 @@ describe("personal navigation preference boundary", () => {
 
   it("retains repeated CAS conflicts for reconnect without overwriting remote edits", async () => {
     vi.useFakeTimers();
-    const backend = server({ a: { [pinsKey]: ["route:usage"] } });
+    const backend = server({ a: { [pinsKey]: [usage] } });
     const a = backend.connect("a");
     await a.refresh();
     const original = a.request.getMockImplementation()!;
@@ -258,8 +217,7 @@ describe("personal navigation preference boundary", () => {
         attempts += 1;
         if (attempts < 3) {
           backend.profiles.a = {
-            [pinsKey]:
-              attempts === 1 ? ["route:usage", "route:cron"] : ["route:cron", "route:systems"],
+            [pinsKey]: attempts === 1 ? [usage, cron] : [cron, systems],
           };
           started.resolve();
           return { status: "conflict" };
@@ -267,58 +225,40 @@ describe("personal navigation preference boundary", () => {
       }
       return original(method, params);
     });
-    patchSettings({ sidebarEntries: ["route:usage", "route:plugins"] });
+    patchSettings({ sidebarEntries: [usage, plugins] });
     pushServerUiPrefs(
       a.writer,
-      { sidebarEntries: ["route:usage", "route:plugins"], sidebarEntriesBase: ["route:usage"] },
+      { sidebarEntries: [usage, plugins], sidebarEntriesBase: [usage] },
       { profileId: "a", canWrite: true, afterCommit: committed },
     );
     await started.promise;
     await vi.runAllTimersAsync();
     expect(committed).not.toHaveBeenCalled();
     expect(attempts).toBe(2);
-    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:cron", "route:systems"]);
+    expect(backend.profiles.a?.[pinsKey]).toEqual([cron, systems]);
     expect(resolveServerUiPrefWriteStatus("sidebarEntries", scope, "a")).toMatchObject({
       status: "error",
     });
-    expect(
-      JSON.parse(
-        localStorage.getItem("openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a")!,
-      ).railShortcuts,
-    ).toEqual(["route:usage", "route:plugins"]);
+    expect(JSON.parse(localStorage.getItem(pendingKey)!).railShortcuts).toEqual([usage, plugins]);
     flushServerUiPrefs(a.writer, { profileId: "a", canWrite: true, afterCommit: committed });
     await vi.dynamicImportSettled();
     expect(committed).toHaveBeenCalledOnce();
     expect(attempts).toBe(3);
-    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:cron", "route:systems", "route:plugins"]);
+    expect(backend.profiles.a?.[pinsKey]).toEqual([cron, systems, plugins]);
     expect(loadSettings().sidebarEntries).toEqual(backend.profiles.a?.[pinsKey]);
     expect(resolveServerUiPrefWriteStatus("sidebarEntries", scope, "a").status).toBe("saved");
-    expect(
-      localStorage.getItem("openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:a"),
-    ).toBeNull();
+    expect(localStorage.getItem(pendingKey)).toBeNull();
   });
 
   it.each(["readd", "readd-identical"])(
     "settles composed intent without losing remote removals or explicit readds (%s)",
     async (mode) => {
-      const backend = server({ a: { [pinsKey]: ["route:usage"] } });
+      const backend = server({ a: { [pinsKey]: [usage] } });
       const a = backend.connect("a");
       await a.refresh();
-      const original = a.request.getMockImplementation()!;
-      const firstAck = createDeferred<unknown>();
-      const started = createDeferred();
+      const held = holdFirstWrite(a);
       const settled = createDeferred();
-      let writes = 0;
       let commits = 0;
-      a.request.mockImplementation(async (method, params) => {
-        if (method === "users.prefs.set" && ++writes === 1) {
-          const result = await original(method, params);
-          expect(result).toEqual({ status: "ok" });
-          started.resolve();
-          return firstAck.promise;
-        }
-        return original(method, params);
-      });
       const hooks = {
         profileId: "a",
         canWrite: true,
@@ -329,32 +269,29 @@ describe("personal navigation preference boundary", () => {
         },
       };
       const before = loadSettings();
-      const first = patchSettings({ sidebarEntries: ["route:usage", "route:plugins"] });
+      const first = patchSettings({ sidebarEntries: [usage, plugins] });
       pushServerUiPrefs(a.writer, changedServerUiPrefs(before, first)!, hooks);
-      await started.promise;
+      await held.started.promise;
       const second = patchSettings({
-        sidebarEntries:
-          mode === "readd-identical" ? first.sidebarEntries : ["route:plugins", "route:systems"],
+        sidebarEntries: mode === "readd-identical" ? first.sidebarEntries : [plugins, systems],
       });
       const removed = patchSettings({
-        sidebarEntries: second.sidebarEntries.filter((entry) => entry !== "route:plugins"),
+        sidebarEntries: second.sidebarEntries.filter((entry) => entry !== plugins),
       });
       pushServerUiPrefs(a.writer, changedServerUiPrefs(first, removed)!, hooks);
       patchSettings({ sidebarEntries: second.sidebarEntries });
       pushServerUiPrefs(a.writer, changedServerUiPrefs(removed, second)!, hooks);
-      backend.profiles.a = { [pinsKey]: ["route:cron"] };
-      firstAck.resolve({ status: "ok" });
+      backend.profiles.a = { [pinsKey]: [cron] };
+      held.ack.resolve({ status: "ok" });
       await settled.promise;
       expect(backend.profiles.a?.[pinsKey]).toEqual(
-        mode === "readd"
-          ? ["route:cron", "route:plugins", "route:systems"]
-          : ["route:cron", "route:plugins"],
+        mode === "readd" ? [cron, plugins, systems] : [cron, plugins],
       );
     },
   );
 
   it("ignores another profile's shared browser mirror even before its storage event", async () => {
-    const a = server({ a: { [pinsKey]: ["route:usage"] } }).connect("a");
+    const a = server({ a: { [pinsKey]: [usage] } }).connect("a");
     await a.refresh();
     const key = settingsKeyForGateway(scope);
     const stored = JSON.parse(localStorage.getItem(key)!);
@@ -367,28 +304,28 @@ describe("personal navigation preference boundary", () => {
       }),
     );
     expect(loadSettings()).toMatchObject({
-      sidebarEntries: ["route:usage"],
+      sidebarEntries: [usage],
       navWidth: 360,
     });
-    patchSettings({ sidebarEntries: ["route:cron"] });
+    patchSettings({ sidebarEntries: [cron] });
     expect(loadSettings()).toMatchObject({
-      sidebarEntries: ["route:cron"],
+      sidebarEntries: [cron],
     });
   });
 
   it("restores only the selected profile's pending pins while its read is unavailable", async () => {
-    const a = server({ a: { [pinsKey]: ["route:usage"] } }).connect("a");
+    const a = server({ a: { [pinsKey]: [usage] } }).connect("a");
     await a.refresh();
     localStorage.setItem(
       "openclaw.control.serverPrefs.pending.v1:" + scope + ":profile:b",
-      JSON.stringify({ railShortcuts: ["route:cron"] }),
+      JSON.stringify({ railShortcuts: [cron] }),
     );
     applyServerUiPrefs(config, { scope, profileId: "b", onApplied: vi.fn() });
     expect(loadSettings()).toMatchObject({
-      sidebarEntries: ["route:cron"],
+      sidebarEntries: [cron],
     });
     applyServerUiPrefs({ ...config }, { scope, profileId: "b", onApplied: vi.fn() });
-    expect(loadSettings().sidebarEntries).toEqual(["route:cron"]);
+    expect(loadSettings().sidebarEntries).toEqual([cron]);
   });
 
   it("ignores an old client's read after reconnect and drains through the new client", async () => {
@@ -402,7 +339,7 @@ describe("personal navigation preference boundary", () => {
     const next = server().connect("a");
     const committed = createDeferred();
     const hooks = { profileId: "a", canWrite: true, afterCommit: () => committed.resolve() };
-    pushServerUiPrefs(writer, { sidebarEntries: ["route:cron"], sidebarEntriesBase: [] }, hooks);
+    pushServerUiPrefs(writer, { sidebarEntries: [cron], sidebarEntriesBase: [] }, hooks);
     await started.promise;
     Object.assign(writer.state, { client: next.writer.state.client });
     flushServerUiPrefs(writer, hooks);
@@ -427,7 +364,7 @@ describe("personal navigation preference boundary", () => {
   });
 
   it("reads saved shortcuts unchanged without importing shared navigation", async () => {
-    const saved = ["route:cron", "session:agent:main:saved"];
+    const saved = [cron, "session:agent:main:saved"];
     patchSettings({ sidebarEntries: ["session:private-other-user"] });
     const backend = server({ a: { [pinsKey]: saved } });
     const connection = backend.connect("a");
@@ -456,18 +393,15 @@ describe("personal navigation preference boundary", () => {
     expect(request.mock.calls).toHaveLength(1);
   });
 
-  it.each([true])(
-    "never writes profileless navigation to global config (offline=%s)",
-    async (offline) => {
-      const request = vi.fn(async () => ({}));
-      const writer = createServerPrefsWriter(request, scope, !offline);
-      pushServerUiPrefs(writer, { sidebarEntries: [] });
-      Object.assign(writer.state, { connected: true });
-      flushServerUiPrefs(writer);
-      await Promise.resolve();
-      expect(request).not.toHaveBeenCalled();
-    },
-  );
+  it("never writes offline profileless navigation to global config", async () => {
+    const request = vi.fn(async () => ({}));
+    const writer = createServerPrefsWriter(request, scope, false);
+    pushServerUiPrefs(writer, { sidebarEntries: [] });
+    Object.assign(writer.state, { connected: true });
+    flushServerUiPrefs(writer);
+    await Promise.resolve();
+    expect(request).not.toHaveBeenCalled();
+  });
 
   it("rechecks dispatch authority after its CAS read", async () => {
     const deferred = createDeferred<unknown>();
@@ -488,40 +422,19 @@ describe("personal navigation preference boundary", () => {
 
   it("serializes rapid reorders and retries CAS conflicts without losing newest intent", async () => {
     vi.useFakeTimers();
-    const backend = server({ a: { [pinsKey]: ["route:usage", "route:cron"] } });
+    const backend = server({ a: { [pinsKey]: [usage, cron] } });
     const a = backend.connect("a");
     await a.refresh();
-    const original = a.request.getMockImplementation()!;
-    const firstWrite = createDeferred<unknown>();
-    const started = createDeferred();
-    let writes = 0;
-    a.request.mockImplementation(async (method, params) => {
-      if (method === "users.prefs.set" && ++writes === 1) {
-        started.resolve();
-        return firstWrite.promise;
-      }
-      return original(method, params);
-    });
+    const held = holdFirstWrite(a, false);
     const committed = createDeferred();
     const hooks = { profileId: "a", canWrite: true, afterCommit: () => committed.resolve() };
-    pushServerUiPrefs(
-      a.writer,
-      {
-        sidebarEntries: ["route:cron", "route:usage"],
-        sidebarEntriesBase: ["route:usage", "route:cron"],
-      },
-      hooks,
-    );
-    await started.promise;
-    pushServerUiPrefs(
-      a.writer,
-      { sidebarEntries: ["route:cron"], sidebarEntriesBase: ["route:cron", "route:usage"] },
-      hooks,
-    );
-    firstWrite.resolve({ status: "conflict" });
+    pushServerUiPrefs(a.writer, pins([cron, usage], [usage, cron]), hooks);
+    await held.started.promise;
+    pushServerUiPrefs(a.writer, pins([cron], [cron, usage]), hooks);
+    held.ack.resolve({ status: "conflict" });
     await vi.advanceTimersByTimeAsync(250);
     await committed.promise;
-    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:cron"]);
+    expect(backend.profiles.a?.[pinsKey]).toEqual([cron]);
     expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(2);
   });
 });

@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import {
+  type BackgroundPreference,
+  selectBackgroundSource,
+} from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import type { EngineConnection } from "../../../src/infra/sql-connection.ts";
 import {
@@ -63,6 +66,28 @@ afterEach(() => {
   }
 });
 const status = () => resolveServerUiPrefWriteStatus("background", scope, profileId).status;
+const backgroundEntries = (value: BackgroundPreference | null) => ({ "ui.background": value });
+const storedBackground = () => readUserPreferences(database, profileId)["ui.background"];
+const update = (value: BackgroundPreference | null, expected: BackgroundPreference | null) => ({
+  entries: backgroundEntries(value),
+  expectedEntries: backgroundEntries(expected),
+});
+const writes = (request: ReturnType<typeof requestOwner>["request"]) =>
+  request.mock.calls.filter(([method]) => method === "users.prefs.set");
+function edit(
+  writer: ReturnType<typeof createServerPrefsWriter>,
+  background: BackgroundPreference,
+) {
+  patchSettings({ background });
+  pushServerUiPrefs(writer, { background }, { profileId, canWrite: true });
+}
+function expectWrite(
+  request: ReturnType<typeof requestOwner>["request"],
+  value: BackgroundPreference | null,
+  expected: BackgroundPreference | null,
+) {
+  expect(request).toHaveBeenLastCalledWith("users.prefs.set", update(value, expected));
+}
 function commit(params: UsersPrefsSetParams) {
   const prepared = prepareUserPreferenceUpdate(params.entries, params.expectedEntries);
   if (!prepared.ok) {
@@ -84,7 +109,7 @@ function requestOwner(
     afterWrite?: () => Promise<void>;
   } = {},
 ) {
-  return vi.fn(async (method: string, params?: unknown) => {
+  const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.prefs.get") {
       const entries = readUserPreferences(database, profileId);
       await hooks.beforeRead?.();
@@ -101,11 +126,11 @@ function requestOwner(
     }
     throw new Error("Unexpected request: " + method);
   });
+  return { request, writer: createServerPrefsWriter(request, scope, true, { ok: true }, false) };
 }
 
 it("uses null only after an authoritative absent read, including a mixed theme batch", async () => {
-  const request = requestOwner();
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+  const { request, writer } = requestOwner();
   patchSettings({ theme: "rose", background: none });
   pushServerUiPrefs(writer, { theme: "rose", background: none }, { profileId, canWrite: true });
   await waitForFast(() => expect(status()).toBe("saved"));
@@ -114,32 +139,23 @@ it("uses null only after an authoritative absent read, including a mixed theme b
     "users.prefs.get",
     "users.prefs.set",
   ]);
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": none },
-    expectedEntries: { "ui.background": null },
-  });
+  expectWrite(request, none, null);
   expect(readUserPreferences(database, profileId)).toEqual({ "ui.background": none });
 });
 
 it("uses the exact saved record to fence an explicit background deletion", async () => {
-  expect(
-    commit({ entries: { "ui.background": none }, expectedEntries: { "ui.background": null } }),
-  ).toEqual({ status: "ok" });
-  const request = requestOwner();
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+  expect(commit(update(none, null))).toEqual({ status: "ok" });
+  const { request, writer } = requestOwner();
   pushServerUiPrefs(writer, { background: null }, { profileId, canWrite: true });
   await waitForFast(() => expect(status()).toBe("saved"));
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": null },
-    expectedEntries: { "ui.background": none },
-  });
+  expectWrite(request, null, none);
   expect(readUserPreferences(database, profileId)).toEqual({});
 });
 
 it("advances the CAS baseline only after its own acknowledgement for rapid placement edits", async () => {
   const acknowledgement = createDeferred();
   let first = true;
-  const request = requestOwner({
+  const { request, writer } = requestOwner({
     afterWrite: async () => {
       if (first) {
         first = false;
@@ -147,41 +163,28 @@ it("advances the CAS baseline only after its own acknowledgement for rapid place
       }
     },
   });
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-  patchSettings({ background: theme });
-  pushServerUiPrefs(writer, { background: theme }, { profileId, canWrite: true });
-  await waitForFast(() =>
-    expect(readUserPreferences(database, profileId)["ui.background"]).toEqual(theme),
-  );
+  edit(writer, theme);
+  await waitForFast(() => expect(storedBackground()).toEqual(theme));
   const edited = { ...theme, showInSessions: false, visibility: 0.2 };
-  patchSettings({ background: edited });
-  pushServerUiPrefs(writer, { background: edited }, { profileId, canWrite: true });
+  edit(writer, edited);
   acknowledgement.resolve();
   await waitForFast(() => expect(status()).toBe("saved"));
-  expect(
-    request.mock.calls
-      .filter(([method]) => method === "users.prefs.set")
-      .map(([, params]) => params),
-  ).toEqual([
-    { entries: { "ui.background": theme }, expectedEntries: { "ui.background": null } },
-    { entries: { "ui.background": edited }, expectedEntries: { "ui.background": theme } },
+  expect(writes(request).map(([, params]) => params)).toEqual([
+    update(theme, null),
+    update(edited, theme),
   ]);
-  expect(readUserPreferences(database, profileId)["ui.background"]).toEqual(edited);
+  expect(storedBackground()).toEqual(edited);
 });
 
 it("does not auto-rebase a conflict over an atomic upload, then uses the refreshed base on manual retry", async () => {
   vi.useFakeTimers();
   const dispatch = createDeferred();
-  const request = requestOwner({ beforeWrite: () => dispatch.promise });
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+  const { request, writer } = requestOwner({ beforeWrite: () => dispatch.promise });
   const afterCommit = vi.fn();
   patchSettings({ background: none });
   pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: true, afterCommit });
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("users.prefs.set", {
-      entries: { "ui.background": none },
-      expectedEntries: { "ui.background": null },
-    }),
+    expect(request).toHaveBeenCalledWith("users.prefs.set", update(none, null)),
   );
   const uploaded = selectBackgroundSource({ kind: "custom", assetId: "uploaded-elsewhere" });
   // Model the other connection's already-authorized atomic asset/preference commit.
@@ -193,9 +196,7 @@ it("does not auto-rebase a conflict over an atomic upload, then uses the refresh
     width: 1,
     height: 1,
   });
-  expect(
-    commit({ entries: { "ui.background": uploaded }, expectedEntries: { "ui.background": null } }),
-  ).toEqual({ status: "ok" });
+  expect(commit(update(uploaded, null))).toEqual({ status: "ok" });
   database.exec("COMMIT");
   dispatch.resolve();
   await waitForFast(() =>
@@ -204,29 +205,23 @@ it("does not auto-rebase a conflict over an atomic upload, then uses the refresh
   expect(status()).toBe("error");
   expect(loadSettings().background).toEqual(none);
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
-  expect(readUserPreferences(database, profileId)["ui.background"]).toEqual(uploaded);
+  expect(writes(request)).toHaveLength(1);
+  expect(storedBackground()).toEqual(uploaded);
   expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(true);
   await waitForFast(() => expect(status()).toBe("saved"));
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": none },
-    expectedEntries: { "ui.background": uploaded },
-  });
-  expect(readUserPreferences(database, profileId)["ui.background"]).toEqual(none);
+  expectWrite(request, none, uploaded);
+  expect(storedBackground()).toEqual(none);
 });
 
 it.each(["newer-intent", "identity-switch"] as const)(
   "revalidates after a baseline read: %s",
   async (change) => {
     const read = createDeferred();
-    const request = requestOwner({ beforeRead: () => read.promise });
-    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-    patchSettings({ background: none });
-    pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: true });
+    const { request, writer } = requestOwner({ beforeRead: () => read.promise });
+    edit(writer, none);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     if (change === "newer-intent") {
-      patchSettings({ background: theme });
-      pushServerUiPrefs(writer, { background: theme }, { profileId, canWrite: true });
+      edit(writer, theme);
     } else {
       applyServerUiPrefs({}, { scope, profileId: "another-profile", onApplied: vi.fn() });
     }
@@ -234,12 +229,9 @@ it.each(["newer-intent", "identity-switch"] as const)(
     await vi.dynamicImportSettled();
     if (change === "newer-intent") {
       await waitForFast(() => expect(status()).toBe("saved"));
-      expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-        entries: { "ui.background": theme },
-        expectedEntries: { "ui.background": null },
-      });
+      expectWrite(request, theme, null);
     } else {
-      expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(0);
+      expect(writes(request)).toHaveLength(0);
       expect(readUserPreferences(database, profileId)).toEqual({});
     }
   },
@@ -247,23 +239,18 @@ it.each(["newer-intent", "identity-switch"] as const)(
 
 it("keeps a failed baseline read visible and retries it without guessing an expected record", async () => {
   let readFails = true;
-  const request = requestOwner({
+  const { request, writer } = requestOwner({
     beforeRead: async () => {
       if (readFails) {
         throw new Error("Profile read failed");
       }
     },
   });
-  const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-  patchSettings({ background: none });
-  pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: true });
+  edit(writer, none);
   await waitForFast(() => expect(status()).toBe("error"));
-  expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(0);
+  expect(writes(request)).toHaveLength(0);
   readFails = false;
   expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(true);
   await waitForFast(() => expect(status()).toBe("saved"));
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": none },
-    expectedEntries: { "ui.background": null },
-  });
+  expectWrite(request, none, null);
 });
