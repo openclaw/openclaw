@@ -7,6 +7,9 @@ import type {
   AgentHarnessUserInputQuestion,
 } from "./user-input-types.js";
 
+export const MULTI_QUESTION_REPLY_GUIDANCE =
+  "For multiple questions, reply with one answer per line, prefixed by the question number or id. Use a declared option where choices are fixed. Replace the placeholders with your answers. Example:\n1: <answer for question 1>\n2: <answer for question 2>";
+
 export type AgentHarnessUserInputPromptOptions = {
   intro?: string;
   formatText?: (text: string) => string;
@@ -176,7 +179,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
 
 function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {
   if (questions.length !== 1) {
-    return "Reply by number or question id. Use a declared option where choices are fixed.";
+    return MULTI_QUESTION_REPLY_GUIDANCE;
   }
   const [question] = questions;
   if (!question || (question.options?.length ?? 0) === 0) {

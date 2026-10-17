@@ -459,7 +459,7 @@ describe("handleToolExecutionStart read path checks", () => {
           options: [{ label: "EU" }, { label: "US" }],
         },
       ],
-      hint: "Reply by number or question id. Use a declared option where choices are fixed.",
+      hint: "Example:\n1: <answer for question 1>\n2: <answer for question 2>",
     },
     {
       name: "multi-select",
