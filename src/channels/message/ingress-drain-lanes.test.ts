@@ -199,66 +199,6 @@ describe("channel ingress drain lanes", () => {
     });
   });
 
-  // LINE-shaped lanes: one user/group id owns a lane, so a lane head parked behind
-  // a newer failing sibling reads to the sender as an ignored message.
-  it("starts an eligible lane head while a newer same-lane event waits out its retry backoff", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      const currentNow = 10_000_000;
-      await queue.enqueue("head", { text: "head" }, { laneKey: "user:U1", receivedAt: 1_000 });
-      await queue.enqueue("tail", { text: "tail" }, { laneKey: "user:U1", receivedAt: 2_000 });
-      const tailClaim = await queue.claim("tail");
-      expect(tailClaim).not.toBeNull();
-      await queue.release(tailClaim!, { lastError: "boom", releasedAt: currentNow });
-
-      const dispatches: string[] = [];
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => currentNow,
-        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          dispatches.push(event.id);
-          await lifecycle.onAdopted();
-        },
-      });
-
-      await expect(drain.drainOnce()).resolves.toEqual({ started: 1 });
-      await vi.waitFor(() => expect(dispatches).toEqual(["head"]));
-
-      await drain.waitForIdle();
-      drain.dispose();
-    });
-  });
-
-  it("keeps the lane blocked while its oldest pending event is retry-delayed", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      const currentNow = 10_000_000;
-      await queue.enqueue("head", { text: "head" }, { laneKey: "user:U1", receivedAt: 1_000 });
-      await queue.enqueue("tail", { text: "tail" }, { laneKey: "user:U1", receivedAt: 2_000 });
-      const headClaim = await queue.claim("head");
-      expect(headClaim).not.toBeNull();
-      await queue.release(headClaim!, { lastError: "boom", releasedAt: currentNow });
-
-      const dispatches: string[] = [];
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => currentNow,
-        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          dispatches.push(event.id);
-          await lifecycle.onAdopted();
-        },
-      });
-
-      await expect(drain.drainOnce()).resolves.toEqual({ started: 0 });
-      expect(dispatches).toEqual([]);
-
-      await drain.waitForIdle();
-      drain.dispose();
-    });
-  });
-
   it("keeps a released lane head ahead of its tail when settlement crosses the drain snapshot", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 10_000 });
@@ -326,39 +266,51 @@ describe("channel ingress drain lanes", () => {
     });
   });
 
-  it("never claims a retry-delayed event whose lane head settled after the drain snapshot", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      const currentNow = 10_000_000;
-      await queue.enqueue("head", { text: "head" }, { laneKey: "user:U1", receivedAt: 1_000 });
-      await queue.enqueue("tail", { text: "tail" }, { laneKey: "user:U1", receivedAt: 2_000 });
-      const tailClaim = await queue.claim("tail");
-      await queue.release(tailClaim!, { lastError: "boom", releasedAt: currentNow });
-
-      // Snapshot keeps the eligible head, then a sibling drainer settles it. The
-      // freed lane must not hand the still-delayed tail an early attempt.
-      const snapshot = await queue.listUnsettled!({ orderBy: "received" });
-      const headClaim = await queue.claim("head");
-      expect(headClaim).not.toBeNull();
-      await queue.complete(headClaim!);
-      vi.spyOn(queue, "listUnsettled").mockResolvedValue(snapshot);
-
-      const dispatches: string[] = [];
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => currentNow,
-        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          dispatches.push(event.id);
-          await lifecycle.onAdopted();
-        },
+  it.each([
+    { delayed: "tail", settleHead: false, expected: ["head"] },
+    { delayed: "head", settleHead: false, expected: [] },
+    { delayed: "tail", settleHead: true, expected: [] },
+  ])(
+    "respects backoff for $delayed with settled head=$settleHead",
+    async ({ delayed, settleHead, expected }) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir);
+        const currentNow = 10_000_000;
+        await queue.enqueue("head", { text: "head" }, { laneKey: "user:U1", receivedAt: 1_000 });
+        await queue.enqueue("tail", { text: "tail" }, { laneKey: "user:U1", receivedAt: 2_000 });
+        const delayedClaim = await queue.claim(delayed);
+        expect(delayedClaim).not.toBeNull();
+        await queue.release(delayedClaim!, { lastError: "boom", releasedAt: currentNow });
+        if (settleHead) {
+          // The snapshot still contains a head that a sibling settles before selection.
+          const snapshot = await queue.listUnsettled!({ orderBy: "received" });
+          const headClaim = await queue.claim("head");
+          expect(headClaim).not.toBeNull();
+          await queue.complete(headClaim!);
+          vi.spyOn(queue, "listUnsettled").mockResolvedValue(snapshot);
+        }
+        const dispatches: string[] = [];
+        const drain = createChannelIngressDrain<Payload>({
+          queue,
+          now: () => currentNow,
+          retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+          dispatchClaimedEvent: async (event, lifecycle) => {
+            dispatches.push(event.id);
+            await lifecycle.onAdopted();
+          },
+        });
+        try {
+          await expect(drain.drainOnce()).resolves.toEqual({ started: expected.length });
+          if (expected.length) {
+            await vi.waitFor(() => expect(dispatches).toEqual(expected));
+          } else {
+            expect(dispatches).toEqual(expected);
+          }
+          await drain.waitForIdle();
+        } finally {
+          drain.dispose();
+        }
       });
-
-      await expect(drain.drainOnce()).resolves.toEqual({ started: 0 });
-      expect(dispatches).toEqual([]);
-
-      await drain.waitForIdle();
-      drain.dispose();
-    });
-  });
+    },
+  );
 });

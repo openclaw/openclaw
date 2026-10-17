@@ -9,9 +9,29 @@ import {
 } from "./ingress-monitor.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
 
+type StoredEvent = { version: 1; rawEvent: string };
+type StoredMonitorOptions<T> = CreateChannelIngressMonitorOptions<T, string, StoredEvent>;
+
+function createStoredMonitor<T>(
+  options: Omit<StoredMonitorOptions<T>, "payload" | "pollIntervalMs" | "retention"> &
+    Partial<Pick<StoredMonitorOptions<T>, "pollIntervalMs" | "retention">>,
+) {
+  return createChannelIngressMonitor<T, string, StoredEvent>({
+    pollIntervalMs: 60_000,
+    retention: { pruneIntervalMs: 60_000 },
+    ...options,
+    payload: {
+      storage: "raw-event",
+      version: 1,
+      serialize: (raw) => JSON.stringify(raw),
+      deserialize: (body) => JSON.parse(body) as T,
+      createClaimError: (kind) => new Error(kind),
+    },
+  });
+}
+
 describe("channel ingress monitor admission", () => {
   type RawEvent = { id: string; text: string };
-  type StoredEvent = { version: 1; rawEvent: string };
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -40,21 +60,12 @@ describe("channel ingress monitor admission", () => {
       return result;
     });
     const acknowledged = vi.fn();
-    const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+    const monitor = createStoredMonitor<RawEvent>({
       queue,
       inspect: (raw) => ({ eventId: raw.id, laneKey: "lane:a" }),
-      payload: {
-        storage: "raw-event",
-        version: 1,
-        serialize: (raw) => JSON.stringify(raw),
-        deserialize: (body) => JSON.parse(body) as RawEvent,
-        createClaimError: (kind) => new Error(kind),
-      },
       deliver: vi.fn(),
       onDurableAdmission: acknowledged,
       appendRetryDelaysMs: [0, 0, 0],
-      pollIntervalMs: 60_000,
-      retention: { pruneIntervalMs: 60_000 },
     });
     try {
       await expect(monitor.admit({ id: "unknown", text: "one" })).rejects.toBe(failure);
@@ -76,7 +87,7 @@ describe("channel ingress monitor admission", () => {
     const entered = createDeferred();
     const inspections: string[] = [];
     const admissions: string[] = [];
-    const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+    const monitor = createStoredMonitor<RawEvent>({
       queue,
       inspect: () => {
         throw new Error("legacy inspection unexpectedly used");
@@ -89,16 +100,8 @@ describe("channel ingress monitor admission", () => {
         }
         return { eventId: raw.id, laneKey: "lane:a" };
       },
-      payload: {
-        storage: "raw-event",
-        version: 1,
-        serialize: (raw) => JSON.stringify(raw),
-        deserialize: (body) => JSON.parse(body) as RawEvent,
-        createClaimError: (kind) => new Error(kind),
-      },
       deliver: vi.fn(),
       pollIntervalMs: 10,
-      retention: { pruneIntervalMs: 60_000 },
       onDurableAdmission: (raw) => {
         admissions.push(raw.id);
       },
@@ -136,20 +139,12 @@ describe("channel ingress monitor admission", () => {
       .mockRejectedValueOnce(new Error("Synthetic transient append failure"))
       .mockImplementation(append);
     const admissions: boolean[] = [];
-    const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+    const monitor = createStoredMonitor<RawEvent>({
       queue,
       inspect: (raw) => ({ eventId: raw.id, laneKey: "lane:a" }),
-      payload: {
-        storage: "raw-event",
-        version: 1,
-        serialize: (raw) => JSON.stringify(raw),
-        deserialize: (body) => JSON.parse(body) as RawEvent,
-        createClaimError: (kind) => new Error(kind),
-      },
       deliver: vi.fn(),
       pollIntervalMs: 10,
       appendRetryDelaysMs: [0, 0],
-      retention: { pruneIntervalMs: 60_000 },
       onDurableAdmission: (_raw, { isNew }) => {
         admissions.push(isNew);
       },
@@ -168,7 +163,6 @@ describe("channel ingress monitor admission", () => {
 
 describe("channel ingress monitor asynchronous inspection", () => {
   type RawEvent = { id: string; lane: string };
-  type StoredEvent = { version: 1; rawEvent: string };
   type MonitorOptions = CreateChannelIngressMonitorOptions<RawEvent, string, StoredEvent, unknown>;
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -197,20 +191,24 @@ describe("channel ingress monitor asynchronous inspection", () => {
       | "onActivityChange"
     >,
   ) {
-    return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+    return createStoredMonitor<RawEvent>({
       queue,
       inspect: (raw) => ({ eventId: raw.id, laneKey: raw.lane }),
-      payload: {
-        storage: "raw-event",
-        version: 1,
-        serialize: (raw) => JSON.stringify(raw),
-        deserialize: (body) => JSON.parse(body) as RawEvent,
-        createClaimError: (kind) => new Error(kind),
-      },
-      pollIntervalMs: 60_000,
-      retention: { pruneIntervalMs: 60_000 },
       ...options,
     });
+  }
+
+  function holdClaimInspection() {
+    const release = createDeferred();
+    const entered = createDeferred();
+    const inspectAsync: NonNullable<MonitorOptions["inspectAsync"]> = async (raw, context) => {
+      if (context.phase === "claim") {
+        entered.resolve();
+        await release.promise;
+      }
+      return { eventId: raw.id, laneKey: raw.lane };
+    };
+    return { release, entered, inspectAsync };
   }
 
   it.each([
@@ -220,18 +218,11 @@ describe("channel ingress monitor asynchronous inspection", () => {
     "joins claim inspection after $cancel with delivery join=$waitForDeliveryIdleOnStop",
     async ({ cancel, waitForDeliveryIdleOnStop }) => {
       const queue = createQueue();
-      const inspection = createDeferred();
-      const entered = createDeferred();
+      const { release: inspection, entered, inspectAsync } = holdClaimInspection();
       const controller = new AbortController();
       const deliver = vi.fn();
       const monitor = createMonitor(queue, {
-        inspectAsync: async (raw, context) => {
-          if (context.phase === "claim") {
-            entered.resolve();
-            await inspection.promise;
-          }
-          return { eventId: raw.id, laneKey: raw.lane };
-        },
+        inspectAsync,
         deliver,
         abortSignal: controller.signal,
         waitForDeliveryIdleOnStop,
@@ -265,17 +256,10 @@ describe("channel ingress monitor asynchronous inspection", () => {
 
   it("joins pending inspection after the watchdog retires its claim", async () => {
     const queue = createQueue();
-    const release = createDeferred();
-    const entered = createDeferred();
+    const { release, entered, inspectAsync } = holdClaimInspection();
     const deliver = vi.fn();
     const monitor = createMonitor(queue, {
-      inspectAsync: async (raw, context) => {
-        if (context.phase === "claim") {
-          entered.resolve();
-          await release.promise;
-        }
-        return { eventId: raw.id, laneKey: raw.lane };
-      },
+      inspectAsync,
       deliver,
       drain: { startLimit: 1, adoptionStallTimeoutMs: 10 },
     });
@@ -307,20 +291,13 @@ describe("channel ingress monitor asynchronous inspection", () => {
 
   it("reports busy through inspection until delivery", async () => {
     const queue = createQueue();
-    const release = createDeferred();
-    const entered = createDeferred();
+    const { release, entered, inspectAsync } = holdClaimInspection();
     const activity: boolean[] = [];
     const deliver = vi.fn(() => {
       expect(activity).not.toContain(false);
     });
     const monitor = createMonitor(queue, {
-      inspectAsync: async (raw, context) => {
-        if (context.phase === "claim") {
-          entered.resolve();
-          await release.promise;
-        }
-        return { eventId: raw.id, laneKey: raw.lane };
-      },
+      inspectAsync,
       deliver,
       onActivityChange: (active) => {
         activity.push(active);
@@ -399,7 +376,6 @@ describe("channel ingress monitor asynchronous inspection", () => {
 
 describe("channel ingress monitor start capacity", () => {
   type RawEvent = { id: string; lane: string; text: string };
-  type StoredEvent = { version: 1; rawEvent: string };
   type MonitorOptions = CreateChannelIngressMonitorOptions<RawEvent, string, StoredEvent, unknown>;
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -409,23 +385,14 @@ describe("channel ingress monitor start capacity", () => {
   });
 
   function createMonitor(deliver: MonitorOptions["deliver"], drain: MonitorOptions["drain"]) {
-    return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+    return createStoredMonitor<RawEvent>({
       queue: createChannelIngressQueue<StoredEvent>({
         channelId: "test",
         accountId: "a",
         stateDir: tempDirs.make("openclaw-ingress-monitor-capacity-"),
       }),
       inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
-      payload: {
-        storage: "raw-event",
-        version: 1,
-        serialize: (raw) => JSON.stringify(raw),
-        deserialize: (body) => JSON.parse(body) as RawEvent,
-        createClaimError: (kind) => new Error(kind),
-      },
       deliver,
-      pollIntervalMs: 60_000,
-      retention: { pruneIntervalMs: 60_000 },
       drain: {
         adoptionStallTimeoutMs: 5_000,
         retryPolicy: { baseMs: 1_000, maxMs: 1_000 },

@@ -222,10 +222,7 @@ describe("channel ingress drain", () => {
 
       await drain.drainOnce();
       await vi.waitFor(() => expect(lifecycles).toHaveLength(1));
-      const onFailed = expectDefined(
-        expectDefined(lifecycles[0], "deferred lifecycle").onFailed,
-        "deferred failure lifecycle",
-      );
+      const onFailed = expectDefined(lifecycles[0]?.onFailed, "onFailed callback");
       await onFailed(new Error("late provider failure"));
 
       expect(await queue.listPending({ limit: "all" })).toMatchObject([
@@ -259,12 +256,12 @@ describe("channel ingress drain", () => {
       expect(await drain.drainOnce()).toEqual({ started: 2 });
       await vi.waitFor(() => expect(lifecycles.size).toBe(2));
       await expectDefined(
-        expectDefined(lifecycles.get("non-retryable"), "non-retryable lifecycle").onFailed,
-        "non-retryable failure lifecycle",
+        lifecycles.get("non-retryable")?.onFailed,
+        "onFailed callback",
       )(new Error("fatal input"));
       await expectDefined(
-        expectDefined(lifecycles.get("retry-limit"), "retry-limit lifecycle").onFailed,
-        "retry-limit failure lifecycle",
+        lifecycles.get("retry-limit")?.onFailed,
+        "onFailed callback",
       )(new Error("still broken"));
 
       expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
@@ -339,8 +336,7 @@ describe("channel ingress drain", () => {
       await drain.drainOnce();
       await drain.waitForIdle();
       expect(adoptCount).toBe(2);
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listPending()).toEqual([]);
+      expect([await queue.listClaims(), await queue.listPending()]).toEqual([[], []]);
       const status = await queue.enqueue("evt-admit", { text: "x" });
       expect(status.kind).toBe("completed");
       // No re-dispatch on later drain.
@@ -487,114 +483,74 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("refreshClaim false aborts the handler mid-dispatch (lease reclaimed)", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1_000;
-      const queue = createTestIngressQueue(stateDir, { now: () => clock });
-      await queue.enqueue("evt-refresh-false", { text: "x" }, { laneKey: "l1" });
-
-      const refreshClaim = vi.fn(async () => false);
-      queue.refreshClaim = refreshClaim;
-
-      let sawAbort = false;
-      let lateAdoptError: unknown;
-      const { promise: holdDispatch, resolve: releaseDispatch } = createDeferred();
-
-      const claimLeaseMs = 3_000;
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => clock,
-        claimLeaseMs,
-        dispatchClaimedEvent: async (_event, lifecycle) => {
-          lifecycle.abortSignal.addEventListener(
-            "abort",
-            () => {
-              sawAbort = true;
-            },
-            { once: true },
-          );
-          await holdDispatch;
-          try {
-            await lifecycle.onAdopted();
-          } catch (err) {
-            lateAdoptError = err;
-            throw err;
-          }
-        },
+  it.each(["reclaimed", "storage-error"] as const)(
+    "handles claim refresh %s without losing adoption fencing",
+    async (outcome) => {
+      await withTempState(async (stateDir) => {
+        let clock = 1_000;
+        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        const id = outcome === "reclaimed" ? "evt-refresh-false" : "evt-refresh-reject";
+        await queue.enqueue(id, { text: "x" }, { laneKey: "l1" });
+        const refreshClaim = vi.fn<NonNullable<typeof queue.refreshClaim>>();
+        if (outcome === "reclaimed") {
+          refreshClaim.mockResolvedValue(false);
+        } else {
+          refreshClaim
+            .mockRejectedValueOnce(new Error("refresh storage failed"))
+            .mockResolvedValue(true);
+        }
+        queue.refreshClaim = refreshClaim;
+        const logs: string[] = [];
+        let signal: AbortSignal | undefined;
+        let adoptError: unknown;
+        const hold = createDeferred();
+        const drain = createChannelIngressDrain<Payload>({
+          queue,
+          now: () => clock,
+          claimLeaseMs: 3_000,
+          onLog: (message) => logs.push(message),
+          dispatchClaimedEvent: async (_event, lifecycle) => {
+            signal = lifecycle.abortSignal;
+            await hold.promise;
+            try {
+              await lifecycle.onAdopted();
+            } catch (error) {
+              adoptError = error;
+              if (outcome === "reclaimed") {
+                throw error;
+              }
+            }
+          },
+        });
+        await drain.drainOnce();
+        clock += 1_000;
+        await vi.advanceTimersByTimeAsync(1_000);
+        if (outcome === "reclaimed") {
+          expect(refreshClaim).toHaveBeenCalled();
+          await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+        } else {
+          expect(refreshClaim).toHaveBeenCalledTimes(1);
+          clock += 1_000;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(refreshClaim).toHaveBeenCalledTimes(2);
+        }
+        hold.resolve();
+        await drain.waitForIdle();
+        if (outcome === "reclaimed") {
+          expect(isIngressAdoptionLostError(adoptError)).toBe(true);
+          expect(isIngressAdoptionLostError(adoptError) && adoptError.code).toBe("guillotined");
+        } else {
+          expect(signal?.aborted).toBe(false);
+          expect(adoptError).toBeUndefined();
+          expect(await queue.listClaims()).toEqual([]);
+          expect(logs).toEqual([
+            "ingress drain: claim refresh failed for event evt-refresh-reject; holding claim: refresh storage failed",
+          ]);
+        }
+        drain.dispose();
       });
-
-      await drain.drainOnce();
-      clock += 1_000;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(refreshClaim).toHaveBeenCalled();
-      await vi.waitFor(() => expect(sawAbort).toBe(true));
-
-      releaseDispatch();
-      await drain.waitForIdle();
-      expect(isIngressAdoptionLostError(lateAdoptError)).toBe(true);
-      expect(isIngressAdoptionLostError(lateAdoptError) && lateAdoptError.code).toBe("guillotined");
-      drain.dispose();
-    });
-  });
-
-  it("refreshClaim rejection is logged without aborting the handler", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1_000;
-      const queue = createTestIngressQueue(stateDir, { now: () => clock });
-      await queue.enqueue("evt-refresh-reject", { text: "x" }, { laneKey: "l1" });
-
-      const refreshClaim = vi
-        .fn<NonNullable<typeof queue.refreshClaim>>()
-        .mockRejectedValueOnce(new Error("refresh storage failed"))
-        .mockResolvedValue(true);
-      queue.refreshClaim = refreshClaim;
-
-      const logs: string[] = [];
-      let sawAbort = false;
-      let adoptError: unknown;
-      const { promise: holdDispatch, resolve: releaseDispatch } = createDeferred();
-
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => clock,
-        claimLeaseMs: 3_000,
-        onLog: (message) => logs.push(message),
-        dispatchClaimedEvent: async (_event, lifecycle) => {
-          lifecycle.abortSignal.addEventListener(
-            "abort",
-            () => {
-              sawAbort = true;
-            },
-            { once: true },
-          );
-          await holdDispatch;
-          try {
-            await lifecycle.onAdopted();
-          } catch (err) {
-            adoptError = err;
-          }
-        },
-      });
-
-      await drain.drainOnce();
-      clock += 1_000;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(refreshClaim).toHaveBeenCalledTimes(1);
-      clock += 1_000;
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(refreshClaim).toHaveBeenCalledTimes(2);
-
-      releaseDispatch();
-      await drain.waitForIdle();
-      expect(sawAbort).toBe(false);
-      expect(adoptError).toBeUndefined();
-      expect(await queue.listClaims()).toEqual([]);
-      expect(logs).toEqual([
-        "ingress drain: claim refresh failed for event evt-refresh-reject; holding claim: refresh storage failed",
-      ]);
-      drain.dispose();
-    });
-  });
+    },
+  );
 
   it("late supersede predicate does not kill an adopted turn", async () => {
     // Failure window: async shouldSupersedePending resolves after the pending
@@ -946,17 +902,14 @@ describe("channel ingress drain cancellation", () => {
 
         await drain.drainOnce();
         await vi.waitFor(() => expect(lifecycles).toHaveLength(1));
-        await expectDefined(
-          expectDefined(lifecycles[0], "cancelled lifecycle").onCancelled,
-          "cancel callback",
-        )();
-        expect(await queue.listPending()).toEqual([
-          expect.objectContaining({
+        await expectDefined(lifecycles[0]?.onCancelled, "onCancelled callback")();
+        expect(await queue.listPending()).toMatchObject([
+          {
             id: "evt-cancel",
             attempts: before?.attempts,
             lastAttemptAt: before?.lastAttemptAt,
             lastError: before?.lastError,
-          }),
+          },
         ]);
         expect(await queue.listClaims()).toEqual([]);
         drain.dispose();

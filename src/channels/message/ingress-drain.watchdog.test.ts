@@ -181,8 +181,7 @@ describe("channel ingress drain watchdog", () => {
         await vi.advanceTimersByTimeAsync(3_500);
         await drain.waitForIdle();
         expect(dispatchSignal?.aborted).toBe(false);
-        expect(await queue.listClaims()).toEqual([]);
-        expect(await queue.listPending()).toEqual([]);
+        expect([await queue.listClaims(), await queue.listPending()]).toEqual([[], []]);
         expect(await queue.listFailed?.()).toEqual([]);
         expect((await queue.enqueue("compacting", { text: "duplicate" })).kind).toBe("completed");
         expect(await drain.drainOnce()).toEqual({ started: 0 });
@@ -382,8 +381,8 @@ describe("channel ingress drain restart-recovery tombstone", () => {
         await vi.waitFor(() => expect(lifecycle).toBeDefined());
         expect(await queue.recoverStaleClaims({ staleMs: 0, now: 10_001 })).toBe(1);
         await expectDefined(
-          expectDefined(lifecycle, "deferred lifecycle").onFailed,
-          "failure callback",
+          lifecycle?.onFailed,
+          "onFailed callback",
         )(new Error("dispatch failure"));
         expect(await queue.listFailed?.()).toHaveLength(0);
         expect(await queue.listPending()).toHaveLength(1);
@@ -425,10 +424,7 @@ describe("channel ingress drain restart-recovery tombstone", () => {
             code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
           }),
         });
-        await expectDefined(
-          expectDefined(lifecycles.get("evt-head"), "head lifecycle").onFailed,
-          "head failure lifecycle",
-        )(error);
+        await expectDefined(lifecycles.get("evt-head")?.onFailed, "onFailed callback")(error);
         const expectedFailed = [
           {
             id: "evt-head",
@@ -689,8 +685,7 @@ describe("channel ingress drain async work ownership", () => {
         turnGate.resolve();
         await monitor.waitForIdle();
         expect(events).toEqual(["turn"]);
-        await expect(queue.listPending()).resolves.toEqual([]);
-        await expect(queue.listClaims()).resolves.toEqual([]);
+        expect([await queue.listPending(), await queue.listClaims()]).toEqual([[], []]);
 
         followupGate.resolve();
         await followupFinished.promise;
