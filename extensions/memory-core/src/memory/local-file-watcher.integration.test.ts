@@ -22,7 +22,9 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => {
   };
 });
 
-it("observes native file edits through one shared worker and joins its final exit", async ({ signal }) => {
+it("observes native file edits through one shared worker and joins its final exit", async ({
+  signal,
+}) => {
   const state = await createOpenClawTestState({ label: "local-memory-worker" });
   const owners: LocalMemoryFileWatcher[] = [];
   const unavailable = vi.fn();
@@ -68,9 +70,9 @@ it("observes native file edits through one shared worker and joins its final exi
     expect(workers[0]!.threadId).toBeGreaterThan(0);
     for (const owner of owners) {
       expect(owner.health().length).toBeGreaterThan(0);
-      expect(owner.health().every((entry) => entry.state === "ready" && entry.mode === "events")).toBe(
-        true,
-      );
+      expect(
+        owner.health().every((entry) => entry.state === "ready" && entry.mode === "events"),
+      ).toBe(true);
       expect(owner.capacityDegraded).toBe(false);
     }
     await fs.writeFile(note, "first shared edit");

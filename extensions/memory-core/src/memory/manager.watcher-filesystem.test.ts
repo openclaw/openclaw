@@ -21,9 +21,12 @@ import { MemoryFileWatcher } from "./file-watcher.js";
 import { MemoryIndexManager } from "./manager.js";
 
 // Keep owner fault injection in this process; real worker transport has separate coverage.
-vi.mock("./local-file-watcher.js", async () => {
-  const { MemoryFileWatcher } = await import("./file-watcher.js");
-  return { LocalMemoryFileWatcher: MemoryFileWatcher };
+vi.mock("./local-file-watcher.js", async (original) => {
+  const watcher = await import("./file-watcher.js");
+  return {
+    ...(await original<typeof import("./local-file-watcher.js")>()),
+    LocalMemoryFileWatcher: watcher.MemoryFileWatcher,
+  };
 });
 
 vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({

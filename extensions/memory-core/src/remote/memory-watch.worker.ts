@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { MessagePort } from "node:worker_threads";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { MemoryFileWatcher } from "../memory/file-watcher.js";
 import type { LocalWatchCommand, LocalWatchEvent } from "../memory/local-watch-protocol.js";
 
@@ -32,7 +33,7 @@ export function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
       try {
         retirement = entry.watcher.close();
       } catch (error) {
-        retirement = Promise.reject(error);
+        retirement = Promise.reject(toErrorObject(error, "Memory file watcher close failed"));
       }
       return (entry.closing = retirement.then(
         () => {
@@ -40,7 +41,7 @@ export function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
           send({
             type: "closed",
             id: entry.id,
-            ...(startError === undefined ? {} : { error: String(startError) }),
+            ...(startError === undefined ? {} : { error: formatErrorMessage(startError) }),
           });
         },
         (error: unknown) => {
@@ -52,21 +53,21 @@ export function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
     };
     const stop = (): Promise<void> => {
       port.off("message", onMessage);
-      return (shutdown ??= Promise.all([...watches.values()].map((entry) => closeWatch(entry))).then(
-        () => {
-          const error = closeErrors.length
-            ? new AggregateError(closeErrors, "Local Memory watcher retirement failed")
-            : undefined;
-          send({ type: "shutdown", ...(error ? { error: String(error) } : {}) });
-          port.off("close", onPortClose);
-          port.close();
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        },
-      ));
+      return (shutdown ??= Promise.all(
+        [...watches.values()].map((entry) => closeWatch(entry)),
+      ).then(() => {
+        const error = closeErrors.length
+          ? new AggregateError(closeErrors, "Local Memory watcher retirement failed")
+          : undefined;
+        send({ type: "shutdown", ...(error ? { error: String(error) } : {}) });
+        port.off("close", onPortClose);
+        port.close();
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      }));
     };
     const onPortClose = () => {
       portClosed = true;

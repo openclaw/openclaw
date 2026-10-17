@@ -5,21 +5,28 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryFileWatcherOptions } from "./file-watcher.js";
 import { LocalMemoryFileWatcher } from "./local-file-watcher.js";
-import type { LocalWatchCommand, LocalWatchEvent, MemoryWatchFacts } from "./local-watch-protocol.js";
+import type {
+  LocalWatchCommand,
+  LocalWatchEvent,
+  MemoryWatchFacts,
+} from "./local-watch-protocol.js";
 
 const transport = vi.hoisted(() => ({
   owner: {} as { transport?: unknown },
   createWorker: vi.fn(),
   warn: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/agent-workspace-runtime")>()),
   resolveWorkspaceWorkerArgv: () => ["/fixture/memory-worker.js"],
 }));
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", () => ({
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>()),
   createSubsystemLogger: () => ({ warn: transport.warn }),
   resolveGlobalSingleton: () => transport.owner,
 }));
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/process-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/process-runtime")>()),
   createCpuTrackedWorker: transport.createWorker,
 }));
 

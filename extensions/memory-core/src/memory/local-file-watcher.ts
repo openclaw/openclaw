@@ -1,5 +1,6 @@
 import type { Worker } from "node:worker_threads";
 import { resolveWorkspaceWorkerArgv } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createSubsystemLogger,
@@ -7,7 +8,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { createCpuTrackedWorker } from "openclaw/plugin-sdk/process-runtime";
 import type { MemoryFileWatcherOptions } from "./file-watcher.js";
-import type { LocalWatchCommand, LocalWatchEvent, MemoryWatchFacts } from "./local-watch-protocol.js";
+import type {
+  LocalWatchCommand,
+  LocalWatchEvent,
+  MemoryWatchFacts,
+} from "./local-watch-protocol.js";
 
 const log = createSubsystemLogger("memory");
 const owner = resolveGlobalSingleton(
@@ -40,7 +45,9 @@ class MemoryWatchTransport {
         this.subscriptions.get(event.id)?.receive(event);
       }
     });
-    this.worker.on("error", (error) => this.fail(error));
+    this.worker.on("error", (error) =>
+      this.fail(toErrorObject(error, "Memory file worker failed")),
+    );
     this.worker.on("exit", (code) => {
       if (!this.retiring || code !== 0) {
         this.fail(new Error(`Memory file worker exited unexpectedly (${code})`));
@@ -63,7 +70,7 @@ class MemoryWatchTransport {
     if (this.failure) {
       throw this.failure;
     }
-    this.worker.postMessage(command);
+    this.worker.postMessage(command, []);
   }
 
   add(subscription: LocalMemoryFileWatcher): number {
@@ -78,14 +85,14 @@ class MemoryWatchTransport {
   async remove(id: number, retired: Promise<void>): Promise<void> {
     if (this.failure) {
       this.subscriptions.delete(id);
-      return this.join();
+      return this.waitForExit();
     }
     this.send({ type: "close", id });
-    let closeError: unknown;
+    let closeError: Error | undefined;
     try {
       await retired;
     } catch (error) {
-      closeError = error;
+      closeError = toErrorObject(error, "Memory file watcher close failed");
     }
     this.subscriptions.delete(id);
     if (!this.subscriptions.size) {
@@ -93,17 +100,17 @@ class MemoryWatchTransport {
       if (!this.failure) {
         this.send({ type: "shutdown" });
       }
-      await this.join();
+      await this.waitForExit();
       owner.transport = undefined;
     } else if (this.failure) {
-      await this.join();
+      await this.waitForExit();
     }
     if (closeError) {
       throw closeError;
     }
   }
 
-  async join(): Promise<void> {
+  async waitForExit(): Promise<void> {
     await this.exited.promise;
     if (this.failure) {
       throw this.failure;
@@ -146,7 +153,7 @@ export class LocalMemoryFileWatcher {
     this.attachment = (async () => {
       // Final retirement joins native cleanup and exit before a new owner starts.
       while (owner.transport?.retiring) {
-        await owner.transport.join();
+        await owner.transport.waitForExit();
       }
       if (this.closed) {
         this.ready.resolve();

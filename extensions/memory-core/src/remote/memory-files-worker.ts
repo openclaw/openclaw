@@ -15,8 +15,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export async function serveLocalMemoryWatches(port: MessagePort): Promise<void> {
-  const { serveLocalMemoryWatches } = await import("./memory-watch.worker.js");
-  await serveLocalMemoryWatches(port);
+  const worker = await import("./memory-watch.worker.js");
+  await worker.serveLocalMemoryWatches(port);
 }
 
 type MemoryWorkspaceMaintenance = NonNullable<MemoryWorkspaceFiles["maintenance"]>;
