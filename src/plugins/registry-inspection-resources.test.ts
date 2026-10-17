@@ -30,6 +30,27 @@ import {
 type Inspection = Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>;
 type Fixture = ReturnType<typeof createInspectionFixture>;
 
+async function inspectFixtures(
+  fixtures: Fixture[],
+  run: (inspection: Inspection, retain: () => { release: () => Promise<void> }) => Promise<void>,
+  cleanupOrder = fixtures,
+) {
+  let inspection: Inspection | undefined;
+  let borrowed: { release: () => Promise<void> } | undefined;
+  try {
+    inspection = await acquireFixtureInspection(fixtures);
+    await run(
+      inspection,
+      () => (borrowed = getPluginRegistryInspectionResources(inspection!.registry)!.retain()),
+    );
+  } finally {
+    await cleanupOrder[0]!.cleanup(inspection, borrowed);
+    for (const fixture of cleanupOrder.slice(1)) {
+      await fixture.cleanup();
+    }
+  }
+}
+
 function readFixture(fixture: Fixture) {
   return fixture.connection().database.prepare("SELECT 42 AS value").get();
 }
@@ -40,11 +61,28 @@ function disposalError(fixture: Fixture) {
   });
 }
 
+function settlement<T extends object>(promise: Promise<unknown>, tag: T) {
+  return promise.then(
+    () => ({ ...tag, error: undefined }),
+    (error: unknown) => ({ ...tag, error }),
+  );
+}
+
+function expectConnection(
+  fixture: Fixture,
+  expected: Partial<{
+    disposals: number;
+    cleanups: number;
+    instanceDisposals: number;
+    open: boolean;
+  }>,
+) {
+  const { database, ...counts } = fixture.connection();
+  expect({ ...counts, open: database.isOpen }).toMatchObject(expected);
+}
+
 function expectDisposed(fixture: Fixture) {
-  const connection = fixture.connection();
-  expect(connection.disposals).toBe(1);
-  expect(connection.database.isOpen).toBe(false);
-  expect(connection.cleanups).toBe(0);
+  expectConnection(fixture, { disposals: 1, open: false, cleanups: 0 });
 }
 
 afterEach(() => resetPluginRuntimeStateForTest());
@@ -100,15 +138,12 @@ describe("owned plugin inspections", () => {
 
   it("revokes every owned view and cache identity before notifying retirement listeners", async () => {
     const fixture = createInspectionFixture();
-    let inspection: Inspection | undefined;
-    let borrowed: { release: () => Promise<void> } | undefined;
-    try {
-      inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+    await inspectFixtures([fixture], async (inspection, retain) => {
       const primary = inspection.registry;
       const copy = { ...primary };
       const resources = getPluginRegistryInspectionResources(primary)!;
       resources.attach(copy);
-      borrowed = resources.retain();
+      const borrowed = retain();
       const views = [primary, copy];
       const authorities = views.map((view) =>
         capturePluginLifecycleAuthority(view, undefined, { scopedRuntime: true })!,
@@ -138,36 +173,20 @@ describe("owned plugin inspections", () => {
       expect(signals.every((signal) => signal.aborted)).toBe(true);
       expect(reentrant).toEqual([release, release]);
       await release;
-      expect(fixture.connection().disposals).toBe(0);
-      expect(fixture.connection().database.isOpen).toBe(true);
+      expectConnection(fixture, { disposals: 0, open: true });
       await borrowed.release();
-      expect(fixture.connection().disposals).toBe(1);
-      expect(fixture.connection().database.isOpen).toBe(false);
-    } finally {
-      await fixture.cleanup(inspection, borrowed);
-    }
+      expectConnection(fixture, { disposals: 1, open: false });
+    });
   });
 
   it.each(
     (
       [
-        {
-          capturedDisposal: "async-context",
-          disposalFailure: false,
-          capturedInstanceDisposal: false,
-        },
-        {
-          capturedDisposal: "work-tracker",
-          disposalFailure: true,
-          capturedInstanceDisposal: false,
-        },
-        {
-          capturedDisposal: "work-tracker",
-          disposalFailure: false,
-          capturedInstanceDisposal: true,
-        },
+        ["async-context", false, false],
+        ["work-tracker", true, false],
+        ["work-tracker", false, true],
       ] as const
-    ).flatMap(({ capturedDisposal, disposalFailure, capturedInstanceDisposal }) =>
+    ).flatMap(([capturedDisposal, disposalFailure, capturedInstanceDisposal]) =>
       [false, true].map((closedReleaseScope) => ({
         capturedDisposal,
         disposalFailure,
@@ -184,6 +203,7 @@ describe("owned plugin inspections", () => {
         capturedInstanceDisposal,
         pauseDisposal: true,
       });
+      const captured = fixture.state.captured;
       const caller = new AsyncWorkScope();
       const closer = new AsyncWorkScope();
       const releaseInScope = closer.run(() => AsyncLocalStorage.snapshot());
@@ -204,17 +224,15 @@ describe("owned plugin inspections", () => {
         expect(readFixture(fixture)).toEqual({
           value: 42,
         });
-        const registrationSignalAborted = fixture.state.captured.registrationSignal?.aborted;
+        const registrationSignalAborted = captured.registrationSignal?.aborted;
         if (closedReleaseScope) {
           await closer.drain();
         }
-        const released = (
+        const released = settlement(
           closedReleaseScope
             ? releaseInScope(() => borrowed!.release())
-            : closer.track(() => borrowed!.release())
-        ).then(
-          () => ({ phase: "released", error: undefined }),
-          (error: unknown) => ({ phase: "released", error }),
+            : closer.track(() => borrowed!.release()),
+          { phase: "released" },
         );
         expect(
           await Promise.race([
@@ -226,10 +244,8 @@ describe("owned plugin inspections", () => {
           ]),
         ).toEqual({ phase: "disposing", error: undefined });
         expect(registrationSignalAborted).toBe(false);
-        expect(fixture.state.captured.registrationSignal).not.toBe(caller.signal);
-        expect(fixture.state.captured.disposalSignal).toBe(
-          fixture.state.captured.registrationSignal,
-        );
+        expect(captured.registrationSignal).not.toBe(caller.signal);
+        expect(captured.disposalSignal).toBe(captured.registrationSignal);
         expect(fixture.connection().database.isOpen).toBe(true);
         expect(authority()).toBe(false);
         fixture.state.finishDisposal.resolve();
@@ -246,12 +262,10 @@ describe("owned plugin inspections", () => {
         } else {
           expect(outcome.error).toBeUndefined();
         }
-        expect(fixture.state.captured.read).toEqual({ value: 42 });
+        expect(captured.read).toEqual({ value: 42 });
         expect(fixture.connection().instanceDisposals).toBe(1);
         if (capturedInstanceDisposal) {
-          expect(fixture.state.captured.instanceSignal).toBe(
-            fixture.state.captured.registrationSignal,
-          );
+          expect(captured.instanceSignal).toBe(captured.registrationSignal);
         }
         expectDisposed(fixture);
       } finally {
@@ -293,14 +307,11 @@ describe("owned plugin inspections", () => {
       expect(owned.database.isOpen).toBe(true);
       fixture.state.finishDisposal.resolve();
       await release;
-      expect(owned.disposals).toBe(1);
-      expect(owned.instanceDisposals).toBe(1);
+      expect(owned).toMatchObject({ disposals: 1, instanceDisposals: 1 });
       expect(process.listenerCount(fixture.event)).toBe(1);
       expect(owned.database.isOpen).toBe(false);
       expect(legacy.database.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
-      expect(legacy.disposals).toBe(0);
-      expect(legacy.cleanups).toBe(0);
-      expect(legacy.instanceDisposals).toBe(0);
+      expect(legacy).toMatchObject({ disposals: 0, cleanups: 0, instanceDisposals: 0 });
       expect(loadPluginRegistryHandle({ config: fixture.config })).toBe(raw);
       expect(getActivePluginRegistry()).toBe(active);
     } finally {
@@ -318,12 +329,9 @@ describe("owned plugin inspections", () => {
       const active = createEmptyPluginRegistry();
       setActivePluginRegistry(active);
       const activeEpoch = capturePluginRegistryLifecycleEpoch(active);
-      let inspection: Inspection | undefined;
-      let borrowed: { release: () => Promise<void> } | undefined;
-      try {
-        inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+      await inspectFixtures([fixture], async (inspection, retain) => {
         const resources = getPluginRegistryInspectionResources(inspection.registry)!;
-        borrowed = resources.retain();
+        const borrowed = retain();
         const signal = capturePluginRegistryLifecycleSignal(inspection.registry, undefined, {
           scopedRuntime: true,
         })!;
@@ -336,7 +344,6 @@ describe("owned plugin inspections", () => {
           expect(() => resources.retain()).toThrow("inspection resources have been released");
           reentrantRelease = inspection?.release();
         });
-
         const release = inspection.release();
         expect(signal.aborted).toBe(true);
         expect(authority()).toBe(false);
@@ -344,12 +351,10 @@ describe("owned plugin inspections", () => {
         await release;
         expect(inspection.release()).toBe(release);
         const connection = fixture.connection();
-        expect(connection.disposals).toBe(0);
-        expect(connection.instanceDisposals).toBe(0);
+        expect(connection).toMatchObject({ disposals: 0, instanceDisposals: 0 });
         expect(connection.database.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
         expect(getActivePluginRegistry()).toBe(active);
         expect(capturePluginRegistryLifecycleEpoch(active)).toBe(activeEpoch);
-
         const finalRelease = borrowed.release();
         expect(borrowed.release()).toBe(finalRelease);
         const settled = disposalFailure
@@ -361,15 +366,12 @@ describe("owned plugin inspections", () => {
         expect(connection.database.isOpen).toBe(true);
         fixture.state.finishDisposal.resolve();
         await settled;
-        expect(connection.disposals).toBe(1);
-        expect(connection.instanceDisposals).toBe(1);
+        expect(connection).toMatchObject({ disposals: 1, instanceDisposals: 1 });
         expect(connection.database.isOpen).toBe(false);
         expect(connection.cleanups).toBe(0);
         expect(signal.aborted).toBe(true);
         expect(authority()).toBe(false);
-      } finally {
-        await fixture.cleanup(inspection, borrowed);
-      }
+      });
     },
   );
 
@@ -382,12 +384,10 @@ describe("owned plugin inspections", () => {
         capturedInstanceDisposal: true,
       });
       const successful = createInspectionFixture();
-      let inspection: Inspection | undefined;
-      let borrowed: { release: () => Promise<void> } | undefined;
-      try {
-        inspection = await acquireFixtureInspection([failed, successful]);
+      await inspectFixtures([failed, successful], async (inspection, retain) => {
+        let borrowed: { release: () => Promise<void> } | undefined;
         if (retainSibling) {
-          borrowed = getPluginRegistryInspectionResources(inspection.registry)!.retain();
+          borrowed = retain();
         }
         expect(
           inspection.registry.plugins.find((entry) => entry.id === failed.plugin.id),
@@ -418,15 +418,9 @@ describe("owned plugin inspections", () => {
           });
           await expect(borrowed.release()).resolves.toBeUndefined();
         }
-        expect(failed.connection().disposals).toBe(1);
-        expect(failed.connection().instanceDisposals).toBe(1);
-        expect(successful.connection().disposals).toBe(1);
-        expect(successful.connection().instanceDisposals).toBe(1);
-        expect(successful.connection().database.isOpen).toBe(false);
-      } finally {
-        await failed.cleanup(inspection, borrowed);
-        await successful.cleanup();
-      }
+        expectConnection(failed, { disposals: 1, instanceDisposals: 1 });
+        expectConnection(successful, { disposals: 1, instanceDisposals: 1, open: false });
+      });
     },
   );
 
@@ -434,11 +428,8 @@ describe("owned plugin inspections", () => {
     "assigns final disposal to the borrower released after the inspection (%s)",
     async (timing) => {
       const fixture = createInspectionFixture({ pauseDisposal: true, disposalFailure: true });
-      let inspection: Inspection | undefined;
-      let borrowed: { release: () => Promise<void> } | undefined;
-      try {
-        inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
-        borrowed = getPluginRegistryInspectionResources(inspection.registry)!.retain();
+      await inspectFixtures([fixture], async (inspection, retain) => {
+        const borrowed = retain();
         const signal = capturePluginRegistryLifecycleSignal(inspection.registry, undefined, {
           scopedRuntime: true,
         })!;
@@ -454,14 +445,8 @@ describe("owned plugin inspections", () => {
         }
         expect(signal.aborted).toBe(true);
         expect(borrowedRelease).toBeDefined();
-        const inspectionOutcome = inspectionRelease.then(
-          () => ({ owner: "inspection", error: undefined }),
-          (error: unknown) => ({ owner: "inspection", error }),
-        );
-        const borrowerOutcome = borrowedRelease!.then(
-          () => ({ owner: "borrower", error: undefined }),
-          (error: unknown) => ({ owner: "borrower", error }),
-        );
+        const inspectionOutcome = settlement(inspectionRelease, { owner: "inspection" });
+        const borrowerOutcome = settlement(borrowedRelease!, { owner: "borrower" });
         await fixture.state.disposalStarted.promise;
         expect(fixture.connection().database.isOpen).toBe(true);
         expect(await Promise.race([inspectionOutcome, borrowerOutcome])).toEqual({
@@ -476,9 +461,7 @@ describe("owned plugin inspections", () => {
           },
         });
         expectDisposed(fixture);
-      } finally {
-        await fixture.cleanup(inspection, borrowed);
-      }
+      });
     },
   );
 
@@ -489,9 +472,7 @@ describe("owned plugin inspections", () => {
         acquirePluginRegistryForInspection({ config: fixture.config, throwOnLoadError: true }),
       ).rejects.toThrow();
       expect(fixture.state.connections).toHaveLength(1);
-      expect(fixture.connection().database.isOpen).toBe(false);
-      expect(fixture.connection().disposals).toBe(1);
-      expect(fixture.connection().instanceDisposals).toBe(1);
+      expectConnection(fixture, { open: false, disposals: 1, instanceDisposals: 1 });
     } finally {
       await fixture.cleanup();
     }
@@ -536,64 +517,72 @@ describe("owned plugin inspections", () => {
     },
   );
 
-  it.each(["async-resolve", "async-reject", "thenable", "tracked"] as const)(
-    "waits for actual registration work before disposal (%s)",
-    async (registration) => {
+  it.each([
+    ["async-resolve", false],
+    ["async-reject", false],
+    ["thenable", false],
+    ["tracked", false],
+    ["async-reject", true],
+  ] as const)(
+    "waits for actual registration work before disposal (%s, retained sibling: %s)",
+    async (registration, retainSibling) => {
       const sibling = createInspectionFixture();
       const fixture = createInspectionFixture({ registration });
       fixture.state.sibling.read = () => readFixture(sibling)?.value;
-      let inspection: Inspection | undefined;
-      try {
-        inspection = await acquireFixtureInspection([sibling, fixture]);
-        const record = inspection.registry.plugins.find((entry) => entry.id === fixture.plugin.id);
-        if (registration === "tracked") {
-          expect(record?.status).toBe("loaded");
-        } else {
-          expect(record?.error).toContain("plugin register must be synchronous");
-        }
-        expect(inspection.registry.runtimeLifecycles).toHaveLength(
-          registration === "tracked" ? 2 : 1,
-        );
-        let released = false;
-        const release = inspection.release().then(() => {
-          released = true;
-        });
-        await Promise.resolve();
-        expect(released).toBe(false);
-        expect(fixture.connection().disposals).toBe(0);
-        expect(fixture.connection().instanceDisposals).toBe(0);
-        expect(sibling.connection().instanceDisposals).toBe(0);
-        fixture.state.resume.resolve();
-        await release;
-        expect(fixture.state.lateRead).toBe(42);
-        expect(fixture.state.sibling.result).toBe(42);
-        if (registration === "thenable") {
-          expect(fixture.state.thenCalls).toBe(1);
-        }
-        expect(sibling.connection().database.isOpen).toBe(false);
-        expect(fixture.connection().disposals).toBe(1);
-        expect(fixture.connection().instanceDisposals).toBe(1);
-        expect(sibling.connection().instanceDisposals).toBe(1);
-        expect(fixture.connection().database.isOpen).toBe(false);
-      } finally {
-        await fixture.cleanup(inspection);
-        await sibling.cleanup();
-      }
+      await inspectFixtures(
+        [sibling, fixture],
+        async (inspection, retain) => {
+          const borrowed = retainSibling ? retain() : undefined;
+          const record = inspection.registry.plugins.find(
+            (entry) => entry.id === fixture.plugin.id,
+          );
+          if (registration === "tracked") {
+            expect(record?.status).toBe("loaded");
+          } else {
+            expect(record?.error).toContain("plugin register must be synchronous");
+          }
+          expect(inspection.registry.runtimeLifecycles).toHaveLength(
+            registration === "tracked" ? 2 : 1,
+          );
+          let released = false;
+          const release = inspection.release().then(() => {
+            released = true;
+          });
+          await Promise.resolve();
+          expect(released).toBe(false);
+          expectConnection(fixture, { disposals: 0, instanceDisposals: 0 });
+          expectConnection(sibling, { instanceDisposals: 0 });
+          fixture.state.resume.resolve();
+          await release;
+          expect(fixture.state).toMatchObject({ lateRead: 42, sibling: { result: 42 } });
+          if (registration === "thenable") {
+            expect(fixture.state.thenCalls).toBe(1);
+          }
+          expectConnection(fixture, { disposals: 1, instanceDisposals: 1, open: false });
+          expectConnection(sibling, {
+            instanceDisposals: retainSibling ? 0 : 1,
+            open: retainSibling,
+          });
+          if (borrowed) {
+            expectConnection(sibling, { disposals: 0 });
+            expect(readFixture(sibling)).toEqual({ value: 42 });
+            await borrowed.release();
+            expectConnection(sibling, { disposals: 1, open: false });
+          }
+        },
+        [fixture, sibling],
+      );
     },
   );
 
   it("joins queued registration-signal cleanup before disposing native resources", async () => {
     const fixture = createInspectionFixture({ queuedAbortCleanup: true });
-    let inspection: Inspection | undefined;
-    try {
-      inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+    await inspectFixtures([fixture], async (inspection) => {
       await inspection.release();
       await expect(fixture.state.captured.abortCleanup).resolves.toBeUndefined();
       expect(fixture.state.captured.abortRead).toEqual({ value: 42 });
       expectDisposed(fixture);
-    } finally {
-      await fixture.cleanup(inspection);
-    }
+    });
   });
 
   it("joins invalid registration work before releasing an inspection with a retained sibling", async () => {
