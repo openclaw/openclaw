@@ -84,6 +84,31 @@ describe("format-docs", () => {
     expect(calls.flatMap((call) => call.args.slice(5))).toEqual(files);
   });
 
+  it("keeps Windows batches inside the cmd.exe command-line limit", () => {
+    // cmd.exe refuses a command line longer than this, well below the CreateProcess limit.
+    const CMD_EXE_MAX_COMMAND_LINE = 8191;
+    const root = createTempDir("openclaw-format-docs-windows-batch-");
+    const files = Array.from({ length: 150 }, (_, index) => `docs/${index}-${"a".repeat(180)}.md`);
+    writeDocsFixture(root, files);
+    const shim = path.join(root, "node_modules", ".bin", "oxfmt.cmd");
+    fs.mkdirSync(path.dirname(shim), { recursive: true });
+    fs.writeFileSync(shim, "@echo off\n");
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    vi.stubEnv("SystemRoot", "C:\\Windows");
+    const calls = mockFormatter(files);
+
+    formatDocs({ root });
+
+    expect(calls.length).toBeGreaterThan(1);
+    for (const call of calls) {
+      expect(call.command).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(String(call.args[3]).length).toBeLessThanOrEqual(CMD_EXE_MAX_COMMAND_LINE);
+    }
+    for (const file of files) {
+      expect(calls.some((call) => String(call.args[3]).includes(file))).toBe(true);
+    }
+  });
+
   it("reports git and oxfmt spawn diagnostics", () => {
     const root = createTempDir("openclaw-format-docs-failures-");
     writeDocsFixture(root);
