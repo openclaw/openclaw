@@ -6,6 +6,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import {
+  DecisionEvaluateInput,
+  parseDecisionEvaluateInput,
+} from "../agents/tools/decision-tool-contract.js";
+import {
   buildProviderToolCompatFamilyHooks,
   inspectDeepSeekToolSchemas,
   findOpenAIStrictSchemaViolations,
@@ -671,6 +675,38 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         validateDeepSeekTool(normalized, { parent: { kind, database_id: "database-1" } }),
       ).toThrow(/Validation failed for tool "literal-parent"/);
     }
+  });
+
+  it("keeps every decision_evaluate question type callable for the deepseek family", () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/166486.
+    // Question branches declare `criteria` as nullable object, map, and array,
+    // and `state` mixes primitive and structured values. Keeping one shape
+    // rejected choice and score questions, and any object state, before the
+    // decision provider was called.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const normalized = hooks.normalizeToolSchemas(
+      deepSeekContext([tool(DecisionEvaluateInput, "decision_evaluate")]),
+    );
+    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+
+    const state = { status: "error", error: "command exited with code 1" };
+    const calls = [
+      { q: { type: "boolean", instructions: "Did the command fail?" } },
+      { q: { type: "choice", instructions: "Which area?", criteria: { build: "b", test: "t" } } },
+      { q: { type: "score", instructions: "How urgent?", criteria: ["low", "medium", "high"] } },
+    ];
+    for (const questions of calls) {
+      const args = validateDeepSeekTool(normalized, { state, questions });
+      expect(parseDecisionEvaluateInput(args)).toEqual({ state, questions });
+    }
+
+    // The flattened schema no longer pairs criteria with its question type, so
+    // the tool's own contract still rejects a mismatched branch.
+    const mismatched = validateDeepSeekTool(normalized, {
+      state,
+      questions: { q: { type: "score", criteria: { low: "l", high: "h" } } },
+    });
+    expect(() => parseDecisionEvaluateInput(mismatched)).toThrow(/Invalid decision_evaluate input/);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {

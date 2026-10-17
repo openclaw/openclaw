@@ -19,6 +19,7 @@ import {
   mergeLiteralSchemas,
   readLiteralSchemaValues,
   schemaAnnotationsOnly,
+  schemaConstraintsOnly,
 } from "../shared/json-schema-literals.js";
 import type {
   AnyAgentTool,
@@ -319,6 +320,13 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     };
   }
 
+  // A primitive branch cannot stand in for an object or array branch, so any
+  // single choice rejects structured values the union accepted. Drop the type
+  // instead; the tool still enforces its own contract.
+  if (nonNullVariants.length > 1 && unionMixesStructuredTypes(nonNullVariants)) {
+    return normalized;
+  }
+
   // Selecting the first object would make valid later branches fail local validation.
   const selected =
     nonNullVariants.length > 1 && nonNullVariants.every(isObjectSchemaVariant)
@@ -350,6 +358,33 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   return merged;
 }
 
+function readVariantTypes(entry: unknown): string[] | undefined {
+  if (!isSchemaRecord(entry)) {
+    return undefined;
+  }
+  if (typeof entry.type === "string") {
+    return [entry.type];
+  }
+  if (Array.isArray(entry.type) && entry.type.every((type) => typeof type === "string")) {
+    return entry.type.filter((type) => type !== "null");
+  }
+  return undefined;
+}
+
+function unionMixesStructuredTypes(variants: unknown[]): boolean {
+  const types = new Set<string>();
+  for (const variant of variants) {
+    const variantTypes = readVariantTypes(variant);
+    if (!variantTypes) {
+      return false;
+    }
+    for (const type of variantTypes) {
+      types.add(type);
+    }
+  }
+  return types.size > 1 && (types.has("object") || types.has("array"));
+}
+
 function isStringConstVariant(entry: unknown): entry is { const: string } {
   return isSchemaRecord(entry) && typeof entry.const === "string";
 }
@@ -365,7 +400,7 @@ function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown>
 }
 
 // Union properties and intersect required keys so every branch remains expressible.
-// Pool discriminating literals; retain the first conflicting non-literal constraint.
+// Pool discriminating literals; leave conflicting non-literal shapes unconstrained.
 function flattenObjectVariants(
   variants: Record<string, unknown>[],
 ): Record<string, unknown> | undefined {
@@ -393,9 +428,15 @@ function flattenObjectVariants(
           : undefined;
       if (pooled) {
         properties[key] = pooled;
+      } else if (
+        !isDeepStrictEqual(schemaConstraintsOnly(existing), schemaConstraintsOnly(value))
+      ) {
+        // Either definition rejects values the other branch accepts, and a union
+        // keyword is the one thing DeepSeek will not accept. The tool still
+        // validates the branch it receives.
+        properties[key] = schemaAnnotationsOnly(existing);
       }
-      // Otherwise keep the first definition. Widening it would mean putting a
-      // union keyword back, which is the one thing DeepSeek will not accept.
+      // Branches that differ only in annotations keep the first annotation.
     }
     const variantRequired = Array.isArray(variant.required)
       ? variant.required.filter((key): key is string => typeof key === "string")
