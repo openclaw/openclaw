@@ -112,6 +112,8 @@ describe("PostgreSQL conformance selection", () => {
       expect(
         evaluateWorkflowExpression(job["timeout-minutes"], {
           eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
           matrix: { shard },
         }),
       ).toBe(timeout);
