@@ -457,7 +457,9 @@
       "lifecycleFailedDetail": "打开会话以查看失败原因",
       "lifecycleStopped": "已停止",
       "lifecycleTimedOut": "已超时",
-      "lifecycleStoppedDetail": "运行已停止"
+      "lifecycleStoppedDetail": "运行已停止",
+      "automationEvent": "事件：{source}",
+      "automationWaitingForEvent": "等待事件"
     }
   },
   "zh-TW": {
@@ -918,7 +920,9 @@
       "lifecycleFailedDetail": "開啟工作階段以查看失敗原因",
       "lifecycleStopped": "已停止",
       "lifecycleTimedOut": "已逾時",
-      "lifecycleStoppedDetail": "執行已停止"
+      "lifecycleStoppedDetail": "執行已停止",
+      "automationEvent": "事件：{source}",
+      "automationWaitingForEvent": "等待事件"
     }
   },
   "pt-BR": {
@@ -1379,7 +1383,9 @@
       "lifecycleFailedDetail": "Abra a sessão para analisar a falha",
       "lifecycleStopped": "Interrompida",
       "lifecycleTimedOut": "Tempo limite excedido",
-      "lifecycleStoppedDetail": "A execução foi interrompida"
+      "lifecycleStoppedDetail": "A execução foi interrompida",
+      "automationEvent": "Evento: {source}",
+      "automationWaitingForEvent": "Aguardando evento"
     }
   },
   "de": {
@@ -1840,7 +1846,9 @@
       "lifecycleFailedDetail": "Öffnen Sie die Sitzung, um den Fehler zu überprüfen",
       "lifecycleStopped": "Gestoppt",
       "lifecycleTimedOut": "Zeitüberschreitung",
-      "lifecycleStoppedDetail": "Der Durchlauf wurde gestoppt"
+      "lifecycleStoppedDetail": "Der Durchlauf wurde gestoppt",
+      "automationEvent": "Ereignis: {source}",
+      "automationWaitingForEvent": "Warten auf Ereignis"
     }
   },
   "es": {
@@ -2301,7 +2309,9 @@
       "lifecycleFailedDetail": "Abre la sesión para revisar el error",
       "lifecycleStopped": "Detenida",
       "lifecycleTimedOut": "Tiempo de espera agotado",
-      "lifecycleStoppedDetail": "La ejecución se detuvo"
+      "lifecycleStoppedDetail": "La ejecución se detuvo",
+      "automationEvent": "Evento: {source}",
+      "automationWaitingForEvent": "Esperando un evento"
     }
   },
   "ja-JP": {
@@ -2762,7 +2772,9 @@
       "lifecycleFailedDetail": "セッションを開いて失敗の詳細を確認してください",
       "lifecycleStopped": "停止済み",
       "lifecycleTimedOut": "タイムアウト",
-      "lifecycleStoppedDetail": "実行が停止されました"
+      "lifecycleStoppedDetail": "実行が停止されました",
+      "automationEvent": "イベント: {source}",
+      "automationWaitingForEvent": "イベントを待機中"
     }
   },
   "ko": {
@@ -3223,7 +3235,9 @@
       "lifecycleFailedDetail": "세션을 열어 실패 원인을 확인하세요",
       "lifecycleStopped": "중지됨",
       "lifecycleTimedOut": "시간 초과",
-      "lifecycleStoppedDetail": "실행이 중지되었습니다"
+      "lifecycleStoppedDetail": "실행이 중지되었습니다",
+      "automationEvent": "이벤트: {source}",
+      "automationWaitingForEvent": "이벤트 대기 중"
     }
   },
   "fr": {
@@ -3684,7 +3698,9 @@
       "lifecycleFailedDetail": "Ouvrez la session pour examiner l’échec",
       "lifecycleStopped": "Arrêté",
       "lifecycleTimedOut": "Délai dépassé",
-      "lifecycleStoppedDetail": "L’exécution a été arrêtée"
+      "lifecycleStoppedDetail": "L’exécution a été arrêtée",
+      "automationEvent": "Événement : {source}",
+      "automationWaitingForEvent": "En attente d’un événement"
     }
   },
   "hi": {
@@ -4145,7 +4161,9 @@
       "lifecycleFailedDetail": "विफलता की समीक्षा करने के लिए सत्र खोलें",
       "lifecycleStopped": "रोक दिया गया",
       "lifecycleTimedOut": "समय सीमा समाप्त हो गई",
-      "lifecycleStoppedDetail": "रन रोक दिया गया था"
+      "lifecycleStoppedDetail": "रन रोक दिया गया था",
+      "automationEvent": "इवेंट: {source}",
+      "automationWaitingForEvent": "इवेंट की प्रतीक्षा है"
     }
   },
   "ar": {
@@ -4606,7 +4624,9 @@
       "lifecycleFailedDetail": "افتح الجلسة لمراجعة سبب الفشل",
       "lifecycleStopped": "متوقف",
       "lifecycleTimedOut": "انتهت المهلة",
-      "lifecycleStoppedDetail": "تم إيقاف التشغيل"
+      "lifecycleStoppedDetail": "تم إيقاف التشغيل",
+      "automationEvent": "الحدث: {source}",
+      "automationWaitingForEvent": "في انتظار حدث"
     }
   },
   "it": {
@@ -5067,7 +5087,9 @@
       "lifecycleFailedDetail": "Apri la sessione per esaminare l'errore",
       "lifecycleStopped": "Interrotta",
       "lifecycleTimedOut": "Tempo scaduto",
-      "lifecycleStoppedDetail": "L'esecuzione è stata interrotta"
+      "lifecycleStoppedDetail": "L'esecuzione è stata interrotta",
+      "automationEvent": "Evento: {source}",
+      "automationWaitingForEvent": "In attesa dell'evento"
     }
   },
   "tr": {
@@ -5528,7 +5550,9 @@
       "lifecycleFailedDetail": "Hatayı incelemek için oturumu açın",
       "lifecycleStopped": "Durduruldu",
       "lifecycleTimedOut": "Zaman aşımına uğradı",
-      "lifecycleStoppedDetail": "Çalıştırma durduruldu"
+      "lifecycleStoppedDetail": "Çalıştırma durduruldu",
+      "automationEvent": "Olay: {source}",
+      "automationWaitingForEvent": "Olay bekleniyor"
     }
   },
   "uk": {
@@ -5989,7 +6013,9 @@
       "lifecycleFailedDetail": "Відкрийте сеанс, щоб переглянути відомості про помилку",
       "lifecycleStopped": "Зупинено",
       "lifecycleTimedOut": "Час очікування вичерпано",
-      "lifecycleStoppedDetail": "Виконання зупинено"
+      "lifecycleStoppedDetail": "Виконання зупинено",
+      "automationEvent": "Подія: {source}",
+      "automationWaitingForEvent": "Очікування події"
     }
   },
   "id": {
@@ -6450,7 +6476,9 @@
       "lifecycleFailedDetail": "Buka sesi untuk meninjau kegagalan",
       "lifecycleStopped": "Dihentikan",
       "lifecycleTimedOut": "Waktu habis",
-      "lifecycleStoppedDetail": "Proses dihentikan"
+      "lifecycleStoppedDetail": "Proses dihentikan",
+      "automationEvent": "Peristiwa: {source}",
+      "automationWaitingForEvent": "Menunggu peristiwa"
     }
   },
   "pl": {
@@ -6911,7 +6939,9 @@
       "lifecycleFailedDetail": "Otwórz sesję, aby sprawdzić przyczynę niepowodzenia",
       "lifecycleStopped": "Zatrzymano",
       "lifecycleTimedOut": "Przekroczono limit czasu",
-      "lifecycleStoppedDetail": "Wykonanie zostało zatrzymane"
+      "lifecycleStoppedDetail": "Wykonanie zostało zatrzymane",
+      "automationEvent": "Zdarzenie: {source}",
+      "automationWaitingForEvent": "Oczekiwanie na zdarzenie"
     }
   },
   "th": {
@@ -7372,7 +7402,9 @@
       "lifecycleFailedDetail": "เปิดเซสชันเพื่อตรวจสอบสาเหตุที่ล้มเหลว",
       "lifecycleStopped": "หยุดแล้ว",
       "lifecycleTimedOut": "หมดเวลา",
-      "lifecycleStoppedDetail": "การทำงานถูกหยุดแล้ว"
+      "lifecycleStoppedDetail": "การทำงานถูกหยุดแล้ว",
+      "automationEvent": "เหตุการณ์: {source}",
+      "automationWaitingForEvent": "กำลังรอเหตุการณ์"
     }
   },
   "vi": {
@@ -7833,7 +7865,9 @@
       "lifecycleFailedDetail": "Mở phiên để xem lại lỗi",
       "lifecycleStopped": "Đã dừng",
       "lifecycleTimedOut": "Đã hết thời gian chờ",
-      "lifecycleStoppedDetail": "Lượt chạy đã bị dừng"
+      "lifecycleStoppedDetail": "Lượt chạy đã bị dừng",
+      "automationEvent": "Sự kiện: {source}",
+      "automationWaitingForEvent": "Đang chờ sự kiện"
     }
   },
   "nl": {
@@ -8294,7 +8328,9 @@
       "lifecycleFailedDetail": "Open de sessie om de fout te bekijken",
       "lifecycleStopped": "Gestopt",
       "lifecycleTimedOut": "Time-out",
-      "lifecycleStoppedDetail": "De uitvoering is gestopt"
+      "lifecycleStoppedDetail": "De uitvoering is gestopt",
+      "automationEvent": "Gebeurtenis: {source}",
+      "automationWaitingForEvent": "Wachten op gebeurtenis"
     }
   },
   "fa": {
@@ -8755,7 +8791,9 @@
       "lifecycleFailedDetail": "برای بررسی علت شکست، نشست را باز کنید",
       "lifecycleStopped": "متوقف شده",
       "lifecycleTimedOut": "مهلت به پایان رسید",
-      "lifecycleStoppedDetail": "اجرا متوقف شد"
+      "lifecycleStoppedDetail": "اجرا متوقف شد",
+      "automationEvent": "رویداد: {source}",
+      "automationWaitingForEvent": "در انتظار رویداد"
     }
   },
   "ru": {
@@ -9216,7 +9254,411 @@
       "lifecycleFailedDetail": "Откройте сеанс, чтобы просмотреть сведения об ошибке",
       "lifecycleStopped": "Остановлено",
       "lifecycleTimedOut": "Время ожидания истекло",
-      "lifecycleStoppedDetail": "Выполнение было остановлено"
+      "lifecycleStoppedDetail": "Выполнение было остановлено",
+      "automationEvent": "Событие: {source}",
+      "automationWaitingForEvent": "Ожидание события"
+    }
+  },
+  "sv": {
+    "common": {
+      "refreshing": "Uppdaterar…",
+      "refresh": "Uppdatera",
+      "retry": "Försök igen",
+      "cancel": "Avbryt",
+      "close": "Stäng",
+      "create": "Skapa",
+      "na": "ej tillämpligt",
+      "save": "Spara"
+    },
+    "sessionsView": {
+      "statusQueued": "I kö"
+    },
+    "workboard": {
+      "pageLoadFailed": "Arbetstavlan kunde inte laddas. Kontrollera anslutningen och ladda om sidan.",
+      "pinBoard": "Fäst i sidofältet",
+      "unpinBoard": "Lossa från sidofältet",
+      "deleteBoard": "Ta bort tavla…",
+      "deleteBoardTitle": "Ta bort ”{name}”?",
+      "deleteBoardConfirm": "Ta bort tavla",
+      "deleteBoardHelp": "Detta tar permanent bort tavlan och dess sparade sessionsplaceringar. Sessionerna behålls. Tavlor med kort måste först tömmas.",
+      "deleteBoardUnavailable": "Anslut med skrivbehörighet för att ta bort den här tavlan.",
+      "discardCardTitle": "Kasta det här kortet?",
+      "discardChangesTitle": "Ignorera ändringarna?",
+      "discardDraftHelp": "Dina osparade ändringar går förlorade.",
+      "keepEditing": "Fortsätt redigera",
+      "discardDraft": "Kasta",
+      "viewBoard": "Kolumner",
+      "boardColor": "Färg",
+      "clearFilters": "Rensa filter",
+      "activeFilters": "Aktiva filter",
+      "removeFilter": "Ta bort filter: {filter}",
+      "filterChipValue": "{field}: {value}",
+      "filterChipExcludes": "{field} ≠ {value}",
+      "filterChipSearch": "Sök: ”{query}”",
+      "filterChipArchived": "Inkludera arkiverade",
+      "filterAttention": "Behöver uppmärksamhet",
+      "filterStale": "Ingen aktivitet på sistone",
+      "filterStaleHint": "Kort markerade som inaktiva eller länkade till en inaktiv session",
+      "filterMissingProof": "Klart utan belägg",
+      "filterMissingProofHint": "Slutförda kort utan belägg, artefakter eller bilagor",
+      "filterDonePeriod": "Slutförda kort",
+      "filterAllTime": "Hela perioden",
+      "filterLastWeek": "Senaste 7 dagarna",
+      "filterLayout": "Layout",
+      "filterDensity": "Täthet",
+      "densityCompact": "Kompakt",
+      "densityComfortable": "Luftig",
+      "viewList": "Lista",
+      "columnActions": "Åtgärder för kolumnen {column}",
+      "selectAllInColumn": "Markera alla i {column}",
+      "selectCard": "Markera {title}",
+      "deselectCard": "Avmarkera {title}",
+      "selectedCountOne": "1 markerat",
+      "selectedCount": "{count} markerade",
+      "selectionLabel": "Markerade kort",
+      "clearSelection": "Rensa markering",
+      "bulkAssign": "Tilldela agent…",
+      "bulkEdit": "Redigera egenskaper",
+      "bulkArchive": "Arkivera",
+      "bulkDelete": "Ta bort",
+      "bulkEditTitle": "Redigera {count} kort",
+      "bulkDeleteTitle": "Ta bort {count} kort?",
+      "bulkDeleteHelp": "Dessa kort tas bort permanent. Pågående sessioner fortsätter.",
+      "bulkEditHelp": "Ändringarna gäller alla markerade kort.",
+      "bulkKeep": "Behåll oförändrat",
+      "bulkLabels_keep": "Behåll oförändrat",
+      "bulkLabels_add": "Lägg till etiketter",
+      "bulkLabels_replace": "Ersätt etiketter",
+      "bulkLabels_remove": "Ta bort etiketter",
+      "bulkLabelsPlaceholder": "Etiketter, separerade med kommatecken",
+      "bulkApplying": "Tillämpar…",
+      "bulkApply": "Tillämpa ändringar",
+      "bulkResult": "Ändringarna har tillämpats på {completed} av {total} kort.",
+      "bulkUnavailable": "Åtgärden avbröts. Återstående kort är fortfarande markerade. Uppdatera och försök igen.",
+      "bulkMoveLabel": "Flytta till…",
+      "widget": {
+        "boardLabel": "Workboard-tavla",
+        "loading": "Läser in Workboard…",
+        "disconnected": "Anslut till Gateway för att läsa in Workboard.",
+        "cardIdRequired": "Den här widgeten kräver en cardId-prop.",
+        "cardMissing": "Det här Workboard-kortet är inte längre tillgängligt.",
+        "unassigned": "Ej tilldelat",
+        "openBoard": "Öppna tavla",
+        "statusCounts": "Kort efter status",
+        "cardCount": "{count} kort",
+        "noActiveCards": "Inga kort är redo eller pågående."
+      },
+      "status": {
+        "triage": "Prioritering",
+        "backlog": "Att planera",
+        "todo": "Att göra",
+        "scheduled": "Schemalagt",
+        "ready": "Redo",
+        "running": "Pågående",
+        "review": "Granskning",
+        "blocked": "Blockerat",
+        "done": "Klart"
+      },
+      "noLinkedSession": "Ingen länkad session",
+      "stopSession": "Stoppa session",
+      "editCard": "Redigera kort",
+      "editBoard": "Redigera tavla",
+      "newBoard": "Ny tavla",
+      "boardKind": "Typ av tavla",
+      "cardsBoard": "Kort",
+      "sessionsBoard": {
+        "kind": "Sessioner",
+        "peopleFilter": "Personfilter",
+        "everyone": "Alla",
+        "involvingMe": "Som involverar mig",
+        "agent": "Tavlans agent",
+        "agentLabel": "Sessionstavla · {name}",
+        "agentUnavailable": "Agenten för tavlans konversation är inte tillgänglig. Välj en konfigurerad agent eller uppdatera tavlans konversation.",
+        "agentCreateFailed": "Tavlans konversation kunde inte skapas. Försök igen.",
+        "writeUnavailable": "Tavlans utseende har sparats. Återanslut med skrivbehörighet för att spara sessionskolumnerna.",
+        "loading": "Läser in sessioner…",
+        "empty": "Inga sessioner i den här kolumnen",
+        "columns": "Kolumner",
+        "columnLabel": "Kolumnnamn",
+        "description": "Beskrivning",
+        "fallback": "Reservkolumn",
+        "defaultColor": "Standard",
+        "addColumn": "Lägg till kolumn",
+        "removeColumn": "Ta bort kolumn",
+        "newColumn": "Ny kolumn",
+        "moveUp": "Flytta upp",
+        "moveDown": "Flytta ned",
+        "rulesHelp": "Tavlans agent kan redigera kolumnregler och vilka sessioner som ingår.",
+        "source": {
+          "state": "enligt regel",
+          "operator": "fäst"
+        },
+        "run": {
+          "active": "Arbetar",
+          "idle": "Inaktiv",
+          "failed": "Misslyckades"
+        },
+        "pullRequest": {
+          "open": "Öppen",
+          "draft": "Utkast",
+          "merged": "Sammanslagen",
+          "closed": "Stängd"
+        },
+        "color": {
+          "red": "Röd",
+          "blue": "Blå",
+          "green": "Grön",
+          "yellow": "Gul",
+          "purple": "Lila",
+          "orange": "Orange",
+          "pink": "Rosa",
+          "cyan": "Cyan"
+        }
+      },
+      "boardName": "Namn",
+      "boardAppearance": "Tavlans utseende",
+      "boardAutomation": "Tavlans automatisering",
+      "openBoardAutomation": "Öppna",
+      "automationLoading": "Läser in länkad automatisering…",
+      "automationUnavailable": "Automatiseringen är inte tillgänglig",
+      "automationPaused": "Pausad",
+      "automationEnabled": "Aktiverad",
+      "automationState": "Status",
+      "automationFrequency": "Frekvens",
+      "automationNextRunLabel": "Nästa körning",
+      "automationNotScheduled": "Inte schemalagd",
+      "automationUpdatedAgo": "Uppdaterad för {time} sedan",
+      "automationUpdatedNow": "Uppdaterad nyss",
+      "automationRefreshHint": "Uppdatera tavlan för att försöka igen.",
+      "openNamedAutomation": "Öppna {name}",
+      "automationNextRun": "Nästa körning {time}",
+      "automationNextRunDue": "Nästa körning ska ske nu",
+      "automationEvery": "Varje {duration}",
+      "automationAt": "Kl. {time}",
+      "automationOnExit": "Vid avslut: {command}",
+      "automationStream": "Ström: {command}",
+      "automationEvent": "Händelse: {source}",
+      "automationWaitingForEvent": "Väntar på händelse",
+      "viewPresetCountOne": "1 kort",
+      "editCardHelp": "Uppdatera kömetadata och sessionsöverlämning.",
+      "newCard": "Nytt kort",
+      "newCardShort": "Nytt",
+      "newCardInColumn": "Nytt kort i {column}",
+      "newCardHelp": "Lägg arbete i kö för en agentsession.",
+      "archiveCard": "Arkivera kort",
+      "unarchiveCard": "Återställ från arkivet",
+      "archived": "Arkiverat",
+      "deleteCard": "Ta bort kort",
+      "cardActions": "Kortåtgärder",
+      "viewDetails": "Visa detaljer",
+      "detailTitle": "Kortdetaljer",
+      "detailProperties": "Egenskaper",
+      "detailTabOverview": "Översikt",
+      "detailTabActivity": "Aktivitet",
+      "detailTabSession": "Session",
+      "detailTabDetails": "Detaljer",
+      "detailTemplate": "Mall",
+      "detailFailures": "Misslyckade försök",
+      "detailClaim": "Anspråksägare",
+      "detailHeartbeat": "Senaste livstecken",
+      "detailNotifications": "Aviseringar",
+      "inlineAddLabels": "Lägg till etiketter",
+      "inlineAddDescription": "Lägg till beskrivning",
+      "detailOccurrences": "{count} förekomster",
+      "detailFirstSeen": "Sågs först {time}",
+      "detailLastSeen": "Sågs senast {time}",
+      "detailExecutionOptions": "Andra sätt att starta",
+      "detailRunAutomatically": "Kör automatiskt",
+      "detailOpenManually": "Öppna en session manuellt",
+      "detailNoSessionYet": "Ingen session ännu",
+      "defaultAgentBadge": "Standard",
+      "detailStartSessionHelp": "Starta {agent} för att arbeta med det här kortet.",
+      "detailTechnical": "Tekniska detaljer",
+      "detailRun": "Körning",
+      "detailUpdated": "Uppdaterad",
+      "detailProof": "Bevis",
+      "detailAttemptTitle": "Försök {number}",
+      "proofPassed": "Godkänt",
+      "proofSkipped": "Överhoppad",
+      "proofUnknown": "Okänd",
+      "detailDiagnostics": "Diagnostik",
+      "detailWorkerLogs": "Arbetsprocessloggar",
+      "detailWorkerProtocol": "Arbetsprocessprotokoll",
+      "detailCardAutomation": "Kortautomatisering",
+      "detailBoard": "Tavla",
+      "detailScheduled": "Schemalagd",
+      "detailSkills": "Skills",
+      "detailWorkspace": "Arbetsyta",
+      "detailDispatchCount": "Tilldelningar",
+      "detailLastDispatch": "Senaste tilldelning",
+      "detailRuntimeLimit": "Körtidsgräns",
+      "detailRetryLimit": "Gräns för återförsök",
+      "detailTenant": "Klientorganisation",
+      "detailUpdatedValue": "Uppdaterad: {time}",
+      "detailOperatorNotes": "Operatörsanteckningar",
+      "detailNoNotes": "Inga operatörsanteckningar ännu.",
+      "detailNotePlaceholder": "Lägg till ett beslut, ett hinder eller en bevisanteckning...",
+      "detailAddNote": "Lägg till anteckning",
+      "openSession": "Öppna session",
+      "defaultAgent": "Standardagent",
+      "allAgents": "Alla agenter",
+      "agentFilter": "Filtrera efter agent",
+      "allBoards": "Alla tavlor",
+      "boardFilter": "Filtrera efter tavla",
+      "defaultBoard": "Standardtavla",
+      "boardFilterSummary": "{active} aktiva · {total} totalt",
+      "boardFilterArchivedSummary": "Arkiverad · {active} aktiva · {total} totalt",
+      "agentFilterUnassigned": "Ej tilldelad (använder {agent})",
+      "agentFilterUnassignedHelp": "Kort utan en uttryckligen tilldelad agent.",
+      "agentFilterConfiguredDefault": "{agent} (standard)",
+      "agentFilterConfiguredDefaultHelp": "Kort som uttryckligen tilldelats den konfigurerade standardagenten.",
+      "agentCurrentUnconfigured": "{agent} (inte konfigurerad)",
+      "viewPresetCount": "{count} kort",
+      "engineOpenAI": "OpenAI",
+      "engineClaude": "Claude",
+      "engineDisabledRuntime": "{agent} använder ACP-körmiljön {runtime}. Använd standardstart för den sessionen.",
+      "runEngine": "Kör {engine}",
+      "openEngine": "Öppna {engine}",
+      "runDefaultAgent": "Kör standardagent",
+      "start": "Starta",
+      "dependencies": "Beroenden",
+      "dependenciesBlocked": "{count} blockerade",
+      "dependencyStatusMissing": "Saknas",
+      "unknownStatus": "Okänd",
+      "showArchived": "Visa arkiverade",
+      "dispatch": "Starta agenter",
+      "dispatchHelp": "Be agenter att utföra uppgifterna på den här tavlans redo-kort, upp till 3 åt gången.",
+      "dispatchHelpAll": "Be agenter att utföra uppgifterna på redo-kort på alla tavlor, upp till 3 åt gången.",
+      "moveTo": "Flytta till",
+      "dispatchSummary": "Startade {started}. Förberedde {promoted}, blockerade {blocked}, frigjorde {reclaimed}, organiserade {orchestrated}. Kunde inte starta: {failures}.",
+      "dispatchSummaryEmpty": "Inga kort startades.",
+      "lastRefreshed": "Uppdaterad {time}",
+      "refreshError": "Uppdateringen misslyckades",
+      "fieldTitle": "Titel",
+      "fieldNotes": "Anteckningar",
+      "fieldStatus": "Status",
+      "fieldPriority": "Prioritet",
+      "fieldAgent": "Agent",
+      "fieldSession": "Session",
+      "fieldLabels": "Etiketter",
+      "templatesLabel": "Kortmallar",
+      "suggestionsLabel": "Förslag",
+      "template": {
+        "bugfix": "Buggfix",
+        "docs": "Dokumentation",
+        "release": "Versionssläpp",
+        "pr_review": "PR-granskning",
+        "plugin": "Insticksprogram"
+      },
+      "templateDraft": {
+        "bugfixTitle": "Åtgärda: ",
+        "bugfixNotes": "Symtom:\nOrsak:\nAcceptanskriterier:\nBelägg:",
+        "docsTitle": "Dokumentation: ",
+        "docsNotes": "Sida:\nÄndring:\nKällbelägg:",
+        "releaseTitle": "Versionssläpp: ",
+        "releaseNotes": "Omfattning:\nVerifiering:\nAvslut:",
+        "prReviewTitle": "Granska PR ",
+        "prReviewNotes": "Berörda delar:\nRisker:\nBelägg:",
+        "pluginTitle": "Insticksprogram: ",
+        "pluginNotes": "Avgränsning:\nKonfiguration/dokumentation:\nTester:"
+      },
+      "cardStaleAge": "Inaktuellt · {age}",
+      "cardStaleTitle": "Ingen aktivitet på {age}",
+      "cardUpdatedNow": "just nu",
+      "cardUpdatedAgo": "för {time} sedan",
+      "cardMoreLabels": "{count} ytterligare etiketter: {labels}",
+      "cardFiles": "{count} filer",
+      "cardWarnings": "{count} varningar",
+      "sessionStatus": {
+        "queued": "I kö",
+        "running": "Körs",
+        "done": "Klar",
+        "failed": "Misslyckad",
+        "stale": "Inaktiv",
+        "unknown": "Okänd",
+        "unavailable": "Otillgänglig",
+        "ambiguous": "Tvetydig",
+        "stopped": "Stoppad",
+        "timedOut": "Tidsgränsen överskreds",
+        "cancelled": "Avbruten"
+      },
+      "badgeAttempts": "{count} försök",
+      "badgeFailures": "{count} misslyckade",
+      "badgeComments": "{count} kommentarer",
+      "badgeLinks": "{count} länkar",
+      "badgeProof": "{count} belägg",
+      "badgeArtifacts": "{count} artefakter",
+      "badgeAttachments": "{count} bilagor",
+      "badgeStale": "inaktuellt",
+      "titlePlaceholder": "Kortets titel",
+      "notesPlaceholder": "Anteckningar, acceptanskriterier, länkar",
+      "labelsPlaceholder": "t.ex. gränssnitt, dokumentation",
+      "searchPlaceholder": "Sök kort",
+      "closeSearch": "Rensa och stäng sökningen",
+      "allStatuses": "Alla",
+      "allWork": "Allt arbete",
+      "filters": "Filter",
+      "filtersActive": "Filter, {count} aktiva",
+      "emptyColumns": "Tomma kolumner",
+      "emptyColumnsShow": "Visa",
+      "emptyColumnsCollapse": "Fäll ihop",
+      "emptyColumnsHide": "Dölj",
+      "showEmptyColumns": "Visa alla",
+      "collapseEmptyColumns": "Fäll ihop tomma",
+      "hideEmptyColumns": "Dölj tomma",
+      "collapseColumn": "Fäll ihop kolumnen {column}",
+      "expandColumn": "Fäll ut kolumnen {column}",
+      "emptyColumn": "Släpp arbete här",
+      "emptyColumnTitle": "Inga kort ännu",
+      "emptyFilteredTitle": "Inga kort matchar den här vyn",
+      "emptyFilteredHint": "Prova färre filter eller en annan sökning.",
+      "lifecycleUnlinked": "Ingen session",
+      "lifecycleUnlinkedDetail": "Starta eller länka en session",
+      "lifecycleUnknown": "Okänd sessionsstatus",
+      "lifecycleUnknownDetail": "Öppna kortet eller uppdatera för att läsa in sessionsdetaljer",
+      "lifecycleUnavailable": "Sessionen är inte tillgänglig",
+      "lifecycleUnavailableDetail": "Öppna sessionen eller länka om det här kortet",
+      "lifecycleAmbiguous": "Tvetydig sessionslänk",
+      "lifecycleAmbiguousDetail": "Redigera kortet för att välja en specifik session",
+      "lifecycleLinked": "Länkad",
+      "lifecycleIdleDetail": "Ingen aktiv körning",
+      "lifecycleRunning": "Körs",
+      "lifecycleRunningDetail": "Aktiv körning pågår",
+      "lifecycleStale": "Inaktuell",
+      "lifecycleStaleDetail": "Ingen sessionsaktivitet på senare tid",
+      "lifecycleDone": "Slutförd",
+      "lifecycleDoneDetail": "Körningen slutfördes",
+      "lifecycleFailed": "Misslyckades",
+      "lifecycleFailedDetail": "Öppna sessionen för att granska felet",
+      "lifecycleStopped": "Stoppad",
+      "lifecycleTimedOut": "Tidsgränsen överskreds",
+      "lifecycleStoppedDetail": "Körningen stoppades",
+      "eventsLabel": "Korthändelser",
+      "eventCreated": "Skapad",
+      "eventEdited": "Redigerad",
+      "eventMoved": "Flyttad",
+      "eventMovedTo": "Flyttad till {status}",
+      "eventLinked": "Session länkad",
+      "eventSpecified": "Specificerad",
+      "eventDecomposed": "Uppdelad",
+      "eventClaimed": "Tagen",
+      "eventHeartbeat": "Livstecken",
+      "eventExecutionUpdated": "Agent uppdaterad",
+      "eventAttemptStarted": "Försök startat",
+      "eventAttemptUpdated": "Försök uppdaterat",
+      "eventCommentAdded": "Kommentar tillagd",
+      "eventLinkAdded": "Länk tillagd",
+      "eventProofAdded": "Bevis tillagt",
+      "eventArtifactAdded": "Artefakt tillagd",
+      "eventAttachmentAdded": "Bilaga tillagd",
+      "eventDiagnostic": "Diagnostik",
+      "eventNotification": "Avisering",
+      "eventDispatch": "Utskick",
+      "eventOrchestration": "Orkestrering",
+      "eventProtocolViolation": "Protokollöverträdelse",
+      "eventArchived": "Arkiverad",
+      "eventUnarchived": "Återställd från arkivet",
+      "eventStale": "Inaktuell session"
     }
   }
 }
