@@ -28,6 +28,7 @@ import {
   resolveSlackNativeProgressTaskCards,
   resolveSlackProgressStyle,
 } from "./dispatch-helpers.js";
+import { createSlackSessionStatusCycle, createSlackThreadStatusGate } from "./thread-status.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
@@ -117,8 +118,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const reactionMessageTs = prepared.ackReactionMessageTs;
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
-  let didSetStatus = false;
-  let statusWasSet = false;
   let didAddTypingReaction = false;
   const statusReactionsEnabled =
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
@@ -177,7 +176,32 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       : ctx.typingReaction;
   // Session status is a state write, not a typing keepalive. Start it once
   // before visible output; the dispatcher owns the delivered/preview gate.
-  const threadStatusGate = { hasVisibleOutput: () => false };
+  const threadStatusGate = createSlackThreadStatusGate();
+  const sessionStatus = createSlackSessionStatusCycle({
+    gate: threadStatusGate,
+    publish: async (status, title) => {
+      const published = await ctx.setSlackSessionStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status,
+        ...(status === "processing"
+          ? { title: title ?? prepared.sessionDisplayName ?? prepared.ctxPayload.ThreadLabel }
+          : {}),
+        eventScope: prepared.eventScope,
+      });
+      return published;
+    },
+    onActiveRestoreFailed: () => {
+      try {
+        runtime.error?.(
+          "Slack session status could not return to active after processing. " +
+            "Enable verbose logging to inspect the Slack API failure.",
+        );
+      } catch {
+        // Diagnostics must not prevent the remaining typing-reaction cleanup.
+      }
+    },
+  });
   const onTypingError = (action: "start" | "stop", error: unknown) => {
     logTypingFailure({
       log: (messageValue) => runtime.error?.(danger(messageValue)),
@@ -195,17 +219,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     transformReplyPayload: sanitizeSlackMonitorReplyPayload,
     typing: {
       start: async () => {
-        if (!didSetStatus && !threadStatusGate.hasVisibleOutput()) {
-          didSetStatus = true;
-          statusWasSet = await ctx.setSlackSessionStatus({
-            channelId: message.channel,
-            threadTs: statusThreadTs,
-            status: "processing",
-            // Initialize new sessions with core's derived label; later title changes use rename.
-            title: prepared.sessionDisplayName ?? prepared.ctxPayload.ThreadLabel,
-            eventScope: prepared.eventScope,
-          });
-        }
+        await sessionStatus.start(prepared.sessionDisplayName ?? prepared.ctxPayload.ThreadLabel);
         if (typingReaction && message.ts) {
           didAddTypingReaction = true;
           await updateReaction(reactSlackMessage, message.ts, typingReaction).catch(
@@ -216,27 +230,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         }
       },
       stop: async () => {
-        if (didSetStatus) {
-          didSetStatus = false;
-          const reportFailure = statusWasSet;
-          statusWasSet = false;
-          const restored = await ctx.setSlackSessionStatus({
-            channelId: message.channel,
-            threadTs: statusThreadTs,
-            status: "active",
-            eventScope: prepared.eventScope,
-          });
-          if (reportFailure && !restored) {
-            try {
-              runtime.error?.(
-                "Slack session status could not return to active after processing. " +
-                  "Enable verbose logging to inspect the Slack API failure.",
-              );
-            } catch {
-              // Diagnostics must not prevent the remaining typing-reaction cleanup.
-            }
-          }
-        }
+        await sessionStatus.stop();
         // Tracked apart from the status write: a suppressed status refresh
         // still adds the reaction, and that reaction must still be removed.
         if (didAddTypingReaction && typingReaction && message.ts) {
@@ -311,6 +305,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     statusReactions,
     hasRepliedRef,
     threadStatusGate,
+    beginFollowupThreadStatus: () => sessionStatus.beginGeneration(),
     replyPlan,
     onModelSelected,
     replyPipeline,
