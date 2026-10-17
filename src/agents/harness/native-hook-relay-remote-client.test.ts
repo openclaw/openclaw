@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import os from "node:os";
@@ -7,6 +7,47 @@ import tls from "node:tls";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { invokeRemoteNativeHookRelay } from "./native-hook-relay-remote-client.js";
+
+it.skipIf(process.platform === "win32")(
+  "rejects a FIFO credential without waiting for a writer",
+  async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "native-hook-fifo-"));
+    const credential = path.join(dir, "credential.json");
+    try {
+      expect(spawnSync("mkfifo", [credential]).status).toBe(0);
+      // Isolate the probe so a regression cannot strand a blocked libuv worker.
+      const probe = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "--input-type=module",
+          "-e",
+          `
+            import { invokeRemoteNativeHookRelay } from "./src/agents/harness/native-hook-relay-remote-client.ts";
+            try {
+              await invokeRemoteNativeHookRelay(process.argv[1], {
+                provider: "codex", relayId: "relay", generation: "current",
+                event: "pre_tool_use", rawPayload: {},
+              }, AbortSignal.timeout(100));
+              process.exitCode = 2;
+            } catch (error) {
+              if (error.message !== "Invalid native hook callback credential") throw error;
+              console.log(error.message);
+            }
+          `,
+          credential,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(probe.error).toBeUndefined();
+      expect(probe.status).toBe(0);
+      expect(probe.stdout).toContain("Invalid native hook callback credential");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 it("verifies TLS and sends only the relay capability; refuses redirects and bounds responses", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "native-hook-https-"));
