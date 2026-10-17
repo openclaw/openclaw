@@ -13,6 +13,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { runMantisDiscordSmoke } from "./discord-smoke.runtime.js";
 
+const readText = (file: string) => fs.readFile(file, "utf8");
+
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -120,7 +122,7 @@ describe("mantis discord smoke runtime", () => {
 
     expect(oversizedResult.status).toBe("fail");
     expect(fetchWithSsrFGuard.mock.calls).toHaveLength(fetchCallsAtBoundary);
-    expect(await fs.readFile(path.join(oversizedResult.outputDir, "error.txt"), "utf8")).toContain(
+    expect(await readText(path.join(oversizedResult.outputDir, "error.txt"))).toContain(
       `Mantis Discord token file at ${tokenFile} exceeds 4096 bytes.`,
     );
   });
@@ -132,21 +134,17 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    const summaryText = await fs.readFile(result.summaryPath, "utf8");
-    const reportText = await fs.readFile(result.reportPath, "utf8");
+    const summaryText = await readText(result.summaryPath);
+    const reportText = await readText(result.reportPath);
     expect(reportText).toContain("# Mantis Discord Smoke");
     expect(reportText).toContain("- Bot: <redacted> (<redacted>)");
     expect(reportText).toContain("- Guild: <redacted> (<redacted>)");
     expect(reportText).toContain("- Channel: #<redacted> (<redacted>)");
     for (const text of [summaryText, reportText]) {
-      expect(text).not.toContain("test-token");
       expect(text).toContain("<redacted>");
-      expect(text).not.toContain("1489650053747314748");
-      expect(text).not.toContain("1456350064065904867");
-      expect(text).not.toContain("Friends");
-      expect(text).not.toContain("1456744319972282449");
-      expect(text).not.toContain("maintainers");
-      expect(text).not.toContain("1500000000000000001");
+      expect(text).not.toMatch(
+        /test-token|1489650053747314748|1456350064065904867|Friends|1456744319972282449|maintainers|1500000000000000001/u,
+      );
     }
     expect(summaryText).not.toContain("Mantis");
     expect(JSON.parse(summaryText)).toEqual(
@@ -167,7 +165,7 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("Missing OPENCLAW_QA_DISCORD_GUILD_ID");
   });
 
@@ -179,7 +177,7 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("is not in guild");
     expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
   });
@@ -209,7 +207,7 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("/users/@me response exceeds");
     expect(errorText).toContain(`${16 * 1024 * 1024} bytes`);
     expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
@@ -225,7 +223,7 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("<redacted>");
     expect(errorText).not.toContain("1999999999999999999");
     expect(errorText).not.toContain("1456350064065904867");

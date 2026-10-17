@@ -16,6 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 const runScript = (script: string, args: string[] = [], signal?: AbortSignal) =>
   defaultCommandRunner(process.execPath, ["-e", script, ...args], { signal });
+const filename = process.platform === "win32" ? "crabbox.cmd" : "crabbox";
 
 function copyArtifacts(runner: CommandRunner, inspect: CrabboxInspect) {
   return copyCrabboxArtifacts({
@@ -28,16 +29,13 @@ function copyArtifacts(runner: CommandRunner, inspect: CrabboxInspect) {
   });
 }
 
-it.each(["relative explicit", "relative PATH", "bare explicit"])(
-  "resolves and probes %s from the requested repository instead of the launch directory",
-  async (selection) => {
-    const root = tempDirs.make("mantis-crabbox-cwd-");
-    const repoRoot = path.join(root, "requested-repo");
-    const binDir = path.join(repoRoot, "tools");
-    const filename = process.platform === "win32" ? "crabbox.cmd" : "crabbox";
-    const executable = path.join(binDir, filename);
-    const cwdFile = path.join(root, "probe-cwd.txt");
-    await fs.mkdir(binDir, { recursive: true });
+it.each([path.join("tools", filename), undefined, "crabbox"])(
+  "probes %s from the requested repository, not the launch directory",
+  async (explicit) => {
+    const repoRoot = tempDirs.make("mantis-crabbox-cwd-");
+    const executable = path.join(repoRoot, "tools", filename);
+    const cwdFile = path.join(repoRoot, "probe-cwd.txt");
+    await fs.mkdir(path.dirname(executable), { recursive: true });
     await fs.writeFile(
       executable,
       process.platform === "win32"
@@ -45,29 +43,18 @@ it.each(["relative explicit", "relative PATH", "bare explicit"])(
         : '#!/bin/sh\npwd -P > "$CRABBOX_PROBE_CWD_FILE"\nprintf "crabbox 999.0.0\\n"\n',
       { mode: 0o755 },
     );
-    const download = vi
-      .spyOn(network, "fetchWithSsrFGuard")
-      .mockRejectedValue(new Error("supported repository binary must not trigger a download"));
-    const explicit =
-      selection === "relative explicit"
-        ? path.join("tools", filename)
-        : selection === "bare explicit"
-          ? "crabbox"
-          : undefined;
+    const download = vi.spyOn(network, "fetchWithSsrFGuard");
+    download.mockRejectedValue(new Error("download"));
     const env = {
       ...process.env,
       PATH: "tools",
       CRABBOX_PROBE_CWD_FILE: cwdFile,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_STATE_DIR: path.join(repoRoot, "state"),
     };
 
-    expect(process.cwd()).not.toBe(repoRoot);
-    await expect(resolveCrabboxBin({ env, explicit, repoRoot })).resolves.toBe(
-      explicit ?? executable,
-    );
-    expect(await fs.realpath((await fs.readFile(cwdFile, "utf8")).trim())).toBe(
-      await fs.realpath(repoRoot),
-    );
+    expect(await resolveCrabboxBin({ env, explicit, repoRoot })).toBe(explicit ?? executable);
+    const reportedCwd = (await fs.readFile(cwdFile, "utf8")).trim();
+    expect(await fs.realpath(reportedCwd)).toBe(await fs.realpath(repoRoot));
     expect(download).not.toHaveBeenCalled();
   },
 );
@@ -162,48 +149,41 @@ it("keeps captured stderr in command failures", async () => {
   ).rejects.toThrow("Permission denied (publickey)");
 });
 
-it.each<[string, CrabboxInspect, string[]]>([
-  [
-    "ssh.proof.example",
-    {
-      sshFallbackPorts: ["22", "2222", " 2200 ", "22"],
-      sshHost: "ssh.proof.example",
-      sshPort: "2222",
-    },
-    ["2222", "22", "2200"],
-  ],
-  ["proof.example", { sshFallbackPorts: ["2200", "22", "2200"] }, ["22", "2200"]],
-  ["proof.example", {}, ["22"]],
-])("selects ordered, deduplicated SSH candidates for %s", async (host, inspect, ports) => {
-  const calls: Array<{ args: readonly string[]; command: string }> = [];
-  const runner: CommandRunner = async (command, args) => {
-    calls.push({ args, command });
+it.each([
+  {
+    sshHost: "ssh.proof.example",
+    sshPort: "2222",
+    sshFallbackPorts: ["22", "2222", " 2200 ", "22"],
+    ports: ["2222", "22", "2200"],
+  },
+  { sshFallbackPorts: ["2200", "22", "2200"], ports: ["22", "2200"] },
+  { ports: ["22"] },
+])("selects ordered, deduplicated SSH candidates: $ports", async ({ ports, ...inspect }) => {
+  const runner = vi.fn<CommandRunner>(async (command, args) => {
     if (command === "ssh" && !args.includes(ports.at(-1) ?? "22")) {
       throw new Error("Connection refused");
     }
     return { stderr: "", stdout: "" };
-  };
+  });
   await copyArtifacts(runner, inspect);
   const expectedProbes = ports.length === 1 ? [] : ports;
-  const probes = calls.filter((call) => call.command === "ssh");
-  expect(probes.map((call) => call.args[3])).toEqual(expectedProbes);
-  expect(probes.map((call) => call.args[12])).toEqual(expectedProbes.map(() => `proof@${host}`));
-  expect(calls.filter((call) => call.command === "rsync").map((call) => call.args)).toEqual([
-    expect.arrayContaining([expect.stringContaining(`-p ${ports.at(-1)}`)]),
-  ]);
+  expect(
+    runner.mock.calls
+      .filter(([command]) => command === "ssh")
+      .map(([, args]) => [args[3], args[12]]),
+  ).toEqual(expectedProbes.map((port) => [port, `proof@${inspect.sshHost ?? "proof.example"}`]));
+  expect(
+    runner.mock.calls.filter(([command]) => command === "rsync").map(([, args]) => args),
+  ).toEqual([expect.arrayContaining([expect.stringContaining(`-p ${ports.at(-1)}`)])]);
 });
 
 it("does not try a fallback after an SSH authentication failure", async () => {
-  const probes: string[] = [];
-  const runner: CommandRunner = async (command, args) => {
-    if (command === "ssh") {
-      probes.push(args[3] ?? "");
-      throw new Error("Permission denied (publickey)");
-    }
-    return { stderr: "", stdout: "" };
-  };
+  const runner = vi.fn<CommandRunner>(async (command, args) => {
+    expect([command, args[3]]).toEqual(["ssh", "2222"]);
+    throw new Error("Permission denied (publickey)");
+  });
   await expect(
     copyArtifacts(runner, { sshFallbackPorts: ["22"], sshPort: "2222" }),
   ).rejects.toThrow("Permission denied");
-  expect(probes).toEqual(["2222"]);
+  expect(runner).toHaveBeenCalledTimes(1);
 });

@@ -1,4 +1,3 @@
-// Qa Lab tests cover run plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +27,7 @@ const expectMissing = async (file: string) =>
 const expectText = async (directory: string, name: string, value: string) =>
   expect(readText(path.join(directory, name))).resolves.toBe(value);
 const scenarioId = "discord-status-reactions-tool-only";
+const threadScenario = "discord-thread-reply-filepath-attachment";
 type LaneFixture = {
   args: readonly string[];
   repoRoot: string;
@@ -36,12 +36,8 @@ type LaneFixture = {
   status: "fail" | "pass";
 };
 
-function laneRunner(
-  writeEvidence: (fixture: LaneFixture) => Promise<void>,
-  observe?: (...args: Parameters<MantisCommandRunner>) => void,
-) {
+function laneRunner(writeEvidence: (fixture: LaneFixture) => Promise<void>) {
   return vi.fn<MantisCommandRunner>(async (command, args, execution) => {
-    await observe?.(command, args, execution);
     if (command === "git" && execution.stage === "worktree-add") {
       await fs.mkdir(String(args[4]), { recursive: true });
     } else if (
@@ -54,15 +50,10 @@ function laneRunner(
       const repoRoot = requireArgAfter(args, "--repo-root");
       const outputArg = requireArgAfter(args, "--output-dir");
       const lane = outputArg.endsWith("baseline") ? "baseline" : "candidate";
+      const status = lane === "baseline" ? "fail" : "pass";
       const outputDir = path.join(repoRoot, outputArg);
       await fs.mkdir(outputDir, { recursive: true });
-      await writeEvidence({
-        args,
-        repoRoot,
-        outputDir,
-        lane,
-        status: lane === "baseline" ? "fail" : "pass",
-      });
+      await writeEvidence({ args, repoRoot, outputDir, lane, status });
     }
     return successfulCommandResult();
   });
@@ -112,29 +103,25 @@ describe("mantis before/after runtime", () => {
       skipInstall: true,
       ...options,
     });
+  const artifactDir = (name: string) => path.join(repoRoot, ".artifacts/qa-e2e/mantis", name);
 
   beforeEach(async () => {
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-before-after-"));
   });
 
-  afterEach(async () => {
-    await fs.rm(repoRoot, { force: true, recursive: true });
-  });
+  afterEach(() => fs.rm(repoRoot, { force: true, recursive: true }));
 
   it("runs both worktrees and writes stable comparison artifacts outside lane roots", async () => {
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "test-run");
+    const outputDir = artifactDir("test-run");
     await fs.mkdir(outputDir, { recursive: true });
     await fs.writeFile(path.join(outputDir, "error.txt"), "stale failure", "utf8");
     await fs.writeFile(path.join(outputDir, "unrelated.txt"), "preserve me", "utf8");
-    const commands: { args: readonly string[]; command: string; stage: string }[] = [];
     const runner = laneRunner(
       async ({ repoRoot: repoRootArg, outputDir: laneOutputDir, lane, status }) => {
-        const artifactDir = path.join(repoRootArg, ".artifacts", "capture");
-        await fs.mkdir(artifactDir, { recursive: true });
-        const screenshotPath = path.join(artifactDir, `${lane}-timeline.png`);
-        const videoPath = path.join(artifactDir, `${lane}-timeline.mp4`);
-        const evidencePath = (artifactPath: string) =>
-          toRepoArtifactPath(repoRootArg, artifactPath);
+        const captureDir = path.join(repoRootArg, ".artifacts", "capture");
+        await fs.mkdir(captureDir, { recursive: true });
+        const screenshotPath = path.join(captureDir, `${lane}-timeline.png`);
+        const videoPath = path.join(captureDir, `${lane}-timeline.mp4`);
         await fs.writeFile(screenshotPath, `${lane} screenshot`);
         await fs.writeFile(videoPath, `${lane} video`);
         const title = "Discord explicit status reactions run in tool-only reply mode";
@@ -142,30 +129,17 @@ describe("mantis before/after runtime", () => {
           artifactPaths: [
             { kind: "summary", path: QA_EVIDENCE_FILENAME },
             { kind: "report", path: "discord-qa-report.md" },
-            { kind: "screenshot", path: evidencePath(screenshotPath) },
-            { kind: "video", path: evidencePath(videoPath) },
+            { kind: "screenshot", path: toRepoArtifactPath(repoRootArg, screenshotPath) },
+            { kind: "video", path: toRepoArtifactPath(repoRootArg, videoPath) },
           ],
-          channelDriver: "live",
           channelId: "discord",
           scenarioDefinitions: [{ id: scenarioId, title }],
           generatedAt: "2026-05-03T12:00:00.000Z",
           primaryModel: "openai/gpt-5.4",
           providerMode: "live-frontier",
-          scenarioResults: [
-            {
-              details:
-                lane === "baseline"
-                  ? "reaction timeline missing thinking/done"
-                  : "reaction timeline matched queued -> thinking -> done",
-              name: title,
-              status,
-            },
-          ],
+          scenarioResults: [{ details: `${lane} timeline`, name: title, status }],
         });
         await writeJson(path.join(laneOutputDir, QA_EVIDENCE_FILENAME), summary);
-      },
-      (command, args, execution) => {
-        commands.push({ command, args, stage: execution.stage });
       },
     );
 
@@ -177,22 +151,23 @@ describe("mantis before/after runtime", () => {
     });
 
     expect(result.status).toBe("pass");
+    const commands = runner.mock.calls;
     expect(commands).toHaveLength(8);
-    const baselineWorktreeDir = String(commands[0]?.args[4]);
-    const candidateWorktreeDir = String(commands[4]?.args[4]);
-    expect(path.dirname(baselineWorktreeDir)).toBe(`${outputDir}.worktrees`);
-    expect(path.basename(baselineWorktreeDir)).toMatch(/^baseline-/u);
-    expect(path.dirname(candidateWorktreeDir)).toBe(`${outputDir}.worktrees`);
-    expect(path.basename(candidateWorktreeDir)).toMatch(/^candidate-/u);
-    for (const [index, directory, ref] of [
-      [0, baselineWorktreeDir, "--lock"],
-      [4, candidateWorktreeDir, "--force"],
+    const baselineWorktreeDir = String(commands[0]?.[1][4]);
+    const candidateWorktreeDir = String(commands[4]?.[1][4]);
+    for (const [index, directory, ref, lane] of [
+      [0, baselineWorktreeDir, "--lock", "baseline"],
+      [4, candidateWorktreeDir, "--force", "candidate"],
     ] as const) {
-      const laneCommands = commands.slice(index, index + 4).map((entry, position) => ({
-        command: entry.command,
-        stage: entry.stage,
-        args: position === 1 ? entry.args.slice(0, 4) : entry.args,
-      }));
+      expect(path.dirname(directory)).toBe(`${outputDir}.worktrees`);
+      expect(path.basename(directory)).toMatch(new RegExp(`^${lane}-`, "u"));
+      const laneCommands = commands
+        .slice(index, index + 4)
+        .map(([command, args, { stage }], position) => ({
+          command,
+          stage,
+          args: position === 1 ? args.slice(0, 4) : args,
+        }));
       expect(laneCommands).toMatchObject([
         {
           stage: "worktree-add",
@@ -233,11 +208,7 @@ describe("mantis before/after runtime", () => {
   it("rejects the repo root as an output container before preparing worktrees", async () => {
     const runner = vi.fn();
     await expect(
-      runMantisBeforeAfter({
-        commandRunner: runner,
-        outputDir: ".",
-        repoRoot,
-      }),
+      runMantisBeforeAfter({ commandRunner: runner, outputDir: ".", repoRoot }),
     ).rejects.toThrow("--output-dir must stay within the repo root.");
     expect(runner).not.toHaveBeenCalled();
   });
@@ -250,11 +221,8 @@ describe("mantis before/after runtime", () => {
         scenarios: [
           {
             artifactPaths: { screenshot: screenshotPath },
-            details:
-              lane === "baseline"
-                ? "thread reply omitted mantis-thread-report.md"
-                : "thread reply attached mantis-thread-report.md",
-            id: "discord-thread-reply-filepath-attachment",
+            details: `${lane} thread reply`,
+            id: threadScenario,
             status,
           },
         ],
@@ -262,11 +230,9 @@ describe("mantis before/after runtime", () => {
     });
 
     const result = await run({
-      baseline: "bug-sha",
-      candidate: "fix-sha",
       commandRunner: runner,
       outputDir: ".artifacts/qa-e2e/mantis/thread-run",
-      scenario: "discord-thread-reply-filepath-attachment",
+      scenario: threadScenario,
     });
 
     expect(result.status).toBe("pass");
@@ -275,35 +241,28 @@ describe("mantis before/after runtime", () => {
       candidate: { expected: "thread reply includes filePath attachment", fixed: true },
       pass: true,
     });
-    const manifest = JSON.parse(await readText(result.manifestPath)) as {
-      artifacts: { alt?: string; label: string }[];
-      title: string;
-    };
+    const manifest: { title: string; artifacts: { label: string; alt?: string }[] } = JSON.parse(
+      await readText(result.manifestPath),
+    );
     expect(manifest.title).toBe("Mantis Discord Thread Attachment QA");
-    const baselineArtifact = manifest.artifacts.find(
-      (artifact) => artifact.label === "Baseline missing filePath attachment",
-    );
-    expect(baselineArtifact?.alt).toBe("Baseline Discord thread reply without filePath attachment");
-    const candidateArtifact = manifest.artifacts.find(
-      (artifact) => artifact.label === "Candidate includes filePath attachment",
-    );
-    expect(candidateArtifact?.alt).toBe("Candidate Discord thread reply with filePath attachment");
+    for (const [label, alt] of [
+      [
+        "Baseline missing filePath attachment",
+        "Baseline Discord thread reply without filePath attachment",
+      ],
+      [
+        "Candidate includes filePath attachment",
+        "Candidate Discord thread reply with filePath attachment",
+      ],
+    ]) {
+      expect(manifest.artifacts.find((artifact) => artifact.label === label)?.alt).toBe(alt);
+    }
   });
 
   it("normalizes command timeout overrides per stage", async () => {
-    const executions: { stage: string; timeoutMs: number }[] = [];
-    const runner = laneRunner(
-      async ({ args }) => {
-        await writeLegacyLaneSummary({ args, scenario: scenarioId });
-      },
-      (_command, _args, execution) => {
-        executions.push({ stage: execution.stage, timeoutMs: execution.timeoutMs });
-      },
-    );
+    const runner = laneRunner(({ args }) => writeLegacyLaneSummary({ args, scenario: scenarioId }));
 
     await run({
-      baseline: "bug-sha",
-      candidate: "fix-sha",
       commandRunner: runner,
       commandTimeouts: {
         "worktree-add": 111,
@@ -317,7 +276,8 @@ describe("mantis before/after runtime", () => {
       skipInstall: false,
     });
 
-    expect(executions.slice(0, 6)).toEqual([
+    const executions = runner.mock.calls.map((call) => call[2]);
+    expect(executions.slice(0, 6)).toMatchObject([
       { stage: "worktree-add", timeoutMs: 111 },
       { stage: "install", timeoutMs: 222 },
       { stage: "build", timeoutMs: 1_800_000 },
@@ -335,7 +295,7 @@ describe("mantis before/after runtime", () => {
     const controller = new AbortController();
     controller.abort();
     const runner = vi.fn(async () => successfulCommandResult());
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "pre-aborted");
+    const outputDir = artifactDir("pre-aborted");
 
     await expect(
       run({
@@ -348,40 +308,37 @@ describe("mantis before/after runtime", () => {
     await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
   });
 
-  it.each(["mantis-evidence.json"])(
-    "restores prior evidence when publication is interrupted at %s",
-    async (abortAt) => {
-      const outputDir = path.join(repoRoot, ".artifacts", "publication-abort");
-      const { staging, outputRoot } = await publicationFixture(outputDir, "abort");
-      await fs.writeFile(path.join(outputDir, "error.txt"), "prior failure");
-      const controller = new AbortController();
-      const reason = new Error("publication interrupted");
-      await expect(
-        publishMantisRunOutput({
-          outputRoot: bindPublicationRoot(outputRoot, async (from, to, options) => {
-            await outputRoot.move(from, to, options);
-            if (from === `${staging.relative}/${abortAt}`) {
-              controller.abort(reason);
-            }
-          }),
-          runId: "abort",
-          signal: controller.signal,
-          staging,
+  it("restores prior evidence when manifest publication is interrupted", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "publication-abort");
+    const { staging, outputRoot } = await publicationFixture(outputDir, "abort");
+    await fs.writeFile(path.join(outputDir, "error.txt"), "prior failure");
+    const controller = new AbortController();
+    const reason = new Error("publication interrupted");
+    await expect(
+      publishMantisRunOutput({
+        outputRoot: bindPublicationRoot(outputRoot, async (from, to, options) => {
+          await outputRoot.move(from, to, options);
+          if (from === `${staging.relative}/mantis-evidence.json`) {
+            controller.abort(reason);
+          }
         }),
-      ).rejects.toBe(reason);
-      for (const lane of ["baseline", "candidate"]) {
-        await expectText(path.join(outputDir, lane), "old.txt", `old ${lane}`);
-        await expectMissing(path.join(outputDir, lane, "new.txt"));
-      }
-      for (const name of stableFiles) {
-        await expectText(outputDir, name, `old ${name}`);
-      }
-      await expectText(outputDir, "error.txt", "prior failure");
-    },
-  );
+        runId: "abort",
+        signal: controller.signal,
+        staging,
+      }),
+    ).rejects.toBe(reason);
+    for (const lane of ["baseline", "candidate"]) {
+      await expectText(path.join(outputDir, lane), "old.txt", `old ${lane}`);
+      await expectMissing(path.join(outputDir, lane, "new.txt"));
+    }
+    for (const name of stableFiles) {
+      await expectText(outputDir, name, `old ${name}`);
+    }
+    await expectText(outputDir, "error.txt", "prior failure");
+  });
 
   it("rolls the complete stable artifact set back when publication fails", async () => {
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "rollback");
+    const outputDir = artifactDir("rollback");
     const externalDir = path.join(repoRoot, "operator-artifacts");
     await fs.mkdir(externalDir);
     await fs.writeFile(path.join(externalDir, "keep.txt"), "external artifact");
@@ -396,18 +353,15 @@ describe("mantis before/after runtime", () => {
 
     await expect(
       publishMantisRunOutput({
-        outputRoot: bindPublicationRoot(
-          outputRoot,
-          vi.fn(async (from, to, options) => {
-            if (from === `${staging.relative}/candidate` && to === "candidate") {
-              throw publicationError;
-            }
-            if (from === `.mantis-previous-test/baseline` && to === "baseline") {
-              throw restorationError;
-            }
-            await outputRoot.move(from, to, options);
-          }),
-        ),
+        outputRoot: bindPublicationRoot(outputRoot, async (from, to, options) => {
+          if (from === `${staging.relative}/candidate` && to === "candidate") {
+            throw publicationError;
+          }
+          if (from === `.mantis-previous-test/baseline` && to === "baseline") {
+            throw restorationError;
+          }
+          await outputRoot.move(from, to, options);
+        }),
         runId: "test",
         staging,
       }),
@@ -436,7 +390,7 @@ describe("mantis before/after runtime", () => {
   });
 
   it("retains the owned worktree and writes diagnostics when cleanup fails", async () => {
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-failure");
+    const outputDir = artifactDir("cleanup-failure");
     let baselineWorktreeDir = "";
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
@@ -445,7 +399,7 @@ describe("mantis before/after runtime", () => {
         return successfulCommandResult();
       }
       if (command === "pnpm" && execution.stage === "qa") {
-        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        await writeLegacyLaneSummary({ args, scenario: scenarioId });
         return successfulCommandResult();
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
@@ -457,12 +411,9 @@ describe("mantis before/after runtime", () => {
       throw new Error(`unexpected ${execution.stage} command`);
     });
 
-    await expect(
-      run({
-        commandRunner: runner,
-        outputDir: ".artifacts/qa-e2e/mantis/cleanup-failure",
-      }),
-    ).rejects.toThrow("baseline worktree cleanup left registered path");
+    await expect(run({ commandRunner: runner, outputDir })).rejects.toThrow(
+      "baseline worktree cleanup left registered path",
+    );
 
     await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toContain(
       "baseline worktree cleanup left registered path",
@@ -473,12 +424,10 @@ describe("mantis before/after runtime", () => {
   it("keeps workload failure first when cleanup also fails", async () => {
     const workloadError = new Error("workload failed");
     const cleanupError = new Error("cleanup failed");
-    const runner = vi.fn(async (_command: string, _args: readonly string[], execution) => {
-      if (execution.stage === "worktree-add") {
-        throw workloadError;
-      }
-      throw cleanupError;
-    });
+    const runner = vi
+      .fn<MantisCommandRunner>()
+      .mockRejectedValue(cleanupError)
+      .mockRejectedValueOnce(workloadError);
 
     await expect(
       run({ commandRunner: runner, outputDir: ".artifacts/qa-e2e/mantis/aggregate-failure" }),
@@ -487,23 +436,20 @@ describe("mantis before/after runtime", () => {
       if (!(error instanceof AggregateError)) {
         return false;
       }
-      const errorPath = path.join(repoRoot, ".artifacts/qa-e2e/mantis/aggregate-failure/error.txt");
+      const errorPath = path.join(artifactDir("aggregate-failure"), "error.txt");
       expect(error.message).toContain("Mantis lane failed and worktree cleanup failed");
       expect(error.message).toContain(errorPath);
-      expect(error.cause).toBeInstanceOf(Error);
-      expect(error.cause).toHaveProperty(
-        "message",
-        expect.stringContaining("baseline worktree-add failed to run"),
-      );
-      expect(error.errors).toHaveLength(2);
+      expect(error.cause).toEqual(expect.any(Error));
+      expect(error.cause).toMatchObject({
+        message: expect.stringContaining("baseline worktree-add failed to run"),
+      });
       expect(error.errors[0]).toBe(error.cause);
-      expect(error.errors[1]).toBeInstanceOf(Error);
-      expect(error.errors[1]).toHaveProperty(
-        "message",
-        expect.stringContaining(
+      expect(error.errors).toEqual([error.cause, expect.any(Error)]);
+      expect(error.errors[1]).toMatchObject({
+        message: expect.stringContaining(
           "baseline worktree cleanup could not verify complete registration state",
         ),
-      );
+      });
       return true;
     });
   });
@@ -530,25 +476,21 @@ describe("mantis before/after runtime", () => {
             proofClass: null,
           },
         });
-        const first = invocation.begin(0);
         const makeEntry = (title: string, outcome: "fail" | "pass") => ({
           test: { kind: "script" as const, id: scenarioId, title },
           coverage: [],
           result: { status: outcome },
         });
+        const complete = (index: number, id: string, title: string, outcome: "fail" | "pass") => {
+          invocation.complete(id, { status: outcome, entries: [makeEntry(title, outcome)] });
+          invocation.select(index, id);
+        };
+        const first = invocation.begin(0);
         if (caseName !== "unresolved first" || status === "fail") {
-          invocation.complete(first, {
-            status,
-            entries: [makeEntry("First", status)],
-          });
-          invocation.select(0, first);
+          complete(0, first, "First", status);
         }
         const later = invocation.begin(1);
-        invocation.complete(later, {
-          status: "pass",
-          entries: [makeEntry("Later", "pass")],
-        });
-        invocation.select(1, later);
+        complete(1, later, "Later", "pass");
         const evidence = invocation.snapshot({ generatedAt: "2026-09-13T00:00:00.000Z" });
         if (caseName === "malformed existing file") {
           const entry = evidence.entries[0];

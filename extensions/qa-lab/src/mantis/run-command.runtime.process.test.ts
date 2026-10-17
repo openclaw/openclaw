@@ -52,16 +52,14 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const pidFile = path.join(repoRoot, "descendant.pid");
     const childScript = `
-      const fs = require("node:fs");
-      fs.writeFileSync(process.argv[1], String(process.pid));
+      require("node:fs").writeFileSync(process.argv[1], String(process.pid));
       process.on("SIGTERM", () => {});
       setInterval(() => {}, 1000);
     `;
     const parentScript = `
       const fs = require("node:fs");
       const { spawn } = require("node:child_process");
-      const child = spawn(process.execPath, ["-e", process.argv[1], process.argv[2]], { stdio: "ignore" });
-      child.unref();
+      spawn(process.execPath, ["-e", process.argv[1], process.argv[2]], { stdio: "ignore" }).unref();
       const ready = setInterval(() => {
         if (fs.existsSync(process.argv[2])) {
           clearInterval(ready);

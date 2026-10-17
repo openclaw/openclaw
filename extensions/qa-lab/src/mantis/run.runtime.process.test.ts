@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
-import { defaultMantisCommandRunner } from "./run-command.runtime.js";
+import { defaultMantisCommandRunner, type MantisCommandRunner } from "./run-command.runtime.js";
 import { runMantisBeforeAfter, type MantisBeforeAfterOptions } from "./run.runtime.js";
 import { successfulCommandResult, type StubCommandResult } from "./run.test-support.js";
 
@@ -31,6 +31,16 @@ const commandTimeouts = {
   "worktree-add": 5_000,
   "worktree-cleanup": 5_000,
 };
+const runDefaults = {
+  baseline: "baseline-ref",
+  candidate: "candidate-ref",
+  skipBuild: true,
+  skipInstall: true,
+};
+const readText = (file: string) => fs.readFile(file, "utf8");
+const expectText = (file: string, text: string) => expect(readText(file)).resolves.toBe(text);
+const expectMissing = (file: string) =>
+  expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
 function isProcessRunning(pid: number) {
   try {
@@ -42,10 +52,6 @@ function isProcessRunning(pid: number) {
 }
 
 type SettledRun = { status: "fulfilled" } | { error: unknown; status: "rejected" };
-
-function describeSettledRun(settled: SettledRun) {
-  return settled.status === "fulfilled" ? "fulfilled" : `rejected with ${String(settled.error)}`;
-}
 
 function killKnownProcessPids(pids: ReadonlyArray<number | undefined>) {
   for (const pid of pids) {
@@ -76,7 +82,7 @@ async function readPidBeforeSettled(filePath: string, label: string, settled: Pr
     settled.then(async (result) => {
       if ((await readPid()) === undefined) {
         throw new Error(
-          `Mantis run settled before ${label} pid readiness: ${describeSettledRun(result)}`,
+          `Mantis run settled before ${label} pid readiness: ${result.status === "fulfilled" ? "fulfilled" : `rejected with ${String(result.error)}`}`,
         );
       }
     }),
@@ -219,12 +225,9 @@ async function withProcessTree(
   let parentPid: number | undefined;
   let descendantPid: number | undefined;
   const settled = runMantisBeforeAfter({
-    baseline: "baseline-ref",
-    candidate: "candidate-ref",
+    ...runDefaults,
     repoRoot,
     signal: controller.signal,
-    skipBuild: true,
-    skipInstall: true,
     ...params.options,
   }).then(
     () => ({ status: "fulfilled" as const }),
@@ -272,9 +275,7 @@ describe("mantis before/after process runtime", () => {
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-before-after-process-"));
   });
 
-  afterEach(async () => {
-    await fs.rm(repoRoot, { force: true, recursive: true });
-  });
+  afterEach(() => fs.rm(repoRoot, { force: true, recursive: true }));
 
   it.skipIf(process.platform === "win32")(
     "keeps an owner-bound cwd when its registered path is replaced after identity verification",
@@ -323,9 +324,7 @@ process.exit(result.status ?? 1);
       expect(JSON.parse(await fs.readFile(naturalExitWitness, "utf8"))).toEqual({
         code: result.code,
       });
-      await expect(fs.readFile(path.join(worktreeDir, "replacement.txt"), "utf8")).resolves.toBe(
-        "replacement",
-      );
+      await expectText(path.join(worktreeDir, "replacement.txt"), "replacement");
       await expect(fs.lstat(path.join(displacedDir, ".git"))).resolves.toBeDefined();
       expect(await listGitWorktreePaths(repoRoot)).toContain(worktreeDir);
     },
@@ -350,7 +349,7 @@ process.exit(result.status ?? 1);
       ).rejects.toThrow("baseline worktree cleanup left registered path");
 
       expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot, worktreeDir]);
-      await expect(fs.lstat(worktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectMissing(worktreeDir);
     },
   );
 
@@ -379,16 +378,16 @@ process.exit(result.status ?? 1);
       ).resolves.toBeUndefined();
 
       expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot, unrelatedDir]);
-      await expect(fs.lstat(baselineDir)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.lstat(candidateDir)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readFile(unrelatedSentinel, "utf8")).resolves.toBe("unrelated");
+      await expectMissing(baselineDir);
+      await expectMissing(candidateDir);
+      await expectText(unrelatedSentinel, "unrelated");
     },
   );
 
   it("keeps signal termination ahead of a normalized successful exit", async () => {
     const controller = new AbortController();
     const stages: string[] = [];
-    const runner = vi.fn(async (_command: string, _args: readonly string[], execution) => {
+    const runner = vi.fn<MantisCommandRunner>(async (_command, _args, execution) => {
       stages.push(execution.stage);
       if (execution.stage === "worktree-cleanup") {
         expect(execution.signal).toBeUndefined();
@@ -410,14 +409,11 @@ process.exit(result.status ?? 1);
 
     await expect(
       runMantisBeforeAfter({
-        baseline: "baseline-ref",
-        candidate: "candidate-ref",
+        ...runDefaults,
         commandRunner: runner,
         outputDir: ".artifacts/qa-e2e/mantis/signal-exit-zero",
         repoRoot,
         signal: controller.signal,
-        skipBuild: true,
-        skipInstall: true,
       }),
     ).rejects.toThrow("baseline worktree-add aborted");
     expect(stages).toEqual(["worktree-add", "worktree-cleanup", "worktree-cleanup"]);
