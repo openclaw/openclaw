@@ -52,6 +52,21 @@ async function sendAndReceive(helper: childProcess.ChildProcess, type: string) {
   helper.send({ type });
   return (await received)[0];
 }
+async function expire(helper: childProcess.ChildProcess) {
+  expect(await sendAndReceive(helper, "acceptance-expire")).toEqual({
+    type: "workspace-quiescence-retired",
+    nonce,
+  });
+}
+function messageReceived(child: childProcess.ChildProcess, type: string) {
+  const received = createDeferred<childProcess.ChildProcess>();
+  child.on("message", (message: unknown) => {
+    if (isRecord(message) && message.type === type) {
+      received.resolve(child);
+    }
+  });
+  return received;
+}
 const identity = {
   gatewayNamespace: "gateway-watchdog",
   environmentId: "worker-watchdog",
@@ -247,8 +262,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     const f = fixture();
     await f.command(acquire);
     const lease = f.readLease();
-    for (const action of ["acquire", "renew", "release"] as const) {
-      const operation = action === "acquire" ? acquire : action === "renew" ? renew : release;
+    for (const operation of [acquire, renew, release]) {
       await expect(f.command({ ...operation, nonce: "b".repeat(32) })).rejects.toThrow(
         /already active|no longer active/,
       );
@@ -322,18 +336,14 @@ process.on("message", (message) => {
   if (message?.type === "acceptance-renewal-release") { const publish = reply; reply = undefined; publish?.(); }
 });`,
       );
-      const entered = createDeferred<childProcess.ChildProcess>();
+      let entered: ReturnType<typeof messageReceived>;
       preloadSpawn(preload, (child) => {
-        child.on("message", (message: unknown) => {
-          if (isRecord(message) && message.type === "acceptance-renewal-held") {
-            entered.resolve(child);
-          }
-        });
+        entered = messageReceived(child, "acceptance-renewal-held");
       });
       await f.command(acquire);
       const caller = new AbortController();
       const renewal = f.command(renew, caller.signal);
-      const helper = await entered.promise;
+      const helper = await entered!.promise;
       if (cancelled) {
         caller.abort();
       }
@@ -414,10 +424,7 @@ process.on("message", (message) => {
         const stopped = once(helper, "close");
         const outcomes = Promise.allSettled([releasing, f.runtime.quiescence.close()]);
         try {
-          expect(await sendAndReceive(helper, "acceptance-expire")).toEqual({
-            type: "workspace-quiescence-retired",
-            nonce,
-          });
+          await expire(helper);
           expect(await outcomes).toEqual([
             { status: "fulfilled", value: expect.objectContaining({ code: 0 }) },
             { status: "fulfilled", value: undefined },
@@ -438,10 +445,7 @@ process.on("message", (message) => {
         const held = once(helper, "message");
         const renewal = expect(f.command(renew)).rejects.toThrow("lease expired during control");
         expect((await held)[0]).toEqual({ type: "acceptance-renewal-held" });
-        expect(await sendAndReceive(helper, "acceptance-expire")).toEqual({
-          type: "workspace-quiescence-retired",
-          nonce,
-        });
+        await expire(helper);
         await renewal;
         await f.command(release);
         await f.command(acquire);
@@ -464,21 +468,13 @@ process.on("message", (message) => {
           helper.send({ type: "acceptance-renewal-release" });
           await currentRenewal;
         }
-        expect(await sendAndReceive(helper, "acceptance-expire")).toEqual({
-          type: "workspace-quiescence-retired",
-          nonce,
-        });
+        await expire(helper);
         await f.command(acquire);
         expect(f.readLease().watchdog).toEqual(lease.watchdog);
         const heldAgain = once(helper, "message");
         const expiring = expect(f.command(renew)).rejects.toThrow("lease expired during control");
         expect((await heldAgain)[0]).toEqual({ type: "acceptance-renewal-held" });
-        const retirementHeld = createDeferred();
-        helper.on("message", (message: unknown) => {
-          if (isRecord(message) && message.type === "acceptance-retirement-held") {
-            retirementHeld.resolve();
-          }
-        });
+        const retirementHeld = messageReceived(helper, "acceptance-retirement-held");
         let closed = false;
         const stopped = once(helper, "close");
         const closing = f.runtime.quiescence.close().then(() => {
@@ -567,16 +563,12 @@ process.on("message", (message) => {
 });`,
     );
     const started = createDeferred();
-    const held = createDeferred<childProcess.ChildProcess>();
+    let held: ReturnType<typeof messageReceived>;
     let helper: childProcess.ChildProcess | undefined;
     preloadSpawn(preload, (child) => {
       helper = child;
       started.resolve();
-      child.on("message", (message: unknown) => {
-        if (isRecord(message) && message.type === "acceptance-ready-held") {
-          held.resolve(child);
-        }
-      });
+      held = messageReceived(child, "acceptance-ready-held");
       child.once("error", held.reject);
       child.once("close", () => held.reject(new Error("helper closed before held readiness")));
     });
@@ -590,7 +582,7 @@ process.on("message", (message) => {
         const rejected = expect(acquiring).rejects.toThrow(/closed|identity changed/);
         await started.promise;
         closing = f.runtime.quiescence.close();
-        await held.promise;
+        await held!.promise;
         helper!.send({ type: "acceptance-ready-release" });
         await closing;
         await rejected;
@@ -598,7 +590,7 @@ process.on("message", (message) => {
         await f.collectAndExpect(1, false);
         return;
       }
-      await held.promise;
+      await held!.promise;
       caller.abort();
       await expect(acquisition).resolves.toMatchObject({ name: "AbortError" });
       const exact = processIdentity.requireNodeWorkerProcessIdentity(f.readLease().watchdog.pid);
