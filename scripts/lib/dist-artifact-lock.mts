@@ -47,15 +47,15 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
   // A surviving wrapper claim retains ownership for possibly detached compilers.
   fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
   const owner: ArtifactOwner = { directory };
+  // This entry process inherits ownership until exit. Native bundler callbacks
+  // can lose async context and run after the CLI module's import has settled.
   inheritedOwner = owner;
   process.argv = [process.execPath, fileURLToPath(script), ...args];
   try {
-    // CLI modules can return before their asynchronous command finishes (notably Vite).
     await activeOwner.run(owner, () => import(script));
   } catch (error) {
     throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {
-    inheritedOwner = undefined;
     // The pre-existing claim is the durable fence if recording uncertainty failed.
     if (owner.unjoinedError === undefined || fs.existsSync(path.join(directory, "unjoined"))) {
       fs.unlinkSync(claim);

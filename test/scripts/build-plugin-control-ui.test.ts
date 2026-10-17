@@ -99,13 +99,15 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
     'export * from "../../../../plugin-sdk/provider-usage.js"',
   );
 
-  // The real Vite CLI returns before its build finishes and bundles local config imports.
+  // Vite invokes buildStart from native bundler callbacks after its CLI import returns.
   const configPath = path.join(root, "vite.config.mts");
   const preparer = pathToFileURL(path.resolve("scripts/lib/prepare-control-ui-settings.mts")).href;
   fs.writeFileSync(
     configPath,
     `import { prepareControlUiSettings } from ${JSON.stringify(preparer)};
-export default async () => { await prepareControlUiSettings(${JSON.stringify(root)}); return {}; };`,
+export default { plugins: [{ name: "settings", async buildStart() {
+  await prepareControlUiSettings(${JSON.stringify(root)});
+} }] };`,
   );
   fs.writeFileSync(
     path.join(root, "index.html"),
