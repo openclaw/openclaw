@@ -58,6 +58,7 @@ function interruptRun(runId: string, interrupted?: () => void) {
       interrupted?.();
       return { runId };
     }
+    return undefined;
   });
   return { controller, onInterrupt };
 }

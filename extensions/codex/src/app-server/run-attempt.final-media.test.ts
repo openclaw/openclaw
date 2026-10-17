@@ -6,41 +6,46 @@ import { buildContractReplyPayloads } from "openclaw/plugin-sdk/agent-runtime-te
 import { collectReplyMediaEntries } from "openclaw/plugin-sdk/channel-outbound";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDefaultLocalRoots } from "openclaw/plugin-sdk/web-media";
 import { expect, it, vi } from "vitest";
 import type { CodexCommandExecParams } from "./command-exec-protocol.js";
-import { agentMessage } from "./native-subagent-monitor.test-support.js";
 import { itemNotification } from "./protocol.test-helpers.js";
-import * as test from "./run-attempt-test-harness.js";
 import {
-  attachSqliteSessionTarget,
-  readTranscriptMessagesByIdentity,
-} from "./sqlite-session.test-helpers.js";
+  bindProductionHarnessHostCapabilitiesForTest,
+  createParams,
+  createStartedThreadHarness,
+  runCodexAppServerAttempt,
+  setupRunAttemptTestHooks,
+  tempDir,
+  threadStartResult,
+} from "./run-attempt-test-harness.js";
+import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
-test.setupRunAttemptTestHooks();
+setupRunAttemptTestHooks();
 
 const execFileAsync = promisify(execFile);
-const artifactName = "project-artifact.txt";
-
-async function writeArtifact(dir: string, contents: string) {
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, artifactName), contents);
-}
 
 it.each(["partial", "async", "denied", "cancel"] as const)(
   "delivers remote reply media without reading stale Gateway files: %s",
   async (scenario) => {
-    const workspaceDir = path.join(test.tempDir, "gateway-workspace");
-    const remoteWorkspaceRoot = path.join(test.tempDir, "codex-workspace");
+    const workspaceDir = path.join(tempDir, "gateway-workspace");
+    const remoteWorkspaceRoot = path.join(tempDir, "codex-workspace");
+    await Promise.all([
+      fs.mkdir(workspaceDir, { recursive: true }),
+      fs.mkdir(remoteWorkspaceRoot, { recursive: true }),
+    ]);
+    const artifactName = "project-artifact.txt";
     const remoteContents = "authoritative Codex project artifact\n";
     await Promise.all([
-      writeArtifact(workspaceDir, "stale Gateway project artifact\n"),
-      writeArtifact(remoteWorkspaceRoot, remoteContents),
+      fs.writeFile(path.join(workspaceDir, artifactName), "stale Gateway project artifact\n"),
+      fs.writeFile(path.join(remoteWorkspaceRoot, artifactName), remoteContents),
     ]);
-    const params = test.createParams(path.join(test.tempDir, "final-media.jsonl"), workspaceDir);
+    const params = createParams(path.join(tempDir, "final-media.jsonl"), workspaceDir);
     await attachSqliteSessionTarget(
       params,
-      path.join(test.tempDir, "final-media.sqlite"),
+      path.join(tempDir, "final-media.sqlite"),
       "final-media",
     );
     if (scenario === "denied") {
@@ -50,11 +55,11 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     params.abortSignal = abort.signal;
     const onBlockReply = vi.fn<NonNullable<typeof params.onBlockReply>>();
     params.onBlockReply = onBlockReply;
-    await test.bindProductionHarnessHostCapabilitiesForTest(params);
+    await bindProductionHarnessHostCapabilitiesForTest(params);
     let remoteReads = 0;
-    const harness = test.createStartedThreadHarness(async (method, requestParams) => {
+    const harness = createStartedThreadHarness(async (method, requestParams) => {
       if (method === "thread/start") {
-        return test.threadStartResult("thread-1", { cwd: remoteWorkspaceRoot });
+        return threadStartResult("thread-1", { cwd: remoteWorkspaceRoot });
       }
       if (method === "command/exec") {
         // The only synthetic boundary is the remote transport: execute the native
@@ -73,7 +78,7 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
       }
       return undefined;
     });
-    const run = test.runCodexAppServerAttempt(params, {
+    const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { transport: "stdio", remoteWorkspaceRoot } },
     });
     await harness.waitForMethod("turn/start");
@@ -81,7 +86,10 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
       scenario === "partial" ? `${remoteWorkspaceRoot}/./${artifactName}` : `./${artifactName}`;
     const sourceText = `Artifact ready\n${scenario === "partial" ? "MEDIA:./missing-artifact.txt\n" : ""}MEDIA:${sourcePath}`;
     const item = {
-      ...agentMessage("final-artifact", sourceText, "final_answer"),
+      id: "final-artifact",
+      type: "agentMessage",
+      phase: "final_answer",
+      text: sourceText,
       ...(scenario === "async" ? { delivery: "async" } : {}),
     };
     await harness.notify(itemNotification("item/started", { ...item, text: "" }));
@@ -92,10 +100,12 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     await harness.notify(itemNotification("item/completed", item));
     if (scenario === "async") {
       await harness.notify(
-        itemNotification(
-          "item/completed",
-          agentMessage("terminal-answer", "Finished.", "final_answer"),
-        ),
+        itemNotification("item/completed", {
+          id: "terminal-answer",
+          type: "agentMessage",
+          phase: "final_answer",
+          text: "Finished.",
+        }),
       );
     }
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -109,9 +119,28 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     expect(result.terminal).toMatchObject({ kind: "ok" });
 
     const sourceContent = [{ type: "text", text: sourceText }];
-    const assistant = expect.objectContaining({ role: "assistant", content: sourceContent });
-    expect(result.messagesSnapshot).toContainEqual(assistant);
-    expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(assistant);
+    expect(result.messagesSnapshot).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", content: sourceContent }),
+      ]),
+    );
+    const transcriptTarget = params.sessionTarget;
+    if (!transcriptTarget?.sessionId || !transcriptTarget.sessionKey) {
+      throw new Error("expected the fixture's persisted session identity");
+    }
+    const savedAssistants = (
+      await readSessionTranscriptEvents({
+        ...transcriptTarget,
+        sessionId: transcriptTarget.sessionId,
+        sessionKey: transcriptTarget.sessionKey,
+      })
+    ).flatMap((event) => {
+      const message = asOptionalRecord(asOptionalRecord(event)?.message);
+      return message?.role === "assistant" ? [message] : [];
+    });
+    expect(savedAssistants).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: sourceContent })]),
+    );
 
     const finalPayloads = buildContractReplyPayloads({
       attempt: result,
@@ -133,10 +162,9 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     const mediaUrls = payloads.flatMap(
       (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
     );
-    const replyText = payloads.map((payload) => payload.text).join("\n");
     if (scenario === "denied") {
       expect(mediaUrls).toEqual([]);
-      expect(replyText).toContain(artifactName);
+      expect(payloads.map((payload) => payload.text).join("\n")).toContain(artifactName);
       expect(remoteReads).toBe(0);
       return;
     }
@@ -160,7 +188,7 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
           sourceUrls: [sourcePath],
         },
       ]);
-      expect(replyText).toContain("missing-artifact.txt");
+      expect(payloads.map((payload) => payload.text).join("\n")).toContain("missing-artifact.txt");
     }
     const delivered = await loadOutboundMediaFromUrl(mediaUrls[0]!, {
       workspaceDir,

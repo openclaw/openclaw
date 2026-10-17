@@ -9,7 +9,6 @@ import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-m
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
@@ -20,45 +19,52 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createReplyParams } from "./agent-runner-reply-params.test-support.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
 
-// Real provider boundary: fail summaries with HTTP 408, not a host deadline wait.
+// Real reply turns: preflight compaction, the native compaction delegate, and the
+// foreground run all reach a local OpenAI-compatible provider. Summary requests time out
+// at the provider, so the turn takes no host deadline wait.
 it("answers through a timed-out compaction summary and does not re-run it next turn", async () => {
   await withOpenClawTestState({ label: "compaction-summary-fallback" }, async (state) => {
     let summaryRequests = 0;
     let answers = 0;
-    const server = createServer(async (request, response) => {
+    const server = createServer((request, response) => {
       let body = "";
       request.setEncoding("utf8");
-      for await (const chunk of request) {
+      request.on("data", (chunk: string) => {
         body += chunk;
-      }
-      // Built-in summarization requests carry SUMMARIZATION_SYSTEM_PROMPT.
-      if (body.includes("context summarization assistant")) {
-        summaryRequests += 1;
-        response.writeHead(408, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
-        return;
-      }
-      answers += 1;
-      const chunk = (delta: object, finish_reason: string | null = null, usage?: object) =>
-        `data: ${JSON.stringify({
-          id: "answer",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "test-model",
-          choices: [{ index: 0, delta, finish_reason }],
-          ...(usage ? { usage } : {}),
-        })}\n\n`;
-      response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
-      response.end(
-        chunk({ role: "assistant", content: `ANSWER-${answers}` }) +
-          chunk({}, "stop", { prompt_tokens: 3_000, completion_tokens: 5, total_tokens: 3_005 }) +
-          "data: [DONE]\n\n",
-      );
+      });
+      request.on("end", () => {
+        // Built-in summarization requests carry SUMMARIZATION_SYSTEM_PROMPT.
+        if (body.includes("context summarization assistant")) {
+          summaryRequests += 1;
+          response.writeHead(408, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
+          return;
+        }
+        answers += 1;
+        const chunk = (payload: object) =>
+          `data: ${JSON.stringify({ id: "answer", object: "chat.completion.chunk", created: 1, model: "test-model", ...payload })}\n\n`;
+        response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+        response.end(
+          chunk({
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: `ANSWER-${answers}` },
+                finish_reason: null,
+              },
+            ],
+          }) +
+            chunk({
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              usage: { prompt_tokens: 3_000, completion_tokens: 5, total_tokens: 3_005 },
+            }) +
+            "data: [DONE]\n\n",
+        );
+      });
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -126,16 +132,19 @@ it("answers through a timed-out compaction summary and does not re-run it next t
             stopReason: "stop",
             errorMessage: undefined,
             usage: {
-              ...createZeroUsageFixture(),
               input: 30_000,
               output: 5,
+              cacheRead: 0,
+              cacheWrite: 0,
               totalTokens: 30_005,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },
           }),
         );
       }
       const turn = async (prompt: string, runId: string) => {
         const followupRun = createTestFollowupRun({
+          agentId: "main",
           agentDir: state.agentDir(),
           sessionId,
           sessionKey,
@@ -151,23 +160,30 @@ it("answers through a timed-out compaction summary and does not re-run it next t
         });
         followupRun.prompt = prompt;
         const entry = loadSessionEntry(scope)!;
-        return await runReplyAgent(
-          createReplyParams({
-            commandBody: prompt,
-            transcriptCommandBody: prompt,
-            followupRun,
-            queueKey: sessionKey,
-            opts: { runId },
-            typing: createTypingController({}),
-            sessionCtx: { Provider: "webchat", MessageSid: runId, SessionKey: sessionKey },
-            sessionEntry: entry,
-            sessionStore: { [sessionKey]: entry },
-            sessionKey,
-            storePath,
-            defaultModel: "test-model",
-            typingMode: "never",
-          }),
-        );
+        return await runReplyAgent({
+          commandBody: prompt,
+          transcriptCommandBody: prompt,
+          followupRun,
+          queueKey: sessionKey,
+          resolvedQueue: { mode: "interrupt" },
+          shouldSteer: false,
+          shouldFollowup: false,
+          isActive: false,
+          opts: { runId },
+          typing: createTypingController({}),
+          sessionCtx: { Provider: "webchat", MessageSid: runId, SessionKey: sessionKey },
+          sessionEntry: entry,
+          sessionStore: { [sessionKey]: entry },
+          sessionKey,
+          storePath,
+          defaultModel: "test-model",
+          resolvedVerboseLevel: "off",
+          isNewSession: false,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: "message_end",
+          shouldInjectGroupIntro: false,
+          typingMode: "never",
+        });
       };
 
       expect(await turn("First question after the long history.", "turn-1")).toMatchObject({

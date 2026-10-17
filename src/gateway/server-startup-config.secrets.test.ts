@@ -309,6 +309,7 @@ function installGatewayStartupSecretsRuntimeMock(state: GatewayStartupSecretsRun
     loadAuthProfileStoreWithoutExternalProfilesAsync:
       state.loadAuthStore ?? vi.fn(() => createAuthProfileStoreFixture({})),
   }));
+  // mock-isolation: Startup tests own secrets activation and must not access host credentials.
   vi.doMock("../secrets/runtime.js", () => {
     const runtimeState = runtimeMockGlobal["__gatewayStartupSecretsRuntimeMock"];
     if (!runtimeState) {

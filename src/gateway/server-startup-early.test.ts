@@ -38,6 +38,7 @@ vi.mock("./server-maintenance.js", () => ({
   startGatewayMaintenanceTimers: mocks.startGatewayMaintenanceTimers,
 }));
 
+// mock-isolation: Startup uses a fixed machine name without reading host identity.
 vi.mock("../infra/machine-name.js", () => ({ getMachineDisplayName: mocks.getMachineDisplayName }));
 
 vi.mock("./server-discovery-runtime.js", () => ({
@@ -58,6 +59,7 @@ vi.mock("../skills/runtime/refresh.js", () => ({
   detachSkillsWatchers: mocks.detachSkillsWatchers,
 }));
 
+// mock-isolation: Startup tests observe scheduling without starting real cron maintenance.
 vi.mock("../cron/maintenance.js", () => ({ startCronMaintenance: mocks.startCronMaintenance }));
 
 vi.mock("../agents/context.js", () => ({

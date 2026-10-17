@@ -135,18 +135,16 @@ describe("resolveBundledPluginsDir", () => {
   });
 
   it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {
-    const repoRoot = createOpenClawRoot({
+    const repoRoot = createOpenClawRoot(sourceDirs, {
       prefix: "openclaw-bundled-dir-disabled-",
-      hasExtensions: true,
-      hasSrc: true,
-      hasGitCheckout: true,
+      git: true,
     });
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
     process.argv[1] = "/usr/bin/env";
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-    const bundledDir = requireBundledDir(resolveBundledPluginsDir());
+    const bundledDir = realBundledDir();
 
     expect(fs.existsSync(bundledDir)).toBe(true);
     expect(fs.readdirSync(bundledDir)).toStrictEqual([]);

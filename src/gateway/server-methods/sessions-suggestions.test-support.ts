@@ -33,9 +33,9 @@ export function withSuggestionState(
   run: Parameters<typeof withOpenClawTestState>[1],
   options: { prepareProfileCatalog?: boolean } = {},
 ) {
-  return withOpenClawTestState({ scenario: "minimal", ...options }, (state) => {
+  return withOpenClawTestState({ scenario: "minimal", ...options }, async (state) => {
     setRuntimeConfigSnapshot({});
-    return run(state);
+    await run(state);
   });
 }
 

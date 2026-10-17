@@ -32,6 +32,7 @@ import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -66,7 +67,7 @@ const withState = (run: Parameters<typeof withSuggestionState>[0]) =>
 
 function roleConfig(
   others: "none" | "view" | "suggest" | "write",
-  scopes = ["operator.read", "operator.write"],
+  scopes: OperatorScope[] = ["operator.read", "operator.write"],
 ): OpenClawConfig {
   return {
     gateway: {

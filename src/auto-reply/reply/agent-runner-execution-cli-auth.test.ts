@@ -20,7 +20,7 @@ import {
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 import * as agentRunnerUtils from "./agent-runner-utils.js";
-import { createInitialState } from "./model-selection.inputs.test-support.js";
+import { createModelSelectionState } from "./model-selection.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 const managedProfile = "claude-cli:managed";
@@ -29,44 +29,6 @@ const primaryProfile = "openai:primary";
 const googleProfile = "google:managed";
 const nativeProfile = "anthropic:claude-cli";
 const customProfile = "custom-cli:managed";
-function createScopedFollowupRun() {
-  const followupRun = createFollowupRun();
-  onTestFinished(() =>
-    closeOpenClawAgentDatabaseByPath(path.join(followupRun.run.agentDir, "openclaw-agent.sqlite")),
-  );
-  return followupRun;
-}
-
-function registerBackends(backends: Array<[string, string, string, string]>) {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () =>
-      backends.map(([id, modelProvider, pluginId, command]) => ({
-        id,
-        modelProvider,
-        pluginId,
-        config: { command },
-      })),
-    resolvePluginSetupCliBackend: () => undefined,
-  });
-}
-
-async function restoreProductionFallbacks() {
-  const actual = await vi.importActual<typeof agentRunnerUtils>("./agent-runner-utils.js");
-  const scope = await vi.importActual<typeof agentScope>("../../agents/agent-scope.js");
-  const spies = [
-    vi
-      .spyOn(agentRunnerUtils, "resolveModelFallbackOptions")
-      .mockImplementation(actual.resolveModelFallbackOptions),
-    vi
-      .spyOn(agentScope, "resolveModelFallbackAvailability")
-      .mockImplementation(scope.resolveModelFallbackAvailability),
-    vi
-      .spyOn(agentScope, "modelFallbackOverrideFromAvailability")
-      .mockImplementation(scope.modelFallbackOverrideFromAvailability),
-  ];
-  onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
-}
-
 const credentials = {
   [managedProfile]: { type: "token", provider: "claude-cli", token: "synthetic-managed-token" },
   [canonicalProfile]: { type: "token", provider: "anthropic", token: "synthetic-canonical-token" },
@@ -78,37 +40,75 @@ const credentials = {
 
 describe("executeAgentTurn: CLI credential selection", () => {
   it.each([
-    { selected: primaryProfile, source: "auto", expected: managedProfile },
-    { selected: primaryProfile, error: true },
-    { selected: canonicalProfile, expected: canonicalProfile },
-    { selected: nativeProfile, expected: undefined },
     {
+      name: "selects ordered CLI credentials after an automatic cross-provider fallback",
       selected: primaryProfile,
       source: "auto",
+      primary: "openai",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [primaryProfile, managedProfile],
+      expected: managedProfile,
+    },
+    {
+      name: "rejects an incompatible explicit account before CLI execution",
+      selected: primaryProfile,
+      source: "user",
+      primary: "openai",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [primaryProfile, managedProfile],
+      error: 'cannot use auth profile "openai:primary"',
+    },
+    {
+      name: "forwards explicitly selected canonical credentials",
+      selected: canonicalProfile,
+      source: "user",
+      primary: "anthropic",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [canonicalProfile, managedProfile],
+      expected: canonicalProfile,
+    },
+    {
+      name: "preserves a selected native login even when a managed account exists",
+      selected: nativeProfile,
+      source: "user",
+      primary: "claude-cli",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [nativeProfile, managedProfile],
+      expected: undefined,
+    },
+    {
+      name: "uses the executing Google candidate for canonical API-key fallback",
+      selected: primaryProfile,
+      source: "auto",
+      primary: "openai",
       provider: "google",
       backend: "google-gemini-cli",
       profiles: [primaryProfile, googleProfile],
       expected: googleProfile,
     },
     {
+      name: "retains existing scoped forwarding for a custom CLI backend",
       selected: customProfile,
+      source: "user",
+      primary: "custom-cli",
       provider: "custom-cli",
       backend: "custom-cli",
       profiles: [customProfile],
       expected: customProfile,
     },
-  ] as const)("$selected → $expected ($source/$backend)", async (scenario) => {
-    const testCase = {
-      provider: "claude-cli",
-      backend: "claude-cli",
-      source: "user" as const,
-      profiles: [scenario.selected, managedProfile],
-      ...scenario,
-    };
-    const followupRun = createScopedFollowupRun();
-
+  ] as const)("$name", async (testCase) => {
+    const followupRun = createFollowupRun();
+    onTestFinished(() => {
+      closeOpenClawAgentDatabaseByPath(
+        path.join(followupRun.run.agentDir, "openclaw-agent.sqlite"),
+      );
+    });
     const model = "test-model";
-    followupRun.run.provider = credentials[testCase.selected].provider;
+    followupRun.run.provider = testCase.primary;
     followupRun.run.model = model;
     followupRun.run.authProfileId = testCase.selected;
     followupRun.run.authProfileIdSource = testCase.source;
@@ -120,9 +120,7 @@ describe("executeAgentTurn: CLI credential selection", () => {
       },
       agents: {
         defaults: {
-          models: {
-            [`${testCase.provider}/${model}`]: { agentRuntime: { id: testCase.backend } },
-          },
+          models: { [`${testCase.provider}/${model}`]: { agentRuntime: { id: testCase.backend } } },
         },
       },
     };
@@ -130,11 +128,29 @@ describe("executeAgentTurn: CLI credential selection", () => {
       filterExternalAuthProfiles: false,
       syncExternalCli: false,
     });
-    registerBackends([
-      ["claude-cli", "anthropic", "anthropic", "claude"],
-      ["google-gemini-cli", "google", "google", "gemini"],
-      ["custom-cli", "custom-cli", "custom", "custom"],
-    ]);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+        {
+          id: "google-gemini-cli",
+          modelProvider: "google",
+          pluginId: "google",
+          config: { command: "gemini" },
+        },
+        {
+          id: "custom-cli",
+          modelProvider: "custom-cli",
+          pluginId: "custom",
+          config: { command: "custom" },
+        },
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
     state.isCliProviderMock.mockImplementation((provider) => provider === testCase.backend);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run(
@@ -169,9 +185,33 @@ describe("executeAgentTurn: CLI credential selection", () => {
     "keeps $runtime native after resume binding and fails closed with API credentials available",
     async ({ runtime, provider }) => {
       await useProductionEmbeddedRunExecutionParamsForTest();
-      await restoreProductionFallbacks();
-      const followupRun = createScopedFollowupRun();
-
+      const { resolveModelFallbackOptions } =
+        await vi.importActual<typeof agentRunnerUtils>("./agent-runner-utils.js");
+      const fallbackOptions = vi
+        .spyOn(agentRunnerUtils, "resolveModelFallbackOptions")
+        .mockImplementation(resolveModelFallbackOptions);
+      const actualAgentScope = await vi.importActual<typeof agentScope>(
+        "../../agents/agent-scope.js",
+      );
+      const resolveFallbackAvailability = actualAgentScope.resolveModelFallbackAvailability;
+      const projectFallbackOverride = actualAgentScope.modelFallbackOverrideFromAvailability;
+      const availability = vi
+        .spyOn(agentScope, "resolveModelFallbackAvailability")
+        .mockImplementation(resolveFallbackAvailability);
+      const fallbackOverride = vi
+        .spyOn(agentScope, "modelFallbackOverrideFromAvailability")
+        .mockImplementation(projectFallbackOverride);
+      onTestFinished(() => {
+        availability.mockRestore();
+        fallbackOverride.mockRestore();
+        fallbackOptions.mockRestore();
+      });
+      const followupRun = createFollowupRun();
+      onTestFinished(() => {
+        closeOpenClawAgentDatabaseByPath(
+          path.join(followupRun.run.agentDir, "openclaw-agent.sqlite"),
+        );
+      });
       const model = "native-test-model";
       const profileId = `${provider}:api`;
       followupRun.run.config = {
@@ -204,33 +244,61 @@ describe("executeAgentTurn: CLI credential selection", () => {
       followupRun.run.modelOverrideSource = "user";
       const entry: SessionEntry = { sessionId: followupRun.run.sessionId, updatedAt: 1 };
       applyModelOverrideToSessionEntry({ entry, selection: { provider: runtime, model } });
-      registerBackends([[runtime, provider, provider, runtime]]);
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: runtime,
+            modelProvider: provider,
+            pluginId: provider,
+            config: { command: runtime },
+          },
+        ],
+        resolvePluginSetupCliBackend: () => undefined,
+      });
       state.isCliProviderMock.mockImplementation((candidate) => candidate === runtime);
-      const candidatePlans: ReturnType<typeof resolveModelCandidateChain>[] = [];
+      const candidatePlans: Array<Array<{ provider: string; model: string }>> = [];
+      let candidateError: unknown;
       state.runWithModelFallbackMock.mockImplementation(
         async (params: FallbackRunnerParams & Parameters<typeof resolveModelCandidateChain>[0]) => {
-          candidatePlans.push(resolveModelCandidateChain({ ...params, manifestPlugins: [] }));
-          return {
-            result: await params.run(
-              params.provider,
-              params.model,
-              initialFallbackAttemptOptions(params),
-            ),
-            provider: params.provider,
-            model: params.model,
-            attempts: [],
-          };
+          candidatePlans.push(
+            resolveModelCandidateChain({ ...params, manifestPlugins: [] }).map((candidate) => ({
+              provider: candidate.provider,
+              model: candidate.model,
+            })),
+          );
+          try {
+            return {
+              result: await params.run(
+                params.provider,
+                params.model,
+                initialFallbackAttemptOptions(params),
+              ),
+              provider: params.provider,
+              model: params.model,
+              attempts: [],
+            };
+          } catch (error) {
+            candidateError = error;
+            throw error;
+          }
         },
       );
       state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "native reply" }], meta: {} });
       state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "API reply" }], meta: {} });
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const runTurn = async () => {
-        const selected = await createInitialState(followupRun.run.config, provider, model, {
+        const selected = await createModelSelectionState({
           agentId: followupRun.run.agentId,
+          cfg: followupRun.run.config,
+          agentCfg: followupRun.run.config.agents?.defaults,
           sessionEntry: entry,
           sessionStore: { main: entry },
           sessionKey: "main",
+          defaultProvider: provider,
+          defaultModel: model,
+          provider,
+          model,
+          hasModelDirective: false,
           preparedModelCatalog: { entries: catalog, routeVariants: catalog, authoritative: true },
         });
         followupRun.run.provider = selected.provider;
@@ -242,13 +310,23 @@ describe("executeAgentTurn: CLI credential selection", () => {
         });
       };
 
-      const nativeReply = {
+      const firstTurn = await runTurn();
+      expect(
+        firstTurn,
+        `${JSON.stringify(firstTurn)}; candidate error: ${String(candidateError)}`,
+      ).toMatchObject({
         kind: "success",
         runResult: { payloads: [{ text: "native reply" }] },
-      };
-      await expect(runTurn()).resolves.toMatchObject(nativeReply);
+      });
       entry.cliSessionBindings = { [runtime]: { sessionId: "native-resume-session" } };
-      await expect(runTurn()).resolves.toMatchObject(nativeReply);
+      const resumedTurn = await runTurn();
+      expect(
+        resumedTurn,
+        `${JSON.stringify(resumedTurn)}; candidate error: ${String(candidateError)}`,
+      ).toMatchObject({
+        kind: "success",
+        runResult: { payloads: [{ text: "native reply" }] },
+      });
       state.runCliAgentMock.mockRejectedValueOnce(
         Object.assign(new Error("native executable unavailable"), { code: "ENOENT" }),
       );
@@ -261,12 +339,18 @@ describe("executeAgentTurn: CLI credential selection", () => {
         ).toBe(false);
       }
       // A user pin must not acquire the configured API fallback or appended primary.
-      expect(candidatePlans).toMatchObject(
-        Array.from({ length: 3 }, () => [{ provider: runtime, model }]),
-      );
+      expect(candidatePlans).toEqual([
+        [{ provider: runtime, model }],
+        [{ provider: runtime, model }],
+        [{ provider: runtime, model }],
+      ]);
 
       applyModelOverrideToSessionEntry({ entry, selection: { provider, model } });
-      await expect(runTurn()).resolves.toMatchObject({
+      const apiTurn = await runTurn();
+      expect(
+        apiTurn,
+        `${JSON.stringify(apiTurn)}; candidate error: ${String(candidateError)}`,
+      ).toMatchObject({
         kind: "success",
         runResult: { payloads: [{ text: "API reply" }] },
       });

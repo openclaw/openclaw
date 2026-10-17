@@ -14,6 +14,6 @@ export function createSharingState(initialize: () => unknown) {
   return (run: Parameters<typeof withOpenClawTestState>[1]) =>
     withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
       await initialize();
-      return run(state);
+      await run(state);
     });
 }

@@ -30,7 +30,7 @@ afterEach(() => vi.restoreAllMocks());
 
 type PatchAction = "visibility" | "publicShare";
 
-function withFixture(run: (fixture: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
+function withFixture(run: (value: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
   return withOpenClawTestState({ scenario: "minimal" }, async () => run(await fixture()));
 }
 

@@ -124,7 +124,7 @@ afterEach(async () => {
   for (const admission of admissions.splice(0)) {
     admission.release();
   }
-  await Promise.all(sidecars.splice(0).map((sidecar) => sidecar.stop()));
+  await Promise.all(sidecars.splice(0).map((sidecar) => Promise.resolve(sidecar.stop())));
   vi.useRealTimers();
   resetGatewayWorkAdmission();
 });

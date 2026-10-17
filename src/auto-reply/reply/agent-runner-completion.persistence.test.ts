@@ -1,15 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
-import {
-  activityRecapResult,
-  preparedActivityRecapModel,
-} from "../../gateway/session-activity-summaries.test-support.js";
 import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
@@ -25,15 +21,22 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
 let root: string;
 let storePath: string;
 let sequence = 0;
+const operations: ReplyOperation[] = [];
 beforeAll(() => {
   // openclaw-temp-dir: allow suite database root drains before removal
   root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-completion-"));
   storePath = path.join(root, "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+});
+afterEach(() => {
+  for (const operation of operations.splice(0)) {
+    operation.complete();
+  }
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
@@ -41,52 +44,24 @@ afterAll(async () => {
   await closeOpenClawAgentDatabasesAsync(root);
   fs.rmSync(root, { recursive: true, force: true });
 });
-async function createFixture(withUsage = false) {
-  const fixture = await createAgentAccountingPersistenceFixture({
+function createFixture() {
+  return createAgentAccountingPersistenceFixture({
     storePath,
     root,
     fixtureId: ++sequence,
-    registerOperation: (operation) => onTestFinished(() => operation.complete()),
+    registerOperation: (operation) => operations.push(operation),
   });
-  if (withUsage) {
-    fixture.context.execution.result.meta.agentMeta = {
-      sessionId: fixture.sessionId,
-      provider: diagnostic.provider,
-      model: diagnostic.model,
-      usage: { input: 120, output: 8 },
-    };
-  }
-  return fixture;
-}
-
-function invalidate(fixture: Awaited<ReturnType<typeof createFixture>>) {
-  sessionChanges.invalidate({
-    sessionKey: fixture.context.sessionKey!,
-    storePath,
-    factsInvalidated: true,
-  });
-}
-
-function observeCommands(...args: Parameters<typeof observeCompletionCommands>) {
-  const observer = observeCompletionCommands(...args);
-  onTestFinished(() => observer.restore());
-  return observer;
-}
-
-function expectCommands(
-  observer: ReturnType<typeof observeCompletionCommands>,
-  command = "session.actor.completeTurn",
-  count = 1,
-) {
-  expect(observer.commands.filter((entry) => entry === command)).toHaveLength(count);
 }
 
 it.for(["ready", "late", "abandoned"] as const)(
   "persists a %s activity recap without holding up terminal accounting",
   async (timing, { signal }) => {
-    const fixture = await createFixture(true);
+    const fixture = await createFixture();
     const sessionKey = fixture.context.sessionKey!;
-    const cfg = { ...fixture.context.cfg, agents: { defaults: { utilityModel: "test/utility" } } };
+    const cfg = {
+      ...fixture.context.cfg,
+      agents: { defaults: { utilityModel: "test/utility" } },
+    };
     await persistSessionTranscriptTurn(
       { storePath, sessionKey, sessionId: fixture.sessionId, agentId: "main" },
       {
@@ -109,21 +84,38 @@ it.for(["ready", "late", "abandoned"] as const)(
         }
       },
       prepareModel: async () => ({
-        ...preparedActivityRecapModel,
         config: cfg,
+        authProfileId: undefined,
+        provider: "test",
+        model: "utility",
+        agentId: "main",
         agentDir: root,
+        outputTextPolicy: "strict-visible",
+        thinkLevel: "off",
       }),
       completeModel: async () => {
         started.resolve();
         return result.promise;
       },
     });
-    const finishModel = () => result.resolve(activityRecapResult("Verified the change."));
+    const finishModel = () =>
+      result.resolve({
+        text: "Verified the change.",
+        provider: "test",
+        model: "utility",
+        owner: { kind: "harness", id: "test" },
+      });
     const completion = service.beginCompletion(
       { key: sessionKey, agentId: "main", storePath },
       fixture.read(),
     )!;
     fixture.context.activitySummaryCompletion = completion;
+    fixture.context.execution.result.meta.agentMeta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
     const observer = observeCompletionCommands();
     try {
       service.handleEvent({
@@ -149,7 +141,9 @@ it.for(["ready", "late", "abandoned"] as const)(
           text: "done",
         });
         expect(fixture.read()).toMatchObject({ inputTokens: 120, outputTokens: 8 });
-        expectCommands(observer);
+        expect(
+          observer.commands.filter((command) => command === "session.actor.completeTurn"),
+        ).toHaveLength(1);
       }
       completion.release();
       finishModel();
@@ -158,7 +152,9 @@ it.for(["ready", "late", "abandoned"] as const)(
         text: "Verified the change.",
         coveredMessages: 1,
       });
-      expectCommands(observer, "session.entry.patch.commit", timing === "ready" ? 0 : 1);
+      expect(
+        observer.commands.filter((command) => command === "session.entry.patch.commit"),
+      ).toHaveLength(timing === "ready" ? 0 : 1);
     } finally {
       completion.release();
       finishModel();
@@ -176,13 +172,19 @@ it.each([
 ] as const)(
   "preserves the completed reply after $count cache-only invalidations during the $stage read",
   async ({ stage, count }) => {
-    const fixture = await createFixture(true);
+    const fixture = await createFixture();
+    const invalidate = () =>
+      sessionChanges.invalidate({
+        sessionKey: fixture.context.sessionKey!,
+        storePath,
+        factsInvalidated: true,
+      });
     let armed = stage === "initial";
     let invalidations = 0;
     const normalize = vi.fn<typeof fixture.context.replyMediaContext.normalizePayload>(
       async (payload) => {
         if (stage === "refresh") {
-          invalidate(fixture);
+          invalidate();
           armed = true;
         }
         return payload;
@@ -192,32 +194,46 @@ it.each([
       { text: "done", mediaUrl: "https://example.invalid/final.png" },
     ];
     fixture.context.replyMediaContext.normalizePayload = normalize;
-    const observer = observeCommands({
+    fixture.context.execution.result.meta.agentMeta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
+    const observer = observeCompletionCommands({
       afterRead() {
         if (armed) {
           armed = false;
           // Cache-only invalidation does not revoke the unchanged scoped write token.
           for (let index = 0; index < count; index += 1) {
             invalidations += 1;
-            invalidate(fixture);
+            invalidate();
           }
         }
       },
     });
-    await expect(finalizeReplyAgentRun(fixture.context)).resolves.toMatchObject({ text: "done" });
-    expect(invalidations).toBe(count);
-    expect(normalize).toHaveBeenCalledOnce();
-    expectCommands(observer, "session.actor.read", stage === "initial" ? 1 : 2);
-    expectCommands(observer);
-    const stored = fixture.read();
-    expect(stored).toMatchObject({
-      inputTokens: 120,
-      outputTokens: 8,
-      pendingFinalDelivery: {
-        text: "done\nMEDIA:https://example.invalid/final.png",
-        deliveries: [{ state: "prepared" }],
-      },
-    });
+    try {
+      await expect(finalizeReplyAgentRun(fixture.context)).resolves.toMatchObject({ text: "done" });
+      expect(invalidations).toBe(count);
+      expect(normalize).toHaveBeenCalledOnce();
+      expect(observer.commands.filter((command) => command === "session.actor.read")).toHaveLength(
+        stage === "initial" ? 1 : 2,
+      );
+      expect(
+        observer.commands.filter((command) => command === "session.actor.completeTurn"),
+      ).toHaveLength(1);
+      const stored = fixture.read();
+      expect(stored).toMatchObject({
+        inputTokens: 120,
+        outputTokens: 8,
+        pendingFinalDelivery: {
+          text: "done\nMEDIA:https://example.invalid/final.png",
+          deliveries: [{ state: "prepared" }],
+        },
+      });
+    } finally {
+      observer.restore();
+    }
   },
 );
 
@@ -227,7 +243,7 @@ it.each(["unrelated-error", "writer-replaced"] as const)(
     const fixture = await createFixture();
     let reads = 0;
     let replacement: Promise<unknown> | undefined;
-    const observer = observeCommands({
+    const observer = observeCompletionCommands({
       afterRead() {
         reads += 1;
         if (failure === "unrelated-error") {
@@ -243,23 +259,31 @@ it.each(["unrelated-error", "writer-replaced"] as const)(
           );
         }
         if (reads === 1) {
-          invalidate(fixture);
+          sessionChanges.invalidate({
+            sessionKey: fixture.context.sessionKey!,
+            storePath,
+            factsInvalidated: true,
+          });
         }
       },
     });
-    await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-      failure === "writer-replaced"
-        ? "Terminal accounting session changed"
-        : "Session actor changed before its read could publish",
-    );
-    await replacement;
-    // Replacement is rejected at admission before another worker read can execute.
-    expect(reads).toBe(1);
-    expect(observer.commands).not.toContain("session.actor.completeTurn");
-    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
-    expect(fixture.read()?.inputTokens).toBeUndefined();
-    if (failure === "writer-replaced") {
-      expect(fixture.read()?.activeWriterRunId).toBe("replacement-writer");
+    try {
+      await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
+        failure === "writer-replaced"
+          ? "Terminal accounting session changed"
+          : "Session actor changed before its read could publish",
+      );
+      await replacement;
+      // Replacement is rejected at admission before another worker read can execute.
+      expect(reads).toBe(1);
+      expect(observer.commands).not.toContain("session.actor.completeTurn");
+      expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+      expect(fixture.read()?.inputTokens).toBeUndefined();
+      if (failure === "writer-replaced") {
+        expect(fixture.read()?.activeWriterRunId).toBe("replacement-writer");
+      }
+    } finally {
+      observer.restore();
     }
   },
 );
@@ -267,51 +291,94 @@ it.each(["unrelated-error", "writer-replaced"] as const)(
 it.each(["publication-failure", "unknown-commit"] as const)(
   "does not disclose or replay a durable final after %s",
   async (failure) => {
-    const fixture = await createFixture(true);
+    const fixture = await createFixture();
+    fixture.context.execution.result.meta.agentMeta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
     if (failure === "publication-failure") {
       fixture.context.activeSessionStore = Object.freeze({ ...fixture.context.activeSessionStore });
     }
-    const observer = observeCommands({ hideCommittedReceipt: failure === "unknown-commit" });
-    await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-      failure === "unknown-commit"
-        ? "Unconfirmed actor settlement"
-        : /read only|readonly|extensible/i,
-    );
-    expectCommands(observer);
-    expect(fixture.read()).toMatchObject({
-      inputTokens: 120,
-      outputTokens: 8,
-      pendingFinalDelivery: { text: "done", deliveries: [{ state: "prepared" }] },
+    const observer = observeCompletionCommands({
+      hideCommittedReceipt: failure === "unknown-commit",
     });
+    try {
+      await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
+        failure === "unknown-commit"
+          ? "Unconfirmed actor settlement"
+          : /read only|readonly|extensible/i,
+      );
+      expect(
+        observer.commands.filter((command) => command === "session.actor.completeTurn"),
+      ).toHaveLength(1);
+      expect(fixture.read()).toMatchObject({
+        inputTokens: 120,
+        outputTokens: 8,
+        pendingFinalDelivery: {
+          text: "done",
+          deliveries: [{ state: "prepared" }],
+        },
+      });
+    } finally {
+      observer.restore();
+    }
   },
 );
 
-it.each(["usage-only", "with-final-custody", "operation-closed"] as const)(
-  "preserves stored state when %s completion fails at the commit boundary",
+it.each(["usage-only", "with-final-custody"] as const)(
+  "preserves %s failure semantics after a proven worker rollback",
   async (kind) => {
-    const fixture = await createFixture(kind !== "operation-closed");
+    const fixture = await createFixture();
+    const meta = {
+      sessionId: fixture.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      usage: { input: 120, output: 8 },
+    };
+    fixture.context.execution.result.meta.agentMeta = meta;
     const before = fixture.read();
     const beforeCommit = vi.fn(() => {
-      if (kind === "operation-closed") {
-        fixture.context.replyOperation.complete();
-      } else {
-        throw new Error("synthetic completion refusal");
-      }
+      throw new Error("synthetic completion refusal");
     });
-    const observer = observeCommands({ beforeCommit });
-    if (kind === "usage-only") {
-      await expect(
-        fixture.account("ordinary", fixture.context.execution.result.meta.agentMeta!),
-      ).resolves.toBeUndefined();
-    } else {
-      await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-        kind === "operation-closed"
-          ? "Terminal accounting lost its reply operation"
-          : "synthetic completion refusal",
-      );
+    const observer = observeCompletionCommands({ beforeCommit });
+    try {
+      if (kind === "usage-only") {
+        await expect(fixture.account("ordinary", meta)).resolves.toBeUndefined();
+      } else {
+        await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
+          "synthetic completion refusal",
+        );
+      }
+      expect(
+        observer.commands.filter((command) => command === "session.actor.completeTurn"),
+      ).toHaveLength(1);
+      expect(beforeCommit).toHaveBeenCalledOnce();
+      expect(fixture.read()).toEqual(before);
+    } finally {
+      observer.restore();
     }
-    expectCommands(observer);
-    expect(beforeCommit).toHaveBeenCalledOnce();
-    expect(fixture.read()).toEqual(before);
   },
 );
+
+it("rechecks the live reply operation at the final commit boundary", async () => {
+  const fixture = await createFixture();
+  const before = fixture.read();
+  const beforeCommit = vi.fn(() => {
+    fixture.context.replyOperation.complete();
+  });
+  const observer = observeCompletionCommands({ beforeCommit });
+  try {
+    await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
+      "Terminal accounting lost its reply operation",
+    );
+    expect(
+      observer.commands.filter((command) => command === "session.actor.completeTurn"),
+    ).toHaveLength(1);
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fixture.read()).toEqual(before);
+  } finally {
+    observer.restore();
+  }
+});
