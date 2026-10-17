@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,10 +13,11 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { isJsonObject, type CodexServerNotification } from "./protocol.js";
+import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
@@ -25,17 +27,18 @@ import {
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
-let compactionTestCleanup:
-  | {
-      controller: AbortController;
-      pending: Set<Promise<unknown>>;
-      released: Set<Promise<void>>;
-      clients: Set<{ interrupt: () => void; close: () => void }>;
-    }
-  | undefined;
+let compactionTestCleanup: ReturnType<typeof createCompactionCleanup> | undefined;
+
+function createCompactionCleanup() {
+  return {
+    controller: new AbortController(),
+    pending: new Set<Promise<unknown>>(),
+    released: new Set<Promise<void>>(),
+    clients: new Set<{ interrupt: () => void; close: () => void }>(),
+  };
+}
 
 /** Opt in only where the suite owns these fake clients and every compaction it starts. */
 export function beginCompactionTestCleanup() {
@@ -43,12 +46,7 @@ export function beginCompactionTestCleanup() {
     throw new Error("Previous compaction test cleanup has not finished");
   }
   setRuntimeConfigSnapshot({});
-  const cleanup = {
-    controller: new AbortController(),
-    pending: new Set<Promise<unknown>>(),
-    released: new Set<Promise<void>>(),
-    clients: new Set<{ interrupt: () => void; close: () => void }>(),
-  };
+  const cleanup = createCompactionCleanup();
   compactionTestCleanup = cleanup;
   return async (failed: boolean) => {
     const unfinished = cleanup.pending.size > 0;
@@ -76,35 +74,24 @@ export function beginCompactionTestCleanup() {
   };
 }
 
-type MaybeCompactOptions = Omit<
-  NonNullable<Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]>,
-  "bindingStore"
-> & {
-  bindingStore?: NonNullable<
-    Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]
-  >["bindingStore"];
-};
-
-type CompactTestParams = Omit<
-  Parameters<typeof maybeCompactCodexAppServerSessionImpl>[0],
-  "hostCapabilities"
-> &
-  Partial<Pick<Parameters<typeof maybeCompactCodexAppServerSessionImpl>[0], "hostCapabilities">>;
+type CompactParams = Parameters<typeof maybeCompactCodexAppServerSessionImpl>[0];
+type CompactOptions = NonNullable<Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]>;
+type MaybeCompactOptions = Omit<CompactOptions, "bindingStore"> &
+  Partial<Pick<CompactOptions, "bindingStore">>;
+type CompactTestParams = Omit<CompactParams, "hostCapabilities"> &
+  Partial<Pick<CompactParams, "hostCapabilities">>;
 
 /** Supplies only the admitted System host; explicit binding-store tests keep their own target. */
 export function compactCodexSessionWithTestHost(
   params: CompactTestParams,
-  options: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1],
+  options: CompactOptions | undefined,
 ) {
   setRuntimeConfigSnapshot(params.config ?? {});
   const cleanup = compactionTestCleanup;
   if (!cleanup) {
     return runCompactionWithTestHost(params, options);
   }
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: released, resolve: release } = createDeferred<void>();
   cleanup.released.add(released);
   void released.then(() => {
     cleanup.released.delete(released);
@@ -130,10 +117,7 @@ export function compactCodexSessionWithTestHost(
   return pending;
 }
 
-function runCompactionWithTestHost(
-  params: CompactTestParams,
-  options: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1],
-) {
+function runCompactionWithTestHost(params: CompactTestParams, options: CompactOptions | undefined) {
   if (params.hostCapabilities) {
     return maybeCompactCodexAppServerSessionImpl(
       { ...params, hostCapabilities: params.hostCapabilities },
@@ -244,43 +228,38 @@ export async function writeSupervisedTestBinding(
   });
 }
 
-export function createSandboxedCompactionParams(tempDir: string, sessionFile: string) {
+function compactionParams(tempDir: string, sessionFile: string) {
   return {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
     trigger: "manual",
+  } satisfies CompactTestParams;
+}
+
+export function createSandboxedCompactionParams(tempDir: string, sessionFile: string) {
+  return {
+    ...compactionParams(tempDir, sessionFile),
     config: { agents: { defaults: { sandbox: { mode: "all" } } } },
   } satisfies Parameters<typeof maybeCompactCodexAppServerSession>[0];
 }
 
 export function createRemoteExecCompactionParams(tempDir: string, sessionFile: string) {
-  const params: Parameters<typeof maybeCompactCodexAppServerSession>[0] & {
-    sandbox: ReturnType<typeof createSandboxContext> & {
-      placementExecutionMode: "remote-exec";
-    };
-  } = {
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    sessionFile,
-    workspaceDir: tempDir,
-    trigger: "manual",
+  return {
+    ...compactionParams(tempDir, sessionFile),
     sandbox: {
       ...createSandboxContext({}),
       placementExecutionMode: "remote-exec",
     },
+  } satisfies CompactTestParams & {
+    sandbox: ReturnType<typeof createSandboxContext> & { placementExecutionMode: "remote-exec" };
   };
-  return params;
 }
 
 export function createNodeExecCompactionParams(tempDir: string, sessionFile: string) {
   return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    sessionFile,
-    workspaceDir: tempDir,
-    trigger: "manual",
+    ...compactionParams(tempDir, sessionFile),
     config: { tools: { exec: { host: "node", node: "worker-1" } } },
   } satisfies Parameters<typeof maybeCompactCodexAppServerSession>[0];
 }
@@ -327,14 +306,7 @@ export function createFakeCodexCompactionClient(
     retainedThreadId?: string | null;
     subscribedThreadIds?: readonly string[];
   } = {},
-): {
-  client: CodexAppServerClient;
-  request: ReturnType<typeof vi.fn<CodexAppServerClient["request"]>>;
-  close: ReturnType<typeof vi.fn<CodexAppServerClient["close"]>>;
-  closeAndWait: ReturnType<typeof vi.fn<CodexAppServerClient["closeAndWait"]>>;
-  emit: (notification: CodexServerNotification) => void;
-  completeCompaction: () => void;
-} {
+) {
   const handlers = new Set<(notification: CodexServerNotification) => void>();
   const closeHandlers = new Set<() => void>();
   const retainedThreadId =
@@ -388,14 +360,14 @@ export function createFakeCodexCompactionClient(
       handler(notification);
     }
   };
-  const completeCompaction = (threadId = "thread-1"): void => {
+  const emitTurn = (threadId: string, turn: JsonObject): void => {
     emit({
-      method: "turn/started",
-      params: {
-        threadId,
-        turn: { id: "compact-turn-1", threadId, status: "inProgress" },
-      },
+      method: turn.status === "inProgress" ? "turn/started" : "turn/completed",
+      params: { threadId, turn },
     });
+  };
+  const completeCompaction = (threadId = "thread-1"): void => {
+    emitTurn(threadId, { id: "compact-turn-1", threadId, status: "inProgress" });
     for (const method of ["item/started", "item/completed"]) {
       emit({
         method,
@@ -406,52 +378,14 @@ export function createFakeCodexCompactionClient(
         },
       });
     }
-    emit({
-      method: "turn/completed",
-      params: {
-        threadId,
-        turn: { id: "compact-turn-1", status: "completed", items: [] },
-      },
-    });
+    emitTurn(threadId, { id: "compact-turn-1", status: "completed", items: [] });
   };
   const request = vi.fn<CodexAppServerClient["request"]>(
     async (method: string, params?: unknown) => {
       const threadId = (params as { threadId?: string } | undefined)?.threadId;
       if (method === "thread/resume" && threadId) {
         subscribedThreadIds.add(threadId);
-        return {
-          thread: {
-            id: threadId,
-            sessionId: "session-1",
-            forkedFromId: null,
-            preview: "",
-            ephemeral: false,
-            modelProvider: "openai",
-            createdAt: 1,
-            updatedAt: 1,
-            status: { type: "idle" },
-            path: null,
-            cwd: tempDir,
-            projectId: null,
-            cliVersion: CODEX_APP_SERVER_VERSION,
-            source: "unknown",
-            agentNickname: null,
-            agentRole: null,
-            gitInfo: null,
-            name: null,
-            turns: [],
-          },
-          model: "gpt-5.5-codex",
-          modelProvider: "openai",
-          serviceTier: null,
-          cwd: tempDir,
-          instructionSources: [],
-          approvalPolicy: "never",
-          approvalsReviewer: "user",
-          sandbox: { type: "dangerFullAccess" },
-          permissionProfile: null,
-          reasoningEffort: null,
-        };
+        return { ...threadStartResult(threadId, tempDir), model: "gpt-5.5-codex" };
       }
       if (method === "thread/unsubscribe" && threadId) {
         subscribedThreadIds.delete(threadId);
@@ -506,15 +440,9 @@ export function createFakeCodexCompactionClient(
         const turnId =
           observed?.requestIndex === requestIndex ? observed.turnId : "test-cleanup-turn";
         if (observed?.requestIndex !== requestIndex) {
-          emit({
-            method: "turn/started",
-            params: { threadId, turn: { id: turnId, status: "inProgress" } },
-          });
+          emitTurn(threadId, { id: turnId, status: "inProgress" });
         }
-        emit({
-          method: "turn/completed",
-          params: { threadId, turn: { id: turnId, status: "interrupted", items: [] } },
-        });
+        emitTurn(threadId, { id: turnId, status: "interrupted", items: [] });
       }
     },
   });

@@ -42,12 +42,15 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
+import { createCodexTestModel } from "./test-support.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
 import { promptSnapshot } from "./user-prompt-message.js";
+
+type Invalidate = (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>;
 
 export async function createCanonicalForkFixture(params: {
   runtime: PluginRuntime;
@@ -71,7 +74,7 @@ export async function createCanonicalForkFixture(params: {
     capabilities: EmbeddedRunAttemptParamsV2["hostCapabilities"];
     close: () => void | Promise<void>;
     abortController: AbortController;
-    invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>;
+    invalidate: Invalidate;
     runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
     userTurnTranscriptRecorder: EmbeddedRunAttemptParamsV2["userTurnTranscriptRecorder"];
   }>;
@@ -93,7 +96,7 @@ export async function createCanonicalForkFixture(params: {
     appServer: {
       command: process.execPath,
       args: ["app-server"],
-      approvalsReviewer: "user" as const,
+      approvalsReviewer: "user",
     },
   };
   const controls = createCodexSessionCatalogControl({
@@ -163,12 +166,10 @@ export async function createCanonicalForkFixture(params: {
       senderId?: string;
       workerOwned?: boolean;
       developerInstructions?: string;
-      beforeStartup?: (
-        invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>,
-      ) => Promise<void> | void;
+      beforeStartup?: (invalidate: Invalidate) => Promise<void> | void;
       inspectTools?: (tools: {
         bridge: Awaited<ReturnType<typeof prepareCodexAttemptTools>>["toolBridge"];
-        invalidate: (reason: "closed" | "aborted" | "replaced" | "claim") => Promise<void>;
+        invalidate: Invalidate;
       }) => Promise<void>;
     } = {},
   ) => {
@@ -188,13 +189,9 @@ export async function createCanonicalForkFixture(params: {
     try {
       return await host.runWithScope(async () => {
         const model = {
+          ...createCodexTestModel("openai", ["text", "image"]),
           id: "gpt-5.6-luna",
           name: "gpt-5.6-luna",
-          provider: "openai",
-          api: "openai-chatgpt-responses",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: undefined,
           maxTokens: undefined,
         };
@@ -231,29 +228,37 @@ export async function createCanonicalForkFixture(params: {
           cfg: config,
           toolsEnabled: true,
         });
+        const connectionContext = {
+          agentDir,
+          pluginConfig,
+          appServer: home.appServer,
+          effectiveWorkspace: workspaceDir,
+          effectiveCwd: workspaceDir,
+          sessionAgentId: "main",
+          attemptClientFactory: getLeasedSharedCodexAppServerClient,
+        };
+        const nativeSurface = {
+          nativeToolSurfaceEnabled: true,
+          nativeProviderWebSearchSupport: "supported" as const,
+          bundleMcpThreadConfig,
+        };
         // SAFETY: fixture connection facts replace native/auth startup only.
         // Tool factories, admitted composition, and schema projection remain real.
         const toolRuntime = {
           connection: {
+            ...connectionContext,
             assertCurrent: host.capabilities.assertActive,
             params: attempt,
-            attemptClientFactory: getLeasedSharedCodexAppServerClient,
             startupClientAuthProfileId: null,
             preDynamicStartupStages: createStageTimingTracker(),
             mutable: { startupBinding },
             resolvedWorkspace: workspaceDir,
-            effectiveWorkspace: workspaceDir,
-            effectiveCwd: workspaceDir,
             sandboxSessionKey: key,
             sandbox: null,
             runAbortController,
-            sessionAgentId: "main",
             policyAgentId: "main",
             contextSessionKey: key,
-            pluginConfig,
             profilerEnabled: false,
-            agentDir,
-            appServer: home.appServer,
             usesSupervisionConnection: true,
           },
           runtimeParams: attempt,
@@ -263,40 +268,26 @@ export async function createCanonicalForkFixture(params: {
             runtimeSessionKey: key,
             sandbox: null,
           }),
-          nativeToolSurfaceEnabled: true,
-          nativeProviderWebSearchSupport: "supported",
-          bundleMcpThreadConfig,
+          ...nativeSurface,
         } as unknown as CodexAttemptRuntime;
         const preparedTools = await prepareCodexAttemptTools(toolRuntime);
         let startup: Awaited<ReturnType<typeof startCodexAttemptThread>> | undefined;
         try {
           await options.beforeStartup?.(host.invalidate);
           startup = await startCodexAttemptThread({
-            attemptClientFactory: getLeasedSharedCodexAppServerClient,
+            ...connectionContext,
+            ...nativeSurface,
+            config,
             bindingStore,
             buildAttemptParams: () => attempt,
-            pluginConfig,
             computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig }),
-            clientOptions: {
-              authProfileId: null,
-              authBindingFingerprint: undefined,
-              authRequirement: undefined,
-            },
+            clientOptions: { authProfileId: null },
             startupAuthAccountCacheKey: undefined,
             startupEnvApiKeyCacheKey: undefined,
-            sessionAgentId: "main",
-            agentDir,
-            config,
-            effectiveWorkspace: workspaceDir,
-            effectiveCwd: workspaceDir,
-            appServer: home.appServer,
             dynamicTools: preparedTools.toolBridge.specs,
-            nativeToolSurfaceEnabled: true,
-            nativeProviderWebSearchSupport: "supported",
             webSearchAllowed: preparedTools.toolState.webSearchAllowed,
             persistentWebSearchAllowed: preparedTools.toolState.persistentWebSearchAllowed,
             developerInstructions: options.developerInstructions,
-            bundleMcpThreadConfig,
             sandboxExecServerEnabled: false,
             sandbox: null,
             contextEngineProjection: undefined,
