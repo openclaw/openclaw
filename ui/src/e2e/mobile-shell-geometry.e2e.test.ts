@@ -56,42 +56,50 @@ const scenarios = [
   },
 ];
 
-async function activateStandaloneStyles(page: Page, largeUnitDifference = 0) {
+const saveJson = (artifacts: string, name: string, value: unknown) =>
+  writeFile(path.join(artifacts, name + ".json"), JSON.stringify(value, null, 2));
+const screenshot = (page: Page, artifacts: string, name: string) =>
+  page.screenshot({ path: path.join(artifacts, name + ".png"), animations: "disabled" });
+
+async function activateStandaloneStyles(page: Page, largeUnitDifference = 0, shortCanvas = false) {
   // Fault injection, not an iPhone measurement: CSS viewport units may exceed
   // the native-scale visible viewport even when layoutHeight == visualHeight.
   // The previous short-layout fixture assumed the extra lvh region was visible;
   // neither viewport API (nor a physical screen size) establishes that premise.
-  await page.evaluate(async (difference) => {
-    const visit = (rules: CSSRuleList) => {
-      for (const rule of rules) {
-        if (rule instanceof CSSMediaRule) {
-          rule.media.mediaText = rule.conditionText.replaceAll(
-            "(display-mode: standalone)",
-            "(min-width: 0px)",
-          );
-        }
-        if (difference && rule instanceof CSSStyleRule) {
-          const base = rule.style.getPropertyValue("--shell-viewport-base");
-          if (base === "100lvh" || base === "100dvh") {
-            rule.style.setProperty(
-              "--shell-viewport-base",
-              "calc(" + base + " + " + difference + "px)",
+  await page.evaluate(
+    async ({ difference, shortCanvas: short }) => {
+      const visit = (rules: CSSRuleList) => {
+        for (const rule of rules) {
+          if (rule instanceof CSSMediaRule) {
+            rule.media.mediaText = rule.conditionText.replaceAll(
+              "(display-mode: standalone)",
+              "(min-width: 0px)",
             );
           }
+          if ((difference || short) && rule instanceof CSSStyleRule) {
+            const base = rule.style.getPropertyValue("--shell-viewport-base");
+            if (base === "100lvh" || base === "100dvh") {
+              rule.style.setProperty(
+                "--shell-viewport-base",
+                `calc(${base} ${short && base === "100dvh" ? "-" : "+"} ${short ? 62 : difference}px)`,
+              );
+            }
+          }
+          if (rule instanceof CSSGroupingRule) {
+            visit(rule.cssRules);
+          }
         }
-        if (rule instanceof CSSGroupingRule) {
-          visit(rule.cssRules);
-        }
+      };
+      for (const sheet of document.styleSheets) {
+        visit(sheet.cssRules);
       }
-    };
-    for (const sheet of document.styleSheets) {
-      visit(sheet.cssRules);
-    }
-    window.dispatchEvent(new Event("resize"));
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    });
-  }, largeUnitDifference);
+      window.dispatchEvent(new Event("resize"));
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    },
+    { difference: largeUnitDifference, shortCanvas },
+  );
 }
 
 async function expectReachableAction(
@@ -200,10 +208,7 @@ async function expectEditableDraft(
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
     .toBe(await textarea.evaluate((editor) => editor.scrollHeight));
   const last = await measure();
-  await page.screenshot({
-    path: path.join(artifacts, "short-editor-typing.png"),
-    animations: "disabled",
-  });
+  await screenshot(page, artifacts, "short-editor-typing");
 
   expect(last.scrollTop).toBeGreaterThan(0);
   expect(last.lineTop).toBeGreaterThanOrEqual(Math.max(last.top, last.conversationTop));
@@ -218,10 +223,7 @@ async function expectEditableDraft(
   expect(first.lineTop).toBeGreaterThanOrEqual(Math.max(first.top, first.conversationTop));
   expect(first.lineBottom).toBeLessThanOrEqual(Math.min(first.bottom, visibleBottom));
   await expect(textarea).toHaveValue("Edited First line\nSecond line\nThird line\nLast line typed");
-  await writeFile(
-    path.join(artifacts, "short-editor.json"),
-    JSON.stringify({ before, last, first }, null, 2),
-  );
+  await saveJson(artifacts, "short-editor", { before, last, first });
   await textarea.fill("");
 }
 
@@ -295,29 +297,7 @@ suite.define(() => {
           await installMockGateway(page);
           await page.goto(suite.server.baseUrl + "new");
           await expect(page.locator(".new-session-page__message")).toBeVisible();
-          await activateStandaloneStyles(page);
-          await page.evaluate(() => {
-            const visit = (rules: CSSRuleList) => {
-              for (const rule of rules) {
-                if (rule instanceof CSSStyleRule) {
-                  const base = rule.style.getPropertyValue("--shell-viewport-base");
-                  if (base === "100dvh") {
-                    rule.style.setProperty("--shell-viewport-base", "calc(100dvh - 62px)");
-                  }
-                  if (base === "100lvh") {
-                    rule.style.setProperty("--shell-viewport-base", "calc(100lvh + 62px)");
-                  }
-                }
-                if (rule instanceof CSSGroupingRule) {
-                  visit(rule.cssRules);
-                }
-              }
-            };
-            for (const sheet of document.styleSheets) {
-              visit(sheet.cssRules);
-            }
-            window.dispatchEvent(new Event("resize"));
-          });
+          await activateStandaloneStyles(page, 0, true);
           const frame = await geometry(page);
           expect(frame.shell.bottom).toBe(812);
           expect(frame.composer.bottom).toBeLessThanOrEqual(812);
@@ -372,7 +352,7 @@ suite.define(() => {
           await activateStandaloneStyles(page, scenario.largeUnit ? top : 0);
         }
         const fresh = await geometry(page);
-        await page.screenshot({ path: path.join(artifacts, "new.png"), animations: "disabled" });
+        await screenshot(page, artifacts, "new");
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         await expect(textarea).toBeVisible();
@@ -402,14 +382,11 @@ suite.define(() => {
         await writeFile(path.join(artifacts, "details-message-actions.png"), hoverFrame.png);
         const detailsBox = (await details.boundingBox())!;
         const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
-        await writeFile(
-          path.join(artifacts, "details-geometry.json"),
-          JSON.stringify({
-            details: detailsBox,
-            bubble: transcriptBoxes[0],
-            actions: transcriptBoxes[1],
-          }),
-        );
+        await saveJson(artifacts, "details-geometry", {
+          details: detailsBox,
+          bubble: transcriptBoxes[0],
+          actions: transcriptBoxes[1],
+        });
         for (const box of transcriptBoxes) {
           expect(
             box &&
@@ -442,26 +419,33 @@ suite.define(() => {
         });
         await openDetailsPullRequests(page);
         await expect(page.locator('.chat-pr[data-state="merged"]').first()).toBeVisible();
-        await gateway.setMethodResponse("progressCard.get", {
-          card: {
+        const setProgress = async (
+          revision: number,
+          markdown: string,
+          steps: Array<{ step: string; status: string }>,
+        ) => {
+          await gateway.setMethodResponse("progressCard.get", {
+            card: {
+              sessionKey: "agent:main:main",
+              revision,
+              updatedAt: 1_789_923_001_000,
+              markdown,
+              steps,
+            },
+          });
+          await gateway.emitGatewayEvent("progressCard.changed", {
             sessionKey: "agent:main:main",
-            revision: 1,
-            updatedAt: 1_789_923_001_000,
-            markdown: "Mobile layout checks completed.",
-            steps: [
-              { step: "Inspect the layout", status: "completed" },
-              { step: "Verify the controls", status: "completed" },
-              { step: "Review the result", status: "completed" },
-            ],
-          },
-        });
-        await gateway.emitGatewayEvent("progressCard.changed", {
-          sessionKey: "agent:main:main",
-          revision: 1,
-        });
+            revision,
+          });
+        };
+        await setProgress(1, "Mobile layout checks completed.", [
+          { step: "Inspect the layout", status: "completed" },
+          { step: "Verify the controls", status: "completed" },
+          { step: "Review the result", status: "completed" },
+        ]);
         await expect(page.locator('[data-progress-card-placement="details"]')).toBeVisible();
         const chat = await geometry(page);
-        await page.screenshot({ path: path.join(artifacts, "chat.png"), animations: "disabled" });
+        await screenshot(page, artifacts, "chat");
         await textarea.fill("Please continue the layout check.");
         const sendPoint = await expectReachableAction(
           page,
@@ -479,36 +463,18 @@ suite.define(() => {
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
         const generating = await geometry(page);
-        await page.screenshot({
-          path: path.join(artifacts, "generating.png"),
-          animations: "disabled",
-        });
-        await gateway.setMethodResponse("progressCard.get", {
-          card: {
-            sessionKey: "agent:main:main",
-            revision: 2,
-            updatedAt: 1_789_923_001_000,
-            markdown: "Checking the usable mobile canvas.",
-            steps: [
-              { step: "Inspect the layout", status: "completed" },
-              { step: "Verify the controls", status: "in_progress" },
-            ],
-          },
-        });
-        await gateway.emitGatewayEvent("progressCard.changed", {
-          sessionKey: "agent:main:main",
-          revision: 2,
-        });
+        await screenshot(page, artifacts, "generating");
+        await setProgress(2, "Checking the usable mobile canvas.", [
+          { step: "Inspect the layout", status: "completed" },
+          { step: "Verify the controls", status: "in_progress" },
+        ]);
         const progress = page.locator('[data-progress-card-placement="details"]');
         // Sending is an outside click; updates must not reopen Details.
         await expect(progress).toBeHidden();
         await openChatDetails(page);
         await expect(progress).toBeVisible();
         const withProgress = await geometry(page);
-        await page.screenshot({
-          path: path.join(artifacts, "progress.png"),
-          animations: "disabled",
-        });
+        await screenshot(page, artifacts, "progress");
         await closeChatDetails(page);
         const keyboard = [];
         if (mobile) {
@@ -531,10 +497,7 @@ suite.define(() => {
             await visualViewport(page, state.height, state.offsetTop, state.scale);
             keyboard.push({ ...state, geometry: await geometry(page) });
             if (state.name === "keyboard-open" && width > height) {
-              await page.screenshot({
-                path: path.join(artifacts, "short-editor.png"),
-                animations: "disabled",
-              });
+              await screenshot(page, artifacts, "short-editor");
               await expectEditableDraft(page, state.height + state.offsetTop, artifacts, mobile);
             }
             if (state.scale === 1) {
@@ -603,21 +566,19 @@ suite.define(() => {
           await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
           await expect(page.locator(".sidebar-session-filter-panel")).toBeVisible();
           await readSurface(".sidebar-session-filter-panel", "filter-sheet");
-          await page.screenshot({
-            path: path.join(artifacts, "drawer-filter.png"),
-            animations: "disabled",
-          });
+          await screenshot(page, artifacts, "drawer-filter");
           await page.keyboard.press("Escape");
           await page.keyboard.press("Escape");
         }
-        await writeFile(
-          path.join(artifacts, "geometry.json"),
-          JSON.stringify(
-            { scenario, fresh, chat, generating, withProgress, keyboard, surfaces },
-            null,
-            2,
-          ),
-        );
+        await saveJson(artifacts, "geometry", {
+          scenario,
+          fresh,
+          chat,
+          generating,
+          withProgress,
+          keyboard,
+          surfaces,
+        });
         // Collect captures before the regression assertion so the unfixed entry
         // point is inspectable in exactly the same route, data and viewport.
         expect(chat.layoutHeight).toBe(height);

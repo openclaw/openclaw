@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -19,6 +19,43 @@ const mobile = {
   hasTouch: true,
   colorScheme: "dark" as const,
 };
+const currentSession = "agent:research:current";
+const draft = "Help me plan the next release.";
+const composerSelector = ".new-session-page__message";
+
+function artifactDir(name: string) {
+  return process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? createControlUiE2eArtifactDir(name) : null;
+}
+
+async function capture(
+  page: Page,
+  dir: string | null,
+  name: string,
+  content: Locator[] = [
+    page.locator(".chat-pane__header:visible, .header-new-session:visible").first(),
+  ],
+  elementOnly = false,
+) {
+  if (!dir) {
+    return;
+  }
+  const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), content, {
+    animations: "disabled",
+    ...(elementOnly ? { elements: content } : {}),
+  });
+  await writeFile(path.join(dir, name + ".png"), elementOnly ? frame.elements[0]!.png : frame.png);
+}
+
+async function openComposer(page: Page, route: "chat" | "new") {
+  await page.goto(
+    route === "chat"
+      ? controlUiSessionUrl(suite.server.baseUrl, currentSession)
+      : suite.server.baseUrl + "new?agent=research",
+  );
+  await page
+    .locator(route === "chat" ? ".agent-chat__composer-combobox textarea" : composerSelector)
+    .waitFor();
+}
 
 async function installScenario(page: Page, operatorScopes?: string[], team = false) {
   if (team) {
@@ -32,27 +69,25 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
     assistantAgentId: "research",
     assistantName: "Atlas",
     operatorScopes,
-    ...(team
+    methodResponses: team
       ? {
-          methodResponses: {
-            "agents.list": {
-              defaultId: "research",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [
-                { id: "research", name: "Atlas", model: { primary: "demo/demo-model" } },
-                { id: "writer", name: "Scout", model: { primary: "demo/demo-model" } },
-              ],
-            },
+          "agents.list": {
+            defaultId: "research",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [
+              { id: "research", name: "Atlas", model: { primary: "demo/demo-model" } },
+              { id: "writer", name: "Scout", model: { primary: "demo/demo-model" } },
+            ],
           },
         }
-      : {}),
+      : undefined,
     agentModel: "demo/demo-model",
     models: [{ id: "demo-model", provider: "demo", name: "Demo model", contextWindow: 32000 }],
-    sessionKey: "agent:research:current",
+    sessionKey: currentSession,
     sessions: [
       {
-        key: "agent:research:current",
+        key: currentSession,
         kind: "direct",
         label: "Launch planning",
         model: "demo-model",
@@ -61,17 +96,12 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
       },
     ],
     historyMessages: [
-      { role: "user", content: [{ type: "text", text: "Let's review the launch checklist." }] },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "The release notes and design review are ready. What would you like to work on next?",
-          },
-        ],
-      },
-    ],
+      ["user", "Let's review the launch checklist."],
+      [
+        "assistant",
+        "The release notes and design review are ready. What would you like to work on next?",
+      ],
+    ].map(([role, text]) => ({ role, content: [{ type: "text", text }] })),
   });
 }
 
@@ -79,26 +109,10 @@ suite.define(() => {
   it("keeps creation in chat navigation and non-chat page headers", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page);
-      const dir =
-        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? createControlUiE2eArtifactDir("mobile-new-conversation-after")
-          : null;
-      const capture = async (name: string) => {
-        if (!dir) {
-          return;
-        }
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(dir, name + ".png"), frame.png);
-      };
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      const dir = artifactDir("mobile-new-conversation-after");
+      await openComposer(page, "chat");
       expect(await page.locator(".header-new-session").count()).toBe(0);
-      await capture("chat");
+      await capture(page, dir, "chat");
       await page.locator(".chat-pane__nav-toggle").tap();
       await waitForMobileSidebarDrawerOpen(page);
       const create = page.getByRole("link", { name: "New conversation", exact: true });
@@ -112,9 +126,9 @@ suite.define(() => {
       expect(await page.locator(".sidebar-rail .sidebar-new-session").isVisible()).toBe(true);
       await create.tap();
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
-      await page.locator(".new-session-page__message").waitFor();
+      await page.locator(composerSelector).waitFor();
       expect(await page.locator(".topbar .header-new-session").count()).toBe(1);
-      await capture("topbar");
+      await capture(page, dir, "topbar");
       await page.goto(suite.server.baseUrl + "agents");
       await waitForControlUiRoute(page, { routeId: "agents-home" });
       expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
@@ -126,18 +140,13 @@ suite.define(() => {
       expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe("/new?agent=research");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       if (dir) {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await openComposer(page, "chat");
         await page.emulateMedia({ colorScheme: "light" });
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-        await capture("chat-light");
+        await capture(page, dir, "chat-light");
         await page.setViewportSize({ width: 1280, height: 800 });
         const sidebar = page.locator("openclaw-app-sidebar .sidebar");
-        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [sidebar], {
-          animations: "disabled",
-          elements: [sidebar],
-        });
-        await writeFile(path.join(dir, "rail-light.png"), frame.elements[0]!.png);
+        await capture(page, dir, "rail-light", [sidebar], true);
       }
     });
   });
@@ -146,15 +155,14 @@ suite.define(() => {
     await suite.withPage(mobile, async ({ page }) => {
       await installScenario(page, undefined, true);
       await page.goto(suite.server.baseUrl + "new?agent=research");
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill("Help me plan the next release.");
+      const composer = page.locator(composerSelector);
+      await composer.fill(draft);
       const identity = page.locator(".new-session-page .agent-chat__welcome-identity");
       const triggers = page.locator(".new-session-page__triggers");
       const surface = page.locator(".new-session-page__composer");
-      const dir =
-        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? createControlUiE2eArtifactDir("mobile-composer-layout")
-          : null;
+      const agentLabel = page.locator(".new-session-page__select--agent .agent-select__label");
+      const dir = artifactDir("mobile-composer-layout");
+      const content = [identity, triggers, surface];
       for (const state of [
         { name: "portrait", width: 390, height: 844, theme: "dark" },
         { name: "wide-phone", width: 430, height: 932, theme: "light" },
@@ -168,23 +176,16 @@ suite.define(() => {
         await expect
           .poll(() => page.locator("html").getAttribute("data-theme-mode"))
           .toBe(state.theme);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [identity, triggers, surface],
-          {
-            animations: "disabled",
-          },
-        );
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), content, {
+          animations: "disabled",
+        });
         if (dir) {
           await writeFile(path.join(dir, state.name + ".png"), frame.png);
         }
         const heroBox = await identity.boundingBox();
         const targetBox = await triggers.boundingBox();
         const composerBox = await surface.boundingBox();
-        expect(heroBox).not.toBeNull();
-        expect(targetBox).not.toBeNull();
-        expect(composerBox).not.toBeNull();
+        expect([heroBox, targetBox, composerBox]).not.toContain(null);
         expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeGreaterThanOrEqual(0);
         expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeLessThanOrEqual(24);
         expect(heroBox!.y).toBeGreaterThanOrEqual(58);
@@ -193,14 +194,12 @@ suite.define(() => {
         expect(Math.abs(compositionCenter - contentCenter)).toBeLessThanOrEqual(48);
         const local = page.locator("#new-session-where-trigger");
         expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
-        expect(
-          await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
-        ).toBe(true);
+        expect(await agentLabel.isVisible()).toBe(true);
         expect(composerBox!.height).toBeLessThanOrEqual(150);
         expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(state.height);
         expect(composerBox!.x).toBeGreaterThanOrEqual(0);
         expect(composerBox!.x + composerBox!.width).toBeLessThanOrEqual(state.width);
-        expect(await composer.inputValue()).toBe("Help me plan the next release.");
+        expect(await composer.inputValue()).toBe(draft);
         expect(
           await page
             .locator(".new-session-page__scroll")
@@ -208,21 +207,13 @@ suite.define(() => {
         ).toBe(true);
       }
       await page.setViewportSize({ width: 390, height: 844 });
-      const capture = async (name: string, content = [identity, triggers, surface]) => {
-        if (dir) {
-          const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), content, {
-            animations: "disabled",
-          });
-          await writeFile(path.join(dir, name + ".png"), frame.png);
-        }
-      };
       await composer.fill("");
       expect(await page.locator(".new-session-page__start-submit").isDisabled()).toBe(true);
-      await capture("empty");
+      await capture(page, dir, "empty", content);
       await page.locator("#new-session-where-trigger").tap();
       const destination = page.locator("#new-session-where-popover");
       await destination.waitFor();
-      await capture("menu", [destination]);
+      await capture(page, dir, "menu", [destination]);
       const destinationBox = await destination.boundingBox();
       expect(destinationBox!.x).toBeGreaterThanOrEqual(0);
       expect(destinationBox!.x + destinationBox!.width).toBeLessThanOrEqual(390);
@@ -232,46 +223,19 @@ suite.define(() => {
       expect(
         await composer.evaluate((element) => element.scrollHeight > element.clientHeight),
       ).toBe(true);
-      await capture("long-prompt");
+      await capture(page, dir, "long-prompt", content);
     });
   });
 
   it.each(["chat", "new"] as const)("opens the team composer directly from %s", async (route) => {
     await suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page, undefined, true);
-      const draft = "Help me plan the next release.";
-      await page.goto(
-        route === "chat"
-          ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
-          : suite.server.baseUrl + "new?agent=research",
-      );
-      await page
-        .locator(
-          route === "chat"
-            ? ".agent-chat__composer-combobox textarea"
-            : ".new-session-page__message",
-        )
-        .waitFor();
+      await openComposer(page, route);
       if (route === "new") {
-        await page.locator(".new-session-page__message").fill(draft);
+        await page.locator(composerSelector).fill(draft);
       }
-      const dir =
-        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? createControlUiE2eArtifactDir("mobile-team-" + route)
-          : null;
-      const capture = async (name: string) => {
-        if (!dir) {
-          return;
-        }
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [page.locator(".chat-pane__header:visible, .header-new-session:visible").first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(dir, name + ".png"), frame.png);
-      };
-      await capture("closed");
+      const dir = artifactDir("mobile-team-" + route);
+      await capture(page, dir, "closed");
       const action = page.getByRole("link", { name: "New conversation", exact: true });
       expect(await action.count()).toBe(route === "chat" ? 0 : 1);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
@@ -290,7 +254,7 @@ suite.define(() => {
       }
       await action.tap();
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
-      const composer = page.locator(".new-session-page__message");
+      const composer = page.locator(composerSelector);
       await composer.waitFor();
       if (route === "chat") {
         await expect
@@ -300,7 +264,7 @@ suite.define(() => {
       }
       // Reopening the current composer keeps its draft instead of resetting it.
       expect(await composer.inputValue()).toBe(draft);
-      await capture("composer");
+      await capture(page, dir, "composer");
       const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await picker.locator(".agent-select__trigger").tap();
       await picker.getByRole("menuitemradio", { name: "Scout", exact: true }).tap();
@@ -324,7 +288,7 @@ suite.define(() => {
         );
         await page.goto(
           state === "denied"
-            ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
+            ? controlUiSessionUrl(suite.server.baseUrl, currentSession)
             : suite.server.baseUrl + "new?agent=research",
         );
         if (state === "denied") {

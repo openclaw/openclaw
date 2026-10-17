@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -20,6 +21,59 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite(true);
+const menuItem = (root: Page | Locator, name: string) =>
+  root.getByRole("menuitem", { name, exact: true });
+const noNestedMenus = async (root: Page | Locator) =>
+  expect(await root.locator(".session-menu__panel [role='menu']").count()).toBe(0);
+
+async function openDrawer(page: Page, wait = false) {
+  const toggle = page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
+  if (wait) {
+    await toggle.waitFor({ state: "visible", timeout: 10_000 });
+  }
+  await toggle.click();
+  await waitForMobileSidebarDrawerOpen(page);
+}
+
+async function captureFrame(
+  page: Page,
+  name: string,
+  highlights: Locator[],
+  target = ".shell",
+  crop = false,
+  alwaysCapture = false,
+) {
+  const enabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+  if (!enabled && !alwaysCapture) {
+    return;
+  }
+  const frame = await takeControlUiScreenshotFrame(page, page.locator(target), highlights, {
+    animations: "disabled",
+    ...(crop ? { elements: [page.locator(target)] } : {}),
+  });
+  if (enabled) {
+    await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
+    if (crop) {
+      await writeFile(path.join(suite.artifactDir, `${name}-crop.png`), frame.elements[0]!.png);
+    }
+  }
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+function expectHorizontalBounds(inner: Pick<Box, "x" | "width">, outer: Pick<Box, "x" | "width">) {
+  expect(inner.x).toBeGreaterThanOrEqual(outer.x);
+  expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width);
+}
+
+function expectVerticalBounds(inner: Pick<Box, "y" | "height">, outer: Pick<Box, "y" | "height">) {
+  expect(inner.y).toBeGreaterThanOrEqual(outer.y);
+  expect(inner.y + inner.height).toBeLessThanOrEqual(outer.y + outer.height);
+}
+
+function expectVerticalOverlap(first: Box, second: Box) {
+  expect(first.y).toBeLessThanOrEqual(second.y + second.height);
+  expect(first.y + first.height).toBeGreaterThanOrEqual(second.y);
+}
 
 suite.define(() => {
   it.each(["coarse", "fine"] as const)(
@@ -77,11 +131,7 @@ suite.define(() => {
             },
           );
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, groupedKey));
-          await page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first()
-            .click();
-          await waitForMobileSidebarDrawerOpen(page);
+          await openDrawer(page);
           const rail = page.locator(".sidebar-rail");
           const pinned = rail.locator('[data-sidebar-entry="session:agent:main:release-plan"]');
           const plugin = rail.locator('[data-sidebar-entry="plugin:reports/reports"]');
@@ -102,22 +152,13 @@ suite.define(() => {
           expect(await plugin.count()).toBe(1);
           await rail.locator('[data-navigation-view="sessions"]').click();
           await group.locator(".sidebar-recent-session").waitFor();
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".shell-nav"),
-              [pinned, plugin, group],
-              { animations: "disabled", elements: [page.locator(".shell-nav")] },
-            );
-            await writeFile(
-              path.join(suite.artifactDir, "sidebar-spacing-" + pointer + ".png"),
-              frame.png,
-            );
-            await writeFile(
-              path.join(suite.artifactDir, "sidebar-spacing-" + pointer + "-crop.png"),
-              frame.elements[0]!.png,
-            );
-          }
+          await captureFrame(
+            page,
+            `sidebar-spacing-${pointer}`,
+            [pinned, plugin, group],
+            ".shell-nav",
+            true,
+          );
           if (pointer === "coarse") {
             await page.clock.install();
           }
@@ -136,10 +177,8 @@ suite.define(() => {
               expect(glyph).not.toBeNull();
               expect(button!.width).toBeGreaterThanOrEqual(32);
               expect(button!.height).toBeGreaterThanOrEqual(32);
-              expect(glyph!.x).toBeGreaterThanOrEqual(button!.x);
-              expect(glyph!.x + glyph!.width).toBeLessThanOrEqual(button!.x + button!.width);
-              expect(glyph!.y).toBeGreaterThanOrEqual(button!.y);
-              expect(glyph!.y + glyph!.height).toBeLessThanOrEqual(button!.y + button!.height);
+              expectHorizontalBounds(glyph!, button!);
+              expectVerticalBounds(glyph!, button!);
               if (width === 390) {
                 const previous = await row.evaluate((element) =>
                   element.previousElementSibling?.getAttribute("data-sidebar-entry"),
@@ -156,7 +195,7 @@ suite.define(() => {
                   const initialUrl = page.url();
                   await shortcut.dispatchEvent("pointerdown", touch);
                   await page.clock.fastForward(500);
-                  await page.getByRole("menuitem", { name: "Move up", exact: true }).waitFor();
+                  await menuItem(page, "Move up").waitFor();
                   await shortcut.dispatchEvent("pointerup", touch);
                   await shortcut.dispatchEvent("click", { ...touch, detail: 1 });
                   expect(page.url()).toBe(initialUrl);
@@ -165,7 +204,7 @@ suite.define(() => {
                   await shortcut.focus();
                   await page.keyboard.press("Shift+F10");
                 }
-                const move = page.getByRole("menuitem", { name: "Move up", exact: true });
+                const move = menuItem(page, "Move up");
                 if (pointer === "coarse") {
                   await move.tap();
                 } else {
@@ -183,18 +222,14 @@ suite.define(() => {
             const sessionBox = await session.boundingBox();
             expect(menuBox).not.toBeNull();
             expect(sessionBox).not.toBeNull();
-            expect(menuBox!.x).toBeGreaterThanOrEqual(sessionBox!.x);
-            expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(
-              sessionBox!.x + sessionBox!.width,
-            );
+            expectHorizontalBounds(menuBox!, sessionBox!);
             expect(menuBox!.width).toBe(44);
             const sessionTitle = await session
               .locator(".sidebar-recent-session__name")
               .boundingBox();
             expect(sessionTitle).not.toBeNull();
             expect(sessionTitle!.x + sessionTitle!.width).toBeLessThanOrEqual(menuBox!.x);
-            expect(menuBox!.y).toBeLessThanOrEqual(sessionTitle!.y + sessionTitle!.height);
-            expect(menuBox!.y + menuBox!.height).toBeGreaterThanOrEqual(sessionTitle!.y);
+            expectVerticalOverlap(menuBox!, sessionTitle!);
             expect(sessionBox!.height).toBeCloseTo(44, 1);
             for (const colored of [session, group.locator(".sidebar-recent-session")]) {
               const clearance = await colored.evaluate((row) => {
@@ -272,12 +307,7 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const drawerToggle = page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first();
-        await drawerToggle.waitFor({ state: "visible", timeout: 10_000 });
-        await drawerToggle.click();
-        await waitForMobileSidebarDrawerOpen(page);
+        await openDrawer(page, true);
 
         const row = page.locator(`[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });
@@ -289,22 +319,7 @@ suite.define(() => {
         const titleWidth = () => title.evaluate((element) => element.getBoundingClientRect().width);
         const restingWidth = await titleWidth();
         await page.mouse.move(389, 649);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell-nav"),
-            [title],
-            {
-              animations: "disabled",
-              elements: [page.locator(".shell-nav")],
-            },
-          );
-          await writeFile(path.join(suite.artifactDir, `mobile-title-${pointer}.png`), frame.png);
-          await writeFile(
-            path.join(suite.artifactDir, `mobile-title-${pointer}-crop.png`),
-            frame.elements[0]!.png,
-          );
-        }
+        await captureFrame(page, `mobile-title-${pointer}`, [title], ".shell-nav", true);
         // Keep the drawer increase modest; reclaim reading space inside its rows.
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
@@ -342,8 +357,7 @@ suite.define(() => {
         expect(buttonBox.height).toBeCloseTo(44, 4);
         expect(titleBox.x).toBeGreaterThanOrEqual(rowBox.x);
         expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(buttonBox.x);
-        expect(buttonBox.y).toBeLessThanOrEqual(titleBox.y + titleBox.height);
-        expect(buttonBox.y + buttonBox.height).toBeGreaterThanOrEqual(titleBox.y);
+        expectVerticalOverlap(buttonBox, titleBox);
         // Empty metadata must not reserve a second row just for the menu.
         expect((await plainRow.boundingBox())!.height).toBeCloseTo(44, 1);
         expect(
@@ -353,8 +367,7 @@ suite.define(() => {
             mask: getComputedStyle(element).maskImage,
           })),
         ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
-        expect(buttonBox.y).toBeGreaterThanOrEqual(rowBox.y);
-        expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
+        expectVerticalBounds(buttonBox, rowBox);
         if (pointer === "coarse") {
           await menuButton.tap();
         } else {
@@ -363,28 +376,22 @@ suite.define(() => {
 
         const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });
         await menu.waitFor({ state: "visible" });
-        await page.getByRole("menuitem", { name: "Pin session", exact: true }).waitFor();
-        await page.getByRole("menuitem", { name: "Archive session", exact: true }).waitFor();
+        await menuItem(page, "Pin session").waitFor();
+        await menuItem(page, "Archive session").waitFor();
         await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-root.png");
 
-        expect(
-          await page.locator("openclaw-session-menu .session-menu__panel [role='menu']").count(),
-        ).toBe(0);
+        await noNestedMenus(page.locator("openclaw-session-menu"));
         await page.getByRole("menuitem", { name: "Move to group" }).click();
         const back = page.getByRole("menuitem", { name: "Back" });
         await back.waitFor({ state: "visible" });
         await page.getByRole("menuitemradio", { name: "Operations" }).waitFor({ state: "visible" });
-        expect(
-          await page.locator("openclaw-session-menu .session-menu__panel [role='menu']").count(),
-        ).toBe(0);
+        await noNestedMenus(page.locator("openclaw-session-menu"));
         const menuBox = await menu.boundingBox();
         if (!menuBox) {
           throw new Error("expected visible compact sidebar session menu");
         }
-        expect(menuBox.x).toBeGreaterThanOrEqual(8);
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(382);
-        expect(menuBox.y).toBeGreaterThanOrEqual(8);
-        expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(642);
+        expectHorizontalBounds(menuBox, { x: 8, width: 374 });
+        expectVerticalBounds(menuBox, { y: 8, height: 634 });
         const scroll = await menu.evaluate((element) => {
           element.scrollTop = element.scrollHeight;
           return {
@@ -399,8 +406,7 @@ suite.define(() => {
         if (!backBox) {
           throw new Error("expected sticky Back action bounds");
         }
-        expect(backBox.y).toBeGreaterThanOrEqual(menuBox.y);
-        expect(backBox.y + backBox.height).toBeLessThanOrEqual(menuBox.y + menuBox.height);
+        expectVerticalBounds(backBox, menuBox);
         await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-group-drilldown.png");
       } catch (error) {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -472,16 +478,12 @@ suite.define(() => {
           await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           if (width === 390) {
-            await page
-              .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-              .first()
-              .click();
-            await waitForMobileSidebarDrawerOpen(page);
+            await openDrawer(page);
           }
           const row = page.locator('[data-session-key="' + sessionKey + '"]');
           await row.locator(".sidebar-recent-session__link").click({ button: "right" });
           const menu = page.locator("openclaw-session-menu");
-          await menu.getByRole("menuitem", { name: "Pin session", exact: true }).waitFor();
+          await menuItem(menu, "Pin session").waitFor();
           const phase = "after-" + width;
           expect(await sessionMenuLabels(menu.locator(".session-menu__panel"))).toEqual([
             "Pin session",
@@ -495,67 +497,45 @@ suite.define(() => {
             "Archive session",
             "Advanced",
           ]);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".shell"),
-              [menu.getByRole("menuitem", { name: "Pin session", exact: true })],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(suite.artifactDir, phase + "-root.png"), frame.png);
-          }
-          await menu.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+          await captureFrame(page, `${phase}-root`, [menuItem(menu, "Pin session")]);
+          await menuItem(menu, "Copy link").click();
           await expect
             .poll(() => page.evaluate(() => navigator.clipboard.readText()))
             .toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await row.locator(".sidebar-recent-session__link").click({ button: "right" });
-          await menu.getByRole("menuitem", { name: "Assign to…", exact: true }).click();
+          await menuItem(menu, "Assign to…").click();
           await menu.getByRole("menuitemradio", { name: "Ben", exact: true }).waitFor();
           if (width === 390) {
-            expect(await menu.locator(".session-menu__panel [role='menu']").count()).toBe(0);
-            await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
-            await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
+            await noNestedMenus(menu);
+            await menuItem(menu, "Back").click();
+            await menuItem(menu, "Copy link").waitFor();
           } else {
             await page.keyboard.press("ArrowLeft");
           }
-          const advanced = menu.getByRole("menuitem", {
-            name: "Advanced",
-            exact: true,
-          });
+          const advanced = menuItem(menu, "Advanced");
           await advanced.click();
           await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".shell"),
-              [
-                width === 390
-                  ? menu.getByRole("menuitem", { name: "Back", exact: true })
-                  : advanced,
-                menu.locator(".session-menu__communication"),
-              ],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(suite.artifactDir, phase + "-advanced.png"), frame.png);
-          }
+          await captureFrame(page, `${phase}-advanced`, [
+            width === 390 ? menuItem(menu, "Back") : advanced,
+            menu.locator(".session-menu__communication"),
+          ]);
           if (width === 390) {
             for (const label of ["Copy details", "Open in", "Icon & color"]) {
-              await menu.getByRole("menuitem", { name: label, exact: true }).click();
-              expect(await menu.locator(".session-menu__panel [role='menu']").count()).toBe(0);
-              await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+              await menuItem(menu, label).click();
+              await noNestedMenus(menu);
+              await menuItem(menu, "Back").click();
               await menu.getByRole("button", { name: "Ask", exact: true }).first().waitFor();
             }
-            const frame = await takeControlUiScreenshotFrame(
+            await captureFrame(
               page,
-              page.locator(".shell"),
-              [menu.getByRole("menuitem", { name: "Back", exact: true })],
-              { animations: "disabled" },
+              "after-phone-back",
+              [menuItem(menu, "Back")],
+              ".shell",
+              false,
+              true,
             );
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              await writeFile(path.join(suite.artifactDir, "after-phone-back.png"), frame.png);
-            }
-            await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
-            await menu.getByRole("menuitem", { name: "Copy link", exact: true }).waitFor();
+            await menuItem(menu, "Back").click();
+            await menuItem(menu, "Copy link").waitFor();
           }
         },
       );

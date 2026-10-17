@@ -16,6 +16,13 @@ const viewports = [
   { name: "mobile", width: 390, height: 844 },
   { name: "narrow", width: 320, height: 844 },
 ] as const;
+const exactButton = (host: Page | Locator, name: string) =>
+  host.getByRole("button", { name, exact: true });
+const modalFor = (page: Page, label: string) =>
+  page.locator(`openclaw-modal-dialog[label="${label}"]`);
+function expectNear(actual: number, expected: number, tolerance: number) {
+  expect(Math.abs(actual - expected)).toBeLessThanOrEqual(tolerance);
+}
 
 // Browser layout is the contract: neither the footer tag nor a CSS declaration
 // proves that wrapped buttons stay right-aligned, visible and inside their form.
@@ -45,16 +52,7 @@ async function inspectActions(page: Page, modal: Locator, selector: string, name
       paddingBottom: Number.parseFloat(cardStyle.paddingBottom),
       controls: [...row.querySelectorAll("button")]
         .filter((button) => button.getBoundingClientRect().height > 0)
-        .map((button) => {
-          const rect = button.getBoundingClientRect();
-          return {
-            label: button.textContent?.trim(),
-            left: rect.left,
-            right: rect.right,
-            top: rect.top,
-            bottom: rect.bottom,
-          };
-        }),
+        .map((button) => Object.assign(bounds(button), { label: button.textContent?.trim() })),
       following: [...card.children]
         .slice([...card.children].indexOf(row) + 1)
         .filter((child) => child.getBoundingClientRect().height > 0).length,
@@ -71,12 +69,8 @@ function expectCompletionPlacement(geometry: Awaited<ReturnType<typeof inspectAc
   expect(geometry.following).toBe(0);
   expect(geometry.controls.length).toBeGreaterThan(0);
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
-  expect(
-    Math.abs(geometry.row.right - (geometry.card.right - geometry.paddingRight)),
-  ).toBeLessThanOrEqual(3);
-  expect(
-    Math.abs(geometry.row.bottom - (geometry.card.bottom - geometry.paddingBottom)),
-  ).toBeLessThanOrEqual(4);
+  expectNear(geometry.row.right, geometry.card.right - geometry.paddingRight, 3);
+  expectNear(geometry.row.bottom, geometry.card.bottom - geometry.paddingBottom, 4);
   const rows = new Map<number, number[]>();
   for (const control of geometry.controls) {
     expect(control.left).toBeGreaterThanOrEqual(geometry.row.left - 1);
@@ -87,10 +81,20 @@ function expectCompletionPlacement(geometry: Awaited<ReturnType<typeof inspectAc
     rows.set(line, [...(rows.get(line) ?? []), control.right]);
   }
   for (const edges of rows.values()) {
-    expect(
-      Math.abs(Math.max(...edges) - (geometry.row.right - geometry.rowPadding)),
-    ).toBeLessThanOrEqual(3);
+    expectNear(Math.max(...edges), geometry.row.right - geometry.rowPadding, 3);
   }
+}
+
+async function submitSecretDialog(page: Page, label: string, proof: string, enter = false) {
+  const modal = modalFor(page, label);
+  const geometry = await inspectActions(page, modal, ".secrets-store-dialog__actions", proof);
+  if (enter) {
+    await modal.getByLabel("Name", { exact: true }).press("Enter");
+  } else {
+    await exactButton(modal, "Save").click();
+  }
+  await modal.waitFor({ state: "detached" });
+  return geometry;
 }
 
 suite.define(() => {
@@ -150,10 +154,7 @@ suite.define(() => {
           };
         });
         expect(placement).toEqual({ count: 2, contained: true, submitOwned: true });
-        await dialog
-          .locator("openclaw-modal-actions")
-          .getByRole("button", { name: "Cancel", exact: true })
-          .click();
+        await exactButton(dialog.locator("openclaw-modal-actions"), "Cancel").click();
         await expect.poll(() => dialog.isVisible()).toBe(false);
       }
       expect(await gateway.getRequests("workboard.cards.create")).toHaveLength(0);
@@ -173,12 +174,12 @@ suite.define(() => {
       );
       await issue.locator("summary").click();
       await issue.locator(".sidebar-update-card__action").click();
-      const modal = page.locator('openclaw-modal-dialog[label="Update Gateway"]');
+      const modal = modalFor(page, "Update Gateway");
       const confirm = await inspectActions(page, modal, ".exec-approval-actions", "update-confirm");
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      await modal.getByRole("button", { name: "Update and restart", exact: true }).click();
+      await exactButton(modal, "Update and restart").click();
       await gateway.waitForRequest("update.run");
-      await modal.getByRole("button", { name: "Updating…", exact: true }).waitFor();
+      await exactButton(modal, "Updating…").waitFor();
       const working = await inspectActions(page, modal, ".exec-approval-actions", "update-working");
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expectCompletionPlacement(confirm);
@@ -210,19 +211,12 @@ suite.define(() => {
         });
         await page.goto(suite.server.baseUrl + "settings/secrets");
         await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
-        await page.getByRole("button", { name: "Add", exact: true }).click();
-        const add = page.locator('openclaw-modal-dialog[label="Add"]');
+        await exactButton(page, "Add").click();
+        const add = modalFor(page, "Add");
         await add.getByLabel("Name", { exact: true }).fill("DEPLOY_REGION");
         await add.getByLabel("Value", { exact: true }).fill("eu-west-1");
-        const addition = await inspectActions(
-          page,
-          add,
-          ".secrets-store-dialog__actions",
-          "secrets-add",
-        );
-        await add.getByLabel("Name", { exact: true }).press("Enter");
+        const addition = await submitSecretDialog(page, "Add", "secrets-add", true);
         await gateway.waitForRequest("secrets.store.set");
-        await add.waitFor({ state: "detached" });
         expect((await gateway.getRequests("secrets.store.set"))[0]?.params).toMatchObject({
           name: "DEPLOY_REGION",
           value: "eu-west-1",
@@ -230,38 +224,22 @@ suite.define(() => {
         const row = page.getByRole("row", { name: "SERVICE_URL", exact: true });
         await row.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
         await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
-        const edit = page.locator('openclaw-modal-dialog[label="Edit"]');
+        const edit = modalFor(page, "Edit");
         await edit.getByLabel("Value", { exact: true }).fill("https://updated.test");
-        const editing = await inspectActions(
-          page,
-          edit,
-          ".secrets-store-dialog__actions",
-          "secrets-edit",
-        );
-        await edit.getByRole("button", { name: "Save", exact: true }).click();
-        await edit.waitFor({ state: "detached" });
+        const editing = await submitSecretDialog(page, "Edit", "secrets-edit");
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(2);
-        await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
-        const bulk = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
+        await exactButton(page, "Bulk Add").click();
+        const bulk = modalFor(page, "Bulk Add");
         await bulk
           .getByRole("textbox", { name: "Value", exact: true })
           .fill(["SERVICE_URL=https://service.test", "SERVICE_API_KEY=fixture-only"].join("\n"));
-        const bulkActions = await inspectActions(
-          page,
-          bulk,
-          ".secrets-store-dialog__actions",
-          "secrets-bulk",
-        );
-        await bulk.getByRole("button", { name: "Save", exact: true }).click();
-        await bulk.waitFor({ state: "detached" });
+        const bulkActions = await submitSecretDialog(page, "Bulk Add", "secrets-bulk");
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(4);
         for (const geometry of [addition, editing, bulkActions]) {
           expectCompletionPlacement(geometry);
           // These short English labels fit one row even at 320px; do not stretch
           // both actions into the old mobile full-width column.
-          expect(
-            Math.abs(geometry.controls[0]!.top - geometry.controls[1]!.top),
-          ).toBeLessThanOrEqual(2);
+          expectNear(geometry.controls[0]!.top, geometry.controls[1]!.top, 2);
         }
       }),
     );
