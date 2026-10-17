@@ -6,22 +6,21 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 
+const manifestRegistry = (
+  ...plugins: Parameters<typeof createPluginManifestRecordFixture>[0][]
+) => ({ diagnostics: [], plugins: plugins.map(createPluginManifestRecordFixture) });
+
 function createChannelSchemaRegistry(
   channelId: string,
   schema: Record<string, unknown>,
   origin: PluginManifestRecord["origin"] = "global",
 ) {
-  return {
-    diagnostics: [],
-    plugins: [
-      createPluginManifestRecordFixture({
-        id: "deep-channel-schema-plugin",
-        channels: [channelId],
-        channelConfigs: { [channelId]: { schema } },
-        origin,
-      }),
-    ],
-  };
+  return manifestRegistry({
+    id: "deep-channel-schema-plugin",
+    channels: [channelId],
+    channelConfigs: { [channelId]: { schema } },
+    origin,
+  });
 }
 
 function deepSchema() {
@@ -44,37 +43,34 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
         type: "object",
         properties: { core: { type: "string" }, plus: { type: "string" } },
       };
-      const registry = {
-        diagnostics: [],
-        plugins: ["core", "plus"].map((id) =>
-          createPluginManifestRecordFixture({
-            id,
-            origin: "global",
-            channels: ["proofchat"],
-            channelConfigs: {
-              proofchat: {
-                schema,
-                label: id,
-                uiHints: {
-                  [id]: { sensitive: true, label: id },
-                  [id === "core" ? "plus" : "core"]: {
-                    sensitive: false,
-                    label: "selected presentation",
-                  },
-                  [id === "core" ? " .endpoint " : "endpoint"]: {
-                    sensitive: false,
-                    tags: id === "core" ? ["url-secret", "inactive-tag"] : ["selected-tag"],
-                    label: id,
-                  },
-                  [`accounts.*.${id}`]: { sensitive: true },
-                  [`entries[].${id}`]: { sensitive: true },
-                  [id === "core" ? " .shared " : "shared"]: { sensitive: id === "core", label: id },
+      const registry = manifestRegistry(
+        ...["core", "plus"].map((id) => ({
+          id,
+          origin: "global" as const,
+          channels: ["proofchat"],
+          channelConfigs: {
+            proofchat: {
+              schema,
+              label: id,
+              uiHints: {
+                [id]: { sensitive: true, label: id },
+                [id === "core" ? "plus" : "core"]: {
+                  sensitive: false,
+                  label: "selected presentation",
                 },
+                [id === "core" ? " .endpoint " : "endpoint"]: {
+                  sensitive: false,
+                  tags: id === "core" ? ["url-secret", "inactive-tag"] : ["selected-tag"],
+                  label: id,
+                },
+                [`accounts.*.${id}`]: { sensitive: true },
+                [`entries[].${id}`]: { sensitive: true },
+                [id === "core" ? " .shared " : "shared"]: { sensitive: id === "core", label: id },
               },
             },
-          }),
-        ),
-      };
+          },
+        })),
+      );
       if (reverse) {
         registry.plugins.reverse();
       }
@@ -87,15 +83,9 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       expect(channels[0]).toMatchObject({ label: owner, schemaPluginId: owner });
       expect(channels[0]?.configSchema?.properties).toMatchObject(schema.properties);
       const hints = channels[0]?.configUiHints;
-      for (const path of [
-        "core",
-        "plus",
-        "shared",
-        "accounts.*.core",
-        "accounts.*.plus",
-        "entries[].core",
-        "entries[].plus",
-      ]) {
+      for (const path of "core plus shared accounts.*.core accounts.*.plus entries[].core entries[].plus".split(
+        " ",
+      )) {
         expect(hints?.[path]?.sensitive, path).toBe(true);
       }
       expect(hints?.endpoint).toMatchObject({ sensitive: false, label: owner });
@@ -115,7 +105,6 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       const entries = collectChannelSchemaMetadataWithOwnership(
         createChannelSchemaRegistry(channelId, schema),
       );
-
       expect(entries[0]).toMatchObject({ id: channelId });
       expect(entries[0]?.configSchema).toBe(schema);
     },
@@ -155,48 +144,39 @@ describe("collectChannelDmPolicyMetadata", () => {
       declared,
       expected,
     }) => {
-      const registry = {
-        diagnostics: [],
-        plugins: [
-          createPluginManifestRecordFixture({
-            id: pluginId,
-            channels: ["qqbot", "unrelated-chat"],
-            packageName,
-            packageChannel: {
-              id: packageChannelId,
-              ...(declared === undefined
-                ? {}
-                : { doctorCapabilities: { openDmRequiresAllowFromWildcard: declared } }),
-            },
-          }),
-        ],
-      };
-
-      const metadata = collectChannelDmPolicyMetadata(registry);
+      const metadata = collectChannelDmPolicyMetadata(
+        manifestRegistry({
+          id: pluginId,
+          channels: ["qqbot", "unrelated-chat"],
+          packageName,
+          packageChannel: {
+            id: packageChannelId,
+            ...(declared === undefined
+              ? {}
+              : { doctorCapabilities: { openDmRequiresAllowFromWildcard: declared } }),
+          },
+        }),
+      );
       expect(metadata.get("qqbot")?.openDmRequiresAllowFromWildcard).toBe(expected);
       expect(metadata.get("unrelated-chat")).toEqual({ id: "unrelated-chat" });
     },
   );
 
   it("retains closest-origin nested metadata when no channel owner is selected", () => {
-    const registry = {
-      diagnostics: [],
-      plugins: (["config", "global"] as const).map((origin) =>
-        createPluginManifestRecordFixture({
-          id: `${origin}-chat`,
-          origin,
-          channels: ["proofchat"],
-          packageChannel: {
-            id: "proofchat",
-            doctorCapabilities:
-              origin === "config"
-                ? { dmAllowFromMode: "nestedOnly", openDmRequiresAllowFromWildcard: false }
-                : { openDmRequiresAllowFromWildcard: true },
-          },
-        }),
-      ),
-    };
-
+    const registry = manifestRegistry(
+      ...(["config", "global"] as const).map((origin) => ({
+        id: `${origin}-chat`,
+        origin,
+        channels: ["proofchat"],
+        packageChannel: {
+          id: "proofchat",
+          doctorCapabilities:
+            origin === "config"
+              ? { dmAllowFromMode: "nestedOnly", openDmRequiresAllowFromWildcard: false }
+              : { openDmRequiresAllowFromWildcard: true },
+        },
+      })),
+    );
     expect(collectChannelDmPolicyMetadata(registry, new Set<string>()).get("proofchat")).toEqual({
       id: "proofchat",
       dmAllowFromMode: "nestedOnly",

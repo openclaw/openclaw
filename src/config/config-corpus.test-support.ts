@@ -92,22 +92,13 @@ export function readConfigCorpusFixture(name: string): string {
   config.diagnostics.otel.endpoint = "http://fixture-32.invalid:4318/";
   config.diagnostics.otel.serviceName = "fixture-33";
   const xai = config.models.providers.xai;
+  xai.models = xai.models
+    .slice(0, 7)
+    .map((model, index) => Object.assign(model, { name: `fixture-${index + 6}` }));
   const { "fixture-extension": fixtureExtension, ...otherPlugins } = config.plugins.entries;
+  config.plugins.entries = { ...otherPlugins, "fixture-extension": fixtureExtension };
   const variant = {
     ...config,
-    models: {
-      ...config.models,
-      providers: {
-        ...config.models.providers,
-        xai: {
-          ...xai,
-          models: Array.from({ length: 7 }, (_, index) => ({
-            ...xai.models[index],
-            name: `fixture-${index + 6}`,
-          })),
-        },
-      },
-    },
     agents: {
       ...config.agents,
       defaults: {
@@ -137,10 +128,6 @@ export function readConfigCorpusFixture(name: string): string {
           "-9000000000024": { requireMention: false },
         },
       },
-    },
-    plugins: {
-      ...config.plugins,
-      entries: { ...otherPlugins, "fixture-extension": fixtureExtension },
     },
   };
   return `${JSON.stringify(variant, null, 2)}\n`;

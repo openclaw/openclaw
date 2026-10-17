@@ -79,12 +79,9 @@ describe("config secret refs schema", () => {
     }
   });
 
-  it.each([
-    { field: "allowedHosts", host: "*.example.com" },
-    { field: "bypassHosts", host: "*.example.com" },
-  ])("rejects invalid secret egress $field entry $host", ({ field, host }) => {
+  it.each(["allowedHosts", "bypassHosts"])("rejects wildcard secret egress %s", (field) => {
     const result = validateConfigObjectRaw({
-      secrets: { egressProxy: { enabled: false, [field]: [host] } },
+      secrets: { egressProxy: { enabled: false, [field]: ["*.example.com"] } },
     });
 
     expect(result.ok).toBe(false);
@@ -98,9 +95,7 @@ describe("config secret refs schema", () => {
     expect(
       validateConfigObjectRaw({
         gateway: {
-          controlUi: {
-            github: { token: secretRef("store", "CONTROL_UI_GITHUB") },
-          },
+          controlUi: { github: { token: secretRef("store", "CONTROL_UI_GITHUB") } },
         },
         tools: { github: { profileId: "ghp_77777777777777777777777777777777" } },
       }).ok,
@@ -131,12 +126,11 @@ describe("config secret refs schema", () => {
     }
   });
 
-  it("rejects env refs that are not env var names", () => {
-    expectInvalidApiKey(secretRef("env", "/providers/openai/apiKey"), "Env secret reference id");
-  });
-
-  it("rejects file refs that are not absolute JSON pointers", () => {
-    expectInvalidApiKey(secretRef("file", "providers/openai/apiKey"), "absolute JSON pointer");
+  it.each([
+    ["env", "/providers/openai/apiKey", "Env secret reference id"],
+    ["file", "providers/openai/apiKey", "absolute JSON pointer"],
+  ])("rejects malformed %s references", (source, id, message) => {
+    expectInvalidApiKey(secretRef(source, id), message);
   });
 
   it("rejects invalid exec secret reference ids", () => {

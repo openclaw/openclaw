@@ -1,4 +1,3 @@
-// Covers config backup rotation limits and snapshot behavior.
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,7 +13,15 @@ import {
 import { createConfigIO } from "./io.factory.js";
 import { withTempHome } from "./test-helpers.js";
 
-const { runRegisteredConfigCommand, withConfigFileHarness } = useConfigCliIntegrationHarness();
+const { runRegisteredConfigCommand: run, withConfigFileHarness: withConfig } =
+  useConfigCliIntegrationHarness();
+const set = (key: string, value: string) => run(["config", "set", key, value]);
+async function expectFile(file: string, raw: string, mode?: number) {
+  await expect(fs.readFile(file, "utf8")).resolves.toBe(raw);
+  if (mode !== undefined) {
+    expectPosixMode((await fs.stat(file)).mode, mode);
+  }
+}
 
 async function expectPathMissing(filePath: string): Promise<void> {
   await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -37,49 +44,39 @@ const createSnapshot = (
 describe("config backup rotation", () => {
   it("openclaw config set keeps five recovery points and preserves manual and pre-update backups", async () => {
     const original = '{"gateway":{"mode":"local","port":19000}}\n';
-    await withConfigFileHarness(
-      "openclaw-config-backup-ring-",
-      original,
-      async ({ configPath }) => {
-        const readPort = async (suffix = "") => {
-          const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
-          return (JSON.parse(raw) as { gateway: { port: number } }).gateway.port;
-        };
-        const manualBackupPath = `${configPath}.bak.20260808`;
-        const manualBackupContent = '{"gateway":{"mode":"local","port":18000}}\n';
+    await withConfig("openclaw-config-backup-ring-", original, async ({ configPath }) => {
+      const readPort = async (suffix = "") => {
+        const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
+        return (JSON.parse(raw) as { gateway: { port: number } }).gateway.port;
+      };
+      const manualBackupPath = `${configPath}.bak.20260808`;
+      const manualBackupContent = '{"gateway":{"mode":"local","port":18000}}\n';
 
-        await fs.writeFile(manualBackupPath, manualBackupContent, "utf-8");
-        await createSnapshot(configPath);
-        for (let version = 1; version <= 6; version += 1) {
-          await runRegisteredConfigCommand([
-            "config",
-            "set",
-            "gateway.port",
-            String(19000 + version),
-          ]);
-          if (version === 1) {
-            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(original);
-          }
+      await fs.writeFile(manualBackupPath, manualBackupContent, "utf-8");
+      await createSnapshot(configPath);
+      for (let version = 1; version <= 6; version += 1) {
+        await set("gateway.port", String(19000 + version));
+        if (version === 1) {
+          await expectFile(`${configPath}.bak`, original);
         }
+      }
 
-        await expect(
-          Promise.all(["", ".bak", ".bak.1", ".bak.2", ".bak.3", ".bak.4"].map(readPort)),
-        ).resolves.toEqual([19006, 19005, 19004, 19003, 19002, 19001]);
-        for (const suffix of [".bak", ".bak.1"]) {
-          expectPosixMode((await fs.stat(`${configPath}${suffix}`)).mode, 0o600);
-        }
-        await expectPathMissing(`${configPath}.bak.5`);
-        await expect(fs.readFile(`${configPath}.pre-update`, "utf-8")).resolves.toBe(original);
-        expectPosixMode((await fs.stat(`${configPath}.pre-update`)).mode, 0o600);
-        await expect(fs.readFile(manualBackupPath, "utf-8")).resolves.toBe(manualBackupContent);
-      },
-    );
+      await expect(
+        Promise.all(["", ".bak", ".bak.1", ".bak.2", ".bak.3", ".bak.4"].map(readPort)),
+      ).resolves.toEqual([19006, 19005, 19004, 19003, 19002, 19001]);
+      for (const suffix of [".bak", ".bak.1"]) {
+        expectPosixMode((await fs.stat(`${configPath}${suffix}`)).mode, 0o600);
+      }
+      await expectPathMissing(`${configPath}.bak.5`);
+      await expectFile(`${configPath}.pre-update`, original, 0o600);
+      await expectFile(manualBackupPath, manualBackupContent);
+    });
   });
 
   it("openclaw config set preserves original include bytes in private recovery backups", async () => {
     const original = '{"level":"info"}\n';
     const rootRaw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
-    await withConfigFileHarness(
+    await withConfig(
       "openclaw-config-private-backup-",
       rootRaw,
       async ({ configPath, tempDir }) => {
@@ -88,15 +85,13 @@ describe("config backup rotation", () => {
         const previousBackup = '{"level":"warn"}\n';
         await fs.writeFile(`${target}.bak`, previousBackup, { mode: 0o644 });
 
-        await runRegisteredConfigCommand(["config", "set", "logging.level", "debug"]);
+        await set("logging.level", "debug");
 
         const saved = JSON.parse(await fs.readFile(target, "utf8"));
         expect(saved.level).toBe("debug");
-        await expect(fs.readFile(`${target}.bak`, "utf-8")).resolves.toBe(original);
-        await expect(fs.readFile(`${target}.bak.1`, "utf-8")).resolves.toBe(previousBackup);
-        expectPosixMode((await fs.stat(`${target}.bak`)).mode, 0o600);
-        expectPosixMode((await fs.stat(`${target}.bak.1`)).mode, 0o600);
-        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+        await expectFile(`${target}.bak`, original, 0o600);
+        await expectFile(`${target}.bak.1`, previousBackup, 0o600);
+        await expectFile(configPath, rootRaw);
       },
     );
   });
@@ -105,7 +100,7 @@ describe("config backup rotation", () => {
     "openclaw config set leaves an external file unchanged through an include backup %s",
     async (linkKind) => {
       const rootRaw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
-      await withConfigFileHarness(
+      await withConfig(
         "openclaw-config-linked-backup-",
         rootRaw,
         async ({ configPath, tempDir }) => {
@@ -120,13 +115,12 @@ describe("config backup rotation", () => {
           const backupPath = `${includePath}.bak`;
           await (linkKind === "symlink" ? fs.symlink : fs.link)(externalPath, backupPath);
 
-          await runRegisteredConfigCommand(["config", "set", "logging.level", "debug"]);
+          await set("logging.level", "debug");
 
           expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({ level: "debug" });
-          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
-          await expect(fs.readFile(externalPath, "utf8")).resolves.toBe(externalRaw);
-          expectPosixMode((await fs.stat(externalPath)).mode, 0o644);
-          await expect(fs.readFile(backupPath, "utf8")).resolves.toBe(externalRaw);
+          await expectFile(configPath, rootRaw);
+          await expectFile(externalPath, externalRaw, 0o644);
+          await expectFile(backupPath, externalRaw);
           await expectPathMissing(`${backupPath}.1`);
         },
       );
@@ -240,12 +234,12 @@ describe("config backup rotation", () => {
       await fs.writeFile(snapshotPath, stale, { mode: 0o600 });
 
       await createSnapshot(configPath);
-      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
+      await expectFile(snapshotPath, current);
 
       // Later writes in the same update attempt should not replace the first snapshot.
       await fs.writeFile(configPath, second);
       await createSnapshot(configPath);
-      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
+      await expectFile(snapshotPath, current);
     });
   });
 
@@ -282,7 +276,7 @@ describe("config backup rotation", () => {
 
         const snapshotPath = `${configPath}.pre-update`;
         expect((await fs.stat(snapshotPath)).isFile()).toBe(true);
-        await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
+        await expectFile(snapshotPath, content);
       }
     });
   });
