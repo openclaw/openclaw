@@ -48,12 +48,14 @@ afterEach(() => {
 
 const body = "synthetic report content ".repeat(400);
 const scope = { agentId: "main", sessionKey: "agent:main:reports", sessionId: "reports" };
-const assistant = makeAgentAssistantMessage({
-  content: [{ type: "text", text: body }],
-  model: "synthetic",
+const assistant = {
+  ...makeAgentAssistantMessage({
+    content: [{ type: "text", text: body }],
+    model: "synthetic",
+    timestamp: 1,
+  }),
   responseId: "response",
-  timestamp: 1,
-});
+};
 const selected = { customType: "status", content: body, details: { selected: true } };
 const header = { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION };
 const messageEvent = (id: string, parentId: string | null, message: unknown) => ({
@@ -111,7 +113,7 @@ const custom = (
     { kind: "custom" }
   >["selectReport"],
 ) => ({ kind: "custom", customTypes: ["status"], selectReport }) as const;
-const appendAssistant = (message: AssistantMessage) =>
+const appendAssistant = (message: AssistantMessage & { responseId: string }) =>
   appendSessionTranscriptReport(scope, { kind: "assistant", message });
 async function blockWriter() {
   const release = createDeferredCore();
@@ -271,7 +273,7 @@ describe("SQLite report payload selection", () => {
         cacheRead: 12,
         cacheWrite: 3,
         totalTokens: 2_624,
-        totalTokensVersion: 1,
+        totalTokensVersion: 1 as const,
         estimatedCostUsd: 0.25,
       };
       await upsertSessionEntryCore(scope, {

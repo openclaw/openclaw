@@ -41,13 +41,14 @@ import { resolveLiveToolResultMaxChars } from "./tool-result-limits.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const sessionId = "result-budget-boundary";
+const contextWindow = 128_000;
 const model = makeProviderModelFixture({
   id: "budget-fixture",
   name: "Budget fixture",
   provider: "test-provider",
   api: "openai-responses",
   baseUrl: "https://example.test",
-  contextWindow: 128_000,
+  contextWindow,
   maxTokens: 1_000,
   compat: {},
 });
@@ -87,7 +88,7 @@ function toolResult(messages: AgentMessage[], index: number): ToolResultMessage 
 
 async function dispatch(
   messages: AgentMessage[],
-  contextWindowTokens = model.contextWindow,
+  contextWindowTokens = contextWindow,
 ): Promise<AgentMessage[]> {
   let sent: AgentMessage[] = [];
   const agent = new Agent({
@@ -154,7 +155,7 @@ describe("fresh producer results through persistence and model guards", () => {
     async (_name, firstText, lastText, options) =>
       withOpenClawTestState({ label: "code-mode-result-budget" }, async (state) => {
         const cap = 65536;
-        const { context = model.contextWindow, fail = false, value = true } = options;
+        const { context = contextWindow, fail = false, value = true } = options;
         const runtime = createAgentHarnessToolSurfaceRuntimeCore({
           config: { tools: { codeMode: { enabled: true, maxOutputBytes: cap } } },
           model,
@@ -371,7 +372,7 @@ describe("fresh producer results through persistence and model guards", () => {
     const read = wrapReadToolWithSkillContent(
       base,
       [{ filePath: locator, readContent: "INSTRUCTIONS" + "中".repeat(9000) }],
-      { modelContextWindowTokens: model.contextWindow },
+      { modelContextWindowTokens: contextWindow },
     );
     const result = await read.execute("skill", { path: locator, offset: 2, limit: 1 });
     expect(text(result)).toContain("cannot be partially served");

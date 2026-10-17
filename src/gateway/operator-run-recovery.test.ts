@@ -130,8 +130,8 @@ function acceptedCaller(fixture: RecoveryFixture) {
   };
 }
 function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.signal?.aborted).toBe(true);
   expect(authority.assertCurrent).toThrow();
+  expect(authority.signal?.aborted).toBe(true);
 }
 
 describe("restart recovery authenticated operator source", () => {

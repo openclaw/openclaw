@@ -19,6 +19,7 @@ vi.mock("./windows-system-tools.js", async (importOriginal) => ({
   runQaWindowsTaskkill: runQaWindowsTaskkillMock,
 }));
 
+// mock-isolation: pin the executable fixture without discovering the host runtime.
 vi.mock("./node-exec.js", () => ({ resolveQaNodeExecPath: resolveQaNodeExecPathMock }));
 
 vi.mock("./suite-runtime-gateway.js", () => ({
@@ -26,6 +27,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   waitForTransportReady: waitForTransportReadyMock,
 }));
 
+// mock-isolation: transcript reads use the synthetic process fixture, not live sessions.
 vi.mock("./suite-runtime-agent-session.js", () => ({
   readSessionTranscriptSummary: readTranscriptMock,
 }));

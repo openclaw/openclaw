@@ -9,6 +9,7 @@ import {
   makeAgentAssistantMessage,
 } from "../test-helpers/agent-message-fixtures.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   assessLastAssistantMessage,

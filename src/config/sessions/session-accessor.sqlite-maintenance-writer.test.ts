@@ -517,7 +517,7 @@ it.for(["channel recording", "reply initialization"] as const)(
       if (includesLaterEntry) {
         void result.then(
           () => finalized.resolve(),
-          (error) => finalized.reject(error),
+          (error: unknown) => finalized.reject(error),
         );
       }
       return result;

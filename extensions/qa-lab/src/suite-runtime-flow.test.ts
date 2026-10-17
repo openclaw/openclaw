@@ -20,8 +20,10 @@ const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
   return { webOpenPage: openPageMock, createWebPageOpener: createOpenerMock };
 });
 
+// mock-isolation: provide the synthetic scenario API without loading live runtime owners.
 vi.mock("./scenario-runtime-api.js", () => ({ createQaScenarioRuntimeApi }));
 
+// mock-isolation: observe flow delegation without executing the scenario runner.
 vi.mock("./scenario-flow-runner.js", () => ({ runScenarioFlow }));
 
 vi.mock("./suite-runtime-transport.js", async (importOriginal) => ({

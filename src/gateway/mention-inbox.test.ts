@@ -48,7 +48,7 @@ function pauseOperation<Args extends unknown[], Result>(
   return {
     ready: ready.promise,
     release: release.resolve,
-    async run(...args: Args) {
+    async run(this: void, ...args: Args) {
       const result = await operation(...args);
       ready.resolve();
       await release.promise;

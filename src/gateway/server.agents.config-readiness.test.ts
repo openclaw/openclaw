@@ -68,7 +68,7 @@ const connect = () =>
     scopes: ["operator.admin", "operator.read", "operator.write"],
   });
 const rpc = (method: string, params: Record<string, unknown>) => client.request(method, params);
-const matches = async (result: Promise<unknown>, expected: unknown) =>
+const matches = async (result: Promise<unknown>, expected: object) =>
   expect(await result).toMatchObject(expected);
 const roster = (entry: Record<string, unknown>) => ({
   agents: expect.arrayContaining([expect.objectContaining(entry)]),

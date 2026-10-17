@@ -57,7 +57,7 @@ const cases = [
   publicationCase("dry-run", privateCaption, [dryRunFinal], dryRunFinal),
   publicationCase("missing-media", privateCaption, [missingMediaFinal], missingMediaFinal),
   publicationCase("cancel", `Attached proof.\n${privateCaption}`, ["Attached proof."]),
-];
+] as const;
 const messagesFrom = (events: unknown[]) =>
   events
     .filter(isRecord)

@@ -78,7 +78,7 @@ const connectAccount = (
   ownerProfileId: string,
   overrides: Partial<Parameters<typeof connectUserModelAccountAsync>[0]> = {},
 ) => connectUserModelAccountAsync({ ownerProfileId, credential, ...authority, ...overrides });
-const role = (scopes: string[]): GatewayOperatorRoleDefinition => ({
+const role = (scopes: GatewayOperatorRoleDefinition["scopes"]): GatewayOperatorRoleDefinition => ({
   agents: [],
   scopes,
   sessions: { others: "none" },

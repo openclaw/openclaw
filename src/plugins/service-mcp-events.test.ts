@@ -271,12 +271,42 @@ it.each(["oauth", "resolver"])(
   },
 );
 it.each([
-  ["disabled", () => (f.cfg.mcp!.servers!.calendar!.enabled = false)],
-  ["session-server", () => (mocks.entry!.toolOverrides = { mcpServers: { calendar: false } })],
-  ["session-namespace", () => (mocks.entry!.toolOverrides = { mcpToolsDeny: { calendar: ["*"] } })],
-  ["tool-namespace", () => (mocks.deny = ["calendar__*"])],
-  ["no-owner", () => delete f.job.scheduledToolPolicy],
-  ["account-disabled", () => (f.cfg.channels = { discord: { enabled: false } })],
+  [
+    "disabled",
+    (): void => {
+      f.cfg.mcp!.servers!.calendar!.enabled = false;
+    },
+  ],
+  [
+    "session-server",
+    (): void => {
+      mocks.entry!.toolOverrides = { mcpServers: { calendar: false } };
+    },
+  ],
+  [
+    "session-namespace",
+    (): void => {
+      mocks.entry!.toolOverrides = { mcpToolsDeny: { calendar: ["*"] } };
+    },
+  ],
+  [
+    "tool-namespace",
+    (): void => {
+      mocks.deny = ["calendar__*"];
+    },
+  ],
+  [
+    "no-owner",
+    (): void => {
+      delete f.job.scheduledToolPolicy;
+    },
+  ],
+  [
+    "account-disabled",
+    (): void => {
+      f.cfg.channels = { discord: { enabled: false } };
+    },
+  ],
 ] as const)("rejects revoked %s authority before transport", async (_kind, revoke) => {
   revoke();
   await expect(f.capability.prepareSource(source)).rejects.toThrow();

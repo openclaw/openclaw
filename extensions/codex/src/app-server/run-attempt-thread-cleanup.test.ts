@@ -1,5 +1,7 @@
+// Codex tests cover run attempt thread cleanup plugin behavior.
 import path from "node:path";
-import { setImmediate as yieldEventLoop, setTimeout as delay } from "node:timers/promises";
+import { setImmediate as yieldEventLoop } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -8,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
+import { turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createNativeRunParams as createParams,
@@ -37,114 +39,22 @@ import {
   createInferenceReadyClientHarness,
   waitForHarnessRequest,
   withoutCodexSkillDiscovery,
+  type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 // The keyed router, client runtime, and subagent monitor each add handlers on
 // the physical client; single-slot mocks would keep only the last one.
-function multiplexedClientFactory(client: CodexAppServerClient): CodexAppServerClientFactory {
-  return adaptCodexTestClientFactory(async () => {
+function multiplexedClientFactory(
+  factory: CodexTestAppServerClientFactory,
+): CodexAppServerClientFactory {
+  return adaptCodexTestClientFactory(async (...args) => {
+    const client = await factory(...args);
     multiplexCodexTestClientHandlers(client);
     return client;
   });
 }
-
-type Harness = ReturnType<typeof createInferenceReadyClientHarness>;
-
-function createHarness() {
-  const harness = createInferenceReadyClientHarness();
-  vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-  return harness;
-}
-
-const passiveHandlers = {
-  addNotificationHandler: () => () => undefined,
-  addRequestHandler: () => () => undefined,
-  addCloseHandler: () => () => undefined,
-};
-
-async function reply(harness: Harness, method: string, result: unknown, start = 0) {
-  const request = await waitForHarnessRequest(harness, method, start);
-  harness.send({ id: request.id, result });
-}
-
-const initialize = (harness: Harness) =>
-  reply(harness, "initialize", {
-    userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)`,
-  });
-const capabilities = (harness: Harness) =>
-  reply(harness, "modelProvider/capabilities/read", { imageGeneration: false, webSearch: true });
-const requirements = (harness: Harness, start = 0) =>
-  reply(harness, "configRequirements/read", { requirements: null }, start);
-async function initializeIncognito(harness: Harness) {
-  await initialize(harness);
-  await capabilities(harness);
-  await requirements(harness);
-}
-async function startTurn(harness: Harness, threadId = "thread-1", turnId = "turn-1", start = 0) {
-  await reply(harness, "thread/start", threadStartResult(threadId), start);
-  await reply(harness, "turn/start", turnStartResult(turnId), start);
-}
-
-function completeTurn(harness: Harness, threadId = "thread-1", turnId = "turn-1") {
-  harness.send({
-    method: "turn/completed",
-    params: { threadId, turnId, turn: { id: turnId, status: "completed", items: [] } },
-  });
-}
-
-function terminalOnly(harness: Harness, id: string, status: "completed" | "interrupted") {
-  harness.send({
-    method: "turn/completed",
-    params: { threadId: "thread-1", turn: { id, status, items: [] } },
-  });
-}
-
-function commandEvent(
-  harness: Harness,
-  phase: "started" | "completed",
-  lane: 1 | 2,
-  output?: string,
-) {
-  const event = itemNotification(`item/${phase}`, {
-    id: lane === 1 ? "cmd-silent" : "cmd-ticking",
-    type: "commandExecution",
-    command: lane === 1 ? "sleep 1" : "printf tick",
-    status: phase === "started" ? "inProgress" : "completed",
-    ...(output === undefined ? {} : { aggregatedOutput: output, exitCode: 0 }),
-  });
-  harness.send({
-    ...event,
-    params: { ...event.params, threadId: `thread-${lane}`, turnId: `turn-${lane}` },
-  });
-}
-
-const cancelledStartup = (mayHaveWritten: boolean) =>
-  Object.assign(new Error("turn/start aborted"), {
-    code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
-    mayHaveWritten,
-  });
-
-function scenarioParams(name: string, sessionKey?: string) {
-  return createParams(
-    path.join(tempDir, `${name}.jsonl`),
-    path.join(tempDir, `${name}-workspace`),
-    sessionKey,
-  );
-}
-
-async function incognitoParams(name: string) {
-  const sessionKey = `agent:main:dashboard:incognito-${name}`;
-  await seedRunSessionOwnerForTest("session-1", sessionKey);
-  const params = scenarioParams(name, sessionKey);
-  params.disableTools = false;
-  return params;
-}
-
-const requestMethods = (harness: Harness) =>
-  harness.writes.map((write) => (JSON.parse(write) as { method: string }).method);
-const requestPrelude = ["config/read", "configRequirements/read", "account/read"];
 
 setupRunAttemptTestHooks();
 
@@ -169,23 +79,39 @@ describe("Codex app-server main thread cleanup", () => {
       await seedRunSessionOwnerForTest(`session-${label}`, `agent:main:session-${label}`);
     }
     const harness = createInferenceReadyClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const clientStarted = createDeferred<void>();
+    vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
+      clientStarted.resolve();
+      return harness.client;
+    });
 
-    async function runConversation(label: "a" | "b", index: number, runId = `run-${index + 1}`) {
+    for (const [index, label] of (["a", "b", "a", "b"] as const).entries()) {
       const sessionKey = `agent:main:session-${label}`;
       const params = createParams(sessionFiles[label], workspaceDir, sessionKey);
       params.sessionId = `session-${label}`;
-      params.runId = runId;
+      params.runId = `run-${index + 1}`;
       params.provider = "openai";
       // Ordinary Codex conversations retain their native tool surface; a
       // disableTools turn is intentionally isolated on a temporary thread.
       params.disableTools = false;
       const requestStart = harness.writes.length;
-      const run = runCodexAppServerAttempt(params);
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+      });
       if (index === 0) {
-        await initialize(harness);
+        await clientStarted.promise;
+        const initialize = await waitForHarnessRequest(harness, "initialize", requestStart);
+        harness.send({
+          id: initialize.id,
+          result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+        });
       }
-      await requirements(harness, requestStart);
+      const requirements = await waitForHarnessRequest(
+        harness,
+        "configRequirements/read",
+        requestStart,
+      );
+      harness.send({ id: requirements.id, result: { requirements: null } });
       const threadId = `thread-${label}`;
       if (index < 2) {
         const start = await waitForHarnessRequest(harness, "thread/start", requestStart);
@@ -209,21 +135,30 @@ describe("Codex app-server main thread cleanup", () => {
       });
       expect(readAttemptTerminal(await run).aborted).toBe(false);
     }
-    for (const [index, label] of (["a", "b", "a", "b"] as const).entries()) {
-      await runConversation(label, index);
-    }
 
     const userRequestMethods = () =>
-      requestMethods(harness).filter(
-        (method) => !["initialize", "initialized", "skills/list"].includes(method),
-      );
-    const freshTurn = [...requestPrelude, "thread/start", "turn/start"];
-    const reusedTurn = [...requestPrelude, "turn/start"];
+      harness.writes
+        .map((write) => (JSON.parse(write) as { method: string }).method)
+        .filter((method) => !["initialize", "initialized", "skills/list"].includes(method));
     expect(userRequestMethods()).toEqual([
-      ...freshTurn,
-      ...freshTurn,
-      ...reusedTurn,
-      ...reusedTurn,
+      "config/read",
+      "configRequirements/read",
+      "account/read",
+      "thread/start",
+      "turn/start",
+      "config/read",
+      "configRequirements/read",
+      "account/read",
+      "thread/start",
+      "turn/start",
+      "config/read",
+      "configRequirements/read",
+      "account/read",
+      "turn/start",
+      "config/read",
+      "configRequirements/read",
+      "account/read",
+      "turn/start",
     ]);
     await expect(readCodexAppServerBinding(sessionFiles.a)).resolves.toMatchObject({
       threadId: "thread-a",
@@ -247,10 +182,37 @@ describe("Codex app-server main thread cleanup", () => {
     harness.send({ id: unsubscribe.id, result: {} });
     await expect(retirement).resolves.toBe("applied");
 
-    await runConversation("b", 4, "run-surviving-sibling");
+    const siblingParams = createParams(sessionFiles.b, workspaceDir, "agent:main:session-b");
+    siblingParams.sessionId = "session-b";
+    siblingParams.runId = "run-surviving-sibling";
+    siblingParams.provider = "openai";
+    siblingParams.disableTools = false;
+    const siblingRequestStart = harness.writes.length;
+    const siblingRun = runCodexAppServerAttempt(siblingParams, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const siblingRequirements = await waitForHarnessRequest(
+      harness,
+      "configRequirements/read",
+      siblingRequestStart,
+    );
+    harness.send({ id: siblingRequirements.id, result: { requirements: null } });
+    const siblingTurn = await waitForHarnessRequest(harness, "turn/start", siblingRequestStart);
+    harness.send({ id: siblingTurn.id, result: turnStartResult("turn-5") });
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-b",
+        turnId: "turn-5",
+        turn: { id: "turn-5", status: "completed", items: [] },
+      },
+    });
+    expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
     expect(userRequestMethods().slice(-5)).toEqual([
       "thread/unsubscribe",
-      ...requestPrelude,
+      "config/read",
+      "configRequirements/read",
+      "account/read",
       "turn/start",
     ]);
   });
@@ -258,8 +220,16 @@ describe("Codex app-server main thread cleanup", () => {
   it("preserves a quiet long-running native tool while a distinct shared-client turn completes", async () => {
     const physical = createInferenceReadyClientHarness();
     const startClient = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(physical.client);
-    const firstParams = scenarioParams("concurrent-first", "agent:main:telegram:topic:first");
-    const secondParams = scenarioParams("concurrent-second", "agent:main:telegram:topic:second");
+    const firstParams = createParams(
+      path.join(tempDir, "concurrent-first.jsonl"),
+      path.join(tempDir, "concurrent-first-workspace"),
+      "agent:main:telegram:topic:first",
+    );
+    const secondParams = createParams(
+      path.join(tempDir, "concurrent-second.jsonl"),
+      path.join(tempDir, "concurrent-second-workspace"),
+      "agent:main:telegram:topic:second",
+    );
     firstParams.sessionId = "session-first";
     secondParams.sessionId = "session-second";
     await seedRunSessionOwnerForTest(firstParams.sessionId, firstParams.sessionKey!);
@@ -267,16 +237,58 @@ describe("Codex app-server main thread cleanup", () => {
     firstParams.timeoutMs = 60_000;
     secondParams.timeoutMs = 60_000;
 
-    const firstRun = runCodexAppServerAttempt(firstParams);
-    await initialize(physical);
-    await startTurn(physical, "thread-1", "turn-1");
+    const firstRun = runCodexAppServerAttempt(firstParams, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const initialize = await waitForHarnessRequest(physical, "initialize");
+    physical.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const firstThreadStart = await waitForHarnessRequest(physical, "thread/start");
+    physical.send({ id: firstThreadStart.id, result: threadStartResult("thread-1") });
+    const firstTurnStart = await waitForHarnessRequest(physical, "turn/start");
+    physical.send({ id: firstTurnStart.id, result: turnStartResult("turn-1") });
 
-    commandEvent(physical, "started", 1);
+    physical.send({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-silent",
+          type: "commandExecution",
+          command: "sleep 1",
+          status: "inProgress",
+        },
+      },
+    });
 
     const secondRequestStart = physical.writes.length;
-    const secondRun = runCodexAppServerAttempt(secondParams);
-    await startTurn(physical, "thread-2", "turn-2", secondRequestStart);
-    commandEvent(physical, "started", 2);
+    const secondRun = runCodexAppServerAttempt(secondParams, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const secondThreadStart = await waitForHarnessRequest(
+      physical,
+      "thread/start",
+      secondRequestStart,
+    );
+    physical.send({ id: secondThreadStart.id, result: threadStartResult("thread-2") });
+    const secondTurnStart = await waitForHarnessRequest(physical, "turn/start", secondRequestStart);
+    physical.send({ id: secondTurnStart.id, result: turnStartResult("turn-2") });
+    physical.send({
+      method: "item/started",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        item: {
+          id: "cmd-ticking",
+          type: "commandExecution",
+          command: "printf tick",
+          status: "inProgress",
+        },
+      },
+    });
     physical.send({
       method: "item/commandExecution/outputDelta",
       params: {
@@ -286,19 +298,60 @@ describe("Codex app-server main thread cleanup", () => {
         delta: "tick\n",
       },
     });
-    commandEvent(physical, "completed", 2, "tick\n");
-    completeTurn(physical, "thread-2", "turn-2");
+    physical.send({
+      method: "item/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        item: {
+          id: "cmd-ticking",
+          type: "commandExecution",
+          command: "printf tick",
+          status: "completed",
+          aggregatedOutput: "tick\n",
+          exitCode: 0,
+        },
+      },
+    });
+    physical.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed", items: [] },
+      },
+    });
 
     const secondResult = await secondRun;
     let firstSettled = false;
-    const markFirstSettled = () => {
-      firstSettled = true;
-    };
-    void firstRun.then(markFirstSettled, markFirstSettled);
-    await delay(150);
+    void firstRun.then(
+      () => {
+        firstSettled = true;
+      },
+      () => {
+        firstSettled = true;
+      },
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
     expect(firstSettled).toBe(false);
 
-    commandEvent(physical, "completed", 1, "silent command finished\n");
+    physical.send({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-silent",
+          type: "commandExecution",
+          command: "sleep 1",
+          status: "completed",
+          aggregatedOutput: "silent command finished\n",
+          exitCode: 0,
+        },
+      },
+    });
     physical.send(turnCompleted({ id: "turn-1", status: "completed" }));
 
     const firstResult = await firstRun;
@@ -312,23 +365,37 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   it("keeps native continuation active after a child result until the parent completes", async () => {
-    const physical = createHarness();
-    const params = scenarioParams("child-result");
+    const physical = createInferenceReadyClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(physical.client);
+    const params = createParams(
+      path.join(tempDir, "child-result.jsonl"),
+      path.join(tempDir, "child-result-workspace"),
+    );
     params.disableTools = false;
     params.provider = "openai";
     params.timeoutMs = 60 * 60_000;
     const progress = vi.fn();
     params.onRunProgress = progress;
-    const run = runCodexAppServerAttempt(params);
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
     try {
-      await initialize(physical);
-      await requirements(physical);
-      await startTurn(physical);
-      await yieldEventLoop();
+      const initialize = await waitForHarnessRequest(physical, "initialize");
+      physical.send({
+        id: initialize.id,
+        result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      });
+      const requirements = await waitForHarnessRequest(physical, "configRequirements/read");
+      physical.send({ id: requirements.id, result: { requirements: null } });
+      const thread = await waitForHarnessRequest(physical, "thread/start");
+      physical.send({ id: thread.id, result: threadStartResult() });
+      const turn = await waitForHarnessRequest(physical, "turn/start");
+      physical.send({ id: turn.id, result: turnStartResult() });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       vi.useFakeTimers();
-      const childResult =
-        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/evidence\nPayload:\nEvidence collected.";
       for (const item of [
         {
           type: "custom_tool_call_output",
@@ -341,23 +408,42 @@ describe("Codex app-server main thread cleanup", () => {
           id: "child-result",
           author: "/root/evidence",
           recipient: "/root",
-          content: [{ type: "input_text", text: childResult }],
+          content: [
+            {
+              type: "input_text",
+              text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/evidence\nPayload:\nEvidence collected.",
+            },
+          ],
         },
       ]) {
-        physical.send(rawItemCompleted(item));
+        physical.send({
+          method: "rawResponseItem/completed",
+          params: { threadId: "thread-1", turnId: "turn-1", item },
+        });
       }
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(
           progress.mock.calls.filter(
             ([event]) => event.reason === "notification:rawResponseItem/completed",
           ),
-        ).toHaveLength(2),
-      );
+        ).toHaveLength(2);
+      });
       await vi.advanceTimersByTimeAsync(60_001);
-      expect(requestMethods(physical)).not.toContain("turn/interrupt");
+      expect(physical.writes.map((write) => JSON.parse(write).method)).not.toContain(
+        "turn/interrupt",
+      );
       await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(requestMethods(physical)).not.toContain("turn/interrupt");
-      completeTurn(physical, "thread-1", "turn-1");
+      expect(physical.writes.map((write) => JSON.parse(write).method)).not.toContain(
+        "turn/interrupt",
+      );
+      physical.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", items: [] },
+        },
+      });
       vi.useRealTimers();
       expect(readAttemptTerminal(await run)).toMatchObject({
         aborted: false,
@@ -372,17 +458,40 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   it("keeps an incognito thread subscribed for live in-process reuse", async () => {
-    const params = await incognitoParams("live-thread");
-    const { sessionFile, sessionKey } = params;
-    const harness = createHarness();
-    const run = runCodexAppServerAttempt(params);
-    await initializeIncognito(harness);
+    const sessionFile = path.join(tempDir, "incognito-session.jsonl");
+    const workspaceDir = path.join(tempDir, "incognito-workspace");
+    const sessionKey = "agent:main:dashboard:incognito-live-thread";
+    // Dashboard incognito sessions keep an authoritative row in process-held SQLite.
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
+    const harness = createInferenceReadyClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+    const params = createParams(sessionFile, workspaceDir, sessionKey);
+    params.disableTools = false;
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const initialize = await waitForHarnessRequest(harness, "initialize");
+    harness.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
+    harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
+    const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
+    harness.send({ id: requirements.id, result: { requirements: null } });
     const start = await waitForHarnessRequest(harness, "thread/start");
     expect(start.params).toEqual(expect.objectContaining({ ephemeral: true }));
     harness.send({ id: start.id, result: threadStartResult() });
     const turn = await waitForHarnessRequest(harness, "turn/start");
     harness.send({ id: turn.id, result: turnStartResult() });
-    completeTurn(harness, "thread-1", "turn-1");
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
+    });
 
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
@@ -408,7 +517,10 @@ describe("Codex app-server main thread cleanup", () => {
       { reason: "fails", error: new Error("turn start exploded") },
       {
         reason: "is cancelled before its request is written",
-        error: cancelledStartup(false),
+        error: Object.assign(new Error("turn/start aborted"), {
+          code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+          mayHaveWritten: false,
+        }),
       },
     ].flatMap(({ reason, error }) =>
       ["current", "successor"].map((owner) => ({ reason, error, owner })),
@@ -416,8 +528,12 @@ describe("Codex app-server main thread cleanup", () => {
   )(
     "settles rejected incognito startup for the $owner physical owner when turn start $reason",
     async ({ error, owner }) => {
-      const params = await incognitoParams("failed-turn");
-      const { sessionFile } = params;
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const sessionKey = "agent:main:dashboard:incognito-failed-turn";
+      await seedRunSessionOwnerForTest("session-1", sessionKey);
+      const params = createParams(sessionFile, workspaceDir, sessionKey);
+      params.disableTools = false;
       const identity = sessionBindingIdentity(params);
       const releaseLease = vi.spyOn(sharedClient, "releaseLeasedSharedCodexAppServerClient");
       const request = vi.fn(async (method: string) => {
@@ -452,13 +568,18 @@ describe("Codex app-server main thread cleanup", () => {
       const client = {
         ...mockClientRuntimeMethods(),
         request,
-        ...passiveHandlers,
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
       } as never;
-      const clientFactory = multiplexedClientFactory(client);
+      const clientFactory = multiplexedClientFactory(async () => client);
 
-      await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toThrow(
-        error.message,
-      );
+      await expect(
+        runCodexAppServerAttempt(params, {
+          bindingStore: testCodexAppServerBindingStore,
+          clientFactory,
+        }),
+      ).rejects.toThrow(error.message);
       expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
         "modelProvider/capabilities/read",
         "config/read",
@@ -492,14 +613,26 @@ describe("Codex app-server main thread cleanup", () => {
   ])(
     "$label an indeterminate native turn before releasing its thread",
     async ({ interruptFails }) => {
-      const harness = createHarness();
+      const sessionFile = path.join(tempDir, "cancelled-start-session.jsonl");
+      const workspaceDir = path.join(tempDir, "cancelled-start-workspace");
+      const harness = createInferenceReadyClientHarness();
       const abort = new AbortController();
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
 
-      const params = scenarioParams("cancelled-start");
+      const params = createParams(sessionFile, workspaceDir);
       params.abortSignal = abort.signal;
-      const run = runCodexAppServerAttempt(params);
-      const failure = run.catch((error: unknown) => error);
-      await initialize(harness);
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+      });
+      const failure = run.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const initialize = await waitForHarnessRequest(harness, "initialize");
+      harness.send({
+        id: initialize.id,
+        result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      });
       const threadStart = await waitForHarnessRequest(harness, "thread/start");
       harness.send({ id: threadStart.id, result: threadStartResult() });
       const turnStart = await waitForHarnessRequest(harness, "turn/start");
@@ -527,7 +660,7 @@ describe("Codex app-server main thread cleanup", () => {
         reason: "aborted",
         mayHaveWritten: true,
       });
-      expect(requestMethods(harness)).toEqual([
+      expect(harness.writes.map((entry) => JSON.parse(entry).method)).toEqual([
         "initialize",
         "initialized",
         "skills/list",
@@ -543,7 +676,12 @@ describe("Codex app-server main thread cleanup", () => {
   );
 
   it("preserves startup cancellation when unsafe client retirement rejects", async () => {
-    const startupError = cancelledStartup(true);
+    const sessionFile = path.join(tempDir, "retirement-failure-session.jsonl");
+    const workspaceDir = path.join(tempDir, "retirement-failure-workspace");
+    const startupError = Object.assign(new Error("turn/start aborted"), {
+      code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+      mayHaveWritten: true,
+    });
     const close = vi.fn();
     const closeAndWait = vi.fn(async () => {
       throw new Error("client retirement failed");
@@ -563,16 +701,23 @@ describe("Codex app-server main thread cleanup", () => {
       }
       throw new Error(`unexpected cleanup request: ${method}`);
     });
-    const clientFactory = multiplexedClientFactory({
-      ...mockClientRuntimeMethods(),
-      request,
-      close,
-      closeAndWait,
-      ...passiveHandlers,
-    } as never);
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
+      return {
+        ...mockClientRuntimeMethods(),
+        request,
+        close,
+        closeAndWait,
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+    });
 
     await expect(
-      runCodexAppServerAttempt(scenarioParams("retirement-failure"), { clientFactory }),
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+        bindingStore: testCodexAppServerBindingStore,
+        clientFactory,
+      }),
     ).rejects.toBe(startupError);
     expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
       "config/read",
@@ -587,18 +732,37 @@ describe("Codex app-server main thread cleanup", () => {
   it.each([false, true])(
     "joins native terminal cleanup before releasing cancellation (RPC fails: %s)",
     async (terminationFails) => {
-      const params = await incognitoParams("cancelled-turn");
-      const harness = createHarness();
+      const sessionFile = path.join(tempDir, "cancelled-session.jsonl");
+      const workspaceDir = path.join(tempDir, "cancelled-workspace");
+      const sessionKey = "agent:main:dashboard:incognito-cancelled-turn";
+      await seedRunSessionOwnerForTest("session-1", sessionKey);
+      const harness = createInferenceReadyClientHarness();
       const abort = new AbortController();
       const close = vi.spyOn(harness.client, "close");
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
 
+      const params = createParams(sessionFile, workspaceDir, sessionKey);
+      params.disableTools = false;
       params.abortSignal = abort.signal;
       let settled = false;
-      const run = runCodexAppServerAttempt(params).finally(() => {
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+      }).finally(() => {
         settled = true;
       });
-      await initializeIncognito(harness);
-      await startTurn(harness);
+      const initialize = await waitForHarnessRequest(harness, "initialize");
+      harness.send({
+        id: initialize.id,
+        result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      });
+      const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
+      harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
+      const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
+      harness.send({ id: requirements.id, result: { requirements: null } });
+      const threadStart = await waitForHarnessRequest(harness, "thread/start");
+      harness.send({ id: threadStart.id, result: threadStartResult() });
+      const turnStart = await waitForHarnessRequest(harness, "turn/start");
+      harness.send({ id: turnStart.id, result: turnStartResult() });
       await yieldEventLoop();
 
       abort.abort("cancelled");
@@ -610,13 +774,29 @@ describe("Codex app-server main thread cleanup", () => {
       harness.send({ id: interrupt.id, result: {} });
       await yieldEventLoop();
       expect(settled).toBe(false);
-      expect(requestMethods(harness)).not.toContain("thread/unsubscribe");
+      expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
+        "thread/unsubscribe",
+      );
 
-      terminalOnly(harness, "turn-unrelated", "interrupted");
-      await yieldEventLoop();
+      harness.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-unrelated", status: "interrupted", items: [] },
+        },
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
 
-      terminalOnly(harness, "turn-1", "interrupted");
+      harness.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "interrupted", items: [] },
+        },
+      });
       const list = await waitForHarnessRequest(harness, "thread/backgroundTerminals/list");
       expect(list.params).toEqual({ threadId: "thread-1" });
       harness.send({ id: list.id, result: { data: [{ processId: "42" }], nextCursor: null } });
@@ -625,9 +805,13 @@ describe("Codex app-server main thread cleanup", () => {
         "thread/backgroundTerminals/terminate",
       );
       expect(terminate.params).toEqual({ threadId: "thread-1", processId: "42" });
-      await yieldEventLoop();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
-      expect(requestMethods(harness)).not.toContain("thread/unsubscribe");
+      expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
+        "thread/unsubscribe",
+      );
       const confirmationStart = harness.writes.length;
       const rejected = terminationFails
         ? expect(run).rejects.toThrow("Codex background-terminal cleanup failed")
@@ -664,30 +848,48 @@ describe("Codex app-server main thread cleanup", () => {
   );
 
   it("rejects late cancellation after failed finalization enters cleanup", async () => {
-    const harness = createHarness();
+    const harness = createInferenceReadyClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const abort = new AbortController();
-    const params = scenarioParams("failed-finalization");
+    const params = createParams(
+      path.join(tempDir, "failed-finalization.jsonl"),
+      path.join(tempDir, "failed-finalization-workspace"),
+    );
     params.abortSignal = abort.signal;
     const projectionError = new Error("terminal projection failed");
-    const run = runCodexAppServerAttempt(params);
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
     const failure = run.catch((error: unknown) => error);
-    await initialize(harness);
-    await startTurn(harness);
+    const initialize = await waitForHarnessRequest(harness, "initialize");
+    harness.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const threadStart = await waitForHarnessRequest(harness, "thread/start");
+    harness.send({ id: threadStart.id, result: threadStartResult() });
+    const turnStart = await waitForHarnessRequest(harness, "turn/start");
+    harness.send({ id: turnStart.id, result: turnStartResult() });
     vi.spyOn(CodexAppServerEventProjector.prototype, "buildResult").mockImplementationOnce(() => {
       throw projectionError;
     });
-    terminalOnly(harness, "turn-1", "completed");
+    harness.send({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+    });
     const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe");
     abort.abort("cancelled during cleanup");
-    const methods = requestMethods(harness);
+    const methods = harness.writes.map((write) => JSON.parse(write).method);
     harness.send({ id: unsubscribe.id, result: {} });
     expect(methods).not.toContain("turn/interrupt");
     expect(await failure).toBe(projectionError);
   });
 
   it("gracefully retires a shared Codex client when a failed turn cannot unsubscribe", async () => {
-    const params = await incognitoParams("failed-unsubscribe");
-    const { sessionFile, workspaceDir, sessionKey } = params;
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionKey = "agent:main:dashboard:incognito-failed-unsubscribe";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
     const contaminated = createInferenceReadyClientHarness();
     const replacement = createInferenceReadyClientHarness();
     const startClient = vi
@@ -695,9 +897,27 @@ describe("Codex app-server main thread cleanup", () => {
       .mockResolvedValueOnce(contaminated.client)
       .mockResolvedValueOnce(replacement.client);
 
-    const failedRun = runCodexAppServerAttempt(params);
-    const observedFailure = failedRun.catch((error: unknown) => error);
-    await initializeIncognito(contaminated);
+    const params = createParams(sessionFile, workspaceDir, sessionKey);
+    params.disableTools = false;
+    const failedRun = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const observedFailure = failedRun.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const initialize = await waitForHarnessRequest(contaminated, "initialize");
+    contaminated.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const capabilities = await waitForHarnessRequest(
+      contaminated,
+      "modelProvider/capabilities/read",
+    );
+    contaminated.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
+    const requirements = await waitForHarnessRequest(contaminated, "configRequirements/read");
+    contaminated.send({ id: requirements.id, result: { requirements: null } });
     const threadStart = await waitForHarnessRequest(contaminated, "thread/start");
     contaminated.send({ id: threadStart.id, result: threadStartResult() });
 
@@ -724,10 +944,39 @@ describe("Codex app-server main thread cleanup", () => {
 
     const replacementParams = createParams(sessionFile, workspaceDir, sessionKey);
     replacementParams.disableTools = false;
-    const replacementRun = runCodexAppServerAttempt(replacementParams);
-    await initializeIncognito(replacement);
-    await startTurn(replacement, "thread-2", "turn-2");
-    completeTurn(replacement, "thread-2", "turn-2");
+    const replacementRun = runCodexAppServerAttempt(replacementParams, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const replacementInitialize = await waitForHarnessRequest(replacement, "initialize");
+    replacement.send({
+      id: replacementInitialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const replacementCapabilities = await waitForHarnessRequest(
+      replacement,
+      "modelProvider/capabilities/read",
+    );
+    replacement.send({
+      id: replacementCapabilities.id,
+      result: { imageGeneration: false, webSearch: true },
+    });
+    const replacementRequirements = await waitForHarnessRequest(
+      replacement,
+      "configRequirements/read",
+    );
+    replacement.send({ id: replacementRequirements.id, result: { requirements: null } });
+    const replacementThread = await waitForHarnessRequest(replacement, "thread/start");
+    replacement.send({ id: replacementThread.id, result: threadStartResult("thread-2") });
+    const replacementTurn = await waitForHarnessRequest(replacement, "turn/start");
+    replacement.send({ id: replacementTurn.id, result: turnStartResult("turn-2") });
+    replacement.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed", items: [] },
+      },
+    });
 
     expect(readAttemptTerminal(await replacementRun)).toMatchObject({
       aborted: false,
