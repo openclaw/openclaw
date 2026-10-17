@@ -19,20 +19,13 @@ const unresolved = {
   message: "SYSTEM_RUN_DENIED: approval requires a resolved executable",
 };
 
-function requireBinding<T extends { ok: boolean }>(result: T): asserts result is T & { ok: true } {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error("Expected executable binding");
-  }
-}
-
 async function bindShell(text: string, cwd?: string, env = { PATH: systemPath }) {
   const prepared = await prepareSystemRunMutableFileBinding({
     command: { kind: "shell", text },
     cwd,
     env,
   });
-  requireBinding(prepared);
+  assert(prepared.ok);
   return prepared.binding;
 }
 
@@ -89,8 +82,8 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
   it.each([
     { name: "direct argv executable", shellCommand: false, prefix: [] },
     { name: "shell env child", shellCommand: true, prefix: ["env"] },
-  ])("binds an external command carrier used as $name", async ({ shellCommand, prefix }) => {
-    await withTempDir("openclaw-wrapper-carrier-", async (rawCwd) => {
+  ])("binds an external command carrier used as $name", ({ shellCommand, prefix }) =>
+    withTempDir("openclaw-wrapper-carrier-", async (rawCwd) => {
       const cwd = fs.realpathSync(rawCwd);
       const carrierPath = path.join(cwd, "command");
       fs.copyFileSync("/usr/bin/true", carrierPath);
@@ -105,17 +98,17 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
         env,
         shellCommand,
       });
-      requireBinding(prepared);
+      assert(prepared.ok);
       expect(prepared.binding.operands.map((operand) => operand.snapshot.path)).toEqual([
         ...prefix.map(() => fs.realpathSync("/usr/bin/env")),
         carrierPath,
         fs.realpathSync("/usr/bin/true"),
       ]);
-    });
-  });
+    }),
+  );
 
-  it("rejects an unavailable wrapper even when its final executable resolves", async () => {
-    await withTempDir("openclaw-wrapper-unavailable-", async (cwd) => {
+  it("rejects an unavailable wrapper even when its final executable resolves", () =>
+    withTempDir("openclaw-wrapper-unavailable-", async (cwd) => {
       const argv = [path.join(cwd, "toybox"), "sh", "-c", "true"];
       const env = { PATH: systemPath };
       const resolution = resolveCommandResolutionFromArgv(argv, cwd, env);
@@ -128,11 +121,10 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
           shellCommand: true,
         }),
       ).toEqual(unresolved);
-    });
-  });
+    }));
 
-  it("binds original absolute and relative wrapper paths throughout a nested dispatch chain", async () => {
-    await withTempDir("openclaw-wrapper-original-", async (rawCwd) => {
+  it("binds original absolute and relative wrapper paths throughout a nested dispatch chain", () =>
+    withTempDir("openclaw-wrapper-original-", async (rawCwd) => {
       const cwd = fs.realpathSync(rawCwd);
       const binDir = path.join(cwd, "bin");
       fs.mkdirSync(binDir);
@@ -152,11 +144,10 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
 
       fs.appendFileSync(nicePath, Buffer.from([0]));
       await expectRevalidation(binding, cwd, false);
-    });
-  });
+    }));
 
-  it("rejects a changed real-file target for a PATH-resolved executable", async () => {
-    await withTempDir("openclaw-wrapper-realpath-", async (rawCwd) => {
+  it("rejects a changed real-file target for a PATH-resolved executable", () =>
+    withTempDir("openclaw-wrapper-realpath-", async (rawCwd) => {
       const cwd = fs.realpathSync(rawCwd);
       const binDir = path.join(cwd, "bin");
       fs.mkdirSync(binDir);
@@ -171,11 +162,10 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
       fs.symlinkSync("/usr/bin/env", executable);
 
       await expectRevalidation(binding, cwd, false);
-    });
-  });
+    }));
 
-  it("rejects an unresolved original external wrapper token", async () => {
-    await withTempDir("openclaw-wrapper-missing-", async (cwd) => {
+  it("rejects an unresolved original external wrapper token", () =>
+    withTempDir("openclaw-wrapper-missing-", async (cwd) => {
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "shell", text: "./missing/env ls" },
@@ -183,6 +173,6 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
           env: { PATH: systemPath },
         }),
       ).resolves.toEqual(unresolved);
-    });
-  });
+    }));
 });
+import assert from "node:assert/strict";

@@ -10,12 +10,16 @@ import {
 
 describe("system-presence", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1);
     listSystemPresence();
     vi.useRealTimers();
-    vi.restoreAllMocks();
   });
+
+  function connect(deviceId: string, fields: Parameters<typeof upsertPresence>[1]) {
+    upsertPresence(deviceId, { deviceId, reason: "connect", ...fields });
+  }
 
   it("keeps a replacement connection private until its own delivery commits", () => {
     const key = randomUUID();
@@ -26,39 +30,27 @@ describe("system-presence", () => {
     updateSystemPresence({ instanceId: key, text: "updated beacon" });
 
     commitPresence(key, "first");
-    expect(listSystemPresence().some((entry) => entry.connectionId === "replacement")).toBe(false);
-    expect(
-      listSystemPresence({ includeConnectionId: "first" }).some(
-        (entry) => entry.connectionId === "replacement",
-      ),
-    ).toBe(false);
+    const replacement = expect.objectContaining({ connectionId: "replacement" });
+    expect(listSystemPresence()).not.toContainEqual(replacement);
+    expect(listSystemPresence({ includeConnectionId: "first" })).not.toContainEqual(replacement);
     expect(listSystemPresence({ includeConnectionId: "replacement" })).toContainEqual(
       expect.objectContaining({ connectionId: "replacement", host: "updated host" }),
     );
 
     commitPresence(key, "replacement");
-    expect(listSystemPresence()).toContainEqual(
-      expect.objectContaining({ connectionId: "replacement" }),
-    );
+    expect(listSystemPresence()).toContainEqual(replacement);
   });
 
   it("merges roles and scopes for the same device", () => {
     const deviceId = randomUUID();
 
-    upsertPresence(deviceId, {
-      deviceId,
+    connect(deviceId, {
       host: "openclaw",
       roles: ["operator"],
       scopes: ["operator.admin"],
-      reason: "connect",
     });
 
-    upsertPresence(deviceId, {
-      deviceId,
-      roles: ["node"],
-      scopes: ["system.run"],
-      reason: "connect",
-    });
+    connect(deviceId, { roles: ["node"], scopes: ["system.run"] });
 
     const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
     expect(entry).toMatchObject({
@@ -184,25 +176,13 @@ describe("system-presence", () => {
     const now = Date.now();
     const self = listSystemPresence().find((entry) => entry.reason === "self");
     expect(self?.instanceId).toBeDefined();
-    const clock = vi
-      .spyOn(Date, "now")
+    vi.spyOn(Date, "now")
       .mockReturnValueOnce(now)
       .mockReturnValue(now + 5 * 60 * 1000 + 1);
-    try {
-      expect(
-        listSystemPresence().filter((entry) => entry.instanceId === self?.instanceId),
-      ).toHaveLength(1);
-    } finally {
-      clock.mockRestore();
-    }
+    expect(
+      listSystemPresence().filter((entry) => entry.instanceId === self?.instanceId),
+    ).toHaveLength(1);
   });
-
-  function addCapacityPeers(prefix: string) {
-    for (let index = 0; index < 205; index += 1) {
-      const deviceId = `${prefix}${index}`;
-      upsertPresence(deviceId, { deviceId, host: deviceId, mode: "ui" });
-    }
-  }
 
   it("keeps the genuine gateway row when a beacon uses its hostname key", () => {
     vi.useFakeTimers();
@@ -224,7 +204,11 @@ describe("system-presence", () => {
     expect(snapshot.filter((entry) => entry.text === self.text)).toHaveLength(1);
     expect(snapshot.filter((entry) => entry.text === forged.text)).toHaveLength(1);
     expect(snapshot.find((entry) => entry.text === self.text)?.deviceId).toBeUndefined();
-    addCapacityPeers(`collision-${randomUUID()}-`);
+    const prefix = `collision-${randomUUID()}-`;
+    for (let index = 0; index < 205; index += 1) {
+      const deviceId = `${prefix}${index}`;
+      upsertPresence(deviceId, { deviceId, host: deviceId, mode: "ui" });
+    }
     const bounded = listSystemPresence();
     expect(bounded).toHaveLength(200);
     expect(bounded.filter((entry) => entry.text === self.text)).toHaveLength(1);
@@ -233,16 +217,8 @@ describe("system-presence", () => {
 
   it("expires stale peers after five minutes while keeping the gateway", () => {
     vi.useFakeTimers();
-    const initialTime = Date.now();
-    vi.setSystemTime(initialTime);
-
     const deviceId = randomUUID();
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "stale-host",
-      mode: "ui",
-      reason: "connect",
-    });
+    connect(deviceId, { host: "stale-host", mode: "ui" });
 
     expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
 

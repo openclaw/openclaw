@@ -27,6 +27,9 @@ vi.mock("./runtime-worker-url.js", () => ({
 import { claimTailscaleRoute, claimTailscaleServePort, findTailscaleBinary } from "./tailscale.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const serveDenied = "Serve is not enabled on your tailnet.";
+const retirementFailed = "route termination was not confirmed";
+const daemonLost = "\nlost connection to tailscaled: EOF";
 
 function startExposure(
   tailscaleMode: "serve" | "funnel" = "serve",
@@ -129,14 +132,15 @@ function queueOwner(
 
 const legacyRoutes = JSON.stringify({
   TCP: { "443": { HTTPS: true }, "18790": { HTTPS: true } },
-  Web: {
-    "fixture.tailnet.ts.net:443": {
-      Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
-    },
-    "fixture.tailnet.ts.net:18790": {
-      Handlers: { "/": { Proxy: "http://127.0.0.1:18790" } },
-    },
-  },
+  Web: Object.fromEntries(
+    [
+      [443, 18789],
+      [18790, 18790],
+    ].map(([port, target]) => [
+      `fixture.tailnet.ts.net:${port}`,
+      { Handlers: { "/": { Proxy: `http://127.0.0.1:${target}` } } },
+    ]),
+  ),
 });
 
 beforeEach(() => {
@@ -146,6 +150,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.resetAllMocks();
 });
@@ -175,98 +180,75 @@ describe("private Tailscale Serve claims", () => {
   );
 
   it.each([
-    { mode: "funnel", code: 1, failure: "Serve is not enabled on your tailnet." },
-    { mode: "serve", code: null, failure: "Serve is not enabled on your tailnet." },
-    {
-      mode: "serve",
-      code: 1,
-      failure: "Unexpected proxy error: Serve is not enabled on your tailnet.",
-    },
-    { mode: "serve", code: 1, failure: "permission denied" },
-    {
-      mode: "serve",
-      code: 1,
-      failure:
-        "Serve is not enabled on your tailnet.\nTo enable, visit:\nhttps://example.test/serve\nlost connection to tailscaled: EOF",
-    },
-  ] as const)("keeps $mode command failure fatal: $failure (code $code)", async (options) => {
+    ["funnel", 1, serveDenied],
+    ["serve", null, serveDenied],
+    ["serve", 1, `Unexpected proxy error: ${serveDenied}`],
+    ["serve", 1, "permission denied"],
+    ["serve", 1, `${serveDenied}\nTo enable, visit:\nhttps://example.test/serve${daemonLost}`],
+  ] as const)("keeps %s command failure fatal (code %s): %s", async (mode, code, failure) => {
+    const options = { code, failure };
     queueOwner(options);
-    if (options.failure === "permission denied") {
+    if (failure === "permission denied") {
       queueOwner(options);
     }
-    await expect(startExposure(options.mode)).rejects.toThrow(options.failure);
+    await expect(startExposure(mode)).rejects.toThrow(failure);
     expect(getTailscalePublishedOrigin()).toBeUndefined();
   });
 
   it("preserves denial and failed cleanup instead of continuing local startup", async () => {
     queueOwner({
-      failure: "Serve is not enabled on your tailnet.",
-      stopFailure: "route termination was not confirmed",
+      failure: serveDenied,
+      stopFailure: retirementFailed,
     });
     const error = await startExposure().catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(AggregateError);
     const failure = error as AggregateError;
     expect(failure.errors.map((cause: Error) => cause.message)).toEqual([
-      "Serve is not enabled on your tailnet.",
-      "route termination was not confirmed",
+      serveDenied,
+      retirementFailed,
     ]);
     expect(failure.cause).toBe(failure.errors[1]);
   });
 
   it.each([
-    { boundary: "policy denial", mode: "serve", outcome: "local" },
-    { boundary: "Funnel denial", mode: "funnel", outcome: "fatal" },
-    {
-      boundary: "later daemon failure",
-      mode: "serve",
-      outcome: "fatal",
-      extra: "\nlost connection to tailscaled: EOF",
-    },
-    {
-      boundary: "failed retirement",
-      mode: "serve",
-      outcome: "fatal",
-      cleanup: "route termination was not confirmed",
-    },
-    { boundary: "shutdown during retirement", mode: "serve", outcome: "cancelled" },
-  ] as const)("joins the owned startup deadline at $boundary", async (scenario) => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const interrupted = new Error("Gateway stopped while retiring denied Serve");
-    const pending = queueOwner({
-      ready: false,
-      failureAfterStop: `Serve is not enabled on your tailnet.\nTo enable, visit:\nhttps://example.test/serve${"extra" in scenario ? scenario.extra : ""}`,
-      ...("cleanup" in scenario ? { stopFailure: scenario.cleanup } : {}),
-      ...(scenario.outcome === "cancelled"
-        ? { abortOnStop: () => controller.abort(interrupted) }
-        : {}),
-    });
-    const log = { info: vi.fn(), warn: vi.fn() };
-    const result = startExposure(scenario.mode, log, controller.signal).catch(
-      (error: unknown) => error,
-    );
-    try {
+    ["policy denial", "serve", "local", "", undefined],
+    ["Funnel denial", "funnel", "fatal", "", undefined],
+    ["later daemon failure", "serve", "fatal", daemonLost, undefined],
+    ["failed retirement", "serve", "fatal", "", retirementFailed],
+    ["shutdown during retirement", "serve", "cancelled", "", undefined],
+  ] as const)(
+    "joins the owned startup deadline at %s",
+    async (_boundary, mode, expected, extra, cleanup) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const interrupted = new Error("Gateway stopped while retiring denied Serve");
+      const pending = queueOwner({
+        ready: false,
+        failureAfterStop: `${serveDenied}\nTo enable, visit:\nhttps://example.test/serve${extra}`,
+        stopFailure: cleanup,
+        ...(expected === "cancelled" ? { abortOnStop: () => controller.abort(interrupted) } : {}),
+      });
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const result = startExposure(mode, log, controller.signal).catch((error: unknown) => error);
       await pending.started;
       await vi.advanceTimersByTimeAsync(15_000);
       const outcome = await result;
-      if (scenario.outcome === "local") {
+      if (expected === "local") {
         expect(outcome).toBeNull();
         expect(log.warn).toHaveBeenCalledWith(
           expect.stringContaining("local Gateway remains available"),
         );
-      } else if (scenario.outcome === "cancelled") {
+      } else if (expected === "cancelled") {
         expect(outcome).toBe(interrupted);
       } else {
         expect(outcome).toBeInstanceOf(Error);
-        if ("cleanup" in scenario) {
+        if (cleanup) {
           expect(outcome).toBeInstanceOf(AggregateError);
         }
       }
       expect(getTailscalePublishedOrigin()).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("keeps stopped-daemon ingress closed and claims normally after the connection returns", async () => {
     runExecMock.mockResolvedValueOnce({ stdout: '{"BackendState":"Stopped"}' });
