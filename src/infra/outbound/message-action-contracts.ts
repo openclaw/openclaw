@@ -303,6 +303,7 @@ export function createChannelActionContext(params: {
     sessionKey: params.ctx.input.sessionKey,
     sessionId: params.ctx.input.sessionId,
     inboundEventKind: params.ctx.input.inboundEventKind,
+    ...(params.ctx.input.actionOrigin ? { actionOrigin: params.ctx.input.actionOrigin } : {}),
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.input.toolContext,

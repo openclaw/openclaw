@@ -197,7 +197,11 @@ function partitionTelegramPresentationBlocks(params: {
 /** Convert portable presentation into the one Telegram payload shape used by every send funnel. */
 export function canonicalizeTelegramPresentationPayload(
   payload: ReplyPayload,
-  options?: { allowWebAppButtons?: boolean; richTables?: boolean },
+  options?: {
+    allowWebAppButtons?: boolean;
+    richTables?: boolean;
+    typedCallbackOwner?: TelegramButtonBuildOptions["typedCallbackOwner"];
+  },
 ): ReplyPayload {
   const normalizedPresentation = normalizeMessagePresentation(payload.presentation);
   const telegramData = payload.channelData?.telegram as
@@ -223,6 +227,7 @@ export function canonicalizeTelegramPresentationPayload(
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
+    typedCallbackOwner: options?.typedCallbackOwner,
   };
   const existingButtons = resolveTelegramInlineButtons(
     {

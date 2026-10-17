@@ -312,6 +312,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     deliveryCompletion: params.ctx.input.deliveryCompletion,
     conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
     deliveryRetryOwner: params.ctx.deliveryRetryOwner,
+    actionOrigin: params.ctx.input.actionOrigin,
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
     onDeliveryIntent: params.ctx.input.onDeliveryIntent,
     onDeliveryAttempt: params.ctx.input.onDeliveryAttempt,

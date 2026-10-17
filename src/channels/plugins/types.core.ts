@@ -718,6 +718,11 @@ export type ChannelMessageActionContext = {
    * them. Plugins forward it into durable sends so recovery does not replay too.
    */
   deliveryRetryOwner?: "caller";
+  /**
+   * Server-owned fact: a model-authored `message` tool call. Typed callback
+   * controls on such sends belong to the agent, not to a plugin handler.
+   */
+  actionOrigin?: "message-tool";
   /** Host-owned live authority check; never read from model-controlled params. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */

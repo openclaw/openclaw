@@ -22,6 +22,8 @@ export type ChannelOutboundContext = Omit<
   mediaUrl?: string;
   formatting?: OutboundDeliveryFormattingOptions;
   identity?: OutboundIdentity;
+  /** @internal Model-authored message tool send; its typed callback controls belong to the agent. */
+  actionOrigin?: "message-tool";
   /** @internal Report each completed platform sub-send before starting another fallible step. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
