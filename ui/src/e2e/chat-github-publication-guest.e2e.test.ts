@@ -18,7 +18,12 @@ import { publicationMethods } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI guest shared GitHub publication" });
-const viewport = { width: 1180, height: 800 };
+const contextOptions = {
+  colorScheme: "light",
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { width: 1180, height: 800 },
+} satisfies Parameters<typeof suite.newBrowserContext>[0];
 const sessionKey = "agent:main:guest-publication";
 const publisher = { source: "system-configured", accountId: 1, login: "roboclaw-bot" } as const;
 const options = {
@@ -28,15 +33,6 @@ const options = {
   latestShared: null,
 } satisfies GitHubPublicationOptions;
 const historyText = "The visitor's change is ready for publication.";
-
-function contextOptions(): Parameters<typeof suite.newBrowserContext>[0] {
-  return {
-    colorScheme: "light",
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport,
-  };
-}
 
 async function installGuestGateway(
   page: Page,
@@ -58,15 +54,13 @@ async function installGuestGateway(
       createControlUiSessionRow(sessionKey, "Visitor change", 1, {
         visibility: "shared",
         sharingRole: "owner",
-        ...(hasWorkspace
+        worktree: hasWorkspace
           ? {
-              worktree: {
-                id: "visitor-worktree",
-                branch: "visitor/documentation",
-                repoRoot: "/synthetic/visitor-demo",
-              },
+              id: "visitor-worktree",
+              branch: "visitor/documentation",
+              repoRoot: "/synthetic/visitor-demo",
             }
-          : {}),
+          : undefined,
       }),
     ],
     presenceUsers: [
@@ -77,10 +71,7 @@ async function installGuestGateway(
         name: "Visitor",
       },
     ],
-    historyMessages: [
-      { role: "user", content: [{ type: "text", text: "Prepare a small documentation change." }] },
-      { role: "assistant", content: [{ type: "text", text: historyText }] },
-    ],
+    historyMessages: [{ role: "assistant", content: [{ type: "text", text: historyText }] }],
     methodResponses: { "sessions.github.options": { ...options, shared } },
   });
 }
@@ -92,7 +83,7 @@ async function expectNoPersonalActions(page: Page) {
 
 suite.define(() => {
   it("publishes an owned guest session through the shared account and recovers its receipt", async () => {
-    await suite.withPage(contextOptions(), async ({ page }) => {
+    await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installGuestGateway(page);
       const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b7";
       const requested = {
@@ -170,7 +161,7 @@ suite.define(() => {
   it.each([false, true])(
     "waits for an available publication target (managed workspace: %s)",
     async (hasWorkspace) => {
-      await suite.withPage(contextOptions(), async ({ page }) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
         const gateway = await installGuestGateway(page, hasWorkspace, null);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText(historyText, { exact: true }).waitFor();

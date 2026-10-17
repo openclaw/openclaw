@@ -124,14 +124,13 @@ suite.define(() => {
 
   it("paints startup history while canonical roster and metadata requests remain pending", async () => {
     const page = await newChatPage(suite);
+    const history = "Transcript paints while optional startup data loads";
     const gateway = await installMockGateway(page, {
       agentModel: "openai/hydrated-model",
       deferredMethods: ["agents.list", "chat.metadata", "models.list"],
       methodResponses: {
         "chat.startup": {
-          messages: [
-            chatMessage("assistant", "Transcript paints while optional startup data loads"),
-          ],
+          messages: [chatMessage("assistant", history)],
           sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
@@ -142,10 +141,8 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await gateway.waitForRequest("agents.list");
     await gateway.waitForRequest("chat.metadata");
-    await page
-      .locator(".chat-thread-inner")
-      .getByText("Transcript paints while optional startup data loads", { exact: true })
-      .waitFor({ timeout: 10_000 });
+    const transcript = page.locator(".chat-thread-inner");
+    await transcript.getByText(history, { exact: true }).waitFor({ timeout: 10_000 });
     expect(await gateway.getRequests("agents.list")).toHaveLength(1);
 
     await gateway.resolveDeferred("agents.list", {

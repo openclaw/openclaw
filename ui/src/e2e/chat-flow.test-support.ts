@@ -4,27 +4,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
-import {
-  controlUiSessionPath,
-  controlUiSessionUrl,
-  installMockGateway,
-  pauseVirtualClock,
-  type MockGatewayRequest,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
+export { expectDefined, installMockGateway };
+export { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 export {
-  expectDefined,
-  SESSION_DRAG_MIME,
   controlUiSessionPath,
   controlUiSessionUrl,
-  installMockGateway,
   pauseVirtualClock,
-};
+} from "../test-helpers/control-ui-e2e.ts";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -177,15 +169,14 @@ export async function expectRequestCountStable(
 export async function installPlainHttpClipboardCapture(page: Page): Promise<void> {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
-    (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec = [];
+    const capture = globalThis as unknown as { copiedViaExec: string[] };
+    capture.copiedViaExec = [];
     document.execCommand = ((command: string) => {
       if (command !== "copy") {
         return false;
       }
       const active = document.activeElement as HTMLTextAreaElement | null;
-      (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec.push(
-        active?.value ?? "",
-      );
+      capture.copiedViaExec.push(active?.value ?? "");
       return true;
     }) as typeof document.execCommand;
   });
@@ -224,11 +215,8 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
             await new Promise<void>((resolve) => {
               globalThis.setTimeout(resolve, 180);
             });
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => {
-                requestAnimationFrame(() => resolve());
-              });
-            });
+            await new Promise(requestAnimationFrame);
+            await new Promise(requestAnimationFrame);
             const after = readGeometry();
             return !scrolled && before.every((value, index) => value === after[index]);
           } finally {
@@ -256,17 +244,13 @@ export async function captureSessionAccessibilityProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  const sessionAccessibilityProofDir = path.join(owner.artifactDir, "session-accessibility");
+  const proofPath = path.join(owner.artifactDir, "session-accessibility", name);
   const sidebar = page.locator("openclaw-app-sidebar");
   await page.screenshot({
     fullPage: true,
-    path: path.join(sessionAccessibilityProofDir, `${name}.png`),
+    path: `${proofPath}.png`,
   });
-  await writeFile(
-    path.join(sessionAccessibilityProofDir, `${name}.yml`),
-    await sidebar.ariaSnapshot(),
-    "utf8",
-  );
+  await writeFile(`${proofPath}.yml`, await sidebar.ariaSnapshot(), "utf8");
 }
 
 export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
@@ -275,13 +259,8 @@ export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
     const viewport = thread.getBoundingClientRect();
     return Array.from(thread.querySelectorAll(".chat-bubble"))
       .filter((candidate) => {
-        const rect = candidate.getBoundingClientRect();
-        return (
-          rect.height > 0 &&
-          rect.width > 0 &&
-          rect.bottom > viewport.top &&
-          rect.top < viewport.bottom
-        );
+        const { height, width, bottom, top } = candidate.getBoundingClientRect();
+        return height > 0 && width > 0 && bottom > viewport.top && top < viewport.bottom;
       })
       .map((candidate) => candidate.textContent?.trim() ?? "")
       .filter(Boolean);

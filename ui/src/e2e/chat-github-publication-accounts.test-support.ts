@@ -54,6 +54,20 @@ export function defineGitHubPublicationAccountTests({
   suite: ReturnType<typeof createControlUiE2eSuite>;
   newPublicationContext: () => Promise<BrowserContext>;
 }) {
+  async function openPublication(
+    options: Parameters<typeof installPublicationGateway>[1] = {},
+    width?: number,
+  ) {
+    const page = await (await newPublicationContext()).newPage();
+    if (width) {
+      await page.setViewportSize({ width, height: 800 });
+    }
+    const gateway = await installPublicationGateway(page, options);
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await showPublicationBranch(gateway);
+    return { page, gateway };
+  }
+
   it.each([
     availability(
       "unavailable",
@@ -84,9 +98,7 @@ export function defineGitHubPublicationAccountTests({
       unidentified: true,
     }),
   ])("explains $name publication availability without requiring a connection", async (scenario) => {
-    const context = await newPublicationContext();
-    const page = await context.newPage();
-    const gateway = await installPublicationGateway(page, {
+    const { page, gateway } = await openPublication({
       assistantName: "Publication QA",
       workspace: "/synthetic/publication-qa",
       communityInvite: false,
@@ -108,8 +120,6 @@ export function defineGitHubPublicationAccountTests({
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await showPublicationBranch(gateway, "fix/publication-availability");
     const discovered = await gateway.waitForRequest("sessions.github.options");
     expect(discovered.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
     await openDetailsPullRequests(page);
@@ -155,12 +165,7 @@ export function defineGitHubPublicationAccountTests({
   it.each([1180, 390])(
     "keeps the account menu compact and keyboard accessible at %ipx",
     async (width) => {
-      const context = await newPublicationContext();
-      const page = await context.newPage();
-      await page.setViewportSize({ width, height: 800 });
-      const gateway = await installPublicationGateway(page, {});
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await showPublicationBranch(gateway);
+      const { page, gateway } = await openPublication({}, width);
       await openDetailsPullRequests(page);
       const arrow = page.getByRole("button", {
         name: "Publication account",
@@ -224,9 +229,7 @@ export function defineGitHubPublicationAccountTests({
   );
 
   it("publishes as the sole personal account only after the explicit labeled action", async () => {
-    const context = await newPublicationContext();
-    const page = await context.newPage();
-    const gateway = await installPublicationGateway(page, {
+    const { page, gateway } = await openPublication({
       methodResponses: {
         "sessions.github.options": {
           ...publicationOptions,
@@ -235,8 +238,6 @@ export function defineGitHubPublicationAccountTests({
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await showPublicationBranch(gateway);
     await openDetailsPullRequests(page);
     const publish = publicationAction(page, "Publish as @alice-tools");
     await publish.waitFor();
@@ -261,10 +262,8 @@ export function defineGitHubPublicationAccountTests({
   ])(
     "gates personal publication for a $name workspace",
     async ({ state, running, conflict, ready }) => {
-      const context = await newPublicationContext();
-      const page = await context.newPage();
       const now = Date.now();
-      const gateway = await installPublicationGateway(page, {
+      const { page } = await openPublication({
         sessions: [
           createControlUiSessionRow("agent:main:main", "Publication workspace", now, {
             hasActiveRun: running,
@@ -275,26 +274,19 @@ export function defineGitHubPublicationAccountTests({
               createdAtMs: now,
               updatedAtMs: now,
               stateChangedAtMs: now,
-              ...(conflict
+              workspaceResultConflict: conflict
                 ? {
-                    workspaceResultConflict: {
-                      paths: ["src/example.ts"],
-                      stagedResultRef: "refs/openclaw/worker-results/test",
-                      totalCount: 1,
-                    },
+                    paths: ["src/example.ts"],
+                    stagedResultRef: "refs/openclaw/worker-results/test",
+                    totalCount: 1,
                   }
-                : {}),
+                : undefined,
             },
           }),
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await showPublicationBranch(gateway);
       await openDetailsPullRequests(page);
-      await page.getByRole("button", { name: "Publication account" }).click();
-      await page
-        .locator('.chat-pr__accounts-panel [role="menuitemradio"][value="personal"]')
-        .click();
+      await selectPublicationAccount(page, "personal");
       const publish = page.getByRole("button", { name: "Publish PR" });
       await publish.waitFor();
 

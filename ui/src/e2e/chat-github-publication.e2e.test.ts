@@ -70,6 +70,10 @@ async function expectHiddenProjection(pane: Locator, name: string) {
   expect.soft(error).toBeUndefined();
 }
 
+async function expectText(locator: Locator, text: string) {
+  await expect.poll(() => locator.textContent()).toContain(text);
+}
+
 function publicationContextOptions(): Parameters<typeof suite.newBrowserContext>[0] {
   return {
     colorScheme: "light",
@@ -83,9 +87,20 @@ async function newPublicationContext() {
   return await suite.newBrowserContext(publicationContextOptions());
 }
 
-async function newPublicationPage(options: Parameters<typeof installPublicationGateway>[1] = {}) {
+async function openPublicationPage(
+  options: Parameters<typeof installPublicationGateway>[1] = {},
+  branch?: string,
+) {
   const page = await (await newPublicationContext()).newPage();
-  return { page, gateway: await installPublicationGateway(page, options) };
+  const gateway = await installPublicationGateway(page, options);
+  await page.goto(
+    options.sessionKey
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey)
+      : `${suite.server.baseUrl}chat`,
+  );
+  await showPublicationBranch(gateway, branch, options.sessionKey);
+  await openDetailsPullRequests(page);
+  return { page, gateway };
 }
 
 suite.define(() => {
@@ -214,7 +229,6 @@ suite.define(() => {
     const gateway = await installPublicationGateway(page, {
       assistantName: "Publication QA",
       workspace: "/synthetic/publication-qa",
-      communityInvite: false,
       sessionKey,
       sessions: [createControlUiSessionRow(sessionKey, "Publication task", 1)],
     });
@@ -266,10 +280,9 @@ suite.define(() => {
     ["shared", "LRU eviction", ["agent:main:other", "agent:main:third", "agent:main:fourth"]],
   ] as const)("keeps the original %s retry after %s", async (source, navigation, via) => {
     const sessionA = "agent:main:publication";
-    const { page, gateway } = await newPublicationPage({
+    const { page, gateway } = await openPublicationPage({
       assistantName: "Publication QA",
       workspace: "/synthetic/publication-qa",
-      communityInvite: false,
       sessionKey: sessionA,
       sessions: [
         createControlUiSessionRow(sessionA, "Publication task", 2),
@@ -279,9 +292,6 @@ suite.define(() => {
       ],
       presenceUsers: viewer("synthetic", "Synthetic reviewer"),
     });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
-    await showPublicationBranch(gateway, undefined, sessionA);
-    await openDetailsPullRequests(page);
     const activePane = page.locator(".chat-pane-cache__pane--active");
     await selectPublicationAccount(activePane, source);
     await gateway.deferNext("sessions.github.publish");
@@ -333,15 +343,14 @@ suite.define(() => {
   it.each(["shared", "personal"] as const)(
     "refreshes a rejected first %s selection without replaying or publishing automatically",
     async (source) => {
-      const { page, gateway } = await newPublicationPage({
-        assistantName: "Publication QA",
-        workspace: "/synthetic/publication-qa",
-        communityInvite: false,
-        presenceUsers: viewer("synthetic", "Synthetic reviewer"),
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await showPublicationBranch(gateway, "fix/publisher-recovery");
-      await openDetailsPullRequests(page);
+      const { page, gateway } = await openPublicationPage(
+        {
+          assistantName: "Publication QA",
+          workspace: "/synthetic/publication-qa",
+          presenceUsers: viewer("synthetic", "Synthetic reviewer"),
+        },
+        "fix/publisher-recovery",
+      );
       await selectPublicationAccount(page, source);
       await gateway.deferNext("sessions.github.publish");
       await publicationAction(page, "Publish PR").click();
@@ -440,12 +449,9 @@ suite.define(() => {
   );
 
   it("freezes an explicitly selected personal account through a lost response and shows the server actor", async () => {
-    const { page, gateway } = await newPublicationPage({
+    const { page, gateway } = await openPublicationPage({
       presenceUsers: viewer("alice", "Alice"),
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await showPublicationBranch(gateway);
-    await openDetailsPullRequests(page);
     const chooser = publicationAction(page, "Publication account");
     await chooser.click();
     const shared = page.getByRole("menuitemradio", { name: "@system-bot", exact: true });
@@ -489,9 +495,7 @@ suite.define(() => {
       .poll(() => page.getByRole("button", { name: "Retry publication" }).isEnabled())
       .toBe(true);
     await expect.poll(() => chooser.count()).toBe(0);
-    await expect
-      .poll(() => page.locator("[data-publication-account]").textContent())
-      .toContain("Publish as @alice-tools");
+    await expectText(page.locator("[data-publication-account]"), "Publish as @alice-tools");
     expect(await page.locator(".chat-pr__publication-outcome").textContent()).not.toContain(
       "replacement",
     );
@@ -509,12 +513,8 @@ suite.define(() => {
     await expect
       .poll(() => page.getByRole("button", { name: "Choose a new publication" }).count())
       .toBe(1);
-    await expect
-      .poll(() => page.locator("[data-publication-account]").textContent())
-      .toContain("Publish as @alice-tools");
-    await expect
-      .poll(() => page.locator(".chat-pr__publication-outcome").textContent())
-      .toContain("My GitHub");
+    await expectText(page.locator("[data-publication-account]"), "Publish as @alice-tools");
+    await expectText(page.locator(".chat-pr__publication-outcome"), "My GitHub");
     expect(await gateway.getRequests("secrets.set")).toHaveLength(0);
   });
 
@@ -523,7 +523,7 @@ suite.define(() => {
     async (state) => {
       const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b3";
       const confirmation = confirmationFixture("team/demo", "alice/demo", "feature/original");
-      const { page, gateway } = await newPublicationPage({
+      const { page, gateway } = await openPublicationPage({
         sessions: [
           createControlUiSessionRow("agent:main:main", "Publication workspace", Date.now(), {
             placement: {
@@ -556,9 +556,6 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await showPublicationBranch(gateway);
-      await openDetailsPullRequests(page);
       await page.getByRole("button", { name: "Confirm original publication" }).waitFor();
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
@@ -566,16 +563,15 @@ suite.define(() => {
       await showPublicationBranch(gateway);
       await openDetailsPullRequests(page);
       const details = page.locator(".chat-pr__publication-outcome");
-      await expect.poll(() => details.textContent()).toContain("Publish as @alice-tools");
-      await expect.poll(() => details.textContent()).toContain("team/demo → main");
-      await expect.poll(() => details.textContent()).toContain("alice/demo · feature/original");
+      await expectText(details, "Publish as @alice-tools");
+      await expectText(details, "team/demo → main");
+      await expectText(details, "alice/demo · feature/original");
       await details.getByText("Original accepted snapshot", { exact: true }).click();
-      await expect
-        .poll(() => details.locator(".chat-pr__publication-note details").textContent())
-        .toContain(confirmation.workspaceTree);
-      await expect
-        .poll(() => details.textContent())
-        .toContain("remote outcome may still be unknown");
+      await expectText(
+        details.locator(".chat-pr__publication-note details"),
+        confirmation.workspaceTree,
+      );
+      await expectText(details, "remote outcome may still be unknown");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
 
@@ -599,10 +595,9 @@ suite.define(() => {
 
   it("acknowledges a completed personal publication with read scope without publishing", async () => {
     const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b5";
-    const { page, gateway } = await newPublicationPage({
+    const { page, gateway } = await openPublicationPage({
       assistantName: "Publication QA",
       workspace: "/synthetic/publication-qa",
-      communityInvite: false,
       operatorScopes: ["operator.read"],
       presenceUsers: viewer("alice", "Alice"),
       methodResponses: {
@@ -620,9 +615,6 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await showPublicationBranch(gateway);
-    await openDetailsPullRequests(page);
     await page
       .getByText("The original publication is still running.", { exact: true })
       .waitFor({ state: "attached" });
@@ -666,12 +658,9 @@ suite.define(() => {
   });
 
   it("removes publication mutation controls when the connection becomes read-only", async () => {
-    const { page, gateway } = await newPublicationPage({
+    const { page, gateway } = await openPublicationPage({
       presenceUsers: viewer("alice", "Alice"),
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await showPublicationBranch(gateway);
-    await openDetailsPullRequests(page);
     await page.getByRole("button", { name: "Publication account" }).click();
     await page.locator('.chat-pr__accounts-panel [role="menuitemradio"][value="personal"]').click();
     await gateway.deferNext("sessions.github.publish");
