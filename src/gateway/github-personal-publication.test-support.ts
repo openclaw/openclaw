@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, expect, onTestFinished, vi } from "vitest";
-import { stringify as stringifyYaml } from "yaml";
-import { resolveManagedGitHubProfileDir } from "../agents/github-tool-identity.js";
+import {
+  resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
+} from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { prepareUserGitHubConnection } from "../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -164,20 +163,7 @@ export async function createPersonalPublicationFixture() {
     () => {},
   );
   const dir = resolveManagedGitHubProfileDir({ scope: "personal", agentId: "", profileId });
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const profileFiles = {
-    "hosts.yml": {
-      "github.com": {
-        user: account.login,
-        oauth_token: personalToken,
-        users: { [account.login]: { oauth_token: personalToken } },
-      },
-    },
-    "config.yml": { version: "1" },
-  };
-  for (const [name, data] of Object.entries(profileFiles)) {
-    await fs.writeFile(path.join(dir, name), stringifyYaml(data), { mode: 0o600 });
-  }
+  await writeManagedGitHubProfileFiles(dir, { login: account.login, token: personalToken });
   const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
     if (
       url !== "https://api.github.com/user" ||
@@ -254,13 +240,7 @@ export async function callPersonalPublicationRpc(
         ...context,
         githubPublicationService: coordinator,
         githubOAuthService: {
-          personal: {
-            ...personal,
-            status: async (statusAction: Parameters<typeof personalGitHubStatus>[0]) => {
-              await prepareUserGitHubConnection(statusAction.owner);
-              return personalGitHubStatus(statusAction);
-            },
-          },
+          personal: { ...personal, status: personalGitHubStatus },
         } as GatewayRequestContext["githubOAuthService"],
       },
       respond,

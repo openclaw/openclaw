@@ -262,7 +262,7 @@ export const OLD_HEAD = "b".repeat(40);
 export const NEW_HEAD = "c".repeat(40);
 export const WORKSPACE_TREE = "d".repeat(40);
 
-function publicationWorktree(ownerId = SESSION_KEY) {
+export function publicationWorktree(ownerId = SESSION_KEY) {
   return {
     id: "worktree-1",
     repoRoot: "/repo",
@@ -275,7 +275,7 @@ function publicationWorktree(ownerId = SESSION_KEY) {
   };
 }
 
-function registryPublicationWorktree(worktree = publicationWorktree()) {
+export function registryPublicationWorktree(worktree = publicationWorktree()) {
   return {
     ...worktree,
     name: "publication",

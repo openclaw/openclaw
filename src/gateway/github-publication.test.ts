@@ -55,6 +55,10 @@ const repository = {
   fingerprint: "fingerprint-1",
 };
 const openDatabase = () => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+const coordinatorFor = (database: ReturnType<typeof openDatabase>) =>
+  createGitHubPublicationCoordinator({
+    placements: createWorkerSessionPlacementStore({ database }),
+  });
 const publish = (idempotencyKey: string) =>
   createGitHubPublicationCoordinator().requestForSessionV2(publicationRequest(idempotencyKey));
 const commandMatches = (...args: string[]) =>
@@ -137,12 +141,8 @@ function publicationPull(
 }
 const pullResponse = (overrides: Parameters<typeof publicationPull>[0]) =>
   commandResult(JSON.stringify([publicationPull(overrides)]));
-const workerTranscript = () =>
-  loadTranscriptEvents({
-    agentId: REQUEST.agentId,
-    sessionId: REQUEST.sessionId,
-    sessionKey: REQUEST.sessionKey,
-  });
+const workerTranscript = ({ agentId, sessionId, sessionKey } = REQUEST) =>
+  loadTranscriptEvents({ agentId, sessionId, sessionKey });
 
 describe("Gateway GitHub publication", () => {
   installGitHubPublicationTestHarness();
@@ -170,9 +170,7 @@ describe("Gateway GitHub publication", () => {
     const database = openOpenClawStateDatabase();
     // Older admitted stores can lack this additive, first-publication table.
     database.db.exec("DROP TABLE IF EXISTS github_publication_requests");
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
+    const coordinator = coordinatorFor(database);
     expect(await coordinator.readAsync("absent")).toBeUndefined();
     expect(
       database.db
@@ -185,8 +183,7 @@ describe("Gateway GitHub publication", () => {
     await persistPublicationTestSession();
     const { requester } = await createSystemGitHubPublicationRequesterFixture();
     const database = openDatabase();
-    const placements = createWorkerSessionPlacementStore({ database });
-    const coordinator = createGitHubPublicationCoordinator({ placements });
+    const coordinator = coordinatorFor(database);
     const request = publicationRequest("publish-1", { title: "Publish the reconciled fix" });
 
     const first = await coordinator.requestForSessionV2({ ...request, requester });
@@ -195,11 +192,6 @@ describe("Gateway GitHub publication", () => {
       true,
     );
     expect(commands.some((argv) => argv.some((arg) => arg.includes("roboclaw-token")))).toBe(false);
-    expect(
-      commandMatches("credential.helper=!gh auth git-credential", "push").some(
-        ([program]) => program === "git",
-      ),
-    ).toBe(true);
     for (const argv of commandMatchesAny("update-ref", "read-tree", "add", "reset", "push")) {
       expect(argv, argv.join(" ")).toContain(`core.hooksPath=${os.devNull}`);
     }
@@ -207,10 +199,12 @@ describe("Gateway GitHub publication", () => {
       expect(argv).toContain("core.fsmonitor=false");
     }
     const push = commands.find((argv) => argv.includes("push"));
+    expect(push?.[0]).toBe("git");
     expect(push).toEqual(
       expect.arrayContaining([
         "--no-follow-tags",
         "--recurse-submodules=no",
+        "credential.helper=!gh auth git-credential",
         `${NEW_HEAD}:refs/heads/${BRANCH}`,
       ]),
     );
@@ -245,15 +239,12 @@ describe("Gateway GitHub publication", () => {
     const persisted = database.db
       .prepare("SELECT * FROM github_publication_requests WHERE session_id = ?")
       .get(SESSION_ID);
-    expect(JSON.stringify(persisted)).not.toContain("GH_CONFIG_DIR");
-    expect(JSON.stringify(persisted)).not.toContain("token");
+    expect(JSON.stringify(persisted)).not.toMatch(/GH_CONFIG_DIR|token/);
 
     const commandCount = commands.length;
     await closeStateDatabaseForTest();
     const reopened = openDatabase();
-    const afterRestart = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database: reopened }),
-    });
+    const afterRestart = coordinatorFor(reopened);
     const resumed = await createSystemGitHubPublicationRequesterFixture();
     await expect(
       afterRestart.requestForSessionV2({ ...request, requester: resumed.requester }),
@@ -395,9 +386,7 @@ describe("Gateway GitHub publication", () => {
 
   it("fails a restarted request when the branch advanced beyond its accepted snapshot", async () => {
     const database = openDatabase();
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
+    const coordinator = coordinatorFor(database);
     const requestId = "publication-stale-snapshot";
     seedLocalPublication(database, { requestId, status: "publishing" });
     overrideCommands((command) => {
@@ -554,9 +543,7 @@ describe("Gateway GitHub publication", () => {
           return { ...repository };
         });
         const database = openDatabase();
-        const coordinator = createGitHubPublicationCoordinator({
-          placements: createWorkerSessionPlacementStore({ database }),
-        });
+        const coordinator = coordinatorFor(database);
         await expect(
           coordinator.requestForSessionV2(
             publicationRequest("publish-stale-worktree-await", { title: "Publish safely" }),
@@ -618,9 +605,7 @@ describe("Gateway GitHub publication", () => {
         }
       }, true);
       const reopened = openDatabase();
-      const resumed = createGitHubPublicationCoordinator({
-        placements: createWorkerSessionPlacementStore({ database: reopened }),
-      });
+      const resumed = coordinatorFor(reopened);
 
       await resumed.resumeSessionRequests();
 

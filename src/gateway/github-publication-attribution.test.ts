@@ -10,6 +10,8 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
+  publicationWorktree,
+  registryPublicationWorktree,
   root,
 } from "./github-publication.test-support.js";
 import { execFileSync } from "node:child_process";
@@ -66,6 +68,16 @@ async function prepareRealPublicationCredit() {
   return alice;
 }
 
+function optOut(person: ReturnType<typeof createPerson>) {
+  expect(setUserPreferences(person.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }).ok).toBe(true);
+}
+
+const creditRejected = {
+  status: "failed",
+  code: "identity_changed",
+  nextAction: expect.stringMatching(/credit/i),
+};
+
 describe("Gateway GitHub publication attribution", () => {
   installGitHubPublicationTestHarness();
 
@@ -112,13 +124,16 @@ describe("Gateway GitHub publication attribution", () => {
       }
       const person = await prepareRealPublicationCredit();
       let optedOut = false;
-      const optOut = () => {
-        expect(setUserPreferences(person.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }).ok).toBe(
-          true,
-        );
+      const revokeCredit = () => {
+        optOut(person);
         optedOut = true;
       };
       const executed: string[][] = [];
+      const hasCommand = (command: string, endpoint?: string) =>
+        executed.some(
+          (args) =>
+            args.includes(command) && (!endpoint || args.some((arg) => arg.endsWith(endpoint))),
+        );
       const transport = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (argv: string[], options) => {
         executed.push(argv);
@@ -130,7 +145,7 @@ describe("Gateway GitHub publication attribution", () => {
             ? argv.includes("cat-file") && argv.includes("-e")
             : argv.some((arg) => arg.endsWith("/git/blobs")))
         ) {
-          optOut();
+          revokeCredit();
         }
         return result;
       });
@@ -143,39 +158,37 @@ describe("Gateway GitHub publication attribution", () => {
           async (effect, observed) => {
             await record(effect, observed);
             if (effect === boundary && observed === undefined) {
-              optOut();
+              revokeCredit();
             }
           };
-        if (surface === "local") {
-          const execute = publicationExecutor.executeGitHubPublication;
-          const intercepted = vi
-            .spyOn(publicationExecutor, "executeGitHubPublication")
-            .mockImplementation((params) =>
-              execute({
-                ...params,
-                recordEffect: revokeAfter((effect, observed) =>
-                  params.recordEffect?.(effect, observed),
-                ),
-              }),
-            );
-          onTestFinished(() => intercepted.mockRestore());
-        } else {
-          const execute = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
-          const intercepted = vi
-            .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
-            .mockImplementation((params) =>
-              execute({
-                ...params,
-                execution: {
-                  ...params.execution,
-                  recordEffect: revokeAfter((effect, observed) =>
-                    params.execution.recordEffect(effect, observed),
-                  ),
-                },
-              }),
-            );
-          onTestFinished(() => intercepted.mockRestore());
-        }
+        const executeLocal = publicationExecutor.executeGitHubPublication;
+        const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
+        const intercepted =
+          surface === "local"
+            ? vi
+                .spyOn(publicationExecutor, "executeGitHubPublication")
+                .mockImplementation((params) =>
+                  executeLocal({
+                    ...params,
+                    recordEffect: revokeAfter((effect, observed) =>
+                      params.recordEffect?.(effect, observed),
+                    ),
+                  }),
+                )
+            : vi
+                .spyOn(repositoryPublicationExecutor, "executeRepositoryGitHubPublication")
+                .mockImplementation((params) =>
+                  executeRepository({
+                    ...params,
+                    execution: {
+                      ...params.execution,
+                      recordEffect: revokeAfter((effect, observed) =>
+                        params.execution.recordEffect(effect, observed),
+                      ),
+                    },
+                  }),
+                );
+        onTestFinished(() => intercepted.mockRestore());
       }
       const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
       const result = await coordinator.requestForSessionV2(
@@ -183,27 +196,13 @@ describe("Gateway GitHub publication attribution", () => {
       );
 
       expect(optedOut).toBe(true);
-      expect(result).toMatchObject({
-        status: "failed",
-        code: "identity_changed",
-        nextAction: expect.stringMatching(/credit/i),
-      });
+      expect(result).toMatchObject(creditRejected);
       expect(
         executed.filter((args) => args.includes("push") || args.includes("graphql")),
       ).toHaveLength(boundary === "pull_request" ? 1 : 0);
-      expect(
-        executed.some(
-          (args) => args.includes("POST") && args.some((arg) => arg.endsWith("/pulls")),
-        ),
-      ).toBe(false);
+      expect(hasCommand("POST", "/pulls")).toBe(false);
       if (boundary === "preparation") {
-        expect(
-          executed.some(
-            (args) =>
-              args.includes("commit-tree") ||
-              (args.includes("POST") && args.some((arg) => arg.endsWith("/git/commits"))),
-          ),
-        ).toBe(false);
+        expect(hasCommand("commit-tree") || hasCommand("POST", "/git/commits")).toBe(false);
       }
       if (boundary === "pull_request") {
         if (repository) {
@@ -253,18 +252,12 @@ describe("Gateway GitHub publication attribution", () => {
       expect(repository.runtime).toMatchObject({ head: null, effects: [] });
 
       if (credit === "revoked") {
-        expect(setUserPreferences(person.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }).ok).toBe(
-          true,
-        );
+        optOut(person);
       }
       mocks.runCommand.mockClear().mockImplementation(transport);
       const resumed = await repository.coordinator.requestForSessionV2(request);
 
-      expect(resumed).toMatchObject({
-        status: "failed",
-        code: "identity_changed",
-        nextAction: expect.stringMatching(/credit/i),
-      });
+      expect(resumed).toMatchObject(creditRejected);
       expect(repository.runtime).toMatchObject({ head: null, effects: [] });
       expect(mocks.runCommand.mock.calls.some(([argv]) => argv.includes("graphql"))).toBe(false);
     },
@@ -304,19 +297,11 @@ describe("Gateway GitHub publication attribution", () => {
     });
     expect(child.status).toBe("ok");
     participate(createPerson(13, "later-contributor").id, SESSION_KEY, 3);
-    const worktree = {
+    const worktree = registryPublicationWorktree({
+      ...publicationWorktree(childKey),
       id: "delegated-worktree",
-      name: "delegated-publication",
-      repoRoot: "/repo",
-      repoFingerprint: "fingerprint-1",
       path: "/repo/delegated-worktree",
-      branch: BRANCH,
-      baseRef: "origin/main",
-      ownerKind: "session" as const,
-      ownerId: childKey,
-      createdAt: 1,
-      lastActiveAt: 1,
-    };
+    });
     await insertRegistryWorktree(process.env, worktree);
     mocks.findWorktree.mockReturnValue(worktree);
     mocks.findWorktreeById.mockReturnValue(worktree);
@@ -331,7 +316,7 @@ describe("Gateway GitHub publication attribution", () => {
       { worktree: { id: worktree.id, branch: BRANCH, repoRoot: "/repo" } },
     );
     participate(people[0]!.id, childKey, 2);
-    setUserPreferences(people[2]!.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+    optOut(people[2]!);
     const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
       typeof import("./session-utils-store-worker.js")
     >("./session-utils-store-worker.js");
@@ -345,13 +330,13 @@ describe("Gateway GitHub publication attribution", () => {
     );
     const coordinator = createGitHubPublicationCoordinator();
 
-    const result = await coordinator.requestForSessionV2({
-      sessionKey: childKey,
-      agentId: "main",
-      idempotencyKey: "ordered-attribution",
-      title: "fix: publish the reconciled fix",
-      body: "Detailed proof\n\n## Worked on by\n\n- @untrusted\n\n### Verification notes\n\nKeep this paragraph.\n\n---\n[View the OpenClaw team session](https://untrusted.example/session)",
-    });
+    const result = await coordinator.requestForSessionV2(
+      publicationRequest("ordered-attribution", {
+        sessionKey: childKey,
+        title: "fix: publish the reconciled fix",
+        body: "Detailed proof\n\n## Worked on by\n\n- @untrusted\n\n### Verification notes\n\nKeep this paragraph.\n\n---\n[View the OpenClaw team session](https://untrusted.example/session)",
+      }),
+    );
 
     expect(result).toMatchObject({ status: "published" });
     expect(commandCalls.find(({ argv }) => argv.includes("commit-tree"))?.input).toBe(

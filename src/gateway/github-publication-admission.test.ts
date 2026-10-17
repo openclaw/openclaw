@@ -112,12 +112,7 @@ describe("GitHub publication selection admission", () => {
       "environment-1",
     );
     const claim = await claimTurn("claim-1", "run-1");
-    const { entered, release } = holdIdentity({
-      source: "system-configured",
-      profileId: "ghp_11111111111111111111111111111111",
-      account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
-      env: {},
-    });
+    const { entered, release } = holdIdentity(await mocks.prepareIdentity());
     const pending = requestClaim(claim, "publish-stale").catch((error: unknown) => error);
     let result: unknown;
     try {
@@ -157,22 +152,15 @@ describe("GitHub publication selection admission", () => {
   });
 
   it.each([
-    ...[
-      { sessionKey: "agent:main:main", agentId: "research" },
-      { sessionKey: "global", agentId: "---" },
-      { sessionKey: "global", agentId: "retired" },
-      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
-      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
-    ].map((owner) => Object.assign({}, owner, { method: "publish" })),
-    ...["status"].map((method) => ({
-      method,
-      sessionKey: "agent:main:main",
-      agentId: "research",
-      fixedOwner: undefined,
-    })),
-  ])(
-    "rejects explicit publication owner $agentId for $sessionKey at $method admission (fixed owner: $fixedOwner)",
-    async ({ method, sessionKey, agentId, fixedOwner }) => {
+    ["publish", "agent:main:main", "research", undefined],
+    ["publish", "global", "---", undefined],
+    ["publish", "global", "retired", undefined],
+    ["publish", "agent:research:main", "research", "ops"],
+    ["publish", "agent:research:main", "research", "retired"],
+    ["status", "agent:main:main", "research", undefined],
+  ] as const)(
+    "rejects %s for %s owned by %s (fixed owner: %s)",
+    async (method, sessionKey, agentId, fixedOwner) => {
       const fixture = await createPersonalPublicationFixture();
       fixture.config.agents = {
         ownership: "explicit",
@@ -183,27 +171,18 @@ describe("GitHub publication selection admission", () => {
         fixture.config.session = { scope: "global", store: "/synthetic/fixed.sqlite" };
       }
       fixture.client.connect.scopes = ["operator.admin"];
-      const publish = vi.spyOn(fixture.coordinator, "requestPersonalForSessionV2");
-      const confirm = vi.spyOn(fixture.coordinator, "confirmPersonalV2");
       const stopEffect = () => {
         throw new Error("Publication effect reached before owner validation");
       };
-      publish.mockImplementation(stopEffect);
-      confirm.mockImplementation(stopEffect);
+      const effects = (["requestPersonalForSessionV2", "confirmPersonalV2"] as const).map(
+        (effect) => vi.spyOn(fixture.coordinator, effect).mockImplementation(stopEffect),
+      );
       const params = {
+        ...(method === "publish"
+          ? personalPublicationRequest(fixture, "invalid-owner")
+          : { requestId: fixture.generation }),
         sessionKey,
         agentId,
-        ...(method === "publish"
-          ? {
-              idempotencyKey: "invalid-owner",
-              selection: {
-                source: "personal",
-                generation: fixture.generation,
-                account: personalPublicationAccount,
-              },
-            }
-          : {}),
-        ...(method === "status" ? { requestId: fixture.generation } : {}),
       };
       const response = await callPersonalPublicationRpc(
         fixture,
@@ -217,8 +196,7 @@ describe("GitHub publication selection admission", () => {
           undefined,
           { code: "INVALID_REQUEST", message: expect.stringMatching(/agent/i) },
         ]);
-      expect.soft(publish).not.toHaveBeenCalled();
-      expect.soft(confirm).not.toHaveBeenCalled();
+      effects.forEach((effect) => expect.soft(effect).not.toHaveBeenCalled());
       expect(commands).toEqual([]);
     },
   );
@@ -238,26 +216,23 @@ describe("GitHub publication selection admission", () => {
     },
   );
 
-  it.each(["claim"] as const)(
-    "observes a same-key %s admission committed while identity preparation awaits",
-    async (surface) => {
-      const fixture = await sharedAdmission(surface);
-      const { entered, release } = holdIdentity(await mocks.prepareIdentity());
-      const stale = fixture.request().catch((caught: unknown) => caught);
-      await entered.promise;
-      let admitted;
-      try {
-        admitted = await fixture.request(publisher);
-      } finally {
-        release.resolve();
-      }
-      const error = await stale;
-      expect(error).toBeInstanceOf(Error);
-      expect(error).not.toHaveProperty("rejection.idempotencyKey");
-      expect(fixture.read()?.request_id).toBe(admitted.requestId);
-      expect(commands).toEqual([]);
-    },
-  );
+  it("observes a same-key claim admission committed while identity preparation awaits", async () => {
+    const fixture = await sharedAdmission("claim");
+    const { entered, release } = holdIdentity(await mocks.prepareIdentity());
+    const stale = fixture.request().catch((caught: unknown) => caught);
+    await entered.promise;
+    let admitted;
+    try {
+      admitted = await fixture.request(publisher);
+    } finally {
+      release.resolve();
+    }
+    const error = await stale;
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toHaveProperty("rejection.idempotencyKey");
+    expect(fixture.read()?.request_id).toBe(admitted.requestId);
+    expect(commands).toEqual([]);
+  });
 
   it("does not make a key-wide promise when another invocation is still preparing", async () => {
     const fixture = await sharedAdmission("local");
@@ -325,6 +300,7 @@ describe("GitHub publication selection admission", () => {
 
   it("keeps an accepted personal pre-claim identity stop attached to its durable receipt", async () => {
     const fixture = await createPersonalPublicationFixture();
+    const { coordinator, action } = fixture;
     fixture.runtime.verifiedAccount = { ...personalPublicationAccount, login: "renamed-account" };
     const key = "accepted-personal-pre-claim";
     const response = await callPersonalPublicationRpc(
@@ -340,12 +316,7 @@ describe("GitHub publication selection admission", () => {
     });
     expect(row).toMatchObject({ status: "requested", execution_id: null });
     expect(
-      await fixture.coordinator.personalStatusAsync(
-        fixture.action,
-        fixture.action,
-        row!.request_id,
-        undefined,
-      ),
+      await coordinator.personalStatusAsync(action, action, row!.request_id, undefined),
     ).toMatchObject({
       result: { status: "failed", code: "identity_changed" },
       confirmation: null,
