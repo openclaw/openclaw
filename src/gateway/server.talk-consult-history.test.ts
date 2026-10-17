@@ -342,20 +342,17 @@ function liveMessages() {
   });
 }
 function expectNoGeneratedInput(messages: unknown[], surface: string) {
-  const markdown = buildChatMarkdown(messages, "Voice test assistant");
-  const serialized = JSON.stringify(messages);
-  expect
-    .soft(
-      syntheticMarkers.filter((marker) => serialized.includes(marker)),
-      surface,
-    )
-    .toEqual([]);
-  expect
-    .soft(
-      syntheticMarkers.filter((marker) => markdown?.includes(marker)),
-      `${surface} Markdown`,
-    )
-    .toEqual([]);
+  for (const [label, text] of [
+    [surface, JSON.stringify(messages)],
+    [`${surface} Markdown`, buildChatMarkdown(messages, "Voice test assistant")],
+  ]) {
+    expect
+      .soft(
+        syntheticMarkers.filter((marker) => text?.includes(marker)),
+        label,
+      )
+      .toEqual([]);
+  }
 }
 function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer: boolean) {
   const users = messages.filter((message) => asOptionalRecord(message)?.role === "user");
@@ -381,13 +378,13 @@ async function historyMessages() {
   return result.messages as unknown[];
 }
 
-async function consult(question: string, callId: string) {
+async function consult(question: string | typeof args, callId: string) {
   return await rpc("talk.client.toolCall", {
     sessionKey,
     voiceSessionId,
     callId,
     name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    args: { question },
+    args: typeof question === "string" ? { question } : question,
   });
 }
 
@@ -558,13 +555,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   await rpc("talk.client.transcript", userTranscript);
   await drainPublications();
   const participantsBeforeConsult = listSessionParticipantsReadOnly(scope()).get(sessionKey) ?? [];
-  const ack = await rpc("talk.client.toolCall", {
-    sessionKey,
-    voiceSessionId,
-    callId: "native-consult",
-    name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    args,
-  });
+  const ack = await consult(args, "native-consult");
   expect(ack.runId).toEqual(expect.any(String));
   expect(ack.idempotencyKey).toBe(ack.runId);
   await Promise.race([
@@ -602,18 +593,19 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     extractText(message)?.includes(args.question),
   );
   expect(matchingTexts(storedMessages, consultAnswer)).toHaveLength(1);
-  expect(
-    storedMessages.find((message) => extractText(message) === consultCommentary),
-  ).not.toHaveProperty("display", false);
-  expect(
-    storedMessages.find((message) => extractText(message) === consultToolResult),
-  ).toMatchObject({
+  const storedToolResult = storedMessages.find(
+    (message) => extractText(message) === consultToolResult,
+  );
+  for (const text of [consultCommentary, consultToolResult]) {
+    expect(storedMessages.find((message) => extractText(message) === text)).not.toHaveProperty(
+      "display",
+      false,
+    );
+  }
+  expect(storedToolResult).toMatchObject({
     role: "toolResult",
     toolCallId: "consult-read",
   });
-  expect(
-    storedMessages.find((message) => extractText(message) === consultToolResult),
-  ).not.toHaveProperty("display", false);
   expect((await historyMessages()).map(extractText)).toContain(consultCommentary);
   expect(generated).toHaveLength(1);
   expect.soft(generated[0]).toMatchObject({

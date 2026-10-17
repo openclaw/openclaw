@@ -86,7 +86,8 @@ describe("registered mcp.authLogin", () => {
   }
   const endpoint = createServer((request, response) => {
     void (async () => {
-      const json = (value: unknown) => response.end(JSON.stringify(value));
+      const json = (value: unknown, code = 200) =>
+        response.writeHead(code).end(JSON.stringify(value));
       const url = new URL(request.url ?? "/", resourceUrl);
       requests.push(url.pathname);
       response.setHeader("Content-Type", "application/json");
@@ -125,12 +126,7 @@ describe("registered mcp.authLogin", () => {
           await releaseToken.promise;
         }
         if (tokenError) {
-          response.writeHead(400).end(
-            JSON.stringify({
-              error: tokenError,
-              error_description: "private exchange detail",
-            }),
-          );
+          json({ error: tokenError, error_description: "private exchange detail" }, 400);
         } else if (
           params.get("code") !== "fixture-code" ||
           params.get("redirect_uri") !== registeredRedirect ||
@@ -138,7 +134,7 @@ describe("registered mcp.authLogin", () => {
             .update(params.get("code_verifier") ?? "")
             .digest("base64url") !== expectedChallenge
         ) {
-          response.writeHead(400).end(JSON.stringify({ error: "invalid_grant" }));
+          json({ error: "invalid_grant" }, 400);
         } else {
           json({
             access_token: "fixture-access",
@@ -269,17 +265,16 @@ describe("registered mcp.authLogin", () => {
     expect(stored.codeVerifier).toBeUndefined();
     expect(stored.lastAuthorizationUrl).toBeUndefined();
   }
+  async function expectSettled(session: ReturnType<typeof getSession>) {
+    await whenAdmittedWizardSessionSettled(session);
+    expect(session.getStatus()).toBe("error");
+  }
   function resolvedTransport() {
     const resolved = resolveMcpTransportConfig("docs", config);
     if (resolved?.kind !== "http") {
       throw new Error("Fixture transport unavailable");
     }
     return resolved;
-  }
-  async function nextResult(sessionId: string, client: WebSocket) {
-    const next = await rpcReq<WizardNextResult>(client, "wizard.next", { sessionId });
-    expect(next.ok, JSON.stringify(next.error)).toBe(true);
-    return expectDefined(next.payload, "wizard result");
   }
   async function connect(scopes: string[], origin = `http://127.0.0.1:${gateway.port}`) {
     const client = await gateway.openWs({ origin });
@@ -304,7 +299,9 @@ describe("registered mcp.authLogin", () => {
       payload: { sessionId, done: false, status: "running" },
     });
     while (true) {
-      const result = await nextResult(sessionId, client);
+      const next = await rpcReq<WizardNextResult>(client, "wizard.next", { sessionId });
+      expect(next.ok, JSON.stringify(next.error)).toBe(true);
+      const result = expectDefined(next.payload, "wizard result");
       expect(result.done, result.error).toBe(false);
       if (result.step?.externalUrl) {
         const authorization = new URL(result.step.externalUrl);
@@ -325,7 +322,9 @@ describe("registered mcp.authLogin", () => {
     );
   async function terminal(sessionId: string, client = owner) {
     while (true) {
-      const result = await nextResult(sessionId, client);
+      const next = await rpcReq<WizardNextResult>(client, "wizard.next", { sessionId });
+      expect(next.ok, JSON.stringify(next.error)).toBe(true);
+      const result = expectDefined(next.payload, "wizard result");
       if (result.done) {
         return result;
       }
@@ -549,13 +548,10 @@ describe("registered mcp.authLogin", () => {
       expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
       const retainedClient = new McpClient({ name: "retained-credential", version: "1.0.0" });
       try {
+        const Authorization = `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`;
         await retainedClient.connect(
           new StreamableHTTPClientTransport(new URL(resourceUrl), {
-            requestInit: {
-              headers: {
-                Authorization: `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`,
-              },
-            },
+            requestInit: { headers: { Authorization } },
           }),
         );
         expect((await retainedClient.listTools()).tools).toEqual(
@@ -709,8 +705,7 @@ describe("registered mcp.authLogin", () => {
         releaseToken.resolve();
         // rpcReq republishes disk config. Let the exchange inspect the edited
         // runtime object before a subsequent RPC replaces that publication.
-        await whenAdmittedWizardSessionSettled(session);
-        expect(session.getStatus()).toBe("error");
+        await expectSettled(session);
         expect((await store()).tokens).toBeUndefined();
         if (change === "connector URL" || change === "in-place connector URL") {
           const result = await terminal(started.sessionId);
@@ -791,8 +786,7 @@ describe("registered mcp.authLogin", () => {
         await closed;
         release.resolve();
         if (session) {
-          await whenAdmittedWizardSessionSettled(session);
-          expect(session.getStatus()).toBe("error");
+          await expectSettled(session);
         } else {
           await admissionSettled.promise;
           expect(invocation.context.wizardSessions.has(sessionId)).toBe(false);
@@ -826,8 +820,7 @@ describe("registered mcp.authLogin", () => {
       const started = await begin(client);
       const session = getSession(started.sessionId);
       withdraw();
-      await whenAdmittedWizardSessionSettled(session);
-      expect(session.getStatus()).toBe("error");
+      await expectSettled(session);
       expect((await callback(started.state)).status).toBe(410);
       expect((await store()).tokens).toBeUndefined();
     } finally {

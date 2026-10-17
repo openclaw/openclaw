@@ -1,5 +1,3 @@
-// Session reset hook tests cover before/after reset payloads, transcript reset
-// events, CLI bindings, browser cleanup, and active-run shutdown.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -40,12 +38,7 @@ afterEach(async () => {
   pendingHookCleanups.clear();
 });
 
-type HookEventRecord = Record<string, unknown> & {
-  context?: Record<string, unknown> & {
-    previousSessionEntry?: { sessionId?: string };
-  };
-  messages?: Array<{ role?: string; content?: unknown }>;
-};
+type HookEventRecord = Record<string, unknown>;
 
 type CommandNewHookEvent = {
   type: string;
@@ -54,7 +47,6 @@ type CommandNewHookEvent = {
   context?: {
     agentId?: string;
     commandSource?: string;
-    previousSessionEntry?: { sessionId?: string };
   };
 };
 
@@ -74,17 +66,8 @@ function expectStringValue(value: unknown, label: string): string {
   return value;
 }
 
-function expectStringWithPrefix(value: unknown, prefix: string, label: string): string {
-  const text = expectStringValue(value, label);
-  expect(text.startsWith(prefix), label).toBe(true);
-  expect(text.length, label).toBeGreaterThan(prefix.length);
-  return text;
-}
-
-async function withGlobalAgentSessionStore(
-  dir: string,
-  run: (config: { workStorePath: string }) => Promise<void>,
-) {
+async function withGlobalAgentSessionStore(run: (storePath: string) => Promise<void>) {
+  const { dir } = await createSessionStoreDir();
   const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
   const configPath = expectStringValue(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
   const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
@@ -105,7 +88,7 @@ async function withGlobalAgentSessionStore(
   clearRuntimeConfigSnapshot();
   clearConfigCache();
   try {
-    await run({ workStorePath: storeTemplate.replace("{agentId}", "work") });
+    await run(storeTemplate.replace("{agentId}", "work"));
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;
@@ -113,15 +96,6 @@ async function withGlobalAgentSessionStore(
     clearRuntimeConfigSnapshot();
     clearConfigCache();
   }
-}
-
-async function writeGlobalSessionFile(storePath: string, sessionId: string) {
-  const agentId = path.basename(path.dirname(path.dirname(storePath)));
-  await writeSessionStore({
-    agentId,
-    entries: { global: sessionStoreEntry(sessionId) },
-    storePath,
-  });
 }
 
 async function writeStoredSession(
@@ -158,6 +132,22 @@ async function resetSession(key = "main") {
   });
   expect(reset.ok).toBe(true);
   return reset;
+}
+
+async function resetWithBroadcast(key: string, connId: string) {
+  const broadcast = vi.fn();
+  const reset = await directSessionReq<{ key: string; deleted?: boolean }>(
+    "sessions.reset",
+    { key, reason: "reset" },
+    {
+      context: {
+        broadcastToConnIds: broadcast,
+        getSessionEventSubscriberConnIds: () => new Set([connId]),
+      },
+    },
+  );
+  expect(reset.ok).toBe(true);
+  return { reset, broadcast };
 }
 
 function createFromMainSession(params: { emitCommandHooks?: boolean; key?: string } = {}) {
@@ -329,30 +319,17 @@ test("sessions.reset does not begin cleanup after losing lifecycle ownership", a
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
 });
 
-test("sessions.reset rejects selected global agentId conflicts", async () => {
-  const { dir } = await createSessionStoreDir();
-  await withGlobalAgentSessionStore(dir, async () => {
+test.each([
+  { key: "agent:main:main", agentId: "work", message: "session key agent does not match agentId" },
+  { key: "agent:typo:main", agentId: undefined, message: "Unknown agent id: typo" },
+])("sessions.reset rejects invalid global selection: $message", async ({ message, ...target }) => {
+  await withGlobalAgentSessionStore(async () => {
     const reset = await performSessionReset({
-      key: "agent:main:main",
-      agentId: "work",
+      ...target,
       reason: "reset",
       commandSource: "gateway:sessions.reset",
     });
-
-    expectResetErrorMessage(reset, "session key agent does not match agentId");
-  });
-});
-
-test("sessions.reset rejects unknown selected global agents", async () => {
-  const { dir } = await createSessionStoreDir();
-  await withGlobalAgentSessionStore(dir, async () => {
-    const reset = await performSessionReset({
-      key: "agent:typo:main",
-      reason: "reset",
-      commandSource: "gateway:sessions.reset",
-    });
-
-    expectResetErrorMessage(reset, "Unknown agent id: typo");
+    expectResetErrorMessage(reset, message);
   });
 });
 
@@ -380,22 +357,13 @@ test.each(["!!!", "   "])(
 );
 
 test("sessions.reset emits inferred selected global agent scope", async () => {
-  const { dir } = await createSessionStoreDir();
-  await withGlobalAgentSessionStore(dir, async (globalConfig) => {
-    await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
-    const broadcast = vi.fn();
-    const reset = await directSessionReq<{ ok: true; key: string }>(
-      "sessions.reset",
-      { key: "agent:work:main", reason: "reset" },
-      {
-        context: {
-          broadcastToConnIds: broadcast,
-          getSessionEventSubscriberConnIds: () => new Set(["conn-work"]),
-        },
-      },
-    );
-
-    expect(reset.ok).toBe(true);
+  await withGlobalAgentSessionStore(async (storePath) => {
+    await writeSessionStore({
+      agentId: "work",
+      storePath,
+      entries: { global: sessionStoreEntry("sess-work-global") },
+    });
+    const { broadcast } = await resetWithBroadcast("agent:work:main", "conn-work");
     for (const [index, name] of ["socket.drain", "sessions.changed"].entries()) {
       expect(broadcast.mock.calls[index]?.slice(0, 3)).toEqual([
         name,
@@ -419,19 +387,7 @@ test("sessions.reset of an incognito session broadcasts a delete, not a reset", 
   const scope = { agentId: "main", storePath: location.path, sessionKey };
   try {
     await upsertSessionEntryCore(scope, sessionStoreEntry("sess-incognito", { incognito: true }));
-    const broadcast = vi.fn();
-    const reset = await directSessionReq<{ ok: true; key: string; deleted?: boolean }>(
-      "sessions.reset",
-      { key: sessionKey, reason: "reset" },
-      {
-        context: {
-          broadcastToConnIds: broadcast,
-          getSessionEventSubscriberConnIds: () => new Set(["conn-incognito"]),
-        },
-      },
-    );
-
-    expect(reset.ok).toBe(true);
+    const { reset, broadcast } = await resetWithBroadcast(sessionKey, "conn-incognito");
     expect(reset.payload?.deleted).toBe(true);
     expect(loadSessionEntry(scope)).toBeUndefined();
     const [, incognitoEndContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
@@ -489,7 +445,8 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
   expect(startEvent.sessionId).toBeTypeOf("string");
   expect(startEvent.sessionId).not.toBe("");
-  expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
+  const key = expectStringValue(startEvent.sessionKey, "created session key");
+  expect(key).toMatch(/^agent:main:dashboard:[\s\S]+$/);
 });
 
 test("sessions.create waits for the parent run lifecycle before firing hooks", async () => {

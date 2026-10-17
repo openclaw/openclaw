@@ -54,6 +54,8 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
+const { retireSessionMcpRuntime: retireMcp, disposeSessionMcpRuntime: disposeMcp } =
+  bundleMcpRuntimeMocks;
 
 afterEach(async () => {
   await disposeSessionReadContexts();
@@ -100,8 +102,18 @@ const retirement = (retainAcrossReuse: boolean) => ({
   onError: expect.any(Function),
 });
 
-function seedAcp(sessionKey: string, params: Parameters<typeof resolvedAcpMeta>[0]) {
-  seedCanonicalAcpSessionMeta({ sessionKey, meta: resolvedAcpMeta(params) });
+function seedAcp(
+  sessionKey: string,
+  overrides: Partial<Parameters<typeof resolvedAcpMeta>[0]> = {},
+) {
+  seedCanonicalAcpSessionMeta({
+    sessionKey,
+    meta: resolvedAcpMeta({
+      recordId: sessionKey,
+      backendSessionId: `backend-${sessionKey}`,
+      ...overrides,
+    }),
+  });
 }
 
 function admitMainWork(storePath: string, onInterrupt: () => void) {
@@ -119,6 +131,26 @@ function expectThreadUnbound() {
     reason: "session-reset",
   });
 }
+
+function expectArchiveRejected(
+  storePath: string,
+  sessionKey: string,
+  sessionId: string,
+  result: unknown,
+) {
+  expect(result).toMatchObject({
+    ok: false,
+    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
+  });
+  const entry = loadSessionEntry({ storePath, sessionKey });
+  expect(entry?.archivedAt).toBeUndefined();
+  expect(entry?.sessionId).toBe(sessionId);
+}
+
+const closedAcpKeys = () =>
+  (acpManagerMocks.closeSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>).map(
+    ([request]) => request?.sessionKey,
+  );
 
 test("sessions.reset retires an unbound memory session without host session SQL", async () => {
   await createSessionStoreDir();
@@ -207,20 +239,14 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   );
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:sess-main")).toStrictEqual([]);
-  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenNthCalledWith(
-    1,
-    retirement(true),
-  );
-  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenNthCalledWith(
-    2,
-    retirement(false),
-  );
-  expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
+  expect(retireMcp).toHaveBeenNthCalledWith(1, retirement(true));
+  expect(retireMcp).toHaveBeenNthCalledWith(2, retirement(false));
+  expect(disposeMcp).toHaveBeenCalledWith("sess-main");
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
-  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
-  expect(
-    browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock.calls[0]?.[0],
-  ).toMatchObject({
+  const browserCalls: unknown[][] =
+    browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock.calls;
+  expect(browserCalls).toHaveLength(1);
+  expect(browserCalls[0]?.[0]).toMatchObject({
     sessionKeys: ["agent:main:main", "agent:main:sess-main"],
     onWarn: expect.any(Function),
   });
@@ -243,7 +269,7 @@ test("sessions.reset watches reply-backed MCP retirement after an active-run tim
   await seedActiveMainSession();
   embeddedRunMock.waitResults.set("sess-main", false);
   const waitCallCountsAtRetirement: number[] = [];
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+  retireMcp.mockImplementation(async () => {
     waitCallCountsAtRetirement.push(embeddedRunMock.waitCalls.length);
     return true;
   });
@@ -251,8 +277,8 @@ test("sessions.reset watches reply-backed MCP retirement after an active-run tim
   const reset = await resetMainSession();
 
   expect(reset).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledWith(retirement(true));
-  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(2);
+  expect(retireMcp).toHaveBeenCalledWith(retirement(true));
+  expect(retireMcp).toHaveBeenCalledTimes(2);
   expect(waitCallCountsAtRetirement).toEqual([0, 1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
   expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main"]);
@@ -260,14 +286,14 @@ test("sessions.reset watches reply-backed MCP retirement after an active-run tim
   const retry = await resetMainSession();
   expect(retry.ok).toBe(false);
   expect(embeddedRunMock.endWaitCalls).toEqual(["sess-main"]);
-  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(4);
+  expect(retireMcp).toHaveBeenCalledTimes(4);
   expect(waitCallCountsAtRetirement).toEqual([0, 1, 1, 2]);
 
   embeddedRunMock.endWaiters.get("sess-main")?.(true);
   await vi.waitFor(() => {
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(5);
+    expect(retireMcp).toHaveBeenCalledTimes(5);
   });
-  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenLastCalledWith(retirement(false));
+  expect(retireMcp).toHaveBeenLastCalledWith(retirement(false));
 });
 
 test("sessions.reset keeps watching a replacement registered after waiter settlement", async () => {
@@ -288,9 +314,7 @@ test("sessions.reset keeps watching a replacement registered after waiter settle
   embeddedRunMock.activeIds.delete("sess-main");
   embeddedRunMock.endWaiters.get("sess-main")?.(true);
   await vi.waitFor(() => {
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenLastCalledWith(
-      retirement(false),
-    );
+    expect(retireMcp).toHaveBeenLastCalledWith(retirement(false));
   });
 });
 
@@ -300,7 +324,7 @@ test("sessions.reset reuses the watcher while prior MCP retirement is still disp
   const { promise: firstRetirementReleased, resolve: releaseFirstRetirement } = createDeferred();
   const { promise: firstRetirementStarted, resolve: markFirstRetirementStarted } = createDeferred();
   let heldFirstRetirement = false;
-  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async (params) => {
+  retireMcp.mockImplementation(async (params) => {
     if (params.retainAcrossReuse === false && !heldFirstRetirement) {
       heldFirstRetirement = true;
       markFirstRetirementStarted();
@@ -322,7 +346,7 @@ test("sessions.reset reuses the watcher while prior MCP retirement is still disp
   embeddedRunMock.activeIds.delete("sess-main");
   releaseFirstRetirement();
   await vi.waitFor(() => {
-    const completedRetirements = bundleMcpRuntimeMocks.retireSessionMcpRuntime.mock.calls.filter(
+    const completedRetirements = retireMcp.mock.calls.filter(
       ([params]) => params.retainAcrossReuse === false,
     );
     expect(completedRetirements).toHaveLength(1);
@@ -387,36 +411,28 @@ test("sessions.reset clears retained native conversations from every execution o
   }
 });
 
-test("sessions.reset interrupts work admitted before runtime registration", async () => {
-  const { storePath } = await seedActiveMainSession();
-  let interrupted = false;
-  let releaseAdmission = () => {};
-  const admissionLease = await admitMainWork(storePath, () => {
-    interrupted = true;
-    releaseAdmission();
-  });
-  releaseAdmission = admissionLease.release;
-
-  const reset = await resetMainSession();
-  expect(reset.ok).toBe(true);
-  expect(interrupted).toBe(true);
-});
-
-test("sessions.reset does not interrupt the admission that initiates it", async () => {
-  const { storePath } = await seedActiveMainSession();
-  let interrupted = false;
-  const admissionLease = await admitMainWork(storePath, () => {
-    interrupted = true;
-  });
-
-  try {
-    const reset = await admissionLease.run(resetMainSession);
-    expect(reset.ok).toBe(true);
-    expect(interrupted).toBe(false);
-  } finally {
-    admissionLease.release();
-  }
-});
+test.each([false, true])(
+  "sessions.reset interrupts only non-initiating work (initiator: %s)",
+  async (initiator) => {
+    const { storePath } = await seedActiveMainSession();
+    let interrupted = false;
+    let releaseAdmission = () => {};
+    const admission = await admitMainWork(storePath, () => {
+      interrupted = true;
+      if (!initiator) {
+        releaseAdmission();
+      }
+    });
+    releaseAdmission = admission.release;
+    try {
+      const reset = await (initiator ? admission.run(resetMainSession) : resetMainSession());
+      expect(reset.ok).toBe(true);
+      expect(interrupted).toBe(!initiator);
+    } finally {
+      admission.release();
+    }
+  },
+);
 
 test("sessions.reset rejects an active lifecycle mutation without interrupting admitted work", async () => {
   const { storePath } = await seedActiveMainSession();
@@ -466,17 +482,8 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
 test("sessions.reset finishes after lifecycle rotation during destructive cleanup", async () => {
   await seedMainSession();
   const prepareFreshSession = installAcpRuntimeBackendWithFreshSession();
-  seedCanonicalAcpSessionMeta({
-    sessionKey: "agent:main:main",
-    lifecycleRevision: undefined,
-    meta: resolvedAcpMeta({
-      recordId: "agent:main:main",
-      backendSessionId: "backend-session-1",
-      runtimeOptions: {
-        runtimeMode: "auto",
-        timeoutSeconds: 30,
-      },
-    }),
+  seedAcp("agent:main:main", {
+    runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
   });
   let lifecycleCurrent = true;
   acpManagerMocks.closeSession.mockImplementationOnce(async () => {
@@ -535,13 +542,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
 
   const [reset, archived] = await Promise.all([resetPromise, archivePromise]);
   expect(reset.ok).toBe(true);
-  expect(archived).toMatchObject({
-    ok: false,
-    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
-  });
-  const entry = loadSessionEntry({ storePath, sessionKey });
-  expect(entry?.archivedAt).toBeUndefined();
-  expect(entry?.sessionId).toBe("sess-archive-race");
+  expectArchiveRejected(storePath, sessionKey, "sess-archive-race", archived);
 });
 
 test("sessions.patch rejects an archive queued behind a rotated session", async () => {
@@ -592,13 +593,7 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   releaseBlocker();
 
   const archived = (await Promise.all([blocker, queuedReset, archivePromise]))[2];
-  expect(archived).toMatchObject({
-    ok: false,
-    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
-  });
-  const entry = loadSessionEntry({ storePath, sessionKey });
-  expect(entry?.archivedAt).toBeUndefined();
-  expect(entry?.sessionId).toBe(replacementSessionId);
+  expectArchiveRejected(storePath, sessionKey, replacementSessionId, archived);
 });
 
 test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
@@ -613,36 +608,20 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
       parentSessionKey: "agent:main:acp-child-1",
     }),
   });
-  seedAcp("agent:main:main", {
-    recordId: "agent:main:main",
-    backendSessionId: "backend-session-main",
-  });
-  seedAcp("agent:main:acp-child-1", {
-    recordId: "agent:main:acp-child-1",
-    backendSessionId: "backend-session-child-1",
-    runtimeSessionName: "runtime:child-1",
-    mode: "oneshot",
-  });
-  for (const child of ["acp-grandchild", "unrelated-acp-child"]) {
-    seedAcp(`agent:main:${child}`, {
-      recordId: `agent:main:${child}`,
-      backendSessionId: `backend-session-${child}`,
-      mode: "oneshot",
-    });
+  seedAcp("agent:main:main");
+  for (const child of ["acp-child-1", "acp-grandchild", "unrelated-acp-child"]) {
+    seedAcp(`agent:main:${child}`, { mode: "oneshot" });
   }
 
   const reset = await resetMainSession();
   expect(reset.ok).toBe(true);
 
   // Parent reset must not orphan its direct ACP child (#68916).
-  const closedKeys = (
-    acpManagerMocks.closeSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>
-  ).map((call) => call[0]?.sessionKey);
-  expect(closedKeys).toContain("agent:main:main");
-  expect(closedKeys).toContain("agent:main:acp-child-1");
-  expect(closedKeys).not.toContain("agent:main:not-acp-child");
-  expect(closedKeys).not.toContain("agent:main:unrelated-acp-child");
-  expect(closedKeys).not.toContain("agent:main:acp-grandchild");
+  const closedKeys = closedAcpKeys();
+  expect(closedKeys).toEqual(expect.arrayContaining(["agent:main:main", "agent:main:acp-child-1"]));
+  for (const child of ["not-acp-child", "unrelated-acp-child", "acp-grandchild"]) {
+    expect(closedKeys).not.toContain(`agent:main:${child}`);
+  }
 });
 
 test("sessions.reset closes a spawned ACP child that lives in a different agent store", async () => {
@@ -658,34 +637,26 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
     entries: { main: {}, codex: {} },
   };
   testState.agentConfig = { systemAgent: { agentId: "main" } };
-  const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  await writeSessionStore({
-    agentId: "main",
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-    storePath: mainStorePath,
-  });
-  await writeSessionStore({
-    agentId: "codex",
-    entries: {
-      "agent:codex:acp:cross-store-child": sessionStoreEntry("sess-codex-child", {
-        spawnedBy: "agent:main:main",
-      }),
-    },
-    storePath: codexStorePath,
-  });
-  for (const [sessionKey, runtimeSessionName, mode] of [
-    ["agent:main:main", "runtime:main", "persistent"],
-    ["agent:codex:acp:cross-store-child", "runtime:codex-child", "oneshot"],
+  for (const [agentId, sessionKey, sessionId, mode] of [
+    ["main", "agent:main:main", "sess-main", "persistent"],
+    ["codex", "agent:codex:acp:cross-store-child", "sess-codex-child", "oneshot"],
   ] as const) {
+    await writeSessionStore({
+      agentId,
+      storePath: path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
+      entries: {
+        [sessionKey]: sessionStoreEntry(
+          sessionId,
+          agentId === "main" ? {} : { spawnedBy: "agent:main:main" },
+        ),
+      },
+    });
     seedCanonicalAcpSessionMeta({
       sessionKey,
       meta: {
         backend: "acpx",
         agent: "codex",
-        runtimeSessionName,
+        runtimeSessionName: `runtime:${agentId}`,
         mode,
         state: "idle",
         lastActivityAt: Date.now(),
@@ -696,10 +667,7 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
   const reset = await resetMainSession();
   expect(reset.ok).toBe(true);
 
-  const closedKeys = (
-    acpManagerMocks.closeSession.mock.calls as unknown as Array<[{ sessionKey?: string }]>
-  ).map((call) => call[0]?.sessionKey);
-  expect(closedKeys).toContain("agent:codex:acp:cross-store-child");
+  expect(closedAcpKeys()).toContain("agent:codex:acp:cross-store-child");
 });
 
 test("sessions.reset closes child ACP runtimes concurrently so stuck children do not serialize cleanup", async ({
@@ -718,12 +686,7 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
     "agent:main:acp-child-2",
     "agent:main:acp-child-3",
   ]) {
-    seedAcp(sessionKey, {
-      recordId: sessionKey,
-      backendSessionId: `backend-${sessionKey}`,
-      runtimeSessionName: `runtime:${sessionKey}`,
-      mode: "oneshot",
-    });
+    seedAcp(sessionKey, { runtimeSessionName: `runtime:${sessionKey}`, mode: "oneshot" });
   }
 
   // All children must enter cancellation before any is released.
