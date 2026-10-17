@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "../infra/backoff.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   CONTROL_UI_PLUGIN_MAX_ASSETS,
@@ -131,6 +132,67 @@ function validateControlUiFiles(files: Array<{ name: string; contents: Uint8Arra
   }
 }
 
+// A freshly-written directory can be transiently locked on Windows while an
+// antivirus or indexer still scans it, so the first rename is denied with
+// EPERM even though the destination does not exist. Retry the atomic publish on
+// the same bounded, widening schedule the root Control UI build publisher uses,
+// so a lock that outlives an immediate burst of attempts can still clear.
+const PUBLISH_RENAME_DELAYS_MS = [100, 200, 400, 800, 1600];
+
+async function publishImmutableGeneration(params: {
+  files: Array<{ name: string; contents: Uint8Array }>;
+  outputDir: string;
+  staging: string;
+}): Promise<void> {
+  const { files, outputDir, staging } = params;
+  let denial: unknown;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rename(staging, outputDir);
+      return;
+    } catch (error) {
+      // Windows reports an existing destination directory as EPERM; reuse still
+      // requires matching bytes.
+      if (
+        !isRecord(error) ||
+        (error.code !== "EEXIST" && error.code !== "ENOTEMPTY" && error.code !== "EPERM")
+      ) {
+        throw error;
+      }
+      denial = error;
+    }
+    const exists = await fs.access(outputDir).then(
+      () => true,
+      () => false,
+    );
+    if (exists) {
+      for (const file of files) {
+        const existing = await fs.readFile(path.join(outputDir, file.name));
+        if (!existing.equals(Buffer.from(file.contents))) {
+          throw new Error(
+            "An immutable Control UI build was modified. Remove that build and rebuild.",
+            { cause: denial },
+          );
+        }
+      }
+      // A generation published by an earlier build may still carry owner-only modes.
+      await normalizeGenerationPermissions(outputDir, files);
+      return;
+    }
+    // The destination is still absent, so this is a transient Windows denial
+    // on the freshly-written staging directory rather than a prior build.
+    const delayMs = PUBLISH_RENAME_DELAYS_MS[attempt];
+    if (delayMs === undefined) {
+      break;
+    }
+    await sleepWithAbort(delayMs);
+  }
+  throw new Error(
+    "Control UI build could not be published: repeatedly denied renaming the staged generation. Another process (usually antivirus or an indexer) is holding the staged build; let it release the files and rerun the build.",
+    { cause: denial },
+  );
+}
+
 async function publishControlUiBuild(
   outputDir: string,
   declaration: PluginManifestControlUi,
@@ -160,28 +222,7 @@ async function publishControlUiBuild(
       await fs.writeFile(path.join(staging, file.name), file.contents);
     }
     await normalizeGenerationPermissions(staging, files);
-    try {
-      await fs.rename(staging, outputDir);
-    } catch (error) {
-      // Windows reports an existing destination directory as EPERM; reuse still requires matching bytes.
-      if (
-        !isRecord(error) ||
-        (error.code !== "EEXIST" && error.code !== "ENOTEMPTY" && error.code !== "EPERM")
-      ) {
-        throw error;
-      }
-      for (const file of files) {
-        const existing = await fs.readFile(path.join(outputDir, file.name));
-        if (!existing.equals(Buffer.from(file.contents))) {
-          throw new Error(
-            "An immutable Control UI build was modified. Remove that build and rebuild.",
-            { cause: error },
-          );
-        }
-      }
-      // A generation published by an earlier build may still carry owner-only modes.
-      await normalizeGenerationPermissions(outputDir, files);
-    }
+    await publishImmutableGeneration({ files, outputDir, staging });
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }

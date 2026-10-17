@@ -23,6 +23,7 @@ import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-contro
 
 const directories: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   resetPluginCache();
   vi.unstubAllGlobals();
@@ -30,6 +31,59 @@ afterEach(async () => {
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
+
+// The publish retry sleeps through faked setTimeout timers while the build
+// itself (esbuild, fs) still progresses on the real event loop.
+function usePublishFakeTimers(): void {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+}
+
+async function yieldRealTurn(): Promise<void> {
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+async function pumpUntilSettled(build: Promise<unknown>): Promise<void> {
+  let settled = false;
+  const isSettled = () => settled;
+  void build.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  while (!isSettled()) {
+    if (vi.getTimerCount() > 0) {
+      await vi.advanceTimersByTimeAsync(1600);
+    } else {
+      await yieldRealTurn();
+    }
+  }
+}
+
+// Intercept only the publish rename (a ".build-" staging directory moving into
+// place); other renames on the shared fs module may come from neighboring async
+// work in the same worker. A successful publish is emulated with fs.cp because
+// a real rename races the host antivirus hold on the freshly-written staging
+// directory, which the fake-time retry schedule cannot outlast.
+function mockPublishRename(handler: (call: number) => Promise<void>): { calls: () => number } {
+  const realRename = fs.rename.bind(fs);
+  let calls = 0;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (typeof from !== "string" || !path.basename(from).startsWith(".build-")) {
+      return realRename(from, to);
+    }
+    calls += 1;
+    await handler(calls);
+    await fs.cp(from, String(to), { recursive: true });
+  });
+  return {
+    calls: () => calls,
+  };
+}
 
 async function fixture() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-build-"));
@@ -423,6 +477,72 @@ export { flush };
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),
     ]);
+  });
+
+  it("retries a transient Windows rename denial when the destination is absent", async () => {
+    const project = await fixture();
+    const publishRename = mockPublishRename(async (call) => {
+      if (call === 1) {
+        throw Object.assign(new Error("transient rename denial"), { code: "EPERM" });
+      }
+    });
+
+    usePublishFakeTimers();
+    const build = buildPluginControlUi(project);
+    await pumpUntilSettled(build);
+    const published = await build;
+    expect(published.entry).toMatch(/^dist\/control-ui\/[a-f0-9]{64}\/index.js$/u);
+    // The first denied rename was retried rather than misread as a prior generation.
+    expect(publishRename.calls()).toBe(2);
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(published.entry)),
+    ]);
+  });
+
+  it("spaces retries so a lock held across attempts clears within the retry window", async () => {
+    const project = await fixture();
+    const publishRename = mockPublishRename(async (call) => {
+      if (call <= 3) {
+        throw Object.assign(new Error("continuing rename denial"), { code: "EPERM" });
+      }
+    });
+
+    usePublishFakeTimers();
+    const build = buildPluginControlUi(project);
+    // Each denied attempt parks on a spaced delay instead of immediately
+    // exhausting the budget while the lock is still held.
+    for (const delayMs of [100, 200, 400]) {
+      while (vi.getTimerCount() === 0) {
+        await yieldRealTurn();
+      }
+      const callsBefore = publishRename.calls();
+      await vi.advanceTimersByTimeAsync(delayMs - 1);
+      expect(publishRename.calls()).toBe(callsBefore);
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await pumpUntilSettled(build);
+    const published = await build;
+    expect(publishRename.calls()).toBe(4);
+    expect(published.entry).toMatch(/^dist\/control-ui\/[a-f0-9]{64}\/index.js$/u);
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(published.entry)),
+    ]);
+  });
+
+  it("fails cleanly when a rename denial never clears and no destination appears", async () => {
+    const project = await fixture();
+    const denial = Object.assign(new Error("persistent rename denial"), { code: "EPERM" });
+    mockPublishRename(async () => {
+      throw denial;
+    });
+
+    usePublishFakeTimers();
+    const build = buildPluginControlUi(project);
+    const assertion = expect(build).rejects.toThrow("could not be published");
+    await pumpUntilSettled(build);
+    await assertion;
+    // No half-published generation and no leftover staging directory.
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([]);
   });
 
   // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits
