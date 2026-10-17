@@ -191,10 +191,7 @@ export function selectBoundedModelRequests(
   // Removing an older repeated ID must not turn an ambiguous result into a different call's result.
   const selectedOwners = readToolResultOwners(selectedMessages);
   for (const message of selectedMessages) {
-    if (
-      message.role === "toolResult" &&
-      pairing.get(message) !== selectedOwners.get(message)
-    ) {
+    if (message.role === "toolResult" && pairing.get(message) !== selectedOwners.get(message)) {
       throw new RangeError("Session context limit would change tool-result ownership");
     }
   }
