@@ -27,7 +27,9 @@ async function startTargetServer(params?: {
       });
       res.writeHead(200, { "content-type": "application/json", ...params?.responseHeaders });
       res.end(params?.responseBody ?? JSON.stringify(forwardedBody));
-    })().catch((error) => res.destroy(error));
+    })().catch((error: unknown) =>
+      res.destroy(error instanceof Error ? error : new Error(String(error))),
+    );
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
