@@ -1,15 +1,14 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { callGateway } from "../../../gateway/call.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { cleanupMaterializedSubagentAttachments } from "./subagent-attachments.js";
-import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { callSubagentGateway, type SubagentGatewayRequest } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
-type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
+type GatewayCall = (options: SubagentGatewayRequest) => Promise<unknown>;
 type AcceptedRunAbortParams = {
   childSessionKey: string;
   gatewayRunId: string;
@@ -67,7 +66,7 @@ export function bindSubagentSpawnCleanup(params: {
       throw new Error("Subagent cleanup cannot dispatch this Gateway method");
     }
     const identity = params.getSessionIdentity();
-    const payload = asNullableRecord(request.params);
+    const payload = request.params;
     const assertCurrent = () => {
       const currentIdentity = params.getSessionIdentity();
       if (
@@ -79,7 +78,7 @@ export function bindSubagentSpawnCleanup(params: {
       }
       if (method === "sessions.delete") {
         if (
-          payload?.key !== params.childSessionKey ||
+          payload.key !== params.childSessionKey ||
           payload.expectedSessionId !== identity.expectedSessionId ||
           payload.expectedLifecycleRevision !== identity.expectedLifecycleRevision
         ) {
@@ -87,7 +86,7 @@ export function bindSubagentSpawnCleanup(params: {
         }
       } else if (
         !acceptedRun ||
-        payload?.sessionKey !== params.childSessionKey ||
+        payload.sessionKey !== params.childSessionKey ||
         payload.runId !== acceptedRun.runId
       ) {
         throw new Error("Subagent cleanup run does not match its accepted owner");

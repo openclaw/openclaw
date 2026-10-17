@@ -139,7 +139,6 @@ export abstract class AppSidebarBase {
   declare readonly addEventListener: HTMLElement["addEventListener"];
   declare readonly removeEventListener: HTMLElement["removeEventListener"];
   declare readonly contains: HTMLElement["contains"];
-  declare readonly matches: HTMLElement["matches"];
 
   private readonly listeners = new Set<() => void>();
   private attached = false;
@@ -177,7 +176,6 @@ export abstract class AppSidebarBase {
       "addEventListener",
       "removeEventListener",
       "contains",
-      "matches",
     ] as const) {
       const value = hostElement[key];
       Object.defineProperty(this, key, {

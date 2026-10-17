@@ -163,7 +163,6 @@ vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
     return observed.unregister;
   },
 }));
-// The pure transport must not become the process-wide disk-scan singleton.
 // mock-isolation: Reader controls must never start the process-wide disk scanner.
 vi.mock("./disk-budget-runtime.js", () => ({
   measureSessionPhysicalDiskUsage: () => {

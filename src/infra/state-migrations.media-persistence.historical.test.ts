@@ -70,12 +70,14 @@ function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
     transcriptFts.createSessionTranscriptFtsInserter(
       database,
       sessionId,
-    )({
-      messageId: `message-${sessionId}`,
-      text: sessionId,
-      role: "user",
-      timestamp: 1,
-    });
+    )([
+      {
+        messageId: `message-${sessionId}`,
+        text: sessionId,
+        role: "user",
+        timestamp: 1,
+      },
+    ]);
   }
   database.exec(
     "UPDATE session_windows SET rowid = 9007199254740993 WHERE session_id = 'orphan-one';",

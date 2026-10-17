@@ -8,6 +8,10 @@ import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../state/openclaw-agent-db-resources.js";
+import {
+  assertChildRuntimeAvailable,
+  classifyChildRuntimeFailure,
+} from "./child-runtime-viability.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { captureSqliteAuthSchema } from "./sqlite-readonly-auth-schema.js";
 import {
@@ -61,6 +65,7 @@ export function createSqliteReadOnlyWorkerSession(
     closeTimeoutMs: number;
   },
 ): SqliteReadOnlyWorkerSession {
+  assertChildRuntimeAvailable();
   const env = { ...host.env };
   const cwd = host.cwd;
   const executable = process.execPath;
@@ -164,6 +169,7 @@ export function createSqliteReadOnlyWorkerSession(
   if (host.retainLifetime !== false) {
     void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
   }
+  let receivedMessage = false;
   let spawned = false;
   let nativeClosed = false;
   child.once("spawn", () => {
@@ -183,22 +189,29 @@ export function createSqliteReadOnlyWorkerSession(
               ].join(": "),
               { cause: error },
             ),
-            { code: error.code },
+            { code: error.code, path: error.path },
           ),
     ),
   );
   child.once("close", (code, signal) => {
     nativeClosed = true;
     retired = true;
+    const failure =
+      pending?.failure ??
+      createSqliteReadOnlyWorkerError(
+        `exited with ${signal ? `signal ${signal}` : `code ${code}`}`,
+        stderr,
+      );
+    const runtimeFailure = classifyChildRuntimeFailure({
+      execPath: executable,
+      error: failure,
+      stderr,
+      signal,
+      started: receivedMessage,
+    });
     if (pending) {
       const request = releasePending(pending);
-      request.reject(
-        request.failure ??
-          createSqliteReadOnlyWorkerError(
-            `exited with ${signal ? `signal ${signal}` : `code ${code}`}`,
-            stderr,
-          ),
-      );
+      request.reject(runtimeFailure ?? failure);
     }
     resolveClosed();
   });
@@ -222,6 +235,7 @@ export function createSqliteReadOnlyWorkerSession(
     attachOutput();
   }
   child.on("message", (message: unknown) => {
+    receivedMessage = true;
     if (retired) {
       return;
     }

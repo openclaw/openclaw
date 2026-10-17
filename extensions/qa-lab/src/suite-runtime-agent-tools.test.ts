@@ -16,18 +16,18 @@ const stdioTransportMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", () => ({
   Client: vi.fn(
     class Client {
       connect = connectMock;
-      listTools = listToolsMock;
+      request = listToolsMock;
       callTool = callToolMock;
       close = closeMock;
     },
   ),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/client/stdio", () => ({
   StdioClientTransport: stdioTransportMock,
 }));
 
@@ -131,10 +131,17 @@ it("prefers the built plugin-tools MCP entry", async () => {
     }),
   );
   expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
-  expect(listToolsMock).toHaveBeenCalledWith({}, { timeout: 180_000 });
-  expect(callToolMock).toHaveBeenCalledWith({ name: "plugin.echo", arguments: {} }, undefined, {
-    timeout: 180_000,
-  });
+  expect(listToolsMock).toHaveBeenCalledWith(
+    { method: "tools/list", params: {} },
+    { timeout: 180_000 },
+  );
+  expect(callToolMock).toHaveBeenCalledWith(
+    { name: "plugin.echo", arguments: {} },
+    {
+      timeout: 180_000,
+      toolDefinition: { name: "plugin.echo" },
+    },
+  );
 });
 
 it("reports available plugin-tools MCP names when the requested tool is missing", async () => {

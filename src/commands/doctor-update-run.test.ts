@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { isStaleIdentitylessUpdateRun } from "../infra/update-run-activity.js";
 import { readInterruptedUpdateCandidateAsync } from "../infra/update-run-interruption-worker.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
@@ -87,31 +91,41 @@ it("keeps history read failure advisory without refreshing a running update", as
 });
 
 it("repairs config after update history discovery cannot launch its runtime", async () => {
-  await withOpenClawTestState(
+  const databasePath = await withOpenClawTestState(
     { label: "history-failure-config-repair", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
-      await state.writeConfig({
-        gateway: { mode: "local", bind: "localhost" },
-        plugins: { enabled: false },
-      });
-      vi.mocked(withOpenClawStateDatabaseReadSnapshot).mockRejectedValueOnce(
-        Object.assign(new Error("runtime binary not executable: /fixture/node (EACCES)"), {
-          code: "EACCES",
-        }),
-      );
+      try {
+        await state.writeConfig({
+          gateway: { mode: "local", bind: "localhost" },
+          plugins: { enabled: false },
+        });
+        vi.mocked(withOpenClawStateDatabaseReadSnapshot).mockRejectedValueOnce(
+          Object.assign(new Error("runtime binary not executable: /fixture/node (EACCES)"), {
+            code: "EACCES",
+          }),
+        );
 
-      const result = await runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        repairPrefixedConfig: true,
-      });
+        const result = await runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+        });
 
-      expect(result.snapshot.valid).toBe(true);
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
-        gateway: { bind: "loopback" },
-      });
-      expect(note).toHaveBeenCalledWith(expect.stringContaining("EACCES"), "Update history");
+        expect(result.snapshot.valid).toBe(true);
+        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+          gateway: { bind: "loopback" },
+        });
+        expect(note).toHaveBeenCalledWith(expect.stringContaining("EACCES"), "Update history");
+        return state.statePath("state", "openclaw.sqlite");
+      } finally {
+        // Physical admissions outlive handles; retire this fixture before its files are deleted.
+        await state.restoreEnv();
+        retireSqliteDatabaseAdmissionForPath(state.statePath("state", "openclaw.sqlite"));
+      }
     },
+  );
+  expect(captureSqliteDatabaseAdmissions().map(({ location }) => location)).not.toContain(
+    databasePath,
   );
 });
 

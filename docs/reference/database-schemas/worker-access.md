@@ -57,6 +57,15 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Manual legacy compaction prepares its transcript, current session entry, persisted
+window owner, and primary conversation in one worker snapshot. The held session
+lifecycle carries those facts through execution. Its existing compaction-boundary
+command commits the transcript and same-key accounting together, with live authority
+checked before commit. Aliases that share a transcript retain their own accounting
+row; a changed final token estimate updates accounting without counting compaction
+twice. Shared-state events follow the agent-store commit, and memory indexing keeps
+its existing post-compaction policy.
+
 Public GitHub coauthor attribution reads merge aliases, verified accounts, and
 credit preferences in one worker-owned snapshot statement. Enterprise attribution
 keeps a read transaction for its additional verified-email binding lookup. Both
@@ -270,6 +279,9 @@ inventories park until a receipt arrives; retained rows schedule their next
 deadline. Refreshes consume the dirty flag before awaiting a worker so a receipt
 received during the read remains pending. These facts schedule maintenance;
 credential, lease, and external-effect authority stays with the execution owner.
+Ingress health refreshes missing failed-count and pressure facts in one worker
+request. Claim expiry refreshes only pressure; each diagnostic retains its own
+error outcome and successful facts remain reusable.
 Cron retains a memory-only clock check for future jobs so forward clock changes
 can trigger overdue work without reloading SQL every minute.
 
@@ -5086,6 +5098,10 @@ The shipped SDK `claimNext` API retains its standalone selection behavior.
 Accepted enqueues, claims, and resubmissions return the mutation's row directly;
 only duplicate enqueues read the retained row. Claims atomically update pending
 rows, and corrupt payloads are tombstoned in that same writer transaction.
+Adapter batches use one enqueue command and transaction, inserting up to 100
+unique events per statement and reading duplicate IDs together. Repeated IDs
+retain the first payload and results follow input order. Corrupt duplicate
+tombstones return the updated row without a follow-up read.
 
 Inbound envelope timestamps use the existing session read worker. Bundled channels
 await preparation at their formatting boundary and carry the timestamp through

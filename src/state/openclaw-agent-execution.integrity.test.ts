@@ -18,6 +18,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
@@ -166,6 +167,51 @@ function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExec
     }),
   };
 }
+
+it("keeps retained borrowers after a caller is refused before native promotion", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-pre-promotion-")) };
+  const options = { agentId: "main", env };
+  const database = openOpenClawAgentDatabase(options);
+  closeOpenClawAgentDatabaseByPath(database.path);
+  const initiator = captureOpenClawAgentDatabaseExecution(options);
+  const retained = captureOpenClawAgentDatabaseExecution(options);
+  const refusal = new Error("Caller revoked before native promotion");
+  let current = true;
+  const source = createNativeSource(() => {
+    if (!current) {
+      throw refusal;
+    }
+  });
+  const runOperation = sqliteWorkerStore.runSqliteWorkerStoreOperation;
+  const preparation = vi
+    .spyOn(sqliteWorkerStore, "runSqliteWorkerStoreOperation")
+    .mockImplementationOnce((...args) => {
+      // The lazy native owner exists, but its first write promotion has not entered.
+      current = false;
+      preparation.mockRestore();
+      return runOperation(...args);
+    });
+  const operation = vi.fn(async () => "not admitted");
+  try {
+    await expect(initiator.runExisting(source, operation)).rejects.toBe(refusal);
+    expect(current).toBe(false);
+    expect(operation).not.toHaveBeenCalled();
+    expect(() => retained.assertCurrent()).not.toThrow();
+    await expect(
+      retained.runExisting(
+        createNativeSource(() => {}),
+        (scope) =>
+          scope.execute({
+            type: "session.transcript.initialize",
+            input: { sessionKey: "agent:main:retained", sessionId: "retained" },
+          }),
+      ),
+    ).resolves.toMatchObject({ kind: "session-transcript-initialized" });
+  } finally {
+    preparation.mockRestore();
+    await Promise.all([initiator.release(), retained.release()]);
+  }
+});
 
 it.for(["revoked", "aborted"] as const)(
   "keeps shared integrity preparation alive after its initiating caller is %s",
