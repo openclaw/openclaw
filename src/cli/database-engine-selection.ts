@@ -1,5 +1,5 @@
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { hasFlag } from "./argv.js";
+import { getFlagValue, hasFlag } from "./argv.js";
 import { resolveCliDatabaseProcessRole } from "./database-process-role.js";
 
 const OWNED_DATABASE_SELECTION = new Set([
@@ -38,11 +38,16 @@ const OWNED_DATABASE_SELECTION = new Set([
   "config set",
   "config patch",
   "config unset",
+  // Explicit config-free cleanup leaves destructive scope selection with its owner.
+  "reset config",
+  "uninstall service",
   // Doctor's explicit store and updater receipt own their target; post-upgrade probes use no DB.
   "doctor explicit-store",
   "doctor update",
   "doctor post-upgrade",
   // Updater contexts, receipts and explicit paths own admission; cleanup reads no config.
+  "update",
+  "update status",
   "update admit",
   "update migrate",
   "update restore",
@@ -65,6 +70,16 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     hasFlag(argv, "--runtime-intent-only")
   ) {
     command = `${invocation.primary} runtime-intent`;
+  }
+  if (invocation.primary === "reset" && getFlagValue(argv, "--scope") === "config") {
+    command = "reset config";
+  }
+  if (
+    invocation.primary === "uninstall" &&
+    hasFlag(argv, "--service") &&
+    !["--all", "--state", "--workspace"].some((flag) => hasFlag(argv, flag))
+  ) {
+    command = "uninstall service";
   }
   if (invocation.primary === "doctor" && !invocation.hasHelpOrVersion) {
     if (hasFlag(argv, "--session-sqlite-store")) {

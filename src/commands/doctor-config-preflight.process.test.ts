@@ -363,6 +363,95 @@ describe("doctor invalid config process exit", () => {
     getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
   );
 
+  it.each(["sqlite", "postgres"] as const)(
+    "preserves the lint failure envelope without opening storage for malformed %s config",
+    async (engine) => {
+      const { stateDir, configPath, run } = createDoctorFixture(
+        `doctor-invalid-lint-${engine}`,
+        true,
+      );
+      const raw = `{"database":{"engine":"${engine}"}, broken`;
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, raw);
+
+      const result = await run(["doctor", "--lint", "--json"], DOCTOR_CHILD_TIMEOUT_MS);
+      expect(result, result.stderr).toMatchObject({ code: 2, signal: null });
+      const report = JSON.parse(result.stdout);
+      expect(report).toMatchObject({ schemaVersion: 1, ok: false, checksRun: 0 });
+      expect(report.findings).toContainEqual(
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining("unknown: config could not be parsed"),
+        }),
+      );
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(
+        fs
+          .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+          .filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file)),
+      ).toEqual([]);
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
+  it.each(["sqlite", "postgres"] as const)(
+    "leaves prefixed %s config untouched while a live Gateway owns the target",
+    async (engine) => {
+      const { stateDir, configPath, run } = createDoctorFixture(
+        `doctor-prefix-owner-${engine}`,
+        true,
+      );
+      const ownerChild = spawn(
+        process.execPath,
+        ["-e", "setTimeout(() => {}, 120_000)", "src/entry.ts", "gateway"],
+        { cwd: path.resolve("."), stdio: "ignore" },
+      );
+      try {
+        const raw = `synthetic warning\n${JSON.stringify({
+          database: {
+            engine,
+            ...(engine === "postgres"
+              ? {
+                  postgres: {
+                    connection: { source: "env", provider: "default", id: "MISSING_DSN" },
+                  },
+                }
+              : {}),
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        })}\n`;
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, raw);
+        const startTime = getFileLockProcessStartTime(ownerChild.pid!);
+        writeJson(path.join(resolveGatewayLockDir(stateDir), "gateway.state.lock"), {
+          pid: ownerChild.pid,
+          ownerId: "doctor-prefix-owner",
+          createdAt: new Date().toISOString(),
+          configPath,
+          port: 18720,
+          stateDir,
+          ...(startTime !== null ? { startTime } : {}),
+        });
+
+        const result = await run(doctorArgs("fix"), DOCTOR_CHILD_TIMEOUT_MS);
+        const output = `${result.stderr}\n${result.stdout}`;
+        expect(result, output).toMatchObject({ code: 0, signal: null });
+        expect(output).toContain("exclusive offline");
+        expect(output).toContain("unknown: config could not be parsed");
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        const files = fs.readdirSync(stateDir, { recursive: true, encoding: "utf8" });
+        expect(files.filter((file) => file.includes(".clobbered."))).toEqual([]);
+        expect(
+          files.filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file)),
+        ).toEqual([]);
+      } finally {
+        await tempDirs.verifyCleanup(() => stopChildProcess(ownerChild, 5_000));
+      }
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
   it(
     "recovers a non-JSON prefix through doctor --fix before normal database checks",
     async () => {

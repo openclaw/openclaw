@@ -1,12 +1,15 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { hasFlag } from "../cli/argv.js";
 import { isDoctorMachineOutput } from "../cli/doctor-output-mode.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { formatInvalidConfigDetails } from "../config/io.invalid-config.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { withConfigWriteLock } from "../config/write-lock.js";
 import { showDoctorIntro, showDoctorOutro } from "../flows/doctor-health-startup.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { prepareDoctorConfigRecovery } from "./doctor-config-preflight-legacy-config.js";
+import { formatDoctorLintFailure } from "./doctor-lint-output.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
 
 /** Recovery may repair file bytes; an unresolved target must never reach stateful Doctor. */
@@ -15,18 +18,39 @@ export async function prepareDoctorEngineSelection(params: {
   snapshot: ConfigFileSnapshot;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
 }): Promise<ConfigFileSnapshot> {
-  const repaired = await prepareDoctorConfigRecovery({
-    enabled:
-      !hasFlag(params.argv, "--lint") &&
-      !hasFlag(params.argv, "--json") &&
-      ["--fix", "--repair", "--yes"].some((flag) => hasFlag(params.argv, flag)),
+  const enabled =
+    !hasFlag(params.argv, "--lint") &&
+    !hasFlag(params.argv, "--json") &&
+    ["--fix", "--repair", "--yes"].some((flag) => hasFlag(params.argv, flag));
+  if (!enabled) {
+    return params.snapshot;
+  }
+  return runWithLocalStateOwner({
+    method: "doctor.config.recover",
+    target: params.snapshot.path,
+    params: {},
     databaseAccess: "none",
-    stateMigrationsRequested: false,
-    snapshotRead: { snapshot: params.snapshot },
-    planRepair: async () => null,
-    readSnapshot: async () => ({ snapshot: await params.readSnapshot() }),
+    onForeignOwner: "refuse",
+    runLocal: ({ env, assertCurrent }) =>
+      withConfigWriteLock(
+        params.snapshot.path,
+        async () => {
+          const snapshot = await params.readSnapshot();
+          assertCurrent();
+          const repaired = await prepareDoctorConfigRecovery({
+            enabled: true,
+            databaseAccess: "none",
+            stateMigrationsRequested: false,
+            snapshotRead: { snapshot },
+            planRepair: async () => null,
+            readSnapshot: async () => ({ snapshot: await params.readSnapshot() }),
+          });
+          return repaired.snapshotRead.snapshot;
+        },
+        env,
+        assertCurrent,
+      ),
   });
-  return repaired.snapshotRead.snapshot;
 }
 
 /** Report uninspected storage truthfully, without entering bootstrap, maintenance or plugins. */
@@ -48,6 +72,16 @@ export function reportDoctorUnresolvedEngine(
   const nextStep = unparseable
     ? "Run `openclaw config validate` to inspect the parse error."
     : "Fix database settings or supply the referenced credentials, then rerun `openclaw doctor`.";
+  if (hasFlag(argv, "--lint")) {
+    const failure = new Error([message, details, nextStep].filter(Boolean).join("\n"));
+    if (isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY })) {
+      writeRuntimeJson(defaultRuntime, formatDoctorLintFailure(failure));
+    } else {
+      defaultRuntime.error(failure.message);
+    }
+    process.exitCode = 2;
+    return;
+  }
   if (isDoctorMachineOutput({ argv, stdoutIsTTY: process.stdout.isTTY })) {
     writeRuntimeJson(defaultRuntime, {
       status: "unknown",

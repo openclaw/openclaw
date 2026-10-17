@@ -20,6 +20,18 @@ const database = {
   },
 };
 
+const recoveryOwnerCommands = [
+  ["update"],
+  ["update", "--dry-run"],
+  ["update", "--channel", "beta"],
+  ["update", "status", "--json"],
+  ["reset", "--scope", "config"],
+  ["reset", "--scope=config"],
+  ["reset", "--scope=full", "--scope=config"],
+  ["uninstall", "--service"],
+  ["uninstall", "--service", "--app"],
+];
+
 describe("one-shot CLI engine selection", () => {
   it("selects the config-directed target without opening a database", async () => {
     await withOpenClawTestState(
@@ -82,12 +94,52 @@ describe("one-shot CLI engine selection", () => {
       ["update", "recover"],
       ["update", "adopt-immutable"],
       ["update", "--channel", "--", "cleanup"],
+      ...recoveryOwnerCommands,
     ].map((args) => ({ args })),
   )("leaves $args with its existing target owner", async ({ args }) => {
     await withOpenClawTestState({ label: "cli-engine-deferred" }, async (state) => {
       await state.writeConfig({ database, plugins: { enabled: false } });
       delete process.env.OPENCLAW_TEST_CLI_DSN;
       await prepareCliDatabaseEngine(["node", "openclaw", ...args]);
+      expect(getDatabaseEngineSelection()).toBeUndefined();
+      await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  it.each(recoveryOwnerCommands.map((args) => ({ args })))(
+    "keeps malformed source diagnostics with the $args owner",
+    async ({ args }) => {
+      await withOpenClawTestState({ label: "cli-recovery-invalid-source" }, async (state) => {
+        await fs.writeFile(state.configPath, '{"database":{"engine":"postgres"}, broken');
+        expect(await prepareCliDatabaseEngine(["node", "openclaw", ...args])).toBe(false);
+        expect(getDatabaseEngineSelection()).toBeUndefined();
+        await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      });
+    },
+  );
+
+  it.each(
+    [
+      ["reset", "--scope", "full"],
+      ["reset", "--scope=config+creds+sessions"],
+      ["reset", "--scope=config", "--scope=full"],
+      ["reset", "--", "--scope", "config"],
+      ["uninstall", "--service", "--state"],
+      ["uninstall", "--service", "--workspace"],
+      ["uninstall", "--service", "--all"],
+      ["uninstall", "--", "--service"],
+    ].map((args) => ({ args })),
+  )("still selects state for broader cleanup $args", async ({ args }) => {
+    await withOpenClawTestState({ label: "cli-cleanup-engine-selection" }, async (state) => {
+      await state.writeConfig({ database, plugins: { enabled: false } });
+      delete process.env.OPENCLAW_TEST_CLI_DSN;
+      await expect(prepareCliDatabaseEngine(["node", "openclaw", ...args])).rejects.toThrow(
+        "SecretRef is unresolved",
+      );
       expect(getDatabaseEngineSelection()).toBeUndefined();
       await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
         code: "ENOENT",
