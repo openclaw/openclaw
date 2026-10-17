@@ -251,6 +251,8 @@ describe("agent JSON predicate migration", () => {
         const pathname = state.path("predicates-v24.sqlite");
         using database = new DatabaseSync(pathname);
         seedSchema(database, 24);
+        // Stable admission has already settled the historical trigger's pending validity flag.
+        database.exec("UPDATE session_nodes SET entry_valid = 1");
         const event =
           '{"type":"message","message":{"role":"user","content":"retained stable transcript"}}';
         database

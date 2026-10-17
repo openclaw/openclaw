@@ -46,8 +46,7 @@ export function isVisibleHistoryNonMessageEventSql(
 }
 
 export function historyNavigationValidSql(database: EngineConnection): RawBuilder<number> {
-  /* kysely-allow-raw: only custom-message visibility needs navigation parsing. */
-  return sql<number>`CASE WHEN identity.event_type = 'custom_message'
+  return /* kysely-allow-raw: only custom-message visibility needs navigation parsing. */ sql<number>`CASE WHEN identity.event_type = 'custom_message'
     THEN ${transcriptPredicateSql(database, "navigation_valid", "event")} ELSE 1 END`;
 }
 

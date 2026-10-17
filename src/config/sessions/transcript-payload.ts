@@ -414,14 +414,18 @@ export function transcriptPredicateSql<K extends keyof TranscriptPredicateFields
   if (isPostgresSqlConnection(database)) {
     return stored;
   }
-  // kysely-allow-raw: the closed payload alias selects the classification marker and canonical identity.
-  const type = sql.ref(`${alias}.navigation_type`);
-  // kysely-allow-raw: malformed owner facts are already classified even with a null type.
-  const valid = sql.ref(`${alias}.navigation_valid`);
-  // kysely-allow-raw: raw identity wins, matching the historical migration's source selection.
-  const identity = sql.ref(`${alias}.event_json`);
-  // kysely-allow-raw: compressed rows carry the duplicate-preserving navigation envelope.
-  const metadata = sql.ref(`${alias}.navigation_json`);
+  const type =
+    /* kysely-allow-raw: the closed payload alias selects the classification marker. */
+    sql.ref(`${alias}.navigation_type`);
+  const valid =
+    /* kysely-allow-raw: the closed payload alias selects recorded validity. */
+    sql.ref(`${alias}.navigation_valid`);
+  const identity =
+    /* kysely-allow-raw: the closed payload alias selects the canonical raw identity. */
+    sql.ref(`${alias}.event_json`);
+  const metadata =
+    /* kysely-allow-raw: closed payload aliases select the duplicate-preserving navigation envelope. */
+    sql.ref(`${alias}.navigation_json`);
   const source = sql`coalesce(${identity}, ${jsonPathValue(database, metadata, sql.lit("$.navigation"), "json")})`;
   const sourceValid = jsonValid(database, source);
   const event = sql`CASE WHEN ${sourceValid} THEN ${source} ELSE '{}' END`;
@@ -450,7 +454,9 @@ export function transcriptPredicateSql<K extends keyof TranscriptPredicateFields
   }
   // A valid unknown type shares legacy defaults and can harmlessly rederive.
   // Classified and malformed rows never parse their payload again here.
-  return sql<TranscriptPredicateFields[K]>`CASE WHEN ${type} IS NOT NULL OR ${valid} = 0
+  return /* kysely-allow-raw: closed predicate keys select matching stored and derived owner facts. */ sql<
+    TranscriptPredicateFields[K]
+  >`CASE WHEN ${type} IS NOT NULL OR ${valid} = 0
     THEN ${stored} ELSE ${derived} END`;
 }
 
