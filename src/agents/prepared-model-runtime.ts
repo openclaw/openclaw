@@ -2,6 +2,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -311,25 +312,13 @@ export async function activateStandalonePreparedModelRuntime(
   const assertLifetime = captureModelRuntimeLifetime();
   const input = await prepareModelRuntimeInput(rawInput);
   assertLifetime();
-  const key = ownerKey(input);
-  const previous = standaloneActivationTails.get(key) ?? Promise.resolve();
   // One writer per owner key prevents conflicting config activations from alternately
   // superseding each other's generation while preserving each caller's requested snapshot.
-  const activation = previous.then(
-    async () => await activateStandalonePreparedModelRuntimeNow(input, assertLifetime, options),
-  );
-  const tail = activation.then(
-    () => undefined,
-    () => undefined,
-  );
-  standaloneActivationTails.set(key, tail);
-  try {
-    return await activation;
-  } finally {
-    if (standaloneActivationTails.get(key) === tail) {
-      standaloneActivationTails.delete(key);
-    }
-  }
+  return await enqueueKeyedTask({
+    tails: standaloneActivationTails,
+    key: ownerKey(input),
+    task: () => activateStandalonePreparedModelRuntimeNow(input, assertLifetime, options),
+  });
 }
 
 async function activateStandalonePreparedModelRuntimeNow(
