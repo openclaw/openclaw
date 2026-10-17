@@ -22,6 +22,7 @@ import {
   getExpandedToolCards,
   getExpandedUserMessages,
   getExpansionStateVersion,
+  setExpansionState,
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
@@ -928,6 +929,7 @@ describe("chat transcript invalidation", () => {
       ...props,
       paneId: "tool-visibility-pane",
       sessionKey: toolVisibilitySession,
+      transcriptVisible: true,
       messages: [
         { role: "user", content: "tool visibility prompt", timestamp: 1 },
         {
@@ -996,6 +998,17 @@ describe("chat transcript invalidation", () => {
         "true",
         "false",
       ]),
+    );
+
+    await renderToolVisibility({ ...toolVisibilityProps, transcriptVisible: false });
+    setExpansionState(visibilityState, expandedToolId, false);
+    flush();
+    expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("true");
+    await renderToolVisibility();
+    expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("false");
+    setExpansionState(visibilityState, expandedToolId, true);
+    await waitForSolid(() =>
+      expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("true"),
     );
 
     await renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });

@@ -21,6 +21,7 @@ import {
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import {
   getExpandedToolCards,
@@ -86,12 +87,17 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
       }),
     ),
   );
+  const expansionVersions = createParkedProjection(
+    () => expansions().map((expansion) => expansion.read()),
+    () => {
+      const visible = input.props.transcriptVisible ?? true;
+      return typeof visible === "object" ? visible.isPresented() : visible;
+    },
+  );
   const current = createMemo(() => {
     const { session } = presentation();
     const projection = projectChatTranscript(input.props, session);
-    for (const expansion of expansions()) {
-      expansion.read();
-    }
+    expansionVersions();
     // Empty shells establish the baseline for first-submission animation.
     if (projection.isEmpty || projection.showLoadingSkeleton) {
       session.entryAnimations.sync(
