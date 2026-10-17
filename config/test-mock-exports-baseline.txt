@@ -3001,7 +3001,6 @@
 ["src/agents/tools/message-tool.test.ts","./agents-list-tool.js","e83c1b81194c3b9f22a1fa2636ec6b6b45b440cfc614044cb6650332bc1000cf",1]
 ["src/agents/tools/message-tool.test.ts","./cron-tool.js","216617fa51afc1ed1bc53adda7ae3fea33f2581e5f8d0e8788d2347f319d29c6",1]
 ["src/agents/tools/message-tool.test.ts","./gateway-tool.js","faefd4280f3ee9fa854257b3cb790e0e499978d2021d3e8537c46851c4b29c07",1]
-["src/agents/tools/message-tool.test.ts","./heartbeat-response-tool.js","b6f8039c0a554dee3c641a0099dce0634721aadc0b657b908edf82f46c25cfb5",1]
 ["src/agents/tools/message-tool.test.ts","./image-generate-tool.js","b44fa99d510bf4a8b28fba3cc59dfd7aa9e0f7fbcda2d6f06f9d62496a7d7be8",1]
 ["src/agents/tools/message-tool.test.ts","./image-tool.js","b2f3b530b9af0dd4141addd7c44f938ef7db06e5fe5d0285a1302a4352dd6523",1]
 ["src/agents/tools/message-tool.test.ts","./manifest-capability-availability.js","d287c23ecd21dbbf56b6eaf53c19021f758817ebdf22dd0e27245f6e73bb2030",1]
