@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-runtime.js";
 import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
@@ -31,6 +31,8 @@ import {
 } from "./remote-skills.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
+const names = (skills?: ReadonlyArray<{ name: string }>) => skills?.map(({ name }) => name);
+const missingTool = { metadata: '{"openclaw":{"requires":{"bins":["fixture-missing-tool"]}}}' };
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
@@ -64,10 +66,9 @@ async function fixture() {
     name: string,
     description: string,
     options: Omit<Parameters<typeof writeSkill>[0], "dir" | "name" | "description"> = {},
-  ) => writeSkill({ dir: path.join(workspaceDir, "skills", name), name, description, ...options });
-  await write("probe", "Requires a local tool", {
-    metadata: '{"openclaw":{"requires":{"bins":["fixture-missing-tool"]}}}',
-  });
+    skillRoot = path.join(workspaceDir, "skills"),
+  ) => writeSkill({ dir: path.join(skillRoot, name), name, description, ...options });
+  await write("probe", "Requires a local tool", missingTool);
   const visibleFile = path.join(workspaceDir, "skills", "visible", "SKILL.md");
   await write("visible", "Original instructions");
   const config: OpenClawConfig = { plugins: { enabled: false } };
@@ -77,7 +78,22 @@ async function fixture() {
   ) => resolveReusableWorkspaceSkillSnapshot({ ...params, ...options });
   const catalog = (snapshot: Parameters<typeof prepareInstalledSkillCatalog>[0]["snapshot"]) =>
     prepareInstalledSkillCatalog({ snapshot, workspaceDir });
-  return { ...params, visibleFile, write, resolve, catalog };
+  const source = (snapshot: SkillSnapshot, name: string) =>
+    catalog(snapshot).find((skill) => skill.name === name)?.source.filePath;
+  const build = () =>
+    buildSkillSnapshot(workspaceDir, {
+      config,
+      snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
+    });
+  const install = () => {
+    const binDir = path.join(root, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, "fixture-missing-tool"), "fixture", { mode: 0o755 });
+  };
+  const prepare = (
+    options: Omit<Parameters<typeof ensureSkillSnapshot>[0], "agentId" | "workspaceDir" | "cfg">,
+  ) => ensureSkillSnapshot({ agentId: "main", workspaceDir, cfg: config, ...options });
+  return { ...params, visibleFile, write, resolve, catalog, source, build, install, prepare };
 }
 
 function persist(snapshot: SkillSnapshot) {
@@ -94,6 +110,10 @@ const bindWorkspace = (workspaceDir: string) =>
   });
 
 describe("asynchronous runtime skill preparation", () => {
+  let params: Awaited<ReturnType<typeof fixture>>;
+  beforeEach(async () => {
+    params = await fixture();
+  });
   it.each([
     { name: "deploy", savedName: "deploy", reservedName: undefined },
     { name: "probe", savedName: "snapshot-node-probe", reservedName: undefined },
@@ -101,11 +121,8 @@ describe("asynchronous runtime skill preparation", () => {
   ])(
     "retains node implementation $savedName when a local provider becomes eligible",
     async ({ name, savedName, reservedName }) => {
-      const params = await fixture();
       if (reservedName) {
-        await params.write(reservedName, "Unavailable local provider", {
-          metadata: '{"openclaw":{"requires":{"bins":["fixture-missing-tool"]}}}',
-        });
+        await params.write(reservedName, "Unavailable local provider", missingTool);
       }
       const nodeId = "snapshot-node";
       const eligibility = { nodeSkills: { canExec: true } };
@@ -117,21 +134,17 @@ describe("asynchronous runtime skill preparation", () => {
         skills: [
           {
             name,
-            description: "Node deployment",
-            content: `---\nname: ${name}\ndescription: Node deployment\n---\nNode instructions`,
+            description: "Node",
+            content: `---\nname: ${name}\ndescription: Node\n---\nNode instructions`,
           },
         ],
       });
-      const { snapshot: original } = await params.resolve({
-        eligibility,
-      });
+      const { snapshot: original } = await params.resolve({ eligibility });
       const saved = persist(original);
       const localDir = path.join(params.workspaceDir, "skills", name);
       await params.write(name, "Local deployment");
 
-      const { snapshot: fresh } = await params.resolve({
-        eligibility,
-      });
+      const { snapshot: fresh } = await params.resolve({ eligibility });
       const { snapshot: hydrated } = await params.resolve({
         eligibility,
         existingSnapshot: expectDefined(saved, "persisted node snapshot"),
@@ -139,18 +152,12 @@ describe("asynchronous runtime skill preparation", () => {
       expect(hydrated.prompt).toBe(original.prompt);
       expect(hydrated.resolvedSkills).toEqual(original.resolvedSkills);
       expect(hydrated.discoverySkills).toEqual(original.discoverySkills);
-      expect(
-        params.catalog(hydrated).find((skill) => skill.name === savedName)?.source.filePath,
-      ).toBe(`node://snapshot-node/skills/${name}/SKILL.md`);
-      expect(params.catalog(fresh).find((skill) => skill.name === name)?.source.filePath).toBe(
-        path.join(localDir, "SKILL.md"),
+      const nodeFile = `node://snapshot-node/skills/${name}/SKILL.md`;
+      expect(params.source(hydrated, savedName)).toBe(nodeFile);
+      expect(params.source(fresh, name)).toBe(path.join(localDir, "SKILL.md"));
+      expect(params.source(fresh, reservedName ? savedName : `snapshot-node-${name}`)).toBe(
+        nodeFile,
       );
-      expect(
-        params
-          .catalog(fresh)
-          .find((skill) => skill.name === (reservedName ? savedName : `snapshot-node-${name}`))
-          ?.source.filePath,
-      ).toBe(`node://snapshot-node/skills/${name}/SKILL.md`);
     },
   );
 
@@ -161,20 +168,15 @@ describe("asynchronous runtime skill preparation", () => {
   ])(
     "keeps the saved implementation when a same-name provider becomes eligible ($maxSkillsInPrompt, retained=$retained, remote=$remote)",
     async ({ maxSkillsInPrompt, retained, remote }) => {
-      const params = await fixture();
       params.config.skills = { load: { watch: false }, limits: { maxSkillsInPrompt } };
       const alternateRoot = path.join(params.workspaceDir, ".agents", "skills");
-      await writeSkill({
-        dir: path.join(alternateRoot, "probe"),
-        name: "probe",
-        description: "Original provider",
-        body: "Original implementation",
-      });
-      await writeSkill({
-        dir: path.join(alternateRoot, "alpha"),
-        name: "alpha",
-        description: "Always available",
-      });
+      await params.write(
+        "probe",
+        "Original provider",
+        { body: "Original implementation" },
+        alternateRoot,
+      );
+      await params.write("alpha", "Always available", {}, alternateRoot);
       const originalEntries = loadSkillRootRecords({
         dir: alternateRoot,
         source: "agents-skills-project",
@@ -185,66 +187,44 @@ describe("asynchronous runtime skill preparation", () => {
         }
         onTestFinished(bindWorkspace(params.workspaceDir));
       }
-      const binDir = path.join(path.dirname(params.workspaceDir), "bin");
-      fs.mkdirSync(binDir);
-      const binary = path.join(binDir, "fixture-missing-tool");
       const resolveEntries = workspaceSkillLoader.resolveWorkspaceSkillPromptEntries;
       const selection = vi
         .spyOn(workspaceSkillLoader, "resolveWorkspaceSkillPromptEntries")
         .mockImplementationOnce((workspaceDir, options) =>
-          resolveEntries(workspaceDir, {
-            ...options,
-            entries: originalEntries,
-          }),
+          resolveEntries(workspaceDir, { ...options, entries: originalEntries }),
         );
-      const original = retained
-        ? (await params.resolve()).snapshot
-        : await buildSkillSnapshot(params.workspaceDir, {
-            config: params.config,
-            snapshotVersion: getSkillsSnapshotVersion(params.workspaceDir),
-          });
+      const original = retained ? (await params.resolve()).snapshot : await params.build();
       selection.mockRestore();
       const saved = structuredClone(persist(original));
 
-      fs.writeFileSync(binary, "fixture", { mode: 0o755 });
+      params.install();
       const { snapshot: fresh } = await params.resolve();
-      const { snapshot: hydrated } = await params.resolve({
-        existingSnapshot: saved,
-      });
+      const { snapshot: hydrated } = await params.resolve({ existingSnapshot: saved });
       expect(hydrated.prompt).toBe(original.prompt);
       expect(hydrated.skills).toEqual(original.skills);
       expect(hydrated.resolvedSkills).toEqual(original.resolvedSkills);
       expect(hydrated.discoverySkills).toEqual(original.discoverySkills);
       const catalog = params.catalog(hydrated);
       expect(catalog).toHaveLength(2);
-      const provider = expectDefined(
-        catalog.find((skill) => skill.name === "probe"),
-        "saved provider",
-      );
-      expect(provider.source.filePath).toBe(path.join(alternateRoot, "probe", "SKILL.md"));
+      const file = expectDefined(params.source(hydrated, "probe"), "saved provider");
+      expect(file).toBe(path.join(alternateRoot, "probe", "SKILL.md"));
       expect(hydrated.discoverySkills?.find((skill) => skill.name === "probe")?.fileHost).toBe(
         remote ? "workspace" : undefined,
       );
-      expect(fs.readFileSync(provider.source.filePath, "utf8")).toContain(
-        "Original implementation",
-      );
-      expect(params.catalog(fresh).find((skill) => skill.name === "probe")?.source.filePath).toBe(
+      expect(fs.readFileSync(file, "utf8")).toContain("Original implementation");
+      expect(params.source(fresh, "probe")).toBe(
         path.join(params.workspaceDir, "skills", "probe", "SKILL.md"),
       );
     },
   );
 
   it("does not revive an ineligible source during cold snapshot hydration", async () => {
-    const params = await fixture();
     await params.write("env-probe", "Requires an environment prerequisite", {
       metadata: '{"openclaw":{"requires":{"env":["W8_SKILL_ENV_FIXTURE"]}}}',
     });
     vi.stubEnv("W8_SKILL_ENV_FIXTURE", "fixture");
-    const original = await buildSkillSnapshot(params.workspaceDir, {
-      config: params.config,
-      snapshotVersion: getSkillsSnapshotVersion(params.workspaceDir),
-    });
-    expect(original.discoverySkills?.map((skill) => skill.name)).toEqual(["env-probe", "visible"]);
+    const original = await params.build();
+    expect(names(original.discoverySkills)).toEqual(["env-probe", "visible"]);
     const saved = persist(original);
     vi.stubEnv("W8_SKILL_ENV_FIXTURE", undefined);
 
@@ -252,65 +232,51 @@ describe("asynchronous runtime skill preparation", () => {
       existingSnapshot: expectDefined(saved, "saved snapshot"),
     });
     expect(snapshot.prompt).toBe(original.prompt);
-    expect(snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["visible"]);
-    expect(snapshot.discoverySkills?.map((skill) => skill.name)).toEqual(["visible"]);
+    expect(names(snapshot.resolvedSkills)).toEqual(["visible"]);
+    expect(names(snapshot.discoverySkills)).toEqual(["visible"]);
   });
 
   it("discovers newly installed dependencies for fresh sessions without rewriting active snapshots", async () => {
-    const params = await fixture();
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     params.config.skills = { load: { watch: false }, limits: { maxSkillsInPrompt: 1 } };
-    const binDir = path.join(path.dirname(params.workspaceDir), "bin");
-    fs.mkdirSync(binDir);
     const sessionStore: Record<string, SessionEntry> = {};
-    const prepare = (sessionKey: string) =>
-      ensureSkillSnapshot({
-        agentId: "main",
-        sessionEntry: sessionStore[sessionKey],
+    const sessionKey = "agent:main:before-install";
+    const prepare = (key: string) =>
+      params.prepare({
+        sessionEntry: sessionStore[key],
         sessionStore,
-        sessionKey,
-        isFirstTurnInSession: sessionStore[sessionKey] === undefined,
-        workspaceDir: params.workspaceDir,
-        cfg: params.config,
+        sessionKey: key,
+        isFirstTurnInSession: sessionStore[key] === undefined,
       });
 
-    const original = await prepare("agent:main:before-install");
-    expect(original.skillsSnapshot?.skills.map((skill) => skill.name)).toEqual(["visible"]);
+    const original = await prepare(sessionKey);
+    expect(names(original.skillsSnapshot?.skills)).toEqual(["visible"]);
 
-    fs.writeFileSync(path.join(binDir, "fixture-missing-tool"), "fixture", { mode: 0o755 });
+    params.install();
 
-    expect((await prepare("agent:main:before-install")).skillsSnapshot).toBe(
-      original.skillsSnapshot,
-    );
+    expect((await prepare(sessionKey)).skillsSnapshot).toBe(original.skillsSnapshot);
     const fresh = await prepare("agent:main:after-install");
-    expect(fresh.skillsSnapshot?.skills.map((skill) => skill.name)).toEqual(["probe", "visible"]);
+    expect(names(fresh.skillsSnapshot?.skills)).toEqual(["probe", "visible"]);
 
-    sessionStore["agent:main:before-install"] = stripRuntimeOnlySessionSkillsFields(
-      expectDefined(sessionStore["agent:main:before-install"], "original session"),
+    sessionStore[sessionKey] = stripRuntimeOnlySessionSkillsFields(
+      expectDefined(sessionStore[sessionKey], "original session"),
     );
-    const hydrated = await prepare("agent:main:before-install");
+    const hydrated = await prepare(sessionKey);
     expect(hydrated.skillsSnapshot?.prompt).toBe(original.skillsSnapshot?.prompt);
-    expect(hydrated.skillsSnapshot?.resolvedSkills?.map((skill) => skill.name)).toEqual([
-      "visible",
-    ]);
-    expect(params.catalog(hydrated.skillsSnapshot).map((skill) => skill.name)).toEqual(["visible"]);
+    expect(names(hydrated.skillsSnapshot?.resolvedSkills)).toEqual(["visible"]);
+    expect(names(params.catalog(hydrated.skillsSnapshot))).toEqual(["visible"]);
   });
 
-  const replyCases = (
-    [
-      [true, true, false],
-      [true, false, false],
-      [false, true, false],
-      [false, false, false],
-      [false, true, true],
-      [false, false, true],
-    ] as const
-  ).map(([isFirstTurnInSession, useHandle, warm]) => ({ isFirstTurnInSession, useHandle, warm }));
-
-  it.each(replyCases)(
-    "preserves concurrent reply state (first turn $isFirstTurnInSession, handle $useHandle, warm $warm)",
-    async ({ isFirstTurnInSession, useHandle, warm }) => {
-      const params = await fixture();
+  it.each([
+    [true, true, false],
+    [true, false, false],
+    [false, true, false],
+    [false, false, false],
+    [false, true, true],
+    [false, false, true],
+  ] as const)(
+    "preserves concurrent reply state (first turn %s, handle %s, warm %s)",
+    async (isFirstTurnInSession, useHandle, warm) => {
       vi.stubEnv("OPENCLAW_TEST_FAST", "0");
       params.config.skills = { load: { watch: false } };
       const sessionKey = "agent:main:main";
@@ -325,15 +291,12 @@ describe("asynchronous runtime skill preparation", () => {
         ? createReplySessionEntryHandle({ sessionEntry, sessionStore, sessionKey })
         : undefined;
       const prepare = () =>
-        ensureSkillSnapshot({
-          agentId: "main",
+        params.prepare({
           sessionEntry,
           sessionStore,
           sessionEntryHandle,
           sessionKey,
           isFirstTurnInSession,
-          workspaceDir: params.workspaceDir,
-          cfg: params.config,
         });
       if (warm) {
         await prepare();
@@ -342,7 +305,6 @@ describe("asynchronous runtime skill preparation", () => {
       const pending = prepare();
       const concurrent: SessionEntry = {
         ...sessionEntry,
-        sessionId: "original",
         updatedAt: 2,
         label: "After",
         sendPolicy: "deny",
@@ -369,13 +331,8 @@ describe("asynchronous runtime skill preparation", () => {
   );
 
   it("rebuilds changed source bytes and version before publishing an in-flight snapshot", async () => {
-    const params = await fixture();
     const requestedVersion = getSkillsSnapshotVersion(params.workspaceDir);
-    const pending = Promise.resolve(
-      params.resolve({
-        snapshotVersion: requestedVersion,
-      }),
-    );
+    const pending = params.resolve({ snapshotVersion: requestedVersion });
     fs.writeFileSync(
       params.visibleFile,
       "---\nname: visible\ndescription: Updated instructions\n---\n",
@@ -391,7 +348,6 @@ describe("asynchronous runtime skill preparation", () => {
   });
 
   it("rechecks eligibility after preparation without changing admitted configuration", async () => {
-    const params = await fixture();
     let canExec = true;
     const pending = params.resolve({
       resolveEligibility: () => ({ nodeSkills: { canExec } }),
@@ -401,7 +357,6 @@ describe("asynchronous runtime skill preparation", () => {
   });
 
   it("keeps a shared rebuild alive for its remaining caller after another caller aborts", async () => {
-    const params = await fixture();
     const controller = new AbortController();
     const reason = new Error("preparation cancelled");
     const first = params.resolve({
@@ -418,21 +373,18 @@ describe("asynchronous runtime skill preparation", () => {
   });
 
   it("observes abort before applying a skill environment and leaves no override behind", async () => {
-    const params = await fixture();
     vi.stubEnv("ASYNC_SKILL_FIXTURE", undefined);
     params.config.skills = { entries: { visible: { env: { ASYNC_SKILL_FIXTURE: "owned" } } } };
     const controller = new AbortController();
     const reason = new Error("attempt cancelled");
-    const pending = Promise.resolve(
-      prepareEmbeddedSkills({
-        attempt: { config: params.config },
-        effectiveWorkspace: params.workspaceDir,
-        sandbox: null,
-        sessionAgentId: "main",
-        includeCodeModeSkills: true,
-        assertCurrent: () => controller.signal.throwIfAborted(),
-      }),
-    );
+    const pending = prepareEmbeddedSkills({
+      attempt: { config: params.config },
+      effectiveWorkspace: params.workspaceDir,
+      sandbox: null,
+      sessionAgentId: "main",
+      includeCodeModeSkills: true,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    });
     const rejected = expect(pending).rejects.toBe(reason);
     controller.abort(reason);
     try {

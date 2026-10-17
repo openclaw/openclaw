@@ -76,11 +76,7 @@ describe("node-hosted skill snapshots", () => {
   it("appears while connected, includes the locator note, and disappears on disconnect", async () => {
     const before = getSkillsSnapshotVersion();
     connect("node-1", { displayName: "Build Mac" });
-    replaceRemoteNodeSkills({
-      nodeId: "node-1",
-      displayName: "Build Mac",
-      skills: [nodeSkill("release-helper", "Prepare a release")],
-    });
+    publish("release-helper", "Prepare a release");
 
     const entries = loadWorkspaceSkills("/workspace", {
       workspaceOnly: true,
@@ -110,9 +106,8 @@ describe("node-hosted skill snapshots", () => {
   });
 
   it("prefixes node skills on local and cross-node collisions", () => {
-    recordRemoteSkillNodeInfo({ nodeId: "node-a", connId: "a", commands: ["system.run"] });
-    recordRemoteSkillNodeInfo({ nodeId: "node-b", connId: "b", commands: ["system.run"] });
     for (const nodeId of ["node-a", "node-b"]) {
+      connect(nodeId, { connId: nodeId.slice(-1) });
       replaceRemoteNodeSkills({
         nodeId,
         skills: [nodeSkill("deploy", "Deploy"), nodeSkill("local-only", "Remote collision")],
@@ -136,22 +131,11 @@ describe("node-hosted skill snapshots", () => {
       ["node-a-123456", "Build A"],
       ["node-b-123456", "Build B"],
     ] as const) {
-      recordRemoteSkillNodeInfo({
-        nodeId,
-        displayName,
-        connId: nodeId,
-        commands: ["system.run"],
-      });
+      connect(nodeId, { displayName, connId: nodeId });
       replaceRemoteNodeSkills({
         nodeId,
         displayName,
-        skills: [
-          {
-            name: `${nodeId.slice(0, 6)}-skill`,
-            description: `Skill from ${displayName}`,
-            content: content(`${nodeId.slice(0, 6)}-skill`, `Skill from ${displayName}`),
-          },
-        ],
+        skills: [nodeSkill(`${nodeId.slice(0, 6)}-skill`, `Skill from ${displayName}`)],
       });
     }
 
@@ -189,8 +173,7 @@ describe("node-hosted skill snapshots", () => {
     const entries = remoteEntries();
 
     const [command] = buildWorkspaceSkillCommandSpecs("/workspace", { entries });
-    expect(command?.skillName).toBe("dispatch-skill");
-    expect(command?.dispatch).toBeUndefined();
+    expect([command?.skillName, command?.dispatch]).toEqual(["dispatch-skill", undefined]);
   });
 
   it("drops content that fails existing frontmatter parsing", () => {
@@ -242,7 +225,7 @@ describe("node-hosted skill snapshots", () => {
   });
 
   it("hides skills when the session or publishing node cannot execute on the node", () => {
-    recordRemoteSkillNodeInfo({ nodeId: "node-1", connId: "conn-1", commands: [] });
+    connect("node-1", { commands: [] });
     publish("remote", "Remote");
 
     expect(remoteEntries()).toEqual([]);
