@@ -21,8 +21,6 @@ import {
   testing as probeTesting,
 } from "./plugin-lifecycle-probe-runtime.js";
 
-// Process reaping uses native time even while the command deadline uses fake timers.
-const waitForProcessTick = nativeProcessTick;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -32,8 +30,24 @@ afterAll(async () => {
   await receipts.close();
 });
 
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
+function inspectFile(plugin?: { enabled: boolean; status: string }) {
+  const file = path.join(tempDirs.make("openclaw-plugin-lifecycle-probe-"), "inspect.json");
+  if (plugin) {
+    writeFileSync(
+      file,
+      `${JSON.stringify({ plugin: { id: "lifecycle-claw", ...plugin } })}\n`,
+      "utf8",
+    );
+  }
+  return file;
+}
+
+function fixtureTarball(prefix: string) {
+  const dir = tempDirs.make(prefix);
+  const tarball = path.join(dir, "fixture.tgz");
+  writeFileSync(tarball, "fixture package");
+  const packages: [string, string, string][] = [["registry-probe", "1.0.0", tarball]];
+  return { dir, packages };
 }
 
 function isProcessRunning(pid: number): boolean {
@@ -49,7 +63,8 @@ function isProcessRunning(pid: number): boolean {
 async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
   try {
     while (isProcessRunning(pid)) {
-      await waitForProcessTick(5, undefined, { signal });
+      // Reaping uses native time even while command deadlines use fake timers.
+      await nativeProcessTick(5, undefined, { signal });
     }
   } catch (error) {
     if (signal.aborted) {
@@ -75,15 +90,8 @@ describe("plugin lifecycle matrix probe", () => {
   it("serves fixture packages after the registry reports its listening port", async ({
     signal,
   }) => {
-    const dir = tempDirs.make("openclaw-plugin-registry-ready-");
-    const tarball = path.join(dir, "fixture.tgz");
-    writeFileSync(tarball, "fixture package");
-    const registry = await probeTesting.startNpmFixtureRegistry(
-      dir,
-      [["registry-probe", "1.0.0", tarball]],
-      process.env,
-      signal,
-    );
+    const { dir, packages } = fixtureTarball("openclaw-plugin-registry-ready-");
+    const registry = await probeTesting.startNpmFixtureRegistry(dir, packages, process.env, signal);
     try {
       const response = await fetch(`${registry.env.NPM_CONFIG_REGISTRY}/registry-probe`, {
         signal,
@@ -99,63 +107,33 @@ describe("plugin lifecycle matrix probe", () => {
   });
 
   it("joins registry cleanup when its startup is cancelled", async () => {
-    const dir = tempDirs.make("openclaw-plugin-registry-cancel-");
-    const tarball = path.join(dir, "fixture.tgz");
-    writeFileSync(tarball, "fixture package");
+    const { dir, packages } = fixtureTarball("openclaw-plugin-registry-cancel-");
     const cancellation = new AbortController();
     cancellation.abort(new Error("registry startup cancelled"));
     await expect(
-      probeTesting.startNpmFixtureRegistry(
-        dir,
-        [["registry-probe", "1.0.0", tarball]],
-        process.env,
-        cancellation.signal,
-      ),
+      probeTesting.startNpmFixtureRegistry(dir, packages, process.env, cancellation.signal),
     ).rejects.toMatchObject({ name: "AbortError", cause: cancellation.signal.reason });
   });
 
   it("accepts inspect JSON for an enabled loaded plugin", async () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
-    const inspectPath = path.join(dir, "inspect.json");
-    writeFileSync(
-      inspectPath,
-      `${JSON.stringify({ plugin: { enabled: true, id: "lifecycle-claw", status: "loaded" } })}\n`,
-      "utf8",
-    );
-
+    const inspectPath = inspectFile({ enabled: true, status: "loaded" });
     expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).not.toThrow();
   });
 
   it("accepts inspect JSON for a disabled plugin", async () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
-    const inspectPath = path.join(dir, "inspect.json");
-    writeFileSync(
-      inspectPath,
-      `${JSON.stringify({ plugin: { enabled: false, id: "lifecycle-claw", status: "disabled" } })}\n`,
-      "utf8",
-    );
-
+    const inspectPath = inspectFile({ enabled: false, status: "disabled" });
     expect(() => assertInspectDisabled("lifecycle-claw", inspectPath)).not.toThrow();
   });
 
   it("rejects disabled inspect JSON that still reports a loaded plugin", async () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
-    const inspectPath = path.join(dir, "inspect.json");
-    writeFileSync(
-      inspectPath,
-      `${JSON.stringify({ plugin: { enabled: false, id: "lifecycle-claw", status: "loaded" } })}\n`,
-      "utf8",
-    );
-
+    const inspectPath = inspectFile({ enabled: false, status: "loaded" });
     expect(() => assertInspectDisabled("lifecycle-claw", inspectPath)).toThrow(
       "expected lifecycle-claw inspect status disabled, got loaded",
     );
   });
 
   it("rejects missing inspect JSON instead of treating it as an empty object", async () => {
-    const dir = tempDirs.make("openclaw-plugin-lifecycle-probe-");
-    const inspectPath = path.join(dir, "missing.json");
-
+    const inspectPath = inspectFile();
     expect(() => assertInspectLoaded("lifecycle-claw", inspectPath)).toThrow(
       `failed to read JSON from ${inspectPath}`,
     );
@@ -227,24 +205,17 @@ describe("plugin lifecycle matrix probe", () => {
 
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(taskkillImpl).toHaveBeenNthCalledWith(
-        1,
-        expectedTaskkillPath(),
+      for (const [index, args] of [
         ["/PID", "12345", "/T"],
-        {
-          stdio: "ignore",
-          windowsHide: true,
-        },
-      );
-      expect(taskkillImpl).toHaveBeenNthCalledWith(
-        2,
-        expectedTaskkillPath(),
         ["/PID", "12345", "/T", "/F"],
-        {
-          stdio: "ignore",
-          windowsHide: true,
-        },
-      );
+      ].entries()) {
+        expect(taskkillImpl).toHaveBeenNthCalledWith(
+          index + 1,
+          resolveWindowsTaskkillPath(),
+          args,
+          { stdio: "ignore", windowsHide: true },
+        );
+      }
       expect(child.signals).toEqual([]);
 
       const error = await runError;

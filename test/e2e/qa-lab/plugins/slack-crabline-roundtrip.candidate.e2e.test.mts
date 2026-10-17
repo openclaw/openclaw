@@ -229,6 +229,12 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
     };
     const outbound = () =>
       bus.getSnapshot().messages.filter((message) => message.direction === "outbound");
+    const cursors = async (baseUrl: string) => ({
+      modelCursor: (await json<{ cursor: number }>(`${baseUrl}/debug/request-cursor`, signal))
+        .cursor,
+      recorderCursor: (await records()).length,
+      busCursor: outbound().length,
+    });
     const runBody = async () => {
       assertActive();
       startedAdapter = undefined;
@@ -353,12 +359,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         streaming: { ...slack?.streaming, ...account?.streaming },
       };
 
-      const firstCursor = await json<{ cursor: number }>(
-        `${mock.baseUrl}/debug/request-cursor`,
-        signal,
-      );
-      const firstRecorderCursor = (await records()).length;
-      const firstBusCursor = outbound().length;
+      const first = await cursors(mock.baseUrl);
       const unboundMarker = "p03-unbound-no-replay";
       assertActive();
       const unbound = await sendProviderInbound({
@@ -370,18 +371,16 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       expect(await nativeMessages("D0000000001")).toEqual([
         expect.objectContaining({ ts: unbound.id, text: unboundMarker, user: "U0000000001" }),
       ]);
-      await transport.waitForNoOutbound({ sinceIndex: firstBusCursor });
+      await transport.waitForNoOutbound({ sinceIndex: first.busCursor });
       expect(
         await json<MockOpenAiRequestSnapshot[]>(
-          `${mock.baseUrl}/debug/requests?after=${firstCursor.cursor}`,
+          `${mock.baseUrl}/debug/requests?after=${first.modelCursor}`,
           signal,
         ),
       ).toEqual([]);
       cells.push({
         kind: "unbound",
-        modelCursor: firstCursor.cursor,
-        recorderCursor: firstRecorderCursor,
-        busCursor: firstBusCursor,
+        ...first,
         inboundId: unbound.id,
         nativeCommitted: true,
       });
@@ -399,12 +398,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         : (["dm"] as const)) {
         const marker = `p03-${mode}-${kind}`;
         const reply = `callback-${kind}-reply`;
-        const modelCursor = await json<{ cursor: number }>(
-          `${mock.baseUrl}/debug/request-cursor`,
-          signal,
-        );
-        const recorderCursor = (await records()).length;
-        const busCursor = outbound().length;
+        const cursor = await cursors(mock.baseUrl);
         assertActive();
         const inbound = await sendProviderInbound({
           conversation: { id: "D0000000002", kind: "direct" },
@@ -415,7 +409,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         expect(inbound.id).toMatch(/^\d+\.\d+$/u);
         const normalized = await transport.waitForOutbound({
           conversation: { id: "D0000000002", kind: "direct" },
-          sinceIndex: busCursor,
+          sinceIndex: cursor.busCursor,
           textIncludes: reply,
           ...(kind === "thread" ? { threadId: parentId } : {}),
           timeoutMs: 45_000,
@@ -424,7 +418,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         expect(normalized.id).not.toBe("");
         expect(normalized.accountId).toBe("default");
         const requests = await json<MockOpenAiRequestSnapshot[]>(
-          `${mock.baseUrl}/debug/requests?after=${modelCursor.cursor}`,
+          `${mock.baseUrl}/debug/requests?after=${cursor.modelCursor}`,
           signal,
         );
         const ownRequests = requests.filter((entry) => entry.allInputText.includes(marker));
@@ -432,7 +426,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         expect(ownRequests[0]!.outcome).toBe("success");
         expect(requests.every((entry) => !entry.allInputText.includes(unboundMarker))).toBe(true);
         const posts = (await records())
-          .slice(recorderCursor)
+          .slice(cursor.recorderCursor)
           .filter(
             (event) =>
               event.method === "POST" &&
@@ -457,9 +451,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         expect(normalized.threadId).toBe(kind === "thread" ? parentId : undefined);
         cells.push({
           kind,
-          modelCursor: modelCursor.cursor,
-          recorderCursor,
-          busCursor,
+          ...cursor,
           inboundId: inbound.id,
           nativeReplyId: nativeReply?.ts,
           normalizedId: normalized.id,
@@ -468,7 +460,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         parentId ??= inbound.id;
       }
       const allRequests = await json<MockOpenAiRequestSnapshot[]>(
-        `${mock.baseUrl}/debug/requests?after=${firstCursor.cursor}`,
+        `${mock.baseUrl}/debug/requests?after=${first.modelCursor}`,
         signal,
       );
       expect(allRequests.every((entry) => !entry.allInputText.includes(unboundMarker))).toBe(true);

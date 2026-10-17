@@ -22,6 +22,10 @@ import { createQaPluginEntryObservation } from "../../../helpers/qa-plugin-entry
 
 const repoRoot = path.resolve(import.meta.dirname, "../../../..");
 const accounts = ["alpha", "beta"] as const;
+const fileHash = async (file: string) =>
+  createHash("sha256")
+    .update(await fs.readFile(file))
+    .digest("hex");
 
 it("joins two native Feishu accounts through the real Gateway with raw rendering, typing off and native DM post responses", async ({
   signal,
@@ -34,9 +38,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
   const events = new Map<string, ServerRequestEvent[]>();
   const agent = new Agent({ ca: PROXY_FIXTURE_CERTIFICATE });
   const gatewayOwner = createQaGatewayChild();
-  const mockOwner: {
-    server?: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
-  } = {};
+  const mockOwner: { server?: Awaited<ReturnType<typeof startQaMockOpenAiServer>> } = {};
   onTestFinished(async () => {
     const errors: unknown[] = [];
     const stopped = await gatewayOwner.stop();
@@ -95,9 +97,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
     path.resolve(builtPluginRoot, builtPackage.openclaw.extensions[0]!),
   );
   expect(path.dirname(builtEntry)).toBe(builtPluginRoot);
-  const builtEntryHash = createHash("sha256")
-    .update(await fs.readFile(builtEntry))
-    .digest("hex");
+  const builtEntryHash = await fileHash(builtEntry);
   const entryObservation = await createQaPluginEntryObservation({ directory, entry: builtEntry });
   const gateway = await gatewayOwner.start({
     repoRoot,
@@ -153,13 +153,9 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
   };
   await wait(() => accounts.every((account) => stage(account, "websocket.connected").length === 1));
   await entryObservation.verify(gateway.pid, builtEntryHash);
-  const entryHash = createHash("sha256")
-    .update(await fs.readFile(builtEntry))
-    .digest("hex");
+  const entryHash = await fileHash(builtEntry);
   expect(entryHash).toBe(builtEntryHash);
-  const sourceHash = createHash("sha256")
-    .update(await fs.readFile(path.join(repoRoot, "extensions/feishu/index.ts")))
-    .digest("hex");
+  const sourceHash = await fileHash(path.join(repoRoot, "extensions/feishu/index.ts"));
   const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`, { signal });
   expect(cursorResponse.ok).toBe(true);
   const { cursor } = (await cursorResponse.json()) as { cursor: number };
