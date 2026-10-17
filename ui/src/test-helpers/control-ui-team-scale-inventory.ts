@@ -76,7 +76,6 @@ export function createTeamScaleSessionInventory({
     if (index === 0 || index === pinnedRows.length - 1) {
       continue;
     }
-    row.updatedAt = now - (100 + index) * 1_000;
     if (!row.participants?.some((participant) => participant.identity.id === people[0]!.id)) {
       row.participants?.push({
         identity: { type: "profile", id: people[0]!.id },
