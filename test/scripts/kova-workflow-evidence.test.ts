@@ -93,15 +93,6 @@ describe("Kova workflow evidence", () => {
     expect(validate).toThrow("lane report collapsed scenario-b/state-b coverage to 1/2 repeats");
   });
 
-  it("rejects live records backed by mock-provider evidence", () => {
-    const { laneReport, validate } = fixture("live");
-    laneReport.records[0]!.providerEvidence.source = "mock-provider-log";
-
-    expect(validate).toThrow(
-      "live record scenario-a/state-a provider source was mock-provider-log",
-    );
-  });
-
   it("accepts live timeline evidence with observed provider requests", () => {
     const { validate } = fixture("live");
 
@@ -113,34 +104,41 @@ describe("Kova workflow evidence", () => {
     });
   });
 
-  it("rejects live evidence for a different provider model", () => {
+  it.each<{
+    name: string;
+    evidence: Partial<ReturnType<typeof record>["providerEvidence"]>;
+    reason: string;
+  }>([
+    {
+      name: "mock-provider evidence",
+      evidence: { source: "mock-provider-log" },
+      reason: "provider source was mock-provider-log",
+    },
+    {
+      name: "different model",
+      evidence: { models: [{ value: "gpt-5.5", count: 1 }] },
+      reason: "provider model did not match gpt-5.6",
+    },
+    {
+      name: "mixed models",
+      evidence: {
+        requestCount: 2,
+        models: [
+          { value: MODEL, count: 1 },
+          { value: "gpt-5.5", count: 1 },
+        ],
+      },
+      reason: "provider model evidence was not exact",
+    },
+    {
+      name: "model count drift",
+      evidence: { models: [{ value: MODEL, count: 2 }] },
+      reason: "provider model count did not match request count",
+    },
+  ])("rejects live $name", ({ evidence, reason }) => {
     const { laneReport, validate } = fixture("live");
-    laneReport.records[0]!.providerEvidence.models = [{ value: "gpt-5.5", count: 1 }];
-
-    expect(validate).toThrow("live record scenario-a/state-a provider model did not match gpt-5.6");
-  });
-
-  it("rejects mixed live provider models", () => {
-    const { laneReport, validate } = fixture("live");
-    const providerEvidence = laneReport.records[0]!.providerEvidence;
-    providerEvidence.requestCount = 2;
-    providerEvidence.models = [
-      { value: MODEL, count: 1 },
-      { value: "gpt-5.5", count: 1 },
-    ];
-
-    expect(validate).toThrow(
-      "live record scenario-a/state-a provider model evidence was not exact",
-    );
-  });
-
-  it("rejects live provider model count drift", () => {
-    const { laneReport, validate } = fixture("live");
-    laneReport.records[0]!.providerEvidence.models = [{ value: MODEL, count: 2 }];
-
-    expect(validate).toThrow(
-      "live record scenario-a/state-a provider model count did not match request count",
-    );
+    Object.assign(laneReport.records[0]!.providerEvidence, evidence);
+    expect(validate).toThrow(`live record scenario-a/state-a ${reason}`);
   });
 
   it("rejects malformed JSON through the CLI", () => {

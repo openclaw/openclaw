@@ -22,7 +22,6 @@ type SuppressionEntry = {
   rule: string;
 };
 
-let productionLintSuppressionsCache: SuppressionEntry[] | null = null;
 let productionCodeFilesCache: string[] | null = null;
 
 function collectFileSuppressions(file: string, source: string): SuppressionEntry[] {
@@ -35,29 +34,11 @@ function isProductionCodeFile(relativePath: string): boolean {
   return (
     CODE_EXTENSIONS.has(path.extname(relativePath)) &&
     !path.posix.basename(relativePath).startsWith("__rootdir_boundary_canary__.") &&
-    !(
-      relativePath.includes("/test/") ||
-      relativePath.endsWith(".test.ts") ||
-      relativePath.endsWith(".test.tsx") ||
-      relativePath.endsWith(".spec.ts") ||
-      relativePath.endsWith(".spec.tsx")
-    )
+    !(relativePath.includes("/test/") || /\.(?:test|spec)\.tsx?$/.test(relativePath))
   );
 }
 
-function isPresentProductionFile(file: string): boolean {
-  return isProductionCodeFile(file) && fs.existsSync(path.join(repoRoot, file));
-}
-
 function walkCodeFiles(dir: string): string[] {
-  const relativeRoot = toRepoRelativePath(repoRoot, dir);
-  if (relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)) {
-    const gitFiles = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
-    if (gitFiles) {
-      return gitFiles.filter(isPresentProductionFile);
-    }
-  }
-
   if (!fs.existsSync(dir)) {
     return [];
   }
@@ -66,23 +47,11 @@ function walkCodeFiles(dir: string): string[] {
     if (entry.isDirectory()) {
       return IGNORED_DIRS.has(entry.name) ? [] : walkCodeFiles(fullPath);
     }
-    const relativePath = toRepoRelativePath(repoRoot, fullPath);
-    return isProductionCodeFile(relativePath) ? [relativePath] : [];
+    return [toRepoRelativePath(repoRoot, fullPath)];
   });
 }
 
-function collectProductionLintSuppressions(): SuppressionEntry[] {
-  productionLintSuppressionsCache ??=
-    collectProductionLintSuppressionsFromGit() ??
-    listProductionCodeFiles().flatMap(readSuppressions);
-  return [...productionLintSuppressionsCache];
-}
-
-function readSuppressions(file: string): SuppressionEntry[] {
-  return collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8"));
-}
-
-function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
+function listSuppressionFiles(): string[] {
   const result = spawnSync(
     "git",
     ["grep", "-z", "-l", "-e", "oxlint-disable", "-e", "eslint-disable", "--", ...ROOTS],
@@ -97,51 +66,38 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
     return [];
   }
   if (result.status !== 0) {
-    return null;
+    return listProductionCodeFiles();
   }
-  return result.stdout.split("\0").filter(isPresentProductionFile).flatMap(readSuppressions);
+  return result.stdout.split("\0").filter(isProductionCodeFile);
 }
 
 function listProductionCodeFiles(): string[] {
-  productionCodeFilesCache ??= ROOTS.flatMap((root) =>
-    walkCodeFiles(path.join(repoRoot, root)),
-  ).toSorted();
-  return [...productionCodeFilesCache];
+  return (productionCodeFilesCache ??= (
+    listGitTrackedFiles({ repoRoot, pathspecs: ROOTS }) ??
+    ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root)))
+  )
+    .filter(isProductionCodeFile)
+    .toSorted());
 }
 
 function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
-  const counts = new Map<string, number>();
-  for (const entry of entries) {
-    const key = `${entry.file}|${entry.rule}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return [...counts.entries()].map(([key, count]) => `${key}|${count}`).toSorted();
+  return [...Map.groupBy(entries, ({ file, rule }) => `${file}|${rule}`)]
+    .map(([key, rows]) => `${key}|${rows.length}`)
+    .toSorted();
 }
 
-function filterExpectedSuppressionsForPresentFiles(entries: readonly string[]): string[] {
-  return entries.filter((entry) => {
-    const [file] = entry.split("|", 1);
-    return file !== undefined && fs.existsSync(path.join(repoRoot, file));
-  });
-}
-
-collectProductionLintSuppressions();
+const productionLintSuppressions = listSuppressionFiles().flatMap((file) =>
+  collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8")),
+);
 
 describe("production lint suppressions", () => {
-  it("keeps companion rules visible beside max-lines suppressions", () => {
-    expect(
-      collectFileSuppressions(
-        "src/example.ts",
-        "/* oxlint-disable\nmax-lines, no-console\n-- TODO: split this file. */",
-      ),
-    ).toEqual([{ file: "src/example.ts", rule: "no-console" }]);
-    expect(
-      collectFileSuppressions(
-        "src/example.ts",
-        "/* oxlint-disable eslint/max-lines, no-debugger */",
-      ),
-    ).toEqual([{ file: "src/example.ts", rule: "no-debugger" }]);
-    expect(collectFileSuppressions("src/example.ts", "/* oxlint-disable - reason */")).toEqual([]);
+  it.each([
+    ["/* oxlint-disable\nmax-lines, no-console\n-- TODO: split this file. */", ["no-console"]],
+    ["/* oxlint-disable eslint/max-lines, no-debugger */", ["no-debugger"]],
+    ["/* oxlint-disable - reason */", []],
+  ] as const)("keeps companion rules visible in %s", (source, rules) => {
+    const file = "src/example.ts";
+    expect(collectFileSuppressions(file, source)).toEqual(rules.map((rule) => ({ file, rule })));
   });
 
   it("lists production files from git without walking source roots", () => {
@@ -154,8 +110,8 @@ describe("production lint suppressions", () => {
   });
 
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
-    expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
-      filterExpectedSuppressionsForPresentFiles([
+    expect(summarizeSuppressions(productionLintSuppressions)).toEqual(
+      [
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
         "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
@@ -193,7 +149,6 @@ describe("production lint suppressions", () => {
         "src/cli/program/openclaw-command.ts|eslint/no-underscore-dangle|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         "src/commands/backup-restore.ts|preserve-caught-error|1",
-        // Probes retain raw prototype methods for restoration; Reflect.apply supplies the live receiver.
         "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
@@ -210,13 +165,9 @@ describe("production lint suppressions", () => {
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
-        // Iterator wrappers capture native next/return and invoke them with the caller's receiver.
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
-        // The Bun transfer probe calls the captured native method with its Worker receiver.
         "src/infra/sqlite-worker-input.bun.test-support.ts|typescript/unbound-method|1",
-        // The dispatch observer captures postMessage before mocking and supplies its worker receiver.
         "src/infra/sqlite-worker-shared-state-admission.test-support.ts|typescript/unbound-method|1",
-        // Worker hooks preserve custom methods and later prototype instrumentation with .call(this).
         "src/infra/worker-cpu.ts|typescript/unbound-method|4",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
@@ -251,7 +202,6 @@ describe("production lint suppressions", () => {
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         // JSON string scanning must detect and reject unescaped control characters.
         "src/state/json-predicate-fields.ts|no-control-regex|1",
-        // Native statement methods are captured before proxy forwarding restores their receiver.
         "src/state/openclaw-agent-canonical-validation-receipt.test-support.ts|typescript/unbound-method|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
@@ -270,7 +220,7 @@ describe("production lint suppressions", () => {
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
         "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
-      ]),
+      ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });
 });
