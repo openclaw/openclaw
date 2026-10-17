@@ -13,6 +13,29 @@ import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const oauthStatus = vi.hoisted(() => vi.fn());
 const startAuthorization = vi.hoisted(() => vi.fn());
+const request = {
+  sessionId: "session-connect",
+  workspaceDir: "/workspace",
+  requesterSenderId: "alice",
+  cfg: {
+    mcp: {
+      servers: {
+        calendar: {
+          url: "https://mcp.example/rpc",
+          transport: "streamable-http" as const,
+          auth: "oauth" as const,
+          oauth: { identity: "per-requester" as const },
+        },
+      },
+    },
+  },
+};
+
+function runConnect(tools: Parameters<typeof applyCodeModeCatalog>[0]["tools"], code: string) {
+  const harness = createCodeModeHarness();
+  applyCodeModeCatalog({ ...harness, tools: [...harness.tools, ...tools] });
+  return runUntilCompleted({ execTool: harness.tools[0]!, waitTool: harness.tools[1]!, code });
+}
 
 vi.mock("./mcp-oauth.js", () => ({
   readMcpOAuthCredentialsStatuses: oauthStatus,
@@ -103,31 +126,14 @@ describe("requester MCP connect runtime", () => {
   });
 
   it("materializes connect before authorization and real tools on the next message", async () => {
-    const request = {
-      sessionId: "session-connect",
-      workspaceDir: "/workspace",
-      requesterSenderId: "alice",
+    const input = {
+      ...request,
       messageChannel: "telegram",
       agentAccountId: "bot",
-      cfg: {
-        gateway: { publicOrigin: "https://gateway.example" },
-        mcp: {
-          servers: {
-            calendar: {
-              url: "https://mcp.example/rpc",
-              transport: "streamable-http" as const,
-              auth: "oauth" as const,
-              oauth: { identity: "per-requester" as const },
-            },
-          },
-        },
-      },
+      cfg: { ...request.cfg, gateway: { publicOrigin: "https://gateway.example" } },
     };
-
-    const disconnectedRuntime = await manager.getOrCreate(request);
-    const disconnected = await materializeBundleMcpToolsForRun({
-      runtime: disconnectedRuntime,
-    });
+    const disconnectedRuntime = await manager.getOrCreate(input);
+    const disconnected = await materializeBundleMcpToolsForRun({ runtime: disconnectedRuntime });
     expect(disconnected.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
     expect(created.find((params) => params.requesterScope)?.includeServerNames).toEqual(new Set());
     expect(startAuthorization).not.toHaveBeenCalled();
@@ -147,17 +153,10 @@ describe("requester MCP connect runtime", () => {
         authorizationUrl: "https://auth.example/authorize?state=opaque",
       })
       .mockResolvedValueOnce({ status: "authorized" });
-    const codeMode = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeMode.tools, ...disconnected.tools],
-      config: codeMode.config,
-      catalogRef: codeMode.catalogRef,
-    });
-    const guest = await runUntilCompleted({
-      execTool: codeMode.tools[0]!,
-      waitTool: codeMode.tools[1]!,
-      code: "return { signIn: await MCP.calendar.connect(), connected: await MCP.calendar.connect() };",
-    });
+    const guest = await runConnect(
+      disconnected.tools,
+      "return { signIn: await MCP.calendar.connect(), connected: await MCP.calendar.connect() };",
+    );
     expect(guest.status, JSON.stringify(guest)).toBe("completed");
     expect(guest.value).toEqual({
       signIn: {
@@ -180,7 +179,7 @@ describe("requester MCP connect runtime", () => {
     oauthStatus.mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
       identities.map(() => ({ state: "authorized" })),
     );
-    const connectedRuntime = await manager.getOrCreate(request);
+    const connectedRuntime = await manager.getOrCreate(input);
     const connected = await materializeBundleMcpToolsForRun({ runtime: connectedRuntime });
 
     expect(connected.tools.map((tool) => tool.name)).toEqual(["calendar__events"]);
@@ -192,37 +191,15 @@ describe("requester MCP connect runtime", () => {
 
   it("returns requester connection configuration failures as failed MCP guest results", async () => {
     const runtime = await manager.getOrCreate({
+      ...request,
       sessionId: "session-connect-missing-origin",
-      workspaceDir: "/workspace",
-      requesterSenderId: "alice",
-      cfg: {
-        mcp: {
-          servers: {
-            calendar: {
-              url: "https://mcp.example/rpc",
-              transport: "streamable-http",
-              auth: "oauth",
-              oauth: { identity: "per-requester" },
-            },
-          },
-        },
-      },
     });
     const materialized = await materializeBundleMcpToolsForRun({ runtime });
     const direct = await materialized.tools[0]!.execute("connect-direct", {});
     expect(direct.details).toMatchObject({ status: "error", mcpServer: "calendar" });
+    expect(startAuthorization).not.toHaveBeenCalled();
 
-    const codeMode = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeMode.tools, ...materialized.tools],
-      config: codeMode.config,
-      catalogRef: codeMode.catalogRef,
-    });
-    const guest = await runUntilCompleted({
-      execTool: codeMode.tools[0]!,
-      waitTool: codeMode.tools[1]!,
-      code: "return await MCP.calendar.connect();",
-    });
+    const guest = await runConnect(materialized.tools, "return await MCP.calendar.connect();");
     expect(guest.status, JSON.stringify(guest)).toBe("completed");
     expect(guest.value).toEqual({
       content: [{ type: "text", text: expect.stringContaining("gateway.publicOrigin") }],
