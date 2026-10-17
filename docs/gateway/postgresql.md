@@ -350,9 +350,9 @@ config and may contain other credentials; protect it accordingly. Supply externa
 SecretRef values separately during recovery.
 
 User backups apply the owning stores' sanitization rules. They are not the
-exact unsanitized captures used for updater recovery. PostgreSQL Git exports
-currently do not honor `--exclude-secrets`; treat them as credential-bearing
-even when that flag is set. Keep Logbook images, cold
+exact unsanitized captures used for updater recovery. SQLite and PostgreSQL Git
+exports apply the same `--exclude-secrets` policy, including credential tables,
+machine-state keys, and generated model-catalog credentials. Keep Logbook images, cold
 transcript blobs, workspaces, config includes, and local state with the database
 backup. Neither a server dump alone nor a copied anchor covers the installation.
 

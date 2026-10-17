@@ -29,7 +29,7 @@ export function defineTerminalPanelElement(
     | "selectHostedTab"
     | "closeHostedTab"
     | "handleToggleRequest"
-    | "requestUpdate"
+    | "invalidate"
   >(
     tag,
     createController,
@@ -78,7 +78,7 @@ export function defineTerminalPanelElement(
         "selectHostedTab",
         "closeHostedTab",
         "handleToggleRequest",
-        "requestUpdate",
+        "invalidate",
       ],
       getters: [
         "renderRoot",

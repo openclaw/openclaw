@@ -406,9 +406,6 @@ export class UrbitSSEClient {
     if (this.lastHeardEventId - this.lastAcknowledgedEventId <= this.ackThreshold) {
       return;
     }
-    this.logger.log?.(
-      `[SSE] Acking event ${this.lastHeardEventId} (last acked: ${this.lastAcknowledgedEventId})`,
-    );
     // The acknowledged watermark advances only after PUT succeeds. A replay
     // therefore retries a failed ack instead of leaving the subscription clogged.
     await this.ack(this.lastHeardEventId);

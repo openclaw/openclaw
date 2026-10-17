@@ -1575,7 +1575,6 @@ button.chat-reply-attribution__target:disabled {
     );
     background-size: 200% 100%;
     background-repeat: repeat-x;
-    -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;

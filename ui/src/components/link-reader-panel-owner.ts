@@ -7,7 +7,7 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
-import { DockLayoutController } from "./dock-layout-controller.ts";
+import { createDockLayout } from "./dock-layout.ts";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
 import { LinkReaderImages } from "./link-reader-images.ts";
 import {
@@ -32,8 +32,6 @@ registerLinkReaderEnglish();
 
 const HISTORY_LIMIT = 30;
 export const LINK_READER_TAB_LIMIT = 10;
-// Only the still-shared dock controller participates in this lifecycle adapter.
-type DockController = { hostConnected?(): void; hostDisconnected?(): void };
 export type LinkReaderPanelProps = {
   client: GatewayBrowserClient | null;
   available: boolean;
@@ -52,7 +50,7 @@ export class LinkReaderPanelOwner {
   constructor(
     readonly host: HTMLElement,
     readonly props: LinkReaderPanelProps,
-    private readonly invalidate: () => void,
+    readonly invalidate: () => void,
   ) {}
   get client() {
     return this.props.client;
@@ -87,16 +85,6 @@ export class LinkReaderPanelOwner {
   get isConnected() {
     return this.host.isConnected;
   }
-  private controllers: DockController[] = [];
-  addController(controller: DockController) {
-    this.controllers.push(controller);
-  }
-  removeController(controller: DockController) {
-    this.controllers = this.controllers.filter((item) => item !== controller);
-  }
-  requestUpdate() {
-    this.invalidate();
-  }
   dispatchEvent(event: Event) {
     return this.host.dispatchEvent(event);
   }
@@ -126,7 +114,9 @@ export class LinkReaderPanelOwner {
   private scrollContent = false;
   private focusAddress = false;
   refreshRequested = false;
-  readonly dockLayout = new DockLayoutController(this, {
+  readonly dockLayout = createDockLayout({
+    notify: () => this.invalidate(),
+    isEmbedded: () => this.embedded,
     layout: linkReaderPanelLayout,
     reservationPrefix: "link-reader",
     isAvailable: () => this.tabs.length > 0 && !this.suppressed && !this.embedded,
@@ -146,9 +136,7 @@ export class LinkReaderPanelOwner {
   }
 
   connect(): void {
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
+    this.dockLayout.connect();
     if (!this.embedded) {
       window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       this.dockLayout.setSuppressed(this.suppressed);
@@ -160,9 +148,7 @@ export class LinkReaderPanelOwner {
     this.activeId = null;
     this.returnFocus = null;
     window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
+    this.dockLayout.dispose();
   }
   sync(previous?: LinkReaderPanelProps): void {
     const changed = {
@@ -172,7 +158,7 @@ export class LinkReaderPanelOwner {
     };
     // SAFETY: PanelView supplies the complete, explicitly keyed props snapshot.
     if (!previous || (Object.keys(previous) as (keyof LinkReaderPanelProps)[]).some(changed.has)) {
-      this.requestUpdate();
+      this.invalidate();
     }
     if (changed.has("embedded")) {
       window.removeEventListener(LINK_READER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
@@ -352,12 +338,12 @@ export class LinkReaderPanelOwner {
     this.invalidUrl = false;
     this.tabLimitUrl = null;
     this.scrollContent = false;
-    this.requestUpdate();
+    this.invalidate();
   }
   createTab(target?: LinkReaderTarget): void {
     if (this.tabs.length >= LINK_READER_TAB_LIMIT) {
       this.tabLimitUrl = target?.href ?? null;
-      this.requestUpdate();
+      this.invalidate();
       return;
     }
     this.abortRequest();
@@ -377,7 +363,7 @@ export class LinkReaderPanelOwner {
     if (!this.embedded) {
       this.dockLayout.setOpen(true);
     } else {
-      this.requestUpdate();
+      this.invalidate();
     }
   }
   closeTab(id: string): void {
@@ -404,7 +390,7 @@ export class LinkReaderPanelOwner {
         this.selectHostedTab(fallback.id);
       }
     }
-    this.requestUpdate();
+    this.invalidate();
   }
   private navigate(target: LinkReaderTarget): void {
     const tab = this.activeTab;
@@ -425,7 +411,7 @@ export class LinkReaderPanelOwner {
     this.invalidUrl = false;
     this.focusAddress = false;
     this.scrollContent = true;
-    this.requestUpdate();
+    this.invalidate();
   }
   readonly handleToggleRequest = (event: Event): void => {
     const payload: unknown = event instanceof CustomEvent ? event.detail : undefined;
@@ -483,7 +469,7 @@ export class LinkReaderPanelOwner {
     if (!this.embedded) {
       this.dockLayout.setOpen(true);
     } else {
-      this.requestUpdate();
+      this.invalidate();
     }
   };
   closePanel(): void {
@@ -492,7 +478,7 @@ export class LinkReaderPanelOwner {
       this.dockLayout.setOpen(false);
     } else {
       this.onClose?.();
-      this.requestUpdate();
+      this.invalidate();
     }
     this.scrollContent = false;
     this.focusAddress = false;
@@ -504,7 +490,7 @@ export class LinkReaderPanelOwner {
   refresh(): void {
     this.abortRequest();
     this.refreshRequested = true;
-    this.requestUpdate();
+    this.invalidate();
   }
   goHistory(offset: number): void {
     const tab = this.activeTab;
@@ -517,7 +503,7 @@ export class LinkReaderPanelOwner {
     this.urlDraft = this.target?.href ?? "";
     this.invalidUrl = false;
     this.scrollContent = true;
-    this.requestUpdate();
+    this.invalidate();
   }
   commitUrl(event: Event): void {
     event.preventDefault();
@@ -530,7 +516,7 @@ export class LinkReaderPanelOwner {
     if (target) {
       this.navigate(target);
     } else {
-      this.requestUpdate();
+      this.invalidate();
     }
   }
   requestSection(section: ReaderSection): void {
@@ -596,7 +582,7 @@ export class LinkReaderPanelOwner {
       ...(target.reader.linkReader.progressive ? { section: section ?? "overview" } : {}),
     };
     this.refreshRequested = false;
-    this.requestUpdate();
+    this.invalidate();
     try {
       const detail = await client.request<ControlUiLinkReaderDocument>(
         target.reader.linkReader.detailMethod,
@@ -648,7 +634,7 @@ export class LinkReaderPanelOwner {
             previous.detail = { ...previous.detail, ...fields };
             delete previous.sections[section];
           }
-          this.requestUpdate();
+          this.invalidate();
           return;
         }
         const next = createReaderReadyView(detail, previous);
@@ -675,7 +661,7 @@ export class LinkReaderPanelOwner {
         if (next.sections.files && previous?.detail.files) {
           void this.loadDetail("files");
         }
-        this.requestUpdate();
+        this.invalidate();
       }
     } catch (error) {
       if (isCurrent()) {
@@ -695,7 +681,7 @@ export class LinkReaderPanelOwner {
           this.abortRequest();
           this.setTabView(tab, { status: "error", message: linkReaderErrorMessage(error) });
         }
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   }

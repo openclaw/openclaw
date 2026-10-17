@@ -335,7 +335,10 @@ export async function safeRemoveAttachmentsDir(
       isCurrent,
     });
     return true;
-  } catch {
+  } catch (error) {
+    defaultRuntime.log(
+      `[warn] Subagent attachment cleanup failed (${entry.runId}): ${String(error)}`,
+    );
     return false;
   }
 }

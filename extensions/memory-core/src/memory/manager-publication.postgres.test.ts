@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -458,8 +459,16 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       }));
       const batches = [...memoryEmbeddingCacheBatches(entries)];
       expect(batches.length).toBeGreaterThan(1);
-      const queries = vi.spyOn(pg(), "query");
-      let statements: string[];
+      const prepared = vi.spyOn(pg(), "prepare");
+      const statements: string[] = [];
+      const listener = (message: unknown) => {
+        const event = message as { engine: string; sql: string };
+        if (event.engine === "postgres") {
+          statements.push(event.sql);
+        }
+      };
+      const observations = channel("openclaw.database.statement");
+      observations.subscribe(listener);
       try {
         backend.execute({
           type: "cache.stage.start",
@@ -478,9 +487,16 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
           ok: true,
           value: true,
         });
+        const reads = prepared.mock.calls
+          .map(([sql]) => sql)
+          .filter((sql) => sql.includes("SELECT ordinal, header, json, last FROM memory_stage_"));
+        expect(reads.length).toBeGreaterThan(0);
+        expect(reads.every((sql) => sql.endsWith("ordinal > ? ORDER BY ordinal LIMIT 32"))).toBe(
+          true,
+        );
       } finally {
-        statements = queries.mock.calls.map(([sql]) => sql);
-        queries.mockRestore();
+        observations.unsubscribe(listener);
+        prepared.mockRestore();
       }
       expect(
         backend.execute({
@@ -495,9 +511,6 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
         sql.includes("SELECT ordinal, header, json, last FROM memory_stage_"),
       );
       expect(reads.length).toBeGreaterThan(1);
-      expect(reads.every((sql) => sql.endsWith("ordinal > ? ORDER BY ordinal LIMIT 32"))).toBe(
-        true,
-      );
       expect(statements.some((sql) => /\bATTACH\b|shadow/iu.test(sql))).toBe(false);
     }));
 });

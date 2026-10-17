@@ -1328,7 +1328,7 @@
   "ui/src/components/copy-button-state.ts",
   "ui/src/components/desktop/desktop-focus-window.ts",
   "ui/src/components/desktop/desktop-panel-layout.ts",
-  "ui/src/components/dock-layout-controller.ts",
+  "ui/src/components/dock-layout.ts",
   "ui/src/components/dock-panel-layout.ts",
   "ui/src/components/elapsed-time.tsx",
   "ui/src/components/error-presentation.ts",

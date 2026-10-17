@@ -6,6 +6,7 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { createMcpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -94,6 +95,7 @@ export function createChatPageState(
     narrow: () => narrow,
     applySessionDrop,
   });
+  // Prefetch lives with the page and reads replacement contexts through the accessor.
   const prefetch = untrack(() => createSessionPrefetch(host, messageCache, snapshotStore, context));
 
   function invalidate() {
@@ -231,12 +233,12 @@ export function createChatPageState(
     }
   }
 
-  const handleViewportChange = (event: MediaQueryListEvent) => {
-    if (narrow !== event.matches) {
-      narrow = event.matches;
+  const handleViewportChange = () => {
+    if (narrow !== mediaQuery.matches) {
+      narrow = mediaQuery.matches;
       invalidate();
     }
-    if (event.matches) {
+    if (mediaQuery.matches) {
       sessionDrop.clear();
     }
   };
@@ -590,6 +592,7 @@ export function createChatPageState(
     });
   }
 
+  // MCP teardown discovers retained native pane hosts across their component boundary.
   function render() {
     if (pendingCreate()) {
       return mcpAppUnmountGate.render(
@@ -619,6 +622,7 @@ export function createChatPageState(
       ),
     );
   }
+  // Gateway and native presentation event streams retain their ordering and teardown.
   createEffect(createMemo(context), (source) => {
     const subscriptions = [
       source.chatSubmissions?.subscribeCreate(invalidate),
@@ -642,9 +646,9 @@ export function createChatPageState(
       splitLayout && retainedSessions.unboundPaneIds.has(splitLayout.activePaneId)
         ? paneData()
         : undefined;
-    mediaQuery.addEventListener("change", handleViewportChange);
-    mobileNavMediaQuery.addEventListener("change", invalidate);
-    window.addEventListener(UI_COMMAND_EVENT, handleUiCommand);
+    onCleanup(listen(mediaQuery, "change", handleViewportChange));
+    onCleanup(listen(mobileNavMediaQuery, "change", invalidate));
+    onCleanup(listen(window, UI_COMMAND_EVENT, handleUiCommand));
     retainedSessions.connect();
     syncRouteToActivePane();
     syncRouteBindings();
@@ -663,7 +667,9 @@ export function createChatPageState(
   });
   // Direct Solid construction precedes attachment; shell ancestry is available after settlement.
   onSettled(invalidate);
+  // Compare against the last committed presentation, including superseded queued frames.
   let lastPresented = untrack(() => props.presented);
+  // Route focus and presence follow committed pane DOM, not the parent render computation.
   createEffect(
     () => ({ revision: revision(), frame: snapshot(), presented: props.presented }),
     (next) => {
@@ -687,9 +693,6 @@ export function createChatPageState(
     closeFocus.clear();
     snapshotStore.disconnect();
     retainedSessions.disconnect();
-    mediaQuery.removeEventListener("change", handleViewportChange);
-    mobileNavMediaQuery.removeEventListener("change", invalidate);
-    window.removeEventListener(UI_COMMAND_EVENT, handleUiCommand);
   });
   return { snapshot, sessionSplitAvailable, sessionDrop };
 }

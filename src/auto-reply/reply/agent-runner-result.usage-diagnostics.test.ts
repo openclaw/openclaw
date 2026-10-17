@@ -77,7 +77,6 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
       resolved: { provider: "openai", model: "gpt-5.6-luna" },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId: "silent-usage-run",
     runStartedAt: Date.now(),

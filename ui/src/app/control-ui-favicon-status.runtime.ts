@@ -1,4 +1,5 @@
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import {
@@ -169,6 +170,9 @@ export function connectControlUiFavicon(
     context.overlays.subscribe(synchronize),
     context.agentSelection.subscribe(synchronize),
     context.sessions.subscribe(synchronize),
+    listen(document, "visibilitychange", synchronize),
+    listen(shell, CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize),
+    listen(shell, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize),
   ];
   const palette = new MutationObserver(() => {
     invalidateControlUiFaviconPalette();
@@ -178,9 +182,6 @@ export function connectControlUiFavicon(
     attributes: true,
     attributeFilter: ["style", "data-theme", "data-theme-mode", "data-theme-mascot"],
   });
-  document.addEventListener("visibilitychange", synchronize);
-  shell.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize);
-  shell.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize);
   synchronizeGateway();
   const stopArtwork = connectControlUiFaviconArtwork(context);
   return () => {
@@ -188,9 +189,6 @@ export function connectControlUiFavicon(
     disposed = true;
     stops.forEach((stop) => stop());
     palette.disconnect();
-    document.removeEventListener("visibilitychange", synchronize);
-    shell.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize);
-    shell.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize);
     disposeQuestionPromptState(questions);
     applyControlUiFaviconStatus("idle");
   };

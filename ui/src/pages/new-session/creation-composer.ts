@@ -7,6 +7,7 @@ import type { UiPreferences } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { trimHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { MAX_STORED_QUEUE_ITEMS } from "../../lib/chat/outbox-store-codec.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
@@ -55,6 +56,15 @@ export type CreationComposerTransfer = {
 export class CreationComposer {
   readonly id = generateUUID();
   readonly attachmentDraft: NewSessionAttachmentDraft;
+  readonly composerDraft: ComposerDraftSource = {
+    read: () => ({
+      draft: this.message,
+      mentions: this.mentions,
+      attachments: this.attachmentDraft.attachments,
+      pendingAttachmentReads: this.attachmentDraft.reads.pendingReads,
+    }),
+    subscribe: (listener) => this.subscribe(listener),
+  };
   message = "";
   mentions: readonly HumanMention[] = [];
   inputs: CreationComposerInput[] = [];
