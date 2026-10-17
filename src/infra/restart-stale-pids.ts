@@ -1,6 +1,7 @@
 // Finds and cleans stale gateway process ids.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { formatErrorMessage as formatRawErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
@@ -567,7 +568,7 @@ export function cleanStaleGatewayProcessesSync(
     waitForPortFreeSync(port);
     return killed;
   } catch (error) {
-    restartLog.warn(`stale gateway process cleanup failed: ${formatErrorMessage(error)}`);
+    restartLog.warn(`stale gateway process cleanup failed: ${formatRawErrorMessage(error)}`);
     return [];
   }
 }

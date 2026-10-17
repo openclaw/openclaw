@@ -564,15 +564,17 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     expect(killSpy).not.toHaveBeenCalledWith(oldManagedPid, expect.anything());
   });
 
-  it("reports an owner lease read failure without scanning or signaling processes", () => {
+  it("reports the raw owner lease read failure without scanning or signaling processes", () => {
+    const cause =
+      "EACCES: permission denied reading gateway owner lease password=synthetic-review-only-abcdefghijk";
     mockReadGatewayOwnerLease.mockImplementationOnce(() => {
-      throw new Error("EACCES: permission denied reading gateway owner lease");
+      throw new Error(cause);
     });
     const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
 
     expect(cleanStaleGatewayProcessesSync(18789)).toEqual([]);
     expectWarningContaining("stale gateway process cleanup failed:");
-    expectWarningContaining("EACCES: permission denied reading gateway owner lease");
+    expectWarningContaining(cause);
     expect(mockSpawnSync).not.toHaveBeenCalled();
     expect(killSpy).not.toHaveBeenCalled();
   });
