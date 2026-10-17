@@ -64,6 +64,13 @@ const requestsFor = (harness: Harness, ...methods: string[]) =>
   harness.requests.filter(({ method }) => methods.includes(method));
 const startupRequests = (harness: Harness) =>
   requestsFor(harness, "thread/start", "thread/resume", "turn/start");
+const expectInterrupted = (harness: Harness, threadId: string, turnId: string) =>
+  expect(harness.requests).toContainEqual({
+    method: "turn/interrupt",
+    params: { threadId, turnId },
+  });
+const bindingThread = async (sessionFile: string) =>
+  (await readCodexAppServerBinding(sessionFile))?.threadId;
 
 type Actor = "maintainer" | "guest";
 type Terminal = {
@@ -128,12 +135,8 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
   let socket: WebSocket | undefined;
   let registeredUrl: string | undefined;
   let retainedEnvironment: Awaited<ReturnType<typeof ensureCodexSandboxExecServerEnvironment>>;
-  let bindingLeaseGate:
-    | {
-        entered: ReturnType<typeof createDeferred<void>>;
-        release: ReturnType<typeof createDeferred<void>>;
-      }
-    | undefined;
+  const leaseGate = () => ({ entered: createDeferred<void>(), release: createDeferred<void>() });
+  let bindingLeaseGate: ReturnType<typeof leaseGate> | undefined;
   const withLease: CodexAppServerBindingStore["withLease"] = async (identity, run, leaseOptions) =>
     await testCodexAppServerBindingStore.withLease(
       identity,
@@ -150,13 +153,11 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     );
   const bindingStore = { ...testCodexAppServerBindingStore, withLease };
   const sandbox = createSandboxContext({
-    ...(settlementFailure
-      ? {
-          finalizeExec: async () => {
-            throw settlementFailure;
-          },
+    finalizeExec: settlementFailure
+      ? async () => {
+          throw settlementFailure;
         }
-      : {}),
+      : undefined,
     buildExecSpec: async () => ({
       argv: [
         process.execPath,
@@ -348,9 +349,6 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       argv: ["qualification-task-owned-process"],
       cwd: "file:///workspace",
       env: {},
-      tty: false,
-      pipeStdin: false,
-      arg0: null,
     });
     const child = [...server.children].find((candidate) => !previousChildren.has(candidate));
     if (!child) {
@@ -405,25 +403,21 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       },
       run,
       complete: async (answer?: string) => {
-        if (answer) {
-          await notify("turn/completed", {
-            threadId,
-            turn: {
-              id: turnId,
-              status: "completed",
-              items: [
-                {
-                  id: `${actor}-answer`,
-                  type: "agentMessage",
-                  phase: "final_answer",
-                  text: answer,
-                },
-              ],
-            },
-          });
-        } else {
-          await harness.completeTurn({ threadId, turnId });
-        }
+        const items = answer
+          ? [
+              {
+                id: `${actor}-answer`,
+                type: "agentMessage",
+                phase: "final_answer",
+                text: answer,
+              },
+            ]
+          : [];
+        await notify("turn/completed", {
+          threadId,
+          ...(answer ? {} : { turnId }),
+          turn: { id: turnId, status: "completed", items },
+        });
         const result = await run;
         completed = true;
         return result;
@@ -440,7 +434,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
     sessionFile,
     threadId,
     armRetentionLeaseWait: () => {
-      const gate = { entered: createDeferred<void>(), release: createDeferred<void>() };
+      const gate = leaseGate();
       bindingLeaseGate = gate;
       return gate;
     },
@@ -511,12 +505,12 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
 }
 
 function createSandboxPolicyRun() {
+  const controller = new AbortController();
   const params = createParams(
     path.join(tempDir, "managed-policy.jsonl"),
     path.join(tempDir, "workspace"),
   );
   setRuntimeConfigSnapshot(params.config ?? {});
-  const controller = new AbortController();
   const preparation: string[] = [];
   const exec = createRuntimeDynamicTool("exec");
   params.hostCapabilities = createSourceBoundHostCapabilities(controller.signal);
@@ -535,7 +529,39 @@ function createSandboxPolicyRun() {
     return [exec];
   });
   setCodexTestToolFactory(params, selectTools);
-  return { params, controller, exec, preparation, selectTools };
+  const policyHarness = (policy: () => boolean, threadId?: string) => {
+    const started = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "configRequirements/read") {
+        const managed = policy();
+        preparation.push(managed ? "managed" : "allowed");
+        return { requirements: { allowManagedHooksOnly: managed } };
+      }
+      if (threadId) {
+        if (method === "thread/start") {
+          return threadStartResult(threadId, { cwd: params.workspaceDir });
+        }
+        if (method === "thread/read") {
+          return {
+            thread: {
+              ...threadStartResult("native-original").thread,
+              status: { type: "notLoaded" },
+              turns: [],
+            },
+          };
+        }
+        if (method === "turn/start") {
+          started.resolve();
+        }
+      }
+      return undefined;
+    });
+    if (threadId) {
+      vi.spyOn(harness.client, "getInstanceId").mockReturnValue(`${threadId}-client`);
+    }
+    return { ...harness, started: started.promise };
+  };
+  return { params, controller, exec, preparation, selectTools, policyHarness };
 }
 
 describe("native background process source authority", () => {
@@ -587,10 +613,7 @@ describe("native background process source authority", () => {
     guest.controller.abort(new Error("Synthetic parent foreground cancelled"));
     expect(readAttemptTerminal(await guest.run).aborted).toBe(true);
     expect(guest.sourceSignal.aborted).toBe(false);
-    expect(f.harness.requests).toContainEqual({
-      method: "turn/interrupt",
-      params: { threadId: f.threadId, turnId: guest.turnId },
-    });
+    expectInterrupted(f.harness, f.threadId, guest.turnId);
     expect(guest.terminal.alive).toBe(false);
     await guest.terminal.settled;
     expect(f.terminated).toEqual([]);
@@ -617,15 +640,12 @@ describe("native background process source authority", () => {
     expect(staff.terminal.alive).toBe(true);
     expect(f.terminated).toEqual([]);
     const guest = await f.begin("guest");
-    expect((await readCodexAppServerBinding(f.sessionFile))?.threadId).toBe(f.threadId);
+    expect(await bindingThread(f.sessionFile)).toBe(f.threadId);
     expect(requestsFor(f.harness, "thread/start")).toHaveLength(1);
     expect(staff.terminal.alive).toBe(true);
     guest.revoke();
     await expect(guest.run).rejects.toBe(guest.sourceSignal.reason);
-    expect(f.harness.requests).toContainEqual({
-      method: "turn/interrupt",
-      params: { threadId: f.threadId, turnId: guest.turnId },
-    });
+    expectInterrupted(f.harness, f.threadId, guest.turnId);
     await guest.terminal.settled;
     expect(guest.terminal.alive).toBe(false);
     expect(f.terminated).toEqual([]);
@@ -635,7 +655,7 @@ describe("native background process source authority", () => {
     "rechecks %s background custody at subscription retention",
     async (custody) => {
       await using f = await fixture();
-      const peer = custody.startsWith("peer") ? await f.begin("guest") : undefined;
+      const peer = custody === "peer replacement" ? await f.begin("guest") : undefined;
       if (peer) {
         await f.retainSecondConsumer();
         await peer.complete();
@@ -647,10 +667,8 @@ describe("native background process source authority", () => {
       await f.rotateSessionLineage();
       if (custody !== "active") {
         await f.settleBackgroundProcess(owner.terminal);
-        expect(owner.terminal.alive).toBe(false);
-      } else {
-        expect(owner.terminal.alive).toBe(true);
       }
+      expect(owner.terminal.alive).toBe(custody === "active");
       lease.release.resolve();
       // Existing processes keep cleanup custody, never reusable session authority.
       await expect(completion).rejects.toMatchObject({
@@ -670,26 +688,18 @@ describe("native background process source authority", () => {
         expect(inventory.data).toEqual([
           expect.objectContaining({ processId: peer.terminal.processId }),
         ]);
-        if (custody === "peer replacement") {
-          // A cleanup-only physical claim is still protected native work. A
-          // new source must not change its configuration before peer settlement.
-          await expect(f.begin("maintainer")).rejects.toMatchObject({
-            name: "CodexAdoptedThreadActiveError",
-          });
-          expect(peer.terminal.alive).toBe(true);
-          expect(requestsFor(f.harness, "thread/unsubscribe")).toEqual([]);
-          await f.settleBackgroundProcess(peer.terminal);
-          await f.harness.waitForMethod("thread/unsubscribe");
-          const successor = await f.begin("maintainer");
-          expect(successor.terminal.alive).toBe(true);
-          expect(requestsFor(f.harness, "thread/unsubscribe")).toHaveLength(1);
-          expect(readAttemptTerminal(await successor.complete()).aborted).toBe(false);
-        } else {
-          await f.settleBackgroundProcess(peer.terminal);
-          await f.harness.waitForMethod("thread/unsubscribe");
-          expect(peer.terminal.alive).toBe(false);
-          expect(requestsFor(f.harness, "thread/unsubscribe")).toHaveLength(1);
-        }
+        // A cleanup-only claim must settle before a new source can reconfigure it.
+        await expect(f.begin("maintainer")).rejects.toMatchObject({
+          name: "CodexAdoptedThreadActiveError",
+        });
+        expect(peer.terminal.alive).toBe(true);
+        expect(requestsFor(f.harness, "thread/unsubscribe")).toEqual([]);
+        await f.settleBackgroundProcess(peer.terminal);
+        await f.harness.waitForMethod("thread/unsubscribe");
+        const successor = await f.begin("maintainer");
+        expect(successor.terminal.alive).toBe(true);
+        expect(requestsFor(f.harness, "thread/unsubscribe")).toHaveLength(1);
+        expect(readAttemptTerminal(await successor.complete()).aborted).toBe(false);
       }
     },
   );
@@ -714,34 +724,7 @@ describe("managed-only Codex sandbox compatibility", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const f = createSandboxPolicyRun();
     const savedText = "Keep this saved conversation across the native catalog change.";
-    const createPolicyHarness = (managedOnly: boolean, threadId: string) => {
-      const started = createDeferred<void>();
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "configRequirements/read") {
-          f.preparation.push(managedOnly ? "managed" : "allowed");
-          return { requirements: { allowManagedHooksOnly: managedOnly } };
-        }
-        if (method === "thread/start") {
-          return threadStartResult(threadId, { cwd: f.params.workspaceDir });
-        }
-        if (method === "thread/read") {
-          return {
-            thread: {
-              ...threadStartResult("native-original").thread,
-              status: { type: "notLoaded" },
-              turns: [],
-            },
-          };
-        }
-        if (method === "turn/start") {
-          started.resolve();
-        }
-        return undefined;
-      });
-      vi.spyOn(harness.client, "getInstanceId").mockReturnValue(`${threadId}-client`);
-      return { ...harness, started: started.promise };
-    };
-    let harness = createPolicyHarness(false, "native-original");
+    let harness = f.policyHarness(() => false, "native-original");
     let run: ReturnType<typeof runCodexAppServerAttempt> | undefined;
     try {
       await attachSqliteSessionTarget(
@@ -762,11 +745,9 @@ describe("managed-only Codex sandbox compatibility", () => {
       });
       await harness.completeTurn({ threadId: "native-original", turnId: "turn-1" });
       expect(readAttemptTerminal(await run).aborted).toBe(false);
-      expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(
-        "native-original",
-      );
+      expect(await bindingThread(f.params.sessionFile)).toBe("native-original");
       harness.close();
-      harness = createPolicyHarness(true, "managed-fallback");
+      harness = f.policyHarness(() => true, "managed-fallback");
       f.params.runId = "managed-policy-upgrade";
       f.preparation.length = 0;
       run = runCodexAppServerAttempt(f.params, sandboxOptions);
@@ -808,7 +789,7 @@ describe("managed-only Codex sandbox compatibility", () => {
       expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(false);
       await harness.completeTurn({ threadId: turn.threadId, turnId: "turn-1" });
       expect(readAttemptTerminal(await run).aborted).toBe(false);
-      expect((await readCodexAppServerBinding(f.params.sessionFile))?.threadId).toBe(turn.threadId);
+      expect(await bindingThread(f.params.sessionFile)).toBe(turn.threadId);
       expect(turn.threadId).toBe("managed-fallback");
       expect(await readTranscriptMessagesByIdentity(f.params)).toEqual(
         expect.arrayContaining(priorMessages),
@@ -825,24 +806,8 @@ describe("managed-only Codex sandbox compatibility", () => {
     async (mode) => {
       const f = createSandboxPolicyRun();
       let reads = 0;
-      const planning = createStartedThreadHarness(async (method) => {
-        if (method !== "configRequirements/read") {
-          return undefined;
-        }
-        const managed = mode === "same client" && reads++ > 0;
-        f.preparation.push(managed ? "managed" : "allowed");
-        return { requirements: { allowManagedHooksOnly: managed } };
-      });
-      const startup =
-        mode === "same client"
-          ? planning
-          : createStartedThreadHarness(async (method) => {
-              if (method !== "configRequirements/read") {
-                return undefined;
-              }
-              f.preparation.push("managed");
-              return { requirements: { allowManagedHooksOnly: true } };
-            });
+      const planning = f.policyHarness(() => mode === "same client" && reads++ > 0);
+      const startup = mode === "same client" ? planning : f.policyHarness(() => true);
       vi.spyOn(planning.client, "getInstanceId").mockReturnValue("planning-client");
       if (startup !== planning) {
         vi.spyOn(startup.client, "getInstanceId").mockReturnValue("startup-client");

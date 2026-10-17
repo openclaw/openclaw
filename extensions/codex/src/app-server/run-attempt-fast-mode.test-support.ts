@@ -25,8 +25,19 @@ type FastModeFixtures = {
   ) => Promise<void>;
 };
 
-function modelCatalog(supported: boolean, id = "catalog-alias") {
+type Requests = ReturnType<typeof createResumeHarness>["requests"];
+const requestsFor = (requests: Requests, method: string) =>
+  requests.filter((request) => request.method === method);
+const requestParams = (requests: Requests, method: string) =>
+  requestsFor(requests, method)[0]?.params;
+const turnTiers = (requests: Requests) =>
+  requestsFor(requests, "turn/start").map(
+    (request) => (request.params as { serviceTier?: string | null }).serviceTier,
+  );
+
+function modelCatalog(supported: boolean, id = "catalog-alias", paginated = false) {
   return {
+    ...(paginated ? { nextCursor: null } : {}),
     data: [
       {
         id,
@@ -44,6 +55,11 @@ function modelCatalog(supported: boolean, id = "catalog-alias") {
     ],
   };
 }
+
+const catalogRequest =
+  (supported: () => boolean, id?: string, paginated = false) =>
+  async (method: string) =>
+    method === "model/list" ? modelCatalog(supported(), id, paginated) : undefined;
 
 type UltrafastCase = {
   name: string;
@@ -91,16 +107,11 @@ export function registerCodexFastModeTests({
     });
     await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
     for (const method of ["thread/resume", "turn/start"]) {
-      const request = requests.find((entry) => entry.method === method);
-      const requestParams = request?.params as Record<string, unknown> | undefined;
-      expect(requestParams?.serviceTier).toBe("priority");
+      expect(requestParams(requests, method)).toMatchObject({ serviceTier: "priority" });
     }
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "codex_app_server.lifecycle",
-      data: expect.objectContaining({
-        phase: "turn_starting",
-        serviceTier: "priority",
-      }),
+      data: expect.objectContaining({ phase: "turn_starting", serviceTier: "priority" }),
     });
   });
 
@@ -120,12 +131,8 @@ export function registerCodexFastModeTests({
       pluginConfig: { appServer: { serviceTier: "ultrafast" } },
     });
     await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
-      serviceTier: null,
-    });
-    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
-      serviceTier: "priority",
-    });
+    expect(requestParams(requests, "thread/resume")).toMatchObject({ serviceTier: null });
+    expect(requestParams(requests, "turn/start")).toMatchObject({ serviceTier: "priority" });
   });
   it.each([
     ultrafastCase("explicit Ultrafast with the switch disabled", {
@@ -166,127 +173,95 @@ export function registerCodexFastModeTests({
       expected: "priority",
       expectedLimit: undefined,
     }),
-  ])(
-    "requires explicit Ultrafast for $name at the actual turn boundary",
-    async ({
-      supported,
-      fastMode,
-      enableUltrafast,
-      expected,
-      nativeLimit,
-      expectedLimit,
-      fresh,
-      nativeOwned,
-    }) => {
-      const { sessionFile, workspaceDir } = createRunPaths();
-      if (!fresh) {
-        await writeExistingBinding(sessionFile, workspaceDir, {
-          model: nativeOwned ? "previous-native-model" : "gpt-5.2",
-          ...(nativeOwned ? { preserveNativeModel: true } : {}),
-        });
+  ])("requires explicit Ultrafast for $name at the actual turn boundary", async (row) => {
+    const { fresh, nativeOwned, expectedLimit } = row;
+    const { sessionFile, workspaceDir } = createRunPaths();
+    if (!fresh) {
+      await writeExistingBinding(sessionFile, workspaceDir, {
+        model: nativeOwned ? "previous-native-model" : "gpt-5.2",
+        ...(nativeOwned ? { preserveNativeModel: true } : {}),
+      });
+    }
+    const requestImpl = async (method: string) => {
+      if (nativeOwned && method === "thread/resume") {
+        return {
+          ...threadStartResult("thread-existing"),
+          model: nativeOwned === "metadata" ? "gpt-5.4-codex" : "previous-native-model",
+        };
       }
-      const requestImpl = async (method: string) => {
-        if (nativeOwned && method === "thread/resume") {
-          return {
-            ...threadStartResult("thread-existing"),
-            model: nativeOwned === "metadata" ? "gpt-5.4-codex" : "previous-native-model",
-          };
-        }
-        if (method === "config/read") {
-          return {
-            config: {
-              model_auto_compact_token_limit: nativeLimit,
-              model_auto_compact_token_limit_scope: "body_after_prefix",
-            },
-            origins: {},
-            layers: [],
-          };
-        }
-        if (method === "model/list") {
-          return { ...modelCatalog(supported), nextCursor: null };
-        }
-        return undefined;
-      };
-      const persistedThread = threadStartResult("thread-existing");
-      const harness = fresh
-        ? createStartedThreadHarness(requestImpl)
-        : createResumeHarness(
-            "thread-existing",
-            requestImpl,
-            nativeOwned === "metadata"
-              ? {
-                  ...persistedThread,
-                  thread: { ...persistedThread.thread, model: "gpt-5.4-codex" },
-                }
-              : undefined,
-          );
-      const params = createParams(sessionFile, workspaceDir);
-      params.fastMode = fastMode;
-      const run = runCodexAppServerAttempt(params, {
-        pluginConfig: { appServer: { enableUltrafast } },
-      });
-      await Promise.race([run, harness.waitForMethod(fresh ? "thread/start" : "thread/resume")]);
-      const threadRequest = harness.requests.find(
-        (request) => request.method === (fresh ? "thread/start" : "thread/resume"),
-      )?.params as { config?: Record<string, unknown> };
-      expect(threadRequest.config?.model_auto_compact_token_limit).toBe(expectedLimit);
-      expect(threadRequest.config?.model_auto_compact_token_limit_scope).toBe(
-        expectedLimit === undefined ? undefined : "total",
-      );
-      await completeStartedRun(
-        run,
-        harness.waitForMethod,
-        harness.completeTurn,
-        fresh ? "thread-1" : "thread-existing",
-      );
-      expect(
-        harness.requests.find((request) => request.method === "turn/start")?.params,
-      ).toMatchObject({
-        serviceTier: expected,
-      });
-      expect(harness.requests.filter((request) => request.method === "model/list")).toHaveLength(
-        fastMode === "ultrafast" && enableUltrafast ? 1 : 0,
-      );
-    },
-  );
+      if (method === "config/read") {
+        return {
+          config: {
+            model_auto_compact_token_limit: row.nativeLimit,
+            model_auto_compact_token_limit_scope: "body_after_prefix",
+          },
+          origins: {},
+          layers: [],
+        };
+      }
+      if (method === "model/list") {
+        return modelCatalog(row.supported, undefined, true);
+      }
+      return undefined;
+    };
+    const persistedThread = threadStartResult("thread-existing");
+    const harness = fresh
+      ? createStartedThreadHarness(requestImpl)
+      : createResumeHarness(
+          "thread-existing",
+          requestImpl,
+          nativeOwned === "metadata"
+            ? {
+                ...persistedThread,
+                thread: { ...persistedThread.thread, model: "gpt-5.4-codex" },
+              }
+            : undefined,
+        );
+    const params = createParams(sessionFile, workspaceDir);
+    params.fastMode = row.fastMode;
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { enableUltrafast: row.enableUltrafast } },
+    });
+    const method = fresh ? "thread/start" : "thread/resume";
+    await Promise.race([run, harness.waitForMethod(method)]);
+    const threadRequest = requestParams(harness.requests, method) as {
+      config?: Record<string, unknown>;
+    };
+    expect(threadRequest.config?.model_auto_compact_token_limit).toBe(expectedLimit);
+    expect(threadRequest.config?.model_auto_compact_token_limit_scope).toBe(
+      expectedLimit === undefined ? undefined : "total",
+    );
+    await completeStartedRun(
+      run,
+      harness.waitForMethod,
+      harness.completeTurn,
+      fresh ? "thread-1" : "thread-existing",
+    );
+    expect(requestParams(harness.requests, "turn/start")).toMatchObject({
+      serviceTier: row.expected,
+    });
+    expect(requestsFor(harness.requests, "model/list")).toHaveLength(
+      row.fastMode === "ultrafast" && row.enableUltrafast ? 1 : 0,
+    );
+  });
 
   it.each([
-    {
-      name: "revoked Ultrafast",
-      fastMode: "ultrafast" as const,
-      supported: false,
-      baseline: undefined,
-      expected: "priority",
-    },
-    {
-      name: "unsupported priority baseline",
-      fastMode: undefined,
-      supported: false,
-      baseline: "priority" as const,
-      expected: "priority",
-    },
-    {
-      name: "unsupported default baseline",
-      fastMode: undefined,
-      supported: false,
-      baseline: undefined,
-      // Removing the cap cold-resumes native defaults, clearing the previous tier override.
-      expected: undefined,
-    },
-  ])(
-    "reselects the tier for $name after an explicit Ultrafast warm turn",
-    async ({ fastMode, supported, baseline, expected }) => {
+    ["revoked Ultrafast", "ultrafast", undefined, "priority"],
+    ["unsupported priority baseline", undefined, "priority", "priority"],
+    // Removing the cap cold-resumes native defaults, clearing the previous tier override.
+    ["unsupported default baseline", undefined, undefined, undefined],
+  ] as const)(
+    "reselects the tier for %s after an explicit Ultrafast warm turn",
+    async (_name, fastMode, baseline, expected) => {
       const { sessionFile, workspaceDir } = createRunPaths();
       await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
       let catalogSupported = true;
-      const harness = createResumeHarness("thread-existing", async (method) => {
-        if (method === "model/list") {
-          return modelCatalog(catalogSupported);
-        }
-        return undefined;
-      });
+      const harness = createResumeHarness(
+        "thread-existing",
+        catalogRequest(() => catalogSupported),
+      );
       for (let turn = 0; turn < 2; turn += 1) {
-        catalogSupported = turn === 0 || supported;
+        catalogSupported = turn === 0;
         const params = createParams(sessionFile, workspaceDir);
         params.fastMode = turn === 0 ? "ultrafast" : fastMode;
         const run = runCodexAppServerAttempt(params, {
@@ -296,19 +271,15 @@ export function registerCodexFastModeTests({
         await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
         await run;
       }
-      expect(
-        harness.requests
-          .filter((request) => request.method === "turn/start")
-          .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
-      ).toEqual(["ultrafast", expected]);
-      const resumeConfigs = harness.requests
-        .filter((request) => request.method === "thread/resume")
-        .map((request) => (request.params as { config: Record<string, unknown> }).config);
+      expect(turnTiers(harness.requests)).toEqual(["ultrafast", expected]);
+      const resumeConfigs = requestsFor(harness.requests, "thread/resume").map(
+        (request) => (request.params as { config: Record<string, unknown> }).config,
+      );
       expect(resumeConfigs.map((config) => config.model_auto_compact_token_limit)).toEqual([
         260_000,
         undefined,
       ]);
-      expect(harness.requests.filter((request) => request.method === "model/list")).toHaveLength(
+      expect(requestsFor(harness.requests, "model/list")).toHaveLength(
         fastMode === "ultrafast" ? 2 : 1,
       );
     },
@@ -322,13 +293,9 @@ export function registerCodexFastModeTests({
       modelProvider: undefined,
       authProfileId: "openai:work",
     });
-    const harness = createResumeHarness("thread-existing", async (method) =>
-      method === "model/list"
-        ? {
-            ...modelCatalog(true, "gpt-5.4-codex"),
-            nextCursor: null,
-          }
-        : undefined,
+    const harness = createResumeHarness(
+      "thread-existing",
+      catalogRequest(() => true, "gpt-5.4-codex", true),
     );
     // Turn 1 resumes the stored thread; turn 2 reuses the warm thread.
     for (let turn = 0; turn < 2; turn += 1) {
@@ -344,13 +311,7 @@ export function registerCodexFastModeTests({
       await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
       await run;
     }
-    expect(harness.requests.filter((request) => request.method === "thread/resume")).toHaveLength(
-      1,
-    );
-    expect(
-      harness.requests
-        .filter((request) => request.method === "turn/start")
-        .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
-    ).toEqual(["ultrafast", "ultrafast"]);
+    expect(requestsFor(harness.requests, "thread/resume")).toHaveLength(1);
+    expect(turnTiers(harness.requests)).toEqual(["ultrafast", "ultrafast"]);
   });
 }

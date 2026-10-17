@@ -1,18 +1,19 @@
-import path from "node:path";
 import { invokeNativeHookRelay } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createAgentHarnessHostCapabilitiesForTest as createHost } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
-  consumeCodexAppServerLiveThread,
-  isCodexAppServerLiveThreadProtected,
-  protectCodexAppServerLiveThread,
+  consumeCodexAppServerLiveThread as consumeLiveThread,
+  isCodexAppServerLiveThreadProtected as isProtected,
+  protectCodexAppServerLiveThread as protectLiveThread,
 } from "./client-runtime.js";
-import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime as monitor } from "./native-subagent-monitor.js";
 import {
+  agentMessage,
   childTurnCompletedNotification,
   createRuntime,
   directSpawnItem,
+  itemNotification,
   observeCompletionAttempts,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
@@ -20,29 +21,37 @@ import * as attemptResources from "./run-attempt-resources.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createParams,
+  createTestParams,
   createCodexRuntimePlanFixture,
   createStartedThreadHarness,
   extractRelayIdFromThreadRequest,
-  runCodexAppServerAttempt,
+  runCodexAppServerAttempt as runAttempt,
   setupRunAttemptTestHooks,
   setCodexTestModelSupportsTools,
-  tempDir,
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import {
-  readCodexAppServerBinding,
-  writeCodexAppServerBinding,
+  readCodexAppServerBinding as readBinding,
+  writeCodexAppServerBinding as writeBinding,
 } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
+type Retain = attemptResources.CodexAttemptResources["retainThreadSubscription"];
+function wrapRetention(wrap: (retain: Retain) => Retain) {
+  const prepare = attemptResources.prepareCodexAttemptResources;
+  vi.spyOn(attemptResources, "prepareCodexAttemptResources").mockImplementation((prompt) => {
+    const resources = prepare(prompt);
+    resources.retainThreadSubscription = wrap(resources.retainThreadSubscription);
+    return resources;
+  });
+}
+
 function createParentHarness() {
   const runtime = createRuntime();
-  const register = codexNativeSubagentMonitorRuntime.register;
-  vi.spyOn(codexNativeSubagentMonitorRuntime, "register").mockImplementation((request) =>
-    register({ ...request, runtime }),
-  );
+  const register = monitor.register;
+  vi.spyOn(monitor, "register").mockImplementation((request) => register({ ...request, runtime }));
   let turns = 0;
   const harness = createStartedThreadHarness(async (method, request) => {
     if (method === "thread/resume") {
@@ -82,15 +91,9 @@ function createParentHarness() {
           },
         },
       });
-      await harness.notify({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: `turn-${turns}`,
-          item: directSpawnItem("v1", "thread-1", "child-thread"),
-        },
-      });
-      expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+      const item = directSpawnItem("v1", "thread-1", "child-thread");
+      await harness.notify(itemNotification(item, `turn-${turns}`, "thread-1"));
+      expect(isProtected(harness.client, "thread-1")).toBe(true);
     },
   };
 }
@@ -99,10 +102,9 @@ describe("Codex parent continuation with native child custody", () => {
   it.each([false, true])(
     "continues an interrupted parent and delivers its child's result (warm: %s)",
     async (warm) => {
-      const sessionFile = path.join(tempDir, "parent.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       const abort = new AbortController();
-      const params = createParams(sessionFile, workspaceDir);
+      const params = createTestParams();
+      const { sessionFile, workspaceDir } = params;
       params.abortSignal = abort.signal;
       params.agentHarnessCompletionScope = {
         requesterSessionKey: params.sessionKey!,
@@ -112,16 +114,16 @@ describe("Codex parent continuation with native child custody", () => {
       const { runtime, harness } = parent;
       const completionAttempts = observeCompletionAttempts();
       if (warm) {
-        const initial = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+        const initial = runAttempt(createParams(sessionFile, workspaceDir));
         await initial.waitForTurnAccepted();
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         expect((await initial).terminal).toEqual({ kind: "ok" });
         params.runId = "run-interrupted";
       }
-      const first = runCodexAppServerAttempt(params);
+      const first = runAttempt(params);
       await first.waitForTurnAccepted();
       await parent.startChild();
-      const binding = await readCodexAppServerBinding(sessionFile);
+      const binding = await readBinding(sessionFile);
 
       abort.abort("parent interrupted while child is active");
       await harness.waitForMethod("turn/interrupt");
@@ -130,26 +132,17 @@ describe("Codex parent continuation with native child custody", () => {
 
       const nextParams = createParams(sessionFile, workspaceDir, { runId: "run-next" });
       nextParams.agentHarnessCompletionScope = params.agentHarnessCompletionScope;
-      const next = runCodexAppServerAttempt(nextParams);
+      const next = runAttempt(nextParams);
       await next.waitForTurnAccepted();
-      expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      expect(await readBinding(sessionFile)).toMatchObject({
         threadId: binding!.threadId,
         clientId: binding!.clientId,
       });
       expect(harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
       expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(0);
       const childCompleted = childTurnCompletedNotification({
-        threadId: "child-thread",
-        turnId: "child-turn",
         status: "completed",
-        items: [
-          {
-            type: "agentMessage",
-            id: "child-result",
-            phase: "final_answer",
-            text: "child completed",
-          },
-        ],
+        items: [agentMessage("child-result", "child completed", "final_answer")],
       });
       await harness.notify(childCompleted);
       await completionAttempts.settle();
@@ -172,42 +165,34 @@ describe("Codex parent continuation with native child custody", () => {
   it.each(["binding", "lineage"] as const)(
     "does not publish an interrupted parent after its %s is replaced",
     async (replacement) => {
-      const sessionFile = path.join(tempDir, "replaced-parent.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       const abort = new AbortController();
-      const params = createParams(sessionFile, workspaceDir);
+      const params = createTestParams();
+      const { sessionFile } = params;
       params.abortSignal = abort.signal;
-      const prepare = attemptResources.prepareCodexAttemptResources;
-      vi.spyOn(attemptResources, "prepareCodexAttemptResources").mockImplementation((prompt) => {
-        const resources = prepare(prompt);
-        const retain = resources.retainThreadSubscription;
-        resources.retainThreadSubscription = async (afterConfirmedCancellation) => {
-          if (afterConfirmedCancellation) {
-            if (replacement === "binding") {
-              const binding = await readCodexAppServerBinding(sessionFile);
-              await writeCodexAppServerBinding(sessionFile, {
-                ...binding!,
-                threadId: "thread-successor",
-              });
-            } else {
-              await seedRunSessionOwnerForTest("session-successor", params.sessionKey!);
-            }
+      wrapRetention((retain) => async (afterConfirmedCancellation) => {
+        if (afterConfirmedCancellation) {
+          if (replacement === "binding") {
+            await writeBinding(sessionFile, {
+              ...(await readBinding(sessionFile))!,
+              threadId: "thread-successor",
+            });
+          } else {
+            await seedRunSessionOwnerForTest("session-successor", params.sessionKey!);
           }
-          return retain(afterConfirmedCancellation);
-        };
-        return resources;
+        }
+        return retain(afterConfirmedCancellation);
       });
       const harness = createStartedThreadHarness();
-      const run = runCodexAppServerAttempt(params);
+      const run = runAttempt(params);
       await run.waitForTurnAccepted();
-      const releaseProtection = protectCodexAppServerLiveThread(harness.client, "thread-1");
+      const releaseProtection = protectLiveThread(harness.client, "thread-1");
       try {
         abort.abort("foreground interrupted");
         const outcome = await Promise.allSettled([run]);
         if (replacement === "lineage") {
           expect(outcome[0]).toMatchObject({ status: "rejected" });
         }
-        expect(await consumeCodexAppServerLiveThread(harness.client, "thread-1")).toBeUndefined();
+        expect(await consumeLiveThread(harness.client, "thread-1")).toBeUndefined();
         expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
         expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(false);
       } finally {
@@ -219,15 +204,13 @@ describe("Codex parent continuation with native child custody", () => {
   it.each([false, true])(
     "settles a yielded parent under retained source authority (revoked: %s)",
     async (revoked) => {
-      const sessionFile = path.join(tempDir, "yielded-parent.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(sessionFile, workspaceDir);
+      const params = createTestParams();
       // Full host tool construction can exceed the lightweight fixture's 5s budget.
       params.timeoutMs = 30_000;
       params.runtimePlan = createCodexRuntimePlanFixture();
       setCodexTestModelSupportsTools(params, true);
       let sourceRevoked = false;
-      const host = await createAgentHarnessHostCapabilitiesForTest({
+      const host = await createHost({
         attempt: params,
         pluginId: "codex",
         nativeModelPolicySupport: "exact",
@@ -242,20 +225,14 @@ describe("Codex parent continuation with native child custody", () => {
         },
       });
       params.hostCapabilities = host.capabilities;
-      const prepare = attemptResources.prepareCodexAttemptResources;
-      vi.spyOn(attemptResources, "prepareCodexAttemptResources").mockImplementation((prompt) => {
-        const resources = prepare(prompt);
-        const retain = resources.retainThreadSubscription;
-        resources.retainThreadSubscription = async (afterConfirmedStop) => {
-          host.close();
-          sourceRevoked = revoked;
-          return retain(afterConfirmedStop);
-        };
-        return resources;
+      wrapRetention((retain) => async (afterConfirmedStop) => {
+        host.close();
+        sourceRevoked = revoked;
+        return retain(afterConfirmedStop);
       });
       const parent = createParentHarness();
       const { harness } = parent;
-      const run = runCodexAppServerAttempt(params, {
+      const run = runAttempt(params, {
         nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
       });
       await run.waitForTurnAccepted();
@@ -271,7 +248,7 @@ describe("Codex parent continuation with native child custody", () => {
         rawPayload: {
           hook_event_name: "PreToolUse",
           agent_id: "child-thread",
-          cwd: workspaceDir,
+          cwd: params.workspaceDir,
           tool_name: "Bash",
           tool_use_id: "child-first-tool",
           tool_input: { command: "allow-child" },
@@ -295,7 +272,7 @@ describe("Codex parent continuation with native child custody", () => {
         expect(response).toMatchObject({ success: true });
         const outcome = await Promise.allSettled([run]);
         expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(true);
-        const ownership = await consumeCodexAppServerLiveThread(harness.client, "thread-1");
+        const ownership = await consumeLiveThread(harness.client, "thread-1");
         if (revoked) {
           expect(outcome[0]).toMatchObject({ status: "rejected" });
           expect(ownership).toBeUndefined();

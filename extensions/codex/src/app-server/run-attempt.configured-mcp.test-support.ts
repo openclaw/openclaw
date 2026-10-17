@@ -1,4 +1,8 @@
 import path from "node:path";
+import type {
+  captureFinalCodexCronCreatorToolAllowlist,
+  runWithCronCreatorAuthorityCapabilityResolver,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { createPluginMetadataSnapshotFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
 import { createCronAuthorityCapabilityFixture } from "./codex-app-server.test-fixtures.js";
@@ -9,20 +13,16 @@ import {
   setupRunAttemptTestHooks,
 } from "./run-attempt-test-harness.js";
 
-const mcpMocks = vi.hoisted(() => ({
-  authorityResolvers: [] as Array<
-    (options?: { signal?: AbortSignal }) => Promise<{
-      tools: readonly (string | { name: string; pluginId?: string })[];
-      provenance: { version: 1; source: "final-executable-surface" };
-    }>
-  >,
+type AuthorityResolver = Parameters<
+  typeof runWithCronCreatorAuthorityCapabilityResolver
+>[0]["resolve"];
+export const mcpMocks = vi.hoisted(() => ({
+  authorityResolvers: [] as AuthorityResolver[],
   captureCalls: [] as Array<{
     storedNames: string[];
     provenance?: unknown;
   }>,
-  captureRefs: [] as Array<{
-    value?: { version: 1; source: "final-executable-surface" };
-  }>,
+  captureRefs: [] as Parameters<typeof captureFinalCodexCronCreatorToolAllowlist>[1][],
   dispose: vi.fn(async () => undefined),
   threadConfigFacade: vi.fn(),
   requesterCalls: 0,
@@ -36,8 +36,6 @@ const mcpMocks = vi.hoisted(() => ({
   staticCalls: [] as Array<Record<string, unknown>>,
   staticToolExecutes: [] as ReturnType<typeof vi.fn>[],
 }));
-
-export { mcpMocks };
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
@@ -147,13 +145,7 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
         await actual.captureFinalCodexCronCreatorToolAllowlist(...args);
       } else {
         target.length = 0;
-        for (const tool of tools) {
-          if (
-            !target.some((entry) => (typeof entry === "string" ? entry : entry.name) === tool.name)
-          ) {
-            target.push({ name: tool.name });
-          }
-        }
+        target.push(...Array.from(new Set(tools.map((tool) => tool.name)), (name) => ({ name })));
         captureRef.value = { version: 1, source: "final-executable-surface" };
       }
       mcpMocks.captureCalls.push({
@@ -191,20 +183,15 @@ export function configureFakeMcp(params: ReturnType<typeof createParams>) {
   setCodexTestModelSupportsTools(params, true);
   params.cleanupBundleMcpOnRunEnd = true;
   params.runtimePlan = createCodexRuntimePlanFixture();
-  const metadataSnapshot = createPluginMetadataSnapshotFixture();
-  params.preparedModelRuntime = { metadataSnapshot } as never;
-  params.config = {
-    ...params.config,
-    mcp: {
-      servers: {
-        fake: {
-          command: process.execPath,
-          args: [path.resolve("scripts/e2e/mcp-app-conformance-server.mjs")],
-          codex: { defaultToolsApprovalMode: "prompt" },
-        },
-      },
-    },
+  params.preparedModelRuntime = {
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
+  } as never;
+  const fake = {
+    command: process.execPath,
+    args: [path.resolve("scripts/e2e/mcp-app-conformance-server.mjs")],
+    codex: { defaultToolsApprovalMode: "prompt" as const },
   };
+  params.config = { ...params.config, mcp: { servers: { fake } } };
 }
 
 export function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertScheduledCodexAppAuthorityRuntime,
-  buildScheduledCodexAppServerConnectionIdentity,
+  buildScheduledCodexAppServerConnectionIdentity as connectionIdentity,
 } from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 
@@ -44,16 +44,13 @@ describe("canResolveScheduledConfiguredMcpCreatorAuthority", () => {
   });
 });
 
-const scheduledAuthority = {
+const principal = { profileId: "openai:work", accountId: "account-1" };
+const authority = (auth: Record<string, unknown> = principal) => ({
   version: 1 as const,
   runtimeId: "codex",
   namespace: "codex.apps",
-  payload: {
-    version: 1,
-    auth: { profileId: "openai:work", accountId: "account-1" },
-    apps: [],
-  },
-};
+  payload: { version: 1, auth, apps: [] },
+});
 
 function preparedProfile(profileId = "openai:work", accountId = "account-1") {
   return {
@@ -66,25 +63,20 @@ function preparedProfile(profileId = "openai:work", accountId = "account-1") {
   };
 }
 
-function scheduledConnection(overrides: Record<string, unknown> = {}) {
-  return {
-    usesSupervisionConnection: false,
-    appServer: { start: { homeScope: "agent" } },
-    startupPreparedAuth: preparedProfile(),
-    ...overrides,
-  } as never;
-}
-
 function expectRuntime(
   connectionOverrides: Record<string, unknown> = {},
   paramsOverrides: Partial<Parameters<typeof assertScheduledCodexAppAuthorityRuntime>[1]> = {},
 ) {
   return expect(() =>
-    assertScheduledCodexAppAuthorityRuntime(scheduledConnection(connectionOverrides), {
-      trigger: "cron",
-      scheduledRuntimeAuthority: scheduledAuthority,
-      ...paramsOverrides,
-    }),
+    assertScheduledCodexAppAuthorityRuntime(
+      {
+        usesSupervisionConnection: false,
+        appServer: { start: { homeScope: "agent" } },
+        startupPreparedAuth: preparedProfile(),
+        ...connectionOverrides,
+      } as never,
+      { trigger: "cron", scheduledRuntimeAuthority: authority(), ...paramsOverrides },
+    ),
   );
 }
 
@@ -109,20 +101,14 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
       },
       connectionClass: "remote",
     } as const;
-    const connectionIdentity = buildScheduledCodexAppServerConnectionIdentity(appServer);
-    const configuredAuthority = {
-      ...scheduledAuthority,
-      payload: {
-        ...scheduledAuthority.payload,
-        auth: {
-          kind: "configured-app-server",
-          connectionFingerprint: connectionIdentity,
-          managedRequirementsFingerprint: "managed-requirements",
-        },
-      },
-    };
+    const fingerprint = connectionIdentity(appServer);
+    const configuredAuthority = authority({
+      kind: "configured-app-server",
+      connectionFingerprint: fingerprint,
+      managedRequirementsFingerprint: "managed-requirements",
+    });
     expect(
-      buildScheduledCodexAppServerConnectionIdentity({
+      connectionIdentity({
         ...appServer,
         start: {
           ...appServer.start,
@@ -130,7 +116,7 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
           headers: { Authorization: "Bearer rotated" },
         },
       }),
-    ).toBe(connectionIdentity);
+    ).toBe(fingerprint);
 
     // Configured authority is endpoint-owned; prepared-profile accounts do not
     // replace it when the endpoint is reauthenticated between scheduled runs.

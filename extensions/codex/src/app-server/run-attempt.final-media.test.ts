@@ -6,11 +6,10 @@ import { buildContractReplyPayloads } from "openclaw/plugin-sdk/agent-runtime-te
 import { collectReplyMediaEntries } from "openclaw/plugin-sdk/channel-outbound";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDefaultLocalRoots } from "openclaw/plugin-sdk/web-media";
 import { expect, it, vi } from "vitest";
 import type { CodexCommandExecParams } from "./command-exec-protocol.js";
+import { agentMessage } from "./native-subagent-monitor.test-support.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -21,7 +20,10 @@ import {
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
-import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import {
+  attachSqliteSessionTarget,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -32,16 +34,19 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
   async (scenario) => {
     const workspaceDir = path.join(tempDir, "gateway-workspace");
     const remoteWorkspaceRoot = path.join(tempDir, "codex-workspace");
-    await Promise.all([
-      fs.mkdir(workspaceDir, { recursive: true }),
-      fs.mkdir(remoteWorkspaceRoot, { recursive: true }),
-    ]);
     const artifactName = "project-artifact.txt";
     const remoteContents = "authoritative Codex project artifact\n";
-    await Promise.all([
-      fs.writeFile(path.join(workspaceDir, artifactName), "stale Gateway project artifact\n"),
-      fs.writeFile(path.join(remoteWorkspaceRoot, artifactName), remoteContents),
-    ]);
+    await Promise.all(
+      (
+        [
+          [workspaceDir, "stale Gateway project artifact\n"],
+          [remoteWorkspaceRoot, remoteContents],
+        ] as const
+      ).map(async ([dir, contents]) => {
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, artifactName), contents);
+      }),
+    );
     const params = createParams(path.join(tempDir, "final-media.jsonl"), workspaceDir);
     await attachSqliteSessionTarget(
       params,
@@ -86,10 +91,7 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
       scenario === "partial" ? `${remoteWorkspaceRoot}/./${artifactName}` : `./${artifactName}`;
     const sourceText = `Artifact ready\n${scenario === "partial" ? "MEDIA:./missing-artifact.txt\n" : ""}MEDIA:${sourcePath}`;
     const item = {
-      id: "final-artifact",
-      type: "agentMessage",
-      phase: "final_answer",
-      text: sourceText,
+      ...agentMessage("final-artifact", sourceText, "final_answer"),
       ...(scenario === "async" ? { delivery: "async" } : {}),
     };
     await harness.notify(itemNotification("item/started", { ...item, text: "" }));
@@ -100,12 +102,10 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     await harness.notify(itemNotification("item/completed", item));
     if (scenario === "async") {
       await harness.notify(
-        itemNotification("item/completed", {
-          id: "terminal-answer",
-          type: "agentMessage",
-          phase: "final_answer",
-          text: "Finished.",
-        }),
+        itemNotification(
+          "item/completed",
+          agentMessage("terminal-answer", "Finished.", "final_answer"),
+        ),
       );
     }
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -119,28 +119,9 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     expect(result.terminal).toMatchObject({ kind: "ok" });
 
     const sourceContent = [{ type: "text", text: sourceText }];
-    expect(result.messagesSnapshot).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ role: "assistant", content: sourceContent }),
-      ]),
-    );
-    const transcriptTarget = params.sessionTarget;
-    if (!transcriptTarget?.sessionId || !transcriptTarget.sessionKey) {
-      throw new Error("expected the fixture's persisted session identity");
-    }
-    const savedAssistants = (
-      await readSessionTranscriptEvents({
-        ...transcriptTarget,
-        sessionId: transcriptTarget.sessionId,
-        sessionKey: transcriptTarget.sessionKey,
-      })
-    ).flatMap((event) => {
-      const message = asOptionalRecord(asOptionalRecord(event)?.message);
-      return message?.role === "assistant" ? [message] : [];
-    });
-    expect(savedAssistants).toEqual(
-      expect.arrayContaining([expect.objectContaining({ content: sourceContent })]),
-    );
+    const assistant = expect.objectContaining({ role: "assistant", content: sourceContent });
+    expect(result.messagesSnapshot).toContainEqual(assistant);
+    expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(assistant);
 
     const finalPayloads = buildContractReplyPayloads({
       attempt: result,
@@ -162,9 +143,10 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     const mediaUrls = payloads.flatMap(
       (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
     );
+    const replyText = payloads.map((payload) => payload.text).join("\n");
     if (scenario === "denied") {
       expect(mediaUrls).toEqual([]);
-      expect(payloads.map((payload) => payload.text).join("\n")).toContain(artifactName);
+      expect(replyText).toContain(artifactName);
       expect(remoteReads).toBe(0);
       return;
     }
@@ -188,7 +170,7 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
           sourceUrls: [sourcePath],
         },
       ]);
-      expect(payloads.map((payload) => payload.text).join("\n")).toContain("missing-artifact.txt");
+      expect(replyText).toContain("missing-artifact.txt");
     }
     const delivered = await loadOutboundMediaFromUrl(mediaUrls[0]!, {
       workspaceDir,
