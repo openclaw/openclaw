@@ -48,8 +48,8 @@ function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {
 
 export function ActivityPageView(props: { page: ActivityPageState }) {
   const state = () => props.page.read();
-  const activity = () => props.page.liveActivity.read();
-  const revision = () =>
+  const liveSnapshot = () => props.page.liveActivity.read();
+  const pageRevision = () =>
     props.page.revision() + props.page.liveActivity.revision() + props.page.agents.revision();
   const [filters, setFilters] = createStore({
     filterText: "",
@@ -59,7 +59,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
   });
   const update = (patch: Partial<typeof filters>) =>
     setFilters((draft) => Object.assign(draft, patch));
-  const liveRevision = createMemo(() => activity().revision);
+  const liveRevision = createMemo(() => liveSnapshot().revision);
   const [expandedIds, setExpandedIds] = createSignal(() => {
     liveRevision();
     return new Set<string>();
@@ -87,7 +87,11 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
   let previousEntries: ReturnType<ActivityPageState["liveActivity"]["read"]>["entries"] | undefined;
   let previousAutoFollow = true;
   const follow = createMemo(
-    () => ({ entries: activity().entries, enabled: filters.autoFollow, revision: liveRevision() }),
+    () => ({
+      entries: liveSnapshot().entries,
+      enabled: filters.autoFollow,
+      revision: liveRevision(),
+    }),
     {
       equals: (previous, next) =>
         previous.entries === next.entries &&
@@ -132,7 +136,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
   };
   onSettled(() => listen(document, "visibilitychange", visibilityChanged));
   const expiry = createMemo(() => {
-    revision();
+    pageRevision();
     presentationTime();
     if (!visible()) {
       return undefined;
@@ -213,7 +217,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                     null,
                 }}
                 presenceViewers={presence()}
-                presentationRevision={revision() + presentationTime()}
+                presentationRevision={pageRevision() + presentationTime()}
                 result={state().sessionActivity.result}
                 loading={pending() || state().sessionActivity.loading}
                 retrying={state().sessionActivity.retrying}
@@ -287,9 +291,9 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                   error={state().sessionActivity.error}
                   onRetry={() => props.page.syncSessionActivity("retry")}
                 />
-                <Show when={activity().error}>
+                <Show when={liveSnapshot().error}>
                   <div role="alert">
-                    <SettingsStatus kind="danger" label={activity().error ?? ""} />
+                    <SettingsStatus kind="danger" label={liveSnapshot().error ?? ""} />
                     <button
                       type="button"
                       class="btn btn--sm"
@@ -301,7 +305,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                 </Show>
                 <LiveActivityView
                   basePath={state().context.basePath}
-                  entries={activity().entries}
+                  entries={liveSnapshot().entries}
                   filterText={filters.filterText}
                   statusFilters={filters.statusFilters}
                   toolFilter={filters.toolFilter}
@@ -315,7 +319,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
                   onToggleAutoFollow={(next) => update({ autoFollow: next })}
                   onClear={() => props.page.clearLiveActivity()}
                   onExpandAll={() =>
-                    setExpandedIds(new Set(activity().entries.map((entry) => entry.id)))
+                    setExpandedIds(new Set(liveSnapshot().entries.map((entry) => entry.id)))
                   }
                   onCollapseAll={() => setExpandedIds(new Set())}
                   onEntryToggle={(id, open) => setExpandedIds((ids) => toggle(ids, id, open))}

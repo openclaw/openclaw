@@ -406,8 +406,8 @@ export function createActivityPageState(context: ApplicationContext) {
   });
   return {
     liveActivity: projectOwner(liveActivity, (source) => source.snapshot),
-    retryLiveActivity: liveActivity.retry,
-    clearLiveActivity: liveActivity.clear,
+    retryLiveActivity: () => liveActivity.retry(),
+    clearLiveActivity: () => liveActivity.clear(),
     agents: projectOwner(context.agents, (source) => source.state),
     read: projection.read,
     revision: projection.revision,

@@ -81,11 +81,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     },
     equality: "revision",
   });
-  const inventories = {
-    agents: projectOwner(context().agents, (source) => source.state),
-    channels: projectOwner(context().channels, (source) => source.state),
-    runtimeConfig: projectOwner(context().runtimeConfig, (source) => source.state),
-  };
+  const agents = projectOwner(context().agents, (source) => source.state);
+  const channels = projectOwner(context().channels, (source) => source.state);
+  const runtimeConfig = projectOwner(context().runtimeConfig, (source) => source.state);
   const runTranscript = createCronRunTranscript(publish, () => {
     const scope = gateway.capture();
     const current = cron;
@@ -150,9 +148,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const sourceChanged = boundContext !== null && boundContext.gateway !== currentContext.gateway;
     let first = boundContext === null || sourceChanged;
     boundContext = currentContext;
-    inventories.agents.replaceSource(currentContext.agents);
-    inventories.channels.replaceSource(currentContext.channels);
-    inventories.runtimeConfig.replaceSource(currentContext.runtimeConfig);
+    agents.replaceSource(currentContext.agents);
+    channels.replaceSource(currentContext.channels);
+    runtimeConfig.replaceSource(currentContext.runtimeConfig);
     if (sourceChanged) {
       gateway.invalidate();
     }
@@ -288,8 +286,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!canRefreshCron() || !cron.connected || !cron.client) {
       return;
     }
-    const agents = context().agents.state;
-    if (!agents.agentsList && !agents.agentsLoading) {
+    if (!context().agents.state.agentsList && !context().agents.state.agentsLoading) {
       void context().agents.ensureList();
     }
     if (forceRefresh || (!cron.cronStatus && !cron.cronLoading)) {
@@ -729,7 +726,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   createEffect(projection.revision, afterRender);
   return {
     context,
-    inventories,
+    inventories: { agents, channels, runtimeConfig },
     cron: projection.read,
     canManageCron,
     cronModelSuggestions,
