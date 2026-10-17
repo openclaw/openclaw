@@ -8,11 +8,9 @@ import type {
 import type { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
-const { resolvePluginDocumentExtractorsMock } = vi.hoisted(() => ({
-  resolvePluginDocumentExtractorsMock: vi.fn<typeof resolvePluginDocumentExtractors>(),
-}));
+const resolveExtractors = vi.hoisted(() => vi.fn<typeof resolvePluginDocumentExtractors>());
 vi.mock("../plugins/document-extractors.runtime.js", () => ({
-  resolvePluginDocumentExtractors: resolvePluginDocumentExtractorsMock,
+  resolvePluginDocumentExtractors: resolveExtractors,
 }));
 
 import { extractDocumentContent } from "./document-extractors.runtime.js";
@@ -51,41 +49,31 @@ type MetadataOptions = {
   textTruncated?: boolean;
   malformed?: boolean;
 };
+const automatic: MetadataOptions = { maxPages: 2, valid: true };
+const explicit: MetadataOptions = { ...automatic, pageNumbers: [2, 4] };
 
 const metadataCases: [string, unknown, MetadataOptions?][] = [
   ["first page", pages([1], 2), { valid: true }],
-  ["non-prefix automatic", pages([2, 4], 10), { maxPages: 2, valid: true }],
-  ["below automatic budget", pages([2], 10), { maxPages: 2, valid: true }],
-  [
-    "partial explicit",
-    pages([4], 10, "explicit", true),
-    { maxPages: 2, pageNumbers: [2, 4], valid: true },
-  ],
-  [
-    "bounded explicit",
-    pages([2, 4], 10, "explicit", true),
-    { maxPages: 2, pageNumbers: [1, 2, 4], valid: true },
-  ],
-  [
-    "complete explicit",
-    pages([2, 4], 10, "explicit", false),
-    { maxPages: 2, pageNumbers: [2, 4], valid: true },
-  ],
+  ["non-prefix automatic", pages([2, 4], 10), automatic],
+  ["below automatic budget", pages([2], 10), automatic],
+  ["partial explicit", pages([4], 10, "explicit"), explicit],
+  ["bounded explicit", pages([2, 4], 10, "explicit"), { ...explicit, pageNumbers: [1, 2, 4] }],
+  ["complete explicit", pages([2, 4], 10, "explicit", false), explicit],
   ["zero-page document", pages([], 0, undefined, false), { text: "", valid: true }],
   [
     "text accounts for omission",
     pages([1], 2, undefined, false),
-    { maxPages: 2, text: "prefix", textTruncated: true, valid: true },
+    { ...automatic, text: "prefix", textTruncated: true },
   ],
   ["zero page ID", pages([0], 1)],
   ["duplicate pages", pages([1, 1], 2), { maxPages: 2 }],
   ["page beyond total", pages([2], 1)],
   ["over request budget", pages([1, 2], 2)],
   ["fractional page ID", pages([1.5], 2)],
-  ["unrequested page", pages([1], 2, "explicit", true), { pageNumbers: [2] }],
-  ["selection mismatch", pages([1], 2, "explicit", true)],
+  ["unrequested page", pages([1], 2, "explicit"), { pageNumbers: [2] }],
+  ["selection mismatch", pages([1], 2, "explicit")],
   ["false automatic truncation", pages([1], 1)],
-  ["false explicit truncation", pages([2], 2, "explicit", true), { pageNumbers: [2] }],
+  ["false explicit truncation", pages([2], 2, "explicit"), { pageNumbers: [2] }],
   ["incomplete automatic selection", pages([1], 2, undefined, false), { maxPages: 2 }],
   [
     "incomplete explicit selection",
@@ -105,9 +93,7 @@ const metadataCases: [string, unknown, MetadataOptions?][] = [
 ];
 
 describe("extractDocumentContent", () => {
-  beforeEach(() => {
-    resolvePluginDocumentExtractorsMock.mockReset();
-  });
+  beforeEach(() => resolveExtractors.mockReset());
 
   it.each(metadataCases)("validates metadata: %s", async (_name, pageInfo, row = {}) => {
     const metadata = {
@@ -117,7 +103,7 @@ describe("extractDocumentContent", () => {
     };
     const text = row.text ?? "pdf text";
     const extract = vi.fn().mockResolvedValue({ text, images: [], metadata });
-    resolvePluginDocumentExtractorsMock.mockReturnValue([extractor(extract)]);
+    resolveExtractors.mockReturnValue([extractor(extract)]);
     const publicRequest = {
       ...request,
       maxPages: row.maxPages ?? 1,
@@ -137,9 +123,7 @@ describe("extractDocumentContent", () => {
 
   it("surfaces matching extractor failures instead of reporting disablement", async () => {
     const cause = new Error("password required");
-    resolvePluginDocumentExtractorsMock.mockReturnValue([
-      extractor(vi.fn().mockRejectedValue(cause)),
-    ]);
+    resolveExtractors.mockReturnValue([extractor(vi.fn().mockRejectedValue(cause))]);
     const result = extractDocumentContent(request);
     await expect(result).rejects.toSatisfy(
       (error: unknown) =>
@@ -158,7 +142,7 @@ describe("extractDocumentContent", () => {
       throw reason;
     });
     const second = vi.fn();
-    resolvePluginDocumentExtractorsMock.mockReturnValue(
+    resolveExtractors.mockReturnValue(
       [first, second].map((extract, index) => extractor(extract, `pdf-${index}`)),
     );
     await expect(
@@ -172,28 +156,23 @@ describe("extractDocumentContent", () => {
     const oldExtract = vi.fn().mockResolvedValue({ text: "retired", images: [] });
     const newExtract = vi.fn().mockResolvedValue({ text: "replacement", images: [] });
     const input = { ...request, config: {} };
-    resolvePluginDocumentExtractorsMock
+    resolveExtractors
       .mockReturnValueOnce([extractor(oldExtract)])
       .mockReturnValueOnce([extractor(newExtract)]);
     await expect(extractDocumentContent(input)).resolves.toMatchObject({ text: "retired" });
     clearPluginMetadataLifecycleCaches();
     await expect(extractDocumentContent(input)).resolves.toMatchObject({ text: "replacement" });
-    expect(resolvePluginDocumentExtractorsMock).toHaveBeenCalledTimes(2);
+    expect(resolveExtractors).toHaveBeenCalledTimes(2);
     expect(oldExtract).toHaveBeenCalledOnce();
     expect(newExtract).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      name: "populated optional fields",
-      password: "  retained  ",
-      pageNumbers: [2, 1],
-      callback: true,
-    },
-    { name: "empty password and pages", password: "", pageNumbers: [], callback: false },
+  it.each<[string, string, number[], boolean]>([
+    ["populated optional fields", "  retained  ", [2, 1], true],
+    ["empty password and pages", "", [], false],
   ])(
-    "preserves the composed PDF request with $name",
-    async ({ password, pageNumbers, callback }) => {
+    "preserves the composed PDF request with %s",
+    async (_name, password, pageNumbers, callback) => {
       const buffer = Buffer.from("%PDF-1.4");
       const config = {};
       const images: DocumentExtractionResult["images"] = [];
@@ -215,24 +194,19 @@ describe("extractDocumentContent", () => {
         input.onImageExtractionError?.(imageError);
         return { text: "pdf text", images };
       });
-      resolvePluginDocumentExtractorsMock.mockReturnValue([extractor(extract)]);
+      resolveExtractors.mockReturnValue([extractor(extract)]);
       const result = await extractPdfContent({
         ...forwarded,
         password,
         config,
         onImageExtractionError: callback ? onImageExtractionError : undefined,
       });
-      expect(resolvePluginDocumentExtractorsMock).toHaveBeenCalledOnce();
-      expect(resolvePluginDocumentExtractorsMock.mock.calls[0]?.[0]?.config).toBe(config);
+      expect(resolveExtractors).toHaveBeenCalledOnce();
+      expect(resolveExtractors.mock.calls[0]?.[0]?.config).toBe(config);
       expect(extract).toHaveBeenCalledOnce();
       expect(result).toStrictEqual({ text: "pdf text", images });
       expect(result.images).toBe(images);
-      if (callback) {
-        expect(onImageExtractionError).toHaveBeenCalledOnce();
-        expect(onImageExtractionError).toHaveBeenCalledWith(imageError);
-      } else {
-        expect(onImageExtractionError).not.toHaveBeenCalled();
-      }
+      expect(onImageExtractionError.mock.calls).toEqual(callback ? [[imageError]] : []);
     },
   );
 });
