@@ -228,27 +228,15 @@ describe("Engine contract tests", () => {
     expect(result).toEqual(compactionResult(target));
   });
 
-  it("rejects a structured successor key from another agent", async () => {
-    await expect(
-      delegateCompactionToRuntime({
-        sessionId: "s-agent-conflict",
-        sessionKey: "agent:main:s-agent-conflict",
-        sessionTarget: {
-          agentId: "worker",
-          sessionId: "s-agent-conflict",
-          sessionKey: "agent:main:s-agent-conflict",
-          storePath: "/tmp/openclaw-agent.sqlite",
-        },
-        tokenBudget: 4096,
-      }),
-    ).rejects.toThrow("successor target conflicts with the caller session identity");
-    expect(compactRuntime).not.toHaveBeenCalled();
-  });
-
   it.each([
     { name: "caller agent", agentId: "worker" },
     { name: "physical session", sessionId: "another-session" },
     { name: "caller key", sessionKey: "agent:main:another-key" },
+    {
+      name: "caller parsed key",
+      agentId: undefined,
+      sessionTarget: { ...callerTarget, agentId: "worker" },
+    },
     {
       name: "target-only parsed key",
       agentId: undefined,
@@ -267,7 +255,11 @@ describe("Engine contract tests", () => {
             sessionTarget: callerTarget,
             ...input,
           }),
-        ).rejects.toThrow(/conflicts with/);
+        ).rejects.toThrow(
+          projectSessionKey
+            ? "successor session key conflicts with its agent identity"
+            : "successor target conflicts with the caller session identity",
+        );
         expect(compactRuntime).not.toHaveBeenCalled();
       });
     },
