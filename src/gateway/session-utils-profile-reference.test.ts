@@ -37,26 +37,39 @@ function createProfile(id: string): void {
   );
 }
 
+function listSessions(
+  entries: Record<string, Partial<SessionEntry>>,
+  opts: SessionsListParams,
+  entryFilter?: Parameters<typeof listSessionFixture>[0]["entryFilter"],
+) {
+  return listSessionFixture({
+    cfg: {},
+    storePath: stateRoot,
+    opts,
+    entryFilter,
+    store: Object.fromEntries(
+      Object.entries(entries).map(([id, entry]) => [
+        `agent:main:${id}`,
+        { sessionId: id, updatedAt: Date.now(), ...entry },
+      ]),
+    ),
+  });
+}
+
 function listActivity(
   profileIds: string[],
   involvingProfileId: string,
   options: Partial<SessionsListParams> = {},
 ) {
-  return listSessionFixture({
-    cfg: {},
-    storePath: stateRoot,
-    store: Object.fromEntries(
+  return listSessions(
+    Object.fromEntries(
       profileIds.map((id, index) => [
-        `agent:main:activity-${index}`,
-        {
-          sessionId: `activity-${index}`,
-          updatedAt: Date.now(),
-          participants: [{ identity: { type: "profile" as const, id } }],
-        },
+        `activity-${index}`,
+        { participants: [{ identity: { type: "profile" as const, id } }] },
       ]),
     ),
-    opts: { includePeople: true, involvingProfileId, ...options },
-  });
+    { includePeople: true, involvingProfileId, ...options },
+  );
 }
 
 it.each(["owned", "created", "involving"] as const)(
@@ -68,24 +81,21 @@ it.each(["owned", "created", "involving"] as const)(
     createProfile(current);
     linkEmail(original + "@activity.test", current);
     for (const profileId of [original, current]) {
-      const result = await listSessionFixture({
-        cfg: {},
-        storePath: stateRoot,
-        store: {
-          "agent:main:merged-profile": {
-            sessionId: "merged-profile",
+      const result = await listSessions(
+        {
+          "merged-profile": {
             updatedAt: 1,
             createdActor: { type: "human", source: "profile", id: original },
             owner: { actor: { type: "human", id: original } },
             participants: [{ identity: { type: "profile", id: original } }],
           },
         },
-        opts: {
+        {
           profileRelation: { profileId, relationship },
           ...(relationship === "owned" ? { ownerId: original } : {}),
           ...(relationship === "created" ? { creatorId: original } : {}),
         },
-      });
+      );
       expect(result.sessions.map((row) => row.sessionId)).toEqual(["merged-profile"]);
       expect(result.sessions[0]?.createdActor?.id).toBe(original);
     }
@@ -117,18 +127,12 @@ it.each(["12345678-A123-4123-8123-123456789ABC"])(
 
 it("resolves qualified retained creators without treating legacy human IDs as profiles", async () => {
   const retained = "12345678-a123-4123-8123-123456789abc";
-  const result = await listSessionFixture({
-    cfg: {},
-    storePath: stateRoot,
-    store: {
-      "agent:main:qualified": {
-        sessionId: "qualified",
-        updatedAt: Date.now(),
+  const result = await listSessions(
+    {
+      qualified: {
         createdActor: { type: "human", id: retained, source: "profile" },
       },
-      "agent:main:legacy": {
-        sessionId: "legacy",
-        updatedAt: Date.now(),
+      legacy: {
         createdActor: {
           type: "human",
           id: "12345678-a123-4123-8123-123456789def",
@@ -136,8 +140,8 @@ it("resolves qualified retained creators without treating legacy human IDs as pr
         },
       },
     },
-    opts: { includePeople: true, involvingProfileId: "12345678a123" },
-  });
+    { includePeople: true, involvingProfileId: "12345678a123" },
+  );
   expect(result.involvingProfileId).toBe(retained);
   expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:qualified"]);
 });
@@ -176,30 +180,24 @@ it.each([
     } as GatewayClient,
   });
   const entryFilter = vi.fn(visibility);
-  const store: Record<string, SessionEntry> = {
-    "agent:main:visible": {
-      sessionId: "visible",
-      updatedAt: Date.now(),
+  const store = {
+    visible: {
       visibility: "shared",
       participants: [{ identity: { type: "profile", id: visibleId } }],
     },
-    "agent:main:hidden": {
-      sessionId: "hidden",
-      updatedAt: Date.now(),
+    hidden: {
       visibility: hidden === "draft" ? "draft" : "shared",
       incognito: hidden === "incognito" ? true : undefined,
       participants: [{ identity: { type: "profile", id: hiddenId } }],
     },
-  };
+  } satisfies Record<string, Partial<SessionEntry>>;
   for (const reference of ["12345678a123", hiddenId, hiddenId.replaceAll("-", "")]) {
     entryFilter.mockClear();
-    const result = await listSessionFixture({
-      cfg: {},
-      storePath: stateRoot,
+    const result = await listSessions(
       store,
+      { includePeople: true, involvingProfileId: reference, search: "no-matching-session" },
       entryFilter,
-      opts: { includePeople: true, involvingProfileId: reference, search: "no-matching-session" },
-    });
+    );
     expect(result.involvingProfileId, reference).toBe(
       reference === "12345678a123" ? visibleId : undefined,
     );
@@ -223,26 +221,20 @@ it("resolves merge aliases for visible owners without considering hidden profile
       authenticatedUserProfile: { profileId: target },
     } as GatewayClient,
   });
-  const result = await listSessionFixture({
-    cfg: {},
-    storePath: stateRoot,
-    entryFilter,
-    store: {
-      "agent:main:owned": {
-        sessionId: "owned",
-        updatedAt: Date.now(),
+  const result = await listSessions(
+    {
+      owned: {
         visibility: "shared",
         owner: { actor: { type: "human", id: target } },
       },
-      "agent:main:hidden": {
-        sessionId: "hidden",
-        updatedAt: Date.now(),
+      hidden: {
         visibility: "draft",
         participants: [{ identity: { type: "profile", id: hidden } }],
       },
     },
-    opts: { includePeople: true, involvingProfileId: "12345678a123" },
-  });
+    { includePeople: true, involvingProfileId: "12345678a123" },
+    entryFilter,
+  );
   expect(result.involvingProfileId).toBe(target);
   expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:owned"]);
 });

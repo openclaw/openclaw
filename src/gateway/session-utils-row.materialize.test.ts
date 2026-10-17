@@ -14,7 +14,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   buildGatewaySessionRow,
@@ -98,7 +97,6 @@ type RowFixture = {
   runs?: SubagentRunRecord[];
   omitRowContext?: boolean;
   expectedIsDock?: boolean;
-  transcript?: boolean;
   decoration?: "current" | "stale";
 };
 
@@ -468,20 +466,8 @@ test("preserves complete base rows across time and caller presentation fixtures"
         now: TIMES[0],
         rowContext: fixture.omitRowContext ? undefined : rowContext,
         includeSwarmChildren: true,
-        skipTranscriptUsageFallback: !fixture.transcript,
-        transcriptUsage:
-          fixture.transcript && fixture.entry
-            ? await readRecentSessionUsageFromTranscriptAsync(
-                {
-                  agentId: "main",
-                  sessionId: fixture.entry.sessionId,
-                  sessionKey: fixture.key,
-                  storePath,
-                },
-                256 * 1024,
-              )
-            : undefined,
-        lightweightListRow: !fixture.transcript,
+        skipTranscriptUsageFallback: true,
+        lightweightListRow: true,
       };
       const { inputs, presentation } = readSessionRowInputs(rowParams);
       const clock = vi.spyOn(Date, "now").mockImplementation(() => {
@@ -494,28 +480,22 @@ test("preserves complete base rows across time and caller presentation fixtures"
         clock.mockRestore();
       }
       const retainedMaterialized = structuredClone(materialized);
-      const rows = TIMES.map((now) =>
-        decorate(
-          presentSessionRow(materialized, {
-            ...presentation,
-            now,
-            subagentRuns: buildSubagentRunReadIndexFromRuns({ ...subagentRunInputs, now }),
-          }),
-          fixture,
-          cfg,
-        ),
-      );
-      const replay = TIMES.map((now) =>
-        decorate(
-          presentSessionRow(materialized, {
-            ...presentation,
-            now,
-            subagentRuns: undefined,
-          }),
-          fixture,
-          cfg,
-        ),
-      );
+      const present = (indexed: boolean) =>
+        TIMES.map((now) =>
+          decorate(
+            presentSessionRow(materialized, {
+              ...presentation,
+              now,
+              subagentRuns: indexed
+                ? buildSubagentRunReadIndexFromRuns({ ...subagentRunInputs, now })
+                : undefined,
+            }),
+            fixture,
+            cfg,
+          ),
+        );
+      const rows = present(true);
+      const replay = present(false);
       expect(replay).toStrictEqual(rows);
       expect(replay.map((row) => JSON.stringify(row))).toEqual(
         rows.map((row) => JSON.stringify(row)),

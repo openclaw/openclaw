@@ -119,97 +119,48 @@ test("SQLite unavailable context blocks old totals until a later valid snapshot"
       totalTokensFresh: false,
     };
     seedSessionEntries(storePath, { [sessionKey]: entry });
-    appendTranscriptMessages({
-      sessionId,
-      sessionKey,
-      storePath,
-      messages: [
-        {
-          role: "assistant",
-          api: "cli",
-          content: "old cumulative turn",
-          usage: {
-            input: 128_814,
-            output: 3_000,
-            cacheRead: 992_953,
-            totalTokens: 1_124_767,
-          },
-        },
-      ],
-    });
-
-    const legacyRow = await buildGatewaySessionRow({
-      cfg,
-      storePath,
-      store: { [sessionKey]: entry },
-      key: sessionKey,
-      entry,
-    });
-    expect(legacyRow.totalTokens).toBeUndefined();
-    expect(legacyRow.totalTokensFresh).toBe(false);
-
-    appendTranscriptMessages({
-      sessionId,
-      sessionKey,
-      storePath,
-      messages: [
-        {
-          role: "assistant",
-          api: "cli",
-          content: "usage unavailable",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            contextUsage: { state: "unavailable" },
-          },
-        },
-      ],
-    });
-
-    const unavailableRow = await buildGatewaySessionRow({
-      cfg,
-      storePath,
-      store: { [sessionKey]: entry },
-      key: sessionKey,
-      entry,
-    });
-    expect(unavailableRow.totalTokens).toBeUndefined();
-    expect(unavailableRow.totalTokensFresh).toBe(false);
-
-    appendTranscriptMessages({
-      sessionId,
-      sessionKey,
-      storePath,
-      messages: [
-        {
-          role: "assistant",
-          api: "cli",
-          content: "valid later turn",
-          usage: {
-            input: 67_932,
-            output: 2_000,
-            cacheRead: 18_944,
-            totalTokens: 88_876,
-            contextUsage: {
-              state: "available",
-              promptTokens: 86_876,
-              totalTokens: 88_876,
-            },
-          },
-        },
-      ],
-    });
-    const validRow = await buildGatewaySessionRow({
-      cfg,
-      storePath,
-      store: { [sessionKey]: entry },
-      key: sessionKey,
-      entry,
-    });
-    expect(validRow.totalTokens).toBe(86_876);
-    expect(validRow.totalTokensFresh).toBe(true);
+    async function appendAndRead(content: string, usage: unknown) {
+      appendTranscriptMessages({
+        sessionId,
+        sessionKey,
+        storePath,
+        messages: [{ role: "assistant", api: "cli", content, usage }],
+      });
+      const row = await buildGatewaySessionRow({
+        cfg,
+        storePath,
+        store: { [sessionKey]: entry },
+        key: sessionKey,
+        entry,
+      });
+      return [row.totalTokens, row.totalTokensFresh];
+    }
+    expect(
+      await appendAndRead("old cumulative turn", {
+        input: 128_814,
+        output: 3_000,
+        cacheRead: 992_953,
+        totalTokens: 1_124_767,
+      }),
+    ).toEqual([undefined, false]);
+    expect(
+      await appendAndRead("usage unavailable", {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        contextUsage: { state: "unavailable" },
+      }),
+    ).toEqual([undefined, false]);
+    expect(
+      await appendAndRead("valid later turn", {
+        input: 67_932,
+        output: 2_000,
+        cacheRead: 18_944,
+        totalTokens: 88_876,
+        contextUsage: { state: "available", promptTokens: 86_876, totalTokens: 88_876 },
+      }),
+    ).toEqual([86_876, true]);
   });
 });

@@ -10,6 +10,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import * as thinking from "../auto-reply/thinking.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -35,14 +36,38 @@ import {
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 
+function catalogEntry(
+  provider: string,
+  id: string,
+  fields: Partial<ModelCatalogEntry & ThinkingCatalogPolicyCarrier> = {},
+): ModelCatalogEntry & ThinkingCatalogPolicyCarrier {
+  return { provider, id, name: id, ...fields };
+}
+
+function session(sessionId: string, fields: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId, updatedAt: 1, ...fields };
+}
+
+function runtimeConfig(
+  model: string,
+  id: string,
+  defaults: AgentDefaultsConfig = {},
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        ...defaults,
+        models: { [model]: { agentRuntime: { id } } },
+      },
+    },
+  };
+}
+
+const mainThinking = { cfg: {}, agentId: "main", agentRuntime: "openclaw" };
+
 it("keeps runtime capacity reads separate from cached API capability donors", () => {
   const context = buildSessionListRowMetadataContext({ now: 1 });
-  const entry: ModelCatalogEntry = {
-    provider: "fixture",
-    id: "local-model",
-    name: "Local model",
-    contextTokens: 32_768,
-  };
+  const entry = catalogEntry("fixture", "local-model", { contextTokens: 32_768 });
   const selection = { entry, routeVariants: [entry], runtimeId: "native-fixture" };
   expect(context.selectModelCatalogRuntimeEntry(selection).entry.contextTokens).toBe(32_768);
   expect(
@@ -54,26 +79,17 @@ it("keeps runtime capacity reads separate from cached API capability donors", ()
 it.each([false, true])(
   "preserves configured reasoning=%s when selecting a runtime route",
   (reasoning) => {
-    const logicalEntry: ModelCatalogEntry = {
-      provider: "openai",
-      id: "gpt-5.4",
-      name: "Configured model",
+    const logicalEntry = catalogEntry("openai", "gpt-5.4", {
       api: "openai-chatgpt-responses",
       reasoning,
-    };
+    });
     const projection = resolveGatewaySessionThinkingProjectionInternal({
-      cfg: {
-        agents: {
-          defaults: {
-            models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
-          },
-        },
-      },
+      cfg: runtimeConfig("openai/gpt-5.4", "openclaw"),
       agentId: "main",
       sessionKey: "agent:main:route",
       provider: "openai",
       model: "gpt-5.4",
-      entry: { sessionId: "route", updatedAt: 1, thinkingLevel: "high" },
+      entry: session("route", { thinkingLevel: "high" }),
       modelCatalog: [logicalEntry],
       modelCatalogRouteVariants: [
         { ...logicalEntry, api: "openai-responses", reasoning: true, nativeRuntime: "openclaw" },
@@ -94,26 +110,16 @@ it.each([false, true])(
 describe("Gateway stored thinking levels", () => {
   it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
     // A synthetic model lets observed native efforts define the capability set.
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/native-effort-fixture" },
-          models: {
-            "openai/native-effort-fixture": { agentRuntime: { id: "codex" } },
-          },
-        },
-      },
-    };
+    const cfg = runtimeConfig("openai/native-effort-fixture", "codex", {
+      model: { primary: "openai/native-effort-fixture" },
+    });
     const openaiPolicy = expectDefined(
       resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
       "OpenAI public thinking policy",
     );
-    const modelEntry: ModelCatalogEntry & ThinkingCatalogPolicyCarrier = {
-      provider: "openai",
-      id: "native-effort-fixture",
-      name: "Native effort fixture",
+    const modelEntry = catalogEntry("openai", "native-effort-fixture", {
       [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
-    };
+    });
     const row = (
       entry: SessionEntry,
       catalog?: { reasoning?: boolean; compat?: { supportedReasoningEfforts: string[] } },
@@ -134,20 +140,18 @@ describe("Gateway stored thinking levels", () => {
       });
     };
 
-    const stored: SessionEntry = { sessionId: "stored", updatedAt: 1, thinkingLevel: "ultra" };
+    const stored = session("stored", { thinkingLevel: "ultra" });
 
-    expect(row(stored).thinkingLevel).toBe("ultra");
-    expect(row(stored, {}).thinkingLevel).toBe("ultra");
-    expect(row(stored, { reasoning: true }).thinkingLevel).toBe("ultra");
-    expect(row(stored, { reasoning: false }).thinkingLevel).toBe("ultra");
-    expect(
-      row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["off"] } })
-        .thinkingLevel,
-    ).toBe("ultra");
-    expect(
-      row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } })
-        .thinkingLevel,
-    ).toBe("ultra");
+    for (const catalog of [
+      undefined,
+      {},
+      { reasoning: true },
+      { reasoning: false },
+      { reasoning: true, compat: { supportedReasoningEfforts: ["off"] } },
+      { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } },
+    ]) {
+      expect(row(stored, catalog).thinkingLevel).toBe("ultra");
+    }
     const nativeUltra = row(stored, {
       reasoning: true,
       compat: { supportedReasoningEfforts: ["max", "ultra"] },
@@ -176,16 +180,12 @@ describe("Gateway all-null thinking map", () => {
     "preserves the explicit default %s without native levels",
     (thinkingDefault) => {
       const profile = resolveGatewayModelThinkingProfile({
+        ...mainThinking,
         cfg: { agents: { defaults: { thinkingDefault } } },
-        agentId: "main",
         provider: "metadata-fixture",
         model: "no-effort",
-        agentRuntime: "openclaw",
         modelCatalog: [
-          {
-            provider: "metadata-fixture",
-            id: "no-effort",
-            name: "No selectable effort",
+          catalogEntry("metadata-fixture", "no-effort", {
             api: "openai-completions",
             reasoning: true,
             thinkingLevelMap: {
@@ -197,7 +197,7 @@ describe("Gateway all-null thinking map", () => {
               xhigh: null,
               max: null,
             },
-          },
+          }),
         ],
       });
 
@@ -218,28 +218,20 @@ describe("Gateway thinking catalog", () => {
       defaultLevel: "high",
     }));
     const catalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] = [
-      {
-        provider: "logical",
-        id: "Reasoner",
-        name: "Logical",
+      catalogEntry("logical", "Reasoner", {
         reasoning: true,
         [PREPARED_THINKING_POLICY]: { resolve: logicalPolicy },
-      },
-      {
-        provider: "donor",
-        id: "Reasoner",
-        name: "Donor",
+      }),
+      catalogEntry("donor", "Reasoner", {
         reasoning: true,
         [PREPARED_THINKING_POLICY]: { resolve: donorPolicy },
-      },
+      }),
     ];
     const profile = resolveGatewayModelThinkingProfile({
-      cfg: {},
-      agentId: "main",
+      ...mainThinking,
       provider: "logical",
       model: "Reasoner",
       thinkingPolicyProvider: "donor",
-      agentRuntime: "openclaw",
       modelCatalog: catalog,
       catalogResolver: thinking.createThinkingCatalogResolver(catalog),
     });
@@ -260,20 +252,15 @@ describe("Gateway thinking catalog", () => {
       defaultLevel: "high",
     }));
     const catalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] = [
-      {
-        provider: "captured-null",
-        id: "Reasoner",
-        name: "Reasoner",
+      catalogEntry("captured-null", "Reasoner", {
         reasoning: true,
         [PREPARED_THINKING_POLICY]: null,
-      },
+      }),
     ];
     const profile = resolveGatewayModelThinkingProfile({
-      cfg: {},
-      agentId: "main",
+      ...mainThinking,
       provider: "captured-null",
       model: "Reasoner",
-      agentRuntime: "openclaw",
       modelCatalog: catalog,
       catalogResolver: thinking.createThinkingCatalogResolver(catalog),
       providerPolicySource: {
@@ -317,14 +304,9 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
         throw new Error("projection must not execute");
       },
     });
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          thinkingDefault: "off",
-          models: { "route-provider/route-model": { agentRuntime: { id: "catalog-route" } } },
-        },
-      },
-    };
+    const cfg = runtimeConfig("route-provider/route-model", "catalog-route", {
+      thinkingDefault: "off",
+    });
     const profile = vi.spyOn(thinking, "resolveThinkingProfile").mockImplementation((params) => ({
       levels: [
         { id: "off", label: "Off", rank: 0 },
@@ -341,14 +323,11 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
       model: "route-model",
       sessionKey: "agent:main:catalog-route",
       modelCatalog: [
-        {
-          provider: "route-provider",
-          id: "route-model",
-          name: "Route model",
+        catalogEntry("route-provider", "route-model", {
           reasoning: true,
           ...(scenario.api ? { api } : {}),
           ...(scenario.baseUrl ? { baseUrl } : {}),
-        },
+        }),
       ],
     };
     try {
@@ -358,7 +337,7 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
       expect(
         resolveGatewaySessionThinkingProjectionInternal({
           ...params,
-          entry: { sessionId: "catalog-route", updatedAt: 1 },
+          entry: session("catalog-route"),
         }).thinkingOptions,
       ).toEqual(scenario.levels);
     } finally {
@@ -381,9 +360,7 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
         },
       });
       const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } } },
-        },
+        ...runtimeConfig("openai/gpt-5.6-sol", "codex"),
         models: {
           providers: {
             openai: {
@@ -414,11 +391,9 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
         provider: "openai",
         model: "gpt-5.6-sol",
         sessionKey: "agent:main:main",
-        entry: {
-          sessionId: "runtime-projection",
-          updatedAt: 1,
+        entry: session("runtime-projection", {
           agentHarnessId: transportOverride ? "codex" : "openclaw",
-        },
+        }),
       });
       expect(projection.agentRuntime).toEqual({
         id: transportOverride ? "openclaw" : "codex",
@@ -496,13 +471,11 @@ describe("Gateway model identity", () => {
         setActivePluginRegistry(createEmptyPluginRegistry());
         setRuntimeConfigSnapshot(cfg);
         const rowContext = buildSessionListRowMetadataContext({ now: 1 });
-        const entry: SessionEntry = {
-          sessionId: "context-projection",
-          updatedAt: 1,
+        const entry = session("context-projection", {
           providerOverride: "custom",
           modelOverride: selected,
           modelOverrideRouteResolution: "resolved",
-        };
+        });
         const key = "agent:main:context-projection";
         const params = {
           cfg,
@@ -514,9 +487,7 @@ describe("Gateway model identity", () => {
           now: 1,
           rowContext,
           lightweightListRow: true,
-          modelCatalog: [
-            { provider: "custom", id: selected, name: selected, contextWindow: 128_000 },
-          ],
+          modelCatalog: [catalogEntry("custom", selected, { contextWindow: 128_000 })],
         } satisfies Parameters<typeof buildGatewaySessionRow>[0];
         visits = 0;
         for (let index = 0; index < 32; index++) {
@@ -557,7 +528,7 @@ describe("Gateway model identity", () => {
   });
 
   function writtenModelOverride(model: string): SessionEntry {
-    const entry: SessionEntry = { sessionId: "written-model", updatedAt: 1 };
+    const entry = session("written-model");
     applyModelOverrideToSessionEntry({ entry, selection: { provider: "custom", model } });
     return structuredClone(entry);
   }
@@ -574,26 +545,23 @@ describe("Gateway model identity", () => {
       await withIdentityScope(() => {
         const resolved = { entry: writtenModelOverride("middle"), model: "middle" };
         const raw = {
-          entry: {
-            sessionId: "raw-model",
-            updatedAt: 1,
+          entry: session("raw-model", {
             providerOverride: "custom",
             modelOverride: "latest",
-          },
+          }),
           model: "middle",
         };
         const rowContext = buildSessionListRowMetadataContext({ now: 1 });
         for (const { entry, model } of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
+          const selected = resolveSessionSelectedModelRef({
+            cfg: identityConfig,
+            agentId: "main",
+            source: { entry, readSourceEntry: () => undefined },
+            rowContext,
+            allowPluginNormalization: false,
+          });
           expect
-            .soft(
-              resolveSessionSelectedModelRef({
-                cfg: identityConfig,
-                agentId: "main",
-                source: { entry, readSourceEntry: () => undefined },
-                rowContext,
-                allowPluginNormalization: false,
-              }),
-            )
+            .soft(selected)
             .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
         }
       });
@@ -612,24 +580,16 @@ describe("Gateway model identity", () => {
     await withStateDirEnv("session-model-identity-", async ({ stateDir }) => {
       const registry = createEmptyPluginRegistry();
       registry.cliBackends = [
-        {
-          pluginId: "fixture",
-          source: "fixture",
-          backend: {
-            id: "demo-cli",
-            modelProvider: "demo-provider",
-            config: { command: "false", output: "text", input: "arg" },
-          },
+        { id: "demo-cli", modelProvider: "demo-provider" },
+        { id: "standalone-cli" },
+      ].map((backend): (typeof registry.cliBackends)[number] => ({
+        pluginId: "fixture",
+        source: "fixture",
+        backend: {
+          ...backend,
+          config: { command: "false", output: "text", input: "arg" },
         },
-        {
-          pluginId: "fixture",
-          source: "fixture",
-          backend: {
-            id: "standalone-cli",
-            config: { command: "false", output: "text", input: "arg" },
-          },
-        },
-      ];
+      }));
       setActivePluginRegistry(registry);
       const selected = `${fixture.provider}/${fixture.model}`;
       const cfg: OpenClawConfig = {
@@ -643,13 +603,11 @@ describe("Gateway model identity", () => {
       };
       setRuntimeConfigSnapshot(cfg);
       const key = "agent:main:identity";
-      const entry: SessionEntry = {
-        sessionId: "identity",
-        updatedAt: 1,
+      const entry = session("identity", {
         providerOverride: fixture.provider,
         modelOverride: fixture.model,
         modelOverrideRouteResolution: "resolved",
-      };
+      });
       const store = { [key]: entry };
       const expected = { modelProvider: fixture.expectedProvider, model: "shared-model" };
       for (const lightweightListRow of [false, true]) {
