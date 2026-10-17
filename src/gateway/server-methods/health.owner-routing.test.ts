@@ -11,6 +11,7 @@ import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { HealthSummary } from "../health/types.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { healthHandlers } from "./health.js";
@@ -26,6 +27,7 @@ async function callStatus(
   scopes = ["operator.read"],
   options: { includeCliProjection?: boolean } = {},
   hostLifecycle?: GatewayHostLifecycle,
+  getPluginReloadStatus?: () => GatewayPluginReloadStatus,
 ) {
   setRuntimeConfigSnapshot(config, config);
   const respond = vi.fn();
@@ -35,6 +37,7 @@ async function callStatus(
     respond: respond as never,
     context: {
       hostLifecycle,
+      getPluginReloadStatus,
       cron: { getSuspensionBlockerCount: () => 0 },
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
@@ -133,6 +136,32 @@ describe("Gateway status owner routing", () => {
       }
     });
   });
+
+  it.each<{ reload: GatewayPluginReloadStatus; newRunsBlocked: boolean }>([
+    {
+      reload: { phase: "recovering", pluginIds: ["first"], startedAtMs: 1_000 },
+      newRunsBlocked: true,
+    },
+    {
+      reload: { phase: "failed", pluginIds: ["first"], reason: "Plugin activation failed." },
+      newRunsBlocked: false,
+    },
+  ])(
+    "reports a $reload.phase plugin reload with newRunsBlocked=$newRunsBlocked",
+    async ({ reload, newRunsBlocked }) => {
+      // A failed reload has released admission; status must not blame it for waiting runs.
+      await withStateDirEnv("openclaw-gateway-reload-status-", async ({ stateDir }) => {
+        const status = await callStatus(
+          { agents: { entries: { main: {} } }, session: { store: path.join(stateDir, "s.json") } },
+          undefined,
+          {},
+          undefined,
+          () => reload,
+        );
+        expect(status.pluginReload).toEqual({ ...reload, newRunsBlocked });
+      });
+    },
+  );
 
   it.each(["status", "cached health", "refreshed health"] as const)(
     "reports current model acquisition and recovery through %s",

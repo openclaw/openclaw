@@ -2,13 +2,7 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createDeferredCore } from "../shared/deferred.js";
-
-export type GatewayPluginReloadStatus = Readonly<{
-  phase: "reloading" | "recovering" | "failed";
-  pluginIds: string[];
-  deadlineAtMs?: number;
-  reason?: string;
-}>;
+import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 export type GatewayPluginRuntimeClaim = Readonly<{
   isCurrent: () => boolean;
@@ -67,6 +61,7 @@ export function createGatewayPluginRuntimeGeneration(params: {
       }
       const reservation = { claim: createClaim(), settled: createDeferredCore() };
       const previousReloadStatus = reloadStatus;
+      let startedAtMs: number | undefined;
       latestReservation = reservation.claim;
       pending = reservation;
       const settle = (accepted: boolean) => {
@@ -85,7 +80,9 @@ export function createGatewayPluginRuntimeGeneration(params: {
         reject: () => settle(false),
         setReloadStatus: (status: GatewayPluginReloadStatus | undefined) => {
           if (latestReservation === reservation.claim) {
-            reloadStatus = status;
+            // Later stage reports keep the first start so status age covers the whole wait.
+            startedAtMs ??= Date.now();
+            reloadStatus = status && { ...status, startedAtMs };
           }
         },
         finishReload: (

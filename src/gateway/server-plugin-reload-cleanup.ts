@@ -25,7 +25,7 @@ import {
   getPluginServiceCleanupSettlement,
   type PluginServicesHandle,
 } from "../plugins/services.js";
-import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 

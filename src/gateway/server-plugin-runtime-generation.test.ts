@@ -30,6 +30,28 @@ describe("Gateway plugin runtime generation", () => {
     expect(generation.getReloadStatus()).toBeUndefined();
   });
 
+  it("keeps status age across drain stages and restarts it for the next replacement", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    try {
+      const owner = createOwner();
+      const first = owner.reserve();
+      first.setReloadStatus({ phase: "reloading", pluginIds: ["first"] });
+      vi.setSystemTime(61_000);
+      first.setReloadStatus({ phase: "reloading", pluginIds: ["first"], reason: "queued" });
+      expect(owner.getReloadStatus()).toEqual({
+        phase: "reloading",
+        pluginIds: ["first"],
+        reason: "queued",
+        startedAtMs: 1_000,
+      });
+      first.reject();
+      owner.reserve().setReloadStatus({ phase: "reloading", pluginIds: ["first"] });
+      expect(owner.getReloadStatus()?.startedAtMs).toBe(61_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("blocks stale publication during reservation, restores rejected claims, and commits winners", async () => {
     const owner = createOwner();
     const startupClaim = owner.currentClaim();

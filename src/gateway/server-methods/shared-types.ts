@@ -71,6 +71,7 @@ import type {
   PreparedGatewayModelCatalog,
   PreparedGatewayModelCatalogReadResult,
 } from "../server-model-catalog.types.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
@@ -442,6 +443,7 @@ type GatewayResidentBridgeContext = {
   getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,

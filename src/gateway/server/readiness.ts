@@ -10,7 +10,7 @@ import {
   type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
-import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 type ReadinessResult = {

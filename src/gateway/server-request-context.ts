@@ -148,7 +148,12 @@ type GatewayRequestContextRuntime = Pick<
     kernel: Pick<
       GatewayCoreRuntime["kernel"],
       "applyPluginLifecycleChange" | "getConfigReloaderHotReloadStatus"
-    >;
+    > & {
+      pluginRuntimeGeneration: Pick<
+        GatewayCoreRuntime["kernel"]["pluginRuntimeGeneration"],
+        "getReloadStatus"
+      >;
+    };
     workerEnvironmentStartup:
       | Pick<NonNullable<GatewayCoreRuntime["workerEnvironmentStartup"]>, "placementStore">
       | undefined;
@@ -563,6 +568,7 @@ export function createGatewayRequestContext(
     getRuntimeSnapshot: runtime.getRuntimeSnapshot,
     getEventLoopHealth: runtime.readinessEventLoopHealth.snapshot,
     getConfigReloaderHotReloadStatus: runtime.kernel.getConfigReloaderHotReloadStatus,
+    getPluginReloadStatus: runtime.kernel.pluginRuntimeGeneration.getReloadStatus,
     startChannel: runtime.startChannel,
     stopChannel: runtime.stopChannel,
     markChannelLoggedOut: runtime.markChannelLoggedOut,
