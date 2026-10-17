@@ -127,32 +127,29 @@ it.each([
       if (directoryRead) {
         syncBuiltinESMExports();
       }
-      try {
-        if (phase === "before") {
-          retarget();
-          // Join any unexpectedly accepted reader so the negative control cannot leak custody.
-          await expect(
-            prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
-          ).rejects.toThrow("Session sharing source changed");
-        } else {
-          const prepared = await prepareSessionSharingSource(target, () => {});
-          try {
-            expect(prepared.target?.entry.sessionId).toBe("identical");
-            if (listing === "denied") {
-              expect(listingDenied).toBe(true);
-            }
-            retarget();
-            expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
-          } finally {
-            await prepared.release();
-          }
-        }
-      } finally {
+      await using cleanup = new AsyncDisposableStack();
+      cleanup.defer(() => {
         directoryRead?.mockRestore();
         if (directoryRead) {
           syncBuiltinESMExports();
         }
+      });
+      if (phase === "before") {
+        retarget();
+        // Join any unexpectedly accepted reader so the negative control cannot leak custody.
+        await expect(
+          prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
+        ).rejects.toThrow("Session sharing source changed");
+        return;
       }
+      const prepared = await prepareSessionSharingSource(target, () => {});
+      cleanup.defer(() => prepared.release());
+      expect(prepared.target?.entry.sessionId).toBe("identical");
+      if (listing === "denied") {
+        expect(listingDenied).toBe(true);
+      }
+      retarget();
+      expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
     }),
 );
 
@@ -363,10 +360,10 @@ it.each([
     try {
       authorization = await authorize(client, scope, () => cfg);
       await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
-        expect(facts.entry?.sessionId).toBe("sharing-current");
-        expect(facts.members.map((member) => member.identityId)).toEqual([
-          client.authenticatedUserProfile!.profileId,
-        ]);
+        expect(facts).toMatchObject({
+          entry: { sessionId: "sharing-current" },
+          members: [{ identityId: client.authenticatedUserProfile!.profileId }],
+        });
         assertCurrent();
         authorization.assertCurrent();
       });
@@ -437,8 +434,7 @@ it.each(["membership", "routing", "policy"] as const)(
       const client = roleClient("view", "scoped-member");
       const scope = await memberSession(client, "agent:main:scoped-sharing", "scoped-current");
       const authorization = await authorize(client, scope, () => cfg);
-      let checked = false;
-      await authorization.withCurrent!(() => {
+      const effect = vi.fn(() => {
         authorization.assertCurrent();
         if (change === "membership") {
           removeSessionMemberSync(scope, client.authenticatedUserProfile!.profileId);
@@ -448,9 +444,9 @@ it.each(["membership", "routing", "policy"] as const)(
           cfg = { ...cfg, session: { store: "replacement/sessions.json" } };
         }
         expect(() => authorization.assertCurrent()).toThrow();
-        checked = true;
       });
-      expect(checked).toBe(true);
+      await authorization.withCurrent!(effect);
+      expect(effect).toHaveBeenCalledOnce();
     }),
 );
 

@@ -48,9 +48,8 @@ async function withSharingState(
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     ensureUserProfilesSchema({});
-    const catalog = await prepareUserProfileCatalog();
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     using resources = new DisposableStack();
-    resources.defer(() => catalog.release());
     if (foreground) {
       resources.defer(retainSessionListForegroundWork());
     }
@@ -117,10 +116,7 @@ function expectCurrent(authorization: SessionMutationAuthorization, error?: stri
 
 async function withoutSql<T>(
   run: () => Promise<T>,
-  observe: () => Pick<
-    ReturnType<typeof observeHostDataSql>,
-    "queries" | "restore"
-  > = observeHostDataSql,
+  observe: () => { queries: string[]; restore: () => void } = observeHostDataSql,
 ) {
   const sql = observe();
   try {
@@ -199,7 +195,11 @@ it.each(["resident", "fixed"] as const)(
       captured.release?.();
       const database = openOpenClawStateDatabase();
       const placements = createWorkerSessionPlacementStore({ database });
-      const active = await advancePlacementFixtureToActive(placements, database, {
+      const {
+        generation,
+        environmentId,
+        activeOwnerEpoch: ownerEpoch,
+      } = await advancePlacementFixtureToActive(placements, database, {
         agentId: "main",
         sessionKey,
         sessionId,
@@ -215,11 +215,7 @@ it.each(["resident", "fixed"] as const)(
         const begun = await placements.beginPlacementMove(
           {
             sessionId,
-            source: {
-              generation: active.generation,
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-            },
+            source: { generation, environmentId, ownerEpoch },
             target: { kind: "gateway" },
           },
           { assertCurrent: authorize },

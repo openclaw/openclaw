@@ -435,33 +435,29 @@ const exhausted = {
 };
 
 it.each([
-  {
-    name: "capacity",
-    error: new WorkerTaskError(privateDiagnostic, "overloaded"),
-    ...exhausted,
-  },
-  {
-    name: "pending inspection",
-    error: inspectionError("pending"),
-    ...exhausted,
-  },
-  {
-    name: "failed inspection",
-    error: inspectionError("failed"),
-    reason: "store-unavailable",
-    attempts: 1,
-    description: "session storage was unavailable",
-  },
-  {
-    name: "unknown",
-    error: new Error(privateDiagnostic),
-    reason: "unknown",
-    attempts: 1,
-    description: "delivery failed",
-  },
-])(
-  "keeps path-bearing $name diagnostics out of saved recovery notices",
-  async ({ error, reason, attempts, description }) => {
+  ["capacity", new WorkerTaskError(privateDiagnostic, "overloaded"), exhausted],
+  ["pending inspection", inspectionError("pending"), exhausted],
+  [
+    "failed inspection",
+    inspectionError("failed"),
+    {
+      reason: "store-unavailable",
+      attempts: 1,
+      description: "session storage was unavailable",
+    },
+  ],
+  [
+    "unknown",
+    new Error(privateDiagnostic),
+    {
+      reason: "unknown",
+      attempts: 1,
+      description: "delivery failed",
+    },
+  ],
+] as const)(
+  "keeps path-bearing %s diagnostics out of saved recovery notices",
+  async (_name, error, { reason, attempts, description }) => {
     io.load.mockRejectedValue(error);
     await recoverWithTimers();
     expect(dispatch).not.toHaveBeenCalled();
