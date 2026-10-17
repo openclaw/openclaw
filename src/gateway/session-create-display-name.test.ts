@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -21,6 +22,16 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "./session-create-service.types.js";
 
+function createSession(
+  params: Omit<Parameters<typeof createGatewaySession>[0], "commandSource" | "operatorRoleActor">,
+) {
+  return createGatewaySession({
+    ...params,
+    commandSource: "test",
+    operatorRoleActor: { kind: "system" },
+  });
+}
+
 describe("session creation display titles", () => {
   afterEach(() => memorySessionActorOwners.reset());
   it.each(["durable", "incognito", "cross-agent", "shared"])(
@@ -36,19 +47,12 @@ describe("session creation display titles", () => {
         };
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
-        const common = {
-          cfg,
-          incognito,
-          commandSource: "test",
-          operatorRoleActor: { kind: "system" as const },
-        };
+        const common = { cfg, incognito };
         const parentKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}fork-parent`;
         let childKey = `agent:${childAgent}:dashboard:${incognito ? "incognito-" : ""}fork-loser`;
         const winnerKey = childKey.replace("fork-loser", "winner");
-        const parent = await createGatewaySession({ ...common, key: parentKey });
-        if (!parent.ok) {
-          throw new Error(parent.error.message);
-        }
+        const parent = await createSession({ ...common, key: parentKey });
+        assert(parent.ok);
         const parentScope = { sessionKey: parentKey, sessionId: parent.entry.sessionId, storePath };
         await appendTranscriptMessage(parentScope, {
           message: { role: "user", content: "Preserve this parent history." },
@@ -89,7 +93,7 @@ describe("session creation display titles", () => {
           forkPrepared = true;
           return result;
         };
-        const loser = createGatewaySession({
+        const loser = createSession({
           ...common,
           agentId: childAgent,
           key: incognito ? undefined : childKey,
@@ -112,7 +116,7 @@ describe("session creation display titles", () => {
               throw new Error(`Fork did not reach commit barrier: ${JSON.stringify(result)}`);
             }),
           ]);
-          winner = await createGatewaySession({ ...common, key: winnerKey, label: "Contended" });
+          winner = await createSession({ ...common, key: winnerKey, label: "Contended" });
         } finally {
           proceed.resolve();
         }
@@ -120,9 +124,7 @@ describe("session creation display titles", () => {
           ok: false,
           error: { code: "INVALID_REQUEST", message: "label already in use: Contended" },
         });
-        if (!winner.ok) {
-          throw new Error(winner.error.message);
-        }
+        assert(winner.ok);
         if (memory) {
           expect(memory.owner?.readSession(childKey, memory.authority)).toBeUndefined();
         } else {
@@ -184,13 +186,11 @@ describe("session creation display titles", () => {
             }
             return run(() => {});
           };
-          return createGatewaySession({
+          return createSession({
             cfg,
             key,
             incognito,
             label: " Shared label ",
-            commandSource: "test",
-            operatorRoleActor: { kind: "system" },
             prepareLifecycle: async () => ({ ok: true, value: { withCommit } }),
           });
         });
@@ -221,17 +221,12 @@ describe("session creation display titles", () => {
   it("rejects a label claimed by a canonical write after creation preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const siblingKey = "agent:main:sibling";
-      const sibling = await createGatewaySession({
+      const sibling = await createSession({
         cfg: {},
         key: siblingKey,
         label: "Old label",
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
       });
-      expect(sibling.ok).toBe(true);
-      if (!sibling.ok) {
-        throw new Error(sibling.error.message);
-      }
+      assert(sibling.ok);
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const withCommit: PreparedGatewaySessionLifecycle["withCommit"] = async (run) => {
         replaceSessionEntrySync(
@@ -241,12 +236,10 @@ describe("session creation display titles", () => {
         return run(() => {});
       };
       await expect(
-        createGatewaySession({
+        createSession({
           cfg: {},
           key: "agent:main:contender",
           label: "Claimed",
-          commandSource: "test",
-          operatorRoleActor: { kind: "system" },
           prepareLifecycle: async () => ({ ok: true, value: { withCommit } }),
         }),
       ).resolves.toMatchObject({
@@ -272,45 +265,26 @@ describe("session creation display titles", () => {
     { kind: "whole surrogates", title: "🦞".repeat(300), expected: "🦞".repeat(250) },
   ])("bounds a create-only $kind title snapshot", async ({ title, expected }) => {
     await withOpenClawTestState({ label: "create-display-title" }, async () => {
-      const first = await createGatewaySession({
-        cfg: {},
-        key: "agent:main:title-first",
-        displayName: title,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-      });
-      const second = await createGatewaySession({
-        cfg: {},
-        key: "agent:main:title-second",
-        displayName: title,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-      });
-      expect(first.ok).toBe(true);
-      expect(second.ok).toBe(true);
-      if (!first.ok || !second.ok) {
-        throw new Error("Display titles must not reject session creation");
-      }
+      const create = (key: string) => createSession({ cfg: {}, key, displayName: title });
+      const first = await create("agent:main:title-first");
+      const second = await create("agent:main:title-second");
+      assert(first.ok && second.ok, "Display titles must not reject session creation");
       expect(first.entry.displayName).toBe(expected);
       expect(second.entry.displayName).toBe(expected);
       expect(first.entry.label).toBeUndefined();
       expect(second.entry.label).toBeUndefined();
       expect(first.entry.sessionId).not.toBe(second.entry.sessionId);
 
-      const repeated = await createGatewaySession({
+      const repeated = await createSession({
         cfg: {},
         key: first.key,
         displayName: "Do not overwrite or backfill existing rows",
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
       });
       expect(repeated).toMatchObject({
         ok: true,
         entry: { sessionId: first.entry.sessionId },
       });
-      if (!repeated.ok) {
-        throw new Error(repeated.error.message);
-      }
+      assert(repeated.ok);
       expect(repeated.entry.displayName).toBe(expected);
     });
   });
@@ -318,13 +292,11 @@ describe("session creation display titles", () => {
   it("preserves explicit labels and still rejects equivalent duplicate labels", async () => {
     await withOpenClawTestState({ label: "create-title-with-label" }, async () => {
       const create = (key: string, label: string) =>
-        createGatewaySession({
+        createSession({
           cfg: {},
           key,
           label,
           displayName: "Non-unique native title",
-          commandSource: "test",
-          operatorRoleActor: { kind: "system" },
         });
       const first = await create("agent:main:operator-first", "Operator label");
       expect(first).toMatchObject({

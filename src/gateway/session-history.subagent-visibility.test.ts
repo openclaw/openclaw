@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -36,6 +37,10 @@ import { collectSessionTranscriptMessages } from "./session-transcript-source-pa
 
 const childKey = "agent:main:dashboard:spawned-worker";
 const peerKey = "agent:main:dashboard:independent-peer";
+const forwarded = (runId: string, sourceSessionKey: string, sourceTool = "sessions_send") => ({
+  ...childInput(runId),
+  provenance: { kind: "inter_session", sourceTool, sourceSessionKey },
+});
 const childInput = (runId: string, extra: Record<string, unknown> = {}) => ({
   role: "user",
   content: "Worker integration checkpoint",
@@ -49,11 +54,30 @@ const response = (runId: string, text: string) => ({
   stopReason: "stop",
   __openclaw: { runId },
 });
+const inline = async (
+  history: SessionHistorySseState,
+  params: Parameters<SessionHistorySseState["prepareInlineMessage"]>[0],
+) => (await history.prepareInlineMessage(params))();
+type HistoryScope = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+const historyDelta = (scope: HistoryScope, cursor: string) =>
+  readChatHistoryDelta({
+    agentId: scope.agentId,
+    scope,
+    sessionKey: scope.sessionKey,
+    sessionSnapshot: {},
+    cursor,
+  });
+const historyReader = (scope: HistoryScope) =>
+  createReadonlySessionHistoryReader({
+    transcript: { ...scope, sessionFile: scope.sessionKey },
+    database: { agentId: scope.agentId, path: scope.storePath },
+    entryValidationKey: scope.sessionKey,
+  });
 
 async function withHistory(
   messages: Array<[string, Record<string, unknown>]>,
   run: (fixture: {
-    scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+    scope: HistoryScope;
     entry: { sessionId: string; updatedAt: number };
     readers: ReturnType<typeof createReadonlySessionHistoryReader>;
     state: OpenClawTestState;
@@ -97,11 +121,7 @@ async function withHistory(
       scope,
       entry,
       state,
-      readers: createReadonlySessionHistoryReader({
-        transcript: { ...scope, sessionFile: scope.sessionKey },
-        database: { agentId: database.agentId, path: database.path },
-        entryValidationKey: scope.sessionKey,
-      }),
+      readers: historyReader(scope),
     });
   });
 }
@@ -165,10 +185,6 @@ describe("subagent coordination history", () => {
   it("hides cross-agent dashboard coordination through worker history pages and deltas", async () => {
     const sourceChild = "agent:worker:dashboard:child";
     const sourcePeer = "agent:worker:dashboard:peer";
-    const forwarded = (runId: string, sourceSessionKey: string) => ({
-      ...childInput(runId),
-      provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceSessionKey },
-    });
     const messages: Array<[string, Record<string, unknown>]> = [
       ["cross-child", forwarded("cross-run", sourceChild)],
       ["cross-answer", response("cross-run", "Cross-agent internal acknowledgement")],
@@ -201,9 +217,7 @@ describe("subagent coordination history", () => {
         snapshot: page,
       });
       const initial = readTranscriptDisplayDelta(scope);
-      if (initial.kind !== "page") {
-        throw new Error("Expected a current history cursor");
-      }
+      assert(initial.kind === "page", "Expected a current history cursor");
       await appendTranscriptMessage(scope, {
         eventId: "cross-late",
         now: 2,
@@ -215,29 +229,19 @@ describe("subagent coordination history", () => {
         message: response("cross-late-run", "Later cross-agent acknowledgement"),
       });
       expect(
-        (
-          await sse.prepareInlineMessage({
-            message: forwarded("cross-late-run", sourceChild),
-            messageSeq: 5,
-          })
-        )(),
+        await inline(sse, {
+          message: forwarded("cross-late-run", sourceChild),
+          messageSeq: 5,
+        }),
       ).toBeNull();
       expect(
-        (
-          await sse.prepareInlineMessage({
-            message: response("cross-late-run", "Later cross-agent acknowledgement"),
-            messageSeq: 6,
-          })
-        )(),
+        await inline(sse, {
+          message: response("cross-late-run", "Later cross-agent acknowledgement"),
+          messageSeq: 6,
+        }),
       ).toBeNull();
       expect(sse.snapshot().messages).toEqual(page.history.messages);
-      const delta = await readChatHistoryDelta({
-        agentId: scope.agentId,
-        scope,
-        sessionKey: scope.sessionKey,
-        sessionSnapshot: {},
-        cursor: initial.cursor,
-      });
+      const delta = await historyDelta(scope, initial.cursor);
       expect.soft(delta).toMatchObject({ kind: "delta", messages: [] });
       const raw = await collectSessionTranscriptMessages(
         readers.readSessionMessagesWithSourceAsync,
@@ -339,17 +343,7 @@ describe("subagent coordination history", () => {
       const interactivePeer = "agent:main:acp:interactive-peer";
       const keys = [acpChild, staleChild, interactivePeer];
       const messages = keys.flatMap<[string, Record<string, unknown>]>((key, index) => [
-        [
-          `acp-input-${index}`,
-          {
-            ...childInput(`acp-run-${index}`),
-            provenance: {
-              kind: "inter_session",
-              sourceTool: "sessions_send",
-              sourceSessionKey: key,
-            },
-          },
-        ],
+        [`acp-input-${index}`, forwarded(`acp-run-${index}`, key)],
         [`acp-answer-${index}`, response(`acp-run-${index}`, "ACP coordination response")],
       ]);
       await withHistory(messages, async ({ scope, entry }) => {
@@ -383,9 +377,7 @@ describe("subagent coordination history", () => {
             now: () => 2,
           });
           const persisted = loadSessionEntryReadOnly(source);
-          if (!persisted) {
-            throw new Error("Expected persisted ACP source session");
-          }
+          assert(persisted, "Expected persisted ACP source session");
           expect(persisted).not.toHaveProperty("acp");
           if (key === staleChild) {
             await replaceSessionEntry(source, {
@@ -433,41 +425,11 @@ describe("subagent coordination history", () => {
         },
       ],
       ["worker-later", response("worker-run", "Nothing changed; no publication action was taken.")],
-      [
-        "removed-child-input",
-        {
-          ...childInput("removed-child-run"),
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceSessionKey: "agent:main:subagent:removed-child",
-          },
-        },
-      ],
+      ["removed-child-input", forwarded("removed-child-run", "agent:main:subagent:removed-child")],
       ["removed-child-answer", response("removed-child-run", "Removed child acknowledgement")],
-      [
-        "peer-input",
-        {
-          ...childInput("peer-run"),
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceSessionKey: peerKey,
-          },
-        },
-      ],
+      ["peer-input", forwarded("peer-run", peerKey)],
       ["peer-answer", response("peer-run", "Independent peer decision")],
-      [
-        "announce",
-        {
-          ...childInput("announce-run"),
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "subagent_announce",
-            sourceSessionKey: childKey,
-          },
-        },
-      ],
+      ["announce", forwarded("announce-run", childKey, "subagent_announce")],
       [
         "completion",
         response("announce-run", "The regression is fixed and the focused proof passes."),
@@ -481,17 +443,7 @@ describe("subagent coordination history", () => {
         },
       ],
       ["human-answer", response("human-run", "Here are the remaining release blockers.")],
-      [
-        "missing-source",
-        {
-          ...childInput("missing-run"),
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceSessionKey: "agent:main:dashboard:missing",
-          },
-        },
-      ],
+      ["missing-source", forwarded("missing-run", "agent:main:dashboard:missing")],
     ];
     await withHistory(messages, async ({ scope, entry, readers }) => {
       const expected = [
@@ -558,9 +510,7 @@ describe("subagent coordination history", () => {
           snapshot,
         });
         const initial = readTranscriptDisplayDelta(scope);
-        if (initial.kind !== "page") {
-          throw new Error("Expected initial transcript cursor");
-        }
+        assert(initial.kind === "page", "Expected initial transcript cursor");
         const later = {
           ...response("worker-run", "Another internal acknowledgement"),
           stopReason: "error",
@@ -568,75 +518,48 @@ describe("subagent coordination history", () => {
         };
         await appendTranscriptMessage(scope, { eventId: "later", now: 2, message: later });
         expect(
-          (
-            await state.prepareInlineMessage({ message: later, messageId: "later", messageSeq: 4 })
-          )(),
+          await inline(state, { message: later, messageId: "later", messageSeq: 4 }),
         ).toBeNull();
-        const delta = await readChatHistoryDelta({
-          agentId: scope.agentId,
-          scope,
-          sessionKey: scope.sessionKey,
-          sessionSnapshot: {},
-          cursor: initial.cursor,
-        });
+        const delta = await historyDelta(scope, initial.cursor);
         expect(delta).toMatchObject({ kind: "delta", messages: [] });
-        if (delta.kind !== "delta") {
-          throw new Error("Expected hidden delta to advance its cursor");
-        }
+        assert(delta.kind === "delta", "Expected hidden delta to advance its cursor");
+        const steer = {
+          role: "user",
+          content: "Give me the remaining blockers.",
+          __openclaw: { steerTargetRunId: "worker-run" },
+        };
+        const answer = response("worker-run", "The release still needs final validation.");
         await appendTranscriptMessage(scope, {
           eventId: "human-steer",
           now: 3,
-          message: {
-            role: "user",
-            content: "Give me the remaining blockers.",
-            idempotencyKey: "human-steer:user",
-            __openclaw: { steerTargetRunId: "worker-run" },
-          },
+          message: { ...steer, idempotencyKey: "human-steer:user" },
         });
         await appendTranscriptMessage(scope, {
           eventId: "human-answer",
           now: 4,
-          message: response("worker-run", "The release still needs final validation."),
+          message: answer,
         });
-        const humanSteer = (
-          await state.prepareInlineMessage({
-            message: {
-              role: "user",
-              content: "Give me the remaining blockers.",
-              __openclaw: { steerTargetRunId: "worker-run" },
-            },
-            messageId: "human-steer",
-            messageSeq: 5,
-          })
-        )();
-        const humanAnswer = (
-          await state.prepareInlineMessage({
-            message: response("worker-run", "The release still needs final validation."),
-            messageId: "human-answer",
-            messageSeq: 6,
-          })
-        )();
+        const humanSteer = await inline(state, {
+          message: steer,
+          messageId: "human-steer",
+          messageSeq: 5,
+        });
+        const humanAnswer = await inline(state, {
+          message: answer,
+          messageId: "human-answer",
+          messageSeq: 6,
+        });
         expect(humanSteer?.messageSeq).toBe(5);
         expect(humanAnswer?.message).toMatchObject({
           content: "The release still needs final validation.",
           __openclaw: { seq: 6 },
         });
-        const resumed = await readChatHistoryDelta({
-          agentId: scope.agentId,
-          scope,
-          sessionKey: scope.sessionKey,
-          sessionSnapshot: {},
-          cursor: delta.deltaCursor,
-        });
+        const resumed = await historyDelta(scope, delta.deltaCursor);
         expect(resumed).toMatchObject({
           kind: "delta",
           messages: [{ messageId: "human-steer" }, { messageId: "human-answer" }],
         });
-        const freshReaders = createReadonlySessionHistoryReader({
-          transcript: { ...scope, sessionFile: scope.sessionKey },
-          database: { agentId: scope.agentId, path: scope.storePath },
-          entryValidationKey: scope.sessionKey,
-        });
+        const freshReaders = historyReader(scope);
         const page = await readSessionHistorySnapshotKernel(
           { target: { ...scope, sessionEntry: entry }, limit: 2 },
           { readers: freshReaders, readOnly: true },

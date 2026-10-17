@@ -37,6 +37,45 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function appendUsage(
+  target: Parameters<typeof persistSessionTranscriptTurn>[0],
+  timestamp: number,
+  tokens?: number,
+  role = "assistant",
+  updateMode: "inline" | "file-only" = "inline",
+  config?: Parameters<typeof persistSessionTranscriptTurn>[1]["config"],
+) {
+  const usage =
+    tokens === undefined
+      ? undefined
+      : {
+          input: tokens,
+          output: 0,
+          totalTokens: tokens,
+          cost: { total: tokens / 100 },
+        };
+  return persistSessionTranscriptTurn(target, {
+    config,
+    messages: [
+      { message: { role, content: "Synthetic usage", timestamp, ...(usage ? { usage } : {}) } },
+    ],
+    updateMode,
+    touchSessionEntry: false,
+  });
+}
+
+const fresh = (totalTokens: number, totalCost?: number) => ({
+  totals: { totalTokens, ...(totalCost === undefined ? {} : { totalCost }) },
+  cacheStatus: { status: "fresh" },
+});
+
+function costWindow(
+  config: Parameters<typeof loadCostUsageSummaryCached>[0]["config"],
+  timestamp: number,
+) {
+  return { config, startMs: timestamp - 1, endMs: timestamp + 1 };
+}
+
 it("keeps usage backfill and all-agent totals available while another agent's deletion drains", async ({
   signal,
 }) => {
@@ -54,32 +93,13 @@ it("keeps usage backfill and all-agent totals available while another agent's de
         sessionId: `${agentId}-usage`,
       };
       replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
-      await persistSessionTranscriptTurn(target, {
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: "Synthetic usage",
-              timestamp,
-              usage: {
-                input: tokens,
-                output: 0,
-                totalTokens: tokens,
-                cost: { total: tokens / 100 },
-              },
-            },
-          },
-        ],
-        touchSessionEntry: false,
-      });
+      await appendUsage(target, timestamp, tokens);
       await aggregation.refreshCostUsageCacheForAgent({ config, agentId });
     }
     const cost = () =>
       loadCostUsageSummaryCached({
-        config,
+        ...costWindow(config, timestamp),
         agentScope: "all",
-        startMs: timestamp - 1,
-        endMs: timestamp + 1,
       });
     expect((await cost()).totals.totalTokens).toBe(910);
     const capturedRoster = createDeferred();
@@ -130,10 +150,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
     const lifetime = startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
     try {
       releaseRoster.resolve();
-      expect.soft(await cost()).toMatchObject({
-        totals: { totalTokens: 10, totalCost: 0.1 },
-        cacheStatus: { status: "fresh" },
-      });
+      expect.soft(await cost()).toMatchObject(fresh(10, 0.1));
       await withinTest(roster.mock.results.at(-1)!.value, signal);
       await vi.advanceTimersByTimeAsync(0);
       const refreshed = await withinTest(
@@ -150,10 +167,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       expect.soft(refreshed.filter((result) => result.status === "rejected")).toEqual([]);
       expect.soft(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
-      expect(await cost()).toMatchObject({
-        totals: { totalTokens: 10, totalCost: 0.1 },
-        cacheStatus: { status: "fresh" },
-      });
+      expect(await cost()).toMatchObject(fresh(10, 0.1));
       expect(await withinTest(reading, signal)).toMatchObject({ totals: { totalTokens: 10 } });
     } finally {
       releaseRoster.resolve();
@@ -181,30 +195,8 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
     };
     const timestamp = Date.parse("2026-09-18T12:00:00Z");
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
-    const append = (role: string, tokens?: number, updateMode: "inline" | "file-only" = "inline") =>
-      persistSessionTranscriptTurn(target, {
-        messages: [
-          {
-            message: {
-              role,
-              content: "Synthetic usage",
-              timestamp,
-              ...(tokens === undefined
-                ? {}
-                : {
-                    usage: {
-                      input: tokens,
-                      output: 0,
-                      totalTokens: tokens,
-                      cost: { total: tokens / 100 },
-                    },
-                  }),
-            },
-          },
-        ],
-        updateMode,
-        touchSessionEntry: false,
-      });
+    const append = (role: string, tokens?: number, mode: "inline" | "file-only" = "inline") =>
+      appendUsage(target, timestamp, tokens, role, mode);
     await append("assistant", 10);
     const alias = { ...target, sessionKey: "agent:main:cron:usage:run:completed" };
     replaceSessionEntrySync(alias, { sessionId: target.sessionId, updatedAt: timestamp });
@@ -221,34 +213,30 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
     });
     const sessions = [
       {
-        key: target.sessionKey,
-        agentId: target.agentId,
-        instances: [
-          {
-            sessionId: target.sessionId,
-            sessionFile: formatSqliteSessionFileMarker({
-              ...target,
-              storePath: resolveSessionStorePathForScope(target, config),
-            }),
-          },
-        ],
+        sessionId: target.sessionId,
+        sessionFile: formatSqliteSessionFileMarker({
+          ...target,
+          storePath: resolveSessionStorePathForScope(target, config),
+        }),
       },
     ];
     const overview = async () => {
       const cached = await cacheRuntime.loadSessionCostSummariesFromCache({
         config,
         agentId: target.agentId,
-        sessions: sessions.flatMap((session) => session.instances),
+        sessions,
         requestRefresh: false,
       });
       return {
         ...buildUsageOverview({
-          rows: sessions.map((session, index) => ({
-            key: session.key,
-            agentId: session.agentId,
-            usage: cached.summaries[index] ?? null,
-            computing: cached.summaries[index] ? undefined : true,
-          })),
+          rows: [
+            {
+              key: target.sessionKey,
+              agentId: target.agentId,
+              usage: cached.summaries[0] ?? null,
+              computing: cached.summaries[0] ? undefined : true,
+            },
+          ],
           options: {},
           dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
         }),
@@ -259,10 +247,8 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
     try {
       const cost = () =>
         loadCostUsageSummaryCached({
-          config,
+          ...costWindow(config, timestamp),
           agentId: target.agentId,
-          startMs: timestamp - 1,
-          endMs: timestamp + 1,
         });
       expect((await cost()).totals.totalTokens).toBe(10);
       await append("user");
@@ -286,18 +272,14 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       // The outer RPC memo must not hide an append waiting for its quiet period.
       expect((await cost()).totals.totalTokens).toBe(60);
       expect(await overview()).toMatchObject({
-        totals: { totalTokens: 60 },
+        ...fresh(60),
         aggregates: { messages: { user: 1, assistant: 3 } },
-        cacheStatus: { status: "fresh" },
       });
       expect(refresh).toHaveBeenCalledTimes(1);
 
       // Invalidation-only publications also cover rewrites and compaction.
       await append("assistant", 40, "file-only");
-      expect(await overview()).toMatchObject({
-        totals: { totalTokens: 100 },
-        cacheStatus: { status: "fresh" },
-      });
+      expect(await overview()).toMatchObject(fresh(100));
       expect(refresh).toHaveBeenCalledTimes(2);
 
       await append("assistant", 50);
@@ -318,10 +300,7 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       try {
         await withinTest(recovered.promise, signal);
         await refresh.mock.results.at(-1)?.value;
-        expect(await overview()).toMatchObject({
-          totals: { totalTokens: 150 },
-          cacheStatus: { status: "fresh" },
-        });
+        expect(await overview()).toMatchObject(fresh(150));
         await expect(
           deleteSessionEntryLifecycle({
             ...target,
@@ -335,10 +314,8 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
         expect(
           (
             await loadCostUsageSummaryCached({
-              config,
+              ...costWindow(config, timestamp),
               agentId: target.agentId,
-              startMs: timestamp - 1,
-              endMs: timestamp + 1,
             })
           ).totals.totalTokens,
         ).toBe(0);
@@ -367,25 +344,7 @@ it("projects committed usage after startup preparation without borrowing its exp
     const timestamp = Date.parse("2026-09-18T12:00:00Z");
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: timestamp });
     const append = (tokens: number) =>
-      persistSessionTranscriptTurn(target, {
-        config,
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: "Synthetic usage",
-              timestamp,
-              usage: {
-                input: tokens,
-                output: 0,
-                totalTokens: tokens,
-                cost: { total: tokens / 100 },
-              },
-            },
-          },
-        ],
-        touchSessionEntry: false,
-      });
+      appendUsage(target, timestamp, tokens, "assistant", "inline", config);
     await append(10);
     const publisher = new AsyncLocalStorage<"owner" | "preparation">();
     const firstStarted = createDeferred();
@@ -459,16 +418,11 @@ it("projects committed usage after startup preparation without borrowing its exp
       const settled = await withinTest(Promise.all(outcomes), signal);
       await lifetime.stop();
       const summary = await cacheRuntime.loadCostUsageSummaryFromCache({
-        config,
+        ...costWindow(config, timestamp),
         agentId: target.agentId,
-        startMs: timestamp - 1,
-        endMs: timestamp + 1,
         requestRefresh: false,
       });
-      expect.soft(summary).toMatchObject({
-        totals: { totalTokens: 30 },
-        cacheStatus: { status: "fresh" },
-      });
+      expect.soft(summary).toMatchObject(fresh(30));
       expect.soft(pendingRefreshes).toBe(0);
       expect(settled).toEqual([
         { ok: true, context: "owner" },
