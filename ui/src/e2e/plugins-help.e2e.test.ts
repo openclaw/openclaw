@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  named,
+  objectSchema,
   config,
   configMocks,
   inspection,
@@ -32,23 +34,39 @@ const chatResponses = {
   },
 };
 
+function installHelpGateway(
+  page: Page,
+  responses: Record<string, unknown> = {},
+  methods: string[] = [],
+) {
+  return installMockGateway(page, {
+    featureMethods: [...featureMethods, ...methods],
+    methodResponses: { ...pluginResponses(), ...chatResponses, ...responses },
+    operatorScopes: ["operator.read", "operator.admin"],
+  });
+}
+
+async function expectDockedEditor(page: Page) {
+  await expect
+    .poll(async () => {
+      const editor = await page.locator(".plugin-editor").boundingBox();
+      const panel = await page.locator("openclaw-assistant-panel .assistant-panel").boundingBox();
+      return Boolean(editor && panel && editor.x + editor.width <= panel.x);
+    })
+    .toBe(true);
+}
+
 suite.define(() => {
   it.each([390, 1440])(
     "keeps setting help editable after startup failure and sends only after retry at %s pixels",
     async (width) => {
       await suite.withPage({ viewport: { width, height: 1000 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          methodResponses: { ...pluginResponses(), ...chatResponses },
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
+        const gateway = await installHelpGateway(page);
         await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
         const row = page.locator('[data-setting="refreshMinutes"]');
-        await row
-          .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
-          .click();
+        await named(row, "button", "Actions for Refresh interval (minutes)").click();
         await gateway.deferNext("openclaw.chat");
-        await row.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
+        await named(row, "menuitem", "Ask OpenClaw").click();
         await gateway.waitForRequest("openclaw.chat");
         await gateway.rejectDeferred("openclaw.chat", {
           code: "UNAVAILABLE",
@@ -75,7 +93,7 @@ suite.define(() => {
         const draft = await composer.inputValue();
         await composer.press("Enter");
         expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
-        await panel.getByRole("button", { name: "Retry", exact: true }).click();
+        await named(panel, "button", "Retry").click();
         await expect.poll(() => panel.locator(".chat-send-btn").isEnabled()).toBe(true);
         expect(await composer.inputValue()).toBe(draft);
         expect(
@@ -87,7 +105,7 @@ suite.define(() => {
           path: path.join(suite.artifactDir, `editable-help-${width}.png`),
           animations: "disabled",
         });
-        await panel.getByRole("button", { name: "Send", exact: true }).click();
+        await named(panel, "button", "Send").click();
         await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(3);
         const sent = (await gateway.getRequests("openclaw.chat"))[2];
         assert.ok(sent);
@@ -116,19 +134,13 @@ suite.define(() => {
             .properties,
           { baseUrl: { type: "string", title: "Base URL" } },
         );
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          methodResponses: {
-            ...pluginResponses(),
-            ...chatResponses,
-            "config.get": {
-              ...configMocks["config.get"],
-              config: savedConfig,
-              raw: JSON.stringify(savedConfig),
-            },
-            "config.schema": schema,
+        const gateway = await installHelpGateway(page, {
+          "config.get": {
+            ...configMocks["config.get"],
+            config: savedConfig,
+            raw: JSON.stringify(savedConfig),
           },
-          operatorScopes: ["operator.read", "operator.admin"],
+          "config.schema": schema,
         });
         await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
         const row = page.locator('[data-setting="baseUrl"]');
@@ -147,8 +159,8 @@ suite.define(() => {
         await page.getByRole("alert").filter({ hasText: "Fixture URL write rejected" }).waitFor();
         expect(await input.inputValue()).toBe(editedUrl);
 
-        await row.getByRole("button", { name: "Actions for Base URL", exact: true }).click();
-        await row.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
+        await named(row, "button", "Actions for Base URL").click();
+        await named(row, "menuitem", "Ask OpenClaw").click();
         const panel = page.locator("openclaw-assistant-panel .assistant-panel");
         const composer = panel.locator("textarea");
         await expect.poll(() => composer.inputValue()).toContain("Explain Base URL");
@@ -179,7 +191,7 @@ suite.define(() => {
           },
         });
         if (width === 390) {
-          await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+          await named(panel, "button", "Close assistant sidebar").click();
         }
         expect(await input.inputValue()).toBe(editedUrl);
         expect(await gateway.getRequests("config.set")).toHaveLength(1);
@@ -189,11 +201,9 @@ suite.define(() => {
 
   it("keeps the transcript flexible through protected setup answers and change history", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...featureMethods, "openclaw.changes.list"],
-        methodResponses: {
-          ...pluginResponses(),
-          ...chatResponses,
+      const gateway = await installHelpGateway(
+        page,
+        {
           "openclaw.changes.list": {
             entries: [
               {
@@ -206,19 +216,11 @@ suite.define(() => {
             ],
           },
         },
-        operatorScopes: ["operator.read", "operator.admin"],
-      });
+        ["openclaw.changes.list"],
+      );
       const expectTranscriptSpace = async (surface: Locator, phase: string) => {
         if (await page.locator(".plugin-editor").count()) {
-          await expect
-            .poll(async () => {
-              const editor = await page.locator(".plugin-editor").boundingBox();
-              const panel = await page
-                .locator("openclaw-assistant-panel .assistant-panel")
-                .boundingBox();
-              return Boolean(editor && panel && editor.x + editor.width <= panel.x);
-            })
-            .toBe(true);
+          await expectDockedEditor(page);
         }
         const bounds = await surface.evaluate((element) => {
           const rect = element.getBoundingClientRect();
@@ -240,11 +242,9 @@ suite.define(() => {
       };
       await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
       const panel = page.locator("openclaw-assistant-panel .assistant-panel");
-      await page
-        .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
-        .click();
+      await named(page, "button", "Actions for Refresh interval (minutes)").click();
       const setting = page.locator('[data-setting="refreshMinutes"]');
-      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
+      await named(setting, "menuitem", "Ask OpenClaw").click();
       await panel.getByText("Existing conversation.", { exact: true }).waitFor();
       const composer = panel.locator("textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
@@ -260,10 +260,8 @@ suite.define(() => {
       await gateway.waitForRequest("openclaw.chat", { after: requests });
       const password = panel.locator('input[type="password"]');
       await password.waitFor();
-      await page
-        .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
-        .click();
-      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
+      await named(page, "button", "Actions for Refresh interval (minutes)").click();
+      await named(setting, "menuitem", "Ask OpenClaw").click();
       expect(await password.inputValue()).toBe("");
       await expectTranscriptSpace(surface, "pending");
       await gateway.setMethodResponse("openclaw.chat", chatResponses["openclaw.chat"]);
@@ -287,25 +285,13 @@ suite.define(() => {
 
   it("opens installed help once, preserves the draft, redacts setting values, and clears departed context", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods,
-        methodResponses: { ...pluginResponses(), ...chatResponses },
-        operatorScopes: ["operator.read", "operator.admin"],
-      });
+      const gateway = await installHelpGateway(page);
       await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
       const panel = page.locator("openclaw-assistant-panel .assistant-panel");
       const composer = panel.locator("textarea");
-      const expectDockedEditor = async () => {
+      const expectReadyEditor = async () => {
         await expect.poll(() => panel.locator(".chat-send-btn").isEnabled()).toBe(true);
-        await expect
-          .poll(async () => {
-            const editorBounds = await page.locator(".plugin-editor").boundingBox();
-            const panelBounds = await panel.boundingBox();
-            return Boolean(
-              editorBounds && panelBounds && editorBounds.x + editorBounds.width <= panelBounds.x,
-            );
-          })
-          .toBe(true);
+        await expectDockedEditor(page);
       };
       await panel.getByText("Existing conversation.", { exact: true }).waitFor();
       await expect.poll(() => composer.isEnabled()).toBe(true);
@@ -315,56 +301,16 @@ suite.define(() => {
         );
       expect(await userRequests()).toHaveLength(0);
       await composer.fill("Keep my existing draft.");
-      const pageErrors: Array<{ name: string; message: string }> = [];
-      const capturePageError = (error: Error) => {
-        if (pageErrors.length < 5) {
-          pageErrors.push({ name: error.name, message: error.message.slice(0, 500) });
-        }
-      };
-      page.on("pageerror", capturePageError);
-      try {
-        await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-        await page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("link", { name: "Settings", exact: true })
-          .click();
-        await page
-          .locator(".plugin-editor")
-          .getByRole("searchbox", { name: "Search settings", exact: true })
-          .waitFor();
-      } catch (error) {
-        const snapshot = await page
-          .evaluate(() => {
-            const editors = Array.from(document.querySelectorAll(".plugin-editor"));
-            return {
-              pathname: location.pathname,
-              search: location.search,
-              settingsLinkHref: document
-                .querySelector('.plugin-catalog-detail__actions a[aria-label="Settings"]')
-                ?.getAttribute("href"),
-              editorCount: editors.length,
-              editors: editors.slice(0, 4).map((editor) => ({
-                visible: editor.checkVisibility({ visibilityProperty: true }),
-              })),
-            };
-          })
-          .catch((snapshotError: unknown) => ({
-            snapshotError: String(snapshotError).slice(0, 500),
-          }));
-        console.warn("plugin-help-settings-navigation", JSON.stringify({ snapshot, pageErrors }));
-        throw error;
-      } finally {
-        page.off("pageerror", capturePageError);
-      }
+      await named(panel, "button", "Close assistant sidebar").click();
+      await named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+      await named(page.locator(".plugin-editor"), "searchbox", "Search settings").waitFor();
       expect(await panel.isVisible()).toBe(false);
-      await page
-        .getByRole("button", { name: "Actions for Refresh interval (minutes)", exact: true })
-        .click();
+      await named(page, "button", "Actions for Refresh interval (minutes)").click();
       const setting = page.locator('[data-setting="refreshMinutes"]');
       expect(
         (await setting.getByRole("menuitem").allTextContents()).map((label) => label.trim()),
       ).toEqual(["Reset value", "Ask OpenClaw"]);
-      await setting.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
+      await named(setting, "menuitem", "Ask OpenClaw").click();
       await expect
         .poll(() => composer.inputValue())
         .toBe("Keep my existing draft.\n\nExplain Refresh interval (minutes)\n\nCurrent value: 15");
@@ -372,7 +318,7 @@ suite.define(() => {
       await expect
         .poll(() => composer.evaluate((element) => element.clientHeight))
         .toBeGreaterThan(80);
-      await expectDockedEditor();
+      await expectReadyEditor();
       await page.screenshot({ path: path.join(suite.artifactDir, "setting-unsent-draft.png") });
       await composer.press("Enter");
       await expect.poll(async () => (await userRequests()).length).toBe(1);
@@ -399,12 +345,10 @@ suite.define(() => {
         schema.schema.properties.plugins.properties.entries.properties.workboard.properties.config
           .properties,
         {
-          connection: {
-            type: "object",
-            title: "Connection",
-            additionalProperties: false,
-            properties: { apiKey: { type: "string", title: "API key" } },
-          },
+          connection: objectSchema(
+            { apiKey: { type: "string", title: "API key" } },
+            { title: "Connection", additionalProperties: false },
+          ),
         },
       );
       await gateway.setMethodResponse("config.get", {
@@ -415,13 +359,11 @@ suite.define(() => {
       await gateway.setMethodResponse("config.schema", schema);
       await page.reload();
       const secretRow = page.locator('[data-setting="connection.apiKey"]');
-      await secretRow
-        .getByRole("button", { name: "Actions for Connection: API key", exact: true })
-        .click();
-      await secretRow.getByRole("menuitem", { name: "Ask OpenClaw", exact: true }).click();
+      await named(secretRow, "button", "Actions for Connection: API key").click();
+      await named(secretRow, "menuitem", "Ask OpenClaw").click();
       await expect.poll(() => composer.inputValue()).toContain("Current value: <redacted>");
       expect(await composer.inputValue()).not.toContain("synthetic-should-never-enter-chat");
-      await expectDockedEditor();
+      await expectReadyEditor();
       await page.screenshot({ path: path.join(suite.artifactDir, "setting-redacted-draft.png") });
       expect(await userRequests()).toHaveLength(0);
       await composer.press("Enter");
@@ -466,22 +408,18 @@ suite.define(() => {
           state: "not-installed",
           action: "install",
         });
-        const gateway = await installMockGateway(page, {
-          featureMethods,
-          methodResponses: {
-            ...pluginResponses(),
-            ...chatResponses,
-            "plugins.catalog.get": catalogResult,
-            "plugins.list": catalog ? { ...inventory, plugins: [] } : inventory,
-          },
-          operatorScopes: ["operator.read", "operator.admin"],
+        const gateway = await installHelpGateway(page, {
+          "plugins.catalog.get": catalogResult,
+          "plugins.list": catalog ? { ...inventory, plugins: [] } : inventory,
         });
         await page.goto(
           `${suite.server.baseUrl}${catalog ? "plugins/ch_uninstalled" : "settings/plugins/workboard"}`,
         );
-        const ask = page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("button", { name: "Ask OpenClaw", exact: true });
+        const ask = named(
+          page.locator(".plugin-catalog-detail__actions"),
+          "button",
+          "Ask OpenClaw",
+        );
         await ask.waitFor();
         const panel = page.locator("openclaw-assistant-panel .assistant-panel");
         expect(await panel.isVisible()).toBe(false);
@@ -493,7 +431,7 @@ suite.define(() => {
             (request) => !asRecord(request.params).message,
           ),
         ).toBe(true);
-        await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+        await named(panel, "button", "Close assistant sidebar").click();
         await page.setViewportSize({ width: 1440, height: 1000 });
         expect(await panel.isVisible()).toBe(false);
       });

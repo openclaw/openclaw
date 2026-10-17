@@ -12,6 +12,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { named, objectSchema } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin request ownership" });
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -149,30 +150,15 @@ suite.define(() => {
           },
           "config.get": configResponse("Before"),
           "config.schema": {
-            schema: {
-              type: "object",
-              properties: {
-                plugins: {
-                  type: "object",
-                  properties: {
-                    entries: {
-                      type: "object",
-                      properties: {
-                        workboard: {
-                          type: "object",
-                          properties: {
-                            config: {
-                              type: "object",
-                              properties: { greeting: { type: "string", title: "Greeting" } },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
+            schema: objectSchema({
+              plugins: objectSchema({
+                entries: objectSchema({
+                  workboard: objectSchema({
+                    config: objectSchema({ greeting: { type: "string", title: "Greeting" } }),
+                  }),
+                }),
+              }),
+            }),
             uiHints: {},
             version: "synthetic",
             generatedAt: "2026-09-01T00:00:00.000Z",
@@ -181,7 +167,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
       await gateway.waitForRequest("plugins.catalog.get");
-      const greeting = page.getByRole("textbox", { name: "Greeting", exact: true });
+      const greeting = named(page, "textbox", "Greeting");
       await greeting.fill("After");
       await greeting.press("Tab");
       const write = await gateway.waitForRequest("config.set");
@@ -191,10 +177,7 @@ suite.define(() => {
       expect(JSON.parse(raw)).toHaveProperty("plugins.entries.workboard.config.greeting", "After");
       await gateway.waitForRequest("plugins.inspect", { after: 1 });
       await gateway.waitForRequest("plugins.catalog.get", { after: 1 });
-      await page
-        .locator(".plugins-settings-breadcrumb")
-        .getByRole("link", { name: "Workboard", exact: true })
-        .click();
+      await named(page.locator(".plugins-settings-breadcrumb"), "link", "Workboard").click();
       const rows = page.locator(".plugin-capability__copy > strong");
       await expect.poll(() => rows.allTextContents()).toEqual(["Current skill"]);
 
@@ -233,9 +216,9 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}plugins`);
-      await page.getByRole("button", { name: "Install Alpha", exact: true }).first().click();
+      await named(page, "button", "Install Alpha").first().click();
       await gateway.waitForRequest("plugins.catalog.get", { match: { id: alpha.plugin.id } });
-      await page.getByRole("button", { name: "Install Beta", exact: true }).first().click();
+      await named(page, "button", "Install Beta").first().click();
       const request = await gateway.waitForRequest("plugins.install");
       expect(request.params).toEqual({ source: "clawhub", packageName: "beta" });
       await gateway.resolveDeferred("plugins.catalog.get", alpha);

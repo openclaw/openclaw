@@ -1,8 +1,37 @@
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import type {
   PluginCatalogItem,
   PluginListResult,
   PluginsInspectResult,
 } from "../lib/plugins/index.ts";
+
+export function named(scope: Page | Locator, role: Parameters<Page["getByRole"]>[0], name: string) {
+  return scope.getByRole(role, { name, exact: true });
+}
+
+export function objectSchema<P>(
+  properties: P,
+  options: { title?: string; additionalProperties?: boolean } = {},
+) {
+  return { type: "object", ...options, properties };
+}
+
+function titledObject<P>(title: string, properties: P) {
+  return objectSchema(properties, { title });
+}
+
+function field(type: string, title: string) {
+  return { type, title };
+}
+
+const stringList = (title: string) => ({ ...field("array", title), items: { type: "string" } });
+
+export const adminPageOptions = {
+  colorScheme: "dark",
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 1000, width: 1440 },
+} satisfies BrowserContextOptions;
 
 export const workboard = {
   id: "workboard",
@@ -163,80 +192,41 @@ export const configMocks = {
   },
   "config.schema": {
     generatedAt: "2026-09-01T00:00:00.000Z",
-    schema: {
-      type: "object",
-      properties: {
-        plugins: {
-          type: "object",
-          title: "Plugins",
-          properties: {
-            enabled: { type: "boolean", title: "Plugin system enabled" },
-            allow: {
-              type: "array",
-              title: "Allowed plugin IDs",
-              items: { type: "string" },
-            },
-            deny: {
-              type: "array",
-              title: "Blocked plugin IDs",
-              items: { type: "string" },
-            },
-            load: {
-              type: "object",
-              title: "Plugin loading",
-              properties: {
-                paths: {
-                  type: "array",
-                  title: "Additional plugin load paths",
-                  items: { type: "string" },
-                },
+    schema: objectSchema({
+      plugins: titledObject("Plugins", {
+        enabled: field("boolean", "Plugin system enabled"),
+        allow: stringList("Allowed plugin IDs"),
+        deny: stringList("Blocked plugin IDs"),
+        load: titledObject("Plugin loading", {
+          paths: stringList("Additional plugin load paths"),
+        }),
+        entries: titledObject("Plugin entries", {
+          workboard: titledObject("Workboard", {
+            enabled: field("boolean", "Enabled"),
+            hooks: objectSchema(
+              {
+                allowPromptInjection: field("boolean", "Allow prompt changes"),
+                allowConversationAccess: field("boolean", "Read conversation context"),
               },
-            },
-            entries: {
-              type: "object",
-              title: "Plugin entries",
-              properties: {
-                workboard: {
-                  type: "object",
-                  title: "Workboard",
-                  properties: {
-                    enabled: { type: "boolean", title: "Enabled" },
-                    hooks: {
-                      type: "object",
-                      additionalProperties: false,
-                      properties: {
-                        allowPromptInjection: { type: "boolean", title: "Allow prompt changes" },
-                        allowConversationAccess: {
-                          type: "boolean",
-                          title: "Read conversation context",
-                        },
-                      },
-                    },
-                    config: {
-                      type: "object",
-                      title: "Configuration",
-                      properties: {
-                        workspaceLabel: {
-                          type: "string",
-                          title: "Workspace label",
-                          default: "Planning",
-                        },
-                        notifications: { type: "boolean", title: "Notifications" },
-                        refreshMinutes: {
-                          type: "integer",
-                          title: "Refresh interval (minutes)",
-                          minimum: 1,
-                        },
-                      },
-                    },
-                  },
-                },
+              { additionalProperties: false },
+            ),
+            config: titledObject("Configuration", {
+              workspaceLabel: {
+                type: "string",
+                title: "Workspace label",
+                default: "Planning",
               },
-            },
-          },
-        },
-      },
-    },
+              notifications: field("boolean", "Notifications"),
+              refreshMinutes: {
+                type: "integer",
+                title: "Refresh interval (minutes)",
+                minimum: 1,
+              },
+            }),
+          }),
+        }),
+      }),
+    }),
     uiHints: {
       "plugins.enabled": { advanced: true },
       "plugins.allow": { advanced: true },
