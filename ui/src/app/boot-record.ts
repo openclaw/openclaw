@@ -171,7 +171,9 @@ export function readBootRecord(
   }
   try {
     storage?.removeItem(key);
-  } catch {}
+  } catch {
+    // Invalid boot data is already rejected; storage eviction is best effort.
+  }
   return null;
 }
 
@@ -195,7 +197,9 @@ function removeOwnedBootRecord(scope: string | undefined, owner: BootRecordOwner
     ) {
       storage?.removeItem(key);
     }
-  } catch {}
+  } catch {
+    // Optional boot-cache cleanup must not interrupt connection recovery.
+  }
 }
 
 export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void {
@@ -222,7 +226,9 @@ export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void 
         storage.removeItem(key);
       }
     }
-  } catch {}
+  } catch {
+    // In-memory admission is retired even when persisted cleanup is unavailable.
+  }
 }
 
 /** One projection of the admitted boot record for local reads/writes only. */

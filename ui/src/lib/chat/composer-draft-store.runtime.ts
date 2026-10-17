@@ -320,8 +320,8 @@ export async function prepareDurableComposerRecovery(
           writeId: record.writeId,
           updatedAt: record.updatedAt,
           text: record.text,
-          ...(record.goalMode ? { goalMode: { ...record.goalMode } } : {}),
-          ...(record.replyTarget ? { replyTarget: { ...record.replyTarget } } : {}),
+          ...(record.goalMode ? { goalMode: record.goalMode } : {}),
+          ...(record.replyTarget ? { replyTarget: record.replyTarget } : {}),
           attachmentNames: record.attachments.map((a) => a.fileName ?? a.mimeType),
         });
       }
@@ -464,7 +464,7 @@ export async function readDurableComposerDraft(
         text: current.text,
         ...(current.mentions?.length ? { mentions: current.mentions } : {}),
         ...(current.goalMode ? { goalMode: current.goalMode } : {}),
-        ...(current.replyTarget ? { replyTarget: { ...current.replyTarget } } : {}),
+        ...(current.replyTarget ? { replyTarget: current.replyTarget } : {}),
         ...(current.modelSelection ? { modelSelection: current.modelSelection } : {}),
         attachments: current.attachments,
         ...(current.questionDrafts?.length ? { questionDrafts: current.questionDrafts } : {}),
@@ -527,12 +527,10 @@ export async function writeDurableComposerDraft(
       scopeKey: scope.scopeKey,
       revision: draft.revision,
       text: draft.text,
-      ...(draft.mentions?.length
-        ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
-        : {}),
+      ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
-      ...(draft.replyTarget ? { replyTarget: { ...draft.replyTarget } } : {}),
-      ...(draft.modelSelection ? { modelSelection: { ...draft.modelSelection } } : {}),
+      ...(draft.replyTarget ? { replyTarget: draft.replyTarget } : {}),
+      ...(draft.modelSelection ? { modelSelection: draft.modelSelection } : {}),
       attachments: draft.attachments,
       ...(draft.questionDrafts?.length ? { questionDrafts: draft.questionDrafts } : {}),
       updatedAt: now,

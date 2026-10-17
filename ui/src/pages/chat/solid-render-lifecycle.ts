@@ -39,6 +39,7 @@ export function createSolidRenderLifecycle<T>(options: {
     }
     requestedGeneration += 1;
     setRevision(requestedGeneration);
+    // Invalidation samples visibility without subscribing its synchronous domain caller.
     if (untrack(options.presented)) {
       notifyRenderLifecycleForTest(options.host, "invalidate");
     }
@@ -104,6 +105,7 @@ export function createSolidRenderLifecycle<T>(options: {
 
   const runTasks = () => {
     for (const task of Array.from(tasks)) {
+      // Recheck after each callback: one callback can park the pane before the next runs.
       if (disposed || !untrack(options.presented)) {
         break;
       }
@@ -118,6 +120,7 @@ export function createSolidRenderLifecycle<T>(options: {
       task.cancel();
     }
   });
+  // The committed DOM gates imperative layout work and its cancellation on parking.
   createEffect(
     () => ({ frame: frame(), presented: options.presented() }),
     (next) => {

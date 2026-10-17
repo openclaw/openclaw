@@ -47,9 +47,13 @@ that supervise the Gateway as a child process, see
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
-- The Gateway offers `permessage-deflate` with context takeover disabled in
-  both directions. Peers that negotiate it (browsers, `ws` clients, Foundation,
-  OkHttp) receive frames of 16 KiB and up compressed; smaller session and tool
+- The Gateway offers `permessage-deflate` to remote clients, with context
+  takeover disabled in both directions. Direct-local connections skip
+  compression to avoid extra RPC latency. Trusted reverse proxies and managed
+  Tailscale ingress retain compression even when their Gateway-side socket is
+  loopback. Plain TCP tunnels without proxy attribution appear direct-local
+  and also skip compression. Peers that negotiate it (browsers, `ws` clients,
+  Foundation, OkHttp) receive frames of 16 KiB and up compressed; smaller session and tool
   updates stay raw. Browsers compress every request; the Gateway inflates and
   compresses each message inline instead of through background zlib streams,
   so request bursts reach handler scheduling together, as uncompressed frames

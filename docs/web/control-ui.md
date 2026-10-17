@@ -41,7 +41,7 @@ badges remain visible on every shape.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 
-Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes.
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
 The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
 

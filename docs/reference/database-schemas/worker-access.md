@@ -2574,9 +2574,14 @@ and deadline scope until settlement; completed operation promises are released.
 
 Snapshot staging owners and native-source completion promises use the same
 lifecycle context. Staging preparations keep their individual authority until
-cleanup completes. Shared-state opening releases its caller admission callback
-after native settlement; reusable writer slots retain prepared launch facts
-instead of the opening caller's options. These changes preserve FIFO admission,
+cleanup completes. Shared-state initialization belongs to its physical owner,
+not the initiating command's cancellation or authorization callback. The initiator
+joins accepted native opening before reporting cancellation; independent callers
+share that result and retain their own cancellable waits and command-effect checks.
+An unused successful opening retires through the existing idle owner. Native
+opening releases its captured database admission after settlement; reusable writer
+slots retain prepared launch facts instead of the opening caller's options.
+These changes preserve FIFO admission,
 joins of pending opens, schemas, stored bytes, configuration, and update behavior.
 
 Successful session discovery transfers selected physical readers and their lexical

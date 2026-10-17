@@ -210,6 +210,7 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
     return state;
   };
   const sync = () => state.syncContext();
+  // Each change transfers draft custody and retires requests before another action can run.
   const stops = [
     context.gateway.subscribe(sync),
     context.agents.subscribe(sync),

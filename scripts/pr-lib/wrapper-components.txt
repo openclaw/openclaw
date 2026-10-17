@@ -591,7 +591,6 @@ src/config/io.recovery.ts
 src/config/io.runtime-env.ts
 src/config/io.runtime-write-finalization.ts
 src/config/io.runtime.ts
-src/config/io.snapshot-preparation-scope.ts
 src/config/io.snapshot-preparation.ts
 src/config/io.snapshot-preparation.types.ts
 src/config/io.snapshot-shared.ts
@@ -1909,8 +1908,6 @@ src/state/openclaw-database-preflight-targets.ts
 src/state/openclaw-database-preflight.messages.ts
 src/state/openclaw-database-preflight.ts
 src/state/openclaw-database-seal-schema.ts
-src/state/openclaw-database-verify.impl.ts
-src/state/openclaw-database-verify.ts
 src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
 src/state/openclaw-state-db-additive-columns.ts

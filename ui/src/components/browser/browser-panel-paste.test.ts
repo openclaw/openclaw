@@ -68,7 +68,7 @@ describe("Browser panel text and touch input", () => {
     controller.activeTargetId = "form-tab";
     controller.view = createView("form-tab");
     controller.operations.resetRoute({ profile: "work", target: "node", node: "browser-node" });
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input")!;
     return { panel, controller, request, input };

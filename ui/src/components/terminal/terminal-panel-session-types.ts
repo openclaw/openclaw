@@ -71,7 +71,7 @@ export type TerminalPanelSessionControllerState = {
 export interface TerminalPanelSessionControllerHost {
   readonly updateComplete: Promise<unknown>;
   readonly ownerDocument: Document;
-  requestUpdate(): void;
+  invalidate(): void;
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
   readonly agentId: string | null;
