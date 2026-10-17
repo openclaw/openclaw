@@ -6,6 +6,7 @@ type PickerDependencies = {
   client: () => TerminalGatewayClient | null;
   available: () => boolean;
   hosted: () => boolean;
+  connected: () => boolean;
   currentSessionIds: () => ReadonlySet<string>;
   list: () => Promise<TerminalSessionInfo[] | null>;
   showError: (error: unknown) => void;
@@ -77,6 +78,9 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   });
 
   return {
+    get connected() {
+      return deps.connected();
+    },
     get hosted() {
       return deps.hosted();
     },

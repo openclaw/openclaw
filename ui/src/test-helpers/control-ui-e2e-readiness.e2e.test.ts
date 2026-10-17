@@ -136,7 +136,7 @@ suite.define(() => {
           booted: true,
           gatewayPhase: offline ? "reconnecting" : "connected",
           sessionKey: key,
-          terminalActivationReady: !offline,
+          terminalActivationReady: true,
           route: { matches: [{ routeId: "chat" }] },
         });
         if (!offline) {

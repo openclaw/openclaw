@@ -123,8 +123,9 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
       // without restoring them, so re-run the normal open path.
       void terminalSessions.restoreSessions();
     }
-    if (changed.has("client") || changed.has("available")) {
-      terminalSessions.scheduleLifecycleSync();
+    terminalSessions.scheduleLifecycleSync();
+    if (changed.has("gatewayConnected") && element.gatewayConnected && sessionPicker?.open()) {
+      sessionPicker.onRefresh();
     }
     for (const tab of terminalSessions.state.tabs) {
       updateTerminalFont(tab.controller, owner.terminalFontFamily);
@@ -146,12 +147,13 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     notifyPanelHostedTabsChanged(element, [
       element.embedded && element.tabsInHeader,
       terminalSessions.state.activeId,
-      owner.hostedTabs.map(({ id, label, statusLabel, badge, className }) => [
+      owner.hostedTabs.map(({ id, label, statusLabel, badge, className, closeDisabled }) => [
         id,
         label,
         statusLabel,
         badge,
         className,
+        closeDisabled,
       ]),
       terminalSessions.state.booting,
       terminalSessions.canHandoffSessions,
@@ -205,7 +207,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
             tab.status === "live" &&
             tab.gatewaySessionId,
         ),
-      client: () => element.client,
+      client: () => (element.gatewayConnected && element.available ? element.client : null),
       config: () => context?.config,
       isCurrent: (tab) =>
         terminalSessions.state.tabs.some((entry) => entry === tab) && tab.status === "live",
@@ -213,9 +215,10 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
       setError: (message) => terminalSessions.setError(message),
     });
     sessionPicker = createTerminalSessionPicker({
-      client: () => element.client,
+      client: () => (element.gatewayConnected && element.available ? element.client : null),
       available: () => element.available,
       hosted: () => element.embedded && element.tabsInHeader,
+      connected: () => element.gatewayConnected,
       currentSessionIds: () =>
         new Set(terminalSessions.state.tabs.map((tab) => tab.gatewaySessionId).filter(Boolean)),
       list: () => terminalSessions.listSessions(),
@@ -324,8 +327,8 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
       return terminalFontFamily(context?.theme.settings.terminalFontFamily);
     },
     get hostedTabs() {
-      return terminalPanelHostedTabs(terminalSessions.state.tabs).map((tab) =>
-        Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
+      return terminalPanelHostedTabs(terminalSessions.state.tabs, element.gatewayConnected).map(
+        (tab) => Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
       );
     },
     get activeHostedTabId() {
@@ -410,6 +413,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         tabs: terminalSessions.state.tabs,
         activeId: terminalSessions.state.activeId,
         booting: terminalSessions.state.booting,
+        connected: element.gatewayConnected,
         connecting:
           terminalSessions.waitingForRefresh ||
           (terminalSessions.state.booting && terminalSessions.state.tabs.length === 0) ||

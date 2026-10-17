@@ -84,7 +84,8 @@ function PanelContent(props: {
     <>
       {!target() ? (
         <p class="lr-status">{t("linkReader.urlPlaceholder")}</p>
-      ) : !props.available || props.tab.view.status === "error" ? (
+      ) : props.tab.view.status !== "ready" &&
+        (!props.available || props.tab.view.status === "error") ? (
         <div class="lr-status" role="alert">
           <h2>{t("linkReader.unavailableTitle")}</h2>
           <p>
@@ -98,7 +99,7 @@ function PanelContent(props: {
             class="lr-retry"
             type="button"
             disabled={!props.available}
-            onClick={props.refresh}
+            onClick={() => props.refresh()}
           >
             {t("linkReader.retry")}
           </button>
@@ -331,6 +332,7 @@ function PanelView(
             <button
               class="rail-header__action bp-icon lr-go"
               type="submit"
+              disabled={!props.available || !props.client}
               title={t("linkReader.openUrl")}
               aria-label={t("linkReader.openUrl")}
             >

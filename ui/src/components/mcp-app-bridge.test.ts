@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -73,6 +74,7 @@ it("confirms file paths in the pane before requesting or opening a file", async 
   const owner = {
     bridge,
     request,
+    releaseResourceSubscription: vi.fn(() => Promise.resolve({})),
     sessionKey: "file-session",
     viewId: "file-view",
     iframe: frame,
@@ -296,13 +298,14 @@ it("routes vendor links through the mounted view and AppBridge only for its focu
       toolResult: { content: [] },
     })),
   };
-  const hello = { type: "hello-ok" };
+  const hello = gatewayHelloForMethods(["mcp.app.view"]);
   const navigate = vi.fn();
   const gateway = {
     snapshot: { client, phase: "connected", hello },
     connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
     connectionRevision: 1,
     subscribe: () => () => {},
+    subscribeEvents: () => () => {},
   };
   const provider = createSolidApplicationContextProvider({
     gateway,
@@ -385,7 +388,7 @@ it("routes vendor links through the mounted view and AppBridge only for its focu
     gateway.connectionRevision = 2;
     await refused();
     gateway.connectionRevision = 1;
-    gateway.snapshot.hello = { type: "hello-ok" };
+    gateway.snapshot.hello = { ...hello, auth: { role: "operator", scopes: [] } };
     await refused();
     gateway.snapshot.hello = hello;
   } finally {
@@ -425,9 +428,10 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
       return {};
     },
   );
-  const start = bindMcpAppResourceHandlers({
+  const notifications = bindMcpAppResourceHandlers({
     bridge,
     request,
+    releaseResourceSubscription: (uri) => request("mcp.app.unsubscribeResource", { uri }),
     sessionKey: "one",
     viewId: "app",
     iframe: frame,
@@ -455,7 +459,7 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
   );
   await bridge.connect(hostTransport);
   await app.connect(appTransport);
-  start();
+  notifications.start();
   const emit = (viewId: string, uri: string) => {
     for (const listener of listeners) {
       listener({ type: "event", event: "mcp.app.resourceUpdated", payload: { viewId, uri } });
@@ -497,6 +501,11 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
     emit("app", "openclaw-file://one");
     expect(notification).toHaveBeenCalledTimes(1);
     await rpc("resources/subscribe", "openclaw-file://two");
+    const beforeReconnect = request.mock.calls.length;
+    await notifications.reconnect();
+    expect(request.mock.calls.slice(beforeReconnect)).toEqual([
+      ["mcp.app.subscribeResource", { uri: "openclaw-file://two" }],
+    ]);
     const late = rpc("resources/subscribe", "openclaw-file://late");
     await subscriptionEntered.promise;
     disposed = true;

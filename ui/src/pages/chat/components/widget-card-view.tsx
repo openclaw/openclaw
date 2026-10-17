@@ -17,6 +17,7 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type {
   CanvasToolPreview,
@@ -136,12 +137,18 @@ const WIDGET_FRAME_MAX_HEIGHT = 8000;
 // Frames register on load so messages can be matched to their owning preview.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 const widgetFrameResize = new WeakMap<HTMLIFrameElement, (height: number) => void>();
+const widgetFramePromptActive = new WeakMap<HTMLIFrameElement, () => boolean>();
+const loadedWidgetFrames = new WeakSet<HTMLIFrameElement>();
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
 
 function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
-  if (!isRecord(data) || data.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
+  if (
+    !isRecord(data) ||
+    data.type !== WIDGET_PROMPT_MESSAGE_TYPE ||
+    !widgetFramePromptActive.get(frame)?.()
+  ) {
     return;
   }
   void dispatchWidgetPrompt(frame, data.prompt, frame.getAttribute("src") ?? "");
@@ -262,14 +269,17 @@ type PreviewFrameParams = {
   title: string;
   src?: string;
   frameKey?: string;
-  connectionGeneration?: number;
   height?: number;
   onHeightChange?: (height: number) => void;
   sandbox?: string;
   promptCapable?: boolean;
 };
 
-function WidgetFrame(props: { params: PreviewFrameParams }) {
+function WidgetFrame(props: {
+  params: PreviewFrameParams;
+  promptAllowed: () => boolean;
+  onFrame: (frame: HTMLIFrameElement) => void;
+}) {
   let frame: HTMLIFrameElement | undefined;
   const [reportedHeight, setReportedHeight] = createSignal<number>();
   // Prompt policy is fixed by the outer URL/sandbox identity.
@@ -286,19 +296,27 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
   const height = () => reportedHeight() ?? props.params.height;
   const Frame = () => {
     let element!: HTMLIFrameElement;
+    createEffect(
+      () => [props.promptAllowed, props.params.onHeightChange] as const,
+      ([promptAllowed, onHeightChange]) => {
+        widgetFramePromptActive.set(element, promptAllowed);
+        widgetFrameResize.set(element, (nextHeight) => {
+          setReportedHeight(nextHeight);
+          onHeightChange?.(nextHeight);
+        });
+      },
+    );
     onCleanup(() => {
       widgetFrameRegistry.delete(element);
       widgetFrameResize.delete(element);
+      widgetFramePromptActive.delete(element);
     });
     return (
       <iframe
         ref={(next) => {
           element = next;
           frame = next;
-          widgetFrameResize.set(next, (nextHeight) => {
-            setReportedHeight(nextHeight);
-            props.params.onHeightChange?.(nextHeight);
-          });
+          props.onFrame(next);
         }}
         src={src() || undefined}
         class="chat-tool-card__preview-frame"
@@ -306,6 +324,7 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
         sandbox={props.params.sandbox ?? ""}
         style={height() ? `height:${height()}px;min-height:${height()}px` : ""}
         onLoad={() => {
+          loadedWidgetFrames.add(element);
           widgetFrameRegistry.add(element);
           if (promptCapable) {
             promptEligibleFrames.add(element);
@@ -330,13 +349,29 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
 }
 
 function PreviewFrame(props: { params: PreviewFrameParams }) {
-  const identity = createMemo(
+  let frame: HTMLIFrameElement | undefined;
+  const presentation = createCanvasFramePresentation(
     () =>
-      `${props.params.sandbox ?? ""}\0${props.params.frameKey ?? ""}\0${props.params.src ? 1 : 0}\0${props.params.connectionGeneration ?? 0}`,
+      `${props.params.sandbox ?? ""}\0${props.params.frameKey ?? ""}\0${props.params.src ? 1 : 0}`,
+    () => props.params.src,
+    () =>
+      Boolean(
+        frame &&
+        (adoptedWidgetPromptFrames.has(frame) ||
+          (!props.params.sandbox?.includes("allow-scripts") && loadedWidgetFrames.has(frame))),
+      ),
   );
   return (
-    <Show when={identity()} keyed>
-      {(_key) => <WidgetFrame params={props.params} />}
+    <Show when={presentation.identity()} keyed>
+      {(_key) => (
+        <WidgetFrame
+          params={{ ...props.params, src: presentation.src() }}
+          promptAllowed={presentation.active}
+          onFrame={(next) => {
+            frame = next;
+          }}
+        />
+      )}
     </Show>
   );
 }
@@ -372,9 +407,6 @@ function WidgetContent(props: {
                   props.options?.allowExternalEmbedUrls ?? false,
                 ),
                 frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
-                connectionGeneration: isInternalCanvasEntryUrl(props.preview.url)
-                  ? getCanvasWidgetFrameConnectionGeneration()
-                  : undefined,
                 height:
                   props.options?.widgetLayout?.read(
                     `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`,
@@ -585,12 +617,11 @@ function CanvasPreview(props: {
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
   const hasActions = () => Boolean(canPin() || hasMenu());
-  const placementRef = widgetActionsPlacementRef(hasActions, () => props.options);
   const pinLabel = () =>
     t(pinned() ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
   return (
     <div
-      ref={placementRef}
+      ref={widgetActionsPlacementRef(hasActions, () => props.options)}
       class="chat-tool-card__preview"
       data-content-kind={props.preview.mcpApp ? "mcp-app" : "canvas-html"}
       data-has-widget-actions={hasActions() ? "" : undefined}

@@ -87,7 +87,7 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
-  it("keeps initialized frames stable but refreshes remounts and new connection generations", () => {
+  it("keeps initialized frames stable through capability and transport generations", () => {
     const firstPreview = {
       ...canvasPreview,
       url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
@@ -128,6 +128,7 @@ describe("widget-card", () => {
     const remountedFrame = host.querySelector("iframe");
     expect(remountedFrame).not.toBe(originalFrame);
     expect(remountedFrame?.getAttribute("src")).toContain("/__openclaw__/cap/two/");
+    initializeWidgetFrame(remountedFrame!);
 
     bumpCanvasWidgetFrameConnectionGeneration();
     mountWidget(
@@ -137,8 +138,7 @@ describe("widget-card", () => {
       },
       host,
     );
-    expect(host.querySelector("iframe")).not.toBe(remountedFrame);
-    expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
+    expect(host.querySelector("iframe")).toBe(remountedFrame);
   });
 
   it.each(["failed"] as const)(

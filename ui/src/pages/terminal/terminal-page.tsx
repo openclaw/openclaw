@@ -53,7 +53,8 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
               fullscreen
               page={true}
               routeTarget={entry().target}
-              client={snapshot().phase === "connected" ? snapshot().client : null}
+              client={snapshot().client}
+              gatewayConnected={snapshot().phase === "connected"}
               available={available()}
               agentId={owner() ? normalizeAgentId(owner()!) : null}
               basePath={context.basePath}

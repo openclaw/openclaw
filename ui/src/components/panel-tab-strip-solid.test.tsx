@@ -112,6 +112,26 @@ it("keeps activation, keyboard repeat, and middle-click close separate", () => {
   expect(onSelect).not.toHaveBeenCalled();
 });
 
+it("honors close availability for the button and middle-click without disabling selection", () => {
+  const onClose = vi.fn();
+  const onSelect = vi.fn();
+  const view = mountStrip([first, { ...second, closeDisabled: true }], { onClose, onSelect });
+  const tab = view.container.querySelector<HTMLButtonElement>("#tab-second")!;
+  const close = view.container.querySelector<HTMLButtonElement>("#tab-second-close")!;
+  expect(close.disabled).toBe(true);
+  close.click();
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
+  tab.click();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith(second.id);
+
+  view.setTabs([first, second]);
+  flush();
+  expect(close.disabled).toBe(false);
+  close.click();
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(second.id);
+});
+
 it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (direction) => {
   document.documentElement.dir = direction;
   const onReorder = vi.fn();

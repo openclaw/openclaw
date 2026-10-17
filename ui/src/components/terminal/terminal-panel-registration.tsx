@@ -53,6 +53,7 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
   {
     properties: {
       client: { default: null, attribute: false },
+      gatewayConnected: { default: true, type: Boolean },
       agentId: { default: null, attribute: false },
       sessionKey: { default: null, attribute: false },
       available: { default: false, type: Boolean },
