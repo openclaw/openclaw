@@ -6,19 +6,17 @@ import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
 type Fixture = ReturnType<typeof createDraftFixture>;
-type Context = Fixture["context"];
 const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const pathname = "/chat/main/0f403cb839204cf18eb779f2f00ce488";
-const readyChat = async () => {
+const readyChat = async () =>
   queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-};
-function created(context: Context, key = sessionKey) {
+function created(context: Fixture["context"], key = sessionKey) {
   vi.mocked(context.sessions.createResult).mockResolvedValue({
     key,
     initialRun: { status: "idle" },
   });
 }
-function expectCalls(context: Context, navigations = 1, creates = 1) {
+function expectCalls(context: Fixture["context"], navigations = 1, creates = 1) {
   expect(context.navigateAndWait).toHaveBeenCalledTimes(navigations);
   expect(context.sessions.createResult).toHaveBeenCalledTimes(creates);
 }
@@ -39,22 +37,20 @@ describe("confirmed session navigation", () => {
       const lifecycle = new AbortController();
       Object.defineProperty(context, "lifecycleAbortSignal", { value: lifecycle.signal });
       const navigation = new StartedSessionNavigation();
-      let committed!: Promise<void>;
-      vi.mocked(context.navigateAndWait).mockImplementation((routeId, options) => {
-        committed = context.router.navigate(
+      vi.mocked(context.navigateAndWait).mockImplementation((routeId, options) =>
+        context.router.navigate(
           routeId,
           context,
           {},
           route(options?.pathname ?? "/chat", options?.search, options?.hash),
-        );
-        return committed;
-      });
+        ),
+      );
       const opening = navigation.navigate(context, {
         client: context.gateway.snapshot.client!,
         key: "agent:main:dashboard:pending-composer",
         agentId: "main",
       });
-      await committed;
+      await vi.mocked(context.navigateAndWait).mock.results[0]?.value;
       if (retire === "stop") {
         lifecycle.abort();
       } else {
@@ -74,7 +70,7 @@ describe("confirmed session navigation", () => {
     vi.mocked(context.navigateAndWait).mockImplementation(async (_routeId, options) => {
       expect(options?.pathname).toBe(pathname);
       expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBe(sessionKey);
-      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+      return readyChat();
     });
     flow.setMessage("start this task");
     const submission = flow.submit();
@@ -123,7 +119,6 @@ describe("confirmed session navigation", () => {
     const { context, flow } = createDraftFixture({
       request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
     });
-    const key = "agent:main:dashboard:background-visible";
     const prompt = { type: "text", text: "keep this background prompt visible" };
     Object.assign(context.gateway.snapshot.client!, {
       recoveryScope: "",
@@ -131,14 +126,13 @@ describe("confirmed session navigation", () => {
     });
     delete context.gateway.snapshot.hello!.auth!.recoveryScope;
     vi.mocked(context.sessions.createResult).mockResolvedValue({
-      key,
+      key: "agent:main:dashboard:background-visible",
       initialRun: { status: "started", runId: "background-run" },
     });
     flow.setMessage(prompt.text);
     await flow.submit(undefined, true);
-    expect(flow.message).toBe("");
+    expect(flow).toMatchObject({ message: "", submitting: false });
     expect(flow.pendingMessage?.content).toContainEqual(prompt);
-    expect(flow.submitting).toBe(false);
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     Object.assign(context.gateway.snapshot.client!, {
       recoveryScope: "principal-a",
@@ -148,44 +142,28 @@ describe("confirmed session navigation", () => {
     vi.mocked(context.navigateAndWait).mockImplementation(readyChat);
     await flow.openSubmittedSession();
     expectCalls(context);
-    const auth = context.gateway.snapshot.hello!.auth!;
-    auth.recoveryScope = "another-account";
+    context.gateway.snapshot.hello!.auth!.recoveryScope = "another-account";
     expect(flow.pendingMessage).toBeNull();
     await flow.openSubmittedSession();
     expect(context.navigateAndWait).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    [
-      "the Gateway handshake is replaced",
-      ({ context }: Fixture) => {
-        const hello = context.gateway.snapshot.hello;
-        if (hello) {
-          context.gateway.snapshot.hello = { ...hello };
-        }
-      },
-    ],
-    [
-      "the Gateway client is replaced",
-      ({ context }: Fixture) => {
-        const client = context.gateway.snapshot.client;
-        if (client) {
-          context.gateway.snapshot.client = new Proxy(client, {});
-        }
-      },
-    ],
-    ["the pending navigation is retired", ({ flow }: Fixture) => flow.invalidate()],
-  ] as const)(
-    "retires a confirmed session handoff when %s during session selection",
-    async (_scenario, retire) => {
-      const fixture = createDraftFixture();
-      const { context, flow } = fixture;
+  it.each(["handshake", "client", "flow"])(
+    "retires a confirmed session handoff on %s replacement during selection",
+    async (retire) => {
+      const { context, flow } = createDraftFixture();
       created(context);
       // Selection publishes synchronously; a subscriber may retire the flow
       // before navigation has claimed the confirmed key.
       vi.mocked(context.gateway.setSessionKey).mockImplementation((key) => {
         context.gateway.snapshot.sessionKey = key;
-        retire(fixture);
+        if (retire === "handshake") {
+          context.gateway.snapshot.hello = { ...context.gateway.snapshot.hello! };
+        } else if (retire === "client") {
+          context.gateway.snapshot.client = new Proxy(context.gateway.snapshot.client!, {});
+        } else {
+          flow.invalidate();
+        }
       });
       flow.setMessage("keep this task on its original connection");
 
@@ -198,22 +176,20 @@ describe("confirmed session navigation", () => {
   );
 
   it.each([
+    ["visibility changes", ({ flow }: Fixture) => flow.setVisibility("draft")],
     [
-      "the requested session visibility changes",
-      ({ flow }: Fixture) => flow.setVisibility("draft"),
-    ],
-    [
-      "the requested session capabilities change",
+      "capabilities change",
       ({ capabilities }: Fixture) => capabilities.setToolOverrides({ skills: { release: false } }),
     ],
-    ["the selected agent changes", ({ place }: Fixture) => place.selectAgentId("other")],
+    ["agent changes", ({ place }: Fixture) => place.selectAgentId("other")],
   ] as const)("never retries a committed session after %s", async (_scenario, retire) => {
     const fixture = createDraftFixture({
       scopes: ["operator.admin", "operator.read", "operator.write"],
-      agents: [
-        { id: "main", workspace: "/workspace", model: { primary: "openai/test" } },
-        { id: "other", workspace: "/workspace", model: { primary: "openai/test" } },
-      ],
+      agents: ["main", "other"].map((id) => ({
+        id,
+        workspace: "/workspace",
+        model: { primary: "openai/test" },
+      })),
     });
     const { context, flow } = fixture;
     vi.mocked(context.sessions.createResult)
@@ -235,11 +211,10 @@ describe("confirmed session navigation", () => {
     flow.setMessage("a new task");
     await flow.submit();
 
-    expect(context.sessions.createResult).toHaveBeenCalledTimes(2);
+    expectCalls(context, 2, 2);
     expect(vi.mocked(context.sessions.createResult).mock.calls[1]?.[0]?.message).toBe("a new task");
     expect(context.gateway.snapshot.sessionKey).toBe(
       `agent:${fixture.place.agentId}:dashboard:new`,
     );
-    expect(context.navigateAndWait).toHaveBeenCalledTimes(2);
   });
 });
