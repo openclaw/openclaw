@@ -1,4 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
+import { json } from "node:stream/consumers";
 import type { Page } from "playwright";
 import { expect } from "vitest";
 import type {
@@ -71,6 +72,12 @@ export async function createBackgroundWorkInstance(port: number, notifyOnExit = 
   return instance;
 }
 
+function outputEvents(events: Record<string, Record<string, unknown>>) {
+  return Object.entries(events).map(([type, fields]) =>
+    Object.assign({ type: `response.${type}`, output_index: 0 }, fields),
+  );
+}
+
 function toolEvents(name: string, args: Record<string, unknown>) {
   const item = {
     type: "function_call",
@@ -80,20 +87,12 @@ function toolEvents(name: string, args: Record<string, unknown>) {
     arguments: JSON.stringify(args),
   };
   return [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    {
-      type: "response.function_call_arguments.done",
-      output_index: 0,
-      item_id: item.id,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
+    ...outputEvents({
+      "output_item.added": { item: { ...item, arguments: "" } },
+      "function_call_arguments.delta": { item_id: item.id, delta: item.arguments },
+      "function_call_arguments.done": { item_id: item.id, arguments: item.arguments },
+      "output_item.done": { item },
+    }),
     {
       type: "response.completed",
       response: {
@@ -147,15 +146,11 @@ export async function startBackgroundWorkProvider(options: { ordinaryExec?: bool
             response.writeHead(404).end();
             return;
           }
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
           const body: {
             model: string;
             tools?: Array<{ name?: string }>;
             input?: Array<{ type?: string }>;
-          } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } = await json(request);
           if (body.model === "child") {
             expect(childResponse, "fixture must not retry the held child").toBeUndefined();
             childResponse = response;
@@ -166,22 +161,20 @@ export async function startBackgroundWorkProvider(options: { ordinaryExec?: bool
           }
           expect(body.model).toBe("parent");
           const step = parentRequests++;
+          const callTool = (name: string, args: Record<string, unknown>) => {
+            expect(body.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name })]));
+            writeOpenAiResponsesSse(response, toolEvents(name, args));
+          };
           if (step === 0) {
-            expect(body.tools).toEqual(
-              expect.arrayContaining([expect.objectContaining({ name: "exec" })]),
-            );
             // No timer or daemon: a live HTTP response keeps Node alive; killing its process closes it.
             const script = `require("node:http").get("http://127.0.0.1:${port}/process",r=>r.pipe(process.stdout)).on("error",()=>process.exit(1))`;
-            writeOpenAiResponsesSse(
-              response,
-              toolEvents("exec", {
-                command: `node -e '${script}'`,
-                title: backgroundWorkFixture.processName,
-                ...(options.ordinaryExec ? { yieldMs: 10 } : { background: true }),
-                timeoutSeconds: 0,
-                host: "gateway",
-              }),
-            );
+            callTool("exec", {
+              command: `node -e '${script}'`,
+              title: backgroundWorkFixture.processName,
+              ...(options.ordinaryExec ? { yieldMs: 10 } : { background: true }),
+              timeoutSeconds: 0,
+              host: "gateway",
+            });
             return;
           }
           if (options.ordinaryExec && step >= 3) {
@@ -196,21 +189,15 @@ export async function startBackgroundWorkProvider(options: { ordinaryExec?: bool
           }
           expect(body.input?.some((item) => item.type === "function_call_output")).toBe(true);
           if (step === 1) {
-            expect(body.tools).toEqual(
-              expect.arrayContaining([expect.objectContaining({ name: "sessions_spawn" })]),
-            );
-            writeOpenAiResponsesSse(
-              response,
-              toolEvents("sessions_spawn", {
-                runtime: "subagent",
-                mode: "run",
-                thread: false,
-                cleanup: "keep",
-                label: backgroundWorkFixture.childLabel,
-                task: backgroundWorkFixture.childTask,
-                model: "background-fixture/child",
-              }),
-            );
+            callTool("sessions_spawn", {
+              runtime: "subagent",
+              mode: "run",
+              thread: false,
+              cleanup: "keep",
+              label: backgroundWorkFixture.childLabel,
+              task: backgroundWorkFixture.childTask,
+              model: "background-fixture/child",
+            });
             return;
           }
           expect(step, "parent must stay pending after spawning its worker").toBe(2);
@@ -258,23 +245,19 @@ export async function startBackgroundWorkProvider(options: { ordinaryExec?: bool
         status: "in_progress",
         content: [],
       };
-      const events = [
-        { type: "response.output_item.added", output_index: 0, item },
-        {
-          type: "response.content_part.added",
+      const events = outputEvents({
+        "output_item.added": { item },
+        "content_part.added": {
           item_id: item.id,
-          output_index: 0,
           content_index: 0,
           part: { type: "output_text", text: "", annotations: [] },
         },
-        {
-          type: "response.output_text.delta",
+        "output_text.delta": {
           item_id: item.id,
-          output_index: 0,
           content_index: 0,
           delta: backgroundWorkFixture.childText,
         },
-      ];
+      });
       for (const event of events) {
         childResponse.write(`data: ${JSON.stringify(event)}\n\n`);
       }

@@ -1,9 +1,9 @@
 import { createServer } from "node:http";
-import path from "node:path";
 import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.js";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   controlUiSessionUrl,
@@ -14,6 +14,7 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const renewedCookie = "synthetic_app_session=renewed; Path=/; HttpOnly; SameSite=None; Secure";
+const image = createSolidPngBuffer(640, 320, { r: 229, g: 246, b: 238 });
 const text = (value: string) => ({ type: "text", text: value });
 const imageContent = (url: string, alt: string, extra: Record<string, unknown> = {}) => ({
   type: "image",
@@ -76,11 +77,6 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers },
         async ({ context, page }) => {
-          const screenshot = (name: string) =>
-            page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, name),
-            });
           const expired = async (route: Route) =>
             !(await route.request().allHeaders()).cookie?.includes("synthetic_app_session=renewed");
           let metadataRequests = 0;
@@ -90,23 +86,6 @@ suite.define(() => {
           const mediaGate = createDeferred();
           const probeGate = createDeferred();
           const redirect = () => ({ status: 302, headers: { location: signInUrl } });
-          const image = Buffer.from(
-            await page.evaluate(() => {
-              const canvas = document.createElement("canvas");
-              canvas.width = 640;
-              canvas.height = 320;
-              const drawing = canvas.getContext("2d")!;
-              drawing.fillStyle = "#e5f6ee";
-              drawing.fillRect(0, 0, 640, 320);
-              drawing.fillStyle = "#196c52";
-              drawing.font = "bold 32px sans-serif";
-              drawing.fillText("Loaded", 246, 160);
-              drawing.font = "22px sans-serif";
-              drawing.fillText("Synthetic image", 238, 193);
-              return canvas.toDataURL("image/png").split(",")[1]!;
-            }),
-            "base64",
-          );
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
           const gateway = await installMockGateway(page, {
             deviceToken: "synthetic-recovery-device-token",
@@ -245,7 +224,6 @@ suite.define(() => {
           expect(initialConnects).toBe(1);
           mediaGate.resolve();
           await page.getByRole("button", { name: "Retry", exact: true }).first().waitFor();
-          await screenshot("01-image-unavailable.png");
           probeGate.resolve();
           const modal = page
             .locator("openclaw-modal-dialog")
@@ -270,10 +248,8 @@ suite.define(() => {
               ).toEqual({ descriptionOverflows: false, outsideViewport: false });
             };
             await expectDialogToFit();
-            await screenshot("02-sign-in-required.png");
             await page.setViewportSize({ width: 390, height: 844 });
             await expectDialogToFit();
-            await screenshot("03-sign-in-required-mobile.png");
             await page.setViewportSize({ width: 1280, height: 900 });
             // Let the generated preview exhaust its single automatic retry before
             // signing in; restoration must wake that existing failed resource.
@@ -307,7 +283,6 @@ suite.define(() => {
           expect(await page.locator("iframe").count()).toBe(0);
           expect(context.pages()).toHaveLength(renewal === "automatic" ? 1 : 2);
           await expectConversationRetained();
-          await screenshot("04-content-recovered.png");
           await composer.press("Enter");
           const sent = await gateway.waitForRequest("chat.send");
           expect(sent.params).toMatchObject({ message: draft, sessionKey: "agent:main:main" });

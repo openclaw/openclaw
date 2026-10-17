@@ -99,34 +99,25 @@ suite.define(() => {
               const b = background.getBoundingClientRect(),
                 c = canvas.getBoundingClientRect(),
                 input = composer.getBoundingClientRect();
+              const fade =
+                Number.parseFloat(
+                  background.style.getPropertyValue("--session-background-fade-end"),
+                ) + b.top;
               return {
-                left: b.left,
-                right: b.right,
-                canvasLeft: c.left,
-                canvasRight: c.right,
-                fade:
-                  Number.parseFloat(
-                    background.style.getPropertyValue("--session-background-fade-end"),
-                  ) + b.top,
-                composerMiddle: input.top + input.height / 2,
-                composerLeft: input.left,
-                composerRight: input.right,
+                edgeError: Math.max(Math.abs(b.left - c.left), Math.abs(b.right - c.right)),
+                fade,
+                fadeError: Math.abs(fade - (input.top + input.height / 2)),
+                composerInsets: [input.left - c.left, c.right - input.right],
                 mask: imageStyle.maskImage,
                 opacity: Number(imageStyle.opacity),
                 underpaint: getComputedStyle(background).backgroundColor,
                 composerBackground: getComputedStyle(composer).backgroundColor,
-                width: innerWidth,
-                bodyWidth: document.body.scrollWidth,
+                overflow: document.body.scrollWidth - innerWidth,
               };
             });
           };
           const expectAlignedFade = () =>
-            expect
-              .poll(async () => {
-                const g = await newPageGeometry();
-                return Math.abs(g.fade - g.composerMiddle);
-              })
-              .toBeLessThan(2);
+            expect.poll(async () => (await newPageGeometry()).fadeError).toBeLessThan(2);
           const transcriptFade = () =>
             page
               .locator(".chat-main__conversation")
@@ -140,15 +131,15 @@ suite.define(() => {
             await page.setViewportSize(viewport);
             await expectAlignedFade();
             const g = await newPageGeometry();
-            expect(Math.abs(g.left - g.canvasLeft)).toBeLessThan(1);
-            expect(Math.abs(g.right - g.canvasRight)).toBeLessThan(1);
+            expect(g.edgeError).toBeLessThan(1);
             expect(g.mask).not.toBe("none");
             expect(g.composerBackground).toMatch(/^rgb\(/);
             if (viewport.width === 390) {
-              expect(g.composerLeft - g.canvasLeft).toBeCloseTo(20, 0);
-              expect(g.canvasRight - g.composerRight).toBeCloseTo(20, 0);
+              for (const inset of g.composerInsets) {
+                expect(inset).toBeCloseTo(20, 0);
+              }
             }
-            expect(g.bodyWidth).toBeLessThanOrEqual(g.width);
+            expect(g.overflow).toBeLessThanOrEqual(0);
           }
           await page.setViewportSize({ width: 1440, height: 1000 });
           const editor = page.locator(".new-session-page .agent-chat__input textarea");

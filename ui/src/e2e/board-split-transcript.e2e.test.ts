@@ -1,11 +1,6 @@
-// Regression: the chat transcript must repaint after an expanded dashboard
-// collapses back to split view; the virtualizer previously stayed detached
-// until an unrelated render, painting a blank pane.
-import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -26,50 +21,37 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-split-transcript";
-let proofDir: string;
-beforeEach(() => {
-  if (process.env.OPENCLAW_UI_E2E_RECORD === "1") {
-    proofDir = createControlUiE2eArtifactDir("dashboard-side-chat-tabs");
-  }
-});
-
 let browser: Browser;
 let controlUi: ControlUiE2eServer;
 const contexts = new Set<BrowserContext>();
-const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 const viewport = { width: 1400, height: 900 };
 
-async function newPage(size = viewport, record = false) {
-  const context = await browser.newContext({
-    viewport: size,
-    ...(record && recordProof ? { recordVideo: { dir: proofDir, size } } : {}),
-  });
+async function newPage(size = viewport) {
+  const context = await browser.newContext({ viewport: size });
   contexts.add(context);
-  return { context, page: await context.newPage() };
+  return { page: await context.newPage() };
 }
 
-async function closePage(page: Page, videoName?: string) {
-  const video = page.video();
-  const context = page.context();
-  await context.close();
-  contexts.delete(context);
-  if (recordProof && videoName && video) {
-    await video.saveAs(path.join(proofDir, `${videoName}.webm`));
-  }
+async function retainDashboard(page: Page) {
+  const view = page.locator("openclaw-board-view");
+  const initial = await view.elementHandle();
+  expect(initial).not.toBeNull();
+  return {
+    connected: () => initial!.evaluate((element) => element.isConnected),
+    same: () => view.evaluate((element, previous) => element === previous, initial),
+  };
 }
 
-async function screenshot(page: Page, name: string) {
-  if (recordProof) {
-    await page.screenshot({ path: path.join(proofDir, `${name}.png`) });
-  }
-}
-
-function installBoard(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
+function installBoard(
+  page: Page,
+  methods: string[] = [],
+  options: Parameters<typeof installMockGateway>[1] = {},
+) {
   return installMockGateway(page, {
     sessionKey,
-    featureMethods: ["board.get", "chat.metadata", "chat.startup"],
-    methodResponses: { "board.get": boardSnapshot() },
+    featureMethods: ["board.get", "chat.metadata", "chat.startup", ...methods],
     ...options,
+    methodResponses: { "board.get": boardSnapshot(), ...options.methodResponses },
   });
 }
 
@@ -118,11 +100,8 @@ async function firstSidebarResizeFrame(page: Page, resize: () => Promise<void>) 
         const panel = document.querySelector<HTMLElement>('[data-region="side"]:not([hidden])');
         const region = panel?.closest(".sidebar-region");
         const transcript = document.querySelector<HTMLElement>(".sidebar-region__primary");
-        if (!panel || !region) {
-          throw new Error("Dashboard side panel is missing");
-        }
-        if (!transcript) {
-          throw new Error("Primary chat region is missing");
+        if (!panel || !region || !transcript) {
+          throw new Error("Dashboard side panel or primary chat region is missing");
         }
         const observer = new MutationObserver(() => {
           observer.disconnect();
@@ -181,25 +160,24 @@ async function expectMinimizedDashboard(page: Page) {
   await page.locator('[data-region-header="side"]').waitFor({ state: "hidden" });
   await expect
     .poll(() =>
-      page.locator(".board-session-surface").evaluate((panel) => ({
-        hidden: panel.hasAttribute("hidden"),
-        inert: panel.hasAttribute("inert"),
-        width: panel.getBoundingClientRect().width,
-        height: panel.getBoundingClientRect().height,
-      })),
+      page.locator(".board-session-surface").evaluate((panel) => {
+        const { width, height } = panel.getBoundingClientRect();
+        const primary = document.querySelector(".sidebar-region__primary")!;
+        return {
+          hidden: panel.hasAttribute("hidden"),
+          inert: panel.hasAttribute("inert"),
+          width,
+          height,
+          fillsPrimary:
+            Math.abs(
+              primary.getBoundingClientRect().width -
+                primary.parentElement!.getBoundingClientRect().width,
+            ) < 1,
+        };
+      }),
     )
-    .toEqual({ hidden: true, inert: true, width: 0, height: 0 });
+    .toEqual({ hidden: true, inert: true, width: 0, height: 0, fillsPrimary: true });
   expect(await page.getByRole("separator", { name: "Resize side panel" }).count()).toBe(0);
-  expect(
-    await page
-      .locator(".sidebar-region__primary")
-      .evaluate((primary) =>
-        Math.abs(
-          primary.getBoundingClientRect().width -
-            primary.parentElement!.getBoundingClientRect().width,
-        ),
-      ),
-  ).toBeLessThan(1);
 }
 
 describeControlUiE2e("Board split transcript restore", () => {
@@ -219,8 +197,7 @@ describeControlUiE2e("Board split transcript restore", () => {
   it("repaints the transcript after expanded -> split", async () => {
     const { page } = await newPage();
     const now = Date.now();
-    await installBoard(page, {
-      featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
+    await installBoard(page, ["chat.history"], {
       historyMessages: Array.from({ length: 40 }, (_, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
         content: `Message number ${index}: the quick brown fox jumps over the lazy dog to give this bubble a realistic height.`,
@@ -239,8 +216,7 @@ describeControlUiE2e("Board split transcript restore", () => {
 
     await selectChatLayoutAction(page, "Restore split");
 
-    // The transcript must repaint promptly from the collapse render itself,
-    // without waiting for an unrelated state change to re-render the pane.
+    // Collapse itself must repaint, without an unrelated render.
     await expect
       .poll(async () => await visibleTranscriptState(page), { timeout: 2_000 })
       .toMatchObject({ present: true, intersectingRows: expect.any(Number) });
@@ -254,77 +230,55 @@ describeControlUiE2e("Board split transcript restore", () => {
   }, 120_000);
 
   it("keeps adjacent chat rows separated throughout a real dashboard-panel resize", async () => {
-    const { context, page } = await newPage({ width: 1720, height: 1250 });
-    try {
-      const now = Date.now();
-      await installBoard(page, {
-        featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
-        historyMessages: [
-          {
-            role: "assistant",
-            content:
-              "Created **Project Board** with a full-screen four-column dashboard:\n\n- Working\n- Idle\n- Review\n- Complete\n\nThe board can refresh active work and show a concise operator summary.\n\nSource: [project-board.html](project-board.html)\n\n" +
-              "Keep the work board visible while tracking active sessions, reviews, approvals, and completed tasks. ".repeat(
-                8,
-              ),
-            timestamp: now - 1,
-          },
-          {
-            role: "user",
-            content: "Please use the existing work board feature.",
-            timestamp: now,
-          },
-        ],
-      });
+    const { page } = await newPage({ width: 1720, height: 1250 });
+    const now = Date.now();
+    await installBoard(page, ["chat.history"], {
+      historyMessages: [
+        {
+          role: "assistant",
+          content:
+            "Created **Project Board** with a full-screen four-column dashboard:\n\n- Working\n- Idle\n- Review\n- Complete\n\nThe board can refresh active work and show a concise operator summary.\n\nSource: [project-board.html](project-board.html)\n\n" +
+            "Keep the work board visible while tracking active sessions, reviews, approvals, and completed tasks. ".repeat(
+              8,
+            ),
+          timestamp: now - 1,
+        },
+        {
+          role: "user",
+          content: "Please use the existing work board feature.",
+          timestamp: now,
+        },
+      ],
+    });
 
-      await showDashboard(page);
-      const sidePanel = page.locator('[data-panel-slot="dashboard"]');
-      await page.getByText("Source: project-board.html", { exact: false }).waitFor();
-      await page.getByText("Please use the existing work board feature.").waitFor();
-      const initialWidth = await sidePanel.evaluate(
-        (element) => element.getBoundingClientRect().width,
-      );
+    await showDashboard(page);
+    const sidePanel = page.locator('[data-panel-slot="dashboard"]');
+    await page.getByText("Source: project-board.html", { exact: false }).waitFor();
+    await page.getByText("Please use the existing work board feature.").waitFor();
+    const initialWidth = await sidePanel.evaluate(
+      (element) => element.getBoundingClientRect().width,
+    );
 
-      const divider = page.getByRole("separator", { name: "Resize side panel" });
-      const dividerBounds = await divider.boundingBox();
-      expect(dividerBounds).not.toBeNull();
-      const startX = dividerBounds!.x + dividerBounds!.width / 2;
-      const pointerY = dividerBounds!.y + Math.min(80, dividerBounds!.height / 2);
-      await page.mouse.move(startX, pointerY);
-      await page.mouse.down();
-      const frame = await firstSidebarResizeFrame(page, () =>
-        page.mouse.move(startX + 64, pointerY),
-      );
-      await page.mouse.up();
+    const divider = page.getByRole("separator", { name: "Resize side panel" });
+    const dividerBounds = await divider.boundingBox();
+    expect(dividerBounds).not.toBeNull();
+    const startX = dividerBounds!.x + dividerBounds!.width / 2;
+    const pointerY = dividerBounds!.y + Math.min(80, dividerBounds!.height / 2);
+    await page.mouse.move(startX, pointerY);
+    await page.mouse.down();
+    const frame = await firstSidebarResizeFrame(page, () => page.mouse.move(startX + 64, pointerY));
+    await page.mouse.up();
 
-      expect(frame.width).toBeLessThan(initialWidth);
-      expect(
-        frame.rowGap,
-        `first frame width=${frame.width}px; assistant-to-user gap=${frame.assistantUserGap}px`,
-      ).toBeGreaterThanOrEqual(-0.01);
-      expect(
-        frame.assistantUserGap,
-        `assistant text overlaps the user bubble at width=${frame.width}px`,
-      ).toBeGreaterThanOrEqual(-0.01);
-    } finally {
-      contexts.delete(context);
-      await context.close();
-    }
+    expect(frame.width).toBeLessThan(initialWidth);
+    expect(frame.rowGap).toBeGreaterThanOrEqual(-0.01);
+    expect(frame.assistantUserGap).toBeGreaterThanOrEqual(-0.01);
   }, 120_000);
 
   it("transitions between expanded and split dashboard panel states", async () => {
-    const { page } = await newPage(viewport, true);
-    const gateway = await installBoard(page, {
+    const { page } = await newPage();
+    const gateway = await installBoard(page, ["browser.request", "terminal.open"], {
       terminalEnabled: true,
-      featureMethods: [
-        "board.get",
-        "browser.request",
-        "chat.metadata",
-        "chat.startup",
-        "terminal.open",
-      ],
       methodResponses: {
-        "board.get": boardSnapshot(),
         "browser.request": {
           cases: [
             { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
@@ -339,14 +293,6 @@ describeControlUiE2e("Board split transcript restore", () => {
 
     const sidePanel = page.locator(".side-panel");
     const chat = page.locator(".chat-thread");
-    const recordStep = async (name: string) => {
-      if (!recordProof) {
-        return;
-      }
-      await screenshot(page, name);
-      await page.waitForTimeout(500);
-    };
-    await sidePanel.locator('[data-region-header="side"]').waitFor();
     const expectedTabLabels = ["Dashboard", "Browser", "zsh"];
     await expectSidePanelTabs(page, expectedTabLabels);
     const terminalPanel = page.locator('[data-panel-slot="terminal"]');
@@ -361,7 +307,6 @@ describeControlUiE2e("Board split transcript restore", () => {
       .poll(() => terminalPanel.evaluate((element) => element.getBoundingClientRect().width))
       .toBeGreaterThan(widthBeforeExpand);
     await expectSidePanelTabs(page, ["Dashboard", "Browser", "OpenClaw"], false);
-    await recordStep("transition-01-expanded");
 
     await selectChatLayoutAction(page, "Restore split");
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
@@ -369,45 +314,25 @@ describeControlUiE2e("Board split transcript restore", () => {
     await restoreChatAsMain(page);
     await expectSidePanelTabs(page, expectedTabLabels);
     expect(await sidePanel.locator('[data-panel-slot="dashboard"]').count()).toBe(1);
-    const dashboard = await page.locator("openclaw-board-view").elementHandle();
-    expect(dashboard).not.toBeNull();
-    await recordStep("transition-02-split");
+    const dashboard = await retainDashboard(page);
 
     await selectChatLayoutAction(page, "Minimize side panel");
     await expectMinimizedDashboard(page);
-    expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(await dashboard.connected()).toBe(true);
     await expect.poll(() => chat.isVisible()).toBe(true);
-    await recordStep("transition-03-chat-only");
 
     await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
     await sidePanel.locator('[data-region-header="side"]').waitFor();
     await expectSidePanelTabs(page, expectedTabLabels);
-    expect(
-      await page
-        .locator("openclaw-board-view")
-        .evaluate((element, previous) => element === previous, dashboard),
-    ).toBe(true);
+    expect(await dashboard.same()).toBe(true);
     await expect.poll(() => chat.isVisible()).toBe(true);
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
-    await recordStep("transition-04-split-reopened");
-    if (recordProof) {
-      await closePage(page, "dashboard-side-panel-transition");
-    }
   }, 120_000);
 
   it("activates Side chat from a split dashboard panel", async () => {
-    const { page } = await newPage(viewport, true);
-    await installBoard(page, {
-      featureMethods: [
-        "board.get",
-        "board.update",
-        "chat.history",
-        "chat.metadata",
-        "chat.startup",
-        "sessions.companion.ask",
-      ],
+    const { page } = await newPage();
+    await installBoard(page, ["board.update", "chat.history", "sessions.companion.ask"], {
       methodResponses: {
-        "board.get": boardSnapshot(),
         "board.update": boardSnapshot(2),
       },
       historyMessages: [
@@ -416,58 +341,45 @@ describeControlUiE2e("Board split transcript restore", () => {
       ],
     });
 
-    try {
-      await showDashboard(page);
-      const sidePanel = page.locator(".side-panel");
-      await sidePanel.locator('[data-region-header="side"]').waitFor();
-      await openChatSidePanelType(page, "Side chat");
-      await expectSidePanelTabs(page, ["Dashboard", "Side chat"]);
-      await screenshot(page, "01-side-chat-added");
+    await showDashboard(page);
+    const sidePanel = page.locator(".side-panel");
+    await sidePanel.locator('[data-region-header="side"]').waitFor();
+    await openChatSidePanelType(page, "Side chat");
+    await expectSidePanelTabs(page, ["Dashboard", "Side chat"]);
 
-      await sidePanel.locator(".tabstrip-tab").filter({ hasText: "Side chat" }).click();
-      await sidePanel.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
-      await expect
-        .poll(() =>
-          sidePanel
-            .locator('[data-panel-slot="dashboard"]')
-            .evaluate((panel) => panel.hasAttribute("hidden")),
-        )
-        .toBe(true);
-      await screenshot(page, "02-side-chat-active");
-    } finally {
-      await closePage(page, "dashboard-side-chat-tabs");
-    }
+    await sidePanel.locator(".tabstrip-tab").filter({ hasText: "Side chat" }).click();
+    await sidePanel.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
+    await expect
+      .poll(() =>
+        sidePanel
+          .locator('[data-panel-slot="dashboard"]')
+          .evaluate((panel) => panel.hasAttribute("hidden")),
+      )
+      .toBe(true);
   }, 120_000);
 
   it("does not offer Discussion when the gateway has no discussion provider", async () => {
-    const { page } = await newPage(viewport, true);
-    const gateway = await installBoard(page, {
-      featureMethods: ["board.get", "chat.metadata", "chat.startup", "session.discussion.info"],
+    const { page } = await newPage();
+    const gateway = await installBoard(page, ["session.discussion.info"], {
       methodResponses: {
-        "board.get": boardSnapshot(),
         "session.discussion.info": { state: "none" },
       },
     });
 
-    try {
-      await showDashboard(page);
-      const sidePanel = page.locator(".side-panel");
-      await sidePanel.locator('[data-region-header="side"]').waitFor();
-      await expect
-        .poll(() =>
-          gateway.getRequests("session.discussion.info").then((requests) => requests.length),
-        )
-        .toBe(1);
-      const layoutMenu = await openChatLayoutMenu(page);
-      await expect
-        .poll(() =>
-          layoutMenu.locator('[role^="menuitem"]').filter({ hasText: "Discussion" }).count(),
-        )
-        .toBe(0);
-      await screenshot(page, "03-discussion-hidden");
-    } finally {
-      await closePage(page, "dashboard-discussion-unavailable");
-    }
+    await showDashboard(page);
+    const sidePanel = page.locator(".side-panel");
+    await sidePanel.locator('[data-region-header="side"]').waitFor();
+    await expect
+      .poll(() =>
+        gateway.getRequests("session.discussion.info").then((requests) => requests.length),
+      )
+      .toBe(1);
+    const layoutMenu = await openChatLayoutMenu(page);
+    await expect
+      .poll(() =>
+        layoutMenu.locator('[role^="menuitem"]').filter({ hasText: "Discussion" }).count(),
+      )
+      .toBe(0);
   }, 120_000);
 
   it("retains a sole Dashboard when minimized and reopened from Layout", async () => {
@@ -478,21 +390,16 @@ describeControlUiE2e("Board split transcript restore", () => {
     const sidePanel = page.locator(".side-panel");
     await sidePanel.locator('[data-region-header="side"]').waitFor();
     await expectSidePanelTabs(page, ["Dashboard"]);
-    const dashboard = await page.locator("openclaw-board-view").elementHandle();
-    expect(dashboard).not.toBeNull();
+    const dashboard = await retainDashboard(page);
     for (let cycle = 0; cycle < 2; cycle++) {
       await selectChatLayoutAction(page, "Minimize side panel");
       await expectMinimizedDashboard(page);
-      expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await dashboard.connected()).toBe(true);
       expect(await gateway.getRequests("board.update")).toHaveLength(0);
       await selectChatLayoutAction(page, "Side panel");
       await sidePanel.locator('[data-region-header="side"]').waitFor();
       await expectSidePanelTabs(page, ["Dashboard"]);
-      expect(
-        await page
-          .locator("openclaw-board-view")
-          .evaluate((element, previous) => element === previous, dashboard),
-      ).toBe(true);
+      expect(await dashboard.same()).toBe(true);
       expect(await gateway.getRequests("board.update")).toHaveLength(0);
     }
   }, 120_000);

@@ -6,7 +6,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { captureUiProof, expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -23,6 +23,9 @@ const browserCase = (path: string, response: unknown, address: Record<string, un
 });
 type BrowserTab = { targetId: string; title: string; url: string; tabId?: string };
 const makeTab = (targetId: string, title: string, url: string) => ({ targetId, title, url });
+const browserResponses = (...cases: ReturnType<typeof browserCase>[]) => ({
+  "browser.request": { cases },
+});
 function browserCases(
   tab: BrowserTab,
   screenshot: Record<string, unknown>,
@@ -61,21 +64,17 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["browser.request"],
           operatorScopes: ["operator.admin"],
-          methodResponses: {
-            "browser.request": {
-              cases: [
-                ...browserCases(
-                  tab,
-                  { targetId: tab.targetId, path: "/proof/selected.png", url: tab.url },
-                  {},
-                  [makeTab("unrelated", "Other session", "https://other.example/"), tab],
-                ),
-                browserCase("/screencast", {
-                  __mockError: { code: "UNAVAILABLE", message: "Screencast unavailable" },
-                }),
-              ],
-            },
-          },
+          methodResponses: browserResponses(
+            ...browserCases(
+              tab,
+              { targetId: tab.targetId, path: "/proof/selected.png", url: tab.url },
+              {},
+              [makeTab("unrelated", "Other session", "https://other.example/"), tab],
+            ),
+            browserCase("/screencast", {
+              __mockError: { code: "UNAVAILABLE", message: "Screencast unavailable" },
+            }),
+          ),
         });
         await page.goto(
           `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=node&node=worker-a&profile=work&targetId=existing`,
@@ -187,25 +186,21 @@ suite.define(() => {
                   { role: "assistant", content: "History is ready.", timestamp: 5_000 },
                 ]
               : [{ role: "assistant", content: "History is ready.", timestamp: 5_000 }],
-            methodResponses: {
-              "browser.request": {
-                cases: [
-                  ...browserCases(
-                    defaultTab,
-                    { path: "/proof/default.png", targetId: "default-tab" },
-                    {},
-                    [defaultTab],
-                  ),
-                  browserCase("/screencast", {
-                    __mockError: {
-                      code: "UNAVAILABLE",
-                      message: "Browser screencast requires Playwright in this gateway build.",
-                      details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
-                    },
-                  }),
-                ],
-              },
-            },
+            methodResponses: browserResponses(
+              ...browserCases(
+                defaultTab,
+                { path: "/proof/default.png", targetId: "default-tab" },
+                {},
+                [defaultTab],
+              ),
+              browserCase("/screencast", {
+                __mockError: {
+                  code: "UNAVAILABLE",
+                  message: "Browser screencast requires Playwright in this gateway build.",
+                  details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
+                },
+              }),
+            ),
           });
           const browserRequests = () => gateway.getRequests("browser.request");
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -298,12 +293,6 @@ suite.define(() => {
           await expectToolOutput("live-1", "Live ordinary output 1");
           await expectRequestCountStable(gateway, "browser.request", 0);
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
-          await captureUiProof(
-            suite,
-            page,
-            "browser-route-handoff",
-            `history-${includeHistory}-live.png`,
-          );
 
           await openChatSidePanelType(page, "Browser");
           const panel = page.locator("section.bp");
@@ -327,17 +316,7 @@ suite.define(() => {
             expect(requestPath(request)).not.toBe("/tabs/focus");
           }
 
-          await captureUiProof(
-            suite,
-            page,
-            "browser-route-handoff",
-            `history-${includeHistory}-panel.png`,
-          );
-
           // The same live transport must still carry actionable browser results.
-          const focusCountBeforeBrowserResult = requests.filter(
-            (request) => requestPath(request) === "/tabs/focus",
-          ).length;
           await emitResult("browser-control", "browser", "Browser control output", {
             browserTab: {
               target: "host",
@@ -362,7 +341,7 @@ suite.define(() => {
             .toBe(true);
           expect(
             (await browserRequests()).filter((request) => requestPath(request) === "/tabs/focus"),
-          ).toHaveLength(focusCountBeforeBrowserResult);
+          ).toHaveLength(0);
         },
       );
     },
@@ -410,34 +389,30 @@ suite.define(() => {
               result(hostTab, "failed-host-open", 4_000, true),
               { role: "assistant", content: "The pages are ready.", timestamp: 5_000 },
             ],
-            methodResponses: {
-              "browser.request": {
-                cases: [
-                  ...routes.flatMap((tab) => {
-                    const address = {
-                      target: tab.target,
-                      ...("node" in tab ? { node: tab.node } : {}),
-                      query: { profile: tab.profile },
-                    };
-                    return browserCases(
-                      tab,
-                      { path: `/proof/${tab.profile}.png`, targetId: "t1", url: tab.url },
-                      address,
-                      [Object.assign({}, tab, { tabId: "t1" })],
-                    ).concat(browserCase("/tabs/focus", { ok: true }, address));
-                  }),
-                  browserCase("/tabs", {
-                    running: true,
-                    tabs: [
-                      {
-                        ...makeTab("default", "Default Chrome", "https://default.example/"),
-                        tabId: "t1",
-                      },
-                    ],
-                  }),
+            methodResponses: browserResponses(
+              ...routes.flatMap((tab) => {
+                const address = {
+                  target: tab.target,
+                  ...("node" in tab ? { node: tab.node } : {}),
+                  query: { profile: tab.profile },
+                };
+                return browserCases(
+                  tab,
+                  { path: `/proof/${tab.profile}.png`, targetId: "t1", url: tab.url },
+                  address,
+                  [Object.assign({}, tab, { tabId: "t1" })],
+                ).concat(browserCase("/tabs/focus", { ok: true }, address));
+              }),
+              browserCase("/tabs", {
+                running: true,
+                tabs: [
+                  {
+                    ...makeTab("default", "Default Chrome", "https://default.example/"),
+                    tabId: "t1",
+                  },
                 ],
-              },
-            },
+              }),
+            ),
           });
           const browserRequests = () => gateway.getRequests("browser.request");
           const focusRequests = async (offset = 0) =>
