@@ -85,6 +85,45 @@ export function measureClaudePartialMessage(
   );
 }
 
+/** Discount tool-result payloads, which are handed to consumers and never retained. */
+export function measureClaudeToolResultMessage(
+  parsed: Record<string, unknown>,
+  rawLine: string,
+): number | undefined {
+  const content = isRecord(parsed.message) ? parsed.message.content : undefined;
+  if (parsed.type !== "user" || !Array.isArray(content) || content.length === 0) {
+    return undefined;
+  }
+  const blocks: Record<string, unknown>[] = [];
+  for (const block of content) {
+    if (!isRecord(block) || block.type !== "tool_result") {
+      return undefined;
+    }
+    blocks.push(block);
+  }
+  // Claude Code echoes each payload under `message.content` and `tool_use_result`.
+  // Only the payloads are discounted; IDs, metadata, and padding stay charged,
+  // and the record still counts as an ordinary frame. Each discount is a lower
+  // bound on the payload's wire size: strings and structure re-encode minimally,
+  // but numbers need not (`1e20` re-encodes as 21 digits), so each is counted as
+  // one character. The discount therefore never exceeds what the wire carried.
+  let payloadChars = 0;
+  try {
+    for (const payload of [...blocks.map((block) => block.content), parsed.tool_use_result]) {
+      payloadChars +=
+        payload === undefined ? 0 : JSON.stringify(payload, minimalNumberEncoding).length;
+    }
+  } catch {
+    // A payload too deep to re-serialize falls back to raw accounting.
+    return undefined;
+  }
+  return Math.max(32, rawLine.length - payloadChars);
+}
+
+function minimalNumberEncoding(_key: string, value: unknown): unknown {
+  return typeof value === "number" ? 0 : value;
+}
+
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
 export function frameBoundedCliJsonlChunk(
   state: { pending: string },
