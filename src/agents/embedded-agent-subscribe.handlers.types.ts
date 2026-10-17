@@ -185,6 +185,8 @@ export type EmbeddedAgentSubscribeState = {
   assistantStream?: {
     raw: string;
     text: string;
+    /** Set while the block-reply source is verbatim, so markup-free text appends to it unchanged. */
+    blockVerbatim?: { endsOnBlankLine: boolean };
     projection?: {
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;

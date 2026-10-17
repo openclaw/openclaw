@@ -50,6 +50,18 @@ import {
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 
 const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
+// Text outside this set cannot open or close a tag, fence, code span, directive, or tool markup,
+// complete a MEDIA: token, or start a new line the media parser would see differently.
+const BLOCK_MARKUP_RE = /[<>[\]`~:\r]/;
+// The block preparer holds back a line that may become a MEDIA: directive.
+const MEDIA_LINE_START_RE = /\n\s*m/i;
+const MEDIA_BLANK_LINE_START_RE = /^\s*m|\n\s*m/i;
+const BLANK_RE = /^\s*$/;
+
+function appendedEndsOnBlankLine(wasBlank: boolean, appended: string): boolean {
+  const newline = appended.lastIndexOf("\n");
+  return BLANK_RE.test(appended.slice(newline + 1)) && (newline >= 0 || wasBlank);
+}
 
 export function handleMessageUpdate(
   ctx: EmbeddedAgentSubscribeContext,
@@ -329,6 +341,10 @@ export function handleMessageUpdate(
     extractThinkingFromTaggedStream(ctx.state.deltaBuffer, ctx.state.thinkingTagStream, chunk),
   );
   const wasThinking = ctx.state.partialBlockState.thinking;
+  const hadPendingBlockFragment = Boolean(
+    ctx.state.partialBlockState.pendingTagFragment ||
+    ctx.state.partialBlockState.pendingFenceFragment,
+  );
   let visibleDelta = "";
   let textIsAppend = false;
   let appendDelta: string | null = null;
@@ -518,20 +534,43 @@ export function handleMessageUpdate(
       (hasVisibleReply || replace) &&
       (replace ? cleanedText !== previousCleaned || hasAudio : Boolean(deltaText || hasAudio));
 
+    // Tagged block text is the tag-stripped source. When the previous frame was verbatim, a delta
+    // that passed the tag stripper unchanged and holds no markup extends it by exactly itself.
+    // Everything else, including each tag, fence, directive, and block boundary, reconciles.
+    const partialBlockState = ctx.state.partialBlockState;
+    const verbatimBlock = ctx.state.assistantStream?.blockVerbatim;
+    const taggedVerbatimAppend =
+      ctx.params.enforceFinalTag === true &&
+      verbatimBlock !== undefined &&
+      !hadPendingBlockFragment &&
+      partialBlockState.final &&
+      !partialBlockState.thinking &&
+      !partialBlockState.pendingTagFragment &&
+      !partialBlockState.pendingFenceFragment &&
+      !BLOCK_MARKUP_RE.test(chunk) &&
+      !(verbatimBlock.endsOnBlankLine ? MEDIA_BLANK_LINE_START_RE : MEDIA_LINE_START_RE).test(
+        chunk,
+      );
     const plainAppend =
       evtType === "text_delta" &&
       unchangedBlockAppend &&
       !snapshot &&
       !reprojectBlockReply &&
       !replace &&
-      !ctx.params.enforceFinalTag &&
+      (!ctx.params.enforceFinalTag || taggedVerbatimAppend) &&
       (priorBlockIndex === streamContentIndex ||
         (priorBlockIndex === undefined && !priorBlockText)) &&
       projection?.projector.matchesTrimmedSource &&
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
+    let blockVerbatim: { endsOnBlankLine: boolean } | undefined;
     if (plainAppend) {
       ctx.blockChunker.append(chunk);
+      if (taggedVerbatimAppend && verbatimBlock) {
+        blockVerbatim = {
+          endsOnBlankLine: appendedEndsOnBlankLine(verbatimBlock.endsOnBlankLine, chunk),
+        };
+      }
     } else {
       const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
         throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
@@ -544,13 +583,21 @@ export function handleMessageUpdate(
         final: finalText,
       });
       reconcileBlockReplySnapshot(ctx, previousBlock, nextBlock);
+      if (ctx.params.enforceFinalTag === true && nextBlock.verbatim) {
+        blockVerbatim = { endsOnBlankLine: nextBlock.endsOnBlankLine };
+      }
     }
     if (isTerminalSnapshot) {
       ctx.state.streamBlockText = content;
     }
 
     // Snapshot recovery discards incremental state; its scoped source seeds the next append.
-    ctx.state.assistantStream = { raw: nextRawStreamText, text: cleanedText, projection };
+    ctx.state.assistantStream = {
+      raw: nextRawStreamText,
+      text: cleanedText,
+      blockVerbatim,
+      projection,
+    };
 
     if (
       ctx.params.silentExpected ||
