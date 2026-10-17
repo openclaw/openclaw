@@ -65,6 +65,58 @@ function expectHealthCount(store: AuthProfileStore | null | undefined, count: nu
     failureCounts: { auth: count },
   });
 }
+function expectCredentials(store: AuthProfileStore | null | undefined, initial: AuthProfileStore) {
+  expect([store?.profiles, store?.order, store?.lastGood]).toEqual([
+    initial.profiles,
+    initial.order,
+    initial.lastGood,
+  ]);
+}
+function expectPublished(agentDir: string, store: AuthProfileStore) {
+  const persisted = loadPersistedAuthProfileStore(agentDir);
+  expect([store.usageStats, getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats]).toEqual([
+    persisted?.usageStats,
+    persisted?.usageStats,
+  ]);
+  return persisted;
+}
+function sharedOwnership(state: OpenClawTestState) {
+  writeConfigMachineState(
+    SHARED_AUTH_STORE_STATE_KEY,
+    { location: "state-db" },
+    { env: state.env },
+  );
+  noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
+}
+async function withoutHostSql(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  run: () => Promise<void>,
+) {
+  const sql = observeHostDataSql();
+  try {
+    database.db.prepare("SELECT 1").get();
+    expect(sql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
+    sql.calls.forEach((call) => call.mockClear());
+    await run();
+    expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+  } finally {
+    sql.restore();
+  }
+}
+async function holdAdmission(
+  options: Parameters<typeof admission.runOpenClawAgentWriteAdmission>[0] & { path: string },
+  run = () => {},
+) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const held = admission.runOpenClawAgentWriteAdmission(options, async () => {
+    entered.resolve();
+    await release.promise;
+    run();
+  });
+  await entered.promise;
+  return { held, release, observation: observeAdmission(options.path) };
+}
 
 type Owner = "local-agent" | "legacy-main" | "main-with-shared-base";
 const provider = "fixture-provider";
@@ -117,7 +169,7 @@ function observeAdmission(path: string) {
   };
 }
 
-async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
+async function fixture(state: OpenClawTestState, owner: Owner = "local-agent", empty = false) {
   const config = {
     agents: { entries: { main: {}, voice: {} } },
     models: {
@@ -136,12 +188,7 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
   prepareSharedAuthStoreOwnershipForNative(state.env);
   let sharedBefore: AuthProfileStore | undefined;
   if (owner === "main-with-shared-base") {
-    writeConfigMachineState(
-      SHARED_AUTH_STORE_STATE_KEY,
-      { location: "state-db" },
-      { env: state.env },
-    );
-    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
+    sharedOwnership(state);
     sharedBefore = {
       version: 1,
       profiles: {
@@ -157,9 +204,7 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
   const agentDir = state.agentDir(agentId);
   const initial: AuthProfileStore = {
     version: 1,
-    profiles: {
-      [siblingId]: apiKeyProfile(provider, "synthetic-sibling-key"),
-    },
+    profiles: { [siblingId]: apiKeyProfile(provider, "synthetic-sibling-key") },
     order: { [provider]: [siblingId] },
     lastGood: { [provider]: siblingId },
     usageStats: {
@@ -261,7 +306,9 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
     },
     getSessionId: () => "inline-auth-failure-session",
   });
-  return { agentDir, initial, store, database, controller, sharedBefore, derived };
+  const fail = (reason: "auth" | "timeout" = "auth") =>
+    controller.maybeMarkAuthProfileFailure({ reason });
+  return { agentDir, initial, store, database, fail, sharedBefore, derived };
 }
 
 it.each<[Owner, boolean]>([
@@ -273,23 +320,16 @@ it.each<[Owner, boolean]>([
   "persists %s inline-key failure without host data SQL (empty credentials: %s)",
   async (owner, empty) => {
     await withState("inline-auth-worker", async (state) => {
-      const { agentDir, initial, store, database, controller, sharedBefore, derived } =
-        await fixture(state, owner, empty);
+      const { agentDir, initial, store, database, fail, sharedBefore, derived } = await fixture(
+        state,
+        owner,
+        empty,
+      );
       if (empty) {
         expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
       }
-      const sql = observeHostDataSql();
-      let counts: number[];
-      try {
-        database.db.prepare("SELECT 1").get();
-        expect(sql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
-        sql.calls.forEach((call) => call.mockClear());
-        await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
-        counts = sql.calls.map((call) => call.mock.calls.length);
-      } finally {
-        sql.restore();
-      }
-      const persisted = loadPersistedAuthProfileStore(agentDir);
+      await withoutHostSql(database, fail);
+      const persisted = expectPublished(agentDir, store);
       if (empty) {
         expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
       }
@@ -303,13 +343,7 @@ it.each<[Owner, boolean]>([
             }
           : {}),
       });
-      expect(store.usageStats).toEqual(persisted?.usageStats);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(
-        persisted?.usageStats,
-      );
-      expect(persisted?.profiles).toEqual(initial.profiles);
-      expect(persisted?.order).toEqual(initial.order);
-      expect(persisted?.lastGood).toEqual(initial.lastGood);
+      expectCredentials(persisted, initial);
       expect(persisted?.usageStats?.[siblingId]).toEqual(initial.usageStats?.[siblingId]);
       if (sharedBefore) {
         expect(loadPersistedAuthProfileStore()).toEqual(sharedBefore);
@@ -321,51 +355,35 @@ it.each<[Owner, boolean]>([
         expect(child?.profiles).toEqual(derived.profiles);
         expect(loadPersistedAuthProfileStore(derived.agentDir)).toEqual(derived.durable);
       }
-      expect(counts).toEqual([0, 0, 0, 0, 0, 0]);
     });
   },
 );
 
 it("rejects a real inline-health write failure without publishing caller or runtime state", async () => {
   await withState("inline-auth-rejection", async (state) => {
-    const { agentDir, store, controller } = await fixture(state, "local-agent");
-    await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
-    const before = {
-      persisted: loadPersistedAuthProfileStore(agentDir),
-      caller: structuredClone(store),
-      runtime: getRuntimeAuthProfileStoreSnapshotCore(agentDir),
-    };
+    const { agentDir, store, fail } = await fixture(state);
+    await fail();
+    const before = healthState(agentDir, structuredClone(store));
     fault.enable();
-    await expect(controller.maybeMarkAuthProfileFailure({ reason: "auth" })).rejects.toThrow(
-      "synthetic inline-health write refused",
-    );
-    expect({
-      persisted: loadPersistedAuthProfileStore(agentDir),
-      caller: store,
-      runtime: getRuntimeAuthProfileStoreSnapshotCore(agentDir),
-    }).toEqual(before);
+    await expect(fail()).rejects.toThrow("synthetic inline-health write refused");
+    expect(healthState(agentDir, store)).toEqual(before);
     fault.disable();
     // This is a new caller request after repair, not an automatic retry of the refused write.
-    await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
-    const persisted = loadPersistedAuthProfileStore(agentDir);
-    expectHealthCount(persisted, 4);
-    expect(store.usageStats).toEqual(persisted?.usageStats);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(
-      persisted?.usageStats,
-    );
+    await fail();
+    expectHealthCount(expectPublished(agentDir, store), 4);
   });
 });
 
 it("rereads durable inline health in FIFO order and publishes before the next admitted reader", async () => {
   await withState("inline-auth-fifo", async (state) => {
-    const { agentDir, initial, store, database, controller } = await fixture(state, "local-agent");
+    const { agentDir, initial, store, database, fail } = await fixture(state);
     const options = { agentId: "voice", path: database.path, env: state.env };
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const earlier = admission.runOpenClawAgentWriteAdmission(options, async () => {
-      entered.resolve();
-      await release.promise;
-      saveAuthProfileStore(
+    const {
+      held: earlier,
+      release,
+      observation,
+    } = await holdAdmission(options, () => {
+      saveStore(
         {
           ...initial,
           usageStats: {
@@ -378,13 +396,10 @@ it("rereads durable inline health in FIFO order and publishes before the next ad
           },
         },
         agentDir,
-        { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
     });
-    await entered.promise;
-    const observation = observeAdmission(database.path);
     let settled = false;
-    const update = controller.maybeMarkAuthProfileFailure({ reason: "auth" }).finally(() => {
+    const update = fail().finally(() => {
       settled = true;
     });
     void update.catch(() => {});
@@ -408,9 +423,7 @@ it("rereads durable inline health in FIFO order and publishes before the next ad
         durable: persisted?.usageStats,
         runtime: persisted?.usageStats,
       });
-      expect(persisted?.profiles).toEqual(initial.profiles);
-      expect(persisted?.order).toEqual(initial.order);
-      expect(persisted?.lastGood).toEqual(initial.lastGood);
+      expectCredentials(persisted, initial);
       expect(persisted?.usageStats?.[siblingId]).toEqual(initial.usageStats?.[siblingId]);
     } finally {
       observation.restore();
@@ -424,18 +437,11 @@ it.each(["agent", "root"] as const)(
   "rejects inline health when its exact %s owner closes while admission is queued",
   async (scope) => {
     await withState("inline-auth-revocation", async (state) => {
-      const { agentDir, store, database, controller } = await fixture(state, "local-agent");
+      const { agentDir, store, database, fail } = await fixture(state);
       const options = { agentId: "voice", path: database.path, env: state.env };
       const before = healthState(agentDir, structuredClone(store));
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const held = admission.runOpenClawAgentWriteAdmission(options, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
-      const observation = observeAdmission(database.path);
-      const update = controller.maybeMarkAuthProfileFailure({ reason: "auth" });
+      const { held, release, observation } = await holdAdmission(options);
+      const update = fail();
       void update.catch(() => {});
       try {
         await observation.wait(update);
@@ -477,16 +483,11 @@ it.each(["local", "inherited"] as const)(
   "preserves captured shared usage while the scoped controller updates its %s inline counter",
   async (counterOwner) => {
     await withState("inline-auth-scope", async (state) => {
-      const { agentDir, initial, store, controller } = await fixture(state, "local-agent");
+      const { agentDir, initial, store, fail } = await fixture(state);
       const callerBefore = loadPersistedAuthProfileStore(agentDir);
       const scopedAgentDir = state.agentDir("main");
       const inheritedId = "shared-provider:inherited";
-      writeConfigMachineState(
-        SHARED_AUTH_STORE_STATE_KEY,
-        { location: "state-db" },
-        { env: state.env },
-      );
-      noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
+      sharedOwnership(state);
       const shared: AuthProfileStore = {
         version: 1,
         profiles: {
@@ -520,7 +521,7 @@ it.each(["local", "inherited"] as const)(
         Object.assign(store, loadAuthProfileStoreWithoutExternalProfiles(agentDir));
         expect(store.profiles[inheritedId]).toEqual(shared.profiles[inheritedId]);
         expect(store.profiles[siblingId]).toEqual(initial.profiles[siblingId]);
-        await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
+        await fail();
         const expectedCount = counterOwner === "local" ? 3 : 8;
         const persisted = loadPersistedAuthProfileStore(scopedAgentDir);
         expectHealthCount(persisted, expectedCount);
@@ -529,11 +530,9 @@ it.each(["local", "inherited"] as const)(
         const expectedSiblingUsage =
           initial.usageStats?.[siblingId] ?? shared.usageStats?.[siblingId];
         expect(store.usageStats?.[siblingId]).toEqual(expectedSiblingUsage);
-        expect(persisted?.profiles).toEqual(initial.profiles);
+        expectCredentials(persisted, initial);
         expect(persisted?.usageStats?.[inheritedId]).toBeUndefined();
         expect(persisted?.usageStats?.[siblingId]).toEqual(expectedSiblingUsage);
-        expect(persisted?.order).toEqual(initial.order);
-        expect(persisted?.lastGood).toEqual(initial.lastGood);
       });
       expect(sharedRows()).toEqual(beforeShared);
       expect(loadPersistedAuthProfileStore(agentDir)).toEqual(callerBefore);
@@ -545,7 +544,7 @@ it.each(["local-agent", "legacy-main"] as const)(
   "keeps a confirmed %s inline-health commit after owner close and a throwing invalidation observer",
   async (owner) => {
     await withState("inline-auth-committed", async (state) => {
-      const { agentDir, store, database, controller, derived } = await fixture(state, owner);
+      const { agentDir, store, database, fail, derived } = await fixture(state, owner);
       const snapshots = await import("../../auth-profiles/runtime-snapshots.js");
       const original = snapshots.noteRuntimeAuthProfileStorePersistedMutation;
       let closing: Promise<boolean> | undefined;
@@ -571,9 +570,7 @@ it.each(["local-agent", "legacy-main"] as const)(
           return revision;
         });
       try {
-        await expect(
-          controller.maybeMarkAuthProfileFailure({ reason: "auth" }),
-        ).resolves.toBeUndefined();
+        await expect(fail()).resolves.toBeUndefined();
         expect(closing).toBeDefined();
         await closing;
       } finally {
@@ -591,7 +588,7 @@ it.each(["local-agent", "legacy-main"] as const)(
         expect(getRuntimeAuthProfileStoreSnapshotCore(derived.agentDir)).toBeUndefined();
         expect(loadPersistedAuthProfileStore(derived.agentDir)).toEqual(derived.durable);
       }
-      await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
+      await fail();
       const recovered = loadPersistedAuthProfileStore(agentDir);
       expectHealthCount(recovered, 4);
       expect(store.usageStats).toEqual(recovered?.usageStats);
@@ -601,18 +598,9 @@ it.each(["local-agent", "legacy-main"] as const)(
 
 it("leaves inline-key health unchanged after a controller timeout without host data SQL", async () => {
   await withState("inline-auth-timeout", async (state) => {
-    const { agentDir, store, database, controller } = await fixture(state, "local-agent");
+    const { agentDir, store, database, fail } = await fixture(state);
     const before = healthState(agentDir, structuredClone(store));
-    const sql = observeHostDataSql();
-    try {
-      database.db.prepare("SELECT 1").get();
-      expect(sql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
-      sql.calls.forEach((call) => call.mockClear());
-      await controller.maybeMarkAuthProfileFailure({ reason: "timeout" });
-      expect(sql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
-    } finally {
-      sql.restore();
-    }
+    await withoutHostSql(database, () => fail("timeout"));
     expect(healthState(agentDir, store)).toEqual(before);
   });
 });

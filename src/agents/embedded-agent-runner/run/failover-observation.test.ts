@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 
@@ -42,7 +42,92 @@ function firstWarnDetails() {
   return details;
 }
 
-function expectPrivateHtml(rawError: string, kind: string) {
+afterEach(() => vi.restoreAllMocks());
+
+it.each<[Partial<DecisionBase>, string]>([
+  [{ timedOut: true }, "timeout"],
+  [
+    {
+      rawError: '{"error":{"type":"overloaded_error"}}',
+      failoverReason: "overloaded",
+      profileFailureReason: "overloaded",
+      fallbackConfigured: true,
+      timedOut: true,
+    },
+    "overloaded",
+  ],
+])("normalizes timeout observations without replacing explicit reasons: %j", (input, reason) => {
+  expect(observeDecision(input)).toMatchObject({
+    failoverReason: reason,
+    profileFailureReason: reason,
+    timedOut: true,
+  });
+});
+
+it("keeps current retry and carried rotation counts identical in structured and console details", () => {
+  createDecisionLogger({
+    failoverReason: "overloaded",
+    retryCount: 3,
+    profileRotationCount: 2,
+  })("retry_same_model", { retryCount: 1 });
+
+  expect(warn).toHaveBeenCalledTimes(1);
+  const details = firstWarnDetails();
+  expect(details).toMatchObject({
+    decision: "retry_same_model",
+    retryCount: 1,
+    profileRotationCount: 2,
+  });
+  expect(details.consoleMessage).toContain("retry=1 rotations=2 ");
+});
+it("omits normal continuation logs when debug is disabled", () => {
+  vi.spyOn(log, "isEnabled").mockReturnValue(false);
+  const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
+
+  createDecisionLogger()("continue_normal");
+
+  expect(warn).not.toHaveBeenCalled();
+  expect(debugSpy).not.toHaveBeenCalled();
+});
+
+it("includes from and to model refs when the source differs from the selected target", () => {
+  const logDecision = createDecisionLogger({
+    runId: "run:failover",
+    rawError: "timeout",
+    failoverReason: "timeout",
+    profileFailureReason: "timeout",
+    model: "gpt-5.4",
+    sourceProvider: "github-copilot",
+    sourceModel: "gpt-5.4-mini",
+    fallbackConfigured: true,
+    timedOut: true,
+    attemptCount: 4,
+    retryCount: 2,
+    profileRotationCount: 1,
+  });
+
+  logDecision("fallback_model");
+
+  expect(warn.mock.calls[0]?.[0]).toBe("embedded run failover decision");
+  const observation = firstWarnDetails();
+  expect(observation).toMatchObject({
+    decision: "fallback_model",
+    attemptCount: 4,
+    retryCount: 2,
+    profileRotationCount: 1,
+    sourceProvider: "github-copilot",
+    sourceModel: "gpt-5.4-mini",
+    provider: "openai",
+    model: "gpt-5.4",
+  });
+  expect(observation.consoleMessage).toContain("from=github-copilot/gpt-5.4-mini");
+  expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
+});
+
+it.each([
+  ["401 <!DOCTYPE html><html><body>Unauthorized</body></html>", "auth_html"],
+  ["403 <html>Enable JavaScript and cookies to continue.</html>", "upstream_html"],
+])("keeps %s bodies out of both diagnostic sinks", (rawError, kind) => {
   const observation = observeDecision(
     {
       rawError,
@@ -59,113 +144,4 @@ function expectPrivateHtml(rawError: string, kind: string) {
   expect(observation).not.toHaveProperty("rawErrorPreview");
   expect(JSON.stringify(observation)).not.toContain("<html>");
   expect(observation.consoleMessage).not.toContain("rawError=");
-  expect(observation.consoleMessage).not.toContain("<html>");
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-describe("createFailoverDecisionLogger timeout normalization", () => {
-  it("fills timeout observation reasons for deadline timeouts without provider error text", () => {
-    const observation = observeDecision({ runId: "run:timeout", timedOut: true });
-    expect(observation).toMatchObject({
-      failoverReason: "timeout",
-      profileFailureReason: "timeout",
-      timedOut: true,
-    });
-  });
-
-  it("preserves explicit failover reasons", () => {
-    const observation = observeDecision({
-      runId: "run:overloaded",
-      rawError: '{"error":{"type":"overloaded_error"}}',
-      failoverReason: "overloaded",
-      profileFailureReason: "overloaded",
-      fallbackConfigured: true,
-      timedOut: true,
-    });
-    expect(observation).toMatchObject({
-      failoverReason: "overloaded",
-      profileFailureReason: "overloaded",
-      timedOut: true,
-    });
-  });
-});
-
-describe("createFailoverDecisionLogger counters", () => {
-  it("keeps current retry and carried rotation counts identical in structured and console details", () => {
-    createDecisionLogger({
-      failoverReason: "overloaded",
-      retryCount: 3,
-      profileRotationCount: 2,
-    })("retry_same_model", { retryCount: 1 });
-
-    expect(warn).toHaveBeenCalledTimes(1);
-    const details = firstWarnDetails();
-    expect(details).toMatchObject({
-      decision: "retry_same_model",
-      retryCount: 1,
-      profileRotationCount: 2,
-    });
-    expect(details.consoleMessage).toContain("retry=1 rotations=2 ");
-  });
-});
-
-describe("createFailoverDecisionLogger", () => {
-  it("omits normal continuation logs when debug is disabled", () => {
-    vi.spyOn(log, "isEnabled").mockReturnValue(false);
-    const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
-
-    createDecisionLogger()("continue_normal");
-
-    expect(warn).not.toHaveBeenCalled();
-    expect(debugSpy).not.toHaveBeenCalled();
-  });
-
-  it("includes from and to model refs when the source differs from the selected target", () => {
-    const logDecision = createDecisionLogger({
-      runId: "run:failover",
-      rawError: "timeout",
-      failoverReason: "timeout",
-      profileFailureReason: "timeout",
-      model: "gpt-5.4",
-      sourceProvider: "github-copilot",
-      sourceModel: "gpt-5.4-mini",
-      fallbackConfigured: true,
-      timedOut: true,
-      attemptCount: 4,
-      retryCount: 2,
-      profileRotationCount: 1,
-    });
-
-    logDecision("fallback_model");
-
-    expect(warn.mock.calls[0]?.[0]).toBe("embedded run failover decision");
-    const observation = firstWarnDetails();
-    expect(observation).toMatchObject({
-      decision: "fallback_model",
-      attemptCount: 4,
-      retryCount: 2,
-      profileRotationCount: 1,
-      sourceProvider: "github-copilot",
-      sourceModel: "gpt-5.4-mini",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-    expect(observation.consoleMessage).toContain("from=github-copilot/gpt-5.4-mini");
-    expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
-  });
-
-  it("omits raw HTML auth bodies from consoleMessage for HTML 401 auth failures", () => {
-    expectPrivateHtml("401 <!DOCTYPE html><html><body>Unauthorized</body></html>", "auth_html");
-  });
-
-  it("omits raw HTML Cloudflare challenge bodies from consoleMessage for upstream_html 403", () => {
-    const cfChallengeHtml =
-      "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
-      "<body>Enable JavaScript and cookies to continue." +
-      "<p>Please stand by, while we are checking your browser...</p></body></html>";
-    expectPrivateHtml(cfChallengeHtml, "upstream_html");
-  });
 });
