@@ -131,7 +131,6 @@ function fixture() {
 describe("session active resource discovery", () => {
   it("projects verified desktop changes and releases the view on disposal", async () => {
     const f = fixture();
-    f.owner.browserAvailable = false;
     const sources: Array<string | null | undefined> = [];
     let refreshBinding: () => void = () => {};
     const dispose = createRoot((release) => {
