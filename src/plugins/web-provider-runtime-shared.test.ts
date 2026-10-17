@@ -45,7 +45,8 @@ vi.mock("./runtime.js", () => ({
   getActivePluginRegistryWorkspaceDir: mocks.getActivePluginRegistryWorkspaceDir,
 }));
 
-vi.mock("./runtime/load-context.js", () => ({
+vi.mock("./runtime/load-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime/load-context.js")>()),
   buildPluginRuntimeLoadOptions: mocks.buildPluginRuntimeLoadOptions,
   pluginRuntimeLoaderLogger: mocks.pluginRuntimeLoaderLogger,
 }));
