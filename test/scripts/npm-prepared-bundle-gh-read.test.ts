@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -11,13 +11,14 @@ let directory: string;
 let preload: string;
 let evidenceDir: string;
 let sourceSha: string;
+function writeFixture(file: string, value: string | Record<string, unknown>) {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
+}
 
 beforeAll(() => {
   directory = tempDirs.make("npm-proof-gh-read-");
-  writeFileSync(
-    join(directory, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.10.4" }),
-  );
+  writeFixture(join(directory, "package.json"), { name: "openclaw", version: "2026.10.4" });
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", directory, ...args], {
       encoding: "utf8",
@@ -32,11 +33,10 @@ beforeAll(() => {
   );
   sourceSha = git("rev-parse", "HEAD");
   evidenceDir = join(directory, "evidence");
-  mkdirSync(evidenceDir);
-  writeFileSync(join(evidenceDir, "evidence.json"), "{}\n");
+  writeFixture(join(evidenceDir, "evidence.json"), "{}\n");
   preload = join(directory, "transport.mjs");
   // Exercise the real CLI, subprocess adapter, and producer checks without live GitHub or sleeps.
-  writeFileSync(
+  writeFixture(
     preload,
     String.raw`import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -140,59 +140,57 @@ function runProof(failures: readonly Failure[], job: Record<string, unknown> = {
   };
 }
 
-describe("npm current-producer metadata recovery", () => {
-  it.each([
-    ["installation quota without headers", throttle(), [60_000]],
-    ["primary quota reset", throttle(resetHeaders(3600)), [3_600_000]],
-    ["429 retry-after", retryAfter("2", 429, "Too many requests"), [2000]],
-    ["HTTP-date retry-after", retryAfter(new Date(epoch + 3000).toUTCString()), [3000]],
-    [
-      "later reset wins",
-      throttle({
-        "retry-after": "1",
-        "x-ratelimit-remaining": "0",
-        "x-ratelimit-reset": String(epoch / 1000 + 5),
-      }),
-      [5000],
-    ],
-  ] as const)("recovers %s before describing exact evidence", (_name, failure, waits) => {
-    const proof = runProof([failure]);
-    expect(proof.result.status, proof.result.stderr).toBe(0);
-    expect(proof.waits).toEqual(waits);
-    expect(proof.requests).toHaveLength(2);
-    expect(JSON.parse(proof.result.stdout)).toMatchObject({
-      source: { sha: sourceSha },
-      producer: { jobId: "45", runId: "12", runAttempt: "2", workflowSha: sha },
-      artifact: { id: "78", digest: "b".repeat(64) },
-    });
-    expect(readFileSync(proof.output, "utf8")).toContain("proof_json=");
+it.each([
+  ["installation quota without headers", throttle(), [60_000]],
+  ["primary quota reset", throttle(resetHeaders(3600)), [3_600_000]],
+  ["429 retry-after", retryAfter("2", 429, "Too many requests"), [2000]],
+  ["HTTP-date retry-after", retryAfter(new Date(epoch + 3000).toUTCString()), [3000]],
+  [
+    "later reset wins",
+    throttle({
+      "retry-after": "1",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": String(epoch / 1000 + 5),
+    }),
+    [5000],
+  ],
+] as const)("recovers %s before describing exact evidence", (_name, failure, waits) => {
+  const proof = runProof([failure]);
+  expect(proof.result.status, proof.result.stderr).toBe(0);
+  expect(proof.waits).toEqual(waits);
+  expect(proof.requests).toHaveLength(2);
+  expect(JSON.parse(proof.result.stdout)).toMatchObject({
+    source: { sha: sourceSha },
+    producer: { jobId: "45", runId: "12", runAttempt: "2", workflowSha: sha },
+    artifact: { id: "78", digest: "b".repeat(64) },
   });
+  expect(readFileSync(proof.output, "utf8")).toContain("proof_json=");
+});
 
-  it.each([
-    ...[
-      { status: 401, message: "Bad credentials" },
-      { status: 403, message: "Resource not accessible by integration" },
-      { status: 404, message: "Not Found" },
-      { status: 500, message: "Internal Server Error" },
-    ].map((failure) => [failure.message, [failure], [], 1, {}] as const),
-    [
-      "exhausted retries",
-      Array.from({ length: 4 }, () => throttle()),
-      [60_000, 120_000, 240_000],
-      4,
-      {},
-    ],
-    ["server delay exceeds budget", [throttle({ "retry-after": "3900" }, 429)], [], 1, {}],
-    ...[{ run_attempt: 3 }, { head_sha: "c".repeat(40) }, { status: "completed" }].map(
-      (job) => [JSON.stringify(job), [throttle()], [60_000], 2, job] as const,
-    ),
-  ] as const)("rejects %s without emitting evidence", (_name, failures, waits, requests, job) => {
-    const proof = runProof(failures, job);
-    expect(proof).toMatchObject({ result: { status: 1 }, waits });
-    expect(proof.requests).toHaveLength(requests);
-    expect(existsSync(proof.output)).toBe(false);
-    if (Object.keys(job).length) {
-      expect(proof.result.stderr).toContain("Current npm producer job identity mismatch");
-    }
-  });
+it.each([
+  ...[
+    { status: 401, message: "Bad credentials" },
+    { status: 403, message: "Resource not accessible by integration" },
+    { status: 404, message: "Not Found" },
+    { status: 500, message: "Internal Server Error" },
+  ].map((failure) => [failure.message, [failure], [], 1, {}] as const),
+  [
+    "exhausted retries",
+    Array.from({ length: 4 }, () => throttle()),
+    [60_000, 120_000, 240_000],
+    4,
+    {},
+  ],
+  ["server delay exceeds budget", [throttle({ "retry-after": "3900" }, 429)], [], 1, {}],
+  ...[{ run_attempt: 3 }, { head_sha: "c".repeat(40) }, { status: "completed" }].map(
+    (job) => [JSON.stringify(job), [throttle()], [60_000], 2, job] as const,
+  ),
+] as const)("rejects %s without emitting evidence", (_name, failures, waits, requests, job) => {
+  const proof = runProof(failures, job);
+  expect(proof).toMatchObject({ result: { status: 1 }, waits });
+  expect(proof.requests).toHaveLength(requests);
+  expect(existsSync(proof.output)).toBe(false);
+  if (Object.keys(job).length) {
+    expect(proof.result.stderr).toContain("Current npm producer job identity mismatch");
+  }
 });

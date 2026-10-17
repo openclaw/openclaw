@@ -25,7 +25,7 @@ const dependency = {
 };
 const npmPath = "node_modules/npm";
 const nestedPath = `${npmPath}/node_modules/foo/node_modules/bar`;
-type Lock = ReturnType<typeof bundledLockFor>;
+type Lock = ReturnType<typeof lockFor>;
 
 function sourceFixture(packages: Record<string, Record<string, unknown>>) {
   const root = tempDirs.make("openclaw-npm-lock-report-");
@@ -66,35 +66,26 @@ function fixture() {
   return sourceFixture(packages);
 }
 
-function lockFor(packageDir: string) {
+function lockFor(packageDir: string, bundled = false) {
   const { name, version } = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
-  return {
-    name,
-    version,
-    lockfileVersion: 3,
-    requires: true,
-    packages: {
-      "": { name, version },
-      "node_modules/fixture": { ...dependency },
-    },
-  };
-}
-
-function bundledLockFor(packageDir: string) {
-  const lock = lockFor(packageDir);
   const packages: Record<string, Record<string, unknown>> = {
-    ...lock.packages,
-    "node_modules/npm": {
-      version: "11.20.0",
-      resolved: "https://registry.npmjs.org/npm/-/npm-11.20.0.tgz",
-      integrity: "sha512-fixture-npm",
-    },
-    // Reverse path order exercises report sorting, including scoped packages.
-    [nestedPath]: { version: "2.0.0", inBundle: true },
-    "node_modules/npm/node_modules/foo": { version: "1.0.0", inBundle: true },
-    "node_modules/npm/node_modules/@gar/promise-retry": { version: "1.0.3", inBundle: true },
+    "": { name, version },
+    "node_modules/fixture": { ...dependency },
   };
-  return { ...lock, packages };
+  if (bundled) {
+    Object.assign(packages, {
+      "node_modules/npm": {
+        version: "11.20.0",
+        resolved: "https://registry.npmjs.org/npm/-/npm-11.20.0.tgz",
+        integrity: "sha512-fixture-npm",
+      },
+      // Reverse path order exercises report sorting, including scoped packages.
+      [nestedPath]: { version: "2.0.0", inBundle: true },
+      "node_modules/npm/node_modules/foo": { version: "1.0.0", inBundle: true },
+      "node_modules/npm/node_modules/@gar/promise-retry": { version: "1.0.3", inBundle: true },
+    });
+  }
+  return { name, version, lockfileVersion: 3, requires: true, packages };
 }
 
 function mockLocks(build: (dir: string) => unknown) {
@@ -105,7 +96,7 @@ function mockLocks(build: (dir: string) => unknown) {
 
 async function rejectsLock(change: (lock: Lock) => void, error: string | RegExp, bundled = false) {
   mockLocks((dir) => {
-    const lock = bundled ? bundledLockFor(dir) : lockFor(dir);
+    const lock = lockFor(dir, bundled);
     change(lock);
     return lock;
   });
@@ -223,7 +214,7 @@ describe("npm package-lock release report", () => {
 
   it("records sorted bundled dependencies with their verified carrier without changing lock bytes", async () => {
     const root = sourceFixture({ ".": { dependencies: { npm: "11.20.0" } } });
-    const lock = bundledLockFor(root);
+    const lock = lockFor(root, true);
     const lockBytes = `${JSON.stringify(lock, null, 2)}\n`;
     vi.mocked(generateNpmPackageLocks).mockResolvedValue([lockBytes]);
 
@@ -257,13 +248,7 @@ describe("npm package-lock release report", () => {
     { carrier: `${npmPath}/node_modules/foo`, metadata: { version: "1.0.0" } },
   ])("rejects unverifiable carrier $carrier: $metadata", async ({ carrier, metadata }) => {
     await rejectsLock(
-      (lock) => {
-        if (metadata) {
-          lock.packages[carrier] = metadata;
-        } else {
-          delete lock.packages[carrier];
-        }
-      },
+      (lock) => Object.assign(lock.packages, { [carrier]: metadata }),
       `.: bundled npm lock entry ${nestedPath} has unverifiable carrier ${carrier}`,
       true,
     );
@@ -276,25 +261,11 @@ describe("npm package-lock release report", () => {
   });
 
   it.each([
-    { dev: true },
-    { link: true },
-    { resolved: "file:local.tgz" },
-    { version: undefined },
-    { version: "" },
-    { version: 1 },
-  ])("rejects unsupported bundled entry %j", async (invalid) => {
-    await rejectsLock(
-      (lock) => Object.assign(lock.packages[nestedPath]!, invalid),
-      `.: unsupported npm lock entry ${nestedPath}`,
-      true,
-    );
-  });
-
-  it.each([
-    { dev: true },
-    { link: true },
+    ...[{ dev: true }, { link: true }, { resolved: "file:local.tgz" }].flatMap((invalid) =>
+      [false, true].map((bundled) => ({ invalid, bundled })),
+    ),
+    ...[undefined, "", 1].map((version) => ({ invalid: { version }, bundled: true })),
     ...[
-      "file:local.tgz",
       "workspace:*",
       "git+https://example.com/repo",
       "git:repo",
@@ -302,14 +273,18 @@ describe("npm package-lock release report", () => {
       "https://github.com/org/repo",
       "",
       undefined,
-    ].map((resolved) => ({ resolved })),
-    { integrity: "" },
-    { integrity: undefined },
-    { inBundle: "true", integrity: undefined },
-  ])("rejects nonportable or incomplete entry %j", async (invalid) => {
+    ].map((resolved) => ({ invalid: { resolved }, bundled: false })),
+    ...[
+      { integrity: "" },
+      { integrity: undefined },
+      { inBundle: "true", integrity: undefined },
+    ].map((invalid) => ({ invalid, bundled: false })),
+  ])("rejects unsupported entry $invalid (bundled=$bundled)", async ({ invalid, bundled }) => {
+    const lockPath = bundled ? nestedPath : "node_modules/fixture";
     await rejectsLock(
-      (lock) => Object.assign(lock.packages["node_modules/fixture"]!, invalid),
-      ".: unsupported npm lock entry node_modules/fixture",
+      (lock) => Object.assign(lock.packages[lockPath]!, invalid),
+      `.: unsupported npm lock entry ${lockPath}`,
+      bundled,
     );
   });
 
