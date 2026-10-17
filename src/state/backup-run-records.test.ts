@@ -19,6 +19,8 @@ import {
   readBackupRuns,
   summarizeBackupTargets,
   recordBackupRunOutcome,
+  type BackupRunRecord,
+  type BackupRunFreshness,
 } from "./backup-run-records.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
@@ -99,13 +101,6 @@ const offsiteLocation = (namespace = "host") => ({
   storedBytes: 150,
 });
 
-function expectHint(message: string | RegExp) {
-  expect(mocks.note).toHaveBeenCalledWith(
-    typeof message === "string" ? expect.stringContaining(message) : expect.stringMatching(message),
-    "Backups",
-  );
-}
-
 async function checkHint(
   env: NodeJS.ProcessEnv,
   message?: string | RegExp,
@@ -120,7 +115,12 @@ async function checkHint(
   if (message === undefined) {
     expect(mocks.note).not.toHaveBeenCalled();
   } else {
-    expectHint(message);
+    expect(mocks.note).toHaveBeenCalledWith(
+      typeof message === "string"
+        ? expect.stringContaining(message)
+        : expect.stringMatching(message),
+      "Backups",
+    );
   }
 }
 
@@ -315,17 +315,19 @@ describe("backup run records", () => {
     });
   });
 
-  it.each(["archive", "git", "local archive"] as const)(
-    "retains each target and namespace's newest attempt and success beyond the 200-row window (%s)",
-    async (mode) => {
+  it.each([
+    ["archive", "occasional", "frequent", "occasional"],
+    ["git", "commit", undefined, "/backups/git"],
+    ["archive", undefined, undefined, "/backups/archive-252.tar.gz"],
+  ] as const)(
+    "retains %s target %s attempts and successes beyond the 200-row window",
+    async (kind, target, namespace, expectedTarget) => {
       const { env, record } = await fixture();
       const frequentRun = (index: number) => ({
-        archivePath: mode === "git" ? "/backups/git" : `/backups/archive-${index}.tar.gz`,
-        kind: mode === "git" ? ("git" as const) : ("archive" as const),
-        ...(mode === "local archive"
-          ? {}
-          : { target: mode === "git" ? `commit-${index}` : "occasional" }),
-        ...(mode === "archive" ? { namespace: "frequent" } : {}),
+        archivePath: kind === "git" ? "/backups/git" : `/backups/archive-${index}.tar.gz`,
+        kind,
+        target: target === "commit" ? `commit-${index}` : target,
+        namespace,
       });
       const occasional = {
         archivePath: "/backups/archive.tar.gz",
@@ -344,13 +346,8 @@ describe("backup run records", () => {
       }
       const targets = summarizeBackupTargets(await readBackupRuns(env));
       expect(targets.find((entry) => entry.latest.createdAt === 252)).toMatchObject({
-        kind: mode === "git" ? "git" : "archive",
-        target:
-          mode === "git"
-            ? "/backups/git"
-            : mode === "local archive"
-              ? "/backups/archive-252.tar.gz"
-              : "occasional",
+        kind,
+        target: expectedTarget,
         latest: { createdAt: 252, status: "ok" },
         latestOk: { createdAt: 252, status: "ok" },
       });
@@ -406,30 +403,20 @@ describe("backup run records", () => {
     await expect(fs.access(resolveOpenClawStateSqlitePath(env))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const statusValue = (
-      freshness: Parameters<typeof buildBackupStatusValue>[0]["freshness"],
-      now: number,
-    ) =>
-      buildBackupStatusValue({
-        freshness,
-        now,
-        formatTimeAgo: (ageMs) => `${ageMs / 3_600_000}h ago`,
-      });
+    const formatTimeAgo = (ageMs: number) => `${ageMs / 3_600_000}h ago`;
+    const statusValue = (freshness: BackupRunFreshness, now: number) =>
+      buildBackupStatusValue({ freshness, now, formatTimeAgo });
     expect(statusValue({}, 10)).toBe("none recorded");
-    expect(
-      statusValue(
-        {
-          latest: {
-            id: "failed",
-            createdAt: 1,
-            archivePath: "/backup",
-            status: "failed",
-            kind: "archive",
-          },
-        },
-        3 * 24 * 3_600_000 + 1,
-      ),
-    ).toBe("last attempt failed 72h ago (archive)");
+    const failed: BackupRunRecord = {
+      id: "failed",
+      createdAt: 1,
+      archivePath: "/backup",
+      status: "failed",
+      kind: "archive",
+    };
+    expect(statusValue({ latest: failed }, 3 * 24 * 3_600_000 + 1)).toBe(
+      "last attempt failed 72h ago (archive)",
+    );
     await checkHint(env, "No successful backup is recorded.");
 
     runOpenClawStateWriteTransaction(() => undefined, { env });

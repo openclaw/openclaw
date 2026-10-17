@@ -1,4 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
@@ -66,6 +67,17 @@ const cleanupParams = {
   orphanTranscriptMinAgeMs: 300_000,
   archiveRemovedEntryTranscripts: false,
 };
+const emptyCleanup = { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+const makeLogger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+
+function memoryConfig(workspace: string, memory?: OpenClawConfig["memory"]): OpenClawConfig {
+  return { cron: { enabled: false }, agents: { entries: { main: { workspace } } }, memory };
+}
+
+function publishConfig(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config, config);
+  onTestFinished(clearRuntimeConfigSnapshot);
+}
 
 const disabledCron = {
   isEnabled: async () => false,
@@ -105,7 +117,7 @@ function withState(label: string, run: (state: OpenClawTestState) => Promise<voi
 }
 
 function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig, managed = true) {
-  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const logger = makeLogger();
   const hooks = vi.fn<OpenClawPluginApi["on"]>();
   const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const owner = managed ? createManagedMemoryCore(config, logger) : undefined;
@@ -127,9 +139,7 @@ function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig, manag
   const hook = owner
     ? owner.registry.typedHooks.find((entry) => entry.hookName === "gateway_start")?.handler
     : hooks.mock.calls.find(([name]) => name === "gateway_start")?.[1];
-  if (!service || service.apiVersion === 2 || !hook) {
-    throw new Error("Memory Core did not register its startup lifecycle");
-  }
+  assert(service && service.apiVersion !== 2 && hook, "Missing Memory Core startup lifecycle");
   const scheduler = createTestPluginServiceScheduler();
   const context = {
     config,
@@ -212,12 +222,8 @@ it.each([
   "scrubs historical dreaming artifacts after pending $phase (managed: $managed)",
   async ({ managed, phase }) => {
     await withState("dreaming-admission", async (state) => {
-      const config: OpenClawConfig = {
-        cron: { enabled: false },
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      };
-      setRuntimeConfigSnapshot(config, config);
-      onTestFinished(clearRuntimeConfigSnapshot);
+      const config = memoryConfig(state.workspaceDir);
+      publishConfig(config);
       const sessionKey = "agent:main:dreaming-narrative-light-interrupted";
       const sessionId = "historical-narrative";
       const updatedAt = Date.now() - 600_000;
@@ -283,10 +289,7 @@ it("captures a store created during preparation only after admission completes",
     await withPendingPreparation(state, async (_admission, activate) => {
       const storePath = state.statePath("companion.sqlite");
       const cleanup = cleanupSessionLifecycleArtifacts({ ...cleanupParams, storePath });
-      const outcome = expect(cleanup).resolves.toEqual({
-        removedEntries: 0,
-        archivedTranscriptArtifacts: 0,
-      });
+      const outcome = expect(cleanup).resolves.toEqual(emptyCleanup);
       activate(() => {
         openOpenClawAgentDatabase({ agentId: "main", path: storePath });
       });
@@ -303,7 +306,7 @@ it("does not wait for unrelated pending agents when the selected agent is prepar
       expect(admission.waitForAgentPreparation("healthy", { env: state.env })).toBeUndefined();
       await expect(
         cleanupSessionLifecycleArtifacts({ ...cleanupParams, agentId: "healthy" }),
-      ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+      ).resolves.toEqual(emptyCleanup);
       expect(admission.hasPendingAgents).toBe(true);
     });
   });
@@ -386,10 +389,7 @@ it("keeps the identity guard when an existing database is replaced", async () =>
     openOpenClawAgentDatabase({ agentId: "main" });
     await expect(cleanup).rejects.toThrow("SQLite lifecycle cleanup database owner changed");
     await closeOpenClawAgentDatabasesAsync(state.stateDir);
-    await expect(cleanupSessionLifecycleArtifacts(cleanupParams)).resolves.toEqual({
-      removedEntries: 0,
-      archivedTranscriptArtifacts: 0,
-    });
+    await expect(cleanupSessionLifecycleArtifacts(cleanupParams)).resolves.toEqual(emptyCleanup);
   });
 });
 
@@ -400,15 +400,10 @@ it.for([
   { phase: "preparation" as const, outcome: "dispose" },
 ])("activates indexes after pending $phase ($outcome)", async ({ phase, outcome }, { signal }) => {
   await withState("memory-index-admission", async (state) => {
-    const config: OpenClawConfig = {
-      cron: { enabled: false },
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-      memory: {
-        search: { provider: "none", sources: ["memory"], store: { vector: { enabled: false } } },
-      },
-    };
-    setRuntimeConfigSnapshot(config, config);
-    onTestFinished(clearRuntimeConfigSnapshot);
+    const config = memoryConfig(state.workspaceDir, {
+      search: { provider: "none", sources: ["memory"], store: { vector: { enabled: false } } },
+    });
+    publishConfig(config);
     const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
     const memoryFiles: MemoryWorkspaceFiles = {
       assertCurrent() {},
@@ -437,23 +432,19 @@ it.for([
       memoryFiles,
       bridge: { readFile: unused, writeFile: unused, stat: unused },
     });
-    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const logger = makeLogger();
     const owner = createManagedMemoryCore(config, logger);
     const instance = getPluginInstance(owner.registry.plugins[0]!)!;
     const registeredRuntime = owner.registry.memoryCapabilities[0]?.capability.runtime;
     const service = owner.registry.services.find(
       (entry) => entry.service.id === "memory-core-index",
     )?.service;
-    if (!registeredRuntime || !service || service.apiVersion === 2) {
-      throw new Error("Memory Core did not register its indexing lifecycle");
-    }
+    assert(registeredRuntime && service && service.apiVersion !== 2, "Missing indexing lifecycle");
     const runtime = (getPluginOriginalValue(registeredRuntime, instance) ??
       registeredRuntime) as typeof registeredRuntime;
     // Service restarts reopen indexes only after a manager has run in this process.
     const earlier = await runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
-    if (!earlier.manager) {
-      throw new Error(earlier.error ?? "Expected an earlier memory manager");
-    }
+    assert(earlier.manager, earlier.error ?? "Expected an earlier memory manager");
     await runtime.closeAllMemorySearchManagers?.();
     subscriptions.length = 0;
     const getManager = runtime.getMemorySearchManager.bind(runtime);
@@ -501,20 +492,16 @@ it.for([
             if (outcome === "failed") {
               await service.stop?.(context);
               expect(result.manager).toBeNull();
-              expect(logger.warn).toHaveBeenCalledTimes(1);
-              expect(logger.warn).toHaveBeenCalledWith(
-                expect.stringContaining("memory-core: index startup failed for main:"),
-              );
-              expect(logger.warn).toHaveBeenCalledWith(
-                expect.stringContaining("synthetic index preparation failure"),
+              expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+                expect.stringMatching(
+                  /memory-core: index startup failed for main:.*synthetic index preparation failure/s,
+                ),
               );
               expect(subscriptions).toHaveLength(0);
               return;
             }
             const manager = result.manager;
-            if (!manager?.sync) {
-              throw new Error(result.error ?? "Startup did not acquire a memory manager");
-            }
+            assert(manager?.sync, result.error ?? "Startup did not acquire a memory manager");
             expect(logger.warn).not.toHaveBeenCalled();
             expect(subscriptions).toHaveLength(1);
             const indexed = createDeferredCore();

@@ -1,3 +1,60 @@
+import { vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { githubPublicationReceipts } from "./github-publication-receipts.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
+
+export function waitForPublicationGate(
+  signal: AbortSignal,
+  operation: PromiseLike<unknown>,
+  ...gates: PromiseLike<unknown>[]
+) {
+  return withinTest(
+    awaitGateBeforeSettlement(
+      Promise.all(gates),
+      operation,
+      "publication settled before observation",
+    ),
+    signal,
+  );
+}
+
+export function holdStateRead(type?: string) {
+  const ready = createDeferredCore();
+  const release = createDeferredCore();
+  const read = stateReads.executeExistingOpenClawStateRead;
+  const delayed: typeof read = async (options, command, readOptions) => {
+    const result = await read(options, command, readOptions);
+    if (!type || command.type === type) {
+      ready.resolve();
+      await release.promise;
+    }
+    return result;
+  };
+  const spy = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  if (type) {
+    spy.mockImplementation(delayed);
+  } else {
+    spy.mockImplementationOnce(delayed);
+  }
+  return { ready: ready.promise, release: release.resolve, restore: () => spy.mockRestore() };
+}
+
+export function observePublicationAuthority() {
+  const facts = new Map<string, unknown>();
+  const unknown: Array<string | symbol> = [];
+  const stop = githubPublicationReceipts.subscribeFacts((change) => {
+    if (change.kind === "committed") {
+      for (const [key, fact] of change.receipt.facts) {
+        facts.set(key, fact);
+      }
+    } else if (change.kind === "unknown") {
+      unknown.push(change.identity);
+    }
+  });
+  return { facts, unknown, stop };
+}
+
 export function publicationRowDefaults(requestId: string) {
   return {
     request_id: requestId,

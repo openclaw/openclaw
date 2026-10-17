@@ -71,17 +71,6 @@ function agentFixture(state: OpenClawTestState, agentId = "doomed") {
   };
 }
 
-it("denies unprepared authority without native SQL until the worker publishes its status", async () => {
-  await withOpenClawTestState({ label: "deletion-status-cold" }, async (state) => {
-    const fixture = agentFixture(state, "main");
-    fixture.blocked(true);
-    expect(await fixture.read()).toBe("absent");
-    fixture.blocked(false);
-    invalidateAgentDeletionJournalStatus(fixture.database.db, "main");
-    fixture.blocked(true);
-  });
-});
-
 it("revokes queued work and refuses the next turn after a worker deletion without rereading the journal", async () => {
   await withOpenClawTestState({ label: "deletion-status-admission" }, async (state) => {
     const fixture = agentFixture(state);
@@ -136,7 +125,7 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
   });
 });
 
-it("publishes completion and recreation only on commit and reloads a discarded tombstone fact", async () => {
+it("denies cold authority and publishes completion and recreation only on commit", async () => {
   await withOpenClawTestState({ label: "deletion-status-commit" }, async (state) => {
     const fixture = agentFixture(state);
     const input = {
@@ -144,8 +133,9 @@ it("publishes completion and recreation only on commit and reloads a discarded t
       operationId: "delete",
       deleteFiles: false,
     };
+    fixture.blocked(true);
     expect(await fixture.read()).toBe("absent");
-    expect(isAgentDeletionBlocked(input.agentId, fixture.options)).toBe(false);
+    fixture.blocked(false);
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
         beginAgentDeletionJournalInDatabase(database, input);
@@ -162,6 +152,7 @@ it("publishes completion and recreation only on commit and reloads a discarded t
     expect(isAgentDeletionBlocked(input.agentId, fixture.options)).toBe(true);
     const stateDatabase = fixture.database;
     invalidateAgentDeletionJournalStatus(stateDatabase.db, input.agentId);
+    fixture.blocked(true);
     seedAgentDeletionDiscovery(stateDatabase.path, {
       status: "unavailable",
       cause: "unreadable",

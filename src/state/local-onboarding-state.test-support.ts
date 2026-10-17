@@ -57,15 +57,9 @@ function onboarding(state: OpenClawTestState) {
 void describe("local onboarding state", () => {
   void it("does not create persistent state when checking an unconfigured install", async () => {
     await withOpenClawTestState({ label: "local-onboarding-empty" }, async (state) => {
-      assert.equal(readLocalOnboardingState(state.configPath, { env: state.env }), undefined);
-      assert.equal(
-        await completeLocalOnboarding({
-          configPath: state.configPath,
-          runId: "missing-run",
-          database: { env: state.env },
-        }),
-        false,
-      );
+      const { read, complete } = onboarding(state);
+      assert.equal(read(), undefined);
+      assert.equal(await complete("missing-run"), false);
       assert.equal(fs.existsSync(state.statePath("state", "openclaw.sqlite")), false);
     });
   });
