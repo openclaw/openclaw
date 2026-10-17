@@ -3,14 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
-import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   client,
   createGatewayHarness,
   flushMicrotasks,
   type RequestFn,
 } from "./overlays-access.test-support.ts";
-import { createApplicationOverlays } from "./overlays.ts";
+import {
+  createTestOverlays as createApplicationOverlays,
+  disposeTestOverlays,
+  updateHello,
+} from "./overlays-update.test-support.ts";
 
 const reportUpdateFailure = vi.hoisted(() =>
   vi.fn<typeof import("./update-failure-report.ts").reportUpdateFailure>(),
@@ -41,9 +44,7 @@ function harnessFor(request: RequestFn) {
   const harness = createGatewayHarness(client(request));
   harness.update({
     selfUser: { id: "gateway-owner" },
-    hello: {
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    } as ApplicationGatewaySnapshot["hello"],
+    hello: updateHello(undefined),
   });
   return harness;
 }
@@ -65,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  disposeTestOverlays();
   vi.unstubAllGlobals();
 });
 
@@ -73,16 +75,12 @@ it("does not admit a failure report without an identified administrator profile"
   const harness = harnessFor(request);
   harness.update({ selfUser: null });
   const overlays = createApplicationOverlays(harness.gateway);
-  try {
-    await flushMicrotasks();
-    expect(overlays.snapshot.reportableUpdateFailureId).toBe(FAILED_RUN.runId);
-    await overlays.reportUpdateFailure(FAILED_RUN.runId);
-    expect(reportUpdateFailure).not.toHaveBeenCalled();
-    expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
-    expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
-  } finally {
-    overlays.dispose();
-  }
+  await flushMicrotasks();
+  expect(overlays.snapshot.reportableUpdateFailureId).toBe(FAILED_RUN.runId);
+  await overlays.reportUpdateFailure(FAILED_RUN.runId);
+  expect(reportUpdateFailure).not.toHaveBeenCalled();
+  expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
+  expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
 });
 
 describe("update failure report continuity", () => {
@@ -96,29 +94,25 @@ describe("update failure report continuity", () => {
     }>();
     reportUpdateFailure.mockReturnValue(pending.promise);
     const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
-      expect(reportUpdateFailure).not.toHaveBeenCalled();
+    await flushMicrotasks();
+    expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+    expect(reportUpdateFailure).not.toHaveBeenCalled();
 
-      const first = overlays.reportUpdateFailure(attemptId);
-      const duplicate = overlays.reportUpdateFailure(attemptId);
-      expect(overlays.snapshot.updateFailureReportBusy).toBe(true);
-      await vi.waitFor(() => expect(reportUpdateFailure).toHaveBeenCalledOnce());
-      pending.resolve({
-        status: "created",
-        url: "https://github.com/openclaw/openclaw/issues/123",
-      });
-      await Promise.all([first, duplicate]);
+    const first = overlays.reportUpdateFailure(attemptId);
+    const duplicate = overlays.reportUpdateFailure(attemptId);
+    expect(overlays.snapshot.updateFailureReportBusy).toBe(true);
+    await vi.waitFor(() => expect(reportUpdateFailure).toHaveBeenCalledOnce());
+    pending.resolve({
+      status: "created",
+      url: "https://github.com/openclaw/openclaw/issues/123",
+    });
+    await Promise.all([first, duplicate]);
 
-      expect(reportUpdateFailure).toHaveBeenCalledOnce();
-      expect(overlays.snapshot.updateFailureReportNotice).toMatchObject({
-        attemptId,
-        result: { status: "created" },
-      });
-    } finally {
-      overlays.dispose();
-    }
+    expect(reportUpdateFailure).toHaveBeenCalledOnce();
+    expect(overlays.snapshot.updateFailureReportNotice).toMatchObject({
+      attemptId,
+      result: { status: "created" },
+    });
   });
 
   it("invalidates an open confirmation on disconnect and restores only the current action", async () => {
@@ -128,34 +122,30 @@ describe("update failure report continuity", () => {
     const first = deferred<null>();
     reportUpdateFailure.mockReturnValueOnce(first.promise).mockResolvedValueOnce(null);
     const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      const interrupted = overlays.reportUpdateFailure(attemptId);
-      await vi.waitFor(() => expect(reportUpdateFailure).toHaveBeenCalledOnce());
-      const admission = reportUpdateFailure.mock.calls[0]?.[0];
-      expect(admission?.isCurrent?.()).toBe(true);
+    await flushMicrotasks();
+    const interrupted = overlays.reportUpdateFailure(attemptId);
+    await vi.waitFor(() => expect(reportUpdateFailure).toHaveBeenCalledOnce());
+    const admission = reportUpdateFailure.mock.calls[0]?.[0];
+    expect(admission?.isCurrent?.()).toBe(true);
 
-      harness.update({ phase: "reconnecting", client: null, hello: null, selfUser: null });
-      expect(admission?.isCurrent?.()).toBe(false);
-      first.resolve(null);
-      await interrupted;
-      expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
-      expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
+    harness.update({ phase: "reconnecting", client: null, hello: null, selfUser: null });
+    expect(admission?.isCurrent?.()).toBe(false);
+    first.resolve(null);
+    await interrupted;
+    expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
+    expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
 
-      harness.update({
-        phase: "connected",
-        client: client(request),
-        hello: administrator,
-        selfUser: { id: "gateway-owner" },
-      });
-      await flushMicrotasks();
-      expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
-      expect(admission?.isCurrent?.()).toBe(false);
-      await overlays.reportUpdateFailure(attemptId);
-      expect(reportUpdateFailure).toHaveBeenCalledTimes(2);
-    } finally {
-      overlays.dispose();
-    }
+    harness.update({
+      phase: "connected",
+      client: client(request),
+      hello: administrator,
+      selfUser: { id: "gateway-owner" },
+    });
+    await flushMicrotasks();
+    expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+    expect(admission?.isCurrent?.()).toBe(false);
+    await overlays.reportUpdateFailure(attemptId);
+    expect(reportUpdateFailure).toHaveBeenCalledTimes(2);
   });
 
   it("retains the report action and visible error after submission fails", async () => {
@@ -163,55 +153,46 @@ describe("update failure report continuity", () => {
     const harness = harnessFor(request);
     reportUpdateFailure.mockRejectedValue(new Error("unknown method: update.report"));
     const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      await overlays.reportUpdateFailure(attemptId);
+    await flushMicrotasks();
+    await overlays.reportUpdateFailure(attemptId);
 
-      expect(overlays.snapshot.updateFailureReportNotice).toMatchObject({
-        attemptId,
-        result: { status: "error", message: expect.stringContaining("unknown method") },
-      });
-      expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
-      await overlays.refreshUpdateStatus();
-      expect(reportUpdateFailure).toHaveBeenCalledOnce();
-      expect(overlays.snapshot.updateFailureReportNotice?.result.status).toBe("error");
-    } finally {
-      overlays.dispose();
-    }
+    expect(overlays.snapshot.updateFailureReportNotice).toMatchObject({
+      attemptId,
+      result: { status: "error", message: expect.stringContaining("unknown method") },
+    });
+    expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+    await overlays.refreshUpdateStatus();
+    expect(reportUpdateFailure).toHaveBeenCalledOnce();
+    expect(overlays.snapshot.updateFailureReportNotice?.result.status).toBe("error");
   });
 });
 
-it.each([{ label: "legacy sentinel", run: null, attemptId: "handoff-failed" }])(
-  "keeps a reported $label across reconnect without reporting again",
-  async ({ run, attemptId }) => {
-    const request = requestForStatus(run);
-    const harness = harnessFor(request);
-    const hello = harness.gateway.snapshot.hello;
-    reportUpdateFailure.mockResolvedValue({
-      status: "created",
-      url: "https://github.com/openclaw/openclaw/issues/123",
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      await overlays.reportUpdateFailure(attemptId);
-      const notice = overlays.snapshot.updateFailureReportNotice;
-      harness.update({ phase: "reconnecting", client: null, hello: null, selfUser: null });
-      harness.update({
-        phase: "connected",
-        client: client(request),
-        hello,
-        selfUser: { id: "gateway-owner" },
-      });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateFailureReportNotice).toEqual(notice);
-      expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
-      expect(reportUpdateFailure).toHaveBeenCalledOnce();
-    } finally {
-      overlays.dispose();
-    }
-  },
-);
+it("keeps a reported legacy sentinel across reconnect without reporting again", async () => {
+  const attemptId = "handoff-failed";
+
+  const request = requestForStatus(null);
+  const harness = harnessFor(request);
+  const hello = harness.gateway.snapshot.hello;
+  reportUpdateFailure.mockResolvedValue({
+    status: "created",
+    url: "https://github.com/openclaw/openclaw/issues/123",
+  });
+  const overlays = createApplicationOverlays(harness.gateway);
+  await flushMicrotasks();
+  await overlays.reportUpdateFailure(attemptId);
+  const notice = overlays.snapshot.updateFailureReportNotice;
+  harness.update({ phase: "reconnecting", client: null, hello: null, selfUser: null });
+  harness.update({
+    phase: "connected",
+    client: client(request),
+    hello,
+    selfUser: { id: "gateway-owner" },
+  });
+  await flushMicrotasks();
+  expect(overlays.snapshot.updateFailureReportNotice).toEqual(notice);
+  expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+  expect(reportUpdateFailure).toHaveBeenCalledOnce();
+});
 
 it.each(["changed-facts", "running", "succeeded", "reconciled"] as const)(
   "invalidates report consent when authoritative run becomes %s",

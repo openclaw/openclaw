@@ -5,8 +5,12 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
+import {
+  createTestOverlays as createApplicationOverlays,
+  disposeTestOverlays,
+  updateHello,
+} from "./overlays-update.test-support.ts";
 import type { ApplicationUpdateOverlayHooks } from "./overlays-updates.ts";
-import { createApplicationOverlays } from "./overlays.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
 const FAILURE = updateRunFixture({
@@ -36,6 +40,7 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
 });
 afterEach(() => {
+  disposeTestOverlays();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -51,57 +56,51 @@ describe("update failure triage admission", () => {
     const admin = harness.gateway.snapshot.hello;
     const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
     let overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-    try {
-      await flushMicrotasks();
-      expect(onUpdateFailure).not.toHaveBeenCalled();
-      run = FAILURE;
-      harness.emitEvent("update.run.changed", run);
-      await flushMicrotasks();
-      expect(onUpdateFailure).not.toHaveBeenCalled();
-      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId);
-      overlays.diagnoseUpdateFailure("stale-attempt");
-      expect(onUpdateFailure).not.toHaveBeenCalled();
-      overlays.diagnoseUpdateFailure(FAILURE.runId);
-      const [failure, admission] = onUpdateFailure.mock.calls[0]!;
-      expect(failure).toMatchObject({
-        id: FAILURE.runId,
-        outcome: "failed",
-        attempt: {
-          reason: "build-failed",
-          beforeVersion: "2026.9.1",
-          afterVersion: "2.0.0",
-          failure: { step: "build", detail: "Disk is full" },
-        },
-      });
-      expect(overlays.snapshot.updateStatusBanner?.text).toContain("Disk is full");
-      expect(admission.admit()).toBe(true);
-      expect(admission.admit()).toBe(false);
-      harness.emitEvent("update.run.changed", run);
-      await overlays.refreshUpdateStatus();
-      expect(onUpdateFailure).toHaveBeenCalledOnce();
-      harness.update({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.read"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      expect(overlays.snapshot.updateRun).toBeNull();
-      expect(admission.isCurrent()).toBe(false);
-      harness.update({ hello: admin });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(FAILURE);
-      expect(onUpdateFailure).toHaveBeenCalledOnce();
-      overlays.dispose();
-      overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(FAILURE);
-      expect(onUpdateFailure).toHaveBeenCalledOnce();
-      overlays.diagnoseUpdateFailure(FAILURE.runId);
-      expect(onUpdateFailure).toHaveBeenCalledTimes(2);
-      expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
-      expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
-    } finally {
-      overlays.dispose();
-    }
+    await flushMicrotasks();
+    expect(onUpdateFailure).not.toHaveBeenCalled();
+    run = FAILURE;
+    harness.emitEvent("update.run.changed", run);
+    await flushMicrotasks();
+    expect(onUpdateFailure).not.toHaveBeenCalled();
+    expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId);
+    overlays.diagnoseUpdateFailure("stale-attempt");
+    expect(onUpdateFailure).not.toHaveBeenCalled();
+    overlays.diagnoseUpdateFailure(FAILURE.runId);
+    const [failure, admission] = onUpdateFailure.mock.calls[0]!;
+    expect(failure).toMatchObject({
+      id: FAILURE.runId,
+      outcome: "failed",
+      attempt: {
+        reason: "build-failed",
+        beforeVersion: "2026.9.1",
+        afterVersion: "2.0.0",
+        failure: { step: "build", detail: "Disk is full" },
+      },
+    });
+    expect(overlays.snapshot.updateStatusBanner?.text).toContain("Disk is full");
+    expect(admission.admit()).toBe(true);
+    expect(admission.admit()).toBe(false);
+    harness.emitEvent("update.run.changed", run);
+    await overlays.refreshUpdateStatus();
+    expect(onUpdateFailure).toHaveBeenCalledOnce();
+    harness.update({
+      hello: updateHello(undefined, "operator.read"),
+    });
+    expect(overlays.snapshot.updateRun).toBeNull();
+    expect(admission.isCurrent()).toBe(false);
+    harness.update({ hello: admin });
+    await flushMicrotasks();
+    expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+    expect(onUpdateFailure).toHaveBeenCalledOnce();
+    overlays.dispose();
+    overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+    await flushMicrotasks();
+    expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+    expect(onUpdateFailure).toHaveBeenCalledOnce();
+    overlays.diagnoseUpdateFailure(FAILURE.runId);
+    expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+    expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
+    expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
   });
 
   it.each(["Gateway", "profile", "client", "reconnect"] as const)(
@@ -133,76 +132,64 @@ describe("update failure triage admission", () => {
               : undefined,
         });
       };
-      try {
-        await flushMicrotasks();
-        expect(onUpdateFailure).not.toHaveBeenCalled();
-        overlays.diagnoseUpdateFailure(FAILURE.runId);
-        const admission = onUpdateFailure.mock.calls[0]![1];
-        switchScope(true);
-        await flushMicrotasks();
-        expect(admission.isCurrent()).toBe(false);
-        expect(admission.admit()).toBe(false);
-        expect(onUpdateFailure).toHaveBeenCalledOnce();
-        switchScope(false);
-        await flushMicrotasks();
-        overlays.dispose();
-        overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-        await flushMicrotasks();
-        expect(overlays.snapshot.updateRun).toEqual(FAILURE);
-        expect(onUpdateFailure).toHaveBeenCalledOnce();
-        overlays.diagnoseUpdateFailure(FAILURE.runId);
-        expect(onUpdateFailure).toHaveBeenCalledTimes(2);
-        expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
-      } finally {
-        overlays.dispose();
-      }
+      await flushMicrotasks();
+      expect(onUpdateFailure).not.toHaveBeenCalled();
+      overlays.diagnoseUpdateFailure(FAILURE.runId);
+      const admission = onUpdateFailure.mock.calls[0]![1];
+      switchScope(true);
+      await flushMicrotasks();
+      expect(admission.isCurrent()).toBe(false);
+      expect(admission.admit()).toBe(false);
+      expect(onUpdateFailure).toHaveBeenCalledOnce();
+      switchScope(false);
+      await flushMicrotasks();
+      overlays.dispose();
+      overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+      expect(onUpdateFailure).toHaveBeenCalledOnce();
+      overlays.diagnoseUpdateFailure(FAILURE.runId);
+      expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+      expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
     },
   );
 
-  it.each(["campaign"])(
-    "retires a queued failure admission when a newer %s starts",
-    async (source) => {
-      let run = FAILURE;
-      const request = vi.fn<RequestFn>(async () => ({ activeRun: run }));
-      const harness = updateRunHarness(request);
-      const onUpdateFailure =
-        vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
-      const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-      try {
-        await flushMicrotasks();
-        overlays.diagnoseUpdateFailure(FAILURE.runId);
-        const admission = onUpdateFailure.mock.calls[0]![1];
-        run = updateRunFixture({
-          runId: "00000000-0000-4000-8000-000000000002",
-          createdAtMs: 4_000,
-          updatedAtMs: 4_000,
-          origin: { campaignId: CAMPAIGN.campaign.id },
-        });
-        if (source === "campaign") {
-          harness.emitEvent("update.available", { schedule: CAMPAIGN });
-          expect(overlays.snapshot.updateRunning).toBe(true);
-          expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
-          overlays.diagnoseUpdateFailure(FAILURE.runId);
-          expect(overlays.snapshot.updateRun).toEqual(FAILURE);
-          expect(admission.isCurrent()).toBe(false);
-          expect(admission.admit()).toBe(false);
-          await overlays.runUpdate();
-          expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
-        }
-        harness.emitEvent("update.run.changed", run);
-        await flushMicrotasks();
-        expect(admission.isCurrent()).toBe(false);
-        expect(admission.admit()).toBe(false);
-        expect(overlays.snapshot.updateRun).toEqual(run);
-        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
-        expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
-        overlays.diagnoseUpdateFailure(run.runId);
-        expect(onUpdateFailure).toHaveBeenCalledOnce();
-      } finally {
-        overlays.dispose();
-      }
-    },
-  );
+  it("retires a queued failure admission when a newer campaign starts", async () => {
+    let run = FAILURE;
+    const request = vi.fn<RequestFn>(async () => ({ activeRun: run }));
+    const harness = updateRunHarness(request);
+    const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
+    const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+    await flushMicrotasks();
+    overlays.diagnoseUpdateFailure(FAILURE.runId);
+    const admission = onUpdateFailure.mock.calls[0]![1];
+    run = updateRunFixture({
+      runId: "00000000-0000-4000-8000-000000000002",
+      createdAtMs: 4_000,
+      updatedAtMs: 4_000,
+      origin: { campaignId: CAMPAIGN.campaign.id },
+    });
+
+    harness.emitEvent("update.available", { schedule: CAMPAIGN });
+    expect(overlays.snapshot.updateRunning).toBe(true);
+    expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
+    overlays.diagnoseUpdateFailure(FAILURE.runId);
+    expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+    expect(admission.isCurrent()).toBe(false);
+    expect(admission.admit()).toBe(false);
+    await overlays.runUpdate();
+    expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
+
+    harness.emitEvent("update.run.changed", run);
+    await flushMicrotasks();
+    expect(admission.isCurrent()).toBe(false);
+    expect(admission.admit()).toBe(false);
+    expect(overlays.snapshot.updateRun).toEqual(run);
+    expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+    expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
+    overlays.diagnoseUpdateFailure(run.runId);
+    expect(onUpdateFailure).toHaveBeenCalledOnce();
+  });
 
   it("does not turn failed status or hold requests into a failed update", async () => {
     let unavailable = false;
@@ -214,72 +201,59 @@ describe("update failure triage admission", () => {
     });
     const onUpdateFailure = vi.fn();
     const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-    try {
-      await flushMicrotasks();
-      unavailable = true;
-      await overlays.refreshUpdateStatus();
-      harness.emitEvent("update.available", {
-        schedule: {
-          ...CAMPAIGN,
-          campaign: { ...CAMPAIGN.campaign, state: "countdown", applyAtMs: Date.now() + 60_000 },
-        },
-      });
-      await overlays.holdUpdate();
-      expect(onUpdateFailure).not.toHaveBeenCalled();
-    } finally {
-      overlays.dispose();
-    }
+    await flushMicrotasks();
+    unavailable = true;
+    await overlays.refreshUpdateStatus();
+    harness.emitEvent("update.available", {
+      schedule: {
+        ...CAMPAIGN,
+        campaign: { ...CAMPAIGN.campaign, state: "countdown", applyAtMs: Date.now() + 60_000 },
+      },
+    });
+    await overlays.holdUpdate();
+    expect(onUpdateFailure).not.toHaveBeenCalled();
   });
-  it.each([{ code: "INVALID_REQUEST", message: "Invalid update request parameters" }])(
-    "preserves the sent rejection $message over historical success",
-    async (failure) => {
-      const previous = updateRunFixture({
-        status: "succeeded",
-        phase: "finished",
-        finishedAtMs: 3_000,
-      });
-      const request = vi.fn<RequestFn>(async (method, _params, options) => {
-        if (method === "update.run") {
-          options?.onSent?.("update-run-request");
-          throw new GatewayRequestError(failure);
-        }
-        return method === "update.status" ? { lastRun: previous } : {};
-      });
-      const harness = updateRunHarness(request);
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        await flushMicrotasks();
-        expect(overlays.snapshot.updateRun).toEqual(previous);
-        await overlays.runUpdate();
-        expect(overlays.snapshot.updateStatusBanner?.text).toContain(failure.message);
-        expect(overlays.snapshot.updateRun).toBeNull();
-        expect(overlays.snapshot.updateRunning).toBe(false);
-      } finally {
-        overlays.dispose();
-      }
-    },
-  );
+  it("preserves the sent rejection Invalid update request parameters over historical success", async () => {
+    const failure = { code: "INVALID_REQUEST", message: "Invalid update request parameters" };
 
-  it.each(["available"])("admits each explicit click once when session storage is %s", async () => {
+    const previous = updateRunFixture({
+      status: "succeeded",
+      phase: "finished",
+      finishedAtMs: 3_000,
+    });
+    const request = vi.fn<RequestFn>(async (method, _params, options) => {
+      if (method === "update.run") {
+        options?.onSent?.("update-run-request");
+        throw new GatewayRequestError(failure);
+      }
+      return method === "update.status" ? { lastRun: previous } : {};
+    });
+    const harness = updateRunHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    expect(overlays.snapshot.updateRun).toEqual(previous);
+    await overlays.runUpdate();
+    expect(overlays.snapshot.updateStatusBanner?.text).toContain(failure.message);
+    expect(overlays.snapshot.updateRun).toBeNull();
+    expect(overlays.snapshot.updateRunning).toBe(false);
+  });
+
+  it("admits each explicit click once when session storage is available", async () => {
     const harness = updateRunHarness(async () => ({ lastRun: FAILURE }));
     const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
     const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-    try {
-      await flushMicrotasks();
-      expect(onUpdateFailure).not.toHaveBeenCalled();
-      overlays.diagnoseUpdateFailure(FAILURE.runId);
-      const first = onUpdateFailure.mock.calls[0]![1];
-      overlays.diagnoseUpdateFailure(FAILURE.runId);
-      const second = onUpdateFailure.mock.calls[1]![1];
-      expect(first.isCurrent()).toBe(false);
-      expect(first.admit()).toBe(false);
-      expect(second.admit()).toBe(true);
-      expect(second.admit()).toBe(false);
-      overlays.diagnoseUpdateFailure(FAILURE.runId);
-      expect(onUpdateFailure.mock.calls[2]![1].admit()).toBe(true);
-      expect(onUpdateFailure).toHaveBeenCalledTimes(3);
-    } finally {
-      overlays.dispose();
-    }
+    await flushMicrotasks();
+    expect(onUpdateFailure).not.toHaveBeenCalled();
+    overlays.diagnoseUpdateFailure(FAILURE.runId);
+    const first = onUpdateFailure.mock.calls[0]![1];
+    overlays.diagnoseUpdateFailure(FAILURE.runId);
+    const second = onUpdateFailure.mock.calls[1]![1];
+    expect(first.isCurrent()).toBe(false);
+    expect(first.admit()).toBe(false);
+    expect(second.admit()).toBe(true);
+    expect(second.admit()).toBe(false);
+    overlays.diagnoseUpdateFailure(FAILURE.runId);
+    expect(onUpdateFailure.mock.calls[2]![1].admit()).toBe(true);
+    expect(onUpdateFailure).toHaveBeenCalledTimes(3);
   });
 });

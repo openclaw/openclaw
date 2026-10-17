@@ -38,6 +38,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function applyPrefs(
+  prefs: Record<string, unknown>,
+  hooks: Parameters<typeof applyServerUiPrefs>[1],
+) {
+  return applyServerUiPrefs(configWithPrefs(prefs), hooks);
+}
+
 function expectPatch(request: RequestMock, prefs: Record<string, unknown>) {
   const params = {
     raw: JSON.stringify({ ui: { prefs } }),
@@ -135,8 +142,8 @@ describe("server preferences", () => {
   it("applies only valid, known pref values", () => {
     const onApplied = vi.fn();
     expect(
-      applyServerUiPrefs(
-        configWithPrefs({
+      applyPrefs(
+        {
           theme: "knot",
           themeMode: "dark",
           accent: "#AbC123",
@@ -150,7 +157,7 @@ describe("server preferences", () => {
           chatMessageMaxWidth: "82%",
           sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
           bogus: true,
-        }),
+        },
         { onApplied },
       ),
     ).toBe(true);
@@ -218,33 +225,31 @@ describe("server preferences", () => {
     const afterCommit = vi.fn(() => committed.resolve());
     pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
     await committed.promise;
-    expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull();
+    expect(localStorage.getItem(pendingKey(scope))).toBeNull();
 
     expect(applyServerUiPrefs(oldSnapshot, { scope, onApplied })).toBe(false);
     expect(loadSettings().themeMode).toBe("dark");
     expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: true });
-    expect(applyServerUiPrefs(configWithPrefs({ themeMode: "light" }), { scope, onApplied })).toBe(
-      true,
-    );
+    expect(applyPrefs({ themeMode: "light" }, { scope, onApplied })).toBe(true);
     expect(loadSettings().themeMode).toBe("light");
   });
 
   it("restores product defaults when authored synced values are removed", () => {
     const onApplied = vi.fn();
-    applyServerUiPrefs(
-      configWithPrefs({
+    applyPrefs(
+      {
         theme: "knot",
         themeMode: "dark",
         accent: "#48d6c2",
         chatSendShortcut: "modifier-enter",
         locale: "de",
         chatFollowUpMode: "queue",
-      }),
+      },
       { onApplied },
     );
 
     const before = loadSettings();
-    expect(applyServerUiPrefs(configWithPrefs({}), { onApplied })).toBe(true);
+    expect(applyPrefs({}, { onApplied })).toBe(true);
     const reset = loadSettings();
     expect(changedServerUiPrefs(before, reset)).toEqual({
       theme: "claw",
@@ -275,32 +280,17 @@ describe("server preferences", () => {
     const client = createClient(request, scope);
     const onApplied = vi.fn();
     const onThemeChanged = vi.fn();
-    applyServerUiPrefs(configWithPrefs({ theme: "claw" }), {
-      scope,
-      onApplied,
-      onThemeChanged,
-    });
+    const hooks = { scope, onApplied, onThemeChanged };
+    applyPrefs({ theme: "claw" }, hooks);
     onThemeChanged.mockClear();
 
     pushServerUiPrefs(client, { theme: "knot" });
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "knot" }), {
-        scope,
-        onApplied,
-        onThemeChanged,
-      }),
-    ).toBe(false);
+    expect(applyPrefs({ theme: "knot" }, hooks)).toBe(false);
     expect(onThemeChanged).not.toHaveBeenCalled();
 
     onApplied.mockClear();
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "knot", locale: "de" }), {
-        scope,
-        onApplied,
-        onThemeChanged,
-      }),
-    ).toBe(true);
+    expect(applyPrefs({ theme: "knot", locale: "de" }, hooks)).toBe(true);
     expect(onApplied).toHaveBeenCalledExactlyOnceWith({ locale: "de" });
     expect(loadSettings().locale).toBe("de");
     expect(onThemeChanged).not.toHaveBeenCalled();
@@ -437,14 +427,17 @@ describe("server preferences", () => {
 
     pushServerUiPrefs(client, { themeMode: "dark" });
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    applyServerUiPrefs(configWithPrefs({ themeMode: "light", locale: "fr" }), {
-      scope: "ws://b",
-      onApplied: vi.fn(),
-    });
+    applyPrefs(
+      { themeMode: "light", locale: "fr" },
+      {
+        scope: "ws://b",
+        onApplied: vi.fn(),
+      },
+    );
     flight.resolve({});
 
     await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://a"))).toBeNull());
-    expect(JSON.parse(localStorage.getItem(pendingKey("ws://b")) ?? "{}")).toEqual({
+    expect(readPending("ws://b")).toEqual({
       locale: "de",
     });
   });
@@ -463,7 +456,7 @@ describe("server preferences", () => {
     Object.assign(writer.state, { client: null });
 
     pushServerUiPrefs(writer, { locale: "de" });
-    expect(JSON.parse(localStorage.getItem(pendingKey("")) ?? "{}")).toEqual({ locale: "de" });
+    expect(readPending("")).toEqual({ locale: "de" });
 
     const firstClient = createClient(request, "ws://first").state.client;
     Object.assign(writer.state, { client: firstClient });
@@ -503,7 +496,7 @@ describe("read-only server preference lifecycle", () => {
     expect(localStorage.getItem(retainedKey)).toBeNull();
 
     resetServerUiPrefsSync();
-    expect(applyServerUiPrefs(configWithPrefs({ theme: "claw" }), applied)).toBe(false);
+    expect(applyPrefs({ theme: "claw" }, applied)).toBe(false);
     expect(loadSettings().theme).toBe("knot");
     const previous = loadSettings();
     const state = resolveServerUiPrefState(initial, "theme", scope, previous, { canSync: false });
@@ -511,7 +504,7 @@ describe("read-only server preference lifecycle", () => {
     expect(reset.theme).toBe("claw");
     expect(changedServerUiPrefs(previous, reset)).toBeNull();
 
-    expect(applyServerUiPrefs(configWithPrefs({ theme: "dash" }), applied)).toBe(true);
+    expect(applyPrefs({ theme: "dash" }, applied)).toBe(true);
     expect(loadSettings().theme).toBe("dash");
     expect(request).not.toHaveBeenCalled();
   });
@@ -533,7 +526,7 @@ describe("read-only server preference lifecycle", () => {
     );
 
     expect(localStorage.getItem(retainedKey)).toBeNull();
-    expect(applyServerUiPrefs(configWithPrefs({ theme: "dash" }), applied)).toBe(true);
+    expect(applyPrefs({ theme: "dash" }, applied)).toBe(true);
     expect(loadSettings().theme).toBe("dash");
   });
 

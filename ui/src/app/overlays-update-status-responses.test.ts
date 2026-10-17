@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
-import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   client,
   createGatewayHarness,
@@ -13,9 +12,18 @@ import {
   AUTO_UPDATE_SCHEDULE,
   createAutomaticUpdateHarness,
 } from "./overlays-update-campaign.test-support.ts";
-import { createApplicationOverlays } from "./overlays.ts";
+import {
+  automaticSchedule,
+  createTestOverlays as createApplicationOverlays,
+  disposeTestOverlays,
+  updateHello,
+  updateStatusRequest,
+} from "./overlays-update.test-support.ts";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  disposeTestOverlays();
+  vi.useRealTimers();
+});
 
 describe("application update status response ownership", () => {
   it("finishes a fresh target check after campaign reconciliation emits an availability event", async () => {
@@ -42,13 +50,8 @@ describe("application update status response ownership", () => {
       },
     };
     let fetched = false;
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method !== "update.status") {
-        return Promise.resolve({});
-      }
-      return (params as { refreshCheckout?: boolean }).refreshCheckout
-        ? discovery.promise
-        : Promise.resolve(fetched ? response : {});
+    const request = updateStatusRequest((checkout) => {
+      return checkout ? discovery.promise : Promise.resolve(fetched ? response : {});
     });
     const harness = createGatewayHarness(client(request));
     const overlays = createApplicationOverlays(harness.gateway);
@@ -84,10 +87,7 @@ describe("application update status response ownership", () => {
       const refresh = overlays.refreshUpdateStatus();
       expect(overlays.snapshot.updateStatusRefreshing).toBe(true);
       harness.update({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.admin"] },
-          snapshot: { updateSchedule: AUTO_UPDATE_SCHEDULE },
-        } as ApplicationGatewaySnapshot["hello"],
+        hello: updateHello(AUTO_UPDATE_SCHEDULE),
       });
       discovery.resolve({ schedule: null });
       await expect(refresh).resolves.toBe(false);
@@ -105,11 +105,8 @@ describe("application update status response ownership", () => {
     const first = updateRunFixture({ phase: "staging", updatedAtMs: 1_000 });
     const next = updateRunFixture({ phase: "validating", updatedAtMs: 6_000 });
     let run = first;
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method !== "update.status") {
-        return Promise.resolve({});
-      }
-      return (params as { refreshCheckout?: boolean }).refreshCheckout
+    const request = updateStatusRequest((checkout) => {
+      return checkout
         ? discovery.promise
         : Promise.resolve({ activeRun: run, schedule: AUTO_UPDATE_SCHEDULE });
     });
@@ -143,13 +140,9 @@ describe("application update status response ownership", () => {
     });
     const harness = createGatewayHarness(client(async () => ({ lastRun: finished })));
     const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
-      expect(overlays.snapshot.updateRun).toEqual(finished);
-      expect(overlays.snapshot.updateRunning).toBe(false);
-    } finally {
-      overlays.dispose();
-    }
+    await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
+    expect(overlays.snapshot.updateRun).toEqual(finished);
+    expect(overlays.snapshot.updateRunning).toBe(false);
   });
 
   it.each(["unchanged", "access", "gateway"])(
@@ -158,61 +151,47 @@ describe("application update status response ownership", () => {
       vi.useFakeTimers();
       let failCheckout = true;
       let failProgress = false;
-      const request = vi.fn<RequestFn>((method, params) => {
-        if (method !== "update.status") {
-          return Promise.resolve({});
-        }
-        const checkout = (params as { refreshCheckout?: boolean }).refreshCheckout;
+      const request = updateStatusRequest((checkout) => {
         return (checkout ? failCheckout : failProgress)
           ? Promise.reject(new Error(checkout ? "checkout unavailable" : "completion unavailable"))
           : Promise.resolve({ schedule: AUTO_UPDATE_SCHEDULE });
       });
       const harness = createAutomaticUpdateHarness(request);
       const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        await flushMicrotasks();
-        await expect(overlays.refreshUpdateStatus()).resolves.toBe(false);
-        expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
-        if (scope === "access") {
-          for (const permission of ["operator.read", "operator.admin"]) {
-            harness.update({
-              hello: {
-                auth: { role: "operator", scopes: [permission] },
-                snapshot: { updateSchedule: AUTO_UPDATE_SCHEDULE },
-              } as ApplicationGatewaySnapshot["hello"],
-            });
-          }
-        } else if (scope === "gateway") {
-          harness.gateway.connection.gatewayUrl = "ws://replacement-gateway.test";
-          harness.update({});
+      await flushMicrotasks();
+      await expect(overlays.refreshUpdateStatus()).resolves.toBe(false);
+      expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
+      if (scope === "access") {
+        for (const permission of ["operator.read", "operator.admin"]) {
+          harness.update({
+            hello: updateHello(AUTO_UPDATE_SCHEDULE, permission),
+          });
         }
-        await flushMicrotasks();
-        if (scope !== "unchanged") {
-          expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
-        }
-        failProgress = true;
-        harness.emitEvent("update.available", {
-          schedule: {
-            ...AUTO_UPDATE_SCHEDULE,
-            campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, state: "applying" },
-          },
-        });
-        harness.emitEvent("update.available", { schedule: AUTO_UPDATE_SCHEDULE });
-        await flushMicrotasks();
-        expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
-          scope === "unchanged" ? "checkout unavailable" : "completion unavailable",
-        );
-        failProgress = false;
-        await vi.advanceTimersByTimeAsync(5_000);
-        if (scope === "unchanged") {
-          expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
-          failCheckout = false;
-          await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
-        }
-        expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
-      } finally {
-        overlays.dispose();
+      } else if (scope === "gateway") {
+        harness.gateway.connection.gatewayUrl = "ws://replacement-gateway.test";
+        harness.update({});
       }
+      await flushMicrotasks();
+      if (scope !== "unchanged") {
+        expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
+      }
+      failProgress = true;
+      harness.emitEvent("update.available", {
+        schedule: automaticSchedule({ state: "applying" }),
+      });
+      harness.emitEvent("update.available", { schedule: AUTO_UPDATE_SCHEDULE });
+      await flushMicrotasks();
+      expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
+        scope === "unchanged" ? "checkout unavailable" : "completion unavailable",
+      );
+      failProgress = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (scope === "unchanged") {
+        expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain("checkout unavailable");
+        failCheckout = false;
+        await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
+      }
+      expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
     },
   );
 
@@ -220,10 +199,7 @@ describe("application update status response ownership", () => {
     vi.useFakeTimers();
     const currentRun = updateRunFixture({ phase: "validating", updatedAtMs: 6_000 });
     const staleRun = updateRunFixture({ phase: "staging", updatedAtMs: 1_000 });
-    const nextSchedule = {
-      ...AUTO_UPDATE_SCHEDULE,
-      campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, holdUntilMs: 90_000, updatedAtMs: 6_000 },
-    };
+    const nextSchedule = automaticSchedule({ holdUntilMs: 90_000, updatedAtMs: 6_000 });
     let polled = false;
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(
@@ -264,11 +240,8 @@ describe("application update status response ownership", () => {
     let reconciled = false;
     const first = updateRunFixture({ phase: "staging", updatedAtMs: 1_000 });
     const next = updateRunFixture({ phase: "validating", updatedAtMs: 6_000 });
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method !== "update.status") {
-        return Promise.resolve({});
-      }
-      if ((params as { refreshCheckout?: boolean }).refreshCheckout) {
+    const request = updateStatusRequest((checkout) => {
+      if (checkout) {
         checking = true;
         return discovery.promise;
       }
@@ -311,11 +284,8 @@ describe("application update status response ownership", () => {
       install: { kind: "git", git: { status: "behind", commitsBehind: 12 } },
     };
     let progressReads = 0;
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method !== "update.status") {
-        return Promise.resolve({});
-      }
-      return (params as { refreshCheckout?: boolean }).refreshCheckout
+    const request = updateStatusRequest((checkout) => {
+      return checkout
         ? Promise.resolve({ schedule: freshSchedule })
         : ++progressReads <= 2
           ? progress.promise
@@ -348,32 +318,23 @@ describe("application update status response ownership", () => {
         ts: 1_000,
         stats: { reason: "build-failed" },
       };
-      const request = vi.fn<RequestFn>((method, params) => {
-        if (method !== "update.status") {
-          return Promise.resolve({});
-        }
-        return (params as { refreshCheckout?: boolean }).refreshCheckout
+      const request = updateStatusRequest((checkout) => {
+        return checkout
           ? Promise.resolve(outcome === "run" ? { activeRun: run } : { sentinel })
           : Promise.reject(new Error("fast progress unavailable"));
       });
       const harness = createGatewayHarness(client(request));
       harness.update({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.admin"] },
-        } as ApplicationGatewaySnapshot["hello"],
+        hello: updateHello(undefined),
       });
       const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        await expect(overlays.refreshUpdateStatus()).resolves.toBe(false);
-        expect(overlays.snapshot.updateStatusCheckBanner).not.toBeNull();
-        if (outcome === "run") {
-          expect(overlays.snapshot.updateRun).toEqual(run);
-        } else {
-          expect(overlays.snapshot.recordedUpdateAttempt?.timestampMs).toBe(1_000);
-          expect(overlays.snapshot.updateStatusBanner?.text).toContain("build-failed");
-        }
-      } finally {
-        overlays.dispose();
+      await expect(overlays.refreshUpdateStatus()).resolves.toBe(false);
+      expect(overlays.snapshot.updateStatusCheckBanner).not.toBeNull();
+      if (outcome === "run") {
+        expect(overlays.snapshot.updateRun).toEqual(run);
+      } else {
+        expect(overlays.snapshot.recordedUpdateAttempt?.timestampMs).toBe(1_000);
+        expect(overlays.snapshot.updateStatusBanner?.text).toContain("build-failed");
       }
     },
   );

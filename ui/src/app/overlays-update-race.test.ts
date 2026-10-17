@@ -4,10 +4,18 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
-import { createApplicationOverlays } from "./overlays.ts";
+import {
+  createTestOverlays as createApplicationOverlays,
+  disposeTestOverlays,
+  updateHello,
+  updateStatusRequest,
+} from "./overlays-update.test-support.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  disposeTestOverlays();
+  vi.restoreAllMocks();
+});
 
 describe("update run response races", () => {
   it("retires privileged run facts when reconnect authenticates without administrator access", async () => {
@@ -17,31 +25,23 @@ describe("update run response races", () => {
       reason: "build-failed",
       finishedAtMs: 3_000,
     });
-    const request = vi.fn<RequestFn>(async (method) =>
-      method === "update.status" ? { lastRun: run } : {},
-    );
+    const request = updateStatusRequest(() => ({ lastRun: run }));
     const harness = updateRunHarness(request);
     const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(run);
-      expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
-      harness.update({ phase: "reconnecting", hello: null });
-      expect(overlays.snapshot.updateRun).toEqual(run);
-      // A build-skew handshake publishes its new auth before connection admission.
-      harness.update({
-        phase: "reconnecting",
-        hello: {
-          auth: { role: "operator", scopes: ["operator.read"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      harness.update({ phase: "connected" });
-      expect(overlays.snapshot.updateRun).toBeNull();
-      expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
-      expect(overlays.snapshot.updateStatusBanner).toBeNull();
-    } finally {
-      overlays.dispose();
-    }
+    await flushMicrotasks();
+    expect(overlays.snapshot.updateRun).toEqual(run);
+    expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
+    harness.update({ phase: "reconnecting", hello: null });
+    expect(overlays.snapshot.updateRun).toEqual(run);
+    // A build-skew handshake publishes its new auth before connection admission.
+    harness.update({
+      phase: "reconnecting",
+      hello: updateHello(undefined, "operator.read"),
+    });
+    harness.update({ phase: "connected" });
+    expect(overlays.snapshot.updateRun).toBeNull();
+    expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+    expect(overlays.snapshot.updateStatusBanner).toBeNull();
   });
 
   it.each(["activeRun", "lastRun"] as const)(
@@ -114,9 +114,7 @@ describe("update run response races", () => {
           });
         } else if (boundary === "administrator") {
           harness.update({
-            hello: {
-              auth: { role: "operator", scopes: ["operator.read"] },
-            } as ApplicationGatewaySnapshot["hello"],
+            hello: updateHello(undefined, "operator.read"),
           });
         } else {
           overlays.dispose();
@@ -187,9 +185,7 @@ describe("update run response races", () => {
     try {
       expect(overlays.snapshot.updateRunning).toBe(true);
       harness.update({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.read"] },
-        } as ApplicationGatewaySnapshot["hello"],
+        hello: updateHello(undefined, "operator.read"),
       });
       drained.resolve();
       await running;
