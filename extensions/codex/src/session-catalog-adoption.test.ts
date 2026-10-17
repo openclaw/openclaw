@@ -48,6 +48,69 @@ function continueSource(
   return continueLocalCodexSession({ config, threadId: "thread-1", ...params });
 }
 
+function adoptionFixture(
+  options: Parameters<typeof createRuntime>[0] = {},
+  control = createEligibleControl(),
+) {
+  const fixture = createRuntime(options);
+  return {
+    ...fixture,
+    ...createGatewayApi(fixture.runtime),
+    control,
+    bindingStore: createCodexTestBindingStore(),
+  };
+}
+
+function catalogRow(threadId: string, status = "idle") {
+  return { threadId, status, archived: false as const };
+}
+
+function catalogControl(threadIds: string[], status = "idle") {
+  return createControl({
+    listPage: vi.fn(async () => ({ sessions: threadIds.map((id) => catalogRow(id, status)) })),
+  });
+}
+
+async function adoptedSource(
+  sourceThreadId: string,
+  entry = adoptedEntry({ sourceThreadId }),
+  pending = false,
+) {
+  const sessionKey = supervisionSessionKey(sourceThreadId);
+  const fixture = adoptionFixture(
+    { entries: [{ sessionKey, entry }] },
+    catalogControl([sourceThreadId]),
+  );
+  await seedSupervisionBinding({
+    bindingStore: fixture.bindingStore,
+    sessionId: entry.sessionId,
+    sessionKey,
+    sourceThreadId,
+    pending,
+  });
+  return { ...fixture, sessionKey };
+}
+
+function pauseHistoryImport() {
+  const entered = createDeferred<void>();
+  const gate = createDeferred<void>();
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockImplementationOnce(async () => {
+    entered.resolve();
+    await gate.promise;
+    return { importedMessages: 0, omittedMessages: 0 };
+  });
+  return {
+    gate,
+    wait: (continuing: Promise<unknown>) =>
+      Promise.race([
+        entered.promise,
+        continuing.then(() => {
+          throw new Error("Continue finished without entering the paused history import");
+        }),
+      ]),
+  };
+}
+
 describe("Codex supervision catalog", () => {
   it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
     const state = createCodexSqliteTestBindingStateStore({
@@ -83,15 +146,7 @@ describe("Codex supervision catalog", () => {
           config,
           runtime,
           sessionEntries,
-          control: createControl({
-            listPage: vi.fn(async () => ({
-              sessions: ["first", "second"].map((threadId) => ({
-                threadId,
-                status: "idle",
-                archived: false as const,
-              })),
-            })),
-          }),
+          control: catalogControl(["first", "second"]),
         });
       expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual(
         entries.map((entry) => entry.sessionKey),
@@ -164,34 +219,16 @@ describe("Codex supervision catalog", () => {
     };
     const bindingStore = createCodexTestBindingStore();
     await seedSupervisionBinding({ bindingStore, sessionId, sessionKey, sourceThreadId });
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [{ threadId: sourceThreadId, status: "idle", archived: false as const }],
-      })),
-    });
+    const control = catalogControl([sourceThreadId]);
     const list = () =>
       listCodexSessionCatalog({ bindingStore, config, runtime, control, sessionEntries });
     expect((await list()).hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
     const coldInspections = inspectedEntries;
-    const started = performance.now();
-    const cpuBefore = process.threadCpuUsage();
     let result: Awaited<ReturnType<typeof list>> | undefined;
     for (let listIndex = 0; listIndex < 100; listIndex++) {
       result = await list();
     }
-    const cpu = process.threadCpuUsage(cpuBefore);
     const warmInspections = inspectedEntries - coldInspections;
-    console.info(
-      "catalog adoption preparation measurements",
-      JSON.stringify({
-        localSessionCount: entries.length,
-        warmLists: 100,
-        coldInspections,
-        warmInspections,
-        wallMs: performance.now() - started,
-        threadCpuMs: (cpu.user + cpu.system) / 1_000,
-      }),
-    );
     expect(result?.hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
     expect(warmInspections).toBe(0);
 
@@ -255,14 +292,10 @@ describe("Codex supervision catalog", () => {
   });
 
   it("enriches only the local source row with its adopted OpenClaw session", async () => {
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [{ threadId: "source-thread", status: "active", archived: false }],
-      })),
-    });
+    const control = catalogControl(["source-thread"], "active");
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
       payloadJSON: JSON.stringify({
-        sessions: [{ threadId: "source-thread", status: "idle", archived: false }],
+        sessions: [catalogRow("source-thread")],
       }),
     }));
     const { runtime, entries } = createRuntime({
@@ -311,29 +344,14 @@ describe("Codex supervision catalog", () => {
   });
 
   it("does not expose an adopted marker while generic initialization remains pending", async () => {
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [{ threadId: "source-thread", status: "idle", archived: false }],
-      })),
-    });
-    const { runtime, entries } = createRuntime();
-    const sessionKey = supervisionSessionKey("source-thread");
-    const sessionId = "openclaw-session-pending";
-    entries.push({
-      sessionKey,
-      entry: {
-        ...adoptedEntry({ sourceThreadId: "source-thread", sessionId }),
+    const { runtime, control, bindingStore } = await adoptedSource(
+      "source-thread",
+      {
+        ...adoptedEntry({ sourceThreadId: "source-thread", sessionId: "openclaw-session-pending" }),
         initializationPending: true,
       },
-    });
-    const bindingStore = createCodexTestBindingStore();
-    await seedSupervisionBinding({
-      bindingStore,
-      sessionId,
-      sessionKey,
-      sourceThreadId: "source-thread",
-      pending: true,
-    });
+      true,
+    );
 
     const result = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
 
@@ -341,41 +359,19 @@ describe("Codex supervision catalog", () => {
   });
 
   it("ignores a public marker retarget and trusts the private source binding", async () => {
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [
-          { threadId: "source-thread", status: "idle", archived: false },
-          { threadId: "forged-thread", status: "idle", archived: false },
-        ],
-      })),
-    });
-    const sessionKey = supervisionSessionKey("source-thread");
-    const sessionId = "openclaw-session-forged-marker";
-    const { runtime, entries } = createRuntime({
-      entries: [
-        {
-          sessionKey,
-          entry: adoptedEntry({ sourceThreadId: "forged-thread", sessionId }),
-        },
-      ],
-    });
-    const bindingStore = createCodexTestBindingStore();
-    await seedSupervisionBinding({
-      bindingStore,
-      sessionId,
-      sessionKey,
-      sourceThreadId: "source-thread",
-    });
+    const control = catalogControl(["source-thread", "forged-thread"]);
+    const { runtime, entries, bindingStore, sessionKey } = await adoptedSource(
+      "source-thread",
+      adoptedEntry({
+        sourceThreadId: "forged-thread",
+        sessionId: "openclaw-session-forged-marker",
+      }),
+    );
 
     const result = await listCodexSessionCatalog({ bindingStore, config, runtime, control });
 
     expect(result.hosts[0]?.sessions).toEqual([
-      {
-        threadId: "source-thread",
-        status: "idle",
-        archived: false,
-        sessionKey,
-      },
+      { threadId: "source-thread", status: "idle", archived: false, sessionKey },
       { threadId: "forged-thread", status: "idle", archived: false },
     ]);
     expect(entries[0]?.entry.pluginExtensions).toMatchObject({
@@ -490,8 +486,7 @@ describe("Codex supervision actions", () => {
       env: { CODEX_HOME: home },
     });
     const source = (await factory.homesForAgent("main"))[0]!;
-    const { runtime, createSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
+    const { api, createSessionEntry } = adoptionFixture();
     await expect(
       continueLocalCodexSession({
         api,
@@ -521,10 +516,10 @@ describe("Codex supervision actions", () => {
         { id: "turn-active", status: "inProgress", items: [] },
       ],
     });
-    const { runtime, createSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl({ readThread: vi.fn(async () => sourceThread) });
+    const { runtime, api, bindingStore, control, createSessionEntry } = adoptionFixture(
+      {},
+      createEligibleControl({ readThread: vi.fn(async () => sourceThread) }),
+    );
     const baselines: Array<{
       connectionFingerprint: string;
       turnId: string | null;
@@ -549,20 +544,14 @@ describe("Codex supervision actions", () => {
       disposition: "forked",
     });
     expect(second).toEqual({ sessionKey: first.sessionKey, disposition: "existing" });
-    expect(baselines).toEqual([
-      {
-        connectionFingerprint: "catalog-connection",
-        // Marker baseline includes the active turn; history import below still
-        // stops at the last terminal turn.
-        turnId: "turn-active",
-        userMessageCount: 0,
-      },
-      {
+    // Baselines include the active turn; history import stops at the last terminal turn.
+    expect(baselines).toEqual(
+      Array.from({ length: 2 }, () => ({
         connectionFingerprint: "catalog-connection",
         turnId: "turn-active",
         userMessageCount: 0,
-      },
-    ]);
+      })),
+    );
     expect(control.withPinnedConnection).toHaveBeenCalledTimes(2);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
@@ -633,10 +622,8 @@ describe("Codex supervision actions", () => {
     const runtimeConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     } as OpenClawConfig;
-    const { runtime, createSessionEntry } = createRuntime();
+    const { runtime, bindingStore, control, createSessionEntry } = adoptionFixture();
     const { api } = createGatewayApi(runtime, runtimeConfig);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
 
     const [alpha, beta] = await Promise.all(
       ["alpha", "beta"].map((agentId) =>
@@ -662,8 +649,6 @@ describe("Codex supervision actions", () => {
   });
 
   it("baselines a re-continued adoption from its bound canonical thread", async () => {
-    const sessionKey = supervisionSessionKey("thread-1");
-    const sessionId = "openclaw-session-existing";
     const canonicalTurn = {
       id: "turn-canonical",
       status: "completed",
@@ -677,22 +662,7 @@ describe("Codex supervision actions", () => {
       id: "thread-1-branch",
       turns: [canonicalTurn],
     });
-    const { runtime } = createRuntime({
-      entries: [
-        {
-          sessionKey,
-          entry: adoptedEntry({ sourceThreadId: "thread-1", sessionId }),
-        },
-      ],
-    });
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    await seedSupervisionBinding({
-      bindingStore,
-      sessionId,
-      sessionKey,
-      sourceThreadId: "thread-1",
-    });
+    const { api, bindingStore } = await adoptedSource("thread-1");
     const control = createEligibleControl({
       readThread: vi.fn(async (threadId: string) =>
         threadId === canonicalThread.id ? canonicalThread : idleThread({ id: threadId }),
@@ -724,10 +694,7 @@ describe("Codex supervision actions", () => {
   it("keeps adopted sessions discoverable when the configured system agent changes", async () => {
     const originalConfig = compatibilityOwnerConfig("alpha");
     const changedConfig = compatibilityOwnerConfig("beta");
-    const { runtime, createSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
+    const { runtime, api, bindingStore, control, createSessionEntry } = adoptionFixture();
 
     const created = await continueLocalCodexSession({
       agentId: "alpha",
@@ -764,27 +731,13 @@ describe("Codex supervision actions", () => {
   });
 
   it("does not expose or reuse an initializing session while history import is paused", async () => {
-    const importEntered = createDeferred<void>();
-    const importGate = createDeferred<void>();
-    transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockImplementationOnce(async () => {
-      importEntered.resolve();
-      await importGate.promise;
-      return { importedMessages: 0, omittedMessages: 0 };
-    });
-    const { runtime, entries, createSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
+    const { gate: importGate, wait } = pauseHistoryImport();
+    const { runtime, api, entries, bindingStore, control, createSessionEntry } = adoptionFixture();
 
     const firstContinue = continueSource({ api, bindingStore, control });
     const pending: Promise<unknown>[] = [firstContinue];
     try {
-      await Promise.race([
-        importEntered.promise,
-        firstContinue.then(() => {
-          throw new Error("Continue finished without entering the paused history import");
-        }),
-      ]);
+      await wait(firstContinue);
       expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
 
       const duringImport = await listCodexSessionCatalog({
@@ -844,10 +797,7 @@ describe("Codex supervision actions", () => {
   });
 
   it("does not archive a source until its supervised branch materializes", async () => {
-    const { runtime } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
+    const { runtime, api, bindingStore, control } = adoptionFixture();
     const continued = await continueSource({ api, bindingStore, control });
 
     await expect(archiveTestSession({ control, bindingStore, runtime })).rejects.toThrow(
@@ -882,26 +832,12 @@ describe("Codex supervision actions", () => {
   });
 
   it("serializes archive behind an in-flight Continue and rejects the pending branch", async () => {
-    const importEntered = createDeferred<void>();
-    const importGate = createDeferred<void>();
-    transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockImplementationOnce(async () => {
-      importEntered.resolve();
-      await importGate.promise;
-      return { importedMessages: 0, omittedMessages: 0 };
-    });
-    const { runtime } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
+    const { gate: importGate, wait } = pauseHistoryImport();
+    const { runtime, api, bindingStore, control } = adoptionFixture();
     const continuing = continueSource({ api, bindingStore, control });
     const pending: Promise<unknown>[] = [continuing];
     try {
-      await Promise.race([
-        importEntered.promise,
-        continuing.then(() => {
-          throw new Error("Continue finished without entering the paused history import");
-        }),
-      ]);
+      await wait(continuing);
       expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
 
       let archiveSettled = false;

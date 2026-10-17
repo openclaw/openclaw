@@ -27,37 +27,40 @@ function continueSource(
   return continueLocalCodexSession({ config, threadId: "thread-1", ...params });
 }
 
+function recoveryFixture(sessionId: string) {
+  const sessionKey = supervisionSessionKey("thread-1");
+  const fixture = createRuntime({
+    entries: [
+      { sessionKey, entry: interruptedAdoptionEntry({ sourceThreadId: "thread-1", sessionId }) },
+    ],
+  });
+  return {
+    ...fixture,
+    ...createGatewayApi(fixture.runtime),
+    sessionId,
+    sessionKey,
+    identity: sessionBindingIdentity({ sessionId, sessionKey, config }),
+    bindingStore: createCodexTestBindingStore(),
+  };
+}
+
 describe("Codex supervision actions", () => {
   it("recovers the same pending session after a restart following binding commit", async () => {
-    const sessionKey = supervisionSessionKey("thread-1");
-    const sessionId = "openclaw-interrupted-after-binding";
-    const crashedRuntime = createRuntime();
-    crashedRuntime.entries.push({
+    const {
+      entries,
+      createSessionEntry,
+      api,
+      bindingStore: inner,
+      identity,
+      sessionId,
       sessionKey,
-      entry: interruptedAdoptionEntry({ sourceThreadId: "thread-1", sessionId }),
-    });
-    const { runtime, entries, createSessionEntry } = createRuntime({
-      entries: crashedRuntime.entries,
-    });
-    const { api } = createGatewayApi(runtime);
-    const inner = createCodexTestBindingStore();
-    const identity = sessionBindingIdentity({ sessionId, sessionKey, config });
-    await inner.mutate(identity, {
-      kind: "set",
-      if: { kind: "absent" },
-      binding: {
-        threadId: "thread-1",
-        connectionScope: "supervision",
-        supervisionSourceThreadId: "thread-1",
-        cwd: "/workspace/project",
-        historyCoveredThrough: new Date().toISOString(),
-        conversationSourceTransferComplete: true,
-        preserveNativeModel: true,
-        pendingSupervisionBranch: {
-          sourceThreadId: "thread-1",
-          connectionFingerprint: "catalog-connection",
-        },
-      },
+    } = recoveryFixture("openclaw-interrupted-after-binding");
+    await seedSupervisionBinding({
+      bindingStore: inner,
+      sessionId,
+      sessionKey,
+      sourceThreadId: "thread-1",
+      pending: true,
     });
     const mutate = vi.fn(inner.mutate);
     const bindingStore: CodexAppServerBindingStore = { ...inner, mutate };
@@ -71,9 +74,7 @@ describe("Codex supervision actions", () => {
     expect(entries[0]?.entry.sessionId).toBe(sessionId);
     expect(entries[0]?.entry.initializationPending).toBeUndefined();
     expect(entries[0]?.entry.pluginExtensions).toEqual({
-      codex: {
-        supervision: { sourceThreadId: "thread-1", modelLocked: true },
-      },
+      codex: { supervision: { sourceThreadId: "thread-1", modelLocked: true } },
     });
     expect(mutate).not.toHaveBeenCalled();
     expect(bindingStore.read(identity)).toMatchObject({
@@ -88,17 +89,9 @@ describe("Codex supervision actions", () => {
   it.each(["a different working directory", "pending cleanup artifacts"] as const)(
     "rejects recovery against %s in a same-thread binding",
     async (invalidState) => {
-      const sessionKey = supervisionSessionKey("thread-1");
-      const sessionId = "openclaw-interrupted-invalid-binding";
-      const crashedRuntime = createRuntime();
-      crashedRuntime.entries.push({
-        sessionKey,
-        entry: interruptedAdoptionEntry({ sourceThreadId: "thread-1", sessionId }),
-      });
-      const { runtime, entries } = createRuntime({ entries: crashedRuntime.entries });
-      const { api } = createGatewayApi(runtime);
-      const bindingStore = createCodexTestBindingStore();
-      const identity = sessionBindingIdentity({ sessionId, sessionKey, config });
+      const { entries, api, bindingStore, identity } = recoveryFixture(
+        "openclaw-interrupted-invalid-binding",
+      );
       const binding: CodexAppServerThreadBinding = {
         threadId: "thread-1",
         connectionScope: "supervision",

@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { describe, expect, it, vi } from "vitest";
@@ -22,6 +23,15 @@ import {
   CODEX_LOCAL_SESSION_HOST_ID,
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
+
+async function expectArchiveBlocked(
+  control: ReturnType<typeof createEligibleControl>,
+  error: string,
+  bindingStore?: ReturnType<typeof createCodexTestBindingStore>,
+) {
+  await expect(archiveTestSession({ control, bindingStore })).rejects.toThrow(error);
+  expect(control.archiveThread).not.toHaveBeenCalled();
+}
 
 describe("Codex supervision actions", () => {
   it("rechecks status after eligibility and rejects active local sessions before either mutation", async () => {
@@ -108,13 +118,7 @@ describe("Codex supervision actions", () => {
     expect(acquisition).toMatchObject({
       agentDir: expectedAgentDir,
       startOptions: expect.objectContaining({ command: "codex-archive-a", homeScope: "user" }),
-      config: {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "alpha" } },
-          entries: { alpha: {}, beta: {} },
-        },
-      },
+      config: initialRuntimeConfig,
     });
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
       "thread/read",
@@ -132,54 +136,43 @@ describe("Codex supervision actions", () => {
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      membership: "another thread only",
-      members: [idleThread({ id: "other-thread", source: "cli" })],
-    },
-  ])(
-    "refuses archive when current membership omits the cached thread ($membership)",
-    async ({ members }) => {
-      pinnedConnectionMocks.request.mockImplementation(async (request: { method: string }) => {
-        if (request.method === "thread/read") {
-          return { thread: idleThread({ source: "cli" }) };
-        }
-        if (request.method === "thread/list") {
-          return { data: members };
-        }
-        throw new Error(`unexpected method: ${request.method}`);
-      });
-      const pluginConfig = { supervision: { enabled: true } };
-      const control = createCodexSessionCatalogControl({
-        getPluginConfig: () => pluginConfig,
-        getRuntimeConfig: () => config,
-      });
-      commandRpcMocks.codexControlRequest.mockResolvedValue({
-        data: [idleThread({ source: "cli" })],
-      });
-      await control.initialize();
-      commandRpcMocks.codexControlRequest.mockClear();
+  it("refuses archive when current membership contains only another thread", async () => {
+    pinnedConnectionMocks.request.mockImplementation(async (request: { method: string }) => {
+      if (request.method === "thread/read") {
+        return { thread: idleThread({ source: "cli" }) };
+      }
+      if (request.method === "thread/list") {
+        return { data: [idleThread({ id: "other-thread", source: "cli" })] };
+      }
+      throw new Error(`unexpected method: ${request.method}`);
+    });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+    });
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ source: "cli" })],
+    });
+    await control.initialize();
+    commandRpcMocks.codexControlRequest.mockClear();
 
-      await expect(archiveTestSession({ control })).rejects.toThrow(
-        "Codex session eligibility could not be verified",
-      );
-      expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
-        "thread/read",
-        "thread/list",
-      ]);
-      expect(pinnedConnectionMocks.request).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          method: "thread/list",
-          requestParams: expect.objectContaining({ archived: false }),
-        }),
-      );
-      expect(pinnedConnectionMocks.releaseClient).toHaveBeenCalledWith(
-        pinnedConnectionMocks.client,
-      );
-      expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
-    },
-  );
+    await expect(archiveTestSession({ control })).rejects.toThrow(
+      "Codex session eligibility could not be verified",
+    );
+    expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "thread/read",
+      "thread/list",
+    ]);
+    expect(pinnedConnectionMocks.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "thread/list",
+        requestParams: expect.objectContaining({ archived: false }),
+      }),
+    );
+    expect(pinnedConnectionMocks.releaseClient).toHaveBeenCalledWith(pinnedConnectionMocks.client);
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+  });
 
   it("rejects archive while another OpenClaw session owns the native thread", async () => {
     const bindingStore = createCodexTestBindingStore();
@@ -192,93 +185,76 @@ describe("Codex supervision actions", () => {
     );
     const control = createEligibleControl();
 
-    await expect(archiveTestSession({ bindingStore, control })).rejects.toThrow(
-      "attached to an OpenClaw session",
-    );
+    await expectArchiveBlocked(control, "attached to an OpenClaw session", bindingStore);
     expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
-    expect(control.archiveThread).not.toHaveBeenCalled();
   });
 
-  it.each([true])(
-    "rejects archive when a paginated spawned descendant has an OpenClaw owner (archived=%s)",
-    async (archived) => {
-      const bindingStore = createCodexTestBindingStore();
-      await bindingStore.mutate(
-        { kind: "conversation", bindingId: "descendant-chat" },
-        {
-          kind: "set",
-          binding: { threadId: "owned-descendant", cwd: "/workspace/project" },
-        },
-      );
-      const control = createEligibleControl({
-        listDescendantPage: vi.fn(async (params) =>
-          params.archived !== archived
-            ? { data: [] }
-            : params.cursor === "descendants-2"
-              ? { data: [idleThread({ id: "owned-descendant" })] }
-              : {
-                  data: [idleThread({ id: "unowned-descendant" })],
-                  nextCursor: "descendants-2",
-                },
-        ),
-      });
+  it("rejects archive when a paginated archived descendant has an OpenClaw owner", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    await bindingStore.mutate(
+      { kind: "conversation", bindingId: "descendant-chat" },
+      {
+        kind: "set",
+        binding: { threadId: "owned-descendant", cwd: "/workspace/project" },
+      },
+    );
+    const control = createEligibleControl({
+      listDescendantPage: vi.fn(async (params) =>
+        !params.archived
+          ? { data: [] }
+          : params.cursor === "descendants-2"
+            ? { data: [idleThread({ id: "owned-descendant" })] }
+            : {
+                data: [idleThread({ id: "unowned-descendant" })],
+                nextCursor: "descendants-2",
+              },
+      ),
+    });
 
-      await expect(archiveTestSession({ bindingStore, control })).rejects.toThrow(
-        "spawned descendant is owned by an OpenClaw session",
-      );
-      expect(control.listDescendantPage).toHaveBeenCalledWith({
-        ancestorThreadId: "thread-1",
-        archived,
-        limit: 100,
-        sortKey: "created_at",
-        sortDirection: "desc",
-        useStateDbOnly: true,
-      });
-      expect(control.listDescendantPage).toHaveBeenCalledWith(
-        expect.objectContaining({ archived, cursor: "descendants-2" }),
-      );
-      expect(control.archiveThread).not.toHaveBeenCalled();
-    },
-  );
+    await expectArchiveBlocked(
+      control,
+      "spawned descendant is owned by an OpenClaw session",
+      bindingStore,
+    );
+    expect(control.listDescendantPage).toHaveBeenCalledWith({
+      ancestorThreadId: "thread-1",
+      archived: true,
+      limit: 100,
+      sortKey: "created_at",
+      sortDirection: "desc",
+      useStateDbOnly: true,
+    });
+    expect(control.listDescendantPage).toHaveBeenCalledWith(
+      expect.objectContaining({ archived: true, cursor: "descendants-2" }),
+    );
+  });
 
-  it.each([true])(
-    "rejects archive when a spawned descendant is active (archived=%s)",
-    async (archived) => {
-      const control = createEligibleControl({
-        listDescendantPage: vi.fn(async (params) => ({
-          data: params.archived === archived ? [{ id: "active-descendant", projectId: null }] : [],
-        })),
-        readThread: vi.fn(async (threadId: string) =>
-          idleThread({
-            id: threadId,
-            status: threadId === "active-descendant" ? { type: "active" } : { type: "idle" },
-          }),
-        ),
-      });
+  it("rejects archive when an archived spawned descendant is active", async () => {
+    const control = createEligibleControl({
+      listDescendantPage: vi.fn(async (params) => ({
+        data: params.archived ? [{ id: "active-descendant", projectId: null }] : [],
+      })),
+      readThread: vi.fn(async (threadId: string) =>
+        idleThread({
+          id: threadId,
+          status: threadId === "active-descendant" ? { type: "active" } : { type: "idle" },
+        }),
+      ),
+    });
 
-      await expect(archiveTestSession({ control })).rejects.toThrow(
-        "Codex session is active in this App Server",
-      );
-      expect(control.readThread).toHaveBeenCalledWith("active-descendant", false);
-      expect(control.archiveThread).not.toHaveBeenCalled();
-    },
-  );
+    await expectArchiveBlocked(control, "Codex session is active in this App Server");
+    expect(control.readThread).toHaveBeenCalledWith("active-descendant", false);
+  });
 
   it("fences ownership mutations through both descendant collections and their pages", async () => {
     const bindingStore = createCodexTestBindingStore();
     const lateIdentity = { kind: "conversation" as const, bindingId: "late-descendant-owner" };
-    let validationReached!: () => void;
-    const validating = new Promise<void>((resolve) => {
-      validationReached = resolve;
-    });
-    let releaseValidation!: () => void;
-    const validationReleased = new Promise<void>((resolve) => {
-      releaseValidation = resolve;
-    });
+    const validating = createDeferred<void>();
+    const validationReleased = createDeferred<void>();
     const listDescendantPage = vi.fn(async ({ archived, cursor }: CodexThreadListParams) => {
       if (archived) {
-        validationReached();
-        await validationReleased;
+        validating.resolve();
+        await validationReleased.promise;
       }
       return {
         data: [{ id: `idle-descendant-${archived}-${cursor ?? "first"}`, projectId: null }],
@@ -288,14 +264,14 @@ describe("Codex supervision actions", () => {
     const control = createEligibleControl({ listDescendantPage });
 
     const archiving = archiveTestSession({ bindingStore, control });
-    await validating;
+    await validating.promise;
     await expect(
       bindingStore.mutate(lateIdentity, {
         kind: "set",
         binding: { threadId: "late-descendant", cwd: "/workspace/project" },
       }),
     ).rejects.toThrow("native archive is in progress");
-    releaseValidation();
+    validationReleased.resolve();
     await expect(archiving).resolves.toEqual({ archived: true });
     expect(bindingStore.read(lateIdentity)).toBeUndefined();
     expect(control.readThread).toHaveBeenCalledWith("idle-descendant-false-first", false);
@@ -331,9 +307,8 @@ describe("Codex supervision actions", () => {
         listDescendantPage: vi.fn(async () => response as never),
       });
 
-      await expect(archiveTestSession({ control })).rejects.toThrow(error);
+      await expectArchiveBlocked(control, error);
       expect(control.listDescendantPage).toHaveBeenCalledTimes(calls);
-      expect(control.archiveThread).not.toHaveBeenCalled();
     },
   );
 
@@ -352,11 +327,8 @@ describe("Codex supervision actions", () => {
       }),
     });
 
-    await expect(archiveTestSession({ control })).rejects.toThrow(
-      "descendant enumeration exceeded its safety limit",
-    );
+    await expectArchiveBlocked(control, "descendant enumeration exceeded its safety limit");
     expect(control.listDescendantPage).toHaveBeenCalledTimes(100);
-    expect(control.archiveThread).not.toHaveBeenCalled();
   });
 
   it("registers generic actions and keeps paired-node archive view-only", async () => {
@@ -388,6 +360,12 @@ describe("Codex supervision actions", () => {
     });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
     const provider = getProvider();
+    const localSource = { hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId: "thread-1" };
+    const remoteSource = {
+      allowProcessHomeFallback: false,
+      hostId: "node:devbox",
+      threadId: "thread-remote",
+    };
     expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
       model: "openai/gpt-6-astra",
       agentRuntime: "codex",
@@ -396,24 +374,21 @@ describe("Codex supervision actions", () => {
       await expect(
         provider?.continueSession?.({
           allowProcessHomeFallback: false,
-          hostId: CODEX_LOCAL_SESSION_HOST_ID,
-          threadId: "thread-1",
+          ...localSource,
           clientScopes: ["operator.admin"],
         }),
       ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
       await expect(
         provider?.archive?.({
           allowProcessHomeFallback: false,
-          hostId: CODEX_LOCAL_SESSION_HOST_ID,
-          threadId: "thread-1",
+          ...localSource,
           confirmNoOtherRunner: true,
         }),
       ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
       await expect(
         provider?.openTerminal?.({
           allowProcessHomeFallback: false,
-          hostId: CODEX_LOCAL_SESSION_HOST_ID,
-          threadId: "thread-1",
+          ...localSource,
         }),
       ).rejects.toThrow("local Codex sessions are unavailable in isolated state");
       await expect(
@@ -426,31 +401,25 @@ describe("Codex supervision actions", () => {
     });
     await expect(
       provider?.archive?.({
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        threadId: "thread-1",
+        ...localSource,
         confirmNoOtherRunner: false,
       } as never),
     ).rejects.toThrow("requires confirmation");
     await expect(
       provider?.archive?.({
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        threadId: "thread-1",
+        ...localSource,
         confirmNoOtherRunner: true,
       }),
     ).resolves.toEqual({ ok: true });
     await expect(
       provider?.archive?.({
-        allowProcessHomeFallback: false,
-        hostId: "node:devbox",
-        threadId: "thread-remote",
+        ...remoteSource,
         confirmNoOtherRunner: true,
       }),
     ).rejects.toThrow("paired-node Codex sessions are view-only");
     await expect(
       provider?.continueSession?.({
-        allowProcessHomeFallback: false,
-        hostId: "node:devbox",
-        threadId: "thread-remote",
+        ...remoteSource,
         clientScopes: ["operator.admin"],
       }),
     ).rejects.toThrow("paired node does not permit Codex session continuation");

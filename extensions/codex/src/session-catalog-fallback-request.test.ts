@@ -10,6 +10,8 @@ import {
   pinnedConnectionMocks,
 } from "./session-catalog.test-helpers.js";
 
+const nativeRequest = commandRpcMocks.codexControlRequest;
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -40,7 +42,7 @@ async function saturatedHome() {
   const control = factory.forRequest("main", home);
   await control.initialize();
   expect(native.fetched.flat()).toHaveLength(20_001);
-  commandRpcMocks.codexControlRequest.mockClear();
+  nativeRequest.mockClear();
   return {
     control,
     now: () => now,
@@ -54,7 +56,7 @@ async function failingFallback() {
   const fixture = await saturatedHome();
   const failure = new Error("second fallback page failed");
   let recovered = false;
-  commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+  nativeRequest.mockImplementation(async (_plugin, method, params) => {
     expect(method).toBe("thread/list");
     expect(params.useStateDbOnly).toBe(true);
     if (params.cursor === "page-two" && !recovered) {
@@ -71,11 +73,16 @@ async function failingFallback() {
     searchTerm: "Wanted",
     excludedThreadIds: new Set(["head"]),
   };
+  const search = () => listVisiblePage(params);
   return {
     ...fixture,
     failure,
     params,
-    search: () => listVisiblePage(params),
+    search,
+    async expectFailure(calls: number) {
+      await expect(search()).rejects.toBe(failure);
+      expect(nativeRequest).toHaveBeenCalledTimes(calls);
+    },
     recover: () => {
       recovered = true;
     },
@@ -103,7 +110,7 @@ describe("overflow catalog request budgets", () => {
     const { control } = await saturatedHome();
     const positions: number[] = [];
     let visibleAt = 0;
-    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+    nativeRequest.mockImplementation(async (_plugin, method, params) => {
       expect(method).toBe("thread/list");
       expect(params.useStateDbOnly).toBe(true);
       const position = params.cursor ? Number(params.cursor.slice("native-after:".length)) + 1 : 1;
@@ -143,26 +150,19 @@ describe("overflow catalog request budgets", () => {
 
   it("backs off the complete visible fallback request when a later native page fails", async () => {
     const fixture = await failingFallback();
-    const { failure, search } = fixture;
-
-    await expect(search()).rejects.toBe(failure);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-    await expect(search()).rejects.toBe(failure);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
-    await expect(search()).rejects.toBe(failure);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
+    await fixture.expectFailure(2);
+    await fixture.expectFailure(4);
+    await fixture.expectFailure(4);
 
     fixture.advance(5_000);
-    await expect(search()).rejects.toBe(failure);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
+    await fixture.expectFailure(6);
     fixture.advance(9_999);
-    await expect(search()).rejects.toBe(failure);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
+    await fixture.expectFailure(6);
 
     fixture.advance(1);
     fixture.recover();
-    expect((await search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(8);
+    expect((await fixture.search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
+    expect(nativeRequest).toHaveBeenCalledTimes(8);
   });
 });
 
@@ -208,9 +208,7 @@ it.each(["read count", "deadline"] as const)(
       const position = Number(params.cursor ?? 0) + 1;
       return { data: [thread(`excluded-${position}`)], nextCursor: String(position) };
     };
-    commandRpcMocks.codexControlRequest.mockImplementation((_plugin, method, params) =>
-      dispatch(method, params),
-    );
+    nativeRequest.mockImplementation((_plugin, method, params) => dispatch(method, params));
     pinnedConnectionMocks.request.mockImplementation(({ method, requestParams }) =>
       dispatch(method, requestParams),
     );
@@ -251,18 +249,17 @@ it.each(["read count", "deadline"] as const)(
 
 it("releases an abandoned exclusion-fill probe for the next catalog request", async () => {
   const fixture = await failingFallback();
-  const { failure, search, params } = fixture;
-  await expect(search()).rejects.toBe(failure);
-  await expect(search()).rejects.toBe(failure);
-  expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
+  const { search, params } = fixture;
+  await fixture.expectFailure(2);
+  await fixture.expectFailure(4);
   fixture.advance(5_000);
 
   const abandoned = new CodexCatalogVisiblePage(params);
   await expect(abandoned.next()).resolves.toEqual({ done: false });
-  expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(5);
+  expect(nativeRequest).toHaveBeenCalledTimes(5);
   abandoned.close();
 
   fixture.recover();
   expect((await search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
-  expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(7);
+  expect(nativeRequest).toHaveBeenCalledTimes(7);
 });

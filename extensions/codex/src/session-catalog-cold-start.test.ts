@@ -2,24 +2,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
-import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { catalogRow } from "./session-catalog-index.test-support.js";
 
-function row(threadId: string, cwd = "/workspace"): CodexCatalogIndexRow {
-  return {
-    threadId,
-    updatedAt: 100,
-    recencyAt: 100,
-    sourceOrder: 0,
-    archived: false,
-    nativeMetadata: true,
-    page: {
-      sessions: [
-        { threadId, cwd, name: threadId, source: "cli", status: "notLoaded", archived: false },
-      ],
-    },
-  };
+function row(threadId: string, cwd = "/workspace") {
+  return catalogRow(threadId, 100, { cwd, name: threadId, source: "cli" }, { sourceOrder: 0 });
+}
+
+function createIndex(
+  options: Omit<ConstructorParameters<typeof CodexCatalogIndex>[0], "assertCurrent" | "homeId">,
+) {
+  return new CodexCatalogIndex({ homeId: "cold-start", assertCurrent: () => {}, ...options });
 }
 
 function savedState(values: StoredCodexCatalogEntry[]): CodexCatalogState {
@@ -34,79 +28,54 @@ function savedState(values: StoredCodexCatalogEntry[]): CodexCatalogState {
 
 describe("cold resident catalog availability", () => {
   it.each([
-    {
-      label: "a removed preceding page",
-      complete: true,
-      removed: ["alpha"],
-      previous: ["bravo"],
-      following: ["charlie"],
-    },
-    {
-      label: "an empty prefix during hydration",
-      complete: false,
-      removed: ["alpha", "bravo"],
-      previous: [],
-      following: ["charlie"],
-    },
-  ])(
-    "keeps navigation after $label",
-    async ({ complete, removed, previous: expectedPrevious, following: expectedFollowing }) => {
-      const tailEntered = createDeferred<void>();
-      const tail = createDeferred<void>();
-      const readNative = vi.fn(async ({ cursor }: CodexThreadListParams) => {
-        if (!cursor) {
-          return {
-            rows: [
-              { ...row("alpha"), recencyAt: 300 },
-              { ...row("bravo"), recencyAt: 200 },
-            ],
-            nextCursor: "native-tail",
-          };
-        }
-        tailEntered.resolve();
-        await tail.promise;
-        return { rows: [row("charlie")] };
-      });
-      const index = new CodexCatalogIndex({
-        homeId: "cold-backward-archive",
-        readNative,
-        assertCurrent: () => {},
-      });
-      try {
-        const first = await index.list({ limit: 1 });
-        await tailEntered.promise;
-        if (complete) {
-          tail.resolve();
-          await index.initialize();
-        }
-        const second = await index.list({ limit: 1, cursor: first.nextCursor });
-        expect(second.sessions.map((session) => session.threadId)).toEqual(["bravo"]);
-        expect(second.backwardsCursor).toEqual(expect.any(String));
-        for (const id of removed) {
-          index.archive(id);
-        }
-        const previous = await index.list({ limit: 1, cursor: second.backwardsCursor });
-        expect(previous.sessions.map((session) => session.threadId)).toEqual(expectedPrevious);
-        expect(previous.backwardsCursor).toBeUndefined();
-        if (expectedFollowing.length) {
-          expect(previous.nextCursor).toEqual(expect.any(String));
-        } else {
-          expect(previous.nextCursor).toBeUndefined();
-        }
+    ["a removed preceding page", true, ["alpha"], ["bravo"]],
+    ["an empty prefix during hydration", false, ["alpha", "bravo"], []],
+  ] as const)("keeps navigation after %s", async (_label, complete, removed, expectedPrevious) => {
+    const tailEntered = createDeferred<void>();
+    const tail = createDeferred<void>();
+    const readNative = vi.fn(async ({ cursor }: CodexThreadListParams) => {
+      if (!cursor) {
+        return {
+          rows: [
+            { ...row("alpha"), recencyAt: 300 },
+            { ...row("bravo"), recencyAt: 200 },
+          ],
+          nextCursor: "native-tail",
+        };
+      }
+      tailEntered.resolve();
+      await tail.promise;
+      return { rows: [row("charlie")] };
+    });
+    const index = createIndex({ readNative });
+    try {
+      const first = await index.list({ limit: 1 });
+      await tailEntered.promise;
+      if (complete) {
         tail.resolve();
         await index.initialize();
-        if (expectedFollowing.length) {
-          const following = await index.list({ limit: 1, cursor: previous.nextCursor });
-          expect(following.sessions.map((session) => session.threadId)).toEqual(expectedFollowing);
-          expect(following.nextCursor).toBeUndefined();
-        }
-        expect(readNative).toHaveBeenCalledTimes(2);
-      } finally {
-        tail.resolve();
-        await index.close();
       }
-    },
-  );
+      const second = await index.list({ limit: 1, cursor: first.nextCursor });
+      expect(second.sessions.map((session) => session.threadId)).toEqual(["bravo"]);
+      expect(second.backwardsCursor).toEqual(expect.any(String));
+      for (const id of removed) {
+        index.archive(id);
+      }
+      const previous = await index.list({ limit: 1, cursor: second.backwardsCursor });
+      expect(previous.sessions.map((session) => session.threadId)).toEqual(expectedPrevious);
+      expect(previous.backwardsCursor).toBeUndefined();
+      expect(previous.nextCursor).toEqual(expect.any(String));
+      tail.resolve();
+      await index.initialize();
+      const following = await index.list({ limit: 1, cursor: previous.nextCursor });
+      expect(following.sessions.map((session) => session.threadId)).toEqual(["charlie"]);
+      expect(following.nextCursor).toBeUndefined();
+      expect(readNative).toHaveBeenCalledTimes(2);
+    } finally {
+      tail.resolve();
+      await index.close();
+    }
+  });
 
   it("returns a progressing filtered frontier and bounds a caught-up continuation wait", async () => {
     const tailEntered = createDeferred<void>();
@@ -119,13 +88,7 @@ describe("cold resident catalog availability", () => {
       await tail.promise;
       return { rows: [row("wanted")] };
     });
-    const options = {
-      homeId: "cold-filter",
-      requestTimeoutMs: 30,
-      readNative,
-      assertCurrent: () => {},
-    };
-    const index = new CodexCatalogIndex(options);
+    const index = createIndex({ requestTimeoutMs: 30, readNative });
     const firstCall = index.list({ cwd: "/workspace" });
     try {
       await tailEntered.promise;
@@ -148,59 +111,45 @@ describe("cold resident catalog availability", () => {
     }
   });
 
-  it.each(["invalid"] as const)(
-    "does not expose a %s saved snapshot's stale tail",
-    async (kind) => {
-      const entries: StoredCodexCatalogEntry[] = [
-        { version: 1, kind: "row", row: row("stale-tail") },
-      ];
-      if (kind === "invalid") {
-        const invalid = row("invalid");
-        invalid.page.sessions[0]!.name = "x".repeat(501);
-        entries.push({ version: 1, kind: "complete" }, { version: 1, kind: "row", row: invalid });
-      }
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      const index = new CodexCatalogIndex({
-        homeId: `saved-${kind}`,
-        state: savedState(entries),
-        assertCurrent: () => {},
-        readNative: async () => {
-          entered.resolve();
-          await release.promise;
-          return { rows: [row("current")] };
-        },
-      });
-      let settled = false;
-      const pending = index.list({}).then((page) => {
-        settled = true;
-        return page;
-      });
-      try {
-        await entered.promise;
-        expect(settled).toBe(false);
-        release.resolve();
-        expect((await pending).sessions.map((session) => session.threadId)).toEqual(["current"]);
-      } finally {
-        release.resolve();
-        await pending;
-        await index.close();
-      }
-    },
-  );
+  it("does not expose an invalid saved snapshot's stale tail", async () => {
+    const entries: StoredCodexCatalogEntry[] = [
+      { version: 1, kind: "row", row: row("stale-tail") },
+    ];
+    const invalid = row("invalid");
+    invalid.page.sessions[0]!.name = "x".repeat(501);
+    entries.push({ version: 1, kind: "complete" }, { version: 1, kind: "row", row: invalid });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const index = createIndex({
+      state: savedState(entries),
+      readNative: async () => {
+        entered.resolve();
+        await release.promise;
+        return { rows: [row("current")] };
+      },
+    });
+    let settled = false;
+    const pending = index.list({}).then((page) => {
+      settled = true;
+      return page;
+    });
+    try {
+      await entered.promise;
+      expect(settled).toBe(false);
+      release.resolve();
+      expect((await pending).sessions.map((session) => session.threadId)).toEqual(["current"]);
+    } finally {
+      release.resolve();
+      await pending;
+      await index.close();
+    }
+  });
 
   it("bounds a stalled restore without starting competing native work", async () => {
     const entries = createDeferred<Awaited<ReturnType<CodexCatalogState["entries"]>>>();
     const state = { ...savedState([]), entries: () => entries.promise };
     const readNative = vi.fn(async () => ({ rows: [] }));
-    const options = {
-      homeId: "restore-wait",
-      state,
-      readNative,
-      requestTimeoutMs: 20,
-      assertCurrent: () => {},
-    };
-    const index = new CodexCatalogIndex(options);
+    const index = createIndex({ state, readNative, requestTimeoutMs: 20 });
     const pending = index.list({}).then(
       (page) => ({ page }),
       (error: unknown) => ({ error }),
@@ -228,11 +177,7 @@ describe("cold resident catalog availability", () => {
       at("old", 100),
       at("oldest", 50),
     ];
-    const warm = new CodexCatalogIndex({
-      homeId: "prefix",
-      readNative: async () => ({ rows: native }),
-      assertCurrent: () => {},
-    });
+    const warm = createIndex({ readNative: async () => ({ rows: native }) });
     let oldForward: string | undefined;
     let oldBackward: string | undefined;
     try {
@@ -249,9 +194,7 @@ describe("cold resident catalog availability", () => {
     const headEntered = createDeferred<void>();
     const headReady = createDeferred<void>();
     const tailReady = createDeferred<void>();
-    const index = new CodexCatalogIndex({
-      homeId: "prefix",
-      assertCurrent: () => {},
+    const index = createIndex({
       readNative: async ({ cursor }) => {
         if (!cursor) {
           headEntered.resolve();
@@ -316,11 +259,7 @@ describe("cold resident catalog availability", () => {
       }
       return { rows: [row("charlie"), row("delta")] };
     });
-    const index = new CodexCatalogIndex({
-      homeId: "cold-retry",
-      readNative,
-      assertCurrent: () => {},
-    });
+    const index = createIndex({ readNative });
     const initial = index.initialize();
     void initial.catch(() => undefined);
     try {

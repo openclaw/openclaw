@@ -27,6 +27,8 @@ import {
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
+const nativeRequest = commandRpcMocks.codexControlRequest;
+
 const sink = vi.hoisted(() => ({ throwing: false, attempts: 0 }));
 
 vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (importOriginal) => {
@@ -99,6 +101,32 @@ function fields(record: LogRecord | undefined) {
   }
   return record.attributes ?? {};
 }
+
+function mockObservedRequest(
+  run: (
+    observation: CodexControlRequestObservation | undefined,
+    params: { cursor?: string },
+    method: string,
+  ) => Promise<unknown>,
+) {
+  nativeRequest.mockImplementation(
+    async (
+      _config: unknown,
+      method: string,
+      params: { cursor?: string },
+      options: { controlObservation?: CodexControlRequestObservation },
+    ) => run(options.controlObservation, params, method),
+  );
+}
+
+function expectBounded(record: LogRecord) {
+  expect(Object.keys(fields(record)).length).toBeLessThanOrEqual(28);
+  expect(Buffer.byteLength(JSON.stringify(fields(record)))).toBeLessThanOrEqual(2_048);
+}
+
+const resolvedWaiters = JSON.stringify([
+  [1, 1, clientInstanceId, 1, 1, "new", 10, 12, 11, 20, "resolved", "native-ok", 19],
+]);
 
 function waiterSummary(
   overrides: Partial<CodexRequestWaiterSummary> = {},
@@ -184,7 +212,7 @@ describe("registered Codex catalog diagnostics", () => {
     const managed = await f.thread("openclaw");
     const ownerScope = new AsyncLocalStorage<string>();
     const sourceOwners: Array<string | undefined> = [];
-    commandRpcMocks.codexControlRequest.mockImplementation(async (_config, method, params) => {
+    nativeRequest.mockImplementation(async (_config, method, params) => {
       expect(method).toBe("thread/list");
       sourceOwners.push(ownerScope.getStore());
       clock += 1_100;
@@ -210,7 +238,7 @@ describe("registered Codex catalog diagnostics", () => {
         expect(fields(page)).not.toHaveProperty("listOperationId");
       }
       expect(await emitted(LIST)).toEqual([]);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+      expect(nativeRequest).toHaveBeenCalledTimes(2);
     } finally {
       ownerScope.disable();
     }
@@ -221,19 +249,12 @@ describe("registered Codex catalog diagnostics", () => {
     const thread = await f.thread("codex");
     const response = createDeferred<unknown>();
     const started = createDeferred<void>();
-    commandRpcMocks.codexControlRequest.mockImplementation(
-      async (
-        _config: unknown,
-        _method: unknown,
-        _params: unknown,
-        options: { controlObservation?: CodexControlRequestObservation },
-      ) => {
-        started.resolve();
-        const result = await response.promise;
-        options.controlObservation?.attemptWaiterFinished?.(waiterSummary());
-        return result;
-      },
-    );
+    mockObservedRequest(async (observation) => {
+      started.resolve();
+      const result = await response.promise;
+      observation?.attemptWaiterFinished?.(waiterSummary());
+      return result;
+    });
     const traces = Array.from({ length: 4 }, (_, index) => ({
       traceId: String(index + 1).repeat(32),
       spanId: String(index + 1).repeat(16),
@@ -251,7 +272,7 @@ describe("registered Codex catalog diagnostics", () => {
     try {
       await started.promise;
       await nextTurn();
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+      expect(nativeRequest).toHaveBeenCalledOnce();
       expect(settledLists).toBe(0);
       clock += 1_500;
       response.resolve({ data: [thread] });
@@ -278,7 +299,7 @@ describe("registered Codex catalog diagnostics", () => {
           expect.objectContaining({ trace: expect.objectContaining(trace) }),
         );
       }
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+      expect(nativeRequest).toHaveBeenCalledOnce();
       const producer = fields(pages[0]);
       expect(producer).not.toHaveProperty("controlFailurePhase");
       expect(producer).not.toHaveProperty("controlFailureCategory");
@@ -291,9 +312,7 @@ describe("registered Codex catalog diagnostics", () => {
         provenanceChecks: 1,
         provenanceReadCalls: 1,
         provenanceCacheHits: 0,
-        controlWaitersV1: JSON.stringify([
-          [1, 1, clientInstanceId, 1, 1, "new", 10, 12, 11, 20, "resolved", "native-ok", 19],
-        ]),
+        controlWaitersV1: resolvedWaiters,
         controlWaitersOmitted: 0,
       });
       expect(producer).not.toHaveProperty("listOperationId");
@@ -302,8 +321,7 @@ describe("registered Codex catalog diagnostics", () => {
       expect(JSON.stringify(records)).not.toContain(privateText);
       expect(JSON.stringify(records)).not.toContain(f.home);
       for (const record of records) {
-        expect(Object.keys(fields(record)).length).toBeLessThanOrEqual(28);
-        expect(Buffer.byteLength(JSON.stringify(fields(record)))).toBeLessThanOrEqual(2_048);
+        expectBounded(record);
         expect(
           Object.values(fields(record)).every((value) =>
             ["string", "number", "boolean"].includes(typeof value),
@@ -320,33 +338,26 @@ describe("registered Codex catalog diagnostics", () => {
     const f = await fixture();
     const thread = await f.thread("codex");
     const cursors: (string | undefined)[] = [];
-    commandRpcMocks.codexControlRequest.mockImplementation(
-      async (
-        _config: unknown,
-        method: unknown,
-        params: { cursor?: string },
-        options: { controlObservation?: CodexControlRequestObservation },
-      ) => {
-        expect(method).toBe("thread/list");
-        expect(params).not.toHaveProperty("searchTerm");
-        cursors.push(params.cursor);
-        for (let attempt = 1; attempt <= 6; attempt++) {
-          options.controlObservation?.attemptWaiterFinished?.(
-            waiterSummary({
-              rpcId: (cursors.length - 1) * 6 + attempt,
-              overloadAttemptOrdinal: attempt,
-              waiterOutcome: attempt === 6 ? "resolved" : "native-error",
-              wireOutcomeAtWaiterSettlement: attempt === 6 ? "native-ok" : "ingress-rejected",
-            }),
-          );
-        }
-        clock += 1_100;
-        return {
-          data: [thread],
-          ...(cursors.length < 20 ? { nextCursor: `private-cursor-${cursors.length}` } : {}),
-        };
-      },
-    );
+    mockObservedRequest(async (observation, params, method) => {
+      expect(method).toBe("thread/list");
+      expect(params).not.toHaveProperty("searchTerm");
+      cursors.push(params.cursor);
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        observation?.attemptWaiterFinished?.(
+          waiterSummary({
+            rpcId: (cursors.length - 1) * 6 + attempt,
+            overloadAttemptOrdinal: attempt,
+            waiterOutcome: attempt === 6 ? "resolved" : "native-error",
+            wireOutcomeAtWaiterSettlement: attempt === 6 ? "native-ok" : "ingress-rejected",
+          }),
+        );
+      }
+      clock += 1_100;
+      return {
+        data: [thread],
+        ...(cursors.length < 20 ? { nextCursor: `private-cursor-${cursors.length}` } : {}),
+      };
+    });
     await f.control.initialize();
     const hosts = await f.list("wanted title");
     expect(hosts[0]).toMatchObject({ connected: true, sessions: [] });
@@ -371,48 +382,39 @@ describe("registered Codex catalog diagnostics", () => {
       const tuples = JSON.parse(String(fields(page).controlWaitersV1));
       expect(tuples).toHaveLength(4);
       expect(tuples.map((tuple: unknown[]) => tuple[1])).toEqual([1, 2, 5, 6]);
-      expect(Object.keys(fields(page)).length).toBeLessThanOrEqual(28);
-      expect(Buffer.byteLength(JSON.stringify(fields(page)))).toBeLessThanOrEqual(2_048);
+      expectBounded(page);
     }
     expect(JSON.stringify(records)).not.toContain("private-cursor-");
     expect(JSON.stringify(records)).not.toContain(privateText);
     await f.list("another query");
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(20);
+    expect(nativeRequest).toHaveBeenCalledTimes(20);
   });
 
   it("preserves a bounded page warning with maximal waiter values and omitted invalid facts", async () => {
     const f = await fixture();
     const maximum = Number.MAX_SAFE_INTEGER;
-    commandRpcMocks.codexControlRequest.mockImplementation(
-      async (
-        _config: unknown,
-        _method: unknown,
-        _params: unknown,
-        options: { controlObservation?: CodexControlRequestObservation },
-      ) => {
-        const observation = options.controlObservation;
-        observation?.attemptWaiterFinished?.(waiterSummary({ clientInstanceId: privateText }));
-        for (let index = 0; index < 4; index++) {
-          observation?.attemptWaiterFinished?.(
-            waiterSummary({
-              rpcId: maximum - index,
-              waiterOrdinal: maximum,
-              overloadAttemptOrdinal: maximum,
-              disposition: "joined",
-              attemptCreatedAtMs: maximum,
-              firstPossibleWriteAtMs: maximum,
-              waiterAttachedAtMs: maximum,
-              waiterSettledAtMs: maximum,
-              waiterOutcome: "authority-rejected",
-              wireOutcomeAtWaiterSettlement: "ingress-rejected",
-              wireObservedAtMs: maximum,
-            }),
-          );
-        }
-        clock += 1_100;
-        return { data: [] };
-      },
-    );
+    mockObservedRequest(async (observation) => {
+      observation?.attemptWaiterFinished?.(waiterSummary({ clientInstanceId: privateText }));
+      for (let index = 0; index < 4; index++) {
+        observation?.attemptWaiterFinished?.(
+          waiterSummary({
+            rpcId: maximum - index,
+            waiterOrdinal: maximum,
+            overloadAttemptOrdinal: maximum,
+            disposition: "joined",
+            attemptCreatedAtMs: maximum,
+            firstPossibleWriteAtMs: maximum,
+            waiterAttachedAtMs: maximum,
+            waiterSettledAtMs: maximum,
+            waiterOutcome: "authority-rejected",
+            wireOutcomeAtWaiterSettlement: "ingress-rejected",
+            wireObservedAtMs: maximum,
+          }),
+        );
+      }
+      clock += 1_100;
+      return { data: [] };
+    });
     await f.control.initialize();
     expect((await f.list())[0]).toMatchObject({ connected: true, sessions: [] });
     const pages = await emitted(PAGE);
@@ -444,10 +446,9 @@ describe("registered Codex catalog diagnostics", () => {
       controlWaitersOmitted: 1,
       omittedObservations: 0,
     });
-    expect(Object.keys(metadata).length).toBeLessThanOrEqual(28);
-    expect(Buffer.byteLength(JSON.stringify(metadata))).toBeLessThanOrEqual(2_048);
+    expectBounded(pages[0]!);
     expect(JSON.stringify(records)).not.toContain(privateText);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+    expect(nativeRequest).toHaveBeenCalledOnce();
   });
 
   it.each(["disabled", "disabled-during-call"] as const)(
@@ -457,7 +458,7 @@ describe("registered Codex catalog diagnostics", () => {
       const gate = vi
         .spyOn(diagnosticRuntime, "areDiagnosticsEnabledForProcess")
         .mockReturnValue(mode !== "disabled");
-      commandRpcMocks.codexControlRequest.mockImplementation(async () => {
+      nativeRequest.mockImplementation(async () => {
         clock += 1_500;
         if (mode === "disabled-during-call") {
           gate.mockReturnValue(false);
@@ -469,11 +470,9 @@ describe("registered Codex catalog diagnostics", () => {
       await diagnosticRuntime.waitForDiagnosticEventsDrained();
       expect(records).toEqual([]);
       expect(sink.attempts).toBe(0);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+      expect(nativeRequest).toHaveBeenCalledOnce();
       if (mode === "disabled") {
-        expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).not.toHaveProperty(
-          "controlObservation",
-        );
+        expect(nativeRequest.mock.calls[0]?.[3]).not.toHaveProperty("controlObservation");
       }
     },
   );
@@ -510,7 +509,7 @@ describe("registered Codex catalog diagnostics", () => {
     });
     expect(f.runtime.nodes.list).toHaveBeenCalledOnce();
     expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
-    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    expect(nativeRequest).not.toHaveBeenCalled();
     expect(await emitted(PAGE)).toEqual([]);
     expect(JSON.stringify(records)).not.toContain(privateText);
   });
@@ -519,7 +518,7 @@ describe("registered Codex catalog diagnostics", () => {
     const response = createDeferred<unknown>();
     const allStarted = createDeferred<void>();
     let started = 0;
-    commandRpcMocks.codexControlRequest.mockImplementation(() => {
+    nativeRequest.mockImplementation(() => {
       if (++started === 80) {
         allStarted.resolve();
       }
@@ -535,13 +534,13 @@ describe("registered Codex catalog diagnostics", () => {
       clock += 1_500;
       response.resolve({ data: [] });
       await Promise.all(calls);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(80);
+      expect(nativeRequest).toHaveBeenCalledTimes(80);
       await diagnosticRuntime.waitForDiagnosticEventsDrained();
       expect(records).toHaveLength(60);
       expect(records.some((record) => Number(fields(record).omittedObservations) >= 16)).toBe(true);
       records = [];
       clock += 61_000;
-      commandRpcMocks.codexControlRequest.mockImplementation(async () => {
+      nativeRequest.mockImplementation(async () => {
         clock += 1_100;
         return { data: [] };
       });
@@ -562,66 +561,58 @@ describe("registered Codex catalog diagnostics", () => {
     const thread = await f.thread("codex");
     let previous: CodexControlRequestObservation | undefined;
     const completedObservations: CodexControlRequestObservation[] = [];
-    commandRpcMocks.codexControlRequest.mockImplementation(
-      async (
-        _pluginConfig: unknown,
-        _method: unknown,
-        _params: unknown,
-        options: { controlObservation?: CodexControlRequestObservation },
-      ) => {
-        const observation = options.controlObservation;
-        if (!observation) {
-          throw new Error("expected the active control observation");
-        }
-        completedObservations.push(observation);
-        if (!previous) {
-          clock += 50;
-          observation.phase("prepare");
-          for (let attempt = 0; attempt < 2; attempt++) {
-            clock += 25.25;
-            observation.phase("acquire-client");
-            clock += 100;
-            observation.phase("prepare");
-            clock += 25.25;
-            observation.phase("client-request");
-            clock += 300;
-            observation.phase("release-client");
-            clock += 50;
-            if (attempt === 0) {
-              observation.phase("prepare");
-            }
-          }
-          observation.attemptWaiterFinished?.(waiterSummary());
-          previous = observation;
-          return { data: [thread], nextCursor: "next" };
-        }
-        expect(observation).not.toBe(previous);
+    mockObservedRequest(async (observation) => {
+      if (!observation) {
+        throw new Error("expected the active control observation");
+      }
+      completedObservations.push(observation);
+      if (!previous) {
         clock += 50;
         observation.phase("prepare");
-        clock += 50;
-        observation.phase("acquire-client");
-        clock += 200;
-        observation.phase("client-request");
-        clock += 600;
-        observation.phase("release-client");
-        clock += 100;
-        observation.attemptWaiterFinished?.(
-          waiterSummary({
-            rpcId: 2,
-            waiterOutcome: "native-error",
-            wireOutcomeAtWaiterSettlement: "native-error",
-          }),
-        );
-        observation.failed({ phase: "client-request", category: "rpc-method-unavailable" });
-        clock += 1_000;
-        previous.phase("prepare");
-        previous.failed({ phase: "release-client", category: "other" });
-        previous.attemptWaiterFinished?.(waiterSummary({ rpcId: 99 }));
-        observation.phase("release-client");
-        observation.failed({ phase: "release-client", category: "deadline-observed" });
-        throw new Error(privateText);
-      },
-    );
+        for (let attempt = 0; attempt < 2; attempt++) {
+          clock += 25.25;
+          observation.phase("acquire-client");
+          clock += 100;
+          observation.phase("prepare");
+          clock += 25.25;
+          observation.phase("client-request");
+          clock += 300;
+          observation.phase("release-client");
+          clock += 50;
+          if (attempt === 0) {
+            observation.phase("prepare");
+          }
+        }
+        observation.attemptWaiterFinished?.(waiterSummary());
+        previous = observation;
+        return { data: [thread], nextCursor: "next" };
+      }
+      expect(observation).not.toBe(previous);
+      clock += 50;
+      observation.phase("prepare");
+      clock += 50;
+      observation.phase("acquire-client");
+      clock += 200;
+      observation.phase("client-request");
+      clock += 600;
+      observation.phase("release-client");
+      clock += 100;
+      observation.attemptWaiterFinished?.(
+        waiterSummary({
+          rpcId: 2,
+          waiterOutcome: "native-error",
+          wireOutcomeAtWaiterSettlement: "native-error",
+        }),
+      );
+      observation.failed({ phase: "client-request", category: "rpc-method-unavailable" });
+      clock += 1_000;
+      previous.phase("prepare");
+      previous.failed({ phase: "release-client", category: "other" });
+      previous.attemptWaiterFinished?.(waiterSummary({ rpcId: 99 }));
+      observation.phase("release-client");
+      observation.failed({ phase: "release-client", category: "deadline-observed" });
+      throw new Error(privateText);
+    });
     await expect(f.control.initialize()).rejects.toThrow(privateText);
     const pages = await emitted(PAGE);
     expect(pages).toHaveLength(2);
@@ -637,9 +628,7 @@ describe("registered Codex catalog diagnostics", () => {
       postResponseMs: 0,
       provenanceReadCalls: 1,
       provenanceMs: 0,
-      controlWaitersV1: JSON.stringify([
-        [1, 1, clientInstanceId, 1, 1, "new", 10, 12, 11, 20, "resolved", "native-ok", 19],
-      ]),
+      controlWaitersV1: resolvedWaiters,
       controlWaitersOmitted: 0,
     });
     expect(fields(pages[1])).toMatchObject({
@@ -660,8 +649,7 @@ describe("registered Codex catalog diagnostics", () => {
       controlWaitersOmitted: 0,
     });
     for (const page of pages) {
-      expect(Object.keys(fields(page)).length).toBeLessThanOrEqual(28);
-      expect(Buffer.byteLength(JSON.stringify(fields(page)))).toBeLessThanOrEqual(2_048);
+      expectBounded(page);
     }
     expect(JSON.stringify(records)).not.toContain(privateText);
     const completed = JSON.stringify(pages);
@@ -677,7 +665,7 @@ describe("registered Codex catalog diagnostics", () => {
     const f = await fixture();
     sink.throwing = true;
     const failure = new Error(privateText);
-    commandRpcMocks.codexControlRequest.mockImplementation(async () => {
+    nativeRequest.mockImplementation(async () => {
       clock += 1_500;
       throw failure;
     });
@@ -693,6 +681,6 @@ describe("registered Codex catalog diagnostics", () => {
     });
     expect(JSON.stringify(hosts)).not.toContain(privateText);
     expect(sink.attempts).toBeGreaterThanOrEqual(1);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+    expect(nativeRequest).toHaveBeenCalledOnce();
   });
 });
