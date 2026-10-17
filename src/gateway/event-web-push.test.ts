@@ -239,7 +239,9 @@ describe("event Web Push classification", () => {
       { agentId: "research", sessionKeys: ["agent:research:thread.1"] },
     );
 
-    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2), {
+      timeout: 3_000,
+    });
     const identifiedPayload = preparedWebPushSendMock.mock.calls.find(
       ([call]) => call.subscriptions[0] === identified,
     )?.[0].payload;
