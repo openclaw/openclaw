@@ -6,13 +6,19 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Swarm descriptor request volume" });
 
+type SwarmSessionRow = GatewaySessionRow & {
+  kind: string;
+  label: string;
+  updatedAt: number;
+};
+
 suite.define(() => {
   it("uses delivered swarm rows through frequent child updates and a new member", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const parentKey = "agent:main:swarm-describe-parent";
       const groupId = `swarm:${parentKey}:run`;
       const startedAt = Date.now();
-      let children: GatewaySessionRow[] = Array.from({ length: 4 }, (_, index) => ({
+      let children: SwarmSessionRow[] = Array.from({ length: 4 }, (_, index) => ({
         key: `agent:main:subagent:describe-worker-${index}`,
         sessionId: `describe-worker-${index}`,
         kind: "direct",
@@ -27,7 +33,7 @@ suite.define(() => {
         updatedAt: startedAt,
         snapshotAt: startedAt,
       }));
-      const parentRow = (clock: number): GatewaySessionRow => ({
+      const parentRow = (clock: number): SwarmSessionRow => ({
         key: parentKey,
         sessionId: "describe-parent",
         agentId: "main",
@@ -72,7 +78,7 @@ suite.define(() => {
       });
       const initialDescribes = (await gateway.getRequests("sessions.describe")).length;
 
-      const publish = async (child: GatewaySessionRow, step: number, reason: string) => {
+      const publish = async (child: SwarmSessionRow, step: number, reason: string) => {
         const parent = parentRow(startedAt + step);
         await gateway.setMethodResponse("sessions.describe", { session: parent });
         await gateway.setMethodResponse(
@@ -135,9 +141,7 @@ suite.define(() => {
       expect(
         (await taskNames.allTextContents()).toSorted((left, right) => left.localeCompare(right)),
       ).toEqual(
-        children
-          .map((child) => child.label)
-          .toSorted((left, right) => String(left).localeCompare(String(right))),
+        children.map((child) => child.label).toSorted((left, right) => left.localeCompare(right)),
       );
       console.info("swarm-describe-churn", {
         events: 12,
