@@ -41,6 +41,22 @@ import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
+const delegation = { agentId: "main", sessionKey: "agent:main:main" };
+const chatParams = (message: string) => ({ sessionId: "delegate-full", message, delegation });
+type Caller = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
+const withCaller = <T>(
+  operationalRunInstance: Caller["operationalRunInstance"],
+  run: () => T | Promise<T>,
+  overrides: Partial<Caller> = {},
+): Promise<T> =>
+  withGatewayToolCallerIdentity({ ...delegation, operationalRunInstance, ...overrides }, run);
+
+function expectReplyParts(payload: unknown, ...parts: string[]) {
+  for (const part of parts) {
+    expect(payload).toMatchObject({ reply: expect.stringContaining(part) });
+  }
+}
+
 const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference: vi.fn() }));
 // mock-isolation: Exercise delegated approval without loading the machine's config CLI.
 vi.mock("../../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
@@ -281,19 +297,10 @@ describe("Full Access delegated chat", () => {
     }
     const controller = new AbortController();
     let settled = false;
-    const pending = withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-        approvalSignals: [controller.signal],
-      },
-      () =>
-        callChat({
-          sessionId: "delegate-full",
-          message: "config set gateway.port banana",
-          delegation: { agentId: "main", sessionKey: "agent:main:main" },
-        }),
+    const pending = withCaller(
+      operationalRunInstance,
+      () => callChat(chatParams("config set gateway.port banana")),
+      { approvalSignals: [controller.signal] },
     ).then((reply) => {
       settled = true;
       return reply;
@@ -397,19 +404,10 @@ describe("Full Access delegated chat", () => {
       if (fails) {
         runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
       }
-      const reply = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          fullPermission: true,
-        },
-        () =>
-          callChat({
-            sessionId: "delegate-full",
-            message: "config set gateway.port banana",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          }),
+      const reply = await withCaller(
+        operationalRunInstance,
+        () => callChat(chatParams("config set gateway.port banana")),
+        { fullPermission: true },
       );
       expect(runConfigSet).toHaveBeenCalledTimes(2);
       expect(await manager.listPendingRecords()).toEqual([]);
@@ -476,21 +474,10 @@ describe("Full Access delegated chat", () => {
       }
       let sameOwner: Promise<Awaited<ReturnType<typeof callChat>>> | undefined;
       let settled = false;
-      const pending = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          approvalSignals: [controller.signal],
-        },
-        () =>
-          observation.track(() =>
-            callChat({
-              sessionId: "delegate-full",
-              message: "config set logging.level debug",
-              delegation: { agentId: "main", sessionKey: "agent:main:main" },
-            }),
-          ),
+      const pending = withCaller(
+        operationalRunInstance,
+        () => observation.track(() => callChat(chatParams("config set logging.level debug"))),
+        { approvalSignals: [controller.signal] },
       ).then((result) => {
         settled = true;
         return result;
@@ -517,14 +504,8 @@ describe("Full Access delegated chat", () => {
           return;
         }
         if (outcome === "allow") {
-          sameOwner = withGatewayToolCallerIdentity(
-            { agentId: "main", sessionKey: "agent:main:main", operationalRunInstance },
-            () =>
-              callChat({
-                sessionId: "delegate-full",
-                message: "Has it finished?",
-                delegation: { agentId: "main", sessionKey: "agent:main:main" },
-              }),
+          sameOwner = withCaller(operationalRunInstance, () =>
+            callChat(chatParams("Has it finished?")),
           );
           await runSystemAgentGatewayTask(async () => undefined);
           expect(await manager.listPendingRecords()).toHaveLength(1);
@@ -605,29 +586,20 @@ describe("Full Access delegated chat", () => {
                   : "cancelled";
         expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
         if (outcome === "expired") {
-          expect(result.payload).toMatchObject({
-            reply: expect.stringContaining("expired without a decision"),
-          });
-          expect(result.payload).toMatchObject({
-            reply: expect.stringContaining("approve it in the Control UI or OpenClaw apps"),
-          });
-          expect(result.payload).toMatchObject({
-            reply: expect.stringContaining("Retrying alone does not approve the change"),
-          });
+          expectReplyParts(
+            result.payload,
+            "expired without a decision",
+            "approve it in the Control UI or OpenClaw apps",
+            "Retrying alone does not approve the change",
+          );
         } else if (outcome === "apply-failed" || outcome === "afterDecision-failed") {
-          expect(result.payload).toMatchObject({
-            reply: expect.stringContaining("application status is unconfirmed"),
-          });
-          expect(result.payload).toMatchObject({
-            reply: expect.stringContaining("before retrying"),
-          });
+          expectReplyParts(result.payload, "application status is unconfirmed", "before retrying");
         } else if (outcome !== "allow" && outcome !== "deny") {
-          expect(result.payload).toMatchObject({
-            reply: expect.stringContaining("approval request is no longer active"),
-          });
-          expect(result.payload).toMatchObject({
-            reply: expect.stringContaining("No change was made"),
-          });
+          expectReplyParts(
+            result.payload,
+            "approval request is no longer active",
+            "No change was made",
+          );
         }
         expect.soft(result.payload).not.toHaveProperty("needsApproval");
         expect.soft(result.payload).not.toHaveProperty("proposalId");
@@ -686,20 +658,15 @@ describe("Full Access delegated chat", () => {
         requested,
       } = await createDelegatedChatFixture(createTestGatewayScheduler(), source, previousRun);
 
-      const call = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          fullPermission: true,
-        },
+      const call = await withCaller(
+        operationalRunInstance,
         () =>
-          callChat({
-            sessionId: "delegate-full",
-            message:
+          callChat(
+            chatParams(
               source === "typed" ? "config set logging.level debug" : "Change the logging level.",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          }),
+            ),
+          ),
+        { fullPermission: true },
       );
 
       expect(call.error).toBeUndefined();
@@ -738,19 +705,10 @@ describe("Full Access delegated chat", () => {
           return reply;
         });
       }
-      const proposalCall = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          fullPermission: previousRun === "unregistered-closed",
-        },
-        () =>
-          callChat({
-            sessionId: "delegate-full",
-            message: "config set logging.level info",
-            delegation: { agentId: "main", sessionKey: "agent:main:main" },
-          }),
+      const proposalCall = withCaller(
+        operationalRunInstance,
+        () => callChat(chatParams("config set logging.level info")),
+        { fullPermission: previousRun === "unregistered-closed" },
       );
       if (previousRun === "unregistered-closed" || previousRun === "registration-failure") {
         await expect(proposalCall).rejects.toThrow(
@@ -781,20 +739,9 @@ describe("Full Access delegated chat", () => {
       expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousAuthorityActive);
       expect(validateAgentRunDelegatedAuthority(replacementAuthority)).toBe(true);
       const readOnly = () =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            operationalRunInstance: replacementRun,
-            fullPermission: previousRun !== "live-restricted",
-          },
-          () =>
-            callChat({
-              sessionId: "delegate-full",
-              message: "config get logging.level",
-              delegation: { agentId: "main", sessionKey: "agent:main:main" },
-            }),
-        );
+        withCaller(replacementRun, () => callChat(chatParams("config get logging.level")), {
+          fullPermission: previousRun !== "live-restricted",
+        });
       if (previousRun === "storage-failure") {
         const forceDeny = manager.forceDenyIfRuntimeAuthorityClosed.bind(manager);
         const storageFailure = vi

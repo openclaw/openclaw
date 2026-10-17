@@ -70,11 +70,7 @@ type CallResult = {
   error?: { code?: string; message?: string };
 };
 
-async function makeHarness(uploadOnly = false): Promise<{
-  handlers: GatewayRequestHandlers;
-  stateDir: string;
-  workspaceDir: string;
-}> {
+async function makeHarness(uploadOnly = false) {
   const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
   const testState = await createOpenClawTestState({
     layout: "state-only",
@@ -138,12 +134,7 @@ function sha256(bytes: Buffer): string {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-    throw new Error(`Expected path to be missing: ${targetPath}`);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-  }
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function skillUploadExists(stateDir: string, uploadId: string): boolean {

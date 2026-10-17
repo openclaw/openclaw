@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
@@ -217,12 +217,11 @@ describe("openclaw.chat hosted lifecycle", () => {
       let sameOwnerChat: Promise<RespondCall> | undefined;
       try {
         if (!fullPermission) {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             approvalRequested.promise,
-            pendingChat.then(() => {
-              throw new Error("Delegated lifecycle replied before approval publication");
-            }),
-          ]);
+            pendingChat,
+            "Delegated lifecycle replied before approval publication",
+          );
           await runSystemAgentGatewayTask(async () => undefined);
           const pendingRecords = await manager.listPendingRecords();
           expect(pendingRecords).toHaveLength(1);
@@ -249,23 +248,21 @@ describe("openclaw.chat hosted lifecycle", () => {
                 delegation: { agentId: "main", sessionKey: "agent:main:main" },
               }),
             );
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               sameOwnerHandled.promise,
-              sameOwnerChat.then(() => {
-                throw new Error("Same-owner chat replied before engine handling");
-              }),
-            ]);
+              sameOwnerChat,
+              "Same-owner chat replied before engine handling",
+            );
             await runSystemAgentGatewayTask(async () => undefined);
             expect(handle).toHaveBeenCalledTimes(2);
           }
           expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
         }
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           preparationStarted.promise,
-          pendingChat.then(() => {
-            throw new Error("Delegated lifecycle replied before host preparation");
-          }),
-        ]);
+          pendingChat,
+          "Delegated lifecycle replied before host preparation",
+        );
         expect(requestResponses.calls).toHaveLength(0);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
         expect(systemAgentLane()).toMatchObject({ activeCount: 1, queuedCount: 0 });
@@ -313,12 +310,11 @@ describe("openclaw.chat hosted lifecycle", () => {
         expect(requestResponses.calls).toHaveLength(1);
         expect(rootsAtResponse).toEqual([expect.any(Number)]);
         expect(rootsAtResponse[0]).toBeGreaterThan(0);
-        expect(persistedHistoryAtResponse[0]).toContainEqual(
-          expect.objectContaining({
-            role: "assistant",
-            text: expect.stringContaining(expectedReply),
-          }),
-        );
+        const expectedTurn = expect.objectContaining({
+          role: "assistant",
+          text: expect.stringContaining(expectedReply),
+        });
+        expect(persistedHistoryAtResponse[0]).toContainEqual(expectedTurn);
         expect(requestResponses.calls[0]).toMatchObject({
           ok: true,
           payload: { reply: expect.stringContaining(expectedReply) },
@@ -328,12 +324,7 @@ describe("openclaw.chat hosted lifecycle", () => {
         }
         expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(appendHistory).toHaveBeenCalledWith(
-          expect.objectContaining({
-            role: "assistant",
-            text: expect.stringContaining(expectedReply),
-          }),
-        );
+        expect(appendHistory).toHaveBeenCalledWith(expectedTurn);
         expect(engine.getPendingOperatorProposal()).toBeNull();
         expect(nativeEffect).not.toHaveBeenCalled();
         if (loss !== "none") {

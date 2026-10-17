@@ -149,18 +149,14 @@ export function useSystemAgentGatewayTestFixture() {
 
   beforeEach(() => {
     previousAppliedHash = getRuntimeConfigAppliedHash();
-    setupInferenceMocks.verifySetupInference.mockResolvedValue({
+    const ready = {
       ok: true,
       modelRef: "openai/gpt-5.5",
       latencyMs: 10,
       binding: verifiedInference,
-    });
-    inferenceFallbackMocks.verify.mockResolvedValue({
-      ok: true,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 10,
-      binding: verifiedInference,
-    });
+    };
+    setupInferenceMocks.verifySetupInference.mockResolvedValue({ ...ready });
+    inferenceFallbackMocks.verify.mockResolvedValue({ ...ready });
     setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
       requireVerifiedInferenceFixture().configuredRoute,
     );
@@ -214,9 +210,5 @@ export async function callChat(
     context,
     client,
   } as never);
-  const call = calls[0];
-  if (!call) {
-    throw new Error("expected a respond call");
-  }
-  return call;
+  return expectDefined(calls[0], "expected a respond call");
 }

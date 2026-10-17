@@ -49,26 +49,13 @@ vi.mock("../../system-agent/greeting.js", () => ({
   resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
 }));
 
-type FakeEngine = {
-  answerWizard: ReturnType<typeof vi.fn>;
-  cancelWizard: ReturnType<typeof vi.fn>;
-  decorateRejoinReply: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
-  getPendingOperatorProposal: ReturnType<typeof vi.fn>;
-  handle: ReturnType<typeof vi.fn>;
-  historyLength: ReturnType<typeof vi.fn>;
-  historySince: ReturnType<typeof vi.fn>;
-  loadOverview: ReturnType<typeof vi.fn>;
-  noteAssistantMessage: ReturnType<typeof vi.fn>;
-  resolveOperatorApproval: ReturnType<typeof vi.fn>;
-  seedHistory: ReturnType<typeof vi.fn>;
-};
+type FakeEngine = ReturnType<typeof makeEngine>;
 
-function makeEngine(): FakeEngine {
+function makeEngine() {
   return {
     answerWizard: vi.fn(),
     cancelWizard: vi.fn(),
-    decorateRejoinReply: vi.fn((reply: unknown) => reply),
+    decorateRejoinReply: vi.fn((reply: Record<string, unknown>) => reply),
     dispose: vi.fn(async () => undefined),
     getPendingOperatorProposal: vi.fn(() => null),
     handle: vi.fn(async () => ({ text: "did the thing", action: "none" })),
@@ -122,6 +109,18 @@ function seededSession(params?: {
   } as unknown as SystemAgentChatSession;
 }
 
+function fullSessions(oldest: SystemAgentChatSession) {
+  return new Map([
+    ["oldest", oldest],
+    ...Array.from({ length: 7 }, (_, i): [string, SystemAgentChatSession] => [
+      `existing-${i + 1}`,
+      seededSession({ lastUsedAt: i + 1 }),
+    ]),
+  ]);
+}
+
+const welcomeQuestion = { id: "welcome-q", header: "Welcome", options: [] };
+
 async function callChat(
   context: GatewayRequestContext,
   params: Record<string, unknown>,
@@ -170,11 +169,7 @@ describe("openclaw.chat session lifecycle", () => {
     }));
     const session = seededSession({ engine });
     session.optionalWelcome = true;
-    (session as { welcomeQuestion?: unknown }).welcomeQuestion = {
-      id: "welcome-q",
-      header: "Welcome",
-      options: [],
-    };
+    (session as { welcomeQuestion?: unknown }).welcomeQuestion = welcomeQuestion;
     const sessions = new Map<string, SystemAgentChatSession>([["s1", session]]);
 
     const call = await callChat(makeContext(sessions), { sessionId: "s1" });
@@ -194,11 +189,7 @@ describe("openclaw.chat session lifecycle", () => {
 
   it("falls back to the welcome question when no interaction is live", async () => {
     const session = seededSession();
-    (session as { welcomeQuestion?: unknown }).welcomeQuestion = {
-      id: "welcome-q",
-      header: "Welcome",
-      options: [],
-    };
+    (session as { welcomeQuestion?: unknown }).welcomeQuestion = welcomeQuestion;
     const sessions = new Map<string, SystemAgentChatSession>([["s1", session]]);
 
     const call = await callChat(makeContext(sessions), { sessionId: "s1" });
@@ -216,10 +207,7 @@ describe("openclaw.chat session lifecycle", () => {
       evictionStarted.resolve();
       await releaseEviction.promise;
     });
-    const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
-    for (let index = 1; index < 8; index += 1) {
-      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
-    }
+    const sessions = fullSessions(oldest);
 
     const context = makeContext(sessions);
     const first = callChat(context, { sessionId: "new-1" });
@@ -240,10 +228,7 @@ describe("openclaw.chat session lifecycle", () => {
     oldest.engine.dispose = vi.fn(async () => {
       current = false;
     });
-    const sessions = new Map<string, SystemAgentChatSession>([["oldest", oldest]]);
-    for (let index = 1; index < 8; index += 1) {
-      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
-    }
+    const sessions = fullSessions(oldest);
     const respond = vi.fn();
     const pending = expectDefined(
       systemAgentHandlers["openclaw.chat"],
