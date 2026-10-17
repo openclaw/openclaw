@@ -1,18 +1,10 @@
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
 import {
   resetGeneratedMediaTaskActivityForTests,
   admitMediaHandle,
 } from "../media-generation-activity.test-support.js";
 
-type MockWithReset = {
-  mockReset(): void;
-  mockResolvedValue?(value: unknown): void;
-  mockReturnValue?(value: unknown): void;
-};
-
-export const taskDeliveryRuntimeMocks = {
-  sendMessage: vi.fn(),
-};
+type MockWithReset = { mockReset(): void };
 
 type TaskExecutorBackgroundMocks = {
   createOperation: MockWithReset;
@@ -23,7 +15,6 @@ type TaskExecutorBackgroundMocks = {
 
 type MediaBackgroundResetMocks = {
   taskExecutorMocks: TaskExecutorBackgroundMocks;
-  taskDeliveryRuntimeMocks: { sendMessage: MockWithReset };
   announceDeliveryMocks: { deliverSubagentAnnouncement: MockWithReset };
 };
 
@@ -90,7 +81,6 @@ export function createMediaCompletionFixture({
 
 export function resetMediaBackgroundMocks({
   taskExecutorMocks,
-  taskDeliveryRuntimeMocks: deliveryMocks,
   announceDeliveryMocks,
 }: MediaBackgroundResetMocks): void {
   resetGeneratedMediaTaskActivityForTests();
@@ -98,14 +88,6 @@ export function resetMediaBackgroundMocks({
   taskExecutorMocks.recordProgress.mockReset();
   taskExecutorMocks.completeOperation.mockReset();
   taskExecutorMocks.failOperation.mockReset();
-  deliveryMocks.sendMessage.mockReset();
-  deliveryMocks.sendMessage.mockResolvedValue?.({
-    channel: "discord",
-    to: "channel:1",
-    via: "direct",
-    mediaUrl: null,
-    result: { messageId: "msg-1" },
-  });
   announceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
 }
 

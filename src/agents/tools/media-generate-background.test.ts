@@ -6,7 +6,7 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
     await import("../media-generation-activity.observer.test-support.js");
   return { ...observeMediaActivity(actual, taskExecutorMocks) };
 });
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -24,7 +24,6 @@ import {
   createMediaCompletionFixture,
   expectFallbackMediaAnnouncement,
   resetMediaBackgroundMocks,
-  taskDeliveryRuntimeMocks,
 } from "./media-generate-background.test-support.js";
 const taskExecutorMocks = vi.hoisted(() => ({
   createOperation: vi.fn(),
@@ -38,6 +37,7 @@ const announceDeliveryMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted((): { entry: SessionEntry } => ({
   entry: { sessionId: "media-requester", updatedAt: 1 },
 }));
+const announce = announceDeliveryMocks.deliverSubagentAnnouncement;
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 // mock-isolation: Keep the session database outside this routing fixture.
@@ -61,22 +61,23 @@ const {
 } = await import("./media-generate-background.js");
 
 beforeEach(() => {
-  resetMediaBackgroundMocks({ taskExecutorMocks, taskDeliveryRuntimeMocks, announceDeliveryMocks });
+  resetMediaBackgroundMocks({ taskExecutorMocks, announceDeliveryMocks });
+  setRuntimeConfigSnapshot({});
   taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-123" });
-  announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-    delivered: true,
-    path: "direct",
-  });
+  announce.mockResolvedValue({ delivered: true, path: "direct" });
   resetAgentEventsForTest();
 });
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   resetAgentEventsForTest();
+  sessionMocks.entry = { sessionId: "media-requester", updatedAt: 1 };
 });
 
 function expectReplyInstruction(required: string[]) {
-  const event = getDeliveredInternalEvents().at(0);
+  const events: unknown = announce.mock.calls[0]?.[0]?.internalEvents;
+  assert(Array.isArray(events), "Expected delivered internal events");
+  const event: Record<string, unknown> | undefined = events.at(0);
   const instruction = String(event?.replyInstruction);
   for (const text of [...required, "Keep internal task/session details private"]) {
     expect(instruction).toContain(text);
@@ -102,90 +103,78 @@ function setDelivery(to: string, accountId: string) {
   });
 }
 
-describe("media requester provenance", () => {
-  beforeEach(() => {
-    taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-provenance" });
+it.each([
+  [undefined, "webchat"],
+  [{ kind: "external_user" }, "webchat"],
+  [{ kind: "internal_system", sourceTool: "cron" }, "telegram"],
+  [{ kind: "inter_session", sourceTool: "sessions_send" }, "telegram"],
+] satisfies Array<[InputProvenance | undefined, string]>)(
+  "routes a prepared WebChat media task with provenance %j to %s",
+  async (inputProvenance, channel) => {
     setDelivery("test-room", "test-bot");
-  });
-  afterEach(() => {
-    sessionMocks.entry = { sessionId: "media-requester", updatedAt: 1 };
-  });
-
-  it.each([
-    [undefined, "webchat"],
-    [{ kind: "external_user" }, "webchat"],
-    [{ kind: "internal_system", sourceTool: "cron" }, "telegram"],
-    [{ kind: "inter_session", sourceTool: "sessions_send" }, "telegram"],
-  ] satisfies Array<[InputProvenance | undefined, string]>)(
-    "routes a prepared WebChat media task with provenance %j to %s",
-    async (inputProvenance, channel) => {
-      let backgroundWork: (() => Promise<void>) | undefined;
-      const run = vi.fn(async () => ({
-        provider: "openai",
-        model: "gpt-image-1",
-        count: 1,
-        wakeResult: "generated",
-        contentText: "generated",
-        details: {},
-      }));
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      await prepareMediaGenerationTask({
-        generationLabel: "image",
-        cfg,
-        args: { prompt: "synthetic provenance proof" },
-        options: { inputProvenance },
-        acquire: async () => undefined,
-        resolveProviders: () => [],
-        findDuplicate: async () => undefined,
-        prepare: async ({ prompt }) => ({
-          kind: "task",
-          params: {
-            lifecycle: imageGenerationTaskLifecycle,
-            sessionKey: "agent:main:main",
-            requesterOrigin: {
-              channel: "webchat",
-              ...(channel === "webchat"
-                ? { to: "stale-peer", accountId: "test-bot", threadId: "stale-thread" }
-                : {}),
-            },
-            prompt,
-            requestKey: "provenance-proof",
-            scheduleBackgroundWork: (work) => {
-              backgroundWork = work;
-            },
-            onFailure: vi.fn(),
-            run,
-          },
-        }),
-      });
-      assert(backgroundWork);
-      setDelivery("changed-room", "changed-bot");
-      await backgroundWork();
-      expect(run).toHaveBeenCalledOnce();
-      expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-      const delivered = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0];
-      assert(delivered);
-      expect(
-        resolveGeneratedMediaSessionDeliveryRoute({
-          ...delivered,
+    let backgroundWork: (() => Promise<void>) | undefined;
+    const run = vi.fn(async () => ({
+      provider: "openai",
+      model: "gpt-image-1",
+      count: 1,
+      wakeResult: "generated",
+      contentText: "generated",
+      details: {},
+    }));
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    await prepareMediaGenerationTask({
+      generationLabel: "image",
+      cfg,
+      args: { prompt: "synthetic provenance proof" },
+      options: { inputProvenance },
+      acquire: async () => undefined,
+      resolveProviders: () => [],
+      findDuplicate: async () => undefined,
+      prepare: async ({ prompt }) => ({
+        kind: "task",
+        params: {
+          lifecycle: imageGenerationTaskLifecycle,
           sessionKey: "agent:main:main",
-        }).route,
-      ).toEqual(
-        channel === "webchat"
-          ? { channel: "webchat", to: "agent:main:main", chatType: "direct" }
-          : {
-              channel: "telegram",
-              to: "test-room",
-              accountId: "test-bot",
-              chatType: "direct",
-            },
-      );
-    },
-  );
-});
+          requesterOrigin: {
+            channel: "webchat",
+            ...(channel === "webchat"
+              ? { to: "stale-peer", accountId: "test-bot", threadId: "stale-thread" }
+              : {}),
+          },
+          prompt,
+          requestKey: "provenance-proof",
+          scheduleBackgroundWork: (work) => {
+            backgroundWork = work;
+          },
+          onFailure: vi.fn(),
+          run,
+        },
+      }),
+    });
+    assert(backgroundWork);
+    setDelivery("changed-room", "changed-bot");
+    await backgroundWork();
+    expect(run).toHaveBeenCalledOnce();
+    expect(announce).toHaveBeenCalledOnce();
+    const delivered = announce.mock.calls[0]?.[0];
+    assert(delivered);
+    expect(
+      resolveGeneratedMediaSessionDeliveryRoute({
+        ...delivered,
+        sessionKey: "agent:main:main",
+      }).route,
+    ).toEqual({
+      channel,
+      chatType: "direct",
+      ...(channel === "webchat"
+        ? { to: "agent:main:main" }
+        : { to: "test-room", accountId: "test-bot" }),
+    });
+  },
+);
 
 it("records task progress updates", () => {
   imageGenerationTaskLifecycle.recordTaskProgress({
@@ -197,7 +186,6 @@ it("records task progress updates", () => {
     }),
     progressSummary: "Saving generated image",
   });
-
   expect(taskExecutorMocks.recordProgress.mock.calls[0]?.[0]).toMatchObject({
     runId: "tool:image_generate:abc",
     progressSummary: "Saving generated image",
@@ -205,25 +193,24 @@ it("records task progress updates", () => {
 });
 
 it("queues a completion event through the shared generated-media wake path", async () => {
+  const path = "/tmp/generated-robot.png";
   await imageGenerationTaskLifecycle.wakeTaskCompletion(
-    completion("image", "Generated 1 image.\nMEDIA:/tmp/generated-robot.png", [
-      "/tmp/generated-robot.png",
-    ]),
+    completion("image", `Generated 1 image.\nMEDIA:${path}`, [path]),
   );
   expectFallbackMediaAnnouncement({
-    deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
+    deliverAnnouncementMock: announce,
     requesterSessionKey: "agent:main:discord:direct:123",
     channel: "discord",
     to: "channel:1",
     source: "image_generation",
     announceType: "image generation task",
-    resultMediaPath: "MEDIA:/tmp/generated-robot.png",
-    mediaUrls: ["/tmp/generated-robot.png"],
+    resultMediaPath: `MEDIA:${path}`,
+    mediaUrls: [path],
   });
 });
 
 it("keeps failed completion notices in the durable agent-loop handoff", async () => {
-  announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+  announce.mockResolvedValue({
     delivered: false,
     path: "direct",
     reason: "generated_media_missing",
@@ -236,27 +223,16 @@ it("keeps failed completion notices in the durable agent-loop handoff", async ()
       statusLabel: "failed",
     }),
   ).resolves.toEqual({ status: "permanent_failure" });
-  expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+  expect(announce).toHaveBeenCalledTimes(1);
 });
-function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
-  const events: unknown =
-    announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0]?.internalEvents;
-  assert(Array.isArray(events), "Expected delivered internal events");
-  return events;
-}
 
 it("creates a running task with queued progress text", async () => {
-  setRuntimeConfigSnapshot({});
   const handle = await musicGenerationTaskLifecycle.createTaskRun({
     sessionKey: "agent:main:discord:direct:123",
-    requesterOrigin: {
-      channel: "discord",
-      to: "channel:1",
-    },
+    requesterOrigin: { channel: "discord", to: "channel:1" },
     prompt: "night-drive synthwave",
     providerId: "google",
   });
-
   expect(handle).toMatchObject({
     taskId: "task-123",
     requesterSessionKey: "agent:main:discord:direct:123",
@@ -286,12 +262,8 @@ it.each([
     await musicGenerationTaskLifecycle.wakeTaskCompletion({
       ...completed,
       attachments,
-      handle: {
-        ...completed.handle,
-        requesterSessionKey,
-      },
+      handle: { ...completed.handle, requesterSessionKey },
     });
-
     const event = expectReplyInstruction([
       "do not send them again",
       "Check the result against what the user asked for",
@@ -302,46 +274,35 @@ it.each([
   },
 );
 it("keeps the detached video tool run context registered until terminal status", async () => {
-  setRuntimeConfigSnapshot({});
   const handle = await videoGenerationTaskLifecycle.createTaskRun({
     sessionKey: "agent:main:discord:channel:123",
     prompt: "friendly lobster surfing",
     providerId: "fal",
   });
   assert(handle, "expected video generation task handle");
-
   expect(handle.runId).toMatch(/^tool:video_generate:/);
   expect(getAgentRunContext(handle.runId)?.sessionKey).toBe("agent:main:discord:channel:123");
-
   const beforeProgress = Date.now();
   videoGenerationTaskLifecycle.recordTaskProgress({
     handle,
     progressSummary: "Generating video",
   });
-
   expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
-
   videoGenerationTaskLifecycle.failTaskRun({
     handle,
     error: new Error("provider failed"),
   });
-
   expect(getAgentRunContext(handle.runId)).toBeUndefined();
 });
 
 it("keeps active video generation failure wakes agent-mediated", async () => {
-  announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-    delivered: true,
-    path: "steered",
-  });
-
+  announce.mockResolvedValue({ delivered: true, path: "steered" });
   await videoGenerationTaskLifecycle.wakeTaskCompletion({
     ...completion("video", "All video generation models failed."),
     status: "error",
     statusLabel: "failed",
   });
-
-  expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+  expect(announce).toHaveBeenCalledTimes(1);
   expectReplyInstruction([
     "retry with adjusted parameters",
     "tell the user briefly what failed",
