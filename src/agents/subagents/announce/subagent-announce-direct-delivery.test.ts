@@ -4,6 +4,7 @@ import { createSessionWorkStartChangedError } from "../../../config/sessions/lif
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
+import { SqliteTranscriptMutationConflictError } from "../../../config/sessions/session-mutation-conflict-error.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createRecoveryTypingManager } from "../../../gateway/recovery-typing.js";
@@ -13,6 +14,7 @@ import type { sendMessage } from "../../../infra/outbound/message.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
+import { ReplaySafeTranscriptConflictError } from "../../embedded-agent-runner/transcript-conflict.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
@@ -306,6 +308,30 @@ describe("late exact requester recovery", () => {
       patch: finalReceipt,
       expected: { delivered: true, requesterVisibleFinalDelivered: true },
     },
+    {
+      name: "safe rejected transcript under current custody",
+      error: new ReplaySafeTranscriptConflictError(
+        new SqliteTranscriptMutationConflictError("fixture"),
+      ),
+      patch: { restartRecoveryTerminalRunIds: [sourceRunId] },
+      expected: { delivered: false, reason: "requester_transcript_conflict" },
+      disposition: "retryable",
+    },
+    {
+      name: "unqualified transcript error without receipt",
+      error: new SqliteTranscriptMutationConflictError("fixture"),
+      patch: { restartRecoveryTerminalRunIds: [sourceRunId] },
+      expected: { delivered: false, reason: "visible_reply_missing" },
+      disposition: "permanent_failure",
+    },
+    {
+      name: "safe rejected transcript with committed receipt",
+      error: new ReplaySafeTranscriptConflictError(
+        new SqliteTranscriptMutationConflictError("fixture"),
+      ),
+      patch: finalReceipt,
+      expected: { delivered: true, requesterVisibleFinalDelivered: true },
+    },
     ...[
       { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
       { name: "accepted turn", response: { status: "accepted" } },
@@ -444,6 +470,15 @@ describe("late exact requester recovery", () => {
       ),
       delivered: false,
       disposition: "permanent_failure",
+    },
+    {
+      name: "safe conflict cannot override committed send ambiguity",
+      error: Object.assign(
+        new ReplaySafeTranscriptConflictError(new SqliteTranscriptMutationConflictError("fixture")),
+        { sentBeforeError: true },
+      ),
+      delivered: false,
+      disposition: "ambiguous",
     },
     {
       name: "send ambiguity",

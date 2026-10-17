@@ -27,6 +27,7 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   resolveEmbeddedRunAbandonment,
 } from "../../embedded-agent-runner/runs.js";
+import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
@@ -473,6 +474,7 @@ async function sendSubagentAnnounceDirectlyBound(
     });
     let directAnnounceResponse: unknown;
     let directFailure: SubagentAnnounceDeliveryResult | undefined;
+    let replaySafeTranscriptConflict = false;
     try {
       directAnnounceResponse = recoveredResult
         ? { status: "ok", result: recoveredResult }
@@ -581,6 +583,8 @@ async function sendSubagentAnnounceDirectlyBound(
         }
       }
       params.onDeliveryError?.(err);
+      replaySafeTranscriptConflict =
+        sourceToolId === "subagent_settle" && isReplaySafeTranscriptConflict(err);
       directFailure = {
         delivered: false,
         path: "direct",
@@ -663,6 +667,7 @@ async function sendSubagentAnnounceDirectlyBound(
     const settledRecovery = resolveRequesterRecoveryDelivery(
       currentEntry,
       params.directIdempotencyKey,
+      replaySafeTranscriptConflict,
     );
     if (!settledRecovery) {
       return delivery;
