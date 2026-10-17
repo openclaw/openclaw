@@ -49,6 +49,7 @@ export async function readManagedImageRecord(
     { type: "managedImages.read", input: { attachmentId } },
     { context, current: true },
   );
+  context.admission.assertCurrent();
   return reply?.record ?? null;
 }
 
@@ -63,6 +64,7 @@ export async function listManagedImageRecordEntries(params: {
     { type: "managedImages.entries", input: { sessionKey } },
     { context, current: true },
   );
+  context.admission.assertCurrent();
   return reply?.entries ?? [];
 }
 
@@ -73,6 +75,7 @@ export async function listManagedImageOriginalMediaIds(stateDir?: string): Promi
     { type: "managedImages.originalMediaIds", input: undefined },
     { context, current: true },
   );
+  context.admission.assertCurrent();
   return reply?.mediaIds ?? [];
 }
 
