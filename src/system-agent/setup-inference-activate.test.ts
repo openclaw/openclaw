@@ -717,7 +717,7 @@ describe("setup activation credentials and configuration", () => {
     };
     await writeConfig(setup, configured);
     await saveProfile(setup, "openai:replacement", configured);
-    const method = setup.deps.resolvePluginProviders?.({ config: configured })[0]?.auth[0];
+    const method = setup.provider.auth[0];
     assert.ok(method);
     method.starterModel = "openai/provider-default";
 

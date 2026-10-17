@@ -433,7 +433,7 @@ async function verifyAndActivateCandidate(
   const withGeneration = <T>(run: () => T): T =>
     generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   const artifacts = withGeneration(() =>
-    (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
+    captureSystemAgentOwnerPluginArtifacts({
       config: route.runConfig,
       executionRoute: route,
     }),

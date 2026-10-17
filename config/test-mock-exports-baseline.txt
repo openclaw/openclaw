@@ -6694,7 +6694,6 @@
 ["src/gateway/server-methods/system-agent.host-lifecycle.test.ts","../../daemon/hosted-stop.js","eb720e45c4444aef3828e1a61f92db22fdf8031204af55cc7ac9e25e3a92e969",1]
 ["src/gateway/server-methods/system-agent.mocks.test-support.ts","../../system-agent/inference-fallback.js","c9fcee95da00a067b2d81d7b779e3a8ef9c19552ac47c5a687e8412e2d2ea7d5",1]
 ["src/gateway/server-methods/system-agent.mocks.test-support.ts","../../system-agent/onboarding-welcome.js","5cb10d6d0e711f5336d30041ffb09d69972422d48d6f34f3dace7932a4b04887",1]
-["src/gateway/server-methods/system-agent.mocks.test-support.ts","../../system-agent/setup-inference.js","e946a6edfc99deb9a784de45fbaef8a993ac6e20dba922dad8df4cf64825b43c",1]
 ["src/gateway/server-methods/system-agent.session-lifecycle.test.ts","../../system-agent/overview.js","926067a334098438c80adfd730301877eb210912490a81b410d19c9564f40bf8",1]
 ["src/gateway/server-methods/task-suggestions-session-start.test.ts","./chat-send-handler.js","97bfc4778a9bde1a020984d025ce6d267a90e52e667e0dba0070bb2d812f2998",1]
 ["src/gateway/server-methods/task-suggestions.owner-recovery.test.ts","./chat-send-handler.js","97bfc4778a9bde1a020984d025ce6d267a90e52e667e0dba0070bb2d812f2998",1]

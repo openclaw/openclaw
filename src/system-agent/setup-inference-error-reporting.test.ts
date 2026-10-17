@@ -11,16 +11,13 @@ import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  redactSetupInferenceError,
-  type ActivateSetupInferenceDeps,
-} from "./setup-inference-core.js";
+import { redactSetupInferenceError } from "./setup-inference-core.js";
 import { verifySetupInferenceConfig } from "./setup-inference-turn.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
   createSystemAgentVerifiedInferenceTestFixture,
 } from "./system-agent.test-helpers.js";
-import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
+import * as verifiedInference from "./verified-inference.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -128,12 +125,13 @@ async function observeScenario(scenario: Scenario, json: boolean) {
               },
             };
           });
-          const deps: ActivateSetupInferenceDeps = {
-            captureSystemAgentOwnerPluginArtifacts: (input) => {
+          const captureOwnerArtifacts = verifiedInference.captureSystemAgentOwnerPluginArtifacts;
+          vi.spyOn(verifiedInference, "captureSystemAgentOwnerPluginArtifacts").mockImplementation(
+            (input) => {
               enter("capture");
-              return captureSystemAgentOwnerPluginArtifacts(input);
+              return captureOwnerArtifacts(input);
             },
-          };
+          );
           inferenceMocks.verifySetupInference.mockImplementation(
             async ({ runtime }: { runtime: RuntimeEnv }) => {
               let binding: typeof fixture.binding | undefined;
@@ -142,7 +140,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
                 agentId: "main",
                 runtime,
                 requireExecutionOwner: true,
-                deps,
                 onVerifiedExecution: (verified) => {
                   enter("callback");
                   binding = verified;

@@ -189,7 +189,7 @@ export async function verifySetupHarness(params: {
       throw new Error("The setup verification harness has no plugin owner.");
     }
     const capture = () =>
-      (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
+      captureSystemAgentOwnerPluginArtifacts({
         config: route.runConfig,
         executionRoute: route,
       });
@@ -197,7 +197,7 @@ export async function verifySetupHarness(params: {
     if (!artifacts.ownerPluginArtifacts.some((entry) => entry.pluginId === ownerPluginId)) {
       throw new Error("The setup verification harness has no trusted runtime artifact.");
     }
-    const timeout = AbortSignal.timeout(deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(SETUP_INFERENCE_TEST_TIMEOUT_MS);
     const signal = params.signal ? AbortSignal.any([params.signal, timeout]) : timeout;
     let open = true;
     const assertCurrent = () => {
