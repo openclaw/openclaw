@@ -54,6 +54,18 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 };
+type BindingConversation = {
+  channel: string;
+  accountId?: string;
+  conversationId: string;
+  parentConversationId?: string;
+};
+type SpawnBinding = {
+  targetSessionKey: string;
+  targetKind?: string;
+  status?: string;
+  conversation: BindingConversation;
+};
 
 export function createSubagentRegistrationScopeForTest(
   overrides: Partial<SubagentRegistrationScope> &
@@ -146,10 +158,7 @@ export function createSubagentSpawnTestConfig(
   overrides?: Record<string, unknown>,
 ) {
   return {
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-    },
+    session: { mainKey: "main", scope: "per-sender" },
     tools: {
       sessions_spawn: {
         attachments: {
@@ -160,11 +169,7 @@ export function createSubagentSpawnTestConfig(
         },
       },
     },
-    agents: {
-      defaults: {
-        workspace: workspaceDir,
-      },
-    },
+    agents: { defaults: { workspace: workspaceDir } },
     ...overrides,
   };
 }
@@ -172,9 +177,7 @@ export function createSubagentSpawnTestConfig(
 export function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
     agents: {
-      defaults: {
-        workspace: os.tmpdir(),
-      },
+      defaults: { workspace: os.tmpdir() },
       entries: { main: { workspace: "/tmp/workspace-main" } },
     },
     ...overrides,
@@ -184,10 +187,7 @@ export function createConfigOverride(overrides?: Record<string, unknown>) {
 /** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
-    if (opts.method === "sessions.patch") {
-      return { ok: true };
-    }
-    if (opts.method === "sessions.delete") {
+    if (opts.method === "sessions.patch" || opts.method === "sessions.delete") {
       return { ok: true };
     }
     if (opts.method === "agent") {
@@ -280,37 +280,13 @@ export async function loadSubagentSpawnModuleForTest(params: {
       bindSupported: boolean;
       placements: Array<"current" | "child">;
     };
-    bind?: (params: {
-      targetSessionKey: string;
-      targetKind?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
-      placement: "current" | "child";
-      metadata?: Record<string, unknown>;
-    }) => Promise<{
-      targetSessionKey: string;
-      targetKind?: string;
-      status?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
-    }>;
-    listBySession: (targetSessionKey: string) => Array<{
-      status?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
-    }>;
+    bind?: (
+      params: Omit<SpawnBinding, "status"> & {
+        placement: "current" | "child";
+        metadata?: Record<string, unknown>;
+      },
+    ) => Promise<SpawnBinding>;
+    listBySession: (targetSessionKey: string) => Pick<SpawnBinding, "status" | "conversation">[];
   };
   workspaceDir?: string;
   sessionStorePath?: string;
