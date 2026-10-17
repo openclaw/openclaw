@@ -94,13 +94,16 @@ function makeStorePath() {
   return path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
 }
 
-function createPlannerStore(entryCount = 0, updatedAt?: number) {
+function createPlannerStore(entryCount = 0, updatedAt?: number, prefix = "planner") {
   const storePath = makeStorePath();
-  const key = (index: number) => `agent:main:planner-${index}`;
-  const scope = (index: number) => ({ sessionKey: key(index), storePath });
-  const set = (index: number, entry: Partial<SessionEntry>) =>
-    replaceSessionEntrySync(scope(index), {
-      sessionId: `planner-${index}`,
+  const id = (name: string | number) => `${prefix}${prefix ? "-" : ""}${name}`;
+  const key = (name: string | number) => `agent:main:${id(name)}`;
+  const scope = (name: string | number) => ({ sessionKey: key(name), storePath });
+  const archived = (...names: Array<string | number>) =>
+    names.map((name) => ({ sessionKey: key(name), sessionId: id(name) }));
+  const set = (name: string | number, entry: Partial<SessionEntry>) =>
+    replaceSessionEntrySync(scope(name), {
+      sessionId: id(name),
       updatedAt: 1,
       ...entry,
     });
@@ -115,7 +118,13 @@ function createPlannerStore(entryCount = 0, updatedAt?: number) {
   }
   const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
   database.db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
-  const load = (index: number) => loadSessionEntry(scope(index));
+  const load = (name: string | number) => loadSessionEntry(scope(name));
+  const transcript = (name: string | number, content = "retained history") => {
+    const target = { ...scope(name), sessionId: id(name) };
+    const events = [{ type: "session", id: target.sessionId, content }];
+    replaceTranscriptEventsSync(target, events);
+    return { target, events };
+  };
   const prepare = async () => {
     const preservation = await prepareSessionMaintenancePreservation(storePath);
     onTestFinished(preservation.dispose);
@@ -136,7 +145,7 @@ function createPlannerStore(entryCount = 0, updatedAt?: number) {
     database.db
       .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
       .get("idx_agent_session_nodes_updated_at");
-  return { database, storePath, key, scope, set, load, prepare, statistics };
+  return { database, storePath, key, scope, set, load, prepare, statistics, archived, transcript };
 }
 
 function trackReads(
@@ -164,6 +173,10 @@ function trackProtection(database: ReturnType<typeof openOpenClawAgentDatabase>)
 function expectUnarchived(entry: SessionEntry | undefined, expected: Partial<SessionEntry> = {}) {
   expect(entry).toMatchObject(expected);
   expect(entry?.archivedAt).toBeUndefined();
+}
+
+function expectArchived(entry: SessionEntry | undefined, archiveReason: string) {
+  expect(entry).toMatchObject({ archivedAt: expect.any(Number), archiveReason });
 }
 
 it("returns bounded finalization outcomes while preserving conflicts and duplicate plan entries", async () => {
@@ -236,26 +249,19 @@ it("avoids inventory projection for sequential writes with no retention candidat
 it("preserves current provider keys without loading unrelated protection rows", async () => {
   const now = freezeTime();
   const expired = now - 40 * day;
-  const { database, scope, set, load, prepare } = createPlannerStore(3, expired);
+  const { database, key, set, load, prepare, archived } = createPlannerStore(3, expired);
   set(2, { updatedAt: now });
-  let protectedKey = scope(0).sessionKey;
+  let protectedKey = key(0);
   preserveKeys(() => [protectedKey]);
   const maintain = await prepare();
   const inventory = trackProtection(database);
-  expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual([
-    { sessionKey: scope(1).sessionKey, sessionId: "planner-1" },
-  ]);
+  expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual(archived(1));
   expectUnarchived(load(0), { sessionId: "planner-0" });
 
-  protectedKey = scope(2).sessionKey;
+  protectedKey = key(2);
   set(2, { updatedAt: expired });
-  expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual([
-    { sessionKey: scope(0).sessionKey, sessionId: "planner-0" },
-  ]);
-  expectUnarchived(load(2), {
-    sessionId: "planner-2",
-    updatedAt: expired,
-  });
+  expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual(archived(0));
+  expectUnarchived(load(2), { sessionId: "planner-2", updatedAt: expired });
   expect(inventory.rowCounts.protection).toBe(0);
 });
 
@@ -263,24 +269,20 @@ it.each([false, true])(
   "loads only age-due maintenance candidates while preserving recent dashboard activity (forced capacity=%s)",
   async (forceMaintenance) => {
     const now = freezeTime();
-    const { database, storePath, prepare } = createPlannerStore();
-    const key = (name: string) => `agent:main:${name}`;
-    const oldModel = key("explicit:model-run-00000000-0000-0000-0000-000000000001");
-    const pressureModel = key("explicit:model-run-00000000-0000-0000-0000-000000000002");
+    const { database, key, set, load, prepare } = createPlannerStore(0, undefined, "");
+    const oldModel = "explicit:model-run-00000000-0000-0000-0000-000000000001";
+    const pressureModel = "explicit:model-run-00000000-0000-0000-0000-000000000002";
     const fixtures: Array<[string, number, Partial<SessionEntry>?]> = [
-      [key("normal-expired"), 31],
-      [key("normal-not-due"), 10],
-      [key("dashboard:expired"), 8],
-      [key("dashboard:not-due"), 3],
-      [key("dashboard:recent-activity"), 8, { lastActivityAt: now }],
+      ["normal-expired", 31],
+      ["normal-not-due", 10],
+      ["dashboard:expired", 8],
+      ["dashboard:not-due", 3],
+      ["dashboard:recent-activity", 8, { lastActivityAt: now }],
       [oldModel, 31],
       [pressureModel, 10],
     ];
-    for (const [index, [sessionKey, ageDays, entry]] of fixtures.entries()) {
-      replaceSessionEntrySync(
-        { sessionKey, storePath },
-        { sessionId: `age-candidate-${index}`, updatedAt: now - ageDays * day, ...entry },
-      );
+    for (const [index, [name, ageDays, entry]] of fixtures.entries()) {
+      set(name, { sessionId: `age-candidate-${index}`, updatedAt: now - ageDays * day, ...entry });
     }
     const maintain = await prepare();
     const candidates = trackReads(
@@ -297,14 +299,12 @@ it.each([false, true])(
       key("normal-expired"),
     ]);
     expect(plan.entryRemovals.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
-      forceMaintenance ? [oldModel, pressureModel] : [oldModel],
+      (forceMaintenance ? [oldModel, pressureModel] : [oldModel]).map(key),
     );
     for (const name of ["normal-not-due", "dashboard:not-due", "dashboard:recent-activity"]) {
-      expectUnarchived(loadSessionEntry({ sessionKey: key(name), storePath }));
+      expectUnarchived(load(name));
     }
-    expect(
-      loadSessionEntry({ sessionKey: key("dashboard:recent-activity"), storePath }),
-    ).toMatchObject({ lastActivityAt: now });
+    expect(load("dashboard:recent-activity")).toMatchObject({ lastActivityAt: now });
     expect(candidates.rowCounts.candidates).toBe(forceMaintenance ? 5 : 4);
   },
 );
@@ -355,10 +355,7 @@ it("resolves protection once before capping aged candidates", async () => {
           maintenanceConfig: { maxEntries: 1 },
         });
         expect(plan).toMatchObject({ archived: 1, capArchived: 1, capped: 1 });
-        expect(load(4)).toMatchObject({
-          archivedAt: expect.any(Number),
-          archiveReason: "active-session-cap",
-        });
+        expectArchived(load(4), "active-session-cap");
         for (const index of [0, 1, 2, 3, 5]) {
           expectUnarchived(load(index), { sessionId: `planner-${index}` });
         }
@@ -372,10 +369,9 @@ it("resolves protection once before capping aged candidates", async () => {
 });
 
 it("caps only the oldest eligible activity ties without decoding unrelated payloads", async () => {
-  const { storePath, prepare } = createPlannerStore();
+  const { key, set, load, prepare } = createPlannerStore(0, undefined, "bounded");
   const now = freezeTime();
   const old = now - 10 * day;
-  const key = (name: string) => `agent:main:bounded-${name}`;
   const untouchedPayload = "unselected-maintenance-payload".repeat(1_000);
   const fixtures: Array<[string, Partial<SessionEntry>]> = [
     ["oldest", { updatedAt: old + 1 }],
@@ -399,54 +395,43 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
   ];
   const victims = ["oldest", "tie-\u{10000}"].map(key);
   for (const [index, [name, entry]] of fixtures.entries()) {
-    replaceSessionEntrySync(
-      { sessionKey: key(name), storePath },
-      {
-        sessionId: `bounded-${index}`,
-        updatedAt: old,
-        label: victims.includes(key(name)) ? name : untouchedPayload,
-        ...entry,
-      },
-    );
+    set(name, {
+      sessionId: `bounded-${index}`,
+      updatedAt: old,
+      label: victims.includes(key(name)) ? name : untouchedPayload,
+      ...entry,
+    });
   }
-  const unregister = preserveKeys(() => [key("live")]);
+  preserveKeys(() => [key("live")]);
   const maintain = await prepare();
   const parse = vi.spyOn(JSON, "parse");
-  try {
-    const plan = maintain({
-      maintenanceConfig: {
-        archiveDashboardAfterMs: null,
-        preserveRecentMs: 1_000,
-        maxEntries: fixtures.length - victims.length,
-      },
-    });
-    expect(plan.archivedEntries).toEqual([
-      { sessionKey: key("oldest"), sessionId: "bounded-0" },
-      { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
-    ]);
-    expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
-    expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
-      false,
-    );
-  } finally {
-    parse.mockRestore();
-    unregister();
-  }
+  const plan = maintain({
+    maintenanceConfig: {
+      archiveDashboardAfterMs: null,
+      preserveRecentMs: 1_000,
+      maxEntries: fixtures.length - victims.length,
+    },
+  });
+  expect(plan.archivedEntries).toEqual([
+    { sessionKey: key("oldest"), sessionId: "bounded-0" },
+    { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
+  ]);
+  expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
+  expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
+    false,
+  );
+  parse.mockRestore();
   for (const [name] of fixtures) {
-    expect(loadSessionEntry({ sessionKey: key(name), storePath })?.archivedAt !== undefined).toBe(
-      victims.includes(key(name)),
-    );
+    expect(load(name)?.archivedAt !== undefined).toBe(victims.includes(key(name)));
   }
 });
 
 it.each(["session-key", "session-id"] as const)(
   "preserves aged sessions during a lifecycle mutation and resumes retention afterward (%s)",
   async (identityKind) => {
-    const { database, storePath, scope, prepare } = createPlannerStore(2);
-    const target = { ...scope(0), sessionId: "planner-0" };
+    const { database, storePath, scope, prepare, transcript } = createPlannerStore(2);
+    const { target, events } = transcript(0);
     const sibling = scope(1);
-    const transcript = [{ type: "session", id: target.sessionId, content: "retained history" }];
-    replaceTranscriptEventsSync(target, transcript);
     const before = readSessionStateDeleteSnapshot(database.db, target.sessionId);
     const maintain = await prepare();
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
@@ -461,31 +446,23 @@ it.each(["session-key", "session-id"] as const)(
           loadSessionEntry(target)?.archivedAt,
           "active lifecycle target must remain unarchived",
         ).toBeUndefined();
-        expect(loadSessionEntry(sibling)).toMatchObject({
-          archivedAt: expect.any(Number),
-          archiveReason: "age-retention",
-        });
+        expectArchived(loadSessionEntry(sibling), "age-retention");
         expect(plan.archived).toBe(1);
         expect(readSessionStateDeleteSnapshot(database.db, target.sessionId)).toEqual(before);
-        expect(loadTranscriptEventsSync(target)).toEqual(transcript);
+        expect(loadTranscriptEventsSync(target)).toEqual(events);
       },
     });
 
     expect(isSessionLifecycleMutationActive(storePath, [identity])).toBe(false);
     expect(maintain({ forceMaintenance: true }).archived).toBe(1);
-    expect(loadSessionEntry(target)).toMatchObject({
-      archivedAt: expect.any(Number),
-      archiveReason: "age-retention",
-    });
-    expect(loadTranscriptEventsSync(target)).toEqual(transcript);
+    expectArchived(loadSessionEntry(target), "age-retention");
+    expect(loadTranscriptEventsSync(target)).toEqual(events);
   },
 );
 
 it("does not rescan unrelated rows when a requested lifecycle removal does not match", async () => {
-  const { storePath, scope, load } = createPlannerStore(2);
-  const retained = { ...scope(1), sessionId: "planner-1" };
-  const transcript = [{ type: "session", id: retained.sessionId, content: "retained" }];
-  replaceTranscriptEventsSync(retained, transcript);
+  const { storePath, load, transcript } = createPlannerStore(2);
+  const { target: retained, events } = transcript(1, "retained");
   const parseSpy = vi.spyOn(JSON, "parse");
   await expect(
     applySessionEntryLifecycleMutation({
@@ -512,7 +489,7 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
   parseSpy.mockRestore();
   expect(load(0)?.label).toBe("updated");
   expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
-  expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
+  expect(loadTranscriptEventsSync(retained)).toEqual(events);
 });
 
 it.for(["channel recording", "reply initialization"] as const)(
@@ -594,11 +571,11 @@ it.for(["channel recording", "reply initialization"] as const)(
       });
     };
     const entryWrite = write("");
-    const firstCompleted = await Promise.race([
-      entryWrite.then(() => "entry-write" as const),
-      materializationStarted.promise.then(() => "maintenance" as const),
+    const writeCompletedFirst = await Promise.race([
+      entryWrite.then(() => true),
+      materializationStarted.promise.then(() => false),
     ]);
-    if (firstCompleted === "entry-write") {
+    if (writeCompletedFirst) {
       await materializationStarted.promise;
       seedStale("-later");
       await write("-later");
@@ -606,7 +583,7 @@ it.for(["channel recording", "reply initialization"] as const)(
     materializationReleased.resolve();
     await entryWrite;
 
-    expect(firstCompleted).toBe("entry-write");
+    expect(writeCompletedFirst).toBe(true);
     // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
     await racePromiseWithAbortSignal(finalized.promise, signal);
     expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
@@ -614,55 +591,50 @@ it.for(["channel recording", "reply initialization"] as const)(
   },
 );
 
-it("refreshes planner statistics after bulk lifecycle cleanup", async () => {
-  const { database, storePath, statistics } = createPlannerStore(66);
-  expect(statistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
-
-  await expect(
-    applySessionEntryLifecycleMutation({
-      storePath,
-      removals: Array.from({ length: 65 }, (_, index) => ({
-        sessionKey: `agent:main:planner-${index + 1}`,
-      })),
-      skipMaintenance: true,
-    }),
-  ).resolves.toMatchObject({ afterCount: 1, removedEntries: 65 });
-
-  expect(statistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
-  expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
-});
-
-it("rolls back planner statistics when maintenance ownership is revoked before commit", async () => {
-  const { database, statistics } = createPlannerStore(66);
-  const scope = { agentId: "main", path: database.path };
-  runOpenClawAgentWriteTransaction((current) => {
-    for (let index = 1; index < 66; index += 1) {
-      deleteSessionEntryRows(current, `agent:main:planner-${index}`, { deleteOwnedWindows: true });
+it.each(["bulk lifecycle cleanup", "revoked commit"])(
+  "refreshes planner statistics safely after %s",
+  async (mode) => {
+    const { database, storePath, key, statistics } = createPlannerStore(66);
+    const scope = { agentId: "main", path: database.path };
+    expect(statistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+    if (mode === "bulk lifecycle cleanup") {
+      await expect(
+        applySessionEntryLifecycleMutation({
+          storePath,
+          removals: Array.from({ length: 65 }, (_, index) => ({ sessionKey: key(index + 1) })),
+          skipMaintenance: true,
+        }),
+      ).resolves.toMatchObject({ afterCount: 1, removedEntries: 65 });
+    } else {
+      runOpenClawAgentWriteTransaction((owner) => {
+        for (let index = 1; index < 66; index += 1) {
+          deleteSessionEntryRows(owner, key(index), { deleteOwnedWindows: true });
+        }
+      }, scope);
+      expect(database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()).toEqual({
+        count: 1,
+      });
+      let current = true;
+      let reachedCommit = false;
+      const authorization = probe.admission(workerAdmission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          reachedCommit = true;
+          current = false;
+        }
+        return callback(request, grant);
+      });
+      const refresh = () =>
+        maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
+          isCurrent: () => current,
+        });
+      await refresh();
+      expect(reachedCommit).toBe(true);
+      expect(statistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+      authorization.mockRestore();
+      current = true;
+      await refresh();
     }
-  }, scope);
-  expect(database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()).toEqual({
-    count: 1,
-  });
-  let current = true;
-  let reachedCommit = false;
-  const authorization = probe.admission(workerAdmission, (request, grant, callback) => {
-    if (request.stage === "commit") {
-      reachedCommit = true;
-      current = false;
-    }
-    return callback(request, grant);
-  });
-
-  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
-    isCurrent: () => current,
-  });
-  expect(reachedCommit).toBe(true);
-  expect(statistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
-  authorization.mockRestore();
-  current = true;
-  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
-    isCurrent: () => current,
-  });
-  expect(statistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
-  expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
-});
+    expect(statistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+    expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
+  },
+);

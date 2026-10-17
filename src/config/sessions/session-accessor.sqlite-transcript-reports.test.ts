@@ -265,17 +265,20 @@ describe("SQLite report payload selection", () => {
     "fences abort fallbacks and preserves authoritative answers",
     withReportState(async () => {
       const db = await seedReports();
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        lifecycleRevision: "current-lifecycle",
+      const usage = {
         inputTokens: 2_605,
         outputTokens: 19,
         cacheRead: 12,
         cacheWrite: 3,
         totalTokens: 2_624,
-        totalTokensFresh: true,
         totalTokensVersion: 1,
         estimatedCostUsd: 0.25,
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        lifecycleRevision: "current-lifecycle",
+        ...usage,
+        totalTokensFresh: true,
         updatedAt: 1,
       });
       const partial = {
@@ -314,15 +317,7 @@ describe("SQLite report payload selection", () => {
         usageReport: { state: "unavailable" },
         totalTokensFresh: false,
       });
-      for (const field of [
-        "inputTokens",
-        "outputTokens",
-        "cacheRead",
-        "cacheWrite",
-        "estimatedCostUsd",
-        "totalTokens",
-        "totalTokensVersion",
-      ]) {
+      for (const field of Object.keys(usage)) {
         expect(saved).not.toHaveProperty(field);
       }
       expect(onUpdate).toHaveBeenCalledExactlyOnceWith(
@@ -499,7 +494,7 @@ describe("SQLite report payload selection", () => {
   );
 
   it(
-    "serializes custom reports before worker transfer",
+    "serializes reports before worker transfer",
     withReportState(async () => {
       await seedReports();
       const serializedKeys: string[] = [];

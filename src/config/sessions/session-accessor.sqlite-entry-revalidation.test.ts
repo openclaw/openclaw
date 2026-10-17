@@ -49,6 +49,7 @@ import type {
 
 const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:entry-revalidation";
+const initialEntry = { label: "original", sessionId: "session-1", updatedAt: 10 };
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -69,11 +70,7 @@ beforeEach(async () => {
   };
   scope = { agentId: "main", env, sessionKey };
   setRuntimeConfigSnapshot({});
-  await upsertSessionEntryCore(scope, {
-    label: "original",
-    sessionId: "session-1",
-    updatedAt: 10,
-  });
+  await upsertSessionEntryCore(scope, initialEntry);
   database = openOpenClawAgentDatabase({ agentId: "main", env });
 });
 
@@ -91,10 +88,8 @@ const updateEntryJson = (db: DatabaseSync, expression: string, ...values: string
     .prepare(`UPDATE session_nodes SET entry_json = ${expression} WHERE session_key = ?`)
     .run(...values, sessionKey);
 const storedEntry = () => loadExactSessionEntry(scope)?.entry;
-const row = (projection = "*") =>
-  database.db
-    .prepare(`SELECT ${projection} FROM session_nodes WHERE session_key = ?`)
-    .get(sessionKey);
+const row = (projection = "*", db = requireNativeSqliteDatabase(database.db)) =>
+  db.prepare(`SELECT ${projection} FROM session_nodes WHERE session_key = ?`).get(sessionKey);
 const seedMain = () =>
   upsertSessionEntryCore(
     { ...scope, sessionKey: "agent:main:main" },
@@ -207,38 +202,23 @@ it("restores the connection's commit wait after admitting a rollback-journal wri
   database = openOpenClawAgentDatabase({ agentId: "main", env });
   expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
   setSqliteBusyTimeout(requireNativeSqliteDatabase(database.db), 37);
-  const reader = new DatabaseSync(database.path);
-  try {
-    reader.exec("BEGIN");
-    reader.prepare("SELECT session_key FROM session_nodes").get();
-    const patched = await runOpenClawAgentWriteWithYieldingAdmission(
-      (writer) => {
-        expect(writer.db.isTransaction).toBe(true);
-        expect(reader.isTransaction).toBe(true);
-        expect(readSqliteBusyTimeout(requireNativeSqliteDatabase(writer.db))).toBe(37);
-        reader.exec("ROLLBACK");
-        return writeSessionEntry(writer, sessionKey, {
-          sessionId: "session-1",
-          updatedAt: 10,
-          label: "after reader",
-        });
-      },
-      { agentId: "main", env },
-    );
-    expect(patched?.label).toBe("after reader");
-    expect(
-      reader
-        .prepare(
-          "SELECT json_extract(entry_json, '$.label') AS label FROM session_nodes WHERE session_key = ?",
-        )
-        .get(sessionKey),
-    ).toEqual({ label: "after reader" });
-  } finally {
-    if (reader.isTransaction) {
+  using reader = new DatabaseSync(database.path);
+  reader.exec("BEGIN");
+  reader.prepare("SELECT session_key FROM session_nodes").get();
+  const patched = await runOpenClawAgentWriteWithYieldingAdmission(
+    (writer) => {
+      expect(writer.db.isTransaction).toBe(true);
+      expect(reader.isTransaction).toBe(true);
+      expect(readSqliteBusyTimeout(requireNativeSqliteDatabase(writer.db))).toBe(37);
       reader.exec("ROLLBACK");
-    }
-    reader.close();
-  }
+      return writeSessionEntry(writer, sessionKey, { ...initialEntry, label: "after reader" });
+    },
+    { agentId: "main", env },
+  );
+  expect(patched?.label).toBe("after reader");
+  expect(row("json_extract(entry_json, '$.label') AS label", reader)).toEqual({
+    label: "after reader",
+  });
 });
 
 it.each(["none", "authority", "row", "connection"] as const)(
@@ -254,6 +234,11 @@ it.each(["none", "authority", "row", "connection"] as const)(
     let updates = 0;
     let release: Promise<void> | undefined;
     const label = valid ? "after contention" : "must not commit";
+    const assertCommitAllowed = () => {
+      if (changed === "authority" && !current) {
+        throw new Error("patch authority revoked");
+      }
+    };
     try {
       const patched = patchSessionEntryCore(
         scope,
@@ -274,15 +259,7 @@ it.each(["none", "authority", "row", "connection"] as const)(
         },
         {
           skipMaintenance: true,
-          ...(valid
-            ? { replaceEntry: false }
-            : {
-                assertCommitAllowed: () => {
-                  if (changed === "authority" && !current) {
-                    throw new Error("patch authority revoked");
-                  }
-                },
-              }),
+          ...(valid ? { replaceEntry: false } : { assertCommitAllowed }),
         },
       );
       if (valid) {
@@ -314,62 +291,38 @@ function currentFacts(native: OpenClawAgentReadOnlyDatabase) {
     source,
     { stage: "commit", facts: undefined },
     { database: native },
-    (request) => {
+    (request) =>
       assertSessionEntryCurrentAdmission(request, {
         source,
-        assertCurrent: (facts) => {
-          entry = facts;
-        },
-      });
-    },
+        assertCurrent: (facts) => (entry = facts),
+      }),
   );
   return entry;
 }
 
-it("discards facts first observed after a write in a rolled-back native transaction", () => {
-  // A fresh admitted connection has never installed the lazy revision tracker.
-  using connection = openNodeSqliteDatabase(database.path);
-  registerOpenClawAgentDatabaseIdentity(connection);
-  admitSqliteSchema(connection);
-  const native = { agentId: database.agentId, path: database.path, db: connection };
-  const rollback = new Error("roll back first compact read");
-  expect(() =>
-    withSqlitePostCommitPublications(connection, () => {
-      connection.exec("BEGIN");
-      try {
-        updateEntryJson(
-          connection,
-          "json_set(entry_json, '$.lifecycleRunId', ?)",
-          "uncommitted-owner",
-        );
-        expect(currentFacts(native)).toMatchObject({
-          lifecycleRunId: "uncommitted-owner",
-        });
-        throw rollback;
-      } finally {
-        connection.exec("ROLLBACK");
-      }
-    }),
-  ).toThrow(rollback);
-  expect(currentFacts(native)).toMatchObject({
-    sessionId: "session-1",
-    lifecycleRunId: undefined,
-  });
-});
-
-it.each(["sibling", "same-connection"] as const)(
-  "refreshes a cached owner after a %s change and preserves rollback",
+it.each(["fresh", "sibling", "same-connection"] as const)(
+  "refreshes owner facts after a %s write and discards rolled-back facts",
   (writer) => {
-    const original = currentFacts(database);
-    expect(original).toEqual({
+    // Fresh admission must first install its lazy revision tracker inside the transaction.
+    using fresh = writer === "fresh" ? openNodeSqliteDatabase(database.path) : undefined;
+    if (fresh) {
+      registerOpenClawAgentDatabaseIdentity(fresh);
+      admitSqliteSchema(fresh);
+    }
+    const native = fresh ? { agentId: database.agentId, path: database.path, db: fresh } : database;
+    const connection = fresh ?? requireNativeSqliteDatabase(database.db);
+    const original = {
       sessionId: "session-1",
       lifecycleRevision: undefined,
       lifecycleRunId: undefined,
       activeWriterRunId: undefined,
-    });
-    const update = (connection: DatabaseSync) =>
+    };
+    if (!fresh) {
+      expect(currentFacts(native)).toEqual(original);
+    }
+    const update = (db: DatabaseSync) =>
       updateEntryJson(
-        connection,
+        db,
         "json_set(entry_json, '$.lifecycleRunId', ?, '$.subagentRecovery.lastRunId', ?)",
         "next-lifecycle",
         "hidden-successor",
@@ -377,23 +330,31 @@ it.each(["sibling", "same-connection"] as const)(
     if (writer === "sibling") {
       using other = openNodeSqliteDatabase(database.path);
       update(other);
-    } else {
-      database.db.exec("BEGIN");
-      update(requireNativeSqliteDatabase(database.db));
     }
-    try {
-      expect(currentFacts(database)).toMatchObject({
+    const observe = () =>
+      expect(currentFacts(native)).toMatchObject({
         lifecycleRunId: "next-lifecycle",
         subagentRecovery: { lastRunId: "hidden-successor" },
       });
-    } finally {
-      if (writer === "same-connection") {
-        database.db.exec("ROLLBACK");
+    if (writer === "sibling") {
+      observe();
+      return;
+    }
+    const rollback = new Error("roll back compact read");
+    const transaction = () => {
+      connection.exec("BEGIN");
+      try {
+        update(connection);
+        observe();
+        throw rollback;
+      } finally {
+        connection.exec("ROLLBACK");
       }
-    }
-    if (writer === "same-connection") {
-      expect(currentFacts(database)).toEqual(original);
-    }
+    };
+    expect(() =>
+      fresh ? withSqlitePostCommitPublications(connection, transaction) : transaction(),
+    ).toThrow(rollback);
+    expect(currentFacts(native)).toEqual(original);
   },
 );
 
@@ -449,16 +410,14 @@ it("refuses a captured source replaced by identical database bytes", async () =>
 });
 
 it("commits an unchanged persisted row after evicting the host handle during preparation", async () => {
+  const expected = { label: "renamed", sessionId: "session-1" };
   const persisted = await patchEntry("ordinary", () => {
     closeCachedOpenClawAgentDatabase(database);
     expect(database.db.isOpen).toBe(false);
     return { label: "renamed" };
   });
-  expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
-  expect(storedEntry()).toMatchObject({
-    label: "renamed",
-    sessionId: "session-1",
-  });
+  expect(persisted).toMatchObject(expected);
+  expect(storedEntry()).toMatchObject(expected);
 });
 
 it.each([
@@ -518,6 +477,10 @@ it("rejects an intervening owner assignment even when entry JSON is unchanged", 
 });
 
 it("preserves separately committed participants through patch and reopen with unchanged row projection", async () => {
+  const participants = [
+    ["existing", 10],
+    ["new-participant", 20],
+  ] as const;
   participant("existing", 10);
   const persisted = await patchEntry("ordinary", () => {
     const before = row();
@@ -531,19 +494,13 @@ it("preserves separately committed participants through patch and reopen with un
   expect(storedEntry()).toMatchObject({
     label: "with participants",
     participantCount: 2,
-    participants: expect.arrayContaining([
-      expect.objectContaining({ identity: { type: "agent", id: "existing" } }),
-      expect.objectContaining({ identity: { type: "agent", id: "new-participant" } }),
-    ]),
+    participants: expect.arrayContaining(
+      participants.map(([id]) => expect.objectContaining({ identity: agent(id) })),
+    ),
   });
   database = openOpenClawAgentDatabase({ agentId: "main", env });
   expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toEqual(
-    (
-      [
-        ["existing", 10],
-        ["new-participant", 20],
-      ] as const
-    ).map(([id, time]) => ({
+    participants.map(([id, time]) => ({
       identity: agent(id),
       contributionCount: 1,
       firstPromptedAt: time,
@@ -551,11 +508,9 @@ it("preserves separately committed participants through patch and reopen with un
     })),
   );
   expect(
-    database.db
-      .prepare(
-        "SELECT json_type(entry_json, '$.participants') AS participants, json_type(entry_json, '$.participantCount') AS participant_count FROM session_nodes WHERE session_key = ?",
-      )
-      .get(sessionKey),
+    row(
+      "json_type(entry_json, '$.participants') AS participants, json_type(entry_json, '$.participantCount') AS participant_count",
+    ),
   ).toEqual({ participants: null, participant_count: null });
 });
 
@@ -591,7 +546,7 @@ it("preserves canonical creation policy when the writer receives an unrelated pr
   const previousEntry = storedEntry();
   expect(previousEntry?.sessionId).toBe("session-1");
   runOpenClawAgentWriteTransaction(
-    (writeDatabase) => {
+    (writeDatabase) =>
       writeSessionEntry(
         writeDatabase,
         requiredScope.sessionKey,
@@ -603,8 +558,7 @@ it("preserves canonical creation policy when the writer receives an unrelated pr
           createdAt: 20,
         },
         { previousEntry },
-      );
-    },
+      ),
     { agentId: "main", env },
   );
   expect(loadExactSessionEntry(requiredScope)?.entry).toMatchObject({

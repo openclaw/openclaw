@@ -230,16 +230,19 @@ it.each([
 
 it("commits one collected message and retains exact source receipts across rewrite and restart", async () => {
   const { sessionKey } = scope();
-  const firstMessage = {
-    ...message("collect-a", "First approved input"),
-    __openclaw: { transport: { clients: [{ id: "cli", mode: "cli", displayName: "CLI" }] } },
-  };
-  const secondMessage = {
-    ...message("collect-b", "Second approved input"),
-    __openclaw: { transport: { clients: [{ id: "openclaw-control-ui", mode: "webchat" }] } },
-  };
-  const first = await stage("collect-a", { message: firstMessage });
-  const second = await stage("collect-b", { message: secondMessage });
+  const clients = [
+    { id: "cli", mode: "cli", displayName: "CLI" },
+    { id: "openclaw-control-ui", mode: "webchat" },
+  ] as const;
+  const stageClient = (id: string, content: string, index: 0 | 1) =>
+    stage(id, {
+      message: {
+        ...message(id, content),
+        __openclaw: { transport: { clients: [clients[index]] } },
+      },
+    });
+  const first = await stageClient("collect-a", "First approved input", 0);
+  const second = await stageClient("collect-b", "Second approved input", 1);
   const aggregate = collect(
     [first, second],
     message("collect-c", "First approved input\nSecond approved input"),
@@ -249,14 +252,7 @@ it("commits one collected message and retains exact source receipts across rewri
   expect(appended).toMatchObject({ appended: true, messageId: aggregate.inputId });
   expect(
     (await readSessionSubmittedInput(scope(), "collect-c:user"))?.["__openclaw"],
-  ).toMatchObject({
-    transport: {
-      clients: [
-        firstMessage["__openclaw"].transport.clients[0],
-        secondMessage["__openclaw"].transport.clients[0],
-      ],
-    },
-  });
+  ).toMatchObject({ transport: { clients } });
   expect(await listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
   expect(await readSessionPendingInput(scope(), first.inputId)).toBeUndefined();
   expect(
@@ -273,7 +269,7 @@ it("commits one collected message and retains exact source receipts across rewri
   expect(await readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
   expect(await readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
   const duplicate = await stage("collect-a", {
-    message: { ...firstMessage, timestamp: 200 },
+    message: { ...first.message, timestamp: 200 },
   });
   expect(duplicate).toMatchObject({
     state: "consumed",
@@ -428,90 +424,78 @@ it.each(["pending", "completed", "transcript", "prepared transcript", "public pe
 );
 
 it.each([
-  ...(["content", "sender", "tool", "run", "outside cohort", "session", "authority"] as const).map(
-    (difference) => ({ state: "completed" as const, difference }),
-  ),
-  ...(["content", "run", "outside cohort", "authority after prepare", "malformed"] as const).map(
-    (difference) => ({ state: "transcript" as const, difference }),
-  ),
-])(
-  "does not substitute a settle $state when $difference differs",
-  async ({ state, difference }) => {
-    const runId = "announce:guarded-settle";
-    const original = {
-      ...settleMessage(runId),
-      __openclaw: { senderIsOwner: false, senderId: "original" },
-    };
-    const first = await stage(runId, { message: original, trackCompletion: true });
-    if (state === "transcript") {
-      promoteSync(first);
-      if (difference === "malformed") {
-        query(
-          "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant'), message_role = ? WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
-        ).run(
-          deriveTranscriptPredicateFields('{"message":{"role":"assistant"}}').message_role,
-          `${runId}:user`,
-        );
-      }
-    } else {
-      await complete(first, { status: "ok" });
-    }
-    await finish(first);
-    const before = snapshot();
-    if (difference === "session") {
-      await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 2 });
-    }
-    let current = true;
-    const replay = request(difference === "run" ? "announce:other-run" : runId, {
-      trackCompletion: true,
-      replaySourceSessionKeys:
-        difference === "outside cohort" ? ["child-a"] : ["child-a", "child-b"],
-      assertCurrent: () => {
-        if (difference === "authority" || !current) {
-          throw new Error("source owner changed");
-        }
-      },
-      prepareMessageAfterIdempotencyCheck: (candidate) => {
-        if (difference === "authority after prepare") {
-          current = false;
-        }
-        return candidate;
-      },
-      message: {
-        ...original,
-        ...(difference === "content" ? { content: "different result" } : {}),
-        ...(difference === "sender"
-          ? { __openclaw: { senderIsOwner: false, senderId: "other" } }
-          : {}),
-        provenance: {
-          ...original.provenance,
-          sourceSessionKey: "child-a",
-          ...(difference === "tool" ? { sourceTool: "sessions_send" } : {}),
-        },
-      },
-    });
-    if (difference === "session") {
-      await expect(replay).resolves.toBeUndefined();
-    } else {
-      await expect(replay).rejects.toThrow(
-        difference === "tool"
-          ? "requires an internal settle request"
-          : difference === "authority" || difference === "authority after prepare"
-            ? "source owner changed"
-            : difference === "malformed"
-              ? "invalid persisted user message"
-              : state === "transcript"
-                ? difference === "run"
-                  ? "conflicts with the accepted run"
-                  : difference === "outside cohort"
-                    ? "committed source is outside the frozen settle cohort"
-                    : "conflicts with the committed input"
-                : "conflicts with the accepted input",
+  ["completed", "content", "conflicts with the accepted input"],
+  ["completed", "sender", "conflicts with the accepted input"],
+  ["completed", "tool", "requires an internal settle request"],
+  ["completed", "run", "conflicts with the accepted input"],
+  ["completed", "outside cohort", "conflicts with the accepted input"],
+  ["completed", "session", undefined],
+  ["completed", "authority", "source owner changed"],
+  ["transcript", "content", "conflicts with the committed input"],
+  ["transcript", "run", "conflicts with the accepted run"],
+  ["transcript", "outside cohort", "committed source is outside the frozen settle cohort"],
+  ["transcript", "authority after prepare", "source owner changed"],
+  ["transcript", "malformed", "invalid persisted user message"],
+] as const)("does not substitute a settle %s when %s differs", async (state, difference, error) => {
+  const runId = "announce:guarded-settle";
+  const original = {
+    ...settleMessage(runId),
+    __openclaw: { senderIsOwner: false, senderId: "original" },
+  };
+  const first = await stage(runId, { message: original, trackCompletion: true });
+  if (state === "transcript") {
+    promoteSync(first);
+    if (difference === "malformed") {
+      query(
+        "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant'), message_role = ? WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
+      ).run(
+        deriveTranscriptPredicateFields('{"message":{"role":"assistant"}}').message_role,
+        `${runId}:user`,
       );
     }
-    expect(snapshot()).toEqual(before);
-  },
-);
+  } else {
+    await complete(first, { status: "ok" });
+  }
+  await finish(first);
+  const before = snapshot();
+  if (difference === "session") {
+    await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 2 });
+  }
+  let current = true;
+  const replay = request(difference === "run" ? "announce:other-run" : runId, {
+    trackCompletion: true,
+    replaySourceSessionKeys: difference === "outside cohort" ? ["child-a"] : ["child-a", "child-b"],
+    assertCurrent: () => {
+      if (difference === "authority" || !current) {
+        throw new Error("source owner changed");
+      }
+    },
+    prepareMessageAfterIdempotencyCheck: (candidate) => {
+      if (difference === "authority after prepare") {
+        current = false;
+      }
+      return candidate;
+    },
+    message: {
+      ...original,
+      ...(difference === "content" ? { content: "different result" } : {}),
+      ...(difference === "sender"
+        ? { __openclaw: { senderIsOwner: false, senderId: "other" } }
+        : {}),
+      provenance: {
+        ...original.provenance,
+        sourceSessionKey: "child-a",
+        ...(difference === "tool" ? { sourceTool: "sessions_send" } : {}),
+      },
+    },
+  });
+  if (error === undefined) {
+    await expect(replay).resolves.toBeUndefined();
+  } else {
+    await expect(replay).rejects.toThrow(error);
+  }
+  expect(snapshot()).toEqual(before);
+});
 
 it.each(["missing", "outside cohort", "wrong tool"] as const)(
   "rejects a committed %s source before lossy preparation",
@@ -589,32 +573,48 @@ it("preserves a message-hook veto when retrying already committed private input"
   expect(completionRows()).toEqual([]);
 });
 
-it("retains operator cancellation across restart after transcript consumption", async () => {
+it.each([
+  ["operator stop", { status: "error", stopReason: "rpc" }],
+  ["restart interruption", { status: "timeout", stopReason: "restart" }],
+  ["provider failure", { status: "error", error: "provider unavailable" }],
+] as const)("preserves private retry semantics after %s", async (kind, outcome) => {
   const first = await stagePrivate();
-  promoteSync(first);
-  const cancelled = buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" });
-  await first.completeAsync!(cancelled);
-  expect(await complete(first, { status: "ok" })).toEqual(cancelled);
-  expect(pendingCount()).toBe(0);
-  rotateAgentEventLifecycleGeneration();
-  await first.settled?.();
-  await close();
+  if (kind !== "provider failure") {
+    promoteSync(first);
+  }
+  const terminal = buildAgentRunTerminalOutcome(outcome);
+  await first.completeAsync!(terminal);
+  if (kind === "operator stop") {
+    expect(await complete(first, { status: "ok" })).toEqual(terminal);
+    expect(pendingCount()).toBe(0);
+    rotateAgentEventLifecycleGeneration();
+    await first.settled?.();
+    await close();
+  } else {
+    if (kind === "provider failure") {
+      expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
+    }
+    await finish(first);
+    if (kind === "restart interruption") {
+      await restart();
+    }
+  }
   const retry = await stagePrivate();
-  expect(retry.completion).toMatchObject({ reason: "cancelled", stopReason: "rpc" });
-  expect(() => retry.run(() => "stopped work")).toThrow("already completed");
-  expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
-});
-
-it("retries a restart interruption instead of treating it as an operator stop", async () => {
-  const first = await stagePrivate();
-  promoteSync(first);
-  await complete(first, { status: "timeout", stopReason: "restart" });
-  await finish(first);
-  await restart();
-  const retry = await stagePrivate();
-  expect(retry.completion).toBeUndefined();
-  await complete(retry, { status: "ok" });
-  expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
+  if (kind === "operator stop") {
+    expect(retry.completion).toMatchObject({ reason: "cancelled", stopReason: "rpc" });
+    expect(() => retry.run(() => "stopped work")).toThrow("already completed");
+    expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
+  } else {
+    expect(retry.completion).toBeUndefined();
+    await complete(retry, { status: "ok" });
+    if (kind === "provider failure") {
+      expect(await complete(first, { status: "error" })).toMatchObject({
+        error: "provider unavailable",
+      });
+      expect(pendingCount()).toBe(0);
+    }
+    expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
+  }
 });
 
 it.each(["pending", "interrupted", "consumed", "completed"] as const)(
@@ -673,20 +673,6 @@ it.each(["pending", "interrupted", "consumed", "completed"] as const)(
     }
   },
 );
-
-it("keeps private failed attempts retryable without letting stale failure replace success", async () => {
-  const first = await stagePrivate();
-  await complete(first, { status: "error", error: "provider unavailable" });
-  expect(completionRows()).toMatchObject([{ succeeded: 0 }]);
-  await finish(first);
-  const retry = await stagePrivate();
-  await complete(retry, { status: "ok" });
-  expect(await complete(first, { status: "error" })).toMatchObject({
-    error: "provider unavailable",
-  });
-  expect(completionRows()).toMatchObject([{ succeeded: 1 }]);
-  expect(pendingCount()).toBe(0);
-});
 
 it.each(["owner", "session", "lifecycle"] as const)(
   "rejects a private completion after %s changes",
