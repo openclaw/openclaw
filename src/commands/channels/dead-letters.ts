@@ -37,7 +37,7 @@ export async function channelsDeadLettersListCommand(
     throw new Error("This runtime does not support channel ingress dead-letter inspection.");
   }
   const deadLetters = await queue.listFailed({
-    limit: parseLogsPositiveInt(options.limit ?? undefined, 100, "--limit"),
+    limit: parseLogsPositiveInt(options.limit, 100, "--limit"),
   });
   if (options.json) {
     writeRuntimeJson(runtime, { channelId, accountId, deadLetters });

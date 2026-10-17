@@ -21,7 +21,7 @@ import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackgroundView } from "./session-background-view.tsx";
-import { SessionBackground, backgroundSourceForSurface } from "./session-background.ts";
+import { SessionBackground, backgroundSourceForSurface } from "./session-background.tsx";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.

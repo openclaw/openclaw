@@ -8,10 +8,15 @@ import {
 import { APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
 
 type CommittedElement = HTMLElement & { readonly updateComplete?: Promise<unknown> };
-type SolidReadinessShell = CommittedElement & {
+export type SolidReadinessShell = {
+  readonly element: CommittedElement;
+  readonly updateComplete?: Promise<unknown>;
   readiness: ControlUiReadiness | undefined;
   readonly activeSessionKey: string;
   readonly navigationSidebar: CommittedElement & { readonly navigationVisible?: boolean };
+  readonly shellElement?: HTMLElement;
+  readonly routeOutlet?: ControlUiReadinessOutlet;
+  readonly terminalPanel?: CommittedElement & { readonly available?: boolean };
 };
 
 async function settleShellReadiness(
@@ -20,7 +25,7 @@ async function settleShellReadiness(
 ): Promise<ControlUiCommittedPresentation> {
   shell.readiness = readiness;
   await shell.updateComplete;
-  if (!shell.querySelector(".shell")) {
+  if (!shell.shellElement?.isConnected) {
     return { kind: "loading", navigationVisible: false };
   }
   const sidebar = shell.navigationSidebar;
@@ -31,11 +36,12 @@ async function settleShellReadiness(
     }
     await sidebar.updateComplete;
   }
-  const outlet = shell.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
+  const outlet = shell.routeOutlet;
   if (!outlet || !(await outlet.settlePresentation())) {
     return { kind: "loading", navigationVisible };
   }
-  await shell.querySelector<CommittedElement>("openclaw-chat-page")?.updateComplete;
+  // Route modules own their page islands; the shell owns only the outlet ref.
+  await outlet.querySelector<CommittedElement>("openclaw-chat-page")?.updateComplete;
   return { kind: "shell", navigationVisible, sessionKey: shell.activeSessionKey };
 }
 
@@ -44,27 +50,33 @@ export function createSolidControlUiReadiness(
   root: HTMLElement,
   runtime: ApplicationRuntime,
   trackRoot: () => void,
+  elements: () => {
+    login?: HTMLElement;
+    shell?: SolidReadinessShell;
+    terminal?: CommittedElement & { readonly available?: boolean };
+  },
 ): ControlUiReadiness {
   const readiness = new ControlUiReadiness(root);
   readiness.connect(runtime, async () => {
     await Promise.resolve();
+    const { login, shell, terminal } = elements();
     let presentation: ControlUiCommittedPresentation;
     if (runtime.documentMode || runtime.focusLocation) {
       presentation = { kind: "standalone", navigationVisible: false };
-    } else if (root.querySelector("openclaw-login-gate")) {
+    } else if (login?.isConnected) {
       presentation = { kind: "login", navigationVisible: false };
     } else {
-      const shell = root.querySelector<SolidReadinessShell>("openclaw-app-shell");
-      presentation = shell
+      presentation = shell?.element.isConnected
         ? await settleShellReadiness(shell, readiness)
         : { kind: "loading", navigationVisible: false };
     }
-    const terminal = root.querySelector<CommittedElement & { available?: boolean }>(
-      "openclaw-terminal-panel",
-    );
     await terminal?.updateComplete;
-    return { ...presentation, terminalActivationReady: terminal?.available === true };
+    return {
+      ...presentation,
+      terminalActivationReady: terminal?.isConnected === true && terminal.available === true,
+    };
   });
+  // Publish committed DOM readiness to the external automation hook.
   createEffect(
     () => {
       trackRoot();

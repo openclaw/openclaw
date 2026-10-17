@@ -83,7 +83,6 @@ function createMetrics(identity: string): Metrics {
   };
 }
 
-/** Presentation-scoped child discovery. Shared owners retain wire subscriptions and roster facts. */
 export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
   loading = false;
@@ -136,6 +135,7 @@ export class SubagentsPanelData {
         }
       },
     };
+    // Until disposal, keep rows synchronous and retire connection scopes before observer events.
     this.unsubscribe = [
       this.narration.subscribe(() => this.publish()),
       context.gateway.subscribe(() => {
@@ -144,7 +144,6 @@ export class SubagentsPanelData {
       }),
       context.gateway.subscribeEvents((event) => this.handleEvent(event)),
     ];
-    // This synchronous activity owner binds document visibility until dispose().
     this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);
   }
 

@@ -919,6 +919,11 @@ ownership, file identity, or dependency checks. Applicable flags (`--dry-run`,
 `--channel`, `--tag`, `--timeout`, `--no-restart`, and `--accept-capabilities`
 are rejected.
 
+While applying cleanup, stderr reports each original being verified or retired
+and each capture being removed, with its path, logical bytes, and position in the
+selection. Large files can take time between these messages. With `--json`,
+stdout still contains only the final result.
+
 Only owner-recorded recovery artifacts with complete import evidence are
 eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay

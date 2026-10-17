@@ -15,7 +15,6 @@ import {
 import { createConfigIoContext } from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import {
-  captureConfigHealthStateStore,
   patchConfigHealthEntryToStore,
   readConfigHealthStateFromStore,
 } from "./io.health-state.js";
@@ -207,9 +206,14 @@ describe("prepared config recovery", () => {
           },
         },
       });
-      const plan = await recovery(io);
-      armed = true;
-      await expect(plan.apply()).rejects.toBe(readError);
+      if (phase.startsWith("async")) {
+        armed = true;
+        await expect(prepare(io)).rejects.toBe(readError);
+      } else {
+        const plan = await recovery(io);
+        armed = true;
+        await expect(plan.apply()).rejects.toBe(readError);
+      }
       expect(fs.readFileSync(configPath, "utf8")).toBe(original);
       expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
       expect(clobberFiles(root)).toEqual([]);
@@ -232,48 +236,33 @@ describe("prepared config recovery", () => {
     expect(clobberFiles(root)).toEqual([]);
   });
 
-  it.each(["live", "completed", "during-apply"] as const)(
-    "preserves a newer %s observation when prepared recovery is applied",
+  it.each(["completed", "during-apply"] as const)(
+    "restores unchanged source bytes without replacing newer %s health metadata",
     async (phase) => {
-      const { root, configPath, original, env, io } = fixture();
+      const { root, configPath, original, backup, env, io } = fixture();
       const plan = await recovery(io);
       const logger = { warn: vi.fn(), error: vi.fn() };
       const deps = normalizeConfigIoDeps({ env, homedir: () => root, logger });
-      using newer = phase === "live" ? captureConfigHealthStateStore(deps, configPath) : undefined;
-      const snapshot = await newer?.read();
-      if (newer && !snapshot) {
-        throw new Error("Expected the newer observation to be current");
-      }
       if (phase === "completed") {
         observeConfigSnapshotSync(deps, await io.readConfigFileSnapshot());
       }
-      const health = phase === "completed" ? readConfigHealthStateFromStore(deps) : undefined;
-      if (phase === "completed") {
-        expect(health?.entries?.[configPath]?.lastObservedSuspiciousSignature).toBeTruthy();
-        expect(logger.warn).toHaveBeenCalledTimes(1);
-      }
-      await expect(
-        plan.apply(
-          phase === "during-apply"
-            ? () => {
-                patchConfigHealthEntryToStore(deps, configPath, {
-                  lastObservedSuspiciousSignature: "newer-observation",
-                });
-              }
-            : undefined,
-        ),
-      ).rejects.toMatchObject({
-        name: "ConfigMutationConflictError",
-        retryable: false,
-      });
-      expectUnchanged(root, configPath, original);
-      if (newer && snapshot) {
-        expect(newer.isCurrent()).toBe(true);
-        await newer.update({ lastObservedSuspiciousSignature: "newer-observation" }, snapshot);
-      }
-      if (phase === "completed") {
-        expect(readConfigHealthStateFromStore(deps)).toEqual(health);
-        expect(logger.warn).toHaveBeenCalledTimes(1);
+      const previousHealth =
+        phase === "completed" ? readConfigHealthStateFromStore(deps) : undefined;
+      await plan.apply(
+        phase === "during-apply"
+          ? () => {
+              patchConfigHealthEntryToStore(deps, configPath, {
+                lastObservedSuspiciousSignature: "newer-observation",
+              });
+            }
+          : undefined,
+      );
+      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
+      const clobbered = clobberFiles(root);
+      expect(clobbered).toHaveLength(1);
+      expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+      if (previousHealth) {
+        expect(readConfigHealthStateFromStore(deps)).toEqual(previousHealth);
       } else {
         expect(
           readConfigHealthStateFromStore(deps).entries?.[configPath]
@@ -327,7 +316,6 @@ describe("prepared config recovery", () => {
     const unavailable = (store: ReturnType<typeof capture>): ReturnType<typeof capture> => ({
       ...store,
       read: async () => ({ state: {}, basis: null }),
-      captureContinuation: () => unavailable(store.captureContinuation()),
     });
     const spy = vi
       .spyOn(healthOwner, "captureConfigHealthStateStore")

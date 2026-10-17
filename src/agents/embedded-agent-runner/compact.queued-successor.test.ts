@@ -37,6 +37,7 @@ const [
   safetyTimeout,
   realSafetyTimeout,
   { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
+  { readSessionTranscriptWatermarkAsync },
 ] = await Promise.all([
   import("../../auto-reply/reply/session-updates.js"),
   import("../../config/sessions/session-accessor.js"),
@@ -47,6 +48,7 @@ const [
     "./compaction-safety-timeout.js",
   ),
   import("../../config/runtime-snapshot.js"),
+  import("../../config/sessions/session-transcript-watermark.js"),
 ]);
 
 let restoreTranscriptBridge: (() => void) | undefined;
@@ -235,6 +237,44 @@ it.each(["compact", "maintain"] as const)(
     if (effect === "compact") {
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
     }
+  },
+);
+
+it.each([false, true])(
+  "reanchors CLI history across compaction bookkeeping without trusting a foreign prefix (%s)",
+  async (foreignPrefix) => {
+    const manager = await PersistentSessionManager.openAsync(target(), workspaceDir);
+    await manager.appendMessageAsync({ role: "user", content: "older turn", timestamp: 1 });
+    const retained = expectDefined(
+      await manager.appendMessageAsync({ role: "user", content: "recent turn", timestamp: 2 }),
+      "retained turn",
+    );
+    const before = await readSessionTranscriptWatermarkAsync(target());
+    const boundary = {
+      version: 1 as const,
+      state: "known" as const,
+      sessionId,
+      writerRunId: "prior-cli-run",
+      authFingerprint: "a".repeat(64),
+      ...before,
+    };
+    await patchSessionEntryCore(target(), () => ({ cliHistoryBoundary: boundary }));
+    if (foreignPrefix) {
+      await manager.appendMessageAsync({ role: "user", content: "foreign turn", timestamp: 3 });
+    }
+    contextEngineCompactMock.mockImplementationOnce(async () => {
+      const compactor = await PersistentSessionManager.openAsync(target(), workspaceDir);
+      await compactor.appendThinkingLevelChange("off");
+      await compactor.appendCustomEntryAsync("model-snapshot", { provider: "summary-fixture" });
+      await compactor.appendCompactionAsync("account summary", retained, 120);
+      return completed(sessionId);
+    });
+    await expect(compact(backendCompactParams())).resolves.toMatchObject(success);
+    const after = await readSessionTranscriptWatermarkAsync(target());
+    expect(latestEntry()?.cliHistoryBoundary).toEqual({
+      ...boundary,
+      ...(foreignPrefix ? before : after),
+    });
   },
 );
 

@@ -529,7 +529,6 @@ export function createMattermostInteractionHandler(params: {
       }
     }
 
-    // Dispatch as system event so the agent can handle it.
     // Wrapped in try/catch — the post update below must still run even if
     // system event dispatch fails (e.g. missing sessionKey or channel lookup).
     try {
@@ -571,7 +570,6 @@ export function createMattermostInteractionHandler(params: {
 
     sendInteractionResponse(res, 200, {});
 
-    // Dispatch a synthetic inbound message so the agent responds to the button click.
     if (params.dispatchButtonClick) {
       try {
         await params.dispatchButtonClick({

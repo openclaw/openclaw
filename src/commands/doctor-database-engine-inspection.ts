@@ -23,6 +23,7 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { inspectDoctorDatabaseLegacyMigrations } from "./doctor-database-legacy-inspection.js";
 
@@ -104,11 +105,13 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
         }
         const files = new Set<string>();
         const unreadableRoots = new Set<string>();
+        let hasPhysicalStore = false;
         for (const root of roots) {
           try {
             const stat = fs.statSync(root, { throwIfNoEntry: false });
             if (stat?.isFile()) {
               files.add(fs.realpathSync(root));
+              hasPhysicalStore = true;
             } else if (!stat && root.endsWith(".sqlite")) {
               files.add(root);
             } else if (stat?.isDirectory()) {
@@ -128,6 +131,7 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
               for (const entry of walked.entries) {
                 try {
                   files.add(fs.realpathSync(entry.path));
+                  hasPhysicalStore = true;
                 } catch {
                   result.discoveryFailed = true;
                   files.add(entry.path);
@@ -142,12 +146,15 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
           }
         }
         let descriptor;
-        try {
-          descriptor = await provider.loadDescriptor(
-            plugins.plugins.find((plugin) => plugin.id === provider.id),
-          );
-        } catch {
-          result.discoveryFailed = true;
+        // Absent optional stores need no port API or plugin runtime to inspect.
+        if (hasPhysicalStore) {
+          try {
+            descriptor = await provider.loadDescriptor(
+              plugins.plugins.find((plugin) => plugin.id === provider.id),
+            );
+          } catch {
+            result.discoveryFailed = true;
+          }
         }
         for (const file of files.size ? [...files].toSorted() : [null]) {
           if (file && inspected.has(file)) {
@@ -218,9 +225,12 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
         );
       }
     };
-    await withArtifactPreservingStateReads(
-      () => (selection ? withDatabaseEngineSelection(selection, inspect) : inspect()),
-      { agentDatabases: true },
+    // The caller's inspection context does not cross this worker boundary.
+    await withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
+      withArtifactPreservingStateReads(
+        () => (selection ? withDatabaseEngineSelection(selection, inspect) : inspect()),
+        { agentDatabases: true },
+      ),
     );
     return result;
   });

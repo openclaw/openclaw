@@ -59,7 +59,10 @@ import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  prepareSubagentRecoveryFixture,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   activateSubagentRegistry,
@@ -424,6 +427,17 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       requesterTurnYielded: true,
       expectsCompletionMessage: true,
     });
+    if (scenario === "settled batch") {
+      await prepareSubagentRecoveryFixture(child, {
+        entries: {
+          [parentKey]: loadSessionEntryReadOnly({
+            storePath: parentStorePath,
+            sessionKey: parentKey,
+          })!,
+        },
+        storePath: parentStorePath,
+      });
+    }
     await addSubagentRunForTests(child);
     expect(
       await settleRequesterTurnAfterSessionSpawns({
@@ -724,6 +738,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             },
           },
         );
+        await prepareSubagentRecoveryFixture(child, { stateDir: fixture.stateDir });
         await addSubagentRunForTests(child);
         children.push(child);
       }

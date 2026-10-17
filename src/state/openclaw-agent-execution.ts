@@ -51,8 +51,9 @@ export function getPendingOpenClawAgentDatabasePreparation(
 export function captureOpenClawAgentDatabasePreparationExecution(
   options: OpenClawAgentDatabaseOptions,
   expectedIdentity?: AgentDatabaseExecutionCaptureConstraints["expectedIdentity"],
+  requestedPath?: string,
 ): OpenClawAgentDatabaseExecution {
-  return captureOpenClawAgentDatabaseExecution(options, { expectedIdentity }, true);
+  return captureOpenClawAgentDatabaseExecution(options, { expectedIdentity, requestedPath }, true);
 }
 
 /** Only the deleted agent's store needs a fresh, exclusive cleanup owner. */

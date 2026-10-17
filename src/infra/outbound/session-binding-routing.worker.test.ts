@@ -127,7 +127,7 @@ it.each(
   (["generic", "account"] as const).flatMap((kind) =>
     (["owner-retired", "database-closed"] as const).map((change) => ({ kind, change })),
   ),
-)("preserves bounded ingress classification for $kind native $change", async ({ kind, change }) => {
+)("retries native $kind $change under the ingress age gate", async ({ kind, change }) => {
   const previousRegistry = captureActivePluginRegistrySnapshot();
   const channel = kind === "generic" ? "native-binding-regression" : "imessage";
   const conversation = { channel, accountId: "default", conversationId: "native-admission" };
@@ -193,16 +193,11 @@ it.each(
         now,
       });
     expect(disposition(6)).toMatchObject({ kind: "release", attempt: 7 });
+    expect(disposition(7)).toMatchObject({ kind: "release", attempt: 8 });
     if (change === "owner-retired") {
-      expect(disposition(7)).toMatchObject({
-        kind: "fail",
-        reason: "session-start-conflict-retry-limit",
-        attempt: 8,
-      });
       expect(failure).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     } else {
       expect(failure).toMatchObject({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" });
-      expect(disposition(7)).toMatchObject({ kind: "release", attempt: 8 });
     }
   } finally {
     manager?.stop();

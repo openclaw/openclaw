@@ -29,8 +29,8 @@ import {
 } from "./session-organizer-batch-mutations.ts";
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import { rememberSessionGroup, type SessionGroupActionHost } from "./session-organizer-catalog.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import { patchSession } from "./session-organizer-patch.runtime.ts";
+import type { SessionOrganizerDependencies } from "./session-organizer.ts";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
@@ -41,7 +41,7 @@ registerSessionOrganizationEnglish();
 registerNewSessionSetupEnglish();
 
 export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
-// The controller loads this module as a single namespace, so the catalog
+// The organizer loads this module as a single namespace, so the catalog
 // operations stay reachable under their original names after the split.
 export {
   deleteSessionGroup,
@@ -83,7 +83,7 @@ function sessionDeleteSkipPreference(
 
 /** One confirm and one preserved-worktrees alert for the whole selection. */
 export async function deleteSessionsBatch(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   rows: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ) {
@@ -102,7 +102,7 @@ export async function deleteSessionsBatch(
   // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     showToast({ message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }) });
     return;
   }
@@ -117,38 +117,38 @@ export async function deleteSessionsBatch(
     ...(row.archived === true ? { archivedOnly: true } : {}),
   }));
   for (const params of requests) {
-    if (!requireSessionMutationAccess(host, scope, { method: "sessions.delete", params })) {
+    if (!requireSessionMutationAccess(deps, scope, { method: "sessions.delete", params })) {
       return;
     }
   }
   try {
     const result = await scope.sessions.deleteMany(requests);
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (result.preservedWorktrees.length > 0) {
         showToast({ message: formatPreservedWorktreesNotice(result.preservedWorktrees) });
       }
       return;
     }
-    if (host.sidebarSessionStatusFilter() !== "active") {
-      await host.sessionData.refreshSidebarSessions(scope.selectedAgentId);
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (deps.sidebarSessionStatusFilter() !== "active") {
+      await deps.sessionData.refreshSidebarSessions(scope.selectedAgentId);
+      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
     }
     if (result.preservedWorktrees.length > 0) {
       window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
     }
     if (result.errors.length > 0) {
-      host.sessionData.publishSessionMutationError(
+      deps.sessionData.publishSessionMutationError(
         scope,
         result.errors.map(({ error }) => formatBatchSessionRemovalError(error)).join("; "),
       );
     }
   } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+    deps.sessionData.publishSessionMutationError(scope, error);
   }
 }
 
@@ -158,7 +158,7 @@ export async function deleteSessionsBatch(
  * run, including one set after this snapshot, survives at the Gateway.
  */
 async function acknowledgeUnreadHiddenRuns(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   rows: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
@@ -171,7 +171,7 @@ async function acknowledgeUnreadHiddenRuns(
   }
   await Promise.all(
     [...runs.values()].map(async (run) => {
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
       const agentId = resolveUiSessionRowAgentId(run, scope.selectedAgentId);
@@ -209,7 +209,7 @@ function needsGroupPromotion(session: SessionActionRow): boolean {
 }
 
 async function moveSessionRowsToCategory(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   rows: readonly SidebarRecentSession[],
   category: string | null,
   scope: SidebarSessionMutationScope,
@@ -223,7 +223,7 @@ async function moveSessionRowsToCategory(
       end += 1;
     }
     const result = await patchSessionRows(
-      host,
+      deps,
       rows.slice(start, end),
       { category, ...(promote ? { sidebarRoot: true } : {}) },
       scope,
@@ -238,7 +238,7 @@ async function moveSessionRowsToCategory(
 }
 
 export async function runBatchSessionAction(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   action: SessionMenuAction,
   rows: SidebarRecentSession[],
   allUnread: boolean,
@@ -246,14 +246,14 @@ export async function runBatchSessionAction(
 ): Promise<void> {
   switch (action.kind) {
     case "toggle-unread":
-      await patchSessionRows(host, rows, { unread: !allUnread }, scope, { sessionScope: true });
+      await patchSessionRows(deps, rows, { unread: !allUnread }, scope, { sessionScope: true });
       if (allUnread) {
-        await acknowledgeUnreadHiddenRuns(host, rows, scope);
+        await acknowledgeUnreadHiddenRuns(deps, rows, scope);
       }
       break;
     case "move-to-group":
       await moveSessionRowsToCategory(
-        host,
+        deps,
         rows.filter(
           (row) => (row.category ?? null) !== action.category || needsGroupPromotion(row),
         ),
@@ -263,17 +263,17 @@ export async function runBatchSessionAction(
       break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
-        await patchSessionRows(host, rows, { archived: false }, scope, { sessionScope: true });
+        await patchSessionRows(deps, rows, { archived: false }, scope, { sessionScope: true });
       } else {
         await archiveSessionsWithUndo(
-          host,
+          deps,
           rows.filter((row) => row.archived !== true),
           scope,
         );
       }
       break;
     case "delete":
-      await deleteSessionsBatch(host, rows, scope);
+      await deleteSessionsBatch(deps, rows, scope);
       break;
     default:
       break;
@@ -281,7 +281,7 @@ export async function runBatchSessionAction(
 }
 
 export async function renameSession(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   session: SidebarRecentSession,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
@@ -295,7 +295,7 @@ export async function renameSession(
         return null;
       }
       let failure: string | null = null;
-      await patchSession(host, session, patch, scope, {
+      await patchSession(deps, session, patch, scope, {
         sessionScope: true,
         handleError: (error) => {
           if (!/^label already in use:/iu.test(formatUiError(error))) {
@@ -311,13 +311,13 @@ export async function renameSession(
 }
 
 export async function assignSessionOwner(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   session: Pick<SidebarRecentSession, "key" | "agentId">,
   owner: Pick<SessionOwnerOption, "type" | "id">,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
   if (
-    !requireSessionMutationAccess(host, scope, {
+    !requireSessionMutationAccess(deps, scope, {
       method: "sessions.assignOwner",
       params: { key: session.key, owner },
       requiredScope: "operator.write",
@@ -329,25 +329,25 @@ export async function assignSessionOwner(
     agentId: resolveUiSessionRowAgentId(session, scope.selectedAgentId),
   });
   if (
-    host.sessionData.isSessionMutationScopeCurrent(scope) &&
+    deps.sessionData.isSessionMutationScopeCurrent(scope) &&
     !assigned &&
     scope.sessions.state.error
   ) {
-    host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+    deps.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
   }
 }
 
 export async function createSessionGroup(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   name: string,
   sessions: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
   if (sessions.some((session) => !session.sessionId)) {
-    host.sessionData.publishSessionMutationError(scope, t("common.refresh"));
+    deps.sessionData.publishSessionMutationError(scope, t("common.refresh"));
     return "failed";
   }
-  const remembered = await rememberSessionGroup(host, name, scope);
+  const remembered = await rememberSessionGroup(deps, name, scope);
   if (remembered !== "completed") {
     return remembered;
   }
@@ -356,39 +356,37 @@ export async function createSessionGroup(
   if (sessions.length > 0) {
     if (sessions.length === 1) {
       return patchSession(
-        host,
+        deps,
         sessions[0]!,
         { category: name, ...(needsGroupPromotion(sessions[0]!) ? { sidebarRoot: true } : {}) },
         scope,
       );
     }
-    const successful = await moveSessionRowsToCategory(host, sessions, name, scope);
+    const successful = await moveSessionRowsToCategory(deps, sessions, name, scope);
     if (!successful) {
-      return host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
+      return deps.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
     }
     return successful.length === sessions.length ? "completed" : "failed";
   }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  // A header-created group starts empty and needs no assignment.
-  host.requestUpdate();
   return "completed";
 }
 
 export async function assignSessionCategory(
-  host: SessionGroupActionHost,
+  deps: SessionGroupActionHost,
   session: SessionActionRow,
   category: string | null,
   scope: SidebarSessionMutationScope,
   patch: { pinned?: boolean } = {},
   options: { resolveSession?: () => SessionActionRow | null } = {},
 ): Promise<void> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  const catalogChanged = Boolean(category && !host.knownSessionGroups().includes(category));
-  if (category && (await rememberSessionGroup(host, category, scope)) !== "completed") {
+  const catalogChanged = Boolean(category && !deps.knownSessionGroups().includes(category));
+  if (category && (await rememberSessionGroup(deps, category, scope)) !== "completed") {
     return;
   }
   const currentSession = options.resolveSession ? options.resolveSession() : session;
@@ -406,7 +404,7 @@ export async function assignSessionCategory(
     return;
   }
   await patchSession(
-    host,
+    deps,
     currentSession,
     { category, ...patch, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
     scope,
@@ -414,11 +412,11 @@ export async function assignSessionCategory(
 }
 
 export async function forkSession(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
@@ -431,30 +429,30 @@ export async function forkSession(
     agentId,
   };
   if (
-    !requireSessionMutationAccess(host, scope, { method: "sessions.create", params: createParams })
+    !requireSessionMutationAccess(deps, scope, { method: "sessions.create", params: createParams })
   ) {
     return;
   }
   try {
     const key = await scope.sessions.create(createParams);
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     if (key) {
-      host.selectSession(key);
+      deps.selectSession(key);
     } else {
-      host.sessionData.publishSessionMutationError(
+      deps.sessionData.publishSessionMutationError(
         scope,
         scope.sessions.state.error ?? t("newSession.createFailed"),
       );
     }
   } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+    deps.sessionData.publishSessionMutationError(scope, error);
   }
 }
 
 export async function stopCloudWorker(
-  host: SessionOrganizerControllerHost,
+  deps: SessionOrganizerDependencies,
   session: SidebarRecentSession,
   scope: SidebarSessionMutationScope,
 ) {
@@ -472,14 +470,14 @@ export async function stopCloudWorker(
   // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
     return;
   }
   if (!confirmed) {
     return;
   }
-  if (!requireSessionMutationAccess(host, scope, stopAction)) {
+  if (!requireSessionMutationAccess(deps, scope, stopAction)) {
     return;
   }
   try {
@@ -492,20 +490,20 @@ export async function stopCloudWorker(
       },
       scope.context.placementStartup,
     );
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     const outcome = await scope.sessions.reconcileMutation(agentId);
-    if (outcome.status === "failed" && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      host.sessionData.publishSessionMutationError(scope, outcome.error);
+    if (outcome.status === "failed" && deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      deps.sessionData.publishSessionMutationError(scope, outcome.error);
     }
   } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+    deps.sessionData.publishSessionMutationError(scope, error);
   }
 }
 
 export async function deleteSession(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
   // The chat header shares this operation, so the opt-out is opt-in per caller:
@@ -522,7 +520,7 @@ export async function deleteSession(
   // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     showToast({ message: t("sessionsView.deleteSessionStale", { session: session.label }) });
     return;
   }
@@ -537,7 +535,7 @@ export async function deleteSession(
     ...(session.archived === true ? { archivedOnly: true } : {}),
   };
   if (
-    !requireSessionMutationAccess(host, scope, {
+    !requireSessionMutationAccess(deps, scope, {
       method: "sessions.delete",
       params: { key: session.key, ...deleteParams },
     })
@@ -549,21 +547,21 @@ export async function deleteSession(
       action: "delete",
       session: { ...session, agentId },
       scope,
-      isCurrent: () => host.sessionData.isSessionMutationScopeCurrent(scope),
+      isCurrent: () => deps.sessionData.isSessionMutationScopeCurrent(scope),
       request: () => scope.sessions.delete(session.key, deleteParams),
     });
     if (!outcome) {
       return;
     }
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       if (outcome.worktreePreserved) {
         showToast({ message: formatPreservedWorktreesNotice([outcome.worktreePreserved]) });
       }
       return;
     }
-    if (host.sidebarSessionStatusFilter() !== "active") {
-      await host.sessionData.refreshSidebarSessions(agentId);
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (deps.sidebarSessionStatusFilter() !== "active") {
+      await deps.sessionData.refreshSidebarSessions(agentId);
+      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
     }
@@ -584,7 +582,7 @@ export async function deleteSession(
         });
         // Reconnect cancels the worktree prompt, not the confirmed deletion.
         // Report the preserved worktree without using the retired client.
-        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
           showToast({
             message: formatPreservedWorktreesNotice([preserved]),
           });
@@ -596,12 +594,12 @@ export async function deleteSession(
             force: true,
           });
           if (result.snapshotError) {
-            host.sessionData.publishSessionMutationError(scope, result.snapshotError);
+            deps.sessionData.publishSessionMutationError(scope, result.snapshotError);
           }
         }
       }
     }
   } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
+    deps.sessionData.publishSessionMutationError(scope, error);
   }
 }

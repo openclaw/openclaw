@@ -13,6 +13,36 @@ import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 describe("async work scope", () => {
+  it("accepts nested work without re-entering its current context", async () => {
+    const outer = new AsyncWorkScope();
+    const inner = new AsyncWorkScope();
+    await outer.track(() =>
+      inner.track(async () => {
+        await Promise.resolve();
+        const entries = vi.spyOn(AsyncLocalStorage.prototype, "run");
+        try {
+          await trackAsyncWork(() =>
+            inner.run(() => {
+              expect(getAsyncWorkSignal()).toBe(inner.signal);
+              expect(isAsyncWorkScopeActiveHere(outer)).toBe(true);
+              expect(isAsyncWorkScopeActiveHere(inner)).toBe(true);
+            }),
+          );
+          expect(entries).not.toHaveBeenCalled();
+        } finally {
+          entries.mockRestore();
+        }
+        await outer.track(() => {
+          expect(getAsyncWorkSignal()).toBe(outer.signal);
+          expect(isAsyncWorkScopeActiveHere(inner)).toBe(true);
+        });
+        expect(getAsyncWorkSignal()).toBe(inner.signal);
+      }),
+    );
+    expect(getAsyncWorkSignal()).toBeUndefined();
+    await Promise.all([outer.drain(), inner.drain()]);
+  });
+
   it.each([false, true])(
     "keeps cancellation and accepted work after foreground settlement (fails=%s)",
     async (fails) => {

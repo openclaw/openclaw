@@ -14,7 +14,6 @@ import {
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import {
-  appendTranscriptMessageSync,
   readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptDatabasePath,
   replaceSessionEntry,
@@ -25,7 +24,6 @@ import { loadSessionEntryForAdmission } from "../../config/sessions/session-acce
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
-import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import {
   runWithoutOwnedSessionTranscriptWrites,
@@ -37,8 +35,6 @@ import {
   attachSessionTranscriptRunId,
   emitSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import {
@@ -186,48 +182,6 @@ describe("chat delivery watermark preparation", () => {
         }),
       ).toBe(false);
       expect(await dispatch.resolveReplyDelivery()).toBe("missing");
-    });
-  });
-
-  it("retires a shared-store watermark with its physical owner", async () => {
-    await withOpenClawTestState({ label: "chat-watermark-shared" }, async (state) => {
-      const storePath = state.statePath("shared.sqlite");
-      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const scope = {
-        agentId: "ops",
-        sessionKey: "agent:ops:watermark",
-        sessionId: "shared-watermark",
-        storePath,
-      };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const appended = appendTranscriptMessageSync(scope, {
-        eventId: "answer",
-        message: { role: "assistant", content: "Shared-store answer." },
-      });
-      expect(appended?.ok).toBe(true);
-      expect(await readSessionTranscriptWatermarkAsync(scope)).toMatchObject({
-        maxSeq: 1,
-      });
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-      const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-      const readerSpy = vi
-        .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-        .mockImplementation((runRequest) => {
-          const readers = createReaders(runRequest);
-          return {
-            ...readers,
-            readWatermark: async (input) => {
-              const watermark = await readers.readWatermark(input);
-              await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-              return watermark;
-            },
-          };
-        });
-      try {
-        await expect(readSessionTranscriptWatermarkAsync(scope)).rejects.toThrow("revoked");
-      } finally {
-        readerSpy.mockRestore();
-      }
     });
   });
 

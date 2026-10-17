@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 import { runStep } from "./update-runner-command.js";
 import type { StepFactory } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
@@ -10,8 +11,16 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 // The installed updater owns this entrypoint; candidate code only runs inside its build unit.
 async function build(): Promise<void> {
-  const [stage, sha, deadline, workDeadline = "0"] = process.argv.slice(2);
-  if (!stage || !sha || !/^[a-f0-9]{40}$/u.test(sha) || process.geteuid?.() === 0) {
+  const [stage, sha, deadline, workDeadline = "0", current, currentSha] = process.argv.slice(2);
+  if (
+    !stage ||
+    !current ||
+    !currentSha ||
+    !/^[a-f0-9]{40}$/u.test(currentSha) ||
+    !sha ||
+    !/^[a-f0-9]{40}$/u.test(sha) ||
+    process.geteuid?.() === 0
+  ) {
     throw new Error(
       "Immutable builds require a private stage, exact SHA and unprivileged account.",
     );
@@ -40,32 +49,57 @@ async function build(): Promise<void> {
     totalSteps: 0,
     results: steps,
   });
-  const command = async (name: string, argv: string[], cwd: string) => {
-    const result = await runStep(step(name, argv, cwd));
-    if (result.exitCode !== 0 || (result.termination && result.termination !== "exit")) {
-      throw new Error(`${name} failed: ${result.stderrTail ?? ""}`);
+  const command = async (name: string, argv: string[], cwd: string, fetch = false) => {
+    for (let attempt = 0; ; attempt++) {
+      const result = await runStep({
+        ...step(name, argv, cwd),
+        timeoutMs: fetch ? UPDATE_NETWORK_TIMEOUT_MS : timeoutMs,
+      });
+      if (result.exitCode === 0 && (!result.termination || result.termination === "exit")) {
+        return;
+      }
+      if (!fetch || attempt === 1 || result.termination === "signal") {
+        throw new Error(`${name} failed: ${result.stderrTail ?? ""}`);
+      }
+      process.stderr.write(`${name} failed; retrying with retained local objects.\n`);
     }
   };
   const source = path.join(stage, "source");
+  await command("immutable-init", ["git", "init", source], stage);
+  // Borrow only the verified, read-only objects; never execute Git in the root-owned release.
+  const alternates = path.join(source, ".git", "objects", "info", "alternates");
+  await fs.writeFile(alternates, `${current}/.git/objects\n`);
   await command(
-    "immutable-clone",
+    "immutable-seed",
+    ["git", "-C", source, "update-ref", "refs/remotes/origin/main", currentSha],
+    source,
+  );
+  await command(
+    "immutable-origin",
+    ["git", "-C", source, "remote", "add", "origin", "https://github.com/openclaw/openclaw.git"],
+    source,
+  );
+  await command(
+    "immutable-fetch",
     [
       "git",
-      "clone",
-      "--no-checkout",
-      "--single-branch",
-      "--branch",
-      "main",
-      "https://github.com/openclaw/openclaw.git",
+      "-C",
       source,
+      "fetch",
+      "--no-tags",
+      "origin",
+      "+refs/heads/main:refs/remotes/origin/main",
     ],
-    stage,
+    source,
+    true,
   );
   await command(
     "immutable-official-ancestry",
     ["git", "-C", source, "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"],
     source,
   );
+  await command("immutable-dissociate", ["git", "-C", source, "repack", "-a", "-d"], source);
+  await fs.unlink(alternates);
   const preflight = await runGitCandidatePreflight({
     gitRoot: source,
     artifactRoot: stage,

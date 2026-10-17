@@ -181,7 +181,6 @@ async function runOutboundDeliveryWithIntent(
         )
       : null;
     throwIfAborted(params.abortSignal);
-    params.deliveryQueueStateContext?.workerContext.admission.assertCurrent();
     if (isReusablePreparedDeliveryOwner(owner)) {
       return [];
     }

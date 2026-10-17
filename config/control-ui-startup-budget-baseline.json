@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340000,
-  "reason": "Cron copy now loads with its lazy page; startup measured 337805 B gzip, retaining about 2 KB headroom.",
+  "startupJsGzipBytes": 337669,
+  "reason": "Combined protocol, Cron, and New Session deferrals measured 337669 B startup; retain the reduced baseline.",
   "updatedAt": "2026-10-17"
 }

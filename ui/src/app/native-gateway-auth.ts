@@ -9,6 +9,7 @@ import {
 } from "@openclaw/gateway-protocol/client-info";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatUiError } from "../lib/format-error.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
 export type NativeGatewayAuthorization = {
@@ -123,6 +124,7 @@ export function createNativeGatewayConnectAuth(
   const pending = new Map<string, (reply: Record<string, unknown>) => void>();
   const waitingForPort = new Map<string, string>();
   let port: MessagePort | undefined;
+  let stopPortMessage: (() => void) | undefined;
   let retired = false;
   const accept = (raw: unknown) => {
     let reply: unknown = raw;
@@ -172,9 +174,9 @@ export function createNativeGatewayConnectAuth(
         return;
       }
       port = incomingPort;
-      port.addEventListener("message", (reply) => accept(reply.data));
+      stopPortMessage = listen(port, "message", (reply) => accept(reply.data));
       port.start();
-      host.removeEventListener("message", receivePort);
+      stopPortHandshake();
       for (const [id, message] of waitingForPort) {
         try {
           // MessagePort has a fixed peer, not a Window target origin.
@@ -185,12 +187,14 @@ export function createNativeGatewayConnectAuth(
       }
       waitingForPort.clear();
     };
-    host.addEventListener("message", receivePort);
-    host.addEventListener(
+    const stopPortHandshake = listen(host, "message", receivePort);
+    listen(
+      host,
       "pagehide",
       () => {
         retired = true;
-        host.removeEventListener("message", receivePort);
+        stopPortHandshake();
+        stopPortMessage?.();
         port?.close();
         for (const id of pending.keys()) {
           accept({ id, error: "Native dashboard document closed" });
@@ -232,7 +236,7 @@ export function createNativeGatewayConnectAuth(
         }
         waitingForPort.delete(request.id);
         clearTimeout(timer);
-        signal.removeEventListener("abort", abort);
+        stopAbort();
         if (error !== undefined) {
           reject(error);
         } else if (authorization) {
@@ -263,7 +267,7 @@ export function createNativeGatewayConnectAuth(
           finish(error instanceof Error ? error : new Error(formatUiError(error)));
         }
       });
-      signal.addEventListener("abort", abort, { once: true });
+      const stopAbort = listen(signal, "abort", abort, { once: true });
       try {
         // Native app bridges are not Window.postMessage; their host owns origin checks.
         let result: void | Promise<unknown> = undefined;

@@ -8,6 +8,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { pendingSessionsYield } from "./chat-sessions-yield.ts";
 import {
+  endedWithoutFinishing,
   isSubagentsPanelSession,
   isUnfinishedSubagent,
   spawnedSubagentsRenderKey,
@@ -30,14 +31,17 @@ export type ChatSubagentActivity = {
   session: GatewaySessionRow;
   key: string;
   label: string;
-  status: "queued" | "running" | "waiting";
+  /** Only the Details list reports settled children; the transcript shows unfinished ones. */
+  status: "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
   activity?: string;
+  /** The current run's plan steps; only the live observer stream reports them. */
+  progress?: { completed: number; total: number };
   listed: boolean;
 };
 
 // A count or a name says which children are left, so it waits for the pane's
 // own child query. Rows seeded from another list can hold only some of them.
-function unfinishedChildren(session: GatewaySessionRow, roster: SubagentRoster) {
+function directChildren(session: GatewaySessionRow, roster: SubagentRoster) {
   if (!roster.subagentSessionsHydrated) {
     return [];
   }
@@ -45,13 +49,73 @@ function unfinishedChildren(session: GatewaySessionRow, roster: SubagentRoster) 
     const parent = resolveUiSessionNavigationParentKey(row);
     return (
       !row.archived &&
-      (row.status === "queued" || isUnfinishedSubagent(row)) &&
       !areUiSessionKeysEquivalent(row.key, session.key) &&
       (parent
         ? areUiSessionKeysEquivalent(parent, session.key)
         : session.childSessions?.some((key) => areUiSessionKeysEquivalent(key, row.key)))
     );
   });
+}
+
+function unfinishedChildren(session: GatewaySessionRow, roster: SubagentRoster) {
+  return directChildren(session, roster).filter(
+    (row) => row.status === "queued" || isUnfinishedSubagent(row),
+  );
+}
+
+// Launch order stays stable as activity updates reorder the source roster.
+function byLaunch(a: GatewaySessionRow, b: GatewaySessionRow) {
+  return (
+    (a.createdAt ?? a.startedAt ?? 0) - (b.createdAt ?? b.startedAt ?? 0) ||
+    a.key.localeCompare(b.key)
+  );
+}
+
+function toActivity(
+  row: GatewaySessionRow,
+  status: ChatSubagentActivity["status"],
+): ChatSubagentActivity {
+  const digest = row.observerDigest;
+  return {
+    session: row,
+    key: row.key,
+    label: resolveSessionDisplayName(row.key, row),
+    status,
+    // A retained headline from the previous run is not current activity.
+    activity:
+      status === "running" && digest?.runId && row.activeRunIds?.includes(digest.runId)
+        ? digest.headline.trim() || undefined
+        : undefined,
+    listed: isSubagentsPanelSession(row),
+  };
+}
+
+function unfinishedStatus(row: GatewaySessionRow): ChatSubagentActivity["status"] {
+  return row.status === "queued" ? "queued" : isSessionRunActive(row) ? "running" : "waiting";
+}
+
+/**
+ * Every direct subagent the pane's own child query returned, finished ones
+ * included. Dashboard children are sessions in their own right and are left out.
+ */
+export function listSubagents(
+  input: SubagentRoster & { selectedSession: GatewaySessionRow | undefined },
+): ChatSubagentActivity[] {
+  const session = input.selectedSession;
+  if (!session || session.archived) {
+    return [];
+  }
+  return directChildren(session, input)
+    .filter((row) => !isDashboardSessionKey(row.key))
+    .toSorted(byLaunch)
+    .map((row) =>
+      toActivity(
+        row,
+        row.status === "queued" || isUnfinishedSubagent(row)
+          ? unfinishedStatus(row)
+          : (endedWithoutFinishing(row) ?? "done"),
+      ),
+    );
 }
 
 /**
@@ -100,34 +164,11 @@ export function projectSubagentStatus(
   const running = children.length;
   const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
   const child = hydrated && running === 1 ? children[0] : undefined;
-  // Launch order stays stable as activity updates reorder the source roster.
   // The roster already carries live observer headlines; no child transcript
   // reads or second execution/status owner are needed for inline progress.
   const activity: ChatSubagentActivity[] = searchFiltering
     ? []
-    : children
-        .toSorted(
-          (a, b) =>
-            (a.createdAt ?? a.startedAt ?? 0) - (b.createdAt ?? b.startedAt ?? 0) ||
-            a.key.localeCompare(b.key),
-        )
-        .map((row) => {
-          const status =
-            row.status === "queued" ? "queued" : isSessionRunActive(row) ? "running" : "waiting";
-          const digest = row.observerDigest;
-          return {
-            session: row,
-            key: row.key,
-            label: resolveSessionDisplayName(row.key, row),
-            status,
-            // A retained headline from the previous run is not current activity.
-            activity:
-              status === "running" && digest?.runId && row.activeRunIds?.includes(digest.runId)
-                ? digest.headline.trim() || undefined
-                : undefined,
-            listed: isSubagentsPanelSession(row),
-          };
-        });
+    : children.toSorted(byLaunch).map((row) => toActivity(row, unfinishedStatus(row)));
   // A hydrated roster with no unfinished children ends the wait.
   const wait: ChatSubagentWait | null =
     waitStartedAt !== null && (!hydrated || unfinished.length > 0)

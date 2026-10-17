@@ -154,6 +154,20 @@ it("exposes a prepared generation only after registration publication and keeps 
   expect(() => claim!.assertCurrent()).toThrow(/released/);
 });
 
+it("refuses writable preparation after its captured physical file disappears", async () => {
+  const options = fixture();
+  openOpenClawAgentDatabase(options);
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  const execution = capture(options);
+  await using _ = onExit(() => execution.release());
+  fs.unlinkSync(options.path);
+
+  await expect(execution.prepare(source())).rejects.toThrow(
+    "Captured agent database file disappeared before writable preparation",
+  );
+  expect(fs.existsSync(options.path)).toBe(false);
+});
+
 it("retains both borrowers when config changes after a completed native open", async () => {
   const options = fixture();
   const previousConfig = getRuntimeConfigSnapshot();

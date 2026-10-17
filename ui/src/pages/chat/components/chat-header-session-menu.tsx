@@ -1,5 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, merge, onCleanup, onSettled } from "solid-js";
+import {
+  createMemo,
+  createProjection,
+  createSignal,
+  flush,
+  merge,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
@@ -16,6 +24,7 @@ import {
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
 import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
+import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
   Menu,
@@ -24,6 +33,7 @@ import {
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
@@ -97,11 +107,15 @@ const openMenus = new WeakMap<HTMLElement, () => boolean>();
 let nextMenuId = 0;
 
 function ChatHeaderSessionMenuContent(
-  props: HeaderMenuProps,
+  liveProps: HeaderMenuProps,
   host: SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>,
 ) {
   const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
+  const [open, setOpen] = createSignal(false);
+  const preparation = () => liveProps.prewarm;
+  const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
+  const props = createProjection(presentation, {}, { key: "id" });
   let menu: MenuHandle | undefined;
   const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
@@ -114,6 +128,7 @@ function ChatHeaderSessionMenuContent(
     readState,
     (action) => props.onAction(action),
     close,
+    createSessionOwnerMenu(open, preparation),
   );
   const view = useSessionMenuEntries(actions, readState, {
     openInExtra: () => [
@@ -432,13 +447,19 @@ function ChatHeaderSessionMenuContent(
       props.onAction({ kind: value });
     }
   }
-  const label = () => t("chat.sidebar.sessionMenu", { session: props.session.label });
+  const label = () => t("chat.sidebar.sessionMenu", { session: liveProps.session.label });
   return (
     <Menu
       id={menuId}
       lazy
-      prewarm={props.prewarm && !props.compact}
-      class={`session-menu chat-header-session-menu${props.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${props.compact && compactView() === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
+      prewarm={liveProps.prewarm && !liveProps.compact}
+      class={[
+        "session-menu chat-header-session-menu",
+        {
+          "session-menu--compact chat-header-session-menu--compact": props.compact,
+          "chat-header-session-menu--compact-sharing": props.compact && compactView() === "sharing",
+        },
+      ]}
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
       label={label()}
@@ -451,8 +472,14 @@ function ChatHeaderSessionMenuContent(
         handle.overlay.surface.addEventListener("keydown", shortcut, true);
       }}
       onEscape={(event) => actions.handleKeydown(event, view.appearance)}
-      onOpenChange={(open) => {
-        if (open) {
+      onBeforeShow={() => {
+        setOpen(true);
+        // Native opening reads the prepared items for validation and initial focus synchronously.
+        flush();
+      }}
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        if (isOpen) {
           actions.loadOwners();
           props.onOpen();
         } else {

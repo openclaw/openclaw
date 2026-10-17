@@ -147,11 +147,13 @@ it("keeps fresh synchronous read callbacks from returning asynchronous work", as
   });
 });
 
-it("preserves read admission denial and recovers the cached reader", async () => {
+it("preserves query authorization denial and recovers the cached reader", async () => {
   await withOpenClawTestState({ label: "state-readonly-authorizer" }, async ({ env }) => {
     const options = { env };
     const opened = openOpenClawStateDatabase(options);
-    const operation = vi.fn(() => "unexpected");
+    const operation = vi.fn(({ db }: { db: typeof opened.db }) =>
+      db.prepare("SELECT role FROM schema_meta").get(),
+    );
     let denied = false;
     requireNativeSqliteDatabase(opened.db).setAuthorizer((action) => {
       if (action === constants.SQLITE_SELECT && !denied) {
@@ -168,7 +170,7 @@ it("preserves read admission denial and recovers the cached reader", async () =>
       requireNativeSqliteDatabase(opened.db).setAuthorizer(null);
     }
     expect(denied).toBe(true);
-    expect(operation).not.toHaveBeenCalled();
+    expect(operation).toHaveBeenCalledTimes(1);
     expect(
       withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
         expect(db).toBe(opened.db);

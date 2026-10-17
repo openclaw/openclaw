@@ -23,6 +23,28 @@ afterEach(() => vi.restoreAllMocks());
 afterEach(() => resetConfigRuntimeState());
 afterEach(() => vi.unstubAllEnvs());
 
+test("discovers canonical recovery stores without waiting for the shared ownership registry", () => {
+  const root = tempDirs.make("session-recovery-inventory-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const cfg: OpenClawConfig = { agents: { entries: { main: {}, helper: {} } } };
+  const targets = ["main", "helper"].map((agentId) => {
+    const sessionsDir = path.join(root, "agents", agentId, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}");
+    return { agentId, storePath: path.join(sessionsDir, "sessions.json") };
+  });
+  const inventory = readSessionStoreTargetInventory({
+    ...prepareSessionStoreTargetInventory(cfg, ["main", "helper"], env, "recovery"),
+    registeredDatabases: { status: "deferred" },
+  });
+  expect(inventory.kind).toBe("session-target-inventory");
+  if (inventory.kind === "session-target-inventory") {
+    expect(
+      inventory.agents.flatMap(({ result }) => (result.available ? result.targets : [])),
+    ).toEqual(expect.arrayContaining(targets));
+  }
+});
+
 test("shares published config while recapturing candidates and following config publications", () => {
   const root = tempDirs.make("session-inventory-publication-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);

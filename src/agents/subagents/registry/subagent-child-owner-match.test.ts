@@ -91,7 +91,7 @@ describe("subagent child authority policy", () => {
     }
   });
 
-  it("summarizes 5,000 legacy runs once per process, deduplicating only by run ID", () => {
+  it("summarizes unsettled legacy runs once per process, deduplicating only by run ID", () => {
     const warn = vi.fn();
     const entries: SubagentRunRecord[] = Array.from({ length: 5000 }, (_, index) => ({
       ...owned,
@@ -105,10 +105,28 @@ describe("subagent child authority policy", () => {
     }));
     const verified = { ...entries[0]!, childSessionIdentity: identity };
     const mismatch = { ...entries[0]!, childSessionKey: "global" };
+    const settled: SubagentRunRecord[] = [
+      {
+        ...entries[0]!,
+        runId: "cleaned-terminal",
+        execution: { status: "terminal" },
+        cleanupCompletedAt: 1,
+      },
+      { ...entries[0]!, runId: "cleaned-running", cleanupCompletedAt: 1 },
+      {
+        ...entries[0]!,
+        runId: "suppressed-terminal",
+        execution: { status: "terminal" },
+        suppressCompletionDelivery: true,
+      },
+    ];
     warnLegacySubagentAuthority([], warn);
-    warnLegacySubagentAuthority([verified, mismatch], warn);
+    warnLegacySubagentAuthority([verified, mismatch, ...settled], warn);
     expect(warn).not.toHaveBeenCalled();
 
+    for (const entry of settled) {
+      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+    }
     warnLegacySubagentAuthority(
       [
         verified,
@@ -117,13 +135,15 @@ describe("subagent child authority policy", () => {
           entry,
           { ...entry, createdAt: entry.createdAt + 1, generation: 2 },
         ]),
+        ...settled,
+        { ...entries[0]!, runId: "suppressed-running", suppressCompletionDelivery: true },
       ],
       warn,
     );
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("child-session effects suppressed"),
       {
-        count: 5000,
+        count: 5004,
         sampleRunIds: ["legacy-population-0", "legacy-population-1", "legacy-population-2"],
       },
     );

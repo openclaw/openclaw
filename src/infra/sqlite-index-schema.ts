@@ -16,6 +16,7 @@ import {
   hasCanonicalSqliteSchemaFingerprint,
   type CanonicalSqliteNamedIndexContract,
   type SqliteSchemaSource,
+  type SqliteTableContractReader,
 } from "./sqlite-schema-contract.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -30,6 +31,8 @@ type RepairCanonicalSqliteIndexesOptions = {
   allowMissingColumns?: boolean;
   /** Keep index repair atomic with the caller's whole-schema validation. */
   validateAfterRepair?: () => void;
+  /** Reuse the inspection catalog only while its unchanged snapshot is still pinned. */
+  validateUnchanged?: (readTable?: SqliteTableContractReader) => void;
   verifyPhysicalIntegrity?: boolean;
   integrity?: SqliteIntegrityCheckOptions;
 };
@@ -125,6 +128,9 @@ export function repairCanonicalSqliteIndexes(
     if (options.verifyPhysicalIntegrity !== false) {
       assertSqliteIntegrity(db, databaseLabel, options.integrity);
     }
+    if (repairIndexes.size === 0) {
+      options.validateUnchanged?.(readTable);
+    }
   });
   if (repairIndexes.size === 0) {
     return [];
@@ -156,6 +162,8 @@ export function repairCanonicalSqliteIndexes(
       }
     }
     if (repairIndexes.size === 0) {
+      // Skipped column migrations rolled back DDL after the inspection snapshot ended.
+      options.validateUnchanged?.();
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
       return [];
     }
