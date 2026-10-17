@@ -80,6 +80,7 @@ export function runSessionMaintenanceMetadataInWorker(params: {
       prepare:
         plan.kind === "maintenance-plan"
           ? (execution, source) => ({
+              runOptions: { retireNativeOnFailure: true },
               beforeWrite() {
                 Object.assign(plan.input, params.refreshMaintenanceProtection?.());
                 params.assertCurrent();

@@ -262,7 +262,7 @@ export function registerSessionMaintenancePreparationTests() {
         });
         let current = true;
         const published = vi.fn();
-        const sql = observeHostDataSql();
+        let sql = observeHostDataSql();
         const first = reclaim({
           plan,
           onWorkerResult: published,
@@ -283,7 +283,10 @@ export function registerSessionMaintenancePreparationTests() {
           preparation.resume();
           expect(await firstOutcome).toEqual({ error: cancelled });
           expect(published).not.toHaveBeenCalled();
+          expect(sql.queries).toEqual([]);
+          sql.restore();
           expect(loadSessionEntry(stale)?.archivedAt).toBeUndefined();
+          sql = observeHostDataSql();
           second = reclaim({ plan });
           await expect(second).resolves.toMatchObject({
             kind: "maintenance-plan",
