@@ -119,6 +119,27 @@ describe("qa scenario catalog", () => {
     });
   });
 
+  it("binds the busy-lane Telegram completion to the live driver and its leased participant", () => {
+    const scenarioId = "subagent-completion-busy-lane-telegram-live";
+    const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+    const config = readQaScenarioExecutionConfig(scenarioId) as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    // scenario-lane only excludes a scenario from a lane when this key is set,
+    // and `channel: telegram` alone is satisfied by the crabline mock driver.
+    expect(scenario.execution.channel).toBe("telegram");
+    expect(config?.requiredChannelDriver).toBe("live");
+
+    // The live adapter rejects any sender that is neither a leased alias nor a
+    // tester user id once the lease carries more than one participant, and
+    // "primary" is the alias it always creates for the leased credential.
+    const senderIds = [
+      ...JSON.stringify(scenario.execution.flow).matchAll(/"senderId":"([^"]*)"/g),
+    ].map((match) => match[1]);
+    expect(senderIds).toEqual(["primary"]);
+  });
+
   it("declares every release agentic scenario in the core lane", () => {
     const scenarioIds = resolveQaParityPackScenarioIds({ parityPack: "agentic" });
 
