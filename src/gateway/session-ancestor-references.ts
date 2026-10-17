@@ -1,18 +1,41 @@
 import { createHash, randomUUID } from "node:crypto";
-import type {
-  SessionAncestorRef,
-  SessionRow,
-} from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { SessionAncestorRef } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import {
+  SESSION_ROW_DELTA_MAX_ENTRIES,
+  sessionRowIdentity,
+  type SessionRowWire,
+} from "../../packages/gateway-protocol/src/session-row-deltas.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { updateSessionEventRowRetention } from "./session-event-row-retention.js";
+import {
+  prepareSessionRowDeltaFields,
+  type SessionRowDeltaFields,
+  type createSessionRowDeltaDiffer,
+} from "./session-row-delta-fields.js";
+import { serializeSessionRow } from "./session-row-presentation.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const MAX_ROWS = 128;
 const MAX_CONTENT_CHARS = 128 * 1024;
+const MAX_VECTOR_BYTES = 2 * 1024 * 1024;
+
+type DeliveredRow = { version: number; fields: SessionRowDeltaFields; bytes: number };
+const encodedRowBytes = new WeakMap<GatewaySessionRow, number>();
+
+function rowByteLength(row: GatewaySessionRow): number {
+  let bytes = encodedRowBytes.get(row);
+  if (bytes === undefined) {
+    bytes = Buffer.byteLength(serializeSessionRow(row));
+    encodedRowBytes.set(row, bytes);
+  }
+  return bytes;
+}
 
 type DeliveredAncestor = { key: string; content: string; chars: number; revision: string };
 const preparedAncestors = new WeakMap<
-  SessionRow,
+  GatewaySessionRow,
   {
-    row: SessionRow;
+    row: GatewaySessionRow;
     identity: string;
     content: string;
     chars: number;
@@ -20,7 +43,7 @@ const preparedAncestors = new WeakMap<
 >();
 
 /** Prepare immutable viewer content once, before consulting connection delivery history. */
-export function prepareSessionAncestor(row: SessionRow) {
+export function prepareSessionAncestor(row: GatewaySessionRow) {
   const cached = preparedAncestors.get(row);
   if (cached) {
     return cached;
@@ -40,9 +63,29 @@ export function prepareSessionAncestor(row: SessionRow) {
 }
 
 /** Connection-owned, bounded history of exactly the presented wire content. */
-export class SessionAncestorReferences {
+export class ConnectionSessionRows {
   readonly #rows = new Map<string, DeliveredAncestor>();
   #chars = 0;
+  // Separate indexes preserve legacy ancestor admission order and wire-row LRU order.
+  readonly #wireRows = new Map<string, DeliveredRow>();
+  #wireBytes = 0;
+  #version = 0;
+
+  clear(): void {
+    this.clearRows();
+    this.clearAncestors();
+  }
+
+  clearRows(): void {
+    updateSessionEventRowRetention(-this.#wireRows.size, -this.#wireBytes);
+    this.#wireRows.clear();
+    this.#wireBytes = 0;
+  }
+
+  clearAncestors(): void {
+    this.#rows.clear();
+    this.#chars = 0;
+  }
 
   forget(key: string): void {
     for (const [identity, row] of this.#rows) {
@@ -60,8 +103,97 @@ export class SessionAncestorReferences {
     }
   }
 
+  prepareRows(rows: GatewaySessionRow[], diff: ReturnType<typeof createSessionRowDeltaDiffer>) {
+    const updates = new Map<string, DeliveredRow | undefined>();
+    let count = this.#wireRows.size;
+    let bytes = this.#wireBytes;
+    let version = this.#version;
+    const bases: Array<SessionRowDeltaFields | undefined> = [];
+    const update = (identity: string, next: DeliveredRow | undefined) => {
+      const previous = updates.has(identity) ? updates.get(identity) : this.#wireRows.get(identity);
+      count += Number(Boolean(next)) - Number(Boolean(previous));
+      bytes += (next?.bytes ?? 0) - (previous?.bytes ?? 0);
+      updates.delete(identity);
+      updates.set(identity, next);
+    };
+    const wire = rows.map((row): SessionRowWire => {
+      const identity = sessionRowIdentity(row.key, row.agentId);
+      const fields = prepareSessionRowDeltaFields(row);
+      const previous = updates.has(identity) ? updates.get(identity) : this.#wireRows.get(identity);
+      bases.push(previous?.fields);
+      const charge = 64 + 16 * fields.fieldCount + 2 * identity.length;
+      let eviction: string | undefined;
+      if (!previous && count === SESSION_ROW_DELTA_MAX_ENTRIES) {
+        for (const candidate of this.#wireRows.keys()) {
+          if (!updates.has(candidate)) {
+            eviction = candidate;
+            break;
+          }
+        }
+        if (!eviction) {
+          for (const [candidate, value] of updates) {
+            if (value) {
+              eviction = candidate;
+              break;
+            }
+          }
+        }
+      }
+      const evictionBytes = eviction
+        ? ((updates.get(eviction) ?? this.#wireRows.get(eviction))?.bytes ?? 0)
+        : 0;
+      const retain = bytes - (previous?.bytes ?? 0) - evictionBytes + charge <= MAX_VECTOR_BYTES;
+      const next = { version: ++version, fields, bytes: charge };
+      const header = { key: row.key, agentId: row.agentId, version: next.version };
+      const full = { ...header, full: row, ...(!retain ? { retain: false as const } : {}) };
+      let result: SessionRowWire = full;
+      if (
+        retain &&
+        previous &&
+        previous.fields.hashes.get("sessionId") === fields.hashes.get("sessionId") &&
+        previous.fields.hashes.get("lifecycleRevision") === fields.hashes.get("lifecycleRevision")
+      ) {
+        const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
+        const fullBytes =
+          Buffer.byteLength(JSON.stringify({ ...header, full: null })) - 4 + rowByteLength(row);
+        if (Buffer.byteLength(JSON.stringify(patch)) < fullBytes) {
+          result = patch;
+        }
+      }
+      if (retain && eviction) {
+        update(eviction, undefined);
+      }
+      update(identity, retain ? next : undefined);
+      return result;
+    });
+    return {
+      wire,
+      bases,
+      key: JSON.stringify(
+        wire.map((row) => [
+          row.version,
+          "base" in row ? row.base : null,
+          "retain" in row ? row.retain : null,
+        ]),
+      ),
+      delivered: () => {
+        const previousCount = this.#wireRows.size;
+        const previousBytes = this.#wireBytes;
+        for (const [identity, next] of updates) {
+          this.#wireRows.delete(identity);
+          if (next) {
+            this.#wireRows.set(identity, next);
+          }
+        }
+        this.#wireBytes = bytes;
+        this.#version = version;
+        updateSessionEventRowRetention(count - previousCount, bytes - previousBytes);
+      },
+    };
+  }
+
   prepare(rows: ReturnType<typeof prepareSessionAncestor>[], revision = randomUUID()) {
-    const ancestorSessions: SessionRow[] = [];
+    const ancestorSessions: GatewaySessionRow[] = [];
     const ancestorSessionRefs: SessionAncestorRef[] = [];
     const deliveryKeys: string[] = [];
     let updates: Map<string, DeliveredAncestor | undefined> | undefined;

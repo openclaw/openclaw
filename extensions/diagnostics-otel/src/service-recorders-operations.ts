@@ -90,6 +90,15 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.sessionsListRetainedBytesGauge.record(evt.estimatedBytes);
       }
     },
+    recordSessionEventRetention(
+      evt: Extract<DiagnosticEventPayload, { type: "sessions.event.retention" }>,
+      metadata: DiagnosticEventMetadata,
+    ) {
+      if (metadata.trusted) {
+        runtime.sessionEventRowsRetainedEntriesGauge.record(evt.entries);
+        runtime.sessionEventRowsRetainedBytesGauge.record(evt.estimatedBytes);
+      }
+    },
     recordGatewayRpc(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
       metadata: DiagnosticEventMetadata,

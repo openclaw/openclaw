@@ -198,6 +198,7 @@ export function createGatewayBroadcaster(params: {
     },
   ) => ((client: GatewayWsClient) => SessionEventProjection | undefined) | undefined;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
+  onSessionDeliveryLost?: (client: GatewayWsClient) => void;
   canReceiveSessionEvent?: (
     client: GatewayWsClient,
     sessionKeys: readonly string[],
@@ -458,9 +459,11 @@ export function createGatewayBroadcaster(params: {
         // Consume the seq for the dropped frame so the client's gap detector
         // sees the loss instead of a silently thinner stream.
         clientSeq.set(c, nextSeq);
+        params.onSessionDeliveryLost?.(c);
         continue;
       }
       if (slow) {
+        params.onSessionDeliveryLost?.(c);
         delivery.retireDelivery(state);
         closeGatewayTransportWithGrace(state.socket, 1008, "slow consumer");
         continue;
@@ -666,6 +669,7 @@ export function createGatewayBroadcaster(params: {
           );
         }
       } catch (err) {
+        params.onSessionDeliveryLost?.(c);
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
         return;
       }
@@ -689,6 +693,7 @@ export function createGatewayBroadcaster(params: {
         }
         if (err) {
           c.presenceSnapshot = undefined;
+          params.onSessionDeliveryLost?.(c);
           delivery.retireDelivery(state);
           log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
             event,

@@ -468,7 +468,7 @@ type SessionMessageSubscriptionOwners = Map<string | undefined, ProvisionalSubsc
 /** Create the broad sessions.changed subscriber registry. */
 export function createSessionEventSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
-  onSubscriptionChange?: (connId: string) => void,
+  onSubscriptionChange?: (connId: string, retired?: true) => void,
 ): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -487,7 +487,7 @@ export function createSessionEventSubscriberRegistry(
       if (!normalized) {
         return;
       }
-      onSubscriptionChange?.(normalized);
+      onSubscriptionChange?.(normalized, true);
       connIds.delete(normalized);
     },
     getAll: () => (connIds.size > 0 ? connIds : empty),
@@ -497,7 +497,7 @@ export function createSessionEventSubscriberRegistry(
 /** Create the per-session message subscriber registry. */
 export function createSessionMessageSubscriberRegistry(
   isConnectionActive?: (connId: string) => boolean,
-  onSubscriptionChange?: (connId: string) => void,
+  onSubscriptionChange?: (connId: string, retired?: true) => void,
 ): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   // Removing a record fences late replay settlements, including connection/session reuse.
@@ -618,7 +618,7 @@ export function createSessionMessageSubscriberRegistry(
         }
         state.inflight.delete(provisionalRecency);
         if (!state.committed && state.inflight.size === 0) {
-          onSubscriptionChange?.(normalizedConnId);
+          onSubscriptionChange?.(normalizedConnId, true);
           owners.delete(subscriptionId);
         }
         if (owners.size === 0) {
@@ -643,7 +643,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId || !normalizedSessionKey) {
         return;
       }
-      onSubscriptionChange?.(normalizedConnId);
+      onSubscriptionChange?.(normalizedConnId, true);
       const states = connections.get(normalizedConnId);
       const owners = states?.get(normalizedSessionKey);
       owners?.delete(subscriptionId);
@@ -665,7 +665,7 @@ export function createSessionMessageSubscriberRegistry(
       if (!normalizedConnId) {
         return;
       }
-      onSubscriptionChange?.(normalizedConnId);
+      onSubscriptionChange?.(normalizedConnId, true);
       const states = connections.get(normalizedConnId);
       if (!states) {
         return;

@@ -78,18 +78,31 @@ it("exports session traffic attribution while keeping aggregate event labels unc
   }
 });
 
-it("exports trusted session-list retention gauges and clears them on retirement", () => {
+it("exports trusted session retention gauges and clears them on retirement", () => {
   const metrics = createMetricsHarness();
   const retentionLines = () =>
     metrics
       .render()
       .split("\n")
-      .filter((line) => line.startsWith("openclaw_sessions_list_retained_"));
+      .filter(
+        (line) =>
+          line.startsWith("openclaw_sessions_list_retained_") ||
+          line.startsWith("openclaw_session_event_rows_retained_"),
+      );
   try {
     metrics.record({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
+    metrics.record({
+      type: "sessions.event.retention",
+      entries: 25_600,
+      estimatedBytes: 24_985_600,
+    });
     for (const metadata of [untrusted, { trusted: false, internal: true }]) {
       metrics.record(
         { type: "sessions.list.retention", views: 99, refs: 999, estimatedBytes: 99_999 },
+        metadata,
+      );
+      metrics.record(
+        { type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 },
         metadata,
       );
     }
@@ -98,13 +111,23 @@ it("exports trusted session-list retention gauges and clears them on retirement"
         `# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`,
       );
     }
+    for (const suffix of ["entries", "bytes"]) {
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_session_event_rows_retained_${suffix} gauge\n`,
+      );
+    }
     expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 24985600",
+      "openclaw_session_event_rows_retained_entries 25600",
       "openclaw_sessions_list_retained_bytes 3504",
       "openclaw_sessions_list_retained_refs 17",
       "openclaw_sessions_list_retained_views 3",
     ]);
     metrics.record({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
+    metrics.record({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
     expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 0",
+      "openclaw_session_event_rows_retained_entries 0",
       "openclaw_sessions_list_retained_bytes 0",
       "openclaw_sessions_list_retained_refs 0",
       "openclaw_sessions_list_retained_views 0",
