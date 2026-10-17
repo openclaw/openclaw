@@ -33,10 +33,34 @@ describe("skills descriptor formatting", () => {
       description,
     );
 
-    const row = stripAnsi(formatSkillsList(report, {}))
+    const output = formatSkillsList(report, {});
+    const row = stripAnsi(output)
       .split("\n")
       .find((line) => line.includes("tab-spacing"));
+    // The cell keeps the tab spacing the terminal rendered but never the C1 introducer.
     expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
+    expect(output).not.toContain("\x9b");
+  });
+
+  it("strips terminal control sequences from table descriptions and sources", async () => {
+    const description = "Evil \u001b[31mRED\u001b[0m\u0007 tail";
+    const workspaceDir = tempDirs.make("esc-description-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "escape-demo", description: JSON.stringify(description) },
+    ]);
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      config: { plugins: { enabled: false } },
+    });
+    expect(report.skills.find((skill) => skill.name === "escape-demo")?.description).toBe(
+      description,
+    );
+
+    const output = formatSkillsList(report, {});
+    const row = output.split("\n").find((line) => line.includes("escape-demo"));
+    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("Evil RED tail");
+    expect(output).not.toContain("\u001b");
+    expect(output).not.toContain("\u0007");
   });
 
   it("preserves description and path whitespace in skills JSON output", async () => {

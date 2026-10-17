@@ -71,22 +71,24 @@ const REMAINING_ESC_SEQUENCE_REGEX = new RegExp(
   String.raw`\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
   "g",
 );
-// JSON escapes tabs and line endings; preserve their meaning in descriptions and paths.
-const JSON_CONTROL_CHAR_REGEX = new RegExp(
+// Tabs and line endings are layout, not control: JSON and the skills table both keep them.
+const CONTROL_CHAR_EXCEPT_LAYOUT_WHITESPACE_REGEX = new RegExp(
   String.raw`[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]`,
   "g",
 );
 
-function sanitizeJsonString(value: string): string {
+/** Drop executable terminal controls, including malformed escapes, and keep the spacing around them. */
+function sanitizePreservingWhitespace(value: string): string {
   return stripAnsi(value)
     .replace(REMAINING_ESC_SEQUENCE_REGEX, "")
-    .replace(JSON_CONTROL_CHAR_REGEX, "");
+    .replace(CONTROL_CHAR_EXCEPT_LAYOUT_WHITESPACE_REGEX, "");
 }
 
 function formatSkillsJson(value: unknown): string {
   return JSON.stringify(
     value,
-    (_key, entry: unknown) => (typeof entry === "string" ? sanitizeJsonString(entry) : entry),
+    (_key, entry: unknown) =>
+      typeof entry === "string" ? sanitizePreservingWhitespace(entry) : entry,
     2,
   );
 }
@@ -174,9 +176,13 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       rows: skills.map((skill) => ({
         Status: formatSkillStatus(skill),
         Skill: formatSkillName(skill),
-        Description: theme.muted(skill.description),
-        Source: skill.source,
-        Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+        // The single-skill report already sanitizes these fields; the list table must not hand
+        // workspace-owned SKILL.md text to the terminal uncleaned. Spacing stays: the table renders it.
+        Description: theme.muted(sanitizePreservingWhitespace(skill.description)),
+        Source: sanitizePreservingWhitespace(skill.source),
+        Missing: opts.verbose
+          ? theme.warn(sanitizePreservingWhitespace(formatSkillMissingSummary(skill)))
+          : "",
       })),
     }),
   );
@@ -197,7 +203,7 @@ export function formatSkillInfo(
         skill: requestedName,
       });
     }
-    const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
+    const safeRequestedName = sanitizePreservingWhitespace(sanitizeForLog(requestedName));
     return appendClawHubHint(
       `Skill "${safeRequestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
     );
