@@ -66,11 +66,23 @@ function snapshot(sourceConfig: OpenClawConfig) {
   };
 }
 
-describe("modelsAliasesListCommand", () => {
-  beforeEach(() => {
-    mocks.loadModelsConfig.mockReset();
-  });
+function modelConfig(
+  models: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"],
+): OpenClawConfig {
+  return { agents: { defaults: { models } } };
+}
 
+function writtenConfig(): OpenClawConfig {
+  return mocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig;
+}
+
+beforeEach(() => {
+  mocks.readConfigFileSnapshot.mockReset();
+  mocks.replaceConfigFile.mockReset().mockResolvedValue(undefined);
+  mocks.loadModelsConfig.mockReset();
+});
+
+describe("modelsAliasesListCommand", () => {
   it.each([
     {
       label: "plain",
@@ -87,16 +99,12 @@ describe("modelsAliasesListCommand", () => {
       ],
     },
   ])("sorts $label aliases independently of model insertion order", async ({ opts, lines }) => {
-    mocks.loadModelsConfig.mockResolvedValue({
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": { alias: "zeta" },
-            "anthropic/claude-sonnet-4-6": { alias: "alpha" },
-          },
-        },
-      },
-    });
+    mocks.loadModelsConfig.mockResolvedValue(
+      modelConfig({
+        "openai/gpt-5.6-sol": { alias: "zeta" },
+        "anthropic/claude-sonnet-4-6": { alias: "alpha" },
+      }),
+    );
     const runtime = makeRuntime();
 
     await modelsAliasesListCommand(opts, runtime);
@@ -105,17 +113,13 @@ describe("modelsAliasesListCommand", () => {
   });
 
   it("preserves safely named prototype aliases in deterministic JSON output", async () => {
-    mocks.loadModelsConfig.mockResolvedValue({
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": { alias: "zeta" },
-            "google/gemini-3.1-pro-preview": { alias: "__proto__" },
-            "anthropic/claude-sonnet-4-6": { alias: "alpha" },
-          },
-        },
-      },
-    });
+    mocks.loadModelsConfig.mockResolvedValue(
+      modelConfig({
+        "openai/gpt-5.6-sol": { alias: "zeta" },
+        "google/gemini-3.1-pro-preview": { alias: "__proto__" },
+        "anthropic/claude-sonnet-4-6": { alias: "alpha" },
+      }),
+    );
     const runtime = makeRuntime();
 
     await modelsAliasesListCommand({ json: true }, runtime);
@@ -135,51 +139,25 @@ describe("modelsAliasesListCommand", () => {
 });
 
 describe("modelsAliasesRemoveCommand", () => {
-  beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockReset();
-    mocks.replaceConfigFile.mockReset();
-    mocks.loadModelsConfig.mockReset();
-  });
-
   it("removes every case-colliding alias from an existing config", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4-mini": { alias: "Fast" },
-            "openai/gpt-5.6-sol": { alias: "fast" },
-            "anthropic/claude-sonnet-4-6": { alias: "steady" },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = modelConfig({
+      "openai/gpt-5.4-mini": { alias: "Fast" },
+      "openai/gpt-5.6-sol": { alias: "fast" },
+      "anthropic/claude-sonnet-4-6": { alias: "steady" },
+    });
     mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
 
     await modelsAliasesRemoveCommand("FAST", makeRuntime());
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.sourceConfig as OpenClawConfig;
+    const written = writtenConfig();
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBeUndefined();
     expect(written.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.alias).toBeUndefined();
     expect(written.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("steady");
   });
 
   it("rejects removal of a built-in alias whose target only matches after key normalization", async () => {
-    // Source config holds the Gemini 4 shorthand key. applyModelDefaults normalizes
-    // `google/gemini-4` to `google/gemini-4-argon` before materializing the `gemini`
-    // built-in alias, so `list` shows `gemini`. `remove gemini` must compare against the
-    // normalized key and return the actionable built-in error, not "Alias not found".
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-4": {},
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = modelConfig({ "google/gemini-4": {} });
     mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
 
     await expect(modelsAliasesRemoveCommand("gemini", makeRuntime())).rejects.toThrow(
@@ -189,19 +167,7 @@ describe("modelsAliasesRemoveCommand", () => {
   });
 
   it("falls back to 'Alias not found' when the user explicitly disables a built-in via alias: \"\"", async () => {
-    // Source config sets an explicit empty alias on the target. applyModelDefaults
-    // honors the opt-out (see src/config/defaults.ts:337 and src/config/model-alias-defaults.test.ts:106),
-    // so `list` does not show `gemini` and `remove gemini` should return the plain
-    // not-found error rather than the "built-in alias" error.
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-4-argon": { alias: "" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = modelConfig({ "google/gemini-4-argon": { alias: "" } });
     mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
 
     await expect(modelsAliasesRemoveCommand("gemini", makeRuntime())).rejects.toThrow(
@@ -211,47 +177,26 @@ describe("modelsAliasesRemoveCommand", () => {
   });
 
   it("removes a user alias that shadows a built-in name (user-set wins)", async () => {
-    // User has explicitly set `gpt-mini` as the alias for a different target.
-    // applyModelDefaults skips entries with an existing alias, so the user-set
-    // alias is what `list` shows and `remove` should remove it normally.
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4-nano": { alias: "gpt-mini" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = modelConfig({ "openai/gpt-5.4-nano": { alias: "gpt-mini" } });
     mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
 
     await modelsAliasesRemoveCommand("gpt-mini", makeRuntime());
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.sourceConfig as OpenClawConfig;
+    const written = writtenConfig();
     expect(written.agents?.defaults?.models?.["openai/gpt-5.4-nano"]?.alias).toBeUndefined();
   });
 });
 
 describe("modelsAliasesAddCommand", () => {
-  beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockReset();
-    mocks.replaceConfigFile.mockReset();
-    mocks.loadModelsConfig.mockReset();
-  });
-
   it("does not make an unlisted model override invalid on a fresh config", async () => {
     const cfg = {} as OpenClawConfig;
     mocks.loadModelsConfig.mockResolvedValue(cfg);
     mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
 
     await modelsAliasesAddCommand("zippy", "clawrouter/deepseek/deepseek-v4-flash", makeRuntime());
 
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.sourceConfig as OpenClawConfig;
+    const written = writtenConfig();
     const persisted = stampConfigWriteMetadata(written, "test", cfg);
     const policy = createModelVisibilityPolicy({
       cfg: persisted,
@@ -265,25 +210,16 @@ describe("modelsAliasesAddCommand", () => {
   });
 
   it("resolves alias targets from the CAS-fenced snapshot", async () => {
-    const staleCfg = {
-      agents: { defaults: { models: { "openai/gpt-5.6-sol": { alias: "old-alias" } } } },
-    } as unknown as OpenClawConfig;
-    const currentCfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": { params: { temperature: 0.2 } },
-            "anthropic/claude-opus-5": { alias: "old-alias" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const staleCfg = modelConfig({ "openai/gpt-5.6-sol": { alias: "old-alias" } });
+    const currentCfg = modelConfig({
+      "openai/gpt-5.6-sol": { params: { temperature: 0.2 } },
+      "anthropic/claude-opus-5": { alias: "old-alias" },
+    });
     mocks.loadModelsConfig.mockResolvedValue(staleCfg);
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...snapshot(currentCfg),
       hash: "current-hash",
     });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
     const runtime = makeRuntime();
 
     await modelsAliasesAddCommand("new-alias", "old-alias", runtime);

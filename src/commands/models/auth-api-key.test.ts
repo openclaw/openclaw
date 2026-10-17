@@ -68,6 +68,26 @@ async function readConfig() {
   return (await configWriter.loadValidConfigSnapshotOrThrow()).runtimeConfig;
 }
 
+function boundConfig(apiKey: string): OpenClawConfig {
+  return { models: { providers: { sample: { ...connection, apiKey } } } };
+}
+
+function savedProfile(profileId = "sample:manual", owner: string | null = "writer") {
+  return loadPersistedAuthProfileStore(owner ? agentDir(owner) : undefined)?.profiles[profileId];
+}
+
+async function remove(
+  profileId: string,
+  options: Partial<Parameters<typeof removeModelAuthCredentials>[0]> = {},
+) {
+  return removeModelAuthCredentials({
+    cfg: options.cfg ?? (await readConfig()),
+    agentDir: agentDir("writer"),
+    profileIds: [profileId],
+    ...options,
+  });
+}
+
 beforeEach(() => {
   stateDir = tempDirs.make("openclaw-shared-api-key-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -128,9 +148,7 @@ describe("shared API-key editing and removal", () => {
         await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
       }
       expect(callbackComplete).toBe(true);
-      expect(
-        loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:manual"],
-      ).toMatchObject({
+      expect(savedProfile()).toMatchObject({
         key: revoke ? "synthetic-before" : "synthetic-after",
       });
     },
@@ -186,7 +204,7 @@ describe("shared API-key editing and removal", () => {
   );
 
   it("waits for the saved binding to reach the Gateway before allowing immediate removal", async () => {
-    writeConfig({ models: { providers: { sample: { ...connection, apiKey: "old-inline" } } } });
+    writeConfig(boundConfig("old-inline"));
     let claim: RuntimeConfigWriteApplicationClaim | undefined;
     const written = createDeferred();
     const updateConfig = configWriter.updateConfig;
@@ -208,12 +226,7 @@ describe("shared API-key editing and removal", () => {
       claim?.settle("applied");
       expect(await response).toEqual({ profileId: "sample:manual" });
       stop();
-      await removeModelAuthCredentials({
-        cfg: runtimeConfig,
-        agentDir: agentDir("writer"),
-        profileIds: ["sample:manual"],
-        apiKeyProvider: "sample",
-      });
+      await remove("sample:manual", { cfg: runtimeConfig, apiKeyProvider: "sample" });
       expect((await readConfig()).models?.providers?.sample?.apiKey).toBeUndefined();
       expect(loadPersistedAuthProfileStore()?.profiles["sample:manual"]).toBeUndefined();
     } finally {
@@ -240,11 +253,7 @@ describe("shared API-key editing and removal", () => {
           provider: "sample",
           mode: "api_key",
         });
-        expect(
-          loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:manual"],
-        ).toMatchObject({
-          key: "synthetic-new-key",
-        });
+        expect(savedProfile()).toMatchObject({ key: "synthetic-new-key" });
       } finally {
         stop();
       }
@@ -305,9 +314,10 @@ describe("shared API-key editing and removal", () => {
         selection === "explicit" ? profileId : undefined,
       );
       const config = await readConfig();
-      expect(
-        loadPersistedAuthProfileStore(owner ? agentDir(owner) : undefined)?.profiles[profileId],
-      ).toMatchObject({ key: "synthetic-new-key", ...metadata });
+      expect(savedProfile(profileId, owner ?? null)).toMatchObject({
+        key: "synthetic-new-key",
+        ...metadata,
+      });
       const usageStats = loadPersistedAuthProfileStore(ownerDir)?.usageStats;
       expect(usageStats?.[profileId]).toEqual({ lastUsed: failureState.lastUsed, errorCount: 0 });
       if (owner) {
@@ -325,9 +335,7 @@ describe("shared API-key editing and removal", () => {
           selection === "configured" ? { ...connection, apiKey: profileId } : undefined,
         );
         expect(config.auth?.profiles?.[profileId]).toEqual(configuredProfile);
-        expect(
-          loadPersistedAuthProfileStore(agentDir("writer"))?.profiles[profileId],
-        ).toBeUndefined();
+        expect(savedProfile(profileId)).toBeUndefined();
         const reader = agentDir("reader");
         await expect(
           resolveApiKeyForProfile({
@@ -359,10 +367,8 @@ describe("shared API-key editing and removal", () => {
         },
         models: { providers: { sample: { ...connection, apiKey: boundId } } },
       });
-      await removeModelAuthCredentials({
-        cfg: await readConfig(),
+      await remove("sample:bound", {
         agentDir: callerDir,
-        profileIds: ["sample:bound"],
         ...(fullProvider ? { provider: "sample" } : {}),
       });
       const config = await readConfig();
@@ -412,11 +418,7 @@ describe("shared API-key editing and removal", () => {
         prevAuthProfileOverrideCompactionCount: 1,
       },
     });
-    await removeModelAuthCredentials({
-      cfg: await readConfig(),
-      agentDir: agentDir("writer"),
-      profileIds: [removedId],
-    });
+    await remove(removedId);
     const cfg = await readConfig();
     expect(cfg.agents?.entries?.writer?.model).toBe("sample/astra");
     expect(ensureAuthProfileStoreWithoutExternalProfiles(agentDir("writer")).profiles).toEqual({});
@@ -490,11 +492,7 @@ describe("shared API-key editing and removal", () => {
         authProfileOverrideSource: "user",
       });
     }
-    await removeModelAuthCredentials({
-      cfg: await readConfig(),
-      agentDir: agentDir("main"),
-      profileIds: [profileId],
-    });
+    await remove(profileId, { agentDir: agentDir("main") });
     const cfg = await readConfig();
     expect(cfg.agents?.defaults?.model).toEqual({
       primary: "sample/astra",
@@ -509,9 +507,7 @@ describe("shared API-key editing and removal", () => {
       "sample/luna@sample:backup",
     ]);
     expect(cfg.agents?.entries?.reader?.utilityModel).toBe(`sample/luna@${profileId}`);
-    expect(loadPersistedAuthProfileStore(agentDir("reader"))?.profiles[profileId]).toMatchObject({
-      key: "independent",
-    });
+    expect(savedProfile(profileId, "reader")).toMatchObject({ key: "independent" });
     expect(
       loadSessionEntryReadOnly({ ...scope("main"), readConsistency: "latest" })
         ?.authProfileOverride,
@@ -534,15 +530,8 @@ describe("shared API-key editing and removal", () => {
       credential: external,
     });
     await seedKey("sample:inline", "removed", "writer");
-    writeConfig({
-      models: { providers: { sample: { ...connection, apiKey: "sample:external" } } },
-    });
-    await removeModelAuthCredentials({
-      cfg: await readConfig(),
-      agentDir: agentDir("writer"),
-      profileIds: ["sample:inline"],
-      apiKeyProvider: "sample",
-    });
+    writeConfig(boundConfig("sample:external"));
+    await remove("sample:inline", { apiKeyProvider: "sample" });
     expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles).toEqual({
       "sample:external": external,
     });
@@ -561,7 +550,7 @@ describe("shared API-key editing and removal", () => {
       name: "another agent's override",
       owner: "reader",
       credential: { type: "api_key", provider: "sample", key: "kept-local" },
-      config: { models: { providers: { sample: { ...connection, apiKey: "old-inline" } } } },
+      config: boundConfig("old-inline"),
       error: "An agent already overrides this shared key",
     },
     {
@@ -569,7 +558,7 @@ describe("shared API-key editing and removal", () => {
       owner: "writer",
       profileId: "sample:local",
       credential: { type: "api_key", provider: "sample", key: "kept-local", copyToAgents: false },
-      config: { models: { providers: { sample: { ...connection, apiKey: "sample:local" } } } },
+      config: boundConfig("sample:local"),
       error: "An agent already overrides this shared key",
     },
     {
@@ -628,9 +617,7 @@ describe("shared API-key editing and removal", () => {
     await expect(save("ordinary-fixture\r\n-key-8304")).rejects.toThrow(
       "API key saved, but provider settings could not be applied",
     );
-    expect(
-      loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:manual"],
-    ).toMatchObject({ key: "ordinary-fixture-key-8304" });
+    expect(savedProfile()).toMatchObject({ key: "ordinary-fixture-key-8304" });
     expect(redactSensitiveText("error: ordinary-fixture-key-8304")).not.toContain(
       "ordinary-fixture-key-8304",
     );
@@ -663,7 +650,7 @@ describe("shared API-key editing and removal", () => {
           },
         ]);
       };
-      writeConfig({ models: { providers: { sample: { ...connection, apiKey: profileId } } } });
+      writeConfig(boundConfig(profileId));
       if (kind === "durable token") {
         await installReplacement();
       } else {
@@ -674,17 +661,8 @@ describe("shared API-key editing and removal", () => {
           return updateConfig(mutator);
         });
       }
-      await expect(
-        removeModelAuthCredentials({
-          cfg: await readConfig(),
-          agentDir: agentDir("writer"),
-          profileIds: [profileId],
-          apiKeyProvider: "sample",
-        }),
-      ).rejects.toThrow("changed");
-      expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles[profileId]).toEqual(
-        replacement,
-      );
+      await expect(remove(profileId, { apiKeyProvider: "sample" })).rejects.toThrow("changed");
+      expect(savedProfile(profileId)).toEqual(replacement);
       expect((await readConfig()).models?.providers?.sample?.apiKey).toBe(profileId);
     },
   );
@@ -692,16 +670,8 @@ describe("shared API-key editing and removal", () => {
   it("retains the credential when config reference cleanup fails", async () => {
     const { profileId } = await save();
     vi.spyOn(configWriter, "updateConfig").mockRejectedValueOnce(new Error("config write failed"));
-    await expect(
-      removeModelAuthCredentials({
-        cfg: await readConfig(),
-        agentDir: agentDir("writer"),
-        profileIds: [profileId],
-      }),
-    ).rejects.toThrow("config write failed");
-    expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles[profileId]).toMatchObject({
-      key: "synthetic-new-key",
-    });
+    await expect(remove(profileId)).rejects.toThrow("config write failed");
+    expect(savedProfile(profileId)).toMatchObject({ key: "synthetic-new-key" });
   });
 
   it("preserves a new profile and binding added after full-provider removal was planned", async () => {
@@ -714,20 +684,13 @@ describe("shared API-key editing and removal", () => {
         profileId: "sample:new",
         credential: { type: "token", provider: "sample", token: "kept-new-token" },
       });
-      writeConfig({ models: { providers: { sample: { ...connection, apiKey: "sample:new" } } } });
+      writeConfig(boundConfig("sample:new"));
       return updateConfig(mutator);
     });
-    await expect(
-      removeModelAuthCredentials({
-        cfg: config,
-        agentDir: agentDir("writer"),
-        profileIds: ["sample:old"],
-        provider: "sample",
-      }),
-    ).rejects.toThrow("could not be removed");
-    expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:new"]).toMatchObject(
-      { token: "kept-new-token" },
+    await expect(remove("sample:old", { cfg: config, provider: "sample" })).rejects.toThrow(
+      "could not be removed",
     );
+    expect(savedProfile("sample:new")).toMatchObject({ token: "kept-new-token" });
     expect((await readConfig()).models?.providers?.sample?.apiKey).toBe("sample:new");
   });
 
@@ -754,18 +717,11 @@ describe("shared API-key editing and removal", () => {
         return updateConfig(mutator);
       });
 
-      await expect(
-        removeModelAuthCredentials({
-          cfg: config,
-          agentDir: agentDir("writer"),
-          profileIds: [profileId],
-          ...selection,
-        }),
-      ).rejects.toThrow("could not be removed");
+      await expect(remove(profileId, { cfg: config, ...selection })).rejects.toThrow(
+        "could not be removed",
+      );
 
-      expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles[profileId]).toMatchObject({
-        key: "replacement-key",
-      });
+      expect(savedProfile(profileId)).toMatchObject({ key: "replacement-key" });
       const restored = await readConfig();
       expect(restored.agents?.entries?.writer?.model).toBe(`sample/astra@${profileId}`);
       expect(restored.auth?.profiles?.[profileId]).toEqual({
@@ -815,8 +771,6 @@ describe("shared API-key editing and removal", () => {
       profileId: "sample:backup",
     });
     expect((await readConfig()).models?.providers?.sample).toEqual(provider);
-    expect(
-      loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:backup"],
-    ).toMatchObject({ key: "backup-key" });
+    expect(savedProfile("sample:backup")).toMatchObject({ key: "backup-key" });
   });
 });
