@@ -11,7 +11,6 @@ import { createResourceLoader } from "./agent-session-loop-resource-loader.test-
 import type { ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { SettingsManager } from "./settings-manager.js";
 
 const reasoningModel = {
   ...testModel,
@@ -38,11 +37,7 @@ async function createSession(
   );
   const fixture = await createTestSession({
     model: reasoning ? reasoningModel : plainModel,
-    settingsManager: SettingsManager.inMemory({
-      compaction: { enabled: false },
-      retry: { enabled: false },
-      defaultThinkingLevel: "high",
-    }),
+    thinkingLevel: "high",
     resourceLoader,
   });
   fixture.modelRegistry.registerProvider(testModel.provider, {
@@ -78,58 +73,55 @@ function observeOutcome(operation: Promise<unknown>) {
   return observed;
 }
 
-it.each(["thinking", "model"] as const)(
-  "retains the committed receipt when a synchronous %s-change listener throws",
+it.each(["thinking", "model", "nested"] as const)(
+  "retains committed metadata and awaits %s notification failures",
   async (kind) => {
-    const fixture = await createSession(kind === "thinking");
-    const cause = new Error("notification listener failed");
+    const nested = kind === "nested";
+    const nestedFailureReady = createDeferredCore<SessionMetadataCommittedError>();
+    const fixture = await createSession(
+      kind !== "model",
+      nested
+        ? async (event) => {
+            if (event.level === "low") {
+              await fixture.session.setThinkingLevel("medium");
+            }
+          }
+        : undefined,
+    );
+    const cause = new Error(nested ? "nested notification failed" : "notification listener failed");
     fixture.session.subscribe((event) => {
-      if (event.type === "thinking_level_changed") {
-        throw cause;
+      if (event.type === "thinking_level_changed" && (!nested || event.level === "medium")) {
+        const failure = nested ? notificationFailure(fixture, cause) : cause;
+        if (failure instanceof SessionMetadataCommittedError) {
+          nestedFailureReady.resolve(failure);
+        }
+        throw failure;
       }
     });
 
-    const failure: unknown = await (
-      kind === "thinking"
-        ? fixture.session.setThinkingLevel("low")
-        : fixture.session.setModel(reasoningModel)
+    const outcome = (
+      kind === "model"
+        ? fixture.session.setModel(reasoningModel)
+        : fixture.session.setThinkingLevel("low")
     ).catch((error: unknown) => error);
-
+    const nestedFailure = nested ? await nestedFailureReady.promise : undefined;
+    const failure = await outcome;
     const entries = fixture.changes();
     expect(entries).toHaveLength(kind === "thinking" ? 1 : 2);
-    const level = kind === "thinking" ? "low" : "high";
+    const level = nested ? "medium" : kind === "thinking" ? "low" : "high";
     expect(fixture.thinking()).toEqual([level, level]);
     expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
     expect(failure).toMatchObject({ committedEntry: entries.at(-1), cause });
     expect(hasModelFallbackStop(failure)).toBe(true);
+    if (nested) {
+      expect(failure).toBe(nestedFailure);
+      expect(entries).toMatchObject([
+        { type: "thinking_level_change", thinkingLevel: "low" },
+        { type: "thinking_level_change", thinkingLevel: "medium" },
+      ]);
+    }
   },
 );
-
-it("awaits reentrant thinking hooks and preserves their nested committed failure", async () => {
-  const nestedFailureReady =
-    createDeferredCore<InstanceType<typeof SessionMetadataCommittedError>>();
-  const fixture = await createSession(true, async (event) => {
-    if (event.level === "low") {
-      await fixture.session.setThinkingLevel("medium");
-    }
-  });
-  fixture.session.subscribe((event) => {
-    if (event.type === "thinking_level_changed" && event.level === "medium") {
-      const failure = notificationFailure(fixture, new Error("nested notification failed"));
-      nestedFailureReady.resolve(failure);
-      throw failure;
-    }
-  });
-
-  const outcome = fixture.session.setThinkingLevel("low").catch((error: unknown) => error);
-  const nestedFailure = await nestedFailureReady.promise;
-  expect(await outcome).toBe(nestedFailure);
-  expect(fixture.changes()).toMatchObject([
-    { type: "thinking_level_change", thinkingLevel: "low" },
-    { type: "thinking_level_change", thinkingLevel: "medium" },
-  ]);
-  expect(fixture.thinking()).toEqual(["medium", "medium"]);
-});
 
 it("joins both started hooks and retains both notification failures", async () => {
   const modelHookStarted = createDeferredCore();

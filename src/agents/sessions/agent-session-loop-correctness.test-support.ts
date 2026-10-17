@@ -4,6 +4,8 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi } from "vitest";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
@@ -20,36 +22,17 @@ const hoistedStreamMocks = vi.hoisted(() => ({
 }));
 export const streamMocks = hoistedStreamMocks;
 
-export const testModel: Model = {
+export const testModel: Model = makeProviderModelFixture({
   id: "test-model",
   name: "Test Model",
   api: "openai-responses",
   provider: "test-provider",
   baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 32_768,
   maxTokens: 8_192,
-};
+});
 
 const sessions: AgentSession[] = [];
-
-function createUsage(contextTokens: number) {
-  return {
-    input: contextTokens,
-    output: 1,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: contextTokens + 1,
-    contextUsage: {
-      state: "available" as const,
-      promptTokens: contextTokens,
-      totalTokens: contextTokens + 1,
-    },
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
 
 export function createAssistant(
   activeModel: Model,
@@ -63,7 +46,17 @@ export function createAssistant(
     api: activeModel.api,
     provider: activeModel.provider,
     model: activeModel.id,
-    usage: createUsage(contextTokens),
+    usage: {
+      ...createZeroUsageFixture(),
+      input: contextTokens,
+      output: 1,
+      totalTokens: contextTokens + 1,
+      contextUsage: {
+        state: "available",
+        promptTokens: contextTokens,
+        totalTokens: contextTokens + 1,
+      },
+    },
     stopReason,
     timestamp: Date.now(),
   };
@@ -96,7 +89,7 @@ export function holdAssistantResponse(text: string) {
       response.push({
         type: "done",
         reason: "stop",
-        message: createAssistant(testModel, [{ type: "text", text }]),
+        message: createAssistant(testModel, text),
       });
       response.end();
     },
@@ -141,6 +134,7 @@ type TestSessionOptions = Partial<
     CreateAgentSessionOptions,
     | "systemPrompt"
     | "model"
+    | "thinkingLevel"
     | "settingsManager"
     | "sessionManager"
     | "resourceLoader"
@@ -160,6 +154,7 @@ export async function createTestSession(options: TestSessionOptions = {}) {
     SettingsManager.inMemory({
       compaction: { enabled: false },
       retry: { enabled: false },
+      defaultThinkingLevel: options.thinkingLevel,
     });
   const sessionManager = options.sessionManager ?? SessionManager.inMemory();
   const modelRegistry = ModelRegistry.inMemory(authStorage);

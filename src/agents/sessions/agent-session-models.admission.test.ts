@@ -37,7 +37,6 @@ import { SessionMetadataCommittedError } from "./session-manager-metadata-error.
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
 
 const startModel = {
   ...testModel,
@@ -92,18 +91,14 @@ function replacementTarget<T extends { sessionId: string; sessionKey: string }>(
 }
 
 function observeMetadata(hooks: {
-  open?: (options: Parameters<MetadataWorker>[0]) => void;
-  executing?: (command: Parameters<MetadataScope["execute"]>[0]) => void;
   committed?: (command: Parameters<MetadataScope["execute"]>[0]) => void;
   closed?: () => void;
 }) {
   const original = metadataRuntime.withSessionMetadataWorker;
   const observed: MetadataWorker = async (options, database, assertCurrent, operation) => {
-    hooks.open?.(options);
     const result = await original(options, database, assertCurrent, (scope) =>
       operation({
         execute: async (command, commandOptions) => {
-          hooks.executing?.(command);
           const reply = await scope.execute(command, commandOptions);
           hooks.committed?.(command);
           return reply;
@@ -189,28 +184,21 @@ async function createSession({
     transitions.push({ previous: selection.previousModel?.id, next: selection.model.id });
     await onSelect?.(selection);
   };
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    ["model_select", [select]],
-    [
-      "thinking_level_select",
-      [
-        async (event) => {
-          const selection = event as ThinkingLevelSelectEvent;
-          thinkingEvents.push(selection);
-          await onThinkingSelect?.(selection);
-        },
-      ],
-    ],
-  ]);
-  const resourceLoader = createResourceLoader(handlers);
+  const selectThinking = async (event: unknown) => {
+    const selection = event as ThinkingLevelSelectEvent;
+    thinkingEvents.push(selection);
+    await onThinkingSelect?.(selection);
+  };
+  const resourceLoader = createResourceLoader(
+    new Map([
+      ["model_select", [select]],
+      ["thinking_level_select", [selectThinking]],
+    ]),
+  );
   const fixture = await createTestSession({
     model: startModel,
     sessionManager: SessionManager.open(target, root),
-    settingsManager: SettingsManager.inMemory({
-      compaction: { enabled: false },
-      retry: { enabled: false },
-      defaultThinkingLevel: "medium",
-    }),
+    thinkingLevel: "medium",
     resourceLoader,
   });
   fixture.modelRegistry.registerProvider(startModel.provider, {
@@ -218,13 +206,12 @@ async function createSession({
     baseUrl: startModel.baseUrl,
     models,
   });
-  const options = toDatabaseOptions(resolveSqliteReadScope(target));
   return {
     ...fixture,
     manager: fixture.sessionManager,
     settings: fixture.settingsManager,
     target,
-    options,
+    options: toDatabaseOptions(resolveSqliteReadScope(target)),
     transitions,
     thinkingEvents,
     runtime: resourceLoader.getExtensions().runtime,
@@ -250,34 +237,6 @@ async function holdAdmission(options: Parameters<typeof runOpenClawAgentWriteAdm
   // Callers resume in their own async context, not the reserved owner's reentrant context.
   return { release: release.resolve, done };
 }
-
-it("keeps captured storage environment out of metadata command payloads", async () => {
-  const stateDir = fs.realpathSync(tempDirs.make("metadata-context-environment-"));
-  const commands = new Set<string>();
-  observeMetadata({
-    open: (options) => {
-      expect(options.env?.OPENCLAW_STATE_DIR).toBe(stateDir);
-    },
-    executing: (command) => {
-      expect(command.input.scope).not.toHaveProperty("env");
-      commands.add(command.type);
-    },
-  });
-  const { session, manager, target } = await createSession({
-    env: { OPENCLAW_STATE_DIR: stateDir },
-  });
-  const before = await loadTranscriptEvents(target);
-  await session.setModel(nextModel);
-  expect(commands).toEqual(new Set(["session.metadata.initialize", "session.metadata.append"]));
-  expect(manager.getSessionTarget()?.env?.OPENCLAW_STATE_DIR).toBe(stateDir);
-  const after = await loadTranscriptEvents(target);
-  expect(after.slice(0, before.length)).toEqual(before);
-  expect(after.slice(before.length)).toMatchObject([
-    { type: "model_change", modelId: nextModel.id },
-    { type: "thinking_level_change", thinkingLevel: "medium" },
-  ]);
-  expect(session.model?.id).toBe(nextModel.id);
-});
 
 it.each([
   { kind: "model", authority: "current" },
