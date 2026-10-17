@@ -30,7 +30,13 @@ import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
-const stores: ReturnType<typeof openStore>[] = [];
+type StoreFixture = {
+  pathname: string;
+  writer: PostgresSqlConnection;
+  open: () => PostgresSqlConnection;
+  close: () => void;
+};
+const stores: StoreFixture[] = [];
 const directories = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(() => {
     try {
@@ -45,7 +51,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function openStore(schema: StoreSchema) {
+function openStore(schema: StoreSchema): StoreFixture {
   const pathname = path.join(directories.make("pg-read-facts-"), "anchor.sqlite");
   const handles: {
     db: PostgresSqlConnection;
@@ -131,7 +137,7 @@ function seedAcp(db: PostgresSqlConnection, name: string, value: string) {
         .insertInto("acp_sessions")
         .values(
           bindAcpSessionMeta({
-            sessionKey: commandFor(name).entries[0].keys[0],
+            sessionKey: buildAcpDatabaseSessionKey(`agent:main:acp:${name}`, "main"),
             lifecycleRevision: "generation",
             updatedAt: 100,
             meta: metadata(value),
@@ -155,7 +161,7 @@ function writeAcp(db: PostgresSqlConnection, name: string, value: string | null)
 }
 
 describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
-  let state: ReturnType<typeof openStore>;
+  let state: StoreFixture;
   beforeAll(() => {
     withEngineStoreAdmission(() => {
       state = openStore(stateEngineSchema);
