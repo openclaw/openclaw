@@ -4,11 +4,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
+import { expectPreparedHandoff } from "./client.test-support.js";
 import * as socketEndpoint from "./socket-path.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -71,57 +70,19 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
   it.each([false, true])(
     "prepares the socket write and rechecks its caller after waiting (revoked=%s)",
     async (revoked) => {
-      const preparing = createDeferred<void>();
-      const prepared = createDeferred<void>();
-      const arrived = createDeferred<void>();
-      const reply = createDeferred<void>();
-      const authority = fetchRuntime.captureEffectAuthority();
-      vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
-        ...authority,
-        async initiate(effect) {
-          preparing.resolve();
-          await prepared.promise;
-          return authority.initiate(effect);
-        },
+      await expectPreparedHandoff(revoked, async ({ arrive, response: reply, assertHandoff }) => {
+        const requests: Record<string, unknown>[] = [];
+        const { baseUrl } = await serve((request, socket) => {
+          requests.push(request);
+          arrive();
+          void reply.then(() => socket.end(response(request.id, { sent: true })));
+        });
+        return {
+          send: () => send(baseUrl, "prepared", { assertDirectAdapterHandoff: assertHandoff }),
+          assertCount: (count) => expect(requests).toHaveLength(count),
+          result: { sent: true },
+        };
       });
-      const requests: Record<string, unknown>[] = [];
-      const { baseUrl } = await serve((request, socket) => {
-        requests.push(request);
-        arrived.resolve();
-        void reply.promise.then(() => socket.end(response(request.id, { sent: true })));
-      });
-      const caller = new AbortController();
-      const failure = new Error("Signal caller ended during preparation");
-      const sending = send(baseUrl, "prepared", {
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-      }).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        await Promise.race([
-          preparing.promise,
-          arrived.promise.then(() => {
-            throw new Error("socket write bypassed preparation");
-          }),
-        ]);
-        expect(requests).toEqual([]);
-        if (revoked) {
-          caller.abort(failure);
-        }
-        prepared.resolve();
-        if (!revoked) {
-          await arrived.promise;
-          reply.resolve();
-        }
-        expect(await sending).toEqual(revoked ? { error: failure } : { value: { sent: true } });
-        expect(requests).toHaveLength(revoked ? 0 : 1);
-      } finally {
-        caller.abort(failure);
-        prepared.resolve();
-        reply.resolve();
-        await sending;
-      }
     },
   );
 
@@ -234,66 +195,60 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     expect(onRequest).not.toHaveBeenCalled();
   });
 
-  it("subscribes, unwraps manual notifications, filters other accounts and aborts", async () => {
-    const controller = new AbortController();
-    const opened = vi.fn();
-    const events: unknown[] = [];
-    const payload = { account: "+15550000001", envelope: { dataMessage: { message: "hello" } } };
-    const { baseUrl } = await serve((request, socket) => {
-      expect(request).toMatchObject({
-        method: "subscribeReceive",
-        params: { account: payload.account },
+  it.each([false, true])(
+    "receives notifications and aborts (delayed reconnect=%s)",
+    async (delayed) => {
+      const controller = new AbortController();
+      const opened = vi.fn();
+      const events: unknown[] = [];
+      const statusSink = vi.fn();
+      const error = vi.fn(() => controller.abort());
+      const payload = { account: "+15550000001", envelope: { dataMessage: { message: "hello" } } };
+      const { baseUrl } = await serve((request, socket) => {
+        expect(request.method).toBe("subscribeReceive");
+        if (!delayed) {
+          expect(request.params).toEqual({ account: payload.account });
+        }
+        const deliver = () => {
+          socket.write(response(request.id, 7));
+          if (!delayed) {
+            notify(socket, { ...payload, account: "+15550000002" });
+          }
+          notify(socket, payload);
+        };
+        if (!delayed) {
+          deliver();
+        } else {
+          const timer = setTimeout(deliver, 30);
+          socket.once("close", () => clearTimeout(timer));
+        }
       });
-      socket.write(response(request.id, 7));
-      for (const result of [{ ...payload, account: "+15550000002" }, payload]) {
-        notify(socket, result);
-      }
-    });
-    await expect(
-      streamSignalEvents({
+      const options = {
         baseUrl,
-        account: payload.account,
         abortSignal: controller.signal,
-        onStreamOpen: opened,
-        onEvent: (event) => {
+        onEvent: (event: Parameters<Parameters<typeof streamSignalEvents>[0]["onEvent"]>[0]) => {
           events.push(event);
           controller.abort();
         },
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(opened).toHaveBeenCalledOnce();
-    expect(events).toEqual([{ event: "receive", data: JSON.stringify(payload) }]);
-  });
-
-  it("receives after a delayed subscription through the monitor's zero-timeout reconnect path", async () => {
-    const controller = new AbortController();
-    const events: unknown[] = [];
-    const statusSink = vi.fn();
-    const error = vi.fn(() => controller.abort());
-    const payload = { envelope: { dataMessage: { message: "delayed" } } };
-    const { baseUrl } = await serve((request, socket) => {
-      expect(request.method).toBe("subscribeReceive");
-      const timer = setTimeout(() => {
-        socket.write(response(request.id, 7));
-        notify(socket, payload);
-      }, 30);
-      socket.once("close", () => clearTimeout(timer));
-    });
-    await runSignalSseLoop({
-      baseUrl,
-      timeoutMs: 0,
-      abortSignal: controller.signal,
-      runtime: { log: vi.fn(), error, exit: vi.fn() },
-      statusSink,
-      onEvent: (event) => {
-        events.push(event);
-        controller.abort();
-      },
-    });
-    expect(error).not.toHaveBeenCalled();
-    expect(statusSink).toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
-    expect(events).toEqual([{ event: "receive", data: JSON.stringify(payload) }]);
-  });
+      };
+      if (delayed) {
+        await runSignalSseLoop({
+          ...options,
+          timeoutMs: 0,
+          statusSink,
+          runtime: { log: vi.fn(), error, exit: vi.fn() },
+        });
+        expect(error).not.toHaveBeenCalled();
+        expect(statusSink).toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
+      } else {
+        await expect(
+          streamSignalEvents({ ...options, account: payload.account, onStreamOpen: opened }),
+        ).rejects.toMatchObject({ name: "AbortError" });
+        expect(opened).toHaveBeenCalledOnce();
+      }
+      expect(events).toEqual([{ event: "receive", data: JSON.stringify(payload) }]);
+    },
+  );
 
   it("closes a subscribed socket when the event consumer throws", async () => {
     let closed: Promise<unknown> | undefined;

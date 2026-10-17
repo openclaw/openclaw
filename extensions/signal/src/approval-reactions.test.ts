@@ -16,21 +16,11 @@ import * as signalRuntime from "./runtime.js";
 
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
-  isApprovalNotFoundError: vi.fn(() => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolveSignalApproval,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
-    "openclaw/plugin-sdk/error-runtime",
-  );
-  return {
-    ...actual,
-    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-  };
-});
 
 const approvalRoute = {
   deliveryMode: "session" as const,
@@ -150,13 +140,10 @@ function execPayload(approvalId: string) {
 describe("Signal approval reactions", () => {
   beforeEach(() => {
     clearSignalApprovalReactionTargetsForTest();
-    resolverMocks.resolveSignalApproval.mockReset();
-    resolverMocks.resolveSignalApproval.mockResolvedValue({
+    resolverMocks.resolveSignalApproval.mockReset().mockResolvedValue({
       applied: true,
       approval: { status: "allowed", decision: "allow-once" },
     });
-    resolverMocks.isApprovalNotFoundError.mockReset();
-    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
   it("does not register metadata-only approval payloads without visible reaction hints", async () => {
@@ -194,8 +181,7 @@ describe("Signal approval reactions", () => {
   });
 
   it("registers only delivered chunks that contain visible reaction hints", async () => {
-    const payload = execPayload("exec-chunked-reaction");
-    const deliveredPayload = withHint(payload);
+    const deliveredPayload = withHint(execPayload("exec-chunked-reaction"));
 
     expect(
       await registerDelivery(deliveredPayload!, [
@@ -297,9 +283,7 @@ describe("Signal approval reactions", () => {
   });
 
   it("does not match timestamp-only bindings when the inbound conversation id differs", async () => {
-    await registerTarget("1700000000001", {
-      conversationKey: "username:kevin",
-    });
+    await registerTarget("1700000000001", { conversationKey: "username:kevin" });
 
     await expect(lookup("1700000000001")).resolves.toBeNull();
   });
@@ -346,9 +330,7 @@ describe("Signal approval reactions", () => {
   });
 
   it("consumes a losing surface and logs the canonical winning decision", async () => {
-    await registerTarget("1700000000019", {
-      approvalId: "exec-losing-surface",
-    });
+    await registerTarget("1700000000019", { approvalId: "exec-losing-surface" });
     resolverMocks.resolveSignalApproval.mockResolvedValueOnce({
       applied: false,
       approval: { status: "denied", decision: "deny" },
@@ -374,28 +356,18 @@ describe("Signal approval reactions", () => {
     await expect(lookup("1700000000019")).resolves.toBeNull();
   });
 
-  it("requires explicit approvers for approval reactions", async () => {
-    await registerTarget("1700000000004", { allowedDecisions: ["allow-once"] });
-
-    const handled = await react("1700000000004", {
-      cfg: { ...sessionConfig, channels: { signal: {} } },
-    });
-
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolveSignalApproval).not.toHaveBeenCalled();
-  });
-
-  it("re-checks the top-level approval route before resolving reactions", async () => {
-    await registerTarget("1700000000007", { allowedDecisions: ["allow-once"] });
-
-    const handled = await react("1700000000007", {
+  it.each([
+    { name: "explicit approvers", cfg: { ...sessionConfig, channels: { signal: {} } } },
+    {
+      name: "the current top-level approval route",
       cfg: {
         ...sessionConfig,
         approvals: { exec: { ...sessionConfig.approvals.exec, agentFilter: ["other-agent"] } },
       },
-    });
-
-    expect(handled).toBe(true);
+    },
+  ])("requires $name before resolving reactions", async ({ cfg }) => {
+    await registerTarget("1700000000004", { allowedDecisions: ["allow-once"] });
+    await expect(react("1700000000004", { cfg })).resolves.toBe(true);
     expect(resolverMocks.resolveSignalApproval).not.toHaveBeenCalled();
   });
 });

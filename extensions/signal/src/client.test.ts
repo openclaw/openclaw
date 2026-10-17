@@ -1,9 +1,8 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { expectPreparedHandoff } from "./client.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/core", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/core")>(
@@ -80,67 +79,28 @@ describe("signalRpcRequest", () => {
   it.each([false, true])(
     "prepares the HTTP handoff and rechecks its caller after waiting (revoked=%s)",
     async (revoked) => {
-      const preparing = createDeferred<void>();
-      const prepared = createDeferred<void>();
-      const arrived = createDeferred<void>();
-      const response = createDeferred<void>();
-      const authority = fetchRuntime.captureEffectAuthority();
-      vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
-        ...authority,
-        async initiate(effect) {
-          preparing.resolve();
-          await prepared.promise;
-          return authority.initiate(effect);
-        },
-      });
-      const baseUrl = await withSignalServer(async (_req, res) => {
-        arrived.resolve();
-        await response.promise;
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: "test-id", result: { sent: true } }));
-      });
-      const request = vi.spyOn(http, "request");
-      const caller = new AbortController();
-      const failure = new Error("Signal caller ended during preparation");
-      let settled = false;
-      const sending = signalRpcRequest(
-        "send",
-        { message: "prepared" },
-        {
-          baseUrl,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        },
-      )
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        )
-        .finally(() => {
-          settled = true;
+      await expectPreparedHandoff(revoked, async ({ arrive, response, assertHandoff }) => {
+        const result = { sent: true };
+        const baseUrl = await withSignalServer(async (_req, res) => {
+          arrive();
+          await response;
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: "test-id", result }));
         });
-      try {
-        await Promise.race([
-          preparing.promise,
-          arrived.promise.then(() => {
-            throw new Error("HTTP request bypassed preparation");
-          }),
-        ]);
-        expect(request).not.toHaveBeenCalled();
-        if (revoked) {
-          caller.abort(failure);
-        }
-        prepared.resolve();
-        if (!revoked) {
-          await arrived.promise;
-          expect(settled).toBe(false);
-          response.resolve();
-        }
-        expect(await sending).toEqual(revoked ? { error: failure } : { value: { sent: true } });
-        expect(request).toHaveBeenCalledTimes(revoked ? 0 : 1);
-      } finally {
-        prepared.resolve();
-        response.resolve();
-        await sending;
-      }
+        const request = vi.spyOn(http, "request");
+        return {
+          send: () =>
+            signalRpcRequest(
+              "send",
+              { message: "prepared" },
+              {
+                baseUrl,
+                assertDirectAdapterHandoff: assertHandoff,
+              },
+            ),
+          assertCount: (count) => expect(request).toHaveBeenCalledTimes(count),
+          result,
+        };
+      });
     },
   );
 
@@ -201,20 +161,11 @@ describe("signalRpcRequest", () => {
 });
 
 describe("signalCheck", () => {
-  it("uses only the status when the unused response body is malformed UTF-8", async () => {
-    await expect(signalCheck(await reply(Buffer.from([0xff])))).resolves.toEqual({
-      ok: true,
-      status: 200,
-      error: null,
-    });
-  });
-
-  it("returns an HTTP status failure for unhealthy checks", async () => {
-    await expect(signalCheck(await reply("down", 503))).resolves.toEqual({
-      ok: false,
-      status: 503,
-      error: "HTTP 503",
-    });
+  it.each([
+    [200, Buffer.from([0xff]), { ok: true, status: 200, error: null }],
+    [503, "down", { ok: false, status: 503, error: "HTTP 503" }],
+  ] as const)("reports status %s without decoding the body", async (status, body, expected) => {
+    await expect(signalCheck(await reply(body, status))).resolves.toEqual(expected);
   });
 });
 
@@ -264,28 +215,18 @@ describe("streamSignalEvents", () => {
     });
   });
 
-  it("rejects event streams that do not send headers before the deadline", async () => {
-    const baseUrl = await withSignalServer(() => {
-      // Leave the request open without response headers.
-    });
-
-    await expect(stream(baseUrl, { timeoutMs: 25 })).rejects.toThrow(
-      "Signal SSE connection timed out after 25ms",
-    );
-  });
-
-  it("allows idle event streams to wait for abort when the deadline is disabled", async () => {
-    const baseUrl = await withSignalServer(() => {
-      // Leave the request open without response headers, matching signal-cli 0.14.3 before
-      // its first keepalive flush.
-    });
-    const abortController = new AbortController();
-    const abortTimer = setTimeout(() => abortController.abort(), 25);
-    abortTimer.unref?.();
-
+  it.each([
+    [25, "Error", "Signal SSE connection timed out after 25ms"],
+    [0, "AbortError", "Signal SSE aborted"],
+  ] as const)("bounds a headerless stream with timeout %s", async (timeoutMs, name, message) => {
+    // signal-cli can leave the request open before its first keepalive flush.
+    const baseUrl = await withSignalServer(() => {});
+    const controller = new AbortController();
+    const timer = timeoutMs === 0 ? setTimeout(() => controller.abort(), 25) : undefined;
+    timer?.unref?.();
     await expect(
-      stream(baseUrl, { timeoutMs: 0, abortSignal: abortController.signal }),
-    ).rejects.toMatchObject({ name: "AbortError", message: "Signal SSE aborted" });
+      stream(baseUrl, { timeoutMs, abortSignal: controller.signal }),
+    ).rejects.toMatchObject({ name, message });
   });
 
   it("rejects oversized SSE line buffers by byte size", async () => {
