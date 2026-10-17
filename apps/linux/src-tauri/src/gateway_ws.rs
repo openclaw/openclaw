@@ -3920,18 +3920,12 @@ esac
             ])
         );
         assert_eq!(params["client"]["id"], CLIENT_ID);
-        assert_eq!(
-            params["client"]["deviceFamily"],
-            CLIENT_DEVICE_FAMILY
-        );
+        assert_eq!(params["client"]["deviceFamily"], CLIENT_DEVICE_FAMILY);
         assert_eq!(params["auth"], json!({ "token": "secret" }));
         assert_eq!(params["device"]["nonce"], "fixture-nonce");
         assert_eq!(params["device"]["signedAt"], 1_800_000_000_000_u64);
         assert_eq!(
-            params["device"]["id"]
-                .as_str()
-                .expect("device id")
-                .len(),
+            params["device"]["id"].as_str().expect("device id").len(),
             64
         );
         assert!(params["device"]["publicKey"]
