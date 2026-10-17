@@ -4353,7 +4353,6 @@
 ["src/cli/precomputed-help.test-helpers.ts","./root-help-metadata.js","a14295f98413942fe15bcc63b0224a299282c4baf4419db82f18b494748694e6",1]
 ["src/cli/program.force.test.ts","../infra/ports-probe.js","449db94342de7ed2c247fc6e0d74ac7f0e1258ebde962dc1ba8a2f452bccf86b",1]
 ["src/cli/program.smoke.test.ts","./config-cli.js","b0bc5d7b59d53a24bc66a2542cec94c017fcd7a8d8695b64e94a5b206183334a",1]
-["src/cli/program.test-mocks.ts","../commands/configure.commands.js","4f8378ec717872be1a5b5b51778334d669c83ddbc797f43c80fbf72d18a2ad30",1]
 ["src/cli/program.test-mocks.ts","../commands/doctor-config-flow.js","fe5b35c660a1075f063a2378d27221268fde415f087a4e5885d29d08eff980bf",1]
 ["src/cli/program.test-mocks.ts","../commands/message.js","7d97f4f048495aa4942558488141bf7ac312ddb034aa28699a2657deaf39b5dc",1]
 ["src/cli/program.test-mocks.ts","../commands/onboard.js","86057830cf97c6df0ddd07d2645aa8118bc9fd44b8a1ab2fa68278a7e2023f2d",1]

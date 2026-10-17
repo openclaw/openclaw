@@ -57,7 +57,8 @@ export const runtime = programMocks.runtime as {
 // Keep these mocks at top level so Vitest does not warn about hoisted nested mocks.
 vi.mock("../commands/message.js", () => ({ messageCommand: programMocks.messageCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand: programMocks.statusCommand }));
-vi.mock("../commands/configure.commands.js", () => ({
+vi.mock("../commands/configure.commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/configure.commands.js")>()),
   CONFIGURE_WIZARD_SECTIONS: [
     "workspace",
     "model",
