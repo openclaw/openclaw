@@ -14,6 +14,41 @@ import {
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
+type BoundaryInput = Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
+function prepareBoundary(
+  input: Pick<BoundaryInput, "activeSession" | "attempt"> & Partial<BoundaryInput>,
+) {
+  return prepareEmbeddedAttemptSessionBoundary({
+    getUserTranscriptContexts: () => undefined,
+    isRawModelRun: false,
+    preparedUserTurnMessage: undefined,
+    sessionManager: createSessionManager(),
+    setActiveSessionSystemPrompt: vi.fn(),
+    ...input,
+  });
+}
+
+function userMessage(text: string, timestamp = 1): Extract<AgentMessage, { role: "user" }> {
+  return { role: "user", content: [{ type: "text", text }], timestamp };
+}
+
+function senderContext(
+  runtimeMessage: ReturnType<typeof userMessage>,
+  text: string,
+  senderName: string,
+  senderId?: string,
+) {
+  return {
+    runtimeMessage,
+    transcriptMessage: {
+      role: "user",
+      content: text,
+      timestamp: runtimeMessage.timestamp,
+      __openclaw: { ...(senderId ? { senderId } : {}), senderName },
+    } as AgentMessage,
+  };
+}
+
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
   it("strips persisted carriers when a session switches to transient replay", async () => {
     const previousUser: AgentMessage = { role: "user", content: "first question", timestamp: 1 };
@@ -26,15 +61,10 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const currentUser: AgentMessage = { role: "user", content: "next question", timestamp: 2 };
     const messages = [previousUser, previousCarrier, reply, currentCarrier, currentUser];
     const { activeSession } = createActiveSession();
-    await prepareEmbeddedAttemptSessionBoundary({
+    await prepareBoundary({
       activeSession,
       appendOnlyRuntimeContext: false,
       attempt: { sessionId: "session-boundary", prompt: "next question" },
-      getUserTranscriptContexts: () => undefined,
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
     });
     const converted = await activeSession.agent.convertToLlm(messages);
     expect(converted).toHaveLength(4);
@@ -61,7 +91,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
             tools: [],
             messages,
           });
-        await prepareEmbeddedAttemptSessionBoundary({
+        await prepareBoundary({
           activeSession,
           appendOnlyRuntimeContext,
           attempt: {
@@ -69,11 +99,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
             config: { agents: { defaults: { userTimezone: "UTC" } } },
             prompt: "first question",
           },
-          getUserTranscriptContexts: () => undefined,
-          isRawModelRun: false,
-          preparedUserTurnMessage: undefined,
-          sessionManager: createSessionManager(),
-          setActiveSessionSystemPrompt: vi.fn(),
         });
         const user = {
           role: "user" as const,
@@ -160,20 +185,15 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession, reset } = createActiveSession();
     const setActiveSessionSystemPrompt = vi.fn();
 
-    const boundary = await prepareEmbeddedAttemptSessionBoundary({
+    const boundary = await prepareBoundary({
       activeSession,
       attempt: { sessionId: "session-boundary", prompt: "exact probe" },
-      getUserTranscriptContexts: () => undefined,
       isRawModelRun: true,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
       setActiveSessionSystemPrompt,
     });
     const converted = await activeSession.agent.convertToLlm([
       {
-        role: "user",
-        content: [{ type: "text", text: "exact probe" }],
-        timestamp: 1,
+        ...userMessage("exact probe"),
         __openclaw: { senderName: "Must not leak" },
       } as AgentMessage,
     ]);
@@ -200,24 +220,18 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         message: { role: "user", content: "old" },
       }),
     });
-    const boundary = await prepareEmbeddedAttemptSessionBoundary({
+    const boundary = await prepareBoundary({
       activeSession,
       attempt: {
         sessionId: "session-boundary",
         operation: "settled-tool-finalization",
         prompt: "finalize exactly",
       },
-      getUserTranscriptContexts: () => undefined,
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
       sessionManager,
-      setActiveSessionSystemPrompt: vi.fn(),
     });
     const converted = await activeSession.agent.convertToLlm([
       {
-        role: "user",
-        content: [{ type: "text", text: "finalize exactly" }],
-        timestamp: 1,
+        ...userMessage("finalize exactly"),
         __openclaw: { senderName: "Must not leak" },
       } as AgentMessage,
     ]);
@@ -234,18 +248,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
   it("applies the prepared current-turn timestamp at the LLM boundary", async () => {
     const { activeSession } = createActiveSession();
     const preparedTimestamp = 1_717_570_800_000;
-    const boundary = await prepareEmbeddedAttemptSessionBoundary({
+    const boundary = await prepareBoundary({
       activeSession,
       attempt: {
         sessionId: "session-boundary",
         config: { agents: { defaults: { userTimezone: "UTC" } } },
         prompt: "Current ask",
       },
-      getUserTranscriptContexts: () => undefined,
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
     });
     boundary.setCurrentUserTimestampOverride({
       timestamp: preparedTimestamp,
@@ -253,11 +262,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     });
 
     const converted = await activeSession.agent.convertToLlm([
-      {
-        role: "user",
-        content: [{ type: "text", text: "Current ask" }],
-        timestamp: preparedTimestamp + 60_000,
-      },
+      userMessage("Current ask", preparedTimestamp + 60_000),
     ]);
 
     expect((converted[0] as { content?: unknown }).content).toBe(
@@ -266,44 +271,16 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
   });
 
   it("retains sender projection for earlier in-memory turns after a queued turn", async () => {
-    const initialRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "The launch is Friday" }],
-      timestamp: 1,
-    } as AgentMessage;
-    const queuedRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "I can present it" }],
-      timestamp: 2,
-    } as AgentMessage;
+    const initialRuntime = userMessage("The launch is Friday");
+    const queuedRuntime = userMessage("I can present it", 2);
     const { activeSession } = createActiveSession();
-    await prepareEmbeddedAttemptSessionBoundary({
+    await prepareBoundary({
       activeSession,
       attempt: { sessionId: "session-boundary", prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [
-        {
-          runtimeMessage: initialRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "The launch is Friday",
-            timestamp: 1,
-            __openclaw: { senderId: "alice-id", senderName: "Alice" },
-          } as AgentMessage,
-        },
-        {
-          runtimeMessage: queuedRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "I can present it",
-            timestamp: 2,
-            __openclaw: { senderId: "bob-id", senderName: "Bob" },
-          } as AgentMessage,
-        },
+        senderContext(initialRuntime, "The launch is Friday", "Alice", "alice-id"),
+        senderContext(queuedRuntime, "I can present it", "Bob", "bob-id"),
       ],
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
     });
 
     const converted = await activeSession.agent.convertToLlm([initialRuntime, queuedRuntime]);
@@ -313,44 +290,16 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
   });
 
   it("reserves exact pairings before matching duplicate timestamp and text", async () => {
-    const firstRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "same" }],
-      timestamp: 1,
-    } as AgentMessage;
-    const secondRuntime = {
-      role: "user",
-      content: [{ type: "text", text: "same" }],
-      timestamp: 1,
-    } as AgentMessage;
+    const firstRuntime = userMessage("same");
+    const secondRuntime = userMessage("same");
     const { activeSession } = createActiveSession();
-    await prepareEmbeddedAttemptSessionBoundary({
+    await prepareBoundary({
       activeSession,
       attempt: { sessionId: "session-boundary", prompt: "same" },
       getUserTranscriptContexts: () => [
-        {
-          runtimeMessage: secondRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "same",
-            timestamp: 1,
-            __openclaw: { senderName: "Bob" },
-          } as AgentMessage,
-        },
-        {
-          runtimeMessage: firstRuntime,
-          transcriptMessage: {
-            role: "user",
-            content: "same",
-            timestamp: 1,
-            __openclaw: { senderName: "Alice" },
-          } as AgentMessage,
-        },
+        senderContext(secondRuntime, "same", "Bob"),
+        senderContext(firstRuntime, "same", "Alice"),
       ],
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
     });
 
     const converted = await activeSession.agent.convertToLlm([firstRuntime, secondRuntime]);

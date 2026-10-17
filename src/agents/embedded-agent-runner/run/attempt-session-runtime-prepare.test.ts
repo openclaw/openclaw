@@ -71,6 +71,12 @@ type PrepareInput = Parameters<typeof prepareEmbeddedAttemptSessionRuntime>[0];
 
 function createFixture() {
   const order: string[] = [];
+  const record =
+    <T>(event: string, value: T) =>
+    () => {
+      order.push(event);
+      return value;
+    };
   const activeMarker = { type: "custom", customType: "openclaw.cache-ttl", data: "active" };
   const sessionManager = {
     kind: "manager",
@@ -141,38 +147,18 @@ function createFixture() {
     input.onSystemPromptChanged("runtime prompt");
     return agentSession;
   });
-  mocks.prepareSessionBoundary.mockImplementation(() => {
-    order.push("boundary");
-    return boundary;
-  });
-  mocks.retainSessionPromptState.mockImplementation(() => {
-    order.push("prompt-state");
-    return promptStateLease;
-  });
-  mocks.createSessionSettleTracker.mockImplementation(() => {
-    order.push("settle-tracker");
-    return settleTracker;
-  });
-  mocks.installContextGuards.mockImplementation(() => {
-    order.push("context-guards");
-    return contextGuards;
-  });
-  mocks.createCacheTrace.mockImplementation(() => {
-    order.push("cache-trace");
-    return cacheTrace;
-  });
-  mocks.createAnthropicPayloadLogger.mockImplementation(() => {
-    order.push("payload-logger");
-    return anthropicPayloadLogger;
-  });
-  mocks.prepareTrajectory.mockImplementation(async () => {
-    order.push("trajectory");
-    return trajectoryRecorder;
-  });
-  mocks.prepareTransport.mockImplementation(async () => {
-    order.push("transport");
-    return transport;
-  });
+  mocks.prepareSessionBoundary.mockImplementation(record("boundary", boundary));
+  mocks.retainSessionPromptState.mockImplementation(record("prompt-state", promptStateLease));
+  mocks.createSessionSettleTracker.mockImplementation(record("settle-tracker", settleTracker));
+  mocks.installContextGuards.mockImplementation(record("context-guards", contextGuards));
+  mocks.createCacheTrace.mockImplementation(record("cache-trace", cacheTrace));
+  mocks.createAnthropicPayloadLogger.mockImplementation(
+    record("payload-logger", anthropicPayloadLogger),
+  );
+  mocks.prepareTrajectory.mockImplementation(async () =>
+    record("trajectory", trajectoryRecorder)(),
+  );
+  mocks.prepareTransport.mockImplementation(async () => record("transport", transport)());
 
   const resourceEvents: Record<string, string> = {
     promptStateLease: "own-prompt-state",
@@ -275,28 +261,53 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+function createPromptFixture(sessionId: string, beforeAppend = () => {}, afterAppend = () => {}) {
+  const fixture = createFixture();
+  fixture.transcriptPolicy.inHistorySystemUpdates = true;
+  const entries: SessionEntry[] = [];
+  const appendCustomEntryAsync = async (customType: string, data: unknown) => {
+    beforeAppend();
+    entries.push({
+      type: "custom",
+      customType,
+      data,
+      id: `marker-${entries.length}`,
+      parentId: null,
+      timestamp: "2026-10-01T00:00:00Z",
+    });
+    afterAppend();
+  };
+  Object.assign(fixture.sessionManager, {
+    getBranch: () => entries,
+    getToolResultProjectionEntries: () => entries,
+    getSessionTarget: () => undefined,
+    getSessionId: () => sessionId,
+    appendCustomEntryAsync,
+  });
+  const agentState = { messages: [] as ReturnType<typeof buildSystemUpdateMessage>[] };
+  Object.assign(fixture.activeSession, { agent: { state: agentState } });
+  Object.defineProperty(fixture.activeSession, "messages", { get: () => agentState.messages });
+  const appendUpdate = (
+    id: string,
+    update: NonNullable<ReturnType<typeof buildSystemUpdateMessage>>,
+  ) => {
+    entries.push({
+      type: "custom_message",
+      customType: update.customType,
+      content: update.content,
+      details: update.details,
+      display: false,
+      id,
+      parentId: null,
+      timestamp: "2026-10-01T00:00:00Z",
+    });
+  };
+  return { ...fixture, entries, agentState, appendCustomEntryAsync, appendUpdate };
+}
+
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
   it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
-    const fixture = createFixture();
-    fixture.transcriptPolicy.inHistorySystemUpdates = true;
-    const entries: SessionEntry[] = [];
-    const appendCustomEntryAsync = async (customType: string, data: unknown) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data,
-        id: `profile-marker-${entries.length}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    };
-    Object.assign(fixture.sessionManager, {
-      getBranch: () => entries,
-      getSessionTarget: () => undefined,
-      getSessionId: () => "shared-profile-session",
-      appendCustomEntryAsync,
-    });
-    Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+    const fixture = createPromptFixture("shared-profile-session");
     mocks.retainSessionPromptState.mockImplementation(() => ({
       state: { toolResults: { projected: true } },
       [Symbol.dispose]: () => {},
@@ -309,7 +320,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       expect(prepared.restart).toBe(true);
       expect(prepared.systemPrompt).toBe(prompt);
       prepared.commit();
-      await persistSessionSystemPrompt(runtime.sessionPromptState, appendCustomEntryAsync);
+      await persistSessionSystemPrompt(runtime.sessionPromptState, fixture.appendCustomEntryAsync);
     }
   });
 
@@ -391,36 +402,21 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
   it.each(["unadmitted", "append-rejected", "committed-then-rejected"] as const)(
     "re-pins the current rendering after a route retirement is %s",
     async (interruption) => {
-      const fixture = createFixture();
-      fixture.transcriptPolicy.inHistorySystemUpdates = true;
-      const entries: SessionEntry[] = [];
       let interruptRetirement = false;
-      const appendCustomEntryAsync = async (customType: string, data: unknown) => {
-        if (interruptRetirement && interruption === "append-rejected") {
-          throw new Error("retirement append rejected");
-        }
-        entries.push({
-          type: "custom",
-          customType,
-          data,
-          id: `marker-${entries.length}`,
-          parentId: null,
-          timestamp: "2026-10-01T00:00:00Z",
-        });
-        if (interruptRetirement && interruption === "committed-then-rejected") {
-          throw new Error("retirement append committed before rejection");
-        }
-      };
-      Object.assign(fixture.sessionManager, {
-        getBranch: () => entries,
-        getToolResultProjectionEntries: () => entries,
-        getSessionTarget: () => undefined,
-        getSessionId: () => "interrupted-route-retirement",
-        appendCustomEntryAsync,
-      });
-      const agentState = { messages: [] as ReturnType<typeof buildSystemUpdateMessage>[] };
-      Object.assign(fixture.activeSession, { agent: { state: agentState } });
-      Object.defineProperty(fixture.activeSession, "messages", { get: () => agentState.messages });
+      const fixture = createPromptFixture(
+        "interrupted-route-retirement",
+        () => {
+          if (interruptRetirement && interruption === "append-rejected") {
+            throw new Error("retirement append rejected");
+          }
+        },
+        () => {
+          if (interruptRetirement && interruption === "committed-then-rejected") {
+            throw new Error("retirement append committed before rejection");
+          }
+        },
+      );
+      const { entries, agentState, appendCustomEntryAsync, appendUpdate } = fixture;
       const routeR = fixture.input.attempt.modelId;
       const firstRuntime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
       const initial = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nA");
@@ -428,16 +424,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
       const changed = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
       changed.commit();
-      entries.push({
-        type: "custom_message",
-        customType: changed.update!.customType,
-        content: changed.update!.content,
-        details: changed.update!.details,
-        display: false,
-        id: "update-B",
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
+      appendUpdate("update-B", changed.update!);
       agentState.messages.push(changed.update!);
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
       expect(changed.systemPrompt).toBe("## Policy\nA");
@@ -469,39 +456,17 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
   );
 
   it("keeps permission admission retryable and restores a fresh rendering of the pinned policy", async () => {
-    const fixture = createFixture();
-    fixture.transcriptPolicy.inHistorySystemUpdates = true;
-    const entries: SessionEntry[] = [];
-    const appendCustomEntryAsync = async (customType: string, data: unknown) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data,
-        id: `marker-${entries.length}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    };
-    Object.assign(fixture.sessionManager, {
-      getBranch: () => entries,
-      getToolResultProjectionEntries: () => entries,
-      getSessionTarget: () => undefined,
-      getSessionId: () => "restart-notice",
-      appendCustomEntryAsync,
-    });
+    const fixture = createPromptFixture("restart-notice");
+    const { entries, agentState, appendCustomEntryAsync, appendUpdate } = fixture;
     const runtimeContext = buildRuntimeContextCustomMessage(
       "Retained turn facts",
       undefined,
       true,
     )!;
-    const agentState = {
-      messages: [
-        runtimeContext,
-        buildSystemUpdateMessage("Retired override", "prompt-update", false),
-      ],
-    };
-    Object.assign(fixture.activeSession, { agent: { state: agentState } });
-    Object.defineProperty(fixture.activeSession, "messages", { get: () => agentState.messages });
+    agentState.messages = [
+      runtimeContext,
+      buildSystemUpdateMessage("Retired override", "prompt-update", false),
+    ];
     const permissionNotice = "## Permission change\nWrite access was removed.";
     const prompt = `## Tools\nread\n<!-- openclaw:attempt:PERMISSION -->\n${permissionNotice}\n<!-- /openclaw:attempt:PERMISSION -->`;
     const runtime = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
@@ -514,16 +479,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const retry = await prepare(prompt);
     expect(retry.update?.content).toBe(permissionNotice);
     retry.commit();
-    entries.push({
-      type: "custom_message",
-      customType: retry.update!.customType,
-      content: retry.update!.content,
-      details: retry.update!.details,
-      display: false,
-      id: "admitted-notice",
-      parentId: null,
-      timestamp: "2026-10-01T00:00:00Z",
-    });
+    appendUpdate("admitted-notice", retry.update!);
     await persistSessionSystemPrompt(runtime.sessionPromptState, appendCustomEntryAsync);
     expect(buildSessionContext(entries).messages).toContainEqual(
       expect.objectContaining({ role: "custom", content: permissionNotice }),

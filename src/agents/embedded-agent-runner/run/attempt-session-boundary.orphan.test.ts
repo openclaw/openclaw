@@ -48,6 +48,8 @@ vi.mock("node:worker_threads", async () =>
 );
 
 const observer = useReconcileWorkerObserver();
+type BoundaryInput = Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
+type UserTurnRecorder = NonNullable<BoundaryInput["attempt"]["userTurnTranscriptRecorder"]>;
 
 async function withPersistedOrphanBoundary(
   options: {
@@ -62,7 +64,7 @@ async function withPersistedOrphanBoundary(
     recoveryNotice?: "tail" | "before-metadata";
   },
   run: (fixture: {
-    input: Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
+    input: BoundaryInput;
     manager: ReturnType<typeof guardSessionManager>;
     orphanId: string;
     target: NonNullable<ReturnType<SessionManager["getSessionTarget"]>>;
@@ -446,180 +448,152 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
     );
   });
 
-  it.each([{ parent: false, metadata: true }])(
-    "keeps the repaired orphan on the canonical branch for later turns: %j",
-    async (options) => {
-      await withPersistedOrphanBoundary(
-        { ...options, restartRecovery: true, suppressNextUserMessagePersistence: true },
-        async ({ input, manager, orphanId, target }) => {
-          const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
-          expect(boundary.orphanRepair?.removeLeaf).toBe(false);
-          expect(manager.getBranch().map((entry) => entry.id)).toContain(orphanId);
-          const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
-          expect(reopened.getBranch().map((entry) => entry.id)).toContain(orphanId);
-          expect(loadTranscriptEventsSync(target)).toEqual(
-            expect.arrayContaining([expect.objectContaining({ id: orphanId })]),
-          );
-          // This turn's assembled messages omit the orphan (folded into the prompt)
-          // while the session tree still points at it for subsequent turns.
-          expect(
-            input.activeSession.agent.state.messages.some((message) => {
-              const content = (message as { content?: unknown }).content;
-              return content === "orphan wake" || JSON.stringify(content).includes("orphan wake");
-            }),
-          ).toBe(false);
-          const leafBeforeAppend = manager.getLeafId();
-          const appended = manager.appendMessageWithTranscriptAnchor(
-            makeAssistantMessageFixture({
-              content: [{ type: "text", text: "recovery reply" }],
-              stopReason: "stop",
-              timestamp: 2,
-            }),
-          );
-          expect(manager.getEntry(appended.entryId)?.parentId).toBe(leafBeforeAppend);
-          expect(manager.getBranch().map((entry) => entry.id)).toEqual(
-            expect.arrayContaining([orphanId, appended.entryId]),
-          );
+  it("keeps the repaired orphan on the canonical branch for later turns", async () => {
+    await withPersistedOrphanBoundary(
+      {
+        parent: false,
+        metadata: true,
+        restartRecovery: true,
+        suppressNextUserMessagePersistence: true,
+      },
+      async ({ input, manager, orphanId, target }) => {
+        const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+        expect(boundary.orphanRepair?.removeLeaf).toBe(false);
+        expect(manager.getBranch().map((entry) => entry.id)).toContain(orphanId);
+        const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
+        expect(reopened.getBranch().map((entry) => entry.id)).toContain(orphanId);
+        expect(loadTranscriptEventsSync(target)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: orphanId })]),
+        );
+        // This turn's assembled messages omit the orphan (folded into the prompt)
+        // while the session tree still points at it for subsequent turns.
+        expect(
+          input.activeSession.agent.state.messages.some((message) => {
+            const content = (message as { content?: unknown }).content;
+            return content === "orphan wake" || JSON.stringify(content).includes("orphan wake");
+          }),
+        ).toBe(false);
+        const leafBeforeAppend = manager.getLeafId();
+        const appended = manager.appendMessageWithTranscriptAnchor(
+          makeAssistantMessageFixture({
+            content: [{ type: "text", text: "recovery reply" }],
+            stopReason: "stop",
+            timestamp: 2,
+          }),
+        );
+        expect(manager.getEntry(appended.entryId)?.parentId).toBe(leafBeforeAppend);
+        expect(manager.getBranch().map((entry) => entry.id)).toEqual(
+          expect.arrayContaining([orphanId, appended.entryId]),
+        );
+      },
+    );
+  });
+
+  it("preserves the admitted current user when recorder state is lost on restart", async () => {
+    const currentUser = {
+      role: "user" as const,
+      content: "current prompt",
+      idempotencyKey: "current-run:user",
+      timestamp: 1,
+    };
+    const { activeSession } = createActiveSession([]);
+    const branchAsync = vi.fn(async () => undefined);
+    const resetLeafAsync = vi.fn(async () => undefined);
+    const setNextUserMessagePersistence = vi.fn();
+    const onUserMessagePersistenceInvalidated = vi.fn();
+    const sessionManager = createSessionManager({
+      branchAsync,
+      resetLeafAsync,
+      setNextUserMessagePersistence,
+      getLeafEntry: () => ({
+        id: "current-user",
+        parentId: "previous-assistant",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        type: "message",
+        message: currentUser,
+      }),
+    });
+    const recorder = {
+      hasPersisted: () => false,
+    } as UserTurnRecorder;
+    const boundary = await prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        sessionId: "session-boundary",
+        onUserMessagePersistenceInvalidated,
+        prompt: "current prompt",
+        userTurnTranscriptRecorder: recorder,
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: currentUser,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+    expect(boundary.orphanRepair).toBeUndefined();
+    expect(activeSession.agent.state.messages).toEqual([]);
+    expect(branchAsync).not.toHaveBeenCalled();
+    expect(resetLeafAsync).not.toHaveBeenCalled();
+    expect(setNextUserMessagePersistence).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+  });
+
+  it("handles a different durable user leaf without current-turn exclusion", async () => {
+    const currentUser = {
+      role: "user" as const,
+      content: "current prompt",
+      idempotencyKey: "current-run:user",
+      excludeFromContext: false,
+      timestamp: 2,
+    };
+    const repairedMessages: AgentMessage[] = [currentUser];
+    const { activeSession } = createActiveSession([]);
+    const branchAsync = vi.fn(async () => undefined);
+    const setNextUserMessagePersistence = vi.fn();
+    const onUserMessagePersistenceInvalidated = vi.fn();
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => ({
+        id: "orphan-user",
+        parentId: "previous-assistant",
+        timestamp: "2026-07-13T00:00:00.000Z",
+        type: "message",
+        message: {
+          role: "user",
+          content: "old prompt",
+          idempotencyKey: "previous-run:user",
+          timestamp: 1,
         },
-      );
-    },
-  );
+      }),
+      branchAsync,
+      setNextUserMessagePersistence,
+      buildSessionContext: () => ({ messages: repairedMessages }),
+    });
+    const recorder = {
+      getPersistedMessage: () => currentUser,
+      hasPersisted: () => true,
+    } as unknown as UserTurnRecorder;
 
-  it.each([
-    {
-      name: "recorder state is lost on restart",
-      prepared: true,
-      recorded: false,
-      persisted: false,
-    },
-  ])(
-    "preserves the admitted current user when $name",
-    async ({ prepared, recorded, persisted }) => {
-      const currentUser = {
-        role: "user" as const,
-        content: "current prompt",
-        idempotencyKey: "current-run:user",
-        timestamp: 1,
-      };
-      const { activeSession } = createActiveSession([]);
-      const branchAsync = vi.fn(async () => undefined);
-      const resetLeafAsync = vi.fn(async () => undefined);
-      const setNextUserMessagePersistence = vi.fn();
-      const onUserMessagePersistenceInvalidated = vi.fn();
-      const sessionManager = createSessionManager({
-        branchAsync,
-        resetLeafAsync,
-        setNextUserMessagePersistence,
-        getLeafEntry: () => ({
-          id: "current-user",
-          parentId: "previous-assistant",
-          timestamp: "2026-07-13T00:00:00.000Z",
-          type: "message",
-          message: currentUser,
-        }),
-      });
-      const recorder = {
-        hasPersisted: () => persisted,
-        ...(recorded ? { getPersistedMessage: () => currentUser } : {}),
-      } as NonNullable<
-        Parameters<
-          typeof prepareEmbeddedAttemptSessionBoundary
-        >[0]["attempt"]["userTurnTranscriptRecorder"]
-      >;
-      const boundary = await prepareEmbeddedAttemptSessionBoundary({
-        activeSession,
-        attempt: {
-          sessionId: "session-boundary",
-          onUserMessagePersistenceInvalidated,
-          prompt: "current prompt",
-          userTurnTranscriptRecorder: recorder,
-        },
-        getUserTranscriptContexts: () => undefined,
-        isRawModelRun: false,
-        preparedUserTurnMessage: prepared ? currentUser : undefined,
-        sessionManager,
-        setActiveSessionSystemPrompt: vi.fn(),
-      });
-      expect(boundary.orphanRepair).toBeUndefined();
-      expect(activeSession.agent.state.messages).toEqual([]);
-      expect(branchAsync).not.toHaveBeenCalled();
-      expect(resetLeafAsync).not.toHaveBeenCalled();
-      expect(setNextUserMessagePersistence).not.toHaveBeenCalled();
-      expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
-    },
-  );
+    const boundary = await prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: {
+        sessionId: "session-boundary",
+        onUserMessagePersistenceInvalidated,
+        prompt: "current prompt",
+        userTurnTranscriptRecorder: recorder,
+      },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
 
-  it.each([false])(
-    "handles a different durable user leaf with current-turn exclusion %s",
-    async (excludeFromContext) => {
-      const currentUser = {
-        role: "user" as const,
-        content: "current prompt",
-        idempotencyKey: "current-run:user",
-        excludeFromContext,
-        timestamp: 2,
-      };
-      const repairedMessages: AgentMessage[] = [currentUser];
-      const { activeSession } = createActiveSession([]);
-      const branchAsync = vi.fn(async () => undefined);
-      const setNextUserMessagePersistence = vi.fn();
-      const onUserMessagePersistenceInvalidated = vi.fn();
-      const sessionManager = createSessionManager({
-        getLeafEntry: () => ({
-          id: "orphan-user",
-          parentId: "previous-assistant",
-          timestamp: "2026-07-13T00:00:00.000Z",
-          type: "message",
-          message: {
-            role: "user",
-            content: "old prompt",
-            idempotencyKey: "previous-run:user",
-            timestamp: 1,
-          },
-        }),
-        branchAsync,
-        setNextUserMessagePersistence,
-        buildSessionContext: () => ({ messages: repairedMessages }),
-      });
-      const recorder = {
-        getPersistedMessage: () => currentUser,
-        hasPersisted: () => true,
-      } as unknown as NonNullable<
-        Parameters<
-          typeof prepareEmbeddedAttemptSessionBoundary
-        >[0]["attempt"]["userTurnTranscriptRecorder"]
-      >;
-
-      const boundary = await prepareEmbeddedAttemptSessionBoundary({
-        activeSession,
-        attempt: {
-          sessionId: "session-boundary",
-          onUserMessagePersistenceInvalidated,
-          prompt: "current prompt",
-          userTurnTranscriptRecorder: recorder,
-        },
-        getUserTranscriptContexts: () => undefined,
-        isRawModelRun: false,
-        preparedUserTurnMessage: undefined,
-        sessionManager,
-        setActiveSessionSystemPrompt: vi.fn(),
-      });
-
-      if (excludeFromContext) {
-        expect(boundary.orphanRepair).toBeUndefined();
-        expect(branchAsync).not.toHaveBeenCalled();
-        expect(setNextUserMessagePersistence).not.toHaveBeenCalled();
-        expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
-        expect(activeSession.agent.state.messages).toEqual([]);
-      } else {
-        expect(boundary.orphanRepair?.removeLeaf).toBe(true);
-        expect(branchAsync).toHaveBeenCalledWith("previous-assistant");
-        expect(setNextUserMessagePersistence).toHaveBeenCalledExactlyOnceWith("normal");
-        expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
-        expect(activeSession.agent.state.messages).toEqual(repairedMessages);
-      }
-    },
-  );
+    expect(boundary.orphanRepair?.removeLeaf).toBe(true);
+    expect(branchAsync).toHaveBeenCalledWith("previous-assistant");
+    expect(setNextUserMessagePersistence).toHaveBeenCalledExactlyOnceWith("normal");
+    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
+    expect(activeSession.agent.state.messages).toEqual(repairedMessages);
+  });
 
   it("keeps failed-dispatch user input through repeated internal continuations", async () => {
     await withPersistedOrphanBoundary(
@@ -664,39 +638,29 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
     );
   });
 
-  it.each([
-    {
-      name: "an internal retry after the admitted user was persisted",
-      suppressNextUserMessagePersistence: true,
-      internalContinuation: true,
-    },
-  ])("keeps one canonical user turn for $name", async (testCase) => {
-    const { suppressNextUserMessagePersistence, internalContinuation } = testCase;
+  it("keeps one canonical user turn for an internal retry after the admitted user was persisted", async () => {
     const recoveryPrompt = "gateway restart recovery";
     await withPersistedOrphanBoundary(
       {
         parent: true,
         metadata: true,
-        restartRecovery: suppressNextUserMessagePersistence && !internalContinuation,
-        suppressNextUserMessagePersistence,
-        idempotencyKey: internalContinuation ? "orphan-projection:user" : undefined,
+        suppressNextUserMessagePersistence: true,
+        idempotencyKey: "orphan-projection:user",
       },
       async ({ input, manager, orphanId, target }) => {
         input.attempt.prompt = recoveryPrompt;
-        if (internalContinuation) {
-          const persistedUser = manager
-            .buildSessionContext()
-            .messages.find((message) => message.role === "user");
-          expect(persistedUser).toBeDefined();
-          Object.assign(input.attempt, { skipPreparedUserTurnMessage: true });
-          input.attempt.userTurnTranscriptRecorder = {
-            hasPersisted: () => true,
-            getPersistedMessage: () => persistedUser,
-          } as NonNullable<typeof input.attempt.userTurnTranscriptRecorder>;
-        }
+        const persistedUser = manager
+          .buildSessionContext()
+          .messages.find((message) => message.role === "user");
+        expect(persistedUser).toBeDefined();
+        Object.assign(input.attempt, { skipPreparedUserTurnMessage: true });
+        input.attempt.userTurnTranscriptRecorder = {
+          hasPersisted: () => true,
+          getPersistedMessage: () => persistedUser,
+        } as NonNullable<typeof input.attempt.userTurnTranscriptRecorder>;
         const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
 
-        expect(boundary.orphanRepair?.removeLeaf).toBe(!suppressNextUserMessagePersistence);
+        expect(boundary.orphanRepair?.removeLeaf).toBe(false);
         expect(boundary.orphanRepair?.contextEnginePrompt).toContain("orphan wake");
         expect(boundary.orphanRepair?.contextEnginePrompt).toContain(recoveryPrompt);
         const mergedPrompt = boundary.orphanRepair!.contextEnginePrompt;
@@ -705,9 +669,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
           content: mergedPrompt,
           timestamp: 3,
         });
-        expect(typeof appendedUser).toBe(
-          suppressNextUserMessagePersistence ? "undefined" : "string",
-        );
+        expect(typeof appendedUser).toBe("undefined");
         manager.appendMessage(
           makeAssistantMessageFixture({
             content: [{ type: "text", text: "recovery reply" }],
@@ -717,13 +679,11 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         );
 
         const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
-        expect(reopened.getBranch().some((entry) => entry.id === orphanId)).toBe(
-          suppressNextUserMessagePersistence,
-        );
+        expect(reopened.getBranch().some((entry) => entry.id === orphanId)).toBe(true);
         expect(reopened.buildSessionContext().messages).toMatchObject([
           {
             role: "user",
-            content: suppressNextUserMessagePersistence ? "orphan wake" : mergedPrompt,
+            content: "orphan wake",
           },
           { role: "assistant", content: [{ type: "text", text: "recovery reply" }] },
         ]);

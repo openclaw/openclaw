@@ -42,6 +42,18 @@ import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+function mockReplayAnswer(text: string) {
+  streamMocks.streamSimple.mockImplementation((model) =>
+    createAssistantResultStream(createAssistant(model, [{ type: "text", text }])),
+  );
+}
+
+function currentUsers<T extends { role: string; content: unknown }>(messages: T[], prompt: string) {
+  return messages.filter(
+    (message) => message.role === "user" && JSON.stringify(message.content).includes(prompt),
+  );
+}
+
 function expectCapturedCurrentUserPrefix(
   before: ReturnType<typeof loadTranscriptEventsSync>,
   after: ReturnType<typeof loadTranscriptEventsSync>,
@@ -145,11 +157,7 @@ describe("interrupted canonical user replay", () => {
         async (fixture) => {
           const before = loadTranscriptEventsSync(fixture.target);
           await withReplaySession(fixture, false, async (session, submit) => {
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Continued after progress" }]),
-              ),
-            );
+            mockReplayAnswer("Continued after progress");
             await submit();
             if (!resumes) {
               expect(streamMocks.streamSimple).not.toHaveBeenCalled();
@@ -333,22 +341,12 @@ describe("interrupted canonical user replay", () => {
           const before = loadTranscriptEventsSync(fixture.target);
           await withReplaySession(fixture, appendOnly, async (session, submit) => {
             expect(fixture.attempt.userTurnTranscriptRecorder!.hasPersisted()).toBe(true);
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Continued from completed work" }]),
-              ),
-            );
+            mockReplayAnswer("Continued from completed work");
             await submit();
             expect(Reflect.get(session.messages.at(-1)!, "errorMessage")).toBeUndefined();
             expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
             const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
-            expect(
-              messages.filter(
-                (message: { role: string; content: unknown }) =>
-                  message.role === "user" &&
-                  JSON.stringify(message.content).includes(fixture.attempt.prompt),
-              ),
-            ).toHaveLength(1);
+            expect(currentUsers(messages, fixture.attempt.prompt)).toHaveLength(1);
             if (toolProgress) {
               expect(JSON.stringify(messages)).not.toContain("Nested read completed");
               expect(messages).toContainEqual(
@@ -398,11 +396,7 @@ describe("interrupted canonical user replay", () => {
         const persisted = vi.fn();
         fixture.attempt.onUserMessagePersisted = persisted;
         await withReplaySession(fixture, true, async (_session, submit) => {
-          streamMocks.streamSimple.mockImplementation((model) =>
-            createAssistantResultStream(
-              createAssistant(model, [{ type: "text", text: "Continued from completed work" }]),
-            ),
-          );
+          mockReplayAnswer("Continued from completed work");
           await submit();
         });
         // Retries and fallbacks skip re-appending only after this report. A
@@ -434,11 +428,7 @@ describe("interrupted canonical user replay", () => {
                   input: { text: queuedText, timestamp: 2, idempotencyKey: "queued-user:user" },
                 })
               : undefined;
-          streamMocks.streamSimple.mockImplementation((model) =>
-            createAssistantResultStream(
-              createAssistant(model, [{ type: "text", text: "Both requests handled" }]),
-            ),
-          );
+          mockReplayAnswer("Both requests handled");
           try {
             if (recorder) {
               await recorder.stageApproved!({
@@ -461,13 +451,7 @@ describe("interrupted canonical user replay", () => {
               fixture,
             );
             for (const [, context] of streamMocks.streamSimple.mock.calls) {
-              expect(
-                context.messages.filter(
-                  (message: { role: string; content: unknown }) =>
-                    message.role === "user" &&
-                    JSON.stringify(message.content).includes(fixture.attempt.prompt),
-                ),
-              ).toHaveLength(1);
+              expect(currentUsers(context.messages, fixture.attempt.prompt)).toHaveLength(1);
             }
             expect(
               SessionManager.open(fixture.target)
@@ -490,52 +474,41 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
-  it.each([false])(
-    "hydrates one current user through the built-in owner with interruption %s",
-    async (interrupted) => {
-      await withInterruptedTurn(
-        false,
-        async (fixture) => {
-          const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
-          const before = loadTranscriptEventsSync(fixture.target);
-          await withReplaySession(
-            fixture,
-            false,
-            async (session, submit) => {
-              streamMocks.streamSimple.mockImplementation((model) =>
-                createAssistantResultStream(
-                  createAssistant(model, [{ type: "text", text: "Image turn recovered" }]),
-                ),
-              );
-              await submit();
-              expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-              const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
-              const users = messages.filter(
-                (message: { role: string; content: unknown }) =>
-                  message.role === "user" &&
-                  JSON.stringify(message.content).includes(fixture.attempt.prompt),
-              );
-              expect(users).toHaveLength(1);
-              expect(users[0]?.content).toContainEqual(image);
-              expectCapturedCurrentUserPrefix(
-                before,
-                loadTranscriptEventsSync(fixture.target),
-                fixture,
-              );
-              expect(
-                SessionManager.open(fixture.target)
-                  .getBranch()
-                  .filter((entry) => entry.type === "message" && entry.message.role === "user"),
-              ).toHaveLength(1);
-              expect(session.getLastAssistantText()).toBe("Image turn recovered");
-            },
-            { images: finalizeRuntimePromptImages([{ image, factIndex: 0 }]).images },
-          );
-        },
-        { interruptedTurn: interrupted },
-      );
-    },
-  );
+  it("hydrates one current user through the built-in owner without interruption", async () => {
+    await withInterruptedTurn(
+      false,
+      async (fixture) => {
+        const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
+        const before = loadTranscriptEventsSync(fixture.target);
+        await withReplaySession(
+          fixture,
+          false,
+          async (session, submit) => {
+            mockReplayAnswer("Image turn recovered");
+            await submit();
+            expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+            const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
+            const users = currentUsers(messages, fixture.attempt.prompt);
+            expect(users).toHaveLength(1);
+            expect(users[0]?.content).toContainEqual(image);
+            expectCapturedCurrentUserPrefix(
+              before,
+              loadTranscriptEventsSync(fixture.target),
+              fixture,
+            );
+            expect(
+              SessionManager.open(fixture.target)
+                .getBranch()
+                .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+            ).toHaveLength(1);
+            expect(session.getLastAssistantText()).toBe("Image turn recovered");
+          },
+          { images: finalizeRuntimePromptImages([{ image, factIndex: 0 }]).images },
+        );
+      },
+      { interruptedTurn: false },
+    );
+  });
 
   it("preserves an existing user/carrier reasoning prefix during SDK replay", async () => {
     const manager = SessionManager.inMemory();
@@ -569,9 +542,7 @@ describe("interrupted canonical user replay", () => {
     const { session } = await createTestSession({ sessionManager: manager });
     const before = structuredClone(session.messages);
     const providerPrefix = await session.agent.convertToLlm(before);
-    streamMocks.streamSimple.mockImplementation((model) =>
-      createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Continued" }])),
-    );
+    mockReplayAnswer("Continued");
     try {
       await session.prompt("Rebuilt prompt", {
         persistedUserIdempotencyKey: user.idempotencyKey,
@@ -682,45 +653,28 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
-  it.each([{ ordering: "pre-core-compaction", appendOnly: false }])(
-    "replays the same interrupted turn after $ordering with append-only context $appendOnly",
-    async ({ ordering, appendOnly }) => {
-      await withInterruptedTurn(appendOnly, async (fixture) => {
-        if (ordering === "repeated-restart") {
-          const previous = guardSessionManager(SessionManager.open(fixture.target), {
-            runId: fixture.attempt.runId,
-          });
-          previous.appendMessage(
-            createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
-          );
-        }
-        let activeSession: AgentSession;
-        await withReplaySession(
-          fixture,
-          appendOnly,
-          async (session, submit) => {
-            activeSession = session;
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Recovered same turn" }]),
-              ),
-            );
-            await submit();
-            expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-            expect(session.getLastAssistantText()).toBe("Recovered same turn");
+  it("replays the same interrupted turn after pre-core compaction", async () => {
+    await withInterruptedTurn(false, async (fixture) => {
+      let activeSession: AgentSession;
+      await withReplaySession(
+        fixture,
+        false,
+        async (session, submit) => {
+          activeSession = session;
+          mockReplayAnswer("Recovered same turn");
+          await submit();
+          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+          expect(session.getLastAssistantText()).toBe("Recovered same turn");
+        },
+        {
+          recovery: "compaction",
+          beforeStart: async () => {
+            await activeSession.compact();
           },
-          ordering === "pre-core-compaction"
-            ? {
-                recovery: "compaction",
-                beforeStart: async () => {
-                  await activeSession.compact();
-                },
-              }
-            : {},
-        );
-      });
-    },
-  );
+        },
+      );
+    });
+  });
 
   it.each(
     (
@@ -834,11 +788,7 @@ describe("interrupted canonical user replay", () => {
                     },
               ),
             );
-            streamMocks.streamSimple.mockImplementation((model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Recovered after retry" }]),
-              ),
-            );
+            mockReplayAnswer("Recovered after retry");
             await submit();
             expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
             expect(session.getLastAssistantText()).toBe("Recovered after retry");
@@ -850,44 +800,32 @@ describe("interrupted canonical user replay", () => {
   );
 });
 
-it.each([
-  { kind: "explicit override", detached: true, fresh: false, explicit: "caller-cache-key" },
-])(
-  "derives boundary cache affinity from the prompt owner ($kind)",
-  async ({ detached, fresh, explicit }) => {
-    await withInterruptedTurn(
-      false,
-      async ({ attempt, target, prepare }) => {
-        const durable = SessionManager.open(target, attempt.workspaceDir);
-        const manager = !detached
-          ? durable
-          : fresh
-            ? SessionManager.inMemory(attempt.workspaceDir)
-            : SessionManager.fromEntries(
-                [durable.getHeader(), ...durable.getBranch()],
-                attempt.workspaceDir,
-              );
-        attempt.sessionManager = manager;
-        attempt.userTurnTranscriptRecorder = undefined;
-        attempt.sessionPersistence = detached ? "detached" : "durable";
-        attempt.promptCacheKey = explicit;
-        if (detached) {
-          attempt.sessionId = "private-helper-routing-identity";
-          attempt.sessionKey = "agent:main:internal-session-effects:cache-fixture";
-          attempt.sessionTarget = {
-            ...target,
-            sessionId: attempt.sessionId,
-            sessionKey: attempt.sessionKey,
-          };
-          attempt.sessionFile = attempt.sessionKey;
-        }
-        const expected = explicit ?? `${manager.getSessionId()}:${manager.getBoundaryCount()}`;
-        const before = loadTranscriptEventsSync(target);
-        await prepare();
-        expect(attempt.promptCacheKey).toBe(expected);
-        expect(loadTranscriptEventsSync(target)).toEqual(before);
-      },
-      { interruptedTurn: false },
-    );
-  },
-);
+it("honors explicit boundary cache affinity for a detached prompt owner", async () => {
+  await withInterruptedTurn(
+    false,
+    async ({ attempt, target, prepare }) => {
+      const durable = SessionManager.open(target, attempt.workspaceDir);
+      const manager = SessionManager.fromEntries(
+        [durable.getHeader(), ...durable.getBranch()],
+        attempt.workspaceDir,
+      );
+      attempt.sessionManager = manager;
+      attempt.userTurnTranscriptRecorder = undefined;
+      attempt.sessionPersistence = "detached";
+      attempt.promptCacheKey = "caller-cache-key";
+      attempt.sessionId = "private-helper-routing-identity";
+      attempt.sessionKey = "agent:main:internal-session-effects:cache-fixture";
+      attempt.sessionTarget = {
+        ...target,
+        sessionId: attempt.sessionId,
+        sessionKey: attempt.sessionKey,
+      };
+      attempt.sessionFile = attempt.sessionKey;
+      const before = loadTranscriptEventsSync(target);
+      await prepare();
+      expect(attempt.promptCacheKey).toBe("caller-cache-key");
+      expect(loadTranscriptEventsSync(target)).toEqual(before);
+    },
+    { interruptedTurn: false },
+  );
+});
