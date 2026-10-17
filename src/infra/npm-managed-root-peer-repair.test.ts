@@ -1,58 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
+import { describe, expect, it, vi } from "vitest";
 import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { repairManagedNpmRootOpenClawPeer } from "./npm-managed-root.js";
+import {
+  readManifest,
+  successfulSpawn,
+  useManagedNpmRootFixture,
+  writeFixtureJson,
+} from "./npm-managed-root.test-support.js";
 
-const fixtureRootTracker = createSuiteTempRootTracker({
-  prefix: "openclaw-npm-managed-root-",
-});
-const tempDirs: string[] = [];
-let npmConfigEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-const successfulSpawn = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-};
-
-async function makeTempRoot(): Promise<string> {
-  const dir = await fixtureRootTracker.make("case");
-  tempDirs.push(dir);
-  return dir;
-}
-
-beforeAll(async () => {
-  const fixtureRoot = await fixtureRootTracker.setup();
-  npmConfigEnvSnapshot = captureEnv(["NPM_CONFIG_GLOBALCONFIG"]);
-  const globalConfig = path.join(fixtureRoot, "global-npmrc");
-  await fs.writeFile(globalConfig, "", "utf8");
-  process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
-});
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
-afterAll(async () => {
-  npmConfigEnvSnapshot?.restore();
-  npmConfigEnvSnapshot = undefined;
-  await fixtureRootTracker.cleanup();
-});
+const makeTempRoot = useManagedNpmRootFixture();
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.lstat(targetPath)).rejects.toThrow(
     expect.objectContaining({ code: "ENOENT", path: targetPath, syscall: "lstat" }),
   );
-}
-
-async function writeFixtureJson(file: string, value: unknown): Promise<void> {
-  await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function writeManagedPeerMetadata(
@@ -176,11 +139,7 @@ describe("managed npm root peer repair", () => {
     }
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(
-      repairManagedNpmRootOpenClawPeer({
-        npmRoot,
-        packageRoot: hostPackageRoot,
-        runCommand,
-      }),
+      repairManagedNpmRootOpenClawPeer({ npmRoot, packageRoot: hostPackageRoot, runCommand }),
     ).resolves.toBe(linked);
     expect(runCommand).not.toHaveBeenCalled();
     await expect(
@@ -192,9 +151,9 @@ describe("managed npm root peer repair", () => {
       );
       await expectPeerMetadataRemoved(npmRoot, peerName, "1.4.69");
     } else {
-      await expect(
-        fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-      ).resolves.toMatchObject({ dependencies: { openclaw: version, [peerName]: "1.4.69" } });
+      await expect(readManifest(npmRoot)).resolves.toMatchObject({
+        dependencies: { openclaw: version, [peerName]: "1.4.69" },
+      });
     }
   });
 });
