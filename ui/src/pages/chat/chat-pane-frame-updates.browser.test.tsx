@@ -56,7 +56,10 @@ async function mountPane(presented = true) {
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
-      layout: { component: FrameLayout, props: { label: pane.paneLabel, id: pane.paneId } },
+      layout: {
+        component: FrameLayout,
+        props: { label: pane.history.catalogCursor ?? pane.paneLabel, id: pane.paneId },
+      },
     }),
     presentedChanged: () => {},
   });
@@ -73,6 +76,17 @@ async function mountPane(presented = true) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("batches a projected history change with a legacy invalidation into one frame", async () => {
+  const { pane, updates } = await mountPane();
+  await task(() => {
+    pane.history.catalogCursor = "projected history";
+    pane.invalidate();
+  });
+  await pane.updateComplete;
+  expect(pane.textContent).toContain("projected history");
+  expect(updates).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(

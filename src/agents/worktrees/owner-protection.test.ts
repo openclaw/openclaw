@@ -351,7 +351,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
   });
 
   it("classifies recent, idle, archived and missing owners through the async census", async () => {
-    const now = 1_800_000_000_000;
+    const now = Date.now();
     const entries = new Map<string, ResolvedSessionEntryStoreTarget>([
       ["live", target("live", { sessionId: "live", updatedAt: now - 1_000 })],
       ["idle", target("idle", { sessionId: "idle", updatedAt: now - IDLE_GC_MS - 1 })],
@@ -359,7 +359,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
       ["missing", { ...target("missing"), entry: undefined }],
     ]);
     readOwners.mockResolvedValue(entries);
-    const census = await createManagedWorktreeOwnerPolicy({}, () => now).prepareOwners(
+    const census = await createManagedWorktreeOwnerPolicy({}).prepareOwners(
       Array.from(entries.keys(), (ownerId) => ({ ...cleanupRecord, ownerId })),
     );
     expect(

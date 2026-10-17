@@ -12,6 +12,7 @@ import {
 import { renewAgentDatabaseMaintenanceAuthorityIfPresent } from "../state/openclaw-agent-db-lease.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { prepareTrajectoryPayload, trajectoryEventJsonSql } from "../trajectory/runtime-payload.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -33,14 +34,15 @@ type MediaMigrationDatabase = Pick<
 function forEachMediaEventBatch(params: {
   database: DatabaseSync;
   table: "trajectory_runtime_events" | "transcript_events";
-  legacyTextStorage?: boolean;
+  legacyTextStorage: boolean;
   visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => void;
 }): void {
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(params.database);
-  const eventJson =
-    params.table === "transcript_events" && !params.legacyTextStorage
+  const eventJson = params.legacyTextStorage
+    ? sql.ref<string>(`${params.table}.event_json`) // kysely-allow-raw: private historical TEXT-table union.
+    : params.table === "transcript_events"
       ? transcriptEventJsonSql(params.database)
-      : sql.ref<string>(`${params.table}.event_json`); // kysely-allow-raw: private TEXT-table union.
+      : trajectoryEventJsonSql(params.database);
   const query = db
     .selectFrom(params.table)
     .select(["session_id", "seq"])
@@ -179,6 +181,7 @@ function rewriteTrajectoryEventJson(eventJson: string, owner: string): string {
 export function scanTrajectoryRows(params: {
   database: DatabaseSync;
   pathname: string;
+  legacyTextStorage: boolean;
   beforeRewrite: () => void;
 }): number {
   const { database, pathname } = params;
@@ -187,6 +190,7 @@ export function scanTrajectoryRows(params: {
   forEachMediaEventBatch({
     database,
     table: "trajectory_runtime_events",
+    legacyTextStorage: params.legacyTextStorage,
     visit: (rows) => {
       for (const row of rows) {
         const rewrittenEventJson = rewriteTrajectoryEventJson(
@@ -202,7 +206,11 @@ export function scanTrajectoryRows(params: {
           database,
           db
             .updateTable("trajectory_runtime_events")
-            .set({ event_json: rewrittenEventJson })
+            .set(
+              params.legacyTextStorage
+                ? { event_json: rewrittenEventJson }
+                : prepareTrajectoryPayload(database, rewrittenEventJson),
+            )
             .where("session_id", "=", row.session_id)
             .where("seq", "=", row.seq),
         );

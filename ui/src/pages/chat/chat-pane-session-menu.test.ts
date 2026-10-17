@@ -423,7 +423,7 @@ describe("chat pane session menu boundary", () => {
       "openclaw-chat-header-session-menu",
     );
     expect(menu?.session.label).toBe("Retained conversation");
-    pane.catalogSession = {
+    pane.history.catalogSession = {
       threadId: "catalog",
       name: "Imported conversation",
       status: "idle",

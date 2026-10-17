@@ -9,5 +9,5 @@ export type CodexThreadRequestHandler = (
   request: CodexAppServerServerRequest,
   scope: CodexThreadRouteScope,
   signal: AbortSignal,
-  setExecutionTimeoutMs?: (timeoutMs: number) => void,
+  setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;

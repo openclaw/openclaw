@@ -1,3 +1,4 @@
+import { AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 
 /** Destination versions, declared only with proof through the complete migration runner. */
@@ -6,6 +7,11 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
   Readonly<Partial<Record<number, readonly string[]>>>
 > = {
   agent: {
+    [AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION]: [
+      "trajectory_runtime_events",
+      "sqlite_stat1",
+      "sqlite_stat4",
+    ],
     27: ["context_engine_turn_outbox", "sqlite_stat1", "sqlite_stat4"],
     28: [
       "transcript_event_identities",

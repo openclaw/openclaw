@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { recordUnwrittenWebhookCompletion } from "../commands/doctor/shared/legacy-webhook-pins.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -324,7 +323,11 @@ it.each(["no database", "empty database"])(
 
 it("keeps read-only completion when a managed config symlink selects a new generation", async () => {
   const { configPath, env, migrate } = await fixture();
-  const readOnlyEnv = { ...env, OPENCLAW_CONFIG_READONLY: "1" };
+  const readOnlyEnv = {
+    ...env,
+    OPENCLAW_STATE_DIR: path.dirname(configPath),
+    OPENCLAW_CONFIG_READONLY: "1",
+  };
   const config = channelConfig();
   const bytes = JSON.stringify(config);
   const firstGeneration = path.join(path.dirname(configPath), "generation-1.json");
@@ -334,9 +337,16 @@ it("keeps read-only completion when a managed config symlink selects a new gener
   await fs.symlink(firstGeneration, configPath, "file");
   const fresh = migrate(config, readOnlyEnv);
   expect(fresh.config.meta?.migrations?.webhookListeners).toBe(true);
-  expect(recordUnwrittenWebhookCompletion({ sourceConfig: config }, fresh, readOnlyEnv)).toBe(true);
+  expectUnchanged(
+    migrate(config, {
+      ...rehearsalEnv(readOnlyEnv, configPath),
+      OPENCLAW_UPDATE_IN_PROGRESS: "0",
+    }),
+    config,
+  );
+  expect(readConfigMachineState(`webhookListeners:${configPath}`, { env: readOnlyEnv })).toBe(true);
   expectUnchanged(migrate(config, readOnlyEnv), config);
-  expect((await beginGatewayBootLifecycle(env, 1_800_000_000_000)).id).toBeDefined();
+  expect((await beginGatewayBootLifecycle(readOnlyEnv, 1_800_000_000_000)).id).toBeDefined();
 
   await fs.unlink(configPath);
   await fs.symlink(nextGeneration, configPath, "file");

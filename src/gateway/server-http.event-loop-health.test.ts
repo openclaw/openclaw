@@ -1,5 +1,6 @@
 import { get } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { performance } from "node:perf_hooks";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -22,6 +23,8 @@ vi.mock("node:perf_hooks", async (importOriginal) => ({
     disable: () => true,
   }),
 }));
+
+afterEach(() => vi.restoreAllMocks());
 
 async function readJson(url: string): Promise<Record<string, unknown>> {
   const { statusCode, body: responseBody } = await new Promise<{
@@ -47,9 +50,9 @@ async function readJson(url: string): Promise<Record<string, unknown>> {
 describe("Gateway HTTP event-loop sampling", () => {
   it("retains a blocked request interval when readiness is read before the sampler resumes", async () => {
     const clock = createGatewaySchedulerClock();
+    vi.spyOn(performance, "now").mockImplementation(clock.clock.now);
     const monitor = createGatewayEventLoopHealthMonitor({
       scheduler: createTestGatewayScheduler(clock.clock),
-      now: clock.clock.now,
     });
     let blockNextRead = false;
     try {

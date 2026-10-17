@@ -153,6 +153,7 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
     try {
       projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       await projection.ensureMaterialized();
+      projection.describe(query);
       releaseForeground();
       await backfill.prepared;
       await sessions.patchSessionEntryCore(scope, () => ({ displayName: "Renamed while reading" }));
@@ -227,6 +228,8 @@ it("retains transcript previews across metadata edits and consumes committed app
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
+      await projection.ensureMaterialized();
+      projection.describe(query);
       await initial;
       // A user-only transcript needs one bounded read to establish assistant absence.
       await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(1));
@@ -295,6 +298,8 @@ it("reuses an unknown preview until a committed transcript watermark changes", a
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
+      await projection.ensureMaterialized();
+      projection.describe(query);
       await initial;
       expect(projection.capture(query)?.retainedDatabaseFacts?.transcriptPreview).toBeUndefined();
       expect(backfill).toHaveBeenCalledTimes(1);
@@ -355,6 +360,8 @@ it("keeps a committed append preview when an older background read finishes", as
     const backfill = holdBackfillPublication();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
+      await projection.ensureMaterialized();
+      projection.describe(query);
       expect((await backfill.prepared).lastMessagePreview).toBe("Older preview");
       await sessions.persistSessionTranscriptTurn(scope, {
         config: cfg,
@@ -425,12 +432,12 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
     };
     let reading: ReturnType<typeof listSessions> | undefined;
     try {
-      await backfill.prepared;
       await projection.ensureMaterialized();
       expect((await listSessions({ client, context, request })).sessions[0]).toMatchObject({
         label: "Original label",
         sharingRole: "member",
       });
+      await backfill.prepared;
       const readDatabases = history.withSessionHistoryWorkerDatabases;
       let reads = 0;
       vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
@@ -576,6 +583,8 @@ it("gives an in-flight Gateway request priority before starting legacy preview b
       () => projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
     );
     try {
+      await projection.ensureMaterialized();
+      projection.describe(query);
       await backgroundWaiting.promise;
       expect(sessions.loadSessionEntry(scope)).toEqual(before);
       expect(
