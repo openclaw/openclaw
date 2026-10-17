@@ -86,17 +86,19 @@ describe("doctor session snapshot stale runtime metadata", () => {
   let bundledSkillsDir = "";
   let stalePath = "";
   let storePath = "";
+  let currentSkillPath = "";
 
   beforeEach(async () => {
     note.mockClear();
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-session-snapshots-"));
     bundledSkillsDir = path.join(root, "current", "skills");
+    currentSkillPath = path.join(bundledSkillsDir, "doctor", "SKILL.md");
     stalePath = path.join(root, "old-runtime/node_modules/openclaw/skills/doctor/SKILL.md");
     storePath = path.join(root, "state/agents/main/sessions/sessions.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundledSkillsDir);
-    await fs.mkdir(path.join(bundledSkillsDir, "doctor"), { recursive: true });
-    await fs.writeFile(path.join(bundledSkillsDir, "doctor", "SKILL.md"), "# Doctor\n");
+    await fs.mkdir(path.dirname(currentSkillPath), { recursive: true });
+    await fs.writeFile(currentSkillPath, "# Doctor\n");
   });
 
   afterEach(async () => {
@@ -120,12 +122,8 @@ describe("doctor session snapshot stale runtime metadata", () => {
     });
 
     expect(findings).toEqual([
-      expectedIssue("agent:main", stalePath, path.join(bundledSkillsDir, "doctor", "SKILL.md")),
-      expectedIssue(
-        "agent:temp",
-        tempBackedPath,
-        path.join(bundledSkillsDir, "doctor", "SKILL.md"),
-      ),
+      expectedIssue("agent:main", stalePath, currentSkillPath),
+      expectedIssue("agent:temp", tempBackedPath, currentSkillPath),
     ]);
   });
 
@@ -142,7 +140,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
       sessionKey: "agent:main",
       field: "skillsSnapshot.prompt",
       cachedPath: stalePath,
-      expectedPath: path.join(bundledSkillsDir, "doctor", "SKILL.md"),
+      expectedPath: currentSkillPath,
     });
     expect(toHealthFinding(issue)).toMatchObject({
       checkId: "core/doctor/session-snapshots",
@@ -202,7 +200,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
   });
 
   it("scans resolvedSkills sourceInfo before normalization strips it", async () => {
-    const skill = resolvedSkill(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+    const skill = resolvedSkill(currentSkillPath);
     skill.sourceInfo.path = stalePath;
     skill.sourceInfo.baseDir = path.dirname(stalePath);
     await writeSessionStore(storePath, {
@@ -222,9 +220,8 @@ describe("doctor session snapshot stale runtime metadata", () => {
 
   it("reports stale cached metadata from configured session stores", async () => {
     const stateDir = path.join(root, "state");
-    const defaultStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const configuredStorePath = path.join(root, "configured-sessions.json");
-    await writeSessionStore(defaultStorePath, {});
+    await writeSessionStore(storePath, {});
     await writeSessionStore(configuredStorePath, { "agent:configured": skillSession(stalePath) });
 
     await noteHealth({

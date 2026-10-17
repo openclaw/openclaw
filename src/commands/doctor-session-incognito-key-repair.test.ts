@@ -38,6 +38,7 @@ describe("doctor reserved incognito session key repair", () => {
     const sql = sessionSqlFixture(database.db);
     const secondaryDatabase = openAgentDatabase({ agentId: "work", env });
     const secondarySql = sessionSqlFixture(secondaryDatabase.db);
+    const workKey = "agent:work:dashboard:regular";
     const stateDatabase = openStateDatabase({ env });
     const stateSql = sessionSqlFixture(stateDatabase.db);
     const oldKey = "agent:main:dashboard:incognito-collision";
@@ -64,7 +65,7 @@ describe("doctor reserved incognito session key repair", () => {
     sql`INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('operation-1', 'turn', 'conversation-1', ${oldKey}, 'hash', 'sent', 1, 1)`.run();
     stateSql`INSERT INTO session_state_heads (session_key, agent_id, last_sequence, updated_at) VALUES (${oldKey}, 'main', 1, 1)`.run();
     stateSql`INSERT INTO operator_approvals (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, source_session_key, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms) VALUES (1, 'approval-1', ${"a".repeat(43)}, 'exec', 'pending', '{}', '[]', ${oldKey}, ${JSON.stringify([baseLegacyKey])}, 'epoch', 1, 2, 1)`.run();
-    secondarySql`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by) VALUES ('agent:work:dashboard:regular', 'session-work', ${JSON.stringify(
+    secondarySql`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by) VALUES (${workKey}, 'session-work', ${JSON.stringify(
       {
         sessionId: "session-work",
         updatedAt: 1,
@@ -74,9 +75,9 @@ describe("doctor reserved incognito session key repair", () => {
       },
     )}, 1, ${oldKey}, ${oldKey})`.run();
     sql`UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ${oldKey}`.run();
-    secondarySql`INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES ('agent:work:dashboard:regular', 'systemPromptReport', ${JSON.stringify({ source: "run", generatedAt: 1, sessionKey: coldOccupiedKey })})`.run();
-    secondarySql`UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ${"agent:work:dashboard:regular"}`.run();
-    secondarySql`INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES ('session-work', 'agent:work:dashboard:regular', 'conversation', 1, 1, ${oldKey}, ${oldKey})`.run();
+    secondarySql`INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (${workKey}, 'systemPromptReport', ${JSON.stringify({ source: "run", generatedAt: 1, sessionKey: coldOccupiedKey })})`.run();
+    secondarySql`UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ${workKey}`.run();
+    secondarySql`INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES ('session-work', ${workKey}, 'conversation', 1, 1, ${oldKey}, ${oldKey})`.run();
     stateSql`INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (${oldKey}, ${oldKey}, 1)`.run();
     writeConfigMachineState("tui.lastSession.main", oldKey, { env });
     writeConfigMachineState("unrelated.sessionReference", oldKey, { env });
@@ -141,18 +142,14 @@ describe("doctor reserved incognito session key repair", () => {
     });
     expect(JSON.parse(entry.entry_json)).not.toHaveProperty("systemPromptReport");
     expect(JSON.parse(entry.entry_json)).not.toHaveProperty("skillsSnapshot");
-    expect(
-      loadEntry({
-        agentId: "work",
-        env,
-        sessionKey: "agent:work:dashboard:regular",
-      })?.entry.systemPromptReport?.sessionKey,
-    ).toBe(coldOccupiedKey);
+    expect(loadEntry({ agentId: "work", env, sessionKey: workKey })?.entry).toMatchObject({
+      systemPromptReport: { sessionKey: coldOccupiedKey },
+    });
     expect(sql`SELECT entry_valid FROM session_nodes WHERE session_key = ${newKey}`.get()).toEqual({
       entry_valid: 1,
     });
     expect(
-      secondarySql`SELECT entry_valid FROM session_nodes WHERE session_key = ${"agent:work:dashboard:regular"}`.get(),
+      secondarySql`SELECT entry_valid FROM session_nodes WHERE session_key = ${workKey}`.get(),
     ).toEqual({ entry_valid: 1 });
     await closeAgentDatabases(stateDir);
     closeAgentHandles(stateDir);
@@ -161,7 +158,7 @@ describe("doctor reserved incognito session key repair", () => {
     ]);
     expect(listEntries({ agentId: "work", env })).toMatchObject([
       {
-        sessionKey: "agent:work:dashboard:regular",
+        sessionKey: workKey,
         entry: { sessionId: "session-work", updatedAt: 1 },
       },
     ]);
