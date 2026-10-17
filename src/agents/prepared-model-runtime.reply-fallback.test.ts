@@ -10,7 +10,7 @@ import type { FollowupRun } from "../auto-reply/reply/queue.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
@@ -204,20 +204,15 @@ describe("prepared reply fallback ownership", () => {
           slots: { memory: "none" },
         },
       };
-      const manifests: PluginManifestRecord[] = ["initial", "selected", "fallback"].map((id) => ({
-        id,
-        name: id,
-        origin: "bundled",
-        channels: [],
-        providers: [id],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        rootDir: `/plugins/${id}`,
-        source: `/plugins/${id}/index.js`,
-        manifestPath: `/plugins/${id}/openclaw.plugin.json`,
-        activation: { onStartup: false, onProviders: [id] },
-      }));
+      const manifests = ["initial", "selected", "fallback"].map((id) =>
+        createPluginManifestRecordFixture({
+          id,
+          name: id,
+          providers: [id],
+          rootDir: `/plugins/${id}`,
+          activation: { onStartup: false, onProviders: [id] },
+        }),
+      );
       const metadata = createPluginMetadataSnapshot({
         config,
         manifestRegistry: {

@@ -146,10 +146,7 @@ async function listModels(refresh: boolean) {
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
 
-it("shares catalog adoption without sharing observer cancellation and accepts the next update", async ({
-  signal,
-}) => {
-  await setup();
+function holdPricing() {
   const preparing = createDeferred();
   const commit = createDeferred();
   const preparePricing = pricing.prepareModelPricingContext;
@@ -160,6 +157,14 @@ it("shares catalog adoption without sharing observer cancellation and accepts th
       await commit.promise;
       return await preparePricing(...args);
     });
+  return { preparing, commit, pricingSpy };
+}
+
+it("shares catalog adoption without sharing observer cancellation and accepts the next update", async ({
+  signal,
+}) => {
+  await setup();
+  const { preparing, commit, pricingSpy } = holdPricing();
   const observer = new AbortController();
   const cancelled = applyRemoteModelCatalogUpdate(() => config, observer.signal);
   const reason = new Error("catalog observer closed");
@@ -191,16 +196,7 @@ it("shares catalog adoption without sharing observer cancellation and accepts th
 
 it("preserves prospective tool and sandbox policy across catalog adoption", async () => {
   await setup();
-  const preparing = createDeferred();
-  const commit = createDeferred();
-  const preparePricing = pricing.prepareModelPricingContext;
-  const pricingSpy = vi
-    .spyOn(pricing, "prepareModelPricingContext")
-    .mockImplementationOnce(async (...args) => {
-      preparing.resolve();
-      await commit.promise;
-      return await preparePricing(...args);
-    });
+  const { preparing, commit, pricingSpy } = holdPricing();
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   try {
     await preparing.promise;
@@ -231,16 +227,7 @@ it("preserves prospective tool and sandbox policy across catalog adoption", asyn
 
 it("delivers the first reply when catalog adoption retires its captured dispatch publication", async () => {
   await setup({ allowGatewaySubagentBinding: true });
-  const preparing = createDeferred();
-  const commit = createDeferred();
-  const preparePricing = pricing.prepareModelPricingContext;
-  const pricingSpy = vi
-    .spyOn(pricing, "prepareModelPricingContext")
-    .mockImplementationOnce(async (...args) => {
-      preparing.resolve();
-      await commit.promise;
-      return await preparePricing(...args);
-    });
+  const { preparing, commit, pricingSpy } = holdPricing();
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   await preparing.promise;
   const deliver = vi.fn(async (_payload: ReplyPayload) => undefined);

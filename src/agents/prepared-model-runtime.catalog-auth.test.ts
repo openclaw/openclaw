@@ -2,6 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
+const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+const account = {
+  profileId: "openai:account",
+  credential,
+  selectedCredential: {
+    source: "profile" as const,
+    profileId: "openai:account",
+    identityKey: "profile:openai:account",
+  },
+};
+const route = {
+  identityKey: account.selectedCredential.identityKey,
+  modelId: "fixture-model",
+  runtimeId: "openclaw",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+};
+const tiers = { requestedTier: "ultrafast", responseTier: "priority" };
+const observation = { ...route, ...tiers };
+
 describe("prepared account catalog observations", () => {
   beforeEach(() => {
     // These cases describe prepared auth facts, not credentials from the host shell.
@@ -23,7 +43,7 @@ describe("prepared account catalog observations", () => {
   it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
     const retirement = new AbortController();
     const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
-    const credential = {
+    const tokenCredential = {
       type: "token",
       provider: "openai",
       token: "synthetic-account-token",
@@ -31,11 +51,16 @@ describe("prepared account catalog observations", () => {
     const load = vi.fn(async () => [
       { provider: "openai", profileId: "account", status: "ready" as const },
     ]);
-    const request = { profileId: "account", credential, load, allowDiscovery: true };
+    const request = {
+      profileId: "account",
+      credential: tokenCredential,
+      load,
+      allowDiscovery: true,
+    };
     expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
     expect(load).not.toHaveBeenCalled();
     const first = await owner.acquire(request);
-    await owner.acquire({ ...request, credential: { ...credential } });
+    await owner.acquire({ ...request, credential: { ...tokenCredential } });
     await owner.acquire({ ...request, allowDiscovery: false });
     expect(load).toHaveBeenCalledOnce();
     const refreshed = await owner.acquire({ ...request, refresh: true });
@@ -58,7 +83,7 @@ describe("prepared account catalog observations", () => {
     await entered.promise;
     const replacement = await owner.acquire({
       ...request,
-      credential: { ...credential, token: "synthetic-replacement-token" },
+      credential: { ...tokenCredential, token: "synthetic-replacement-token" },
     });
     expect(refreshed.isCurrent()).toBe(false);
     release.resolve();
@@ -74,7 +99,6 @@ describe("prepared account catalog observations", () => {
     "retires response observers when explicit refresh arrives %s",
     async (timing) => {
       const owner = createPreparedAccountCatalogAccess(() => true);
-      const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
       const record = owner.prepareServiceTierObserver({
         credential,
         selectedCredential: {
@@ -83,14 +107,6 @@ describe("prepared account catalog observations", () => {
           identityKey: "profile:account",
         },
       });
-      const observation = {
-        modelId: "fixture-model",
-        runtimeId: "openclaw",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        requestedTier: "ultrafast",
-        responseTier: "priority",
-      };
       record(observation);
       const entered = createDeferred();
       const release = createDeferred<[]>();
@@ -125,32 +141,10 @@ describe("prepared account catalog observations", () => {
     const retirement = new AbortController();
     const onChanged = vi.fn();
     const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal, {}, onChanged);
-    const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
-    const account = {
-      profileId: "openai:account",
-      credential,
-      selectedCredential: {
-        source: "profile" as const,
-        profileId: "openai:account",
-        identityKey: "profile:openai:account",
-      },
-    };
-    const observation = {
-      modelId: "fixture-model",
-      runtimeId: "openclaw",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1/",
-      requestedTier: "ultrafast",
-      responseTier: "priority",
-    };
-    const route = { ...observation, identityKey: account.selectedCredential.identityKey };
     const record = owner.prepareServiceTierObserver(account);
-    expect(record(observation)).toBe(true);
-    expect(record({ ...observation, baseUrl: "https://api.openai.com/v1" })).toBe(false);
-    expect(owner.readServiceTierObservation(route)).toEqual({
-      requestedTier: "ultrafast",
-      responseTier: "priority",
-    });
+    expect(record({ ...observation, baseUrl: `${route.baseUrl}/` })).toBe(true);
+    expect(record(observation)).toBe(false);
+    expect(owner.readServiceTierObservation(route)).toEqual(tiers);
     for (const mismatch of [
       { identityKey: "profile:openai:other" },
       { modelId: "other-model" },
@@ -208,22 +202,7 @@ describe("prepared account catalog observations", () => {
     const onChanged = vi.fn();
     const retirement = new AbortController();
     const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal, {}, onChanged);
-    const record = owner.prepareServiceTierObserver({
-      selectedCredential: {
-        source: "profile",
-        profileId: "openai:account",
-        identityKey: "profile:openai:account",
-      },
-      credential: { type: "api_key", provider: "openai", key: "synthetic-key" },
-    });
-    const route = {
-      identityKey: "profile:openai:account",
-      modelId: "fixture-model",
-      runtimeId: "openclaw",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    };
-    const observation = { ...route, requestedTier: "ultrafast", responseTier: "priority" };
+    const record = owner.prepareServiceTierObserver(account);
     expect(record(observation)).toBe(true);
     record({ ...observation, modelId: "other-model" });
     expect(onChanged).toHaveBeenCalledTimes(2);
@@ -257,38 +236,19 @@ describe("prepared account catalog observations", () => {
   it("bounds response tier observations per account and rejects a superseded owner", () => {
     let current = true;
     const owner = createPreparedAccountCatalogAccess(() => current);
-    const account = {
-      profileId: "openai:account",
-      selectedCredential: {
-        source: "profile" as const,
-        profileId: "openai:account",
-        identityKey: "profile:openai:account",
-      },
-      credential: { type: "api_key", provider: "openai", key: "synthetic-key" } as const,
-    };
-    const route = {
-      identityKey: account.selectedCredential.identityKey,
-      modelId: "model-0",
-      runtimeId: "openclaw",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    };
+    const firstRoute = { ...route, modelId: "model-0" };
     const record = owner.prepareServiceTierObserver(account);
     for (let index = 0; index <= 128; index++) {
       record({
         ...route,
         modelId: `model-${index}`,
-        requestedTier: "ultrafast",
-        responseTier: "priority",
+        ...tiers,
       });
     }
-    expect(owner.readServiceTierObservation(route)).toBeUndefined();
-    expect(owner.readServiceTierObservation({ ...route, modelId: "model-128" })).toEqual({
-      requestedTier: "ultrafast",
-      responseTier: "priority",
-    });
+    expect(owner.readServiceTierObservation(firstRoute)).toBeUndefined();
+    expect(owner.readServiceTierObservation({ ...route, modelId: "model-128" })).toEqual(tiers);
     current = false;
     expect(owner.readServiceTierObservation({ ...route, modelId: "model-128" })).toBeUndefined();
-    expect(record({ ...route, requestedTier: "ultrafast", responseTier: "priority" })).toBe(false);
+    expect(record({ ...firstRoute, ...tiers })).toBe(false);
   });
 });

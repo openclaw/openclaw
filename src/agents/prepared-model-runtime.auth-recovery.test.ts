@@ -71,6 +71,14 @@ import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "auth-generation-recovery" });
 const { mocks } = fixture;
+const loadDispatch = () => loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+
+function registeredInstance(id: string) {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({ id });
+  registry.plugins.push(record);
+  return { registry, record, instance: new PluginInstance(id, { record, registry }) };
+}
 
 async function publishOwner(
   agentIds = ["default"],
@@ -129,98 +137,88 @@ async function listModels(config: OpenClawConfig) {
 }
 
 describe("configured plugin generation recovery", () => {
-  it.each([true])(
-    "retains exact thinking policy until registry replacement (borrowed Gateway registry=%s)",
-    async (borrowed) => {
-      const provider = "stale-policy-fixture";
-      const entry = { provider, id: "reasoner", name: "Reasoner", reasoning: true };
-      const registry = createEmptyPluginRegistry();
-      const record = createPluginRecord({ id: provider });
-      registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry });
-      registry.providers.push({
-        pluginId: record.id,
-        source: "test",
-        provider: instance.wrap({
-          id: provider,
-          label: "Captured policy",
-          auth: [],
-          resolveThinkingProfile: () => ({
-            levels: [{ id: "off" as const }, { id: "low" as const }],
-            defaultLevel: "low" as const,
-          }),
+  it("retains exact thinking policy until borrowed Gateway registry replacement", async () => {
+    const provider = "stale-policy-fixture";
+    const entry = { provider, id: "reasoner", name: "Reasoner", reasoning: true };
+    const { registry, record, instance } = registeredInstance(provider);
+    registry.providers.push({
+      pluginId: record.id,
+      source: "test",
+      provider: instance.wrap({
+        id: provider,
+        label: "Captured policy",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "off" as const }, { id: "low" as const }],
+          defaultLevel: "low" as const,
         }),
-      });
-      // An activated Gateway registry has no prepared-owned disposal lifetime.
-      const gateway = borrowed ? createPluginRegistryOwner(registry) : undefined;
-      if (gateway) {
-        markPluginRegistryActive(registry);
-      }
-      const { snapshot } = await publishOwner(["default"], registry, {
-        models: {
-          providers: {
-            [provider]: {
-              baseUrl: "https://policy.invalid/v1",
-              models: [
-                {
-                  ...entry,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8_192,
-                  maxTokens: 1_024,
-                },
-              ],
-            },
+      }),
+    });
+    // An activated Gateway registry has no prepared-owned disposal lifetime.
+    const gateway = createPluginRegistryOwner(registry);
+    markPluginRegistryActive(registry);
+    const { snapshot } = await publishOwner(["default"], registry, {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "https://policy.invalid/v1",
+            models: [
+              {
+                ...entry,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8_192,
+                maxTokens: 1_024,
+              },
+            ],
           },
         },
+      },
+    });
+    const generation = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!.pluginGeneration!;
+    const release = retainPreparedPluginGeneration(generation);
+    const ambient = createEmptyPluginRegistry();
+    ambient.providers.push({
+      pluginId: "ambient-policy",
+      source: "test",
+      provider: {
+        id: provider,
+        label: "Ambient policy",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "off" }, { id: "high" }],
+          defaultLevel: "high",
+        }),
+      },
+    });
+    const previousActive = captureActivePluginRegistrySnapshot();
+    setActivePluginRegistry(ambient);
+    const readThinking = () =>
+      resolveEffectiveThinkingProfile({
+        provider,
+        context: { provider, modelId: entry.id, reasoning: true },
+        catalogEntry: snapshot.modelCatalog.entries.find((row) => row.id === entry.id),
       });
-      const generation = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!.pluginGeneration!;
-      const release = retainPreparedPluginGeneration(generation);
-      const ambient = createEmptyPluginRegistry();
-      ambient.providers.push({
-        pluginId: "ambient-policy",
-        source: "test",
-        provider: {
-          id: provider,
-          label: "Ambient policy",
-          auth: [],
-          resolveThinkingProfile: () => ({
-            levels: [{ id: "off" }, { id: "high" }],
-            defaultLevel: "high",
-          }),
-        },
+    try {
+      expect(readThinking()?.defaultLevel).toBe("low");
+      markPreparedModelRuntimeSnapshotsStale("scoped policy refresh", {
+        agentIds: new Set(["default"]),
+        waitForReplacement: true,
       });
-      const previousActive = captureActivePluginRegistrySnapshot();
-      setActivePluginRegistry(ambient);
-      const readThinking = () =>
-        resolveEffectiveThinkingProfile({
-          provider,
-          context: { provider, modelId: entry.id, reasoning: true },
-          catalogEntry: snapshot.modelCatalog.entries.find((row) => row.id === entry.id),
-        });
-      try {
-        expect(readThinking()?.defaultLevel).toBe("low");
-        markPreparedModelRuntimeSnapshotsStale("scoped policy refresh", {
-          agentIds: new Set(["default"]),
-          waitForReplacement: true,
-        });
-        expect(snapshot.isCurrent()).toBe(false);
-        expect(isPluginRegistryRetired(registry)).toBe(false);
-        expect(readThinking()?.defaultLevel).toBe("low");
-        if (gateway) {
-          // Committing the Gateway successor, not staling the catalog, closes the lender.
-          gateway.publish(ambient);
-          expect(isPluginRegistryRetired(registry)).toBe(true);
-          expect(readThinking).toThrow(PluginInstanceUnavailableError);
-          await disposePluginRegistryInstances(registry);
-        }
-      } finally {
-        await release();
-        await gateway?.close();
-        restoreActivePluginRegistrySnapshot(previousActive);
-      }
-    },
-  );
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(isPluginRegistryRetired(registry)).toBe(false);
+      expect(readThinking()?.defaultLevel).toBe("low");
+      // Committing the Gateway successor, not staling the catalog, closes the lender.
+      gateway.publish(ambient);
+      expect(isPluginRegistryRetired(registry)).toBe(true);
+      expect(readThinking).toThrow(PluginInstanceUnavailableError);
+      await disposePluginRegistryInstances(registry);
+    } finally {
+      await release();
+      await gateway.close();
+      restoreActivePluginRegistrySnapshot(previousActive);
+    }
+  });
 
   it.each(["admitted registry", "metadata cache"] as const)(
     "does not republish independent retirement of %s",
@@ -229,10 +227,7 @@ describe("configured plugin generation recovery", () => {
       await using cache = createPluginCache();
       mocks.pluginMetadataSnapshot = { ...originalMetadata };
       bindPluginMetadataSnapshotCache(mocks.pluginMetadataSnapshot, cache);
-      const registry = createEmptyPluginRegistry();
-      const record = createPluginRecord({ id: "owned-retirement" });
-      registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry });
+      const { registry, instance } = registeredInstance("owned-retirement");
       if (source === "admitted registry") {
         // An admitting Gateway link does not make this prepared instance its loan.
         const gatewayRegistry = createEmptyPluginRegistry();
@@ -273,10 +268,7 @@ describe("configured plugin generation recovery", () => {
       const cache = createPluginCache();
       mocks.pluginMetadataSnapshot = { ...originalMetadata };
       bindPluginMetadataSnapshotCache(mocks.pluginMetadataSnapshot, cache);
-      const lender = createEmptyPluginRegistry();
-      const record = createPluginRecord({ id: "gateway-lender" });
-      lender.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry: lender });
+      const { registry: lender, record, instance } = registeredInstance("gateway-lender");
       markPluginRegistryActive(lender);
       const gateway = createPluginRegistryOwner(lender);
       const selectedRegistry = borrowed ? createEmptyPluginRegistry() : lender;
@@ -325,7 +317,7 @@ describe("configured plugin generation recovery", () => {
           ? config
           : { ...config, agents: { defaults: { heartbeat: { every: "0m" } } } };
         advancePreparedModelRuntimeConfig(currentConfig);
-        const dispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+        const dispatch = loadDispatch();
         if (fails) {
           await expect(dispatch).rejects.toBe(failure);
           await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
@@ -432,9 +424,7 @@ describe("auth publication generation recovery", () => {
       } else {
         mutate();
       }
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toBeDefined();
+      await expect(loadDispatch()).resolves.toBeDefined();
       const replacement = await prepareModelRuntimeSnapshot(input);
       expect(replacement.pluginRegistry).toBe(currentRegistry);
       expect(replacement.isCurrent()).toBe(true);
@@ -516,7 +506,7 @@ describe("auth publication generation recovery", () => {
     );
     try {
       mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
-      const waiting = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+      const waiting = loadDispatch();
       const rejected = expect(waiting).rejects.toThrow("after 1 fresh-generation retry");
       const recorded = await failed.promise;
       await rejected;

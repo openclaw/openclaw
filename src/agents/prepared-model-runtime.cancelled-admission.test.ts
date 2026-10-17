@@ -67,6 +67,29 @@ function dynamicInput(label: string): PreparedModelRuntimeInput {
   };
 }
 
+function cancellableRun(input: PreparedModelRuntimeInput) {
+  const controller = new AbortController();
+  const pending = acquireAgentRunPreparedModelRuntime(input, { abortSignal: controller.signal });
+  return {
+    pending,
+    cancel(reason: string) {
+      controller.abort(new Error(reason));
+      return expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    },
+  };
+}
+
+function holdModelBuild() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+    entered.resolve();
+    await release.promise;
+    return { agentDir: String(agentDir), wrote: false };
+  });
+  return { entered, release };
+}
+
 describe("prepared model runtime cancelled admission ownership", () => {
   beforeEach(() => {
     pendingBuildReleases = [];
@@ -76,17 +99,11 @@ describe("prepared model runtime cancelled admission ownership", () => {
   it("retires a coalesced cold owner only after the final admission cancels", async () => {
     const input = dynamicInput("coalesced-cancellations");
     const build = prepareColdBuildGate();
-    const firstAbort = new AbortController();
-    const secondAbort = new AbortController();
-    const first = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: firstAbort.signal,
-    });
+    const first = cancellableRun(input);
 
     await build.started.promise;
-    const second = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: secondAbort.signal,
-    });
-    const secondObserved = second.then(
+    const second = cancellableRun(input);
+    const secondObserved = second.pending.then(
       () => "resolved",
       () => "rejected",
     );
@@ -94,12 +111,10 @@ describe("prepared model runtime cancelled admission ownership", () => {
       "pending",
     );
 
-    firstAbort.abort(new Error("first request cancelled"));
-    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await first.cancel("first request cancelled");
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
 
-    secondAbort.abort(new Error("second request cancelled"));
-    await expect(second).rejects.toMatchObject({ name: "AbortError" });
+    await second.cancel("second request cancelled");
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
 
     build.release.resolve();
@@ -108,16 +123,12 @@ describe("prepared model runtime cancelled admission ownership", () => {
   it("keeps one shared build for a survivor after its peer cancels", async () => {
     const input = dynamicInput("cancelled-peer-survivor");
     const build = prepareColdBuildGate();
-    const cancelledAbort = new AbortController();
-    const cancelled = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: cancelledAbort.signal,
-    });
+    const cancelled = cancellableRun(input);
 
     await build.started.promise;
     const survivor = acquireAgentRunPreparedModelRuntime(input);
 
-    cancelledAbort.abort(new Error("peer request cancelled"));
-    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    await cancelled.cancel("peer request cancelled");
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
 
     build.release.resolve();
@@ -132,14 +143,10 @@ describe("prepared model runtime cancelled admission ownership", () => {
   it("does not let an abandoned publication satisfy or delete its same-key replacement", async () => {
     const input = dynamicInput("same-key-replacement");
     const firstBuild = prepareColdBuildGate();
-    const firstAbort = new AbortController();
-    const abandoned = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: firstAbort.signal,
-    });
+    const abandoned = cancellableRun(input);
 
     await firstBuild.started.promise;
-    firstAbort.abort(new Error("first request cancelled"));
-    await expect(abandoned).rejects.toMatchObject({ name: "AbortError" });
+    await abandoned.cancel("first request cancelled");
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
 
     const secondBuild = prepareColdBuildGate();
@@ -161,21 +168,13 @@ describe("prepared model runtime cancelled admission ownership", () => {
   it("skips workspace preparation for a cancelled queued replacement", async () => {
     const input = dynamicInput("queued-cancelled-replacement");
     const firstBuild = prepareColdBuildGate();
-    const firstAbort = new AbortController();
-    const first = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: firstAbort.signal,
-    });
+    const first = cancellableRun(input);
 
     await firstBuild.started.promise;
-    firstAbort.abort(new Error("first request cancelled"));
-    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await first.cancel("first request cancelled");
 
-    const queuedAbort = new AbortController();
-    const queued = acquireAgentRunPreparedModelRuntime(input, {
-      abortSignal: queuedAbort.signal,
-    });
-    queuedAbort.abort(new Error("queued request cancelled"));
-    await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+    const queued = cancellableRun(input);
+    await queued.cancel("queued request cancelled");
 
     const survivor = acquireAgentRunPreparedModelRuntime(input);
     firstBuild.release.resolve();
@@ -209,18 +208,12 @@ describe("prepared model runtime cancelled admission ownership", () => {
     async (source) => {
       mocks.configuredAgentIds = ["default"];
       await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-      const entered = createDeferred();
-      const release = createDeferred();
+      const { entered, release } = holdModelBuild();
       const published = vi.fn();
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "published") {
           published();
         }
-      });
-      mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-        entered.resolve();
-        await release.promise;
-        return { agentDir: String(agentDir), wrote: false };
       });
       let refresh: Promise<void> | undefined;
       if (source === "auth") {
@@ -285,14 +278,8 @@ describe("prepared model runtime cancelled admission ownership", () => {
   });
 
   it("does not revive a queued standalone activation after its process lifetime closes", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
+    const { entered, release } = holdModelBuild();
     const input = { config: {}, agentDir: fixture.state.agentDir("queued") };
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      entered.resolve();
-      await release.promise;
-      return { agentDir: String(agentDir), wrote: false };
-    });
     const first = activateStandalonePreparedModelRuntime(input);
     void first.catch(() => {});
     await entered.promise;
