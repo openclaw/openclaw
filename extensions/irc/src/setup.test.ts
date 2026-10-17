@@ -1,4 +1,3 @@
-// Irc tests cover setup plugin behavior.
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
@@ -34,11 +33,7 @@ const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
 }));
 
-vi.mock("./channel-runtime.js", () => {
-  return {
-    monitorIrcProvider: hoisted.monitorIrcProvider,
-  };
-});
+vi.mock("./channel-runtime.js", () => ({ monitorIrcProvider: hoisted.monitorIrcProvider }));
 
 afterAll(() => {
   vi.doUnmock("./channel-runtime.js");
@@ -47,9 +42,7 @@ afterAll(() => {
 
 const ircSetupPlugin = {
   id: "irc",
-  meta: {
-    label: "IRC",
-  },
+  meta: { label: "IRC" },
   config: {
     defaultAccountId: resolveDefaultIrcAccountId,
     listAccountIds: listIrcAccountIds,
@@ -62,6 +55,10 @@ const ircStatus = createPluginSetupWizardStatus(ircSetupPlugin);
 
 function ircConfig(irc: NonNullable<NonNullable<CoreConfig["channels"]>["irc"]>): CoreConfig {
   return { channels: { irc } };
+}
+
+function expectIrcConfig(actual: CoreConfig, irc: Parameters<typeof ircConfig>[0]) {
+  expect(actual).toStrictEqual(ircConfig(irc));
 }
 
 function buildAccount(): ResolvedIrcAccount {
@@ -90,18 +87,8 @@ describe("irc setup", () => {
   it("updates top-level dm policy and allowlist", () => {
     const cfg: CoreConfig = ircConfig({});
 
-    expect(setIrcDmPolicy(cfg, "open")).toStrictEqual(
-      ircConfig({
-        dmPolicy: "open",
-        allowFrom: ["*"],
-      }),
-    );
-
-    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toStrictEqual(
-      ircConfig({
-        allowFrom: ["alice", "bob"],
-      }),
-    );
+    expectIrcConfig(setIrcDmPolicy(cfg, "open"), { dmPolicy: "open", allowFrom: ["*"] });
+    expectIrcConfig(setIrcAllowFrom(cfg, ["alice", "bob"]), { allowFrom: ["alice", "bob"] });
   });
 
   it("setup status honors the configured default account", async () => {
@@ -109,14 +96,8 @@ describe("irc setup", () => {
       cfg: ircConfig({
         defaultAccount: "work",
         accounts: {
-          ops: {
-            host: "irc.example.com",
-            nick: "ops-bot",
-          },
-          work: {
-            host: "irc.example.com",
-            nick: "",
-          },
+          ops: { host: "irc.example.com", nick: "ops-bot" },
+          work: { host: "irc.example.com", nick: "" },
         },
       }),
       accountOverrides: {},
@@ -129,45 +110,23 @@ describe("irc setup", () => {
   it("stores nickserv and account config patches on the scoped account", () => {
     const cfg: CoreConfig = ircConfig({});
 
-    expect(
-      setIrcNickServ(cfg, "work", {
-        enabled: true,
-        service: "NickServ",
-      }),
-    ).toStrictEqual(
-      ircConfig({
-        accounts: {
-          work: {
-            nickserv: {
-              enabled: true,
-              service: "NickServ",
-            },
-          },
-        },
-      }),
-    );
+    expectIrcConfig(setIrcNickServ(cfg, "work", { enabled: true, service: "NickServ" }), {
+      accounts: { work: { nickserv: { enabled: true, service: "NickServ" } } },
+    });
 
-    expect(
+    expectIrcConfig(
       updateIrcAccountConfig(cfg, "work", {
         host: "irc.libera.chat",
         nick: "openclaw-work",
       }),
-    ).toStrictEqual(
-      ircConfig({
-        accounts: {
-          work: {
-            host: "irc.libera.chat",
-            nick: "openclaw-work",
-          },
-        },
-      }),
+      { accounts: { work: { host: "irc.libera.chat", nick: "openclaw-work" } } },
     );
   });
 
   it("normalizes allowlist groups and handles non-allowlist policies", () => {
     const cfg: CoreConfig = ircConfig({});
 
-    expect(
+    expectIrcConfig(
       setIrcGroupAccess(
         cfg,
         "default",
@@ -175,32 +134,25 @@ describe("irc setup", () => {
         ["openclaw", "#ops", "openclaw", "*"],
         (raw) => {
           const trimmed = raw.trim();
-          if (!trimmed) {
-            return null;
-          }
-          if (trimmed === "*") {
-            return "*";
+          if (!trimmed || trimmed === "*") {
+            return trimmed || null;
           }
           return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
         },
       ),
-    ).toStrictEqual(
-      ircConfig({
+      {
         enabled: true,
         groupPolicy: "allowlist",
-        groups: {
-          "#openclaw": {},
-          "#ops": {},
-          "*": {},
-        },
-      }),
+        groups: { "#openclaw": {}, "#ops": {}, "*": {} },
+      },
     );
 
-    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toStrictEqual(
-      ircConfig({
+    expectIrcConfig(
+      setIrcGroupAccess(cfg, "default", "disabled", [], () => null),
+      {
         enabled: true,
         groupPolicy: "disabled",
-      }),
+      },
     );
   });
 
@@ -213,41 +165,18 @@ describe("irc setup", () => {
       throw new Error("Expected IRC setup validateInput");
     }
 
-    expect(
-      validateInput({
-        input: { host: "", nick: "openclaw" },
-      } as never),
-    ).toBe("IRC requires host.");
-
-    expect(
-      validateInput({
-        input: { host: "irc.libera.chat", nick: "" },
-      } as never),
-    ).toBe("IRC requires nick.");
-
-    expect(
-      validateInput({
-        input: { host: "irc.libera.chat", nick: "openclaw" },
-      } as never),
-    ).toBeNull();
-
-    expect(
-      validateInput({
-        input: { host: "irc.libera.chat", nick: "openclaw", port: "+07000" },
-      } as never),
-    ).toBeNull();
-
-    expect(
-      validateInput({
-        input: { host: "irc.libera.chat", nick: "openclaw", port: "7000x" },
-      } as never),
-    ).toBe("IRC port must be between 1 and 65535.");
-
-    expect(
-      validateInput({
-        input: { host: "irc.libera.chat", nick: "openclaw", port: "70000" },
-      } as never),
-    ).toBe("IRC port must be between 1 and 65535.");
+    const validate = (host: string, nick: string, port?: string) =>
+      validateInput({ input: { host, nick, port } } as never);
+    expect(validate("", "openclaw")).toBe("IRC requires host.");
+    expect(validate("irc.libera.chat", "")).toBe("IRC requires nick.");
+    expect(validate("irc.libera.chat", "openclaw")).toBeNull();
+    expect(validate("irc.libera.chat", "openclaw", "+07000")).toBeNull();
+    expect(validate("irc.libera.chat", "openclaw", "7000x")).toBe(
+      "IRC port must be between 1 and 65535.",
+    );
+    expect(validate("irc.libera.chat", "openclaw", "70000")).toBe(
+      "IRC port must be between 1 and 65535.",
+    );
 
     expect(
       applyAccountConfig({
@@ -282,40 +211,30 @@ describe("irc setup", () => {
   });
 
   it("configures host and nick via setup prompts", async () => {
+    const answers: Record<string, string> = {
+      "IRC server host": "irc.libera.chat",
+      "IRC server port": "6697",
+      "IRC nick": "openclaw-bot",
+      "IRC username": "openclaw",
+      "IRC real name": "OpenClaw Bot",
+    };
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "IRC server host") {
-          return "irc.libera.chat";
+        if (Object.hasOwn(answers, message)) {
+          return answers[message];
         }
-        if (message === "IRC server port") {
-          return "6697";
-        }
-        if (message === "IRC nick") {
-          return "openclaw-bot";
-        }
-        if (message === "IRC username") {
-          return "openclaw";
-        }
-        if (message === "IRC real name") {
-          return "OpenClaw Bot";
-        }
-        if (message.startsWith("Auto-join IRC channels")) {
-          return "#openclaw, #ops";
-        }
-        if (message.startsWith("IRC channels allowlist")) {
+        if (
+          message.startsWith("Auto-join IRC channels") ||
+          message.startsWith("IRC channels allowlist")
+        ) {
           return "#openclaw, #ops";
         }
         throw new Error(`Unexpected prompt: ${message}`);
       }) as WizardPrompter["text"],
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Use TLS for IRC?") {
-          return true;
-        }
-        if (message === "Configure IRC channels access?") {
-          return true;
-        }
-        return false;
-      }),
+      confirm: vi.fn(
+        async ({ message }: { message: string }) =>
+          message === "Use TLS for IRC?" || message === "Configure IRC channels access?",
+      ),
     });
 
     const result = await runSetupWizardConfigure({
@@ -326,12 +245,14 @@ describe("irc setup", () => {
     });
 
     expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.irc?.enabled).toBe(true);
-    expect(result.cfg.channels?.irc?.host).toBe("irc.libera.chat");
-    expect(result.cfg.channels?.irc?.nick).toBe("openclaw-bot");
-    expect(result.cfg.channels?.irc?.tls).toBe(true);
-    expect(result.cfg.channels?.irc?.channels).toEqual(["#openclaw", "#ops"]);
-    expect(result.cfg.channels?.irc?.groupPolicy).toBe("allowlist");
+    expect(result.cfg.channels?.irc).toMatchObject({
+      enabled: true,
+      host: "irc.libera.chat",
+      nick: "openclaw-bot",
+      tls: true,
+      channels: ["#openclaw", "#ops"],
+      groupPolicy: "allowlist",
+    });
     expect(Object.keys(result.cfg.channels?.irc?.groups ?? {})).toEqual(["#openclaw", "#ops"]);
   });
 
@@ -362,13 +283,8 @@ describe("irc setup", () => {
       throw new Error("promptAllowFrom unavailable");
     }
 
-    const cfg: CoreConfig = ircConfig({
-      accounts: {
-        work: {
-          host: "irc.libera.chat",
-          nick: "openclaw-work",
-        },
-      },
+    const cfg = ircConfig({
+      accounts: { work: { host: "irc.libera.chat", nick: "openclaw-work" } },
     });
 
     const updated = await promptSetupWizardAllowFrom({
