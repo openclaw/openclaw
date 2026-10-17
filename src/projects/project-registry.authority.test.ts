@@ -431,7 +431,6 @@ it.each(["known", "unknown", "wrapped-unknown"] as const)(
     fixture.startHeartbeat.mockReturnValueOnce({
       ready: Promise.resolve(),
       assertRunning: vi.fn(),
-      assertResponsive: vi.fn(),
       verify: async () => fixture.expiresAt,
       renew: fixture.forbiddenNative,
       holdOwnerFence: fixture.forbiddenNative,

@@ -215,7 +215,7 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
-  it("acknowledges ownership inside a parent write transaction", async ({ state }) => {
+  it("verifies ownership inside a parent write transaction", async ({ state }) => {
     await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
       runOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -228,20 +228,16 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
-  it("rejects a terminated worker before queued parent notification", async ({ state }) => {
+  it("rejects a terminated heartbeat worker", async ({ state }) => {
     const spawned = nextHeartbeatWorker();
     await expect(
       withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
         const worker = await spawned;
-        void worker.terminate();
-        block(100);
+        await worker.terminate();
         expect(Number(readLease(state.env)?.expires_at)).toBeGreaterThan(Date.now());
         expect(() => lease.assertOwned()).toThrowError(
           expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
         );
-        // The database alone still grants the old lease: only fresh worker
-        // liveness can reject this assertion before the queued exit callback.
-        expect(Number(readLease(state.env)?.expires_at)).toBeGreaterThan(Date.now());
       }),
     ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
     expect(readLease(state.env)).toBeUndefined();
@@ -388,7 +384,6 @@ it("defers activation until contended renewal commits", async ({ state }) => {
       deferActivation: true,
       shared: shared.buffer,
       renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
-      completedRequest: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
     } satisfies LeaseHeartbeatWorkerData,
     transferList: [databaseAdmission.port],
     execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
