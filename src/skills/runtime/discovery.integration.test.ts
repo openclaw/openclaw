@@ -17,6 +17,7 @@ import {
   prepareSkillSourcePlan,
   projectSkillSnapshot,
   refreshSkillsDiscovery,
+  registerSkillsChangeListener,
 } from "./refresh.js";
 
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
@@ -142,6 +143,72 @@ it("coalesces passive edits until the minute boundary and shares one worker", as
   expect(await descriptions(request(other))).toEqual(["Other"]);
 });
 
+it("publishes diagnostic changes and removals after passive refresh with unchanged valid skills", async () => {
+  const brokenFile = path.join(workspace, "skills", "broken", "SKILL.md");
+  await write("Valid sibling");
+  await fs.mkdir(path.dirname(brokenFile), { recursive: true });
+  await fs.writeFile(brokenFile, "---\nname: broken\n---\n", "utf8");
+  const input = request();
+  const diagnostics = async () => {
+    const sources = await prepareLocalSkillSources(input);
+    expect(
+      sources.entries.map((entry) => ({
+        name: entry.skill.name,
+        description: entry.skill.description,
+      })),
+    ).toEqual([{ name: "guide", description: "Valid sibling" }]);
+    return sources.diagnostics;
+  };
+  const missingDescription = {
+    items: [{ kind: "invalid", path: brokenFile, message: "description is required" }],
+    omitted: 0,
+  };
+  const invalidFrontmatter = {
+    items: [
+      {
+        kind: "invalid",
+        path: brokenFile,
+        message: "invalid frontmatter: UNTERMINATED_FRONTMATTER: missing closing --- delimiter",
+      },
+    ],
+    omitted: 0,
+  };
+  expect(await diagnostics()).toEqual(missingDescription);
+  const initialVersion = getSkillsSnapshotVersion(workspace);
+  const changed = vi.fn<Parameters<typeof registerSkillsChangeListener>[0]>();
+  const unsubscribe = registerSkillsChangeListener(changed);
+  try {
+    await fs.writeFile(brokenFile, "---\nname: broken\ndescription: Still rejected\n", "utf8");
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(await diagnostics()).toEqual(missingDescription);
+    expect(getSkillsSnapshotVersion(workspace)).toBe(initialVersion);
+    expect(changed).not.toHaveBeenCalled();
+
+    await completePassiveScan(1);
+    expect(await diagnostics()).toEqual(invalidFrontmatter);
+    const changedVersion = getSkillsSnapshotVersion(workspace);
+    expect(changedVersion).toBeGreaterThan(initialVersion);
+    expect(changed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ workspaceDir: workspace, reason: "watch" }),
+    );
+
+    changed.mockClear();
+    await fs.rm(brokenFile);
+    expect(await diagnostics()).toEqual(invalidFrontmatter);
+    expect(getSkillsSnapshotVersion(workspace)).toBe(changedVersion);
+    expect(changed).not.toHaveBeenCalled();
+
+    await completePassiveScan();
+    expect(await diagnostics()).toEqual({ items: [], omitted: 0 });
+    expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(changedVersion);
+    expect(changed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ workspaceDir: workspace, reason: "watch" }),
+    );
+  } finally {
+    unsubscribe();
+  }
+});
+
 it("applies config refresh on the healthy worker and drops departed sources", async () => {
   const nextWorkspace = temporary.make("skills-config-successor-");
   const config = (workspaceDir: string) => ({
@@ -175,7 +242,11 @@ it("applies config refresh on the healthy worker and drops departed sources", as
 
 it("batches fresh agent discovery without separate root-planning passes", async () => {
   const other = temporary.make("skills-batch-agent-");
-  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", temporary.make("skills-batch-bundled-"));
+  const bundled = temporary.make("skills-batch-bundled-");
+  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundled);
+  const brokenFile = path.join(bundled, "broken", "SKILL.md");
+  await fs.mkdir(path.dirname(brokenFile), { recursive: true });
+  await fs.writeFile(brokenFile, "---\nname: broken\n---\n", "utf8");
   const config = {
     agents: { entries: { main: { workspace }, second: { workspace: other } } },
     plugins: { enabled: false },
@@ -193,6 +264,10 @@ it("batches fresh agent discovery without separate root-planning passes", async 
       },
       { plan: { input: prepared.input } },
     );
+    expect(sources.diagnostics).toEqual({
+      items: [{ kind: "invalid", path: brokenFile, message: "description is required" }],
+      omitted: 0,
+    });
     return sources.entries.find((entry) => entry.skill.name === "guide")?.skill.description;
   };
   try {

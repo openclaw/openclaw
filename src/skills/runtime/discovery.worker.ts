@@ -128,7 +128,8 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
         key,
         sources,
         plan: selection.plan ? resolvedPlan : undefined,
-        fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
+        // Rejected-file warnings are inventory facts even when loaded entries stay unchanged.
+        fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime, sources.diagnostics])),
       };
     }),
   };
