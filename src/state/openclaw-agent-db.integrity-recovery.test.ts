@@ -6,12 +6,12 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";

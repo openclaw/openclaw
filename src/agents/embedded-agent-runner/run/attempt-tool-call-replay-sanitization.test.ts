@@ -433,9 +433,8 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
         typeof (block as { id?: unknown }).id === "string",
     ) as { id: string } | undefined;
 
-    expect(toolCall?.id).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(toolCall?.id).toMatch(/^call_[A-Za-z0-9_-]{1,59}\|fc_[A-Za-z0-9_-]{1,61}$/);
     expect(toolCall?.id).not.toBe(rawToolCallId);
-    expect(toolCall?.id).not.toContain("|");
     expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(toolCall?.id);
   });
 

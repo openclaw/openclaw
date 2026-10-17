@@ -3,8 +3,9 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -30,7 +31,6 @@ import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 export function createAgentAdmissionController(params: {
   assertAdmissionCurrent?: () => void;
   runId: string;
-  lifecycleGeneration: string;
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
@@ -54,7 +54,6 @@ export function createAgentAdmissionController(params: {
   let postAdmissionAbort: ReturnType<typeof readGatewayDedupeEntry>;
   let postAdmissionTimeout: ReturnType<typeof buildAbortedAgentPayload> | undefined;
   let postAdmissionSuperseded = false;
-  let lifecycleRotated = false;
 
   const admissionAgentId = () => {
     const resolvedSessionKey = params.getResolvedSessionKey();
@@ -116,15 +115,6 @@ export function createAgentAdmissionController(params: {
         }
         return undefined;
       }
-    }
-    if (params.lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-      if (commitOutcome) {
-        lifecycleRotated = params.dedupeLifecycle.abortForLifecycleRotation({
-          sessionKey: resolvedSessionKey,
-          agentId: admissionAgentId(),
-        });
-      }
-      return undefined;
     }
     if (!resolvedSessionKey) {
       return undefined;
@@ -194,6 +184,7 @@ export function createAgentAdmissionController(params: {
     }
     const isSettling = () => admittedRunAbort?.entry?.terminalOutcomeObserved === true;
     const getAbortReason = () => admittedRunAbort?.controller.signal.reason;
+    const sessionKey = params.getResolvedSessionKey();
     admission =
       consumeExpectedSessionWorkAdmission({
         constraint: params.expectedSession,
@@ -215,6 +206,12 @@ export function createAgentAdmissionController(params: {
         isSettling,
         getAbortReason,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        storeWriterIdentities:
+          sessionKey &&
+          parseAgentSessionKey(sessionKey) &&
+          normalizeStoreSessionKey(sessionKey) === sessionKey
+            ? [sessionKey]
+            : undefined,
         ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => {
           assertAllowed(false);
@@ -224,7 +221,6 @@ export function createAgentAdmissionController(params: {
         },
         onInterrupt: interrupt,
       }));
-    const sessionKey = params.getResolvedSessionKey();
     if (sessionKey) {
       // A queued lifecycle mutation may finish before this lease is acquired.
       const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
@@ -255,10 +251,6 @@ export function createAgentAdmissionController(params: {
       );
       return true;
     }
-    if (lifecycleRotated) {
-      admission?.release();
-      return true;
-    }
     return false;
   };
 
@@ -268,14 +260,14 @@ export function createAgentAdmissionController(params: {
     acquire,
     respondToOutcome,
     hasOutcome: () =>
-      Boolean(
-        postAdmissionAbort || postAdmissionTimeout || postAdmissionSuperseded || lifecycleRotated,
-      ),
+      Boolean(postAdmissionAbort || postAdmissionTimeout || postAdmissionSuperseded),
     getAdmission: () => admission,
     getAdmittedRunAbort: () => admittedRunAbort,
     setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => {
       admittedRunAbort = value;
     },
-    release: () => admission?.release(),
+    release: () => {
+      admission?.release();
+    },
   };
 }

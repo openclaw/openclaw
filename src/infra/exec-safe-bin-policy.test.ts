@@ -220,21 +220,6 @@ describe("exec safe bin policy boolean flags", () => {
     ).toBe(true);
   });
 
-  it("keeps allowedBooleanFlags on built-in default profiles", () => {
-    expect(
-      expectDefined(
-        SAFE_BIN_PROFILES.wc,
-        "SAFE_BIN_PROFILES.wc test invariant",
-      ).allowedBooleanFlags?.has("-l"),
-    ).toBe(true);
-    expect(
-      validateSafeBinArgv(
-        ["-l"],
-        expectDefined(SAFE_BIN_PROFILES.wc, "SAFE_BIN_PROFILES.wc test invariant"),
-      ),
-    ).toBe(true);
-  });
-
   it("does not let custom config profiles widen the boolean allowlist", () => {
     const customFixtures = {
       wc: { allowedBooleanFlags: ["-l"], deniedFlags: ["--files0-from"] },

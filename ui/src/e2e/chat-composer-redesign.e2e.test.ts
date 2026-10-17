@@ -15,7 +15,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat composer redesign",
 });
 const pickerPopup = (kind: "model" | "effort") =>
-  `.chat-controls__${kind}-picker > wa-popup[data-anchored-overlay] > [part="popup"]`;
+  `.chat-controls__${kind}-picker > [data-anchored-overlay]`;
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
@@ -259,8 +259,22 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => effort.evaluate((node) => node === document.activeElement))
-        .toBe(true);
+        .poll(() =>
+          effort.evaluate((node) =>
+            node === document.activeElement
+              ? "effort trigger"
+              : JSON.stringify({
+                  activeTag: document.activeElement?.tagName ?? null,
+                  activeClass: document.activeElement?.getAttribute("class") ?? null,
+                  activeRole: document.activeElement?.getAttribute("role") ?? null,
+                  openPickers: [
+                    ...document.querySelectorAll("details[data-chat-native-picker][open]"),
+                  ].map((picker) => picker.className),
+                  openTooltips: document.querySelectorAll("openclaw-tooltip[open]").length,
+                }),
+          ),
+        )
+        .toBe("effort trigger");
     });
   });
 
@@ -363,7 +377,9 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       const composerShell = page.locator(".agent-chat__composer-shell");
       const chatContent = page.locator("main.content--chat");
-      const chatMain = page.locator(".chat-workbench__main");
+      // Details reserves a column; the composer stays centered in the conversation,
+      // not across the combined conversation and rail.
+      const chatMain = page.locator(".chat-main__conversation");
       const model = composer.locator('[data-chat-model-select="true"]');
       const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
@@ -676,6 +692,8 @@ suite.define(() => {
         .toBe(true);
 
       await page.setViewportSize({ width: 1280, height: 900 });
+      // Details releases its reserved column after the resize reaches its layout owner.
+      await page.locator(".chat-details--docked").waitFor({ state: "detached" });
       const [compactChatMainBox, compactComposerShellBox] = await Promise.all([
         chatMain.boundingBox(),
         composerShell.boundingBox(),
@@ -696,14 +714,16 @@ suite.define(() => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const viewDropdown = page.locator("wa-dropdown.chat-header-session-menu");
+      const viewDropdown = page.locator(".chat-header-session-menu");
       const viewMenu = viewDropdown.getByRole("menuitem", { name: "View", exact: true });
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await viewMenu.hover();
       await expect
         .poll(() =>
-          viewMenu
-            .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
+          viewDropdown
+            .getByRole("menu", { name: "View", exact: true })
+            .getByRole("menuitemcheckbox")
+            .locator(".session-menu__text")
             .allTextContents(),
         )
         .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
@@ -718,7 +738,7 @@ suite.define(() => {
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await settings.click();
-      await expect.poll(() => viewDropdown.getAttribute("open")).toBeNull();
+      await expect.poll(() => settings.getAttribute("aria-expanded")).toBe("false");
 
       await textarea.fill("Send this message");
       await expect
@@ -774,10 +794,10 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         state: "delta",
       });
-      // The working row stays attached with elapsed/token telemetry throughout streaming.
+      // Answer publication ends visual activity while queue and Stop stay owned.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.isVisible()).toBe(true);
-      await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
+      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => announcement.textContent()).toBe("");
       await expect.poll(() => layout.isVisible()).toBe(true);
       await expect.poll(() => model.isVisible()).toBe(true);
       await textarea.fill("Steer this queued follow-up");
@@ -856,7 +876,7 @@ suite.define(() => {
         .toBe(true);
       await captureMobileState(
         "mobile-composer-permissions-open.png",
-        composer.locator('.chat-controls__permission-picker [part="menu"]'),
+        composer.locator(".chat-controls__permission-menu"),
         [composer.locator(".chat-controls__permission-option").first()],
       );
       await page.keyboard.press("Escape");
@@ -890,8 +910,15 @@ suite.define(() => {
       expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
       expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
       await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
-      expect(mobileContextBox.y + mobileContextBox.height).toBeLessThanOrEqual(
-        mobileModelSettingsBox.y + 1,
+      expect(
+        Math.abs(
+          mobileContextBox.y +
+            mobileContextBox.height / 2 -
+            (mobileModelSettingsBox.y + mobileModelSettingsBox.height / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(mobileContextBox.x + mobileContextBox.width).toBeLessThanOrEqual(
+        mobileModelSettingsBox.x,
       );
       expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
       expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);

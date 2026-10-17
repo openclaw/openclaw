@@ -42,6 +42,7 @@ interface ProviderModelConfig
       | "thinkingLevelMap"
       | "input"
       | "maxTokens"
+      | "parameterCount"
       | "headers"
       | "compat"
     >,

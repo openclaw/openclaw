@@ -6,6 +6,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   loadSessionEntry,
@@ -132,6 +133,7 @@ it("does not retain native admission from a rolled-back repair of an unrelated r
       { sessionId: "damaged", updatedAt: 1 },
     );
     const seeded = openOpenClawAgentDatabase(scope);
+    markCanonicalSessionValidationPending(seeded, ["agent:main:damaged"]);
     seeded.db.exec(
       "UPDATE session_nodes SET entry_json = '{' WHERE session_key = 'agent:main:damaged'; UPDATE session_nodes SET entry_valid = 1 WHERE session_key = 'agent:main:damaged'",
     );
@@ -175,7 +177,8 @@ it("does not publish an autocommit main-key change when receipt invalidation fai
     const scope = { agentId: "main", env, sessionKey: "agent:main:policy" };
     replaceSessionEntrySync(scope, { sessionId: "policy", updatedAt: 1 });
     const database = openOpenClawAgentDatabase(scope);
-    database.db.setAuthorizer((action, table, column) => {
+    const db = requireNativeSqliteDatabase(database.db);
+    db.setAuthorizer((action, table, column) => {
       const denied =
         action === constants.SQLITE_UPDATE &&
         table === "session_key_contract" &&
@@ -185,7 +188,7 @@ it("does not publish an autocommit main-key change when receipt invalidation fai
     try {
       expect(() => setCanonicalSqliteSessionMainKey(database, "changed-main")).toThrow(/authoriz/u);
     } finally {
-      database.db.setAuthorizer(null);
+      db.setAuthorizer(null);
     }
     expect(
       database.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),

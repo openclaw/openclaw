@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createRetainedOperation,
@@ -259,6 +260,88 @@ function createProbe(root: string, name = "source", value = "preserved") {
   }
   return filename;
 }
+
+it.each(["pre-aborted", "queued", "accepted"] as const)(
+  "sends preparation cancellation only after dispatch (%s)",
+  async (phase) => {
+    const root = directories.make("staging-prepare-cancel-");
+    const pathname = createProbe(root);
+    const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
+    const controller = new AbortController();
+    const reason = new Error("snapshot caller canceled");
+    const gate = phase === "queued" ? holdRelease(1) : undefined;
+    const first = gate
+      ? createSqliteSnapshotStagingDirectory(root, false, undefined, true)
+      : undefined;
+    let request:
+      | ReturnType<ReturnType<typeof captureSqliteSnapshotStagingOwner>["start"]>
+      | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- call keeps the real MessagePort receiver.
+    const nativePost = MessagePort.prototype.postMessage;
+    const posts = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+      this: MessagePort,
+      message: unknown,
+      transfers,
+    ) {
+      nativePost.call(this, message, transfers);
+      if (
+        phase === "accepted" &&
+        isRecord(message) &&
+        isRecord(message.input) &&
+        message.input.type === "prepare" &&
+        message.input.abortPort instanceof MessagePort
+      ) {
+        // The genuine task send has transferred its cancellation endpoint.
+        controller.abort(reason);
+      }
+    });
+    try {
+      if (gate && first) {
+        await waitForGate(gate, first);
+      }
+      if (phase === "pre-aborted") {
+        controller.abort(reason);
+      }
+      request = captureSqliteSnapshotStagingOwner().start(
+        {
+          type: "prepare",
+          root,
+          pathname,
+          allowLegacyWorker: false,
+          preserveSourceArtifacts: true,
+          deadlineOwnedByCaller: false,
+          launch: { env, cwd, transport: { kind: "native" } },
+        },
+        controller.signal,
+      );
+      const rejected =
+        phase === "accepted"
+          ? expect(request.result).rejects.toThrow("SQLite snapshot preparation stopped")
+          : expect(request.result).rejects.toBe(reason);
+      if (phase === "queued") {
+        expect(observation.admitted).toHaveLength(1);
+        controller.abort(reason);
+      }
+      releaseGate(gate);
+      await rejected;
+      expect(
+        posts.mock.calls.filter(([message]) => isRecord(message) && message.type === "abort"),
+      ).toHaveLength(phase === "accepted" ? 1 : 0);
+      expect(
+        observation.admitted.filter((input) => isRecord(input) && input.type === "prepare"),
+      ).toHaveLength(phase === "accepted" ? 1 : 0);
+    } finally {
+      releaseGate(gate);
+      controller.abort(reason);
+      await Promise.allSettled([request?.result]);
+      await request?.startClose().result;
+      if (first) {
+        expect(await removeTempDirectoryAsync(await first)).toBe(true);
+      }
+    }
+    expect(fs.readdirSync(root)).toEqual([path.basename(pathname)]);
+  },
+);
 
 it.each(["queued", "accepted"] as const)(
   "settles %s allocation cancellation without retiring a sibling token",

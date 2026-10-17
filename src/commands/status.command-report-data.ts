@@ -9,6 +9,7 @@ import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
+import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import {
   buildStatusFooterLines,
@@ -50,6 +51,13 @@ export async function buildStatusCommandReportData(
 ) {
   const overviewRows = buildStatusCommandOverviewRows({
     ...params,
+    surface: {
+      ...params.surface,
+      databaseEngines: await resolveStatusDatabaseEngines(
+        params.surface.cfg,
+        params.summary.databaseStores,
+      ),
+    },
     backupFreshness: await readBackupRunFreshness(params.env),
     osLabel: params.osSummary.label,
   });

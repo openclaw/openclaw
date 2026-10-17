@@ -11,6 +11,7 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import type { CodexPluginConfig } from "./config.js";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import {
   clearSharedCodexAppServerClientAndWait,
@@ -294,7 +295,7 @@ if (process.argv.includes("--native")) {
         args: [executable, "app-server"],
         homeScope: "agent",
       },
-    };
+    } satisfies CodexPluginConfig;
     const config = {
       agents: {
         ownership: "explicit" as const,

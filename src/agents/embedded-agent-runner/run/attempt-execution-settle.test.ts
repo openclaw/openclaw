@@ -2,7 +2,6 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  appendTranscriptEvent,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
@@ -11,6 +10,7 @@ import {
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { appendTranscriptEventSnapshotSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendPreparedTranscriptEvent } from "../../../config/sessions/session-transcript-event.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../../../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../../config/sessions/transcript-tree.js";
@@ -332,7 +332,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           const after = await loadTranscriptEvents(target);
           expect(after.slice(0, before.length)).toEqual(before);
           expect(after).toHaveLength(before.length + 1);
-          const stored = SessionManager.open(target).getLeafEntry();
+          const stored = (await SessionManager.openAsync(target)).getLeafEntry();
           expect(stored).toMatchObject({
             type: "message",
             message: { role: "custom", customType: "openclaw.system-note" },
@@ -370,8 +370,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           await first.lifecycle.dispose();
         }
         const source = await SessionManager.openAsync(first.target, testState.workspaceDir);
-        const kept = source.appendCustomMessageEntry("retained-context", "Current context", true);
-        source.appendCompaction("Earlier image failure summarized", kept, 100);
+        const kept = await source.appendCustomMessageEntryAsync(
+          "retained-context",
+          "Current context",
+          true,
+        );
+        await source.appendCompactionAsync("Earlier image failure summarized", kept, 100);
         const current = await createPersistedImageNoteFixture(mocks, testState, storage, true);
         try {
           const expected = current.manager.buildSessionContext().messages;
@@ -405,10 +409,14 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
   it.each(
     (["file-backed", "incognito"] as const).flatMap((storage) =>
-      (["none", "side", "side-dirty", "controls-dirty", "visible"] as const).map((intervening) => ({
-        storage,
-        intervening,
-      })),
+      (["none", "side", "side-dirty", "controls-dirty", "visible"] as const)
+        // Memory actors publish their projection atomically and have no dirty SQLite index.
+        .filter(
+          (intervening) =>
+            storage === "file-backed" ||
+            (intervening !== "side-dirty" && intervening !== "controls-dirty"),
+        )
+        .map((intervening) => ({ storage, intervening })),
     ),
   )(
     "reconciles a committed note against the visible tail ($storage, $intervening)",
@@ -478,7 +486,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             expect(needsReconcile).toBe(true);
           };
           if (intervening === "side" || intervening === "side-dirty") {
-            const visibleMessages = SessionManager.open(target).buildSessionContext().messages;
+            const visibleMessages = (await SessionManager.openAsync(target)).buildSessionContext()
+              .messages;
             const sideEntry = {
               type: "custom",
               id: `${note.id}-side`,
@@ -491,7 +500,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             if (intervening === "side-dirty") {
               appendBeforeReconcile(sideEntry);
             } else {
-              await appendTranscriptEvent(target, sideEntry);
+              await appendPreparedTranscriptEvent(target, sideEntry, () => {});
               await waitForSessionTranscriptProjection(target);
             }
             const stored = await loadTranscriptEvents(target);
@@ -499,10 +508,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             expect(stored.slice(committed.length)).toEqual([sideEntry]);
             expect(resolveSessionTranscriptActiveLeafEntryId(stored)).toBe(note.id);
             if (intervening === "side") {
-              expect(SessionManager.open(target).getLeafId()).toBe(note.id);
-              expect(SessionManager.open(target).buildSessionContext().messages).toEqual(
-                visibleMessages,
-              );
+              const visible = await SessionManager.openAsync(target);
+              expect(visible.getLeafId()).toBe(note.id);
+              expect(visible.buildSessionContext().messages).toEqual(visibleMessages);
             }
           } else if (intervening === "controls-dirty") {
             const firstControl = {
@@ -524,7 +532,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             expect(stored.slice(committed.length)).toEqual([firstControl, secondControl]);
             expect(selectVisibleTranscriptEvents(stored).at(-1)).toMatchObject({ id: note.id });
           } else if (intervening === "visible") {
-            const later = SessionManager.open(target).appendMessage({
+            const later = await (
+              await SessionManager.openAsync(target)
+            ).appendMessageAsync({
               role: "user",
               content: "A newer visible turn",
               timestamp: 2,
@@ -532,7 +542,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             const stored = await loadTranscriptEvents(target);
             expect(stored.slice(0, committed.length)).toEqual(committed);
             expect(stored).toHaveLength(committed.length + 1);
-            expect(SessionManager.open(target).getLeafId()).toBe(later);
+            expect((await SessionManager.openAsync(target)).getLeafId()).toBe(later);
           }
           const beforeReplay = await loadTranscriptEvents(target);
 
@@ -560,7 +570,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           const expected =
             intervening === "visible"
               ? previousMessages
-              : SessionManager.open(target).buildSessionContext().messages;
+              : (await SessionManager.openAsync(target)).buildSessionContext().messages;
           expect(await loadTranscriptEvents(target)).toEqual(beforeReplay);
           expect(activeSession.messages).toEqual(expected);
           expect(replay.messagesSnapshot).toEqual(expected);

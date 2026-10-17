@@ -54,7 +54,7 @@ function orderedCleanup(order: string[]) {
       order.push("flush");
     }),
     session: {
-      agent: {},
+      agent: { waitForIdle: async () => {} },
       dispose: () => {
         order.push("dispose");
       },

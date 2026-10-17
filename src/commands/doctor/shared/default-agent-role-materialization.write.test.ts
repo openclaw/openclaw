@@ -27,6 +27,23 @@ function configIO(root: string, env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_
   });
 }
 
+async function setupConfig(
+  config: (root: string) => unknown,
+  envOverrides: NodeJS.ProcessEnv = {},
+  files: Record<string, string> = {},
+) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-roles-"));
+  roots.push(root);
+  const configPath = path.join(root, "openclaw.json");
+  const env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_TEST_FAST: "1", ...envOverrides };
+  for (const [name, contents] of Object.entries(files)) {
+    await fs.writeFile(path.join(root, name), contents, "utf8");
+  }
+  await fs.writeFile(configPath, `${JSON.stringify(config(root), null, 2)}\n`, "utf8");
+  const io = configIO(root, env);
+  return { root, configPath, env, io };
+}
+
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
@@ -35,38 +52,22 @@ afterEach(async () => {
 
 describe("default role materialization authored writes", () => {
   it("preserves env references and includes and is idempotent after persistence", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-roles-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    const channelsPath = path.join(root, "channels.json5");
     const includeRaw = `${JSON.stringify({ telegram: { enabled: true } }, null, 2)}\n`;
-    await fs.writeFile(channelsPath, includeRaw, "utf-8");
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          agents: {
-            defaults: { model: "${DEFAULT_MODEL}", workspace: "/srv/ops" },
-            entries: {
-              ops: { default: true },
-              research: { model: "${RESEARCH_MODEL}" },
-            },
+    const { root, configPath, io } = await setupConfig(
+      () => ({
+        agents: {
+          defaults: { model: "${DEFAULT_MODEL}", workspace: "/srv/ops" },
+          entries: {
+            ops: { default: true },
+            research: { model: "${RESEARCH_MODEL}" },
           },
-          channels: { $include: "./channels.json5" },
-          talk: { provider: "test" },
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
+        channels: { $include: "./channels.json5" },
+        talk: { provider: "test" },
+      }),
+      { DEFAULT_MODEL: "openai/default-model", RESEARCH_MODEL: "openai/research-model" },
+      { "channels.json5": includeRaw },
     );
-    const io = configIO(root, {
-      HOME: root,
-      OPENCLAW_TEST_FAST: "1",
-      DEFAULT_MODEL: "openai/default-model",
-      RESEARCH_MODEL: "openai/research-model",
-    });
-
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
     expect(snapshot.sourceConfig).toHaveProperty("agents.entries.ops.default", true);
@@ -91,7 +92,7 @@ describe("default role materialization authored writes", () => {
     expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
     expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
     expect(persisted.channels).toEqual({ $include: "./channels.json5" });
-    await expect(fs.readFile(channelsPath, "utf-8")).resolves.toBe(includeRaw);
+    await expect(fs.readFile(path.join(root, "channels.json5"), "utf-8")).resolves.toBe(includeRaw);
     expect(persisted.bindings).toContainEqual({
       agentId: "ops",
       match: { channel: "telegram", accountId: "*" },
@@ -122,20 +123,13 @@ describe("default role materialization authored writes", () => {
   });
 
   it("pins the survivor's previous workspace during a generic roster collapse", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-collapse-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          defaults: { workspace: "/srv/fleet" },
-          entries: { ops: {}, research: {} },
-        },
-      }),
-    );
-    const io = configIO(root);
+    const { configPath, io } = await setupConfig(() => ({
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: "/srv/fleet" },
+        entries: { ops: {}, research: {} },
+      },
+    }));
     const snapshot = await io.readConfigFileSnapshot();
 
     await io.writeConfigFile(
@@ -155,15 +149,9 @@ describe("default role materialization authored writes", () => {
   });
 
   it("refuses to remove an inherited-auth owner with a custom agentDir", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-custom-auth-owner-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    const customAgentDir = path.join(root, "custom-ops-agent");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { agentDir: customAgentDir } } } }),
-    );
-    const io = configIO(root);
+    const { io } = await setupConfig((root) => ({
+      agents: { entries: { ops: { agentDir: path.join(root, "custom-ops-agent") } } },
+    }));
     const snapshot = await io.readConfigFileSnapshot();
 
     await expect(
@@ -181,23 +169,11 @@ describe("default role materialization authored writes", () => {
   });
 
   it("refuses to retire the legacy owner while cron rows still need Doctor", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-cron-owner-write-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
+    const { root, configPath, env } = await setupConfig(() => ({
+      agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+    }));
     const storePath = path.join(root, "custom-cron", "jobs.json");
-    const env = {
-      HOME: root,
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_TEST_FAST: "1",
-    } as NodeJS.ProcessEnv;
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          list: [{ id: "ops", default: true }, { id: "research" }],
-        },
-      }),
-    );
+    env.OPENCLAW_STATE_DIR = root;
     writeConfigMachineState("cron.store", storePath, { env });
     const storeKey = cronStoreKey(storePath);
     const database = openOpenClawStateDatabase({ env }).db;
@@ -241,22 +217,10 @@ describe("default role materialization authored writes", () => {
   });
 
   it("requires roster migration before an unrelated write and preserves the canonical owner", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-owner-roundtrip-"));
-    roots.push(root);
-    const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: {
-          entries: {
-            ops: {},
-            research: { default: true },
-          },
-        },
-        gateway: { port: 18789 },
-      }),
-    );
-    const io = configIO(root);
+    const { root, configPath, io } = await setupConfig(() => ({
+      agents: { entries: { ops: {}, research: { default: true } } },
+      gateway: { port: 18789 },
+    }));
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
     const original = await fs.readFile(configPath, "utf8");

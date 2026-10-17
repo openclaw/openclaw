@@ -5,7 +5,7 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as diagnostics from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { readUserProfileIdentity } from "../../state/user-profile-list.js";
+import { readResidentUserProfileIdentity } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -187,7 +187,7 @@ it("preserves legacy email creation and failed identity synchronization", async 
         expect(observedId, kind).toBe(kind === "legacy email" ? existing.id : undefined);
       }
       expect(sync, kind).not.toHaveBeenCalled();
-      expect(readUserProfileIdentity("missing-profile"), kind).toBeUndefined();
+      expect(readResidentUserProfileIdentity("missing-profile"), kind).toBeUndefined();
     }
   });
 });

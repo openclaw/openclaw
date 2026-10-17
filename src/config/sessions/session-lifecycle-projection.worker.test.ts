@@ -291,6 +291,36 @@ it("keeps guarded lifecycle writes and committed follow-ups off the host while p
   });
 });
 
+it.each([2, 1])(
+  "keeps maintenance without explicit mutations on the resident writer (cap=%s)",
+  async (maxEntries) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = maintenanceFixture();
+      const reclaim = vi.spyOn(reclamation, "runSqliteSessionReclamation");
+      const committed = vi.fn();
+      const result = await applySessionEntryLifecycleMutation({
+        ...f.scope,
+        activeSessionKey: f.scope.sessionKey,
+        maintenanceOverride: { ...f.maintenanceOverride, maxEntries },
+        onLifecycleCommitted: committed,
+      });
+      expect(result).toMatchObject({
+        beforeCount: 2,
+        afterCount: 2,
+        capped: 2 - maxEntries,
+        archived: 2 - maxEntries,
+        removedEntries: 0,
+      });
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(committed).toHaveBeenCalledOnce();
+      expect(f.read()?.sessionId).toBe(f.initial.sessionId);
+      expect(f.read(f.siblingKey)?.archiveReason).toBe(
+        maxEntries === 1 ? "active-session-cap" : undefined,
+      );
+    });
+  },
+);
+
 it("does not classify another operation's conflict as retryable reply initialization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   openEngineStore,
+  withEngineStoreAdmission,
   type EngineConnection,
   type DatabaseEngineInput,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
@@ -14,6 +15,8 @@ import {
   getSqliteDatabaseAdmission,
   openNodeSqliteDatabase,
   publishSqliteDatabaseAdmission,
+  admitSqliteSchema,
+  getAdmittedSqliteSchemaFacts,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { WORKBOARD_POSTGRES_SCHEMA_SQL } from "./workboard-postgres-schema.js";
@@ -124,27 +127,45 @@ export function createWorkboardDatabase(
   };
   try {
     retainClose?.(close);
-    selected = openEngineStore({
-      anchor: db,
-      schema: {
-        id: "workboard",
-        version: SCHEMA_VERSION,
-        sqlite: WORKBOARD_SCHEMA_SQL,
-        postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
-      },
-      input: postgresInput,
-      prepareAnchor: () => {
-        maintenance = configureSqliteConnectionPragmas(db, {
-          busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
-          checkpointIntervalMs: 0,
-          databaseLabel: "workboard database",
-          databasePath: dbPath,
-          foreignKeys: true,
-          synchronous: "NORMAL",
-        });
-      },
-      openSqlite: () => ensureWorkboardSchema(db),
-    });
+    selected = withEngineStoreAdmission(() =>
+      openEngineStore({
+        anchor: db,
+        schema: {
+          id: "workboard",
+          version: SCHEMA_VERSION,
+          sqlite: WORKBOARD_SCHEMA_SQL,
+          postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
+        },
+        input: postgresInput,
+        inspectSqlite: () => {
+          admitSqliteSchema(db);
+          const facts = getAdmittedSqliteSchemaFacts(db);
+          if (!facts) {
+            throw new Error("Workboard SQLite catalog admission is unavailable");
+          }
+          return {
+            hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
+            hasExistingData:
+              [...facts.tables].some(
+                (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
+              ) ||
+              facts.views.size > 0 ||
+              facts.triggers.size > 0,
+          };
+        },
+        prepareAnchor: () => {
+          maintenance = configureSqliteConnectionPragmas(db, {
+            busyTimeoutMs: WORKBOARD_SQLITE_BUSY_TIMEOUT_MS,
+            checkpointIntervalMs: 0,
+            databaseLabel: "workboard database",
+            databasePath: dbPath,
+            foreignKeys: true,
+            synchronous: "NORMAL",
+          });
+        },
+        openSqlite: () => ensureWorkboardSchema(db),
+      }),
+    );
     hardenWorkboardDatabaseFiles(dbPath);
     return { db: selected, close };
   } catch (error) {

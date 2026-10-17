@@ -42,7 +42,11 @@ import {
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "../../prepared-model-runtime-generation-scope.js";
+import { readAdmittedPublishedModelCatalog } from "../../prepared-model-runtime.capture.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
@@ -404,28 +408,28 @@ export async function resolveEmbeddedRunModelSetup(params: {
       model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
       ...createEmptyAgentDiscoveryStores(),
     };
+    // Native capability rows omit transport; keep the picker routes captured for this turn.
+    const generation = getPreparedModelRuntimePluginGeneration();
+    const borrowedSnapshot = generation
+      ? getPreparedModelRuntimeBorrowedSnapshot(generation)
+      : undefined;
+    const routeCatalog =
+      (borrowedSnapshot &&
+      borrowedSnapshot.modelCatalog === params.preparedModelRuntime?.modelCatalog
+        ? readAdmittedPublishedModelCatalog(borrowedSnapshot)
+        : undefined) ?? catalog;
     const routeVariants =
-      catalog &&
-      createModelCatalogSnapshotView(runParams.config ?? {}, catalog).variantsOf({
+      routeCatalog &&
+      createModelCatalogSnapshotView(runParams.config ?? {}, routeCatalog).variantsOf({
         provider,
         id: modelId,
       });
     observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
-    const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
-      provider,
-      harnessRuntime: agentHarness.id,
-      agentHarnessId: agentHarness.id,
-      authProfileProvider: runParams.authProfileId?.split(":", 1)[0],
-      authProfileId: runParams.authProfileId,
-      config: runParams.config,
-      workspaceDir: params.workspaceDir,
-    });
     const tieredResolution = await resolveTieredModel({
       abortSignal: runParams.abortSignal,
       assertCurrent: params.assertCurrent,
-      provider: selectedRuntimeProvider,
-      ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
+      provider,
       modelId,
       agentDir: params.agentDir,
       requestedRouteResolution: modelSelectionChangedByHook

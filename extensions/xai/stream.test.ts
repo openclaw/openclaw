@@ -2,7 +2,6 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
-  type Api,
   type Context,
   type Model,
   type ModelThinkingLevel,
@@ -12,13 +11,10 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
-type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 
 function captureWrappedModelId(params: {
   modelId: string;
   fastMode: boolean | "ultrafast" | (() => boolean | "ultrafast" | undefined);
-  api?: XaiStreamApi;
-  provider?: string;
 }): string {
   let capturedModelId = "";
   const baseStreamFn: StreamFn = (model) => {
@@ -32,10 +28,10 @@ function captureWrappedModelId(params: {
   } as never);
   void wrapped?.(
     {
-      api: params.api ?? "openai-responses",
-      provider: params.provider ?? "xai",
+      api: "openai-responses",
+      provider: "xai",
       id: params.modelId,
-    } as Model<Extract<Api, "openai-completions" | "openai-responses">>,
+    } as Model<"openai-responses">,
     { messages: [] } as Context,
     {},
   );
@@ -45,33 +41,28 @@ function captureWrappedModelId(params: {
 
 function runXaiToolPayloadWrapper(params: {
   payload: Record<string, unknown>;
-  api?: XaiStreamApi;
   modelId?: string;
   input?: string[];
   provider?: string;
   baseUrl?: string;
 }) {
   const baseStreamFn: StreamFn = (_model, _context, options) => {
-    options?.onPayload?.(params.payload, {} as Model<XaiStreamApi>);
+    options?.onPayload?.(params.payload, {} as Model<"openai-responses">);
     return {} as ReturnType<StreamFn>;
   };
   const wrapped = wrapXaiProviderStream({
     streamFn: baseStreamFn,
     extraParams: { tool_stream: false },
   } as never);
-  const api = params.api ?? "openai-responses";
-
   void wrapped?.(
     {
-      api,
+      api: "openai-responses",
       provider: params.provider ?? "xai",
       baseUrl: params.baseUrl ?? "https://proxy.example/v1",
-      id:
-        params.modelId ??
-        (api === "openai-completions" ? "grok-4-1-fast-reasoning" : "grok-4-fast"),
+      id: params.modelId ?? "grok-4-fast",
       reasoning: params.modelId ? !params.modelId.includes("non-reasoning") : true,
       ...(params.input ? { input: params.input } : {}),
-    } as Model<XaiStreamApi>,
+    } as Model<"openai-responses">,
     { messages: [] } as Context,
     {},
   );
@@ -97,8 +88,8 @@ it.each([
 });
 
 async function captureXaiResponsesPayloadWithThinking(
-  reasoning: ModelThinkingLevel = "low",
-  modelId = "grok-4.5",
+  reasoning: ModelThinkingLevel,
+  modelId: string,
 ): Promise<Record<string, unknown>> {
   const model = applyXaiRuntimeModelCompat({
     api: "openai-responses",
@@ -110,7 +101,7 @@ async function captureXaiResponsesPayloadWithThinking(
     cost: {
       input: 2,
       output: 6,
-      cacheRead: modelId === "grok-4.5" ? 0.3 : 0.5,
+      cacheRead: 0.5,
       cacheWrite: 0,
     },
     contextWindow: 500_000,
@@ -294,81 +285,74 @@ describe("xai stream wrappers", () => {
     },
   );
 
-  it.each([true])(
-    "keeps compatibility image history as a prefix across turns (parallel: %s)",
-    (parallel) => {
-      const image = { type: "input_image", image_url: "data:image/png;base64,QUJDRA==" };
-      const result = {
-        type: "function_call_output",
-        call_id: "call_image",
-        output: [{ type: "input_text", text: "Read image" }, image],
-      };
-      const group = [
-        result,
-        ...(parallel
-          ? [{ type: "function_call_output", call_id: "call_text", output: "No image" }]
-          : []),
-      ];
-      const history = [
-        { type: "message", role: "user", content: "Read the files" },
-        { type: "function_call", call_id: "call_image", name: "read", arguments: "{}" },
-        ...(parallel
-          ? [{ type: "function_call", call_id: "call_text", name: "read", arguments: "{}" }]
-          : []),
-        ...group,
-      ];
-      const project = (input: Array<Record<string, unknown>>) => {
-        const payload = { input: structuredClone(input) };
-        runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
-        return payload.input;
-      };
-      const first = project(history);
-      const nextTurns = [
-        { type: "message", role: "assistant", content: "I read the files." },
-        { type: "message", role: "user", content: "Read another image" },
-        { type: "function_call", call_id: "call_next", name: "read", arguments: "{}" },
-        { ...result, call_id: "call_next" },
-      ];
-      const next = project([...history, ...nextTurns]);
+  it("keeps parallel compatibility image history as a prefix across turns", () => {
+    const image = { type: "input_image", image_url: "data:image/png;base64,QUJDRA==" };
+    const result = {
+      type: "function_call_output",
+      call_id: "call_image",
+      output: [{ type: "input_text", text: "Read image" }, image],
+    };
+    const group = [
+      result,
+      { type: "function_call_output", call_id: "call_text", output: "No image" },
+    ];
+    const history = [
+      { type: "message", role: "user", content: "Read the files" },
+      { type: "function_call", call_id: "call_image", name: "read", arguments: "{}" },
+      { type: "function_call", call_id: "call_text", name: "read", arguments: "{}" },
+      ...group,
+    ];
+    const project = (input: Array<Record<string, unknown>>) => {
+      const payload = { input: structuredClone(input) };
+      runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
+      return payload.input;
+    };
+    const first = project(history);
+    const nextTurns = [
+      { type: "message", role: "assistant", content: "I read the files." },
+      { type: "message", role: "user", content: "Read another image" },
+      { type: "function_call", call_id: "call_next", name: "read", arguments: "{}" },
+      { ...result, call_id: "call_next" },
+    ];
+    const next = project([...history, ...nextTurns]);
 
-      // Compare the actual serialized message prefix, including the image bytes.
-      expect(JSON.stringify(next.slice(0, first.length))).toBe(JSON.stringify(first));
-      expect(first.slice(-group.length - 1)).toEqual([
-        { ...result, output: "Read image" },
-        ...(parallel ? [group[1]] : []),
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Image(s) from tool result #1:" }, image],
-        },
-      ]);
-      expect(next.at(-1)).toEqual({
+    // Compare the actual serialized message prefix, including the image bytes.
+    expect(JSON.stringify(next.slice(0, first.length))).toBe(JSON.stringify(first));
+    expect(first.slice(-group.length - 1)).toEqual([
+      { ...result, output: "Read image" },
+      group[1],
+      {
         type: "message",
         role: "user",
-        content: [
-          { type: "input_text", text: `Image(s) from tool result #${group.length + 1}:` },
-          image,
-        ],
-      });
-      expect(project(next)).toEqual(next);
+        content: [{ type: "input_text", text: "Image(s) from tool result #1:" }, image],
+      },
+    ]);
+    expect(next.at(-1)).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: `Image(s) from tool result #${group.length + 1}:` },
+        image,
+      ],
+    });
+    expect(project(next)).toEqual(next);
 
-      // Compaction replaces old history; the retained tail establishes a fresh prefix.
-      const compactedHistory = [
-        { type: "message", role: "user", content: "Summary: the first files were read." },
-        ...nextTurns,
-      ];
-      const compacted = project(compactedHistory);
-      expect(compacted.at(-1)).toEqual(first.at(-1));
-      expect(compacted).toHaveLength(compactedHistory.length + 1);
-      expect(
-        project([
-          ...compactedHistory,
-          { type: "message", role: "assistant", content: "The next image is blue." },
-          { type: "message", role: "user", content: "Thanks" },
-        ]).slice(0, compacted.length),
-      ).toEqual(compacted);
-    },
-  );
+    // Compaction replaces old history; the retained tail establishes a fresh prefix.
+    const compactedHistory = [
+      { type: "message", role: "user", content: "Summary: the first files were read." },
+      ...nextTurns,
+    ];
+    const compacted = project(compactedHistory);
+    expect(compacted.at(-1)).toEqual(first.at(-1));
+    expect(compacted).toHaveLength(compactedHistory.length + 1);
+    expect(
+      project([
+        ...compactedHistory,
+        { type: "message", role: "assistant", content: "The next image is blue." },
+        { type: "message", role: "user", content: "Thanks" },
+      ]).slice(0, compacted.length),
+    ).toEqual(compacted);
+  });
 
   it("replays source-based input_image parts from tool results", () => {
     const payload: Record<string, unknown> = {

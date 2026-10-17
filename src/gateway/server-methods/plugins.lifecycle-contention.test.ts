@@ -108,6 +108,8 @@ it.each(["direct", "nested"] as const)(
           expect.objectContaining({
             code: "UNAVAILABLE",
             retryable: true,
+            retryAfterMs: 1_000,
+            details: { mutationAccepted: false },
             message: expect.stringContaining("retry"),
           }),
         );

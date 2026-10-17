@@ -59,5 +59,8 @@ it("keeps plugin dialog content and cancellation policy across handle updates", 
   await hidden;
   expect(onCancel).toHaveBeenCalledOnce();
   expect(dialog.open).toBe(false);
+  handle.dispose();
+  modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+  expect(onCancel).toHaveBeenCalledOnce();
   expect(onError).not.toHaveBeenCalled();
 });

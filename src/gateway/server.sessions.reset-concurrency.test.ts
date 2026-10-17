@@ -8,6 +8,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
@@ -72,17 +73,18 @@ test.each(["normal", "incognito", "replacement"])(
   async (mode) => {
     const registeredHarnesses = listRegisteredAgentHarnesses();
     const { storePath } = await createSessionStoreDir();
-    const sessionKey = `agent:main:${mode === "incognito" ? "incognito" : "dashboard"}:closing-reset`;
+    const sessionKey = `agent:main:dashboard:${mode === "incognito" ? "incognito-" : ""}closing-reset`;
     const sessionId = "closing-reset";
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          incognito: mode === "incognito" ? true : undefined,
-          lifecycleRevision: "original",
-          totalTokens: 99,
-        }),
-      },
+    const initialEntry = sessionStoreEntry(sessionId, {
+      incognito: mode === "incognito" ? true : undefined,
+      lifecycleRevision: "original",
+      totalTokens: 99,
     });
+    if (mode === "incognito") {
+      await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, initialEntry);
+    } else {
+      await writeSessionStore({ entries: { [sessionKey]: initialEntry } });
+    }
     let current = true;
     let cleaned = false;
     registerAgentHarness({
@@ -143,15 +145,16 @@ test.each([false, true])(
   "sessions.reset rejects caller closure before cleanup (incognito: %s)",
   async (incognito) => {
     const { storePath } = await createSessionStoreDir();
-    const sessionKey = `agent:main:${incognito ? "incognito" : "dashboard"}:early-reset`;
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry("early-reset", {
-          incognito: incognito ? true : undefined,
-          totalTokens: 99,
-        }),
-      },
+    const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}early-reset`;
+    const initialEntry = sessionStoreEntry("early-reset", {
+      incognito: incognito ? true : undefined,
+      totalTokens: 99,
     });
+    if (incognito) {
+      await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, initialEntry);
+    } else {
+      await writeSessionStore({ entries: { [sessionKey]: initialEntry } });
+    }
     const before = loadSessionEntry({ sessionKey, storePath });
     let current = true;
     sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
@@ -163,73 +166,76 @@ test.each([false, true])(
   },
 );
 
-test("sessions.reset preserves a concurrent same-id lifecycle replacement", async () => {
-  const registeredHarnesses = listRegisteredAgentHarnesses();
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main", { lifecycleRevision: "original-revision" }),
-    },
-  });
-  let lifecycleCurrent = true;
-  registerAgentHarness({
-    id: "reset-race-observer",
-    label: "Reset race observer",
-    supports: () => ({ supported: false }),
-    runAttempt: async () => {
-      throw new Error("not used");
-    },
-    reset: async () => {
-      lifecycleCurrent = false;
-      await writeSessionStore({
-        entries: {
-          main: sessionStoreEntry("sess-main", {
-            label: "newer owner",
-            lifecycleRevision: "replacement-revision",
-          }),
+test.each(["sess-main", "sess-replacement"])(
+  "sessions.reset preserves a concurrent lifecycle replacement (%s)",
+  async (replacementSessionId) => {
+    const registeredHarnesses = listRegisteredAgentHarnesses();
+    const { storePath } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("sess-main", { lifecycleRevision: "original-revision" }),
+      },
+    });
+    let lifecycleCurrent = true;
+    registerAgentHarness({
+      id: "reset-race-observer",
+      label: "Reset race observer",
+      supports: () => ({ supported: false }),
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+      reset: async () => {
+        lifecycleCurrent = false;
+        await writeSessionStore({
+          entries: {
+            main: sessionStoreEntry(replacementSessionId, {
+              label: "newer owner",
+              lifecycleRevision: "replacement-revision",
+            }),
+          },
+        });
+      },
+    });
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+    try {
+      const reset = await performGatewaySessionReset({
+        key: "main",
+        reason: "new",
+        commandSource: "gateway:agent",
+        workerPlacementContext: {},
+        assertCurrent: () => {
+          if (!lifecycleCurrent) {
+            throw new Error("stale lifecycle");
+          }
         },
       });
-    },
-  });
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
 
-  try {
-    const reset = await performGatewaySessionReset({
-      key: "main",
-      reason: "new",
-      commandSource: "gateway:agent",
-      workerPlacementContext: {},
-      assertCurrent: () => {
-        if (!lifecycleCurrent) {
-          throw new Error("stale lifecycle");
-        }
-      },
-    });
-
-    expect(reset).toMatchObject({
-      ok: true,
-      entry: {
-        label: "newer owner",
-        lifecycleRevision: "replacement-revision",
-        sessionId: "sess-main",
-      },
-    });
-    expect(
-      await loadTranscriptEvents({
-        agentId: "main",
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath,
-      }),
-    ).toEqual([]);
-    expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-    expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
-    expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
-    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
-  } finally {
-    restoreRegisteredAgentHarnesses(registeredHarnesses);
-  }
-});
+      expect(reset).toMatchObject({
+        ok: true,
+        entry: {
+          label: "newer owner",
+          lifecycleRevision: "replacement-revision",
+          sessionId: replacementSessionId,
+        },
+      });
+      expect(
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        }),
+      ).toEqual([]);
+      expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+      expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+      expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
+      expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+    } finally {
+      restoreRegisteredAgentHarnesses(registeredHarnesses);
+    }
+  },
+);
 
 test("sessions.reset rejects a stale expected session without interrupting current work", async () => {
   const sessionKey = "agent:main:subagent:guarded-reset";

@@ -1,4 +1,4 @@
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 // Codex tests cover run-attempt prompt state helpers.
 import { describe, expect, it } from "vitest";
 import {
@@ -32,7 +32,7 @@ describe("invalid-image binding recovery", () => {
         store,
         identity,
         failure,
-        createNativeSessionBindingAuthority([], () => {}),
+        createNativeSessionBindingScope(() => {}),
       );
       if (owner === "current") {
         expect(store.read(identity)).toBeUndefined();

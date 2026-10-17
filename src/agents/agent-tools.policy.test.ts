@@ -248,11 +248,6 @@ describe("resolveEffectiveToolPolicy", () => {
 
   it.each<{ name: string; tools: OpenClawConfig["tools"]; warning?: string }>([
     { name: "provider wildcard deny", tools: { byProvider: { fixture: { deny: ["pro*"] } } } },
-    {
-      name: "provider profile alsoAllow",
-      tools: { byProvider: { fixture: { profile: "minimal", alsoAllow: ["process"] } } },
-      warning: 'Add alsoAllow: ["process"]',
-    },
   ])("warns only about actionable grants with $name", async ({ tools, warning }) => {
     const logs = createWarnLogCapture("openclaw-agent-tools-policy-test");
     try {

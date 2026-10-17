@@ -15,7 +15,10 @@ const metaPreset = {
     api: "openai-responses",
     baseUrl: META_BASE_URL,
     catalogModels: buildMetaCatalogModels,
-    aliases: [{ modelRef: META_DEFAULT_MODEL_REF, alias: "Muse Spark 1.3" }],
+    aliases: [
+      { modelRef: META_DEFAULT_MODEL_REF, alias: "Muse Spark 1.3" },
+      { modelRef: "meta/muse-wonder-1.0", alias: "Muse Wonder" },
+    ],
   }),
 } satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];
 

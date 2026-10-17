@@ -8,10 +8,10 @@ import {
   acquireRequesterScopedMcpRuntime,
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
-  getSessionMcpRuntimeManagerForTesting,
   setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
+import { getSessionMcpRuntimeTestManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createMcpProbeFixture, probeMcpServer } from "./agent-bundle-mcp-probe.test-support.js";
 import {
@@ -108,10 +108,8 @@ it("releases capacity when every configured server is excluded before connection
           cfg,
         });
         await releaseSessionMcpRuntime(acquired, new Set());
-        expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
-        expect(
-          getSessionMcpRuntimeManagerForTesting().resolveSessionId(sessionKey),
-        ).toBeUndefined();
+        expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
+        expect(getSessionMcpRuntimeTestManager().resolveSessionId(sessionKey)).toBeUndefined();
       }
     })(),
   ).resolves.toBeUndefined();
@@ -133,7 +131,7 @@ it.each(["exported acquisition", "harness materialization"])(
     const acquired = await acquireSessionMcpRuntime(input);
     const original = await materializeBundleMcpToolsForRun(acquired);
     const healthy = await probeMcpServer(acquired.runtime, "healthy");
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     const started = createDeferred();
     const released = createDeferred();
     releases.push(() => released.resolve());
@@ -183,7 +181,7 @@ it("releases static admission when requester resolution fails during required re
   const original = await acquireSessionMcpRuntime(input);
   const healthy = await probeMcpServer(original.runtime, "healthy");
   original.releaseLease();
-  const manager = getSessionMcpRuntimeManagerForTesting();
+  const manager = getSessionMcpRuntimeTestManager();
   readAuthorization.mockImplementationOnce(async () => {
     manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
     throw new Error("requester authorization unavailable");
@@ -203,7 +201,7 @@ it.each(["empty", "catalog failure"])(
       ...params,
       cfg: { plugins: { enabled: false } },
     });
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     expect(acquired.runtime.activeLeases).toBe(1);
     manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
     if (result === "catalog failure") {

@@ -14,11 +14,11 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { PendingChatAbort } from "./chat-abort-request.ts";
+import type { ChatErrorState } from "./chat-error-state.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
-import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
-import type { ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
 import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
@@ -34,6 +34,7 @@ import type {
 export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 
 export type ChatPageHost = ChatHost &
+  ChatErrorState &
   ChatRealtimeState &
   PullRequestRefreshHost &
   SessionWorkspaceHost & {
@@ -83,7 +84,6 @@ export type ChatPageHost = ChatHost &
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Set<string>;
-    chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
     observerDigest: SessionObserverDigest | null;

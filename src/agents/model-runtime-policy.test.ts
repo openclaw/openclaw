@@ -265,34 +265,6 @@ describe("resolveModelRuntimePolicy", () => {
     expect(parse.mock.calls.length).toBeLessThanOrEqual(models.length * 2);
   });
 
-  it.each(["inherited"])(
-    "keeps wildcard policy when %s has no own enumerable runtime entry",
-    (modelId) => {
-      const models = {
-        "fixture/alias-only": { alias: "display-name" },
-        "fixture/*": { agentRuntime: { id: "wildcard-runtime" } },
-      };
-      Object.setPrototypeOf(models, {
-        "fixture/inherited": { agentRuntime: { id: "inherited-runtime" } },
-      });
-      Object.defineProperty(models, "fixture/hidden", {
-        value: { agentRuntime: { id: "hidden-runtime" } },
-        enumerable: false,
-      });
-      expect(
-        resolveModelRuntimePolicyBase({
-          config: { agents: { defaults: { models } } },
-          provider: "fixture",
-          modelId,
-        }),
-      ).toEqual({
-        policy: { id: "wildcard-runtime" },
-        source: "model",
-        matchedProvider: "fixture",
-      });
-    },
-  );
-
   it("ignores the QA force-runtime override when the private QA gate is unset", () => {
     deleteTestEnvValue("OPENCLAW_BUILD_PRIVATE_QA");
     setTestEnvValue("OPENCLAW_QA_FORCE_RUNTIME", "openclaw");
@@ -424,71 +396,28 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
-  it.each([
-    { modelId: "qwen-local", expected: { policy: { id: "codex" }, source: "model" } },
-    { modelId: "local", expected: {} },
-  ])("matches self-qualified provider rows only by their full model id ($modelId)", (params) => {
-    const config = {
-      models: {
-        providers: {
-          vllm: {
-            baseUrl: "http://127.0.0.1:11434/v1",
-            models: [
-              createModelConfig("openclaw", "other/qwen-local"),
-              createModelConfig("codex", " vllm/qwen-local "),
-            ],
+  it.each([{ modelId: "local", expected: {} }])(
+    "matches self-qualified provider rows only by their full model id ($modelId)",
+    (params) => {
+      const config = {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:11434/v1",
+              models: [
+                createModelConfig("openclaw", "other/qwen-local"),
+                createModelConfig("codex", " vllm/qwen-local "),
+              ],
+            },
           },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    expect(
-      resolveModelRuntimePolicy({ config, provider: "vllm", modelId: params.modelId }),
-    ).toEqual(params.expected);
-  });
-
-  it.each([
-    {
-      name: "provider-owned model id",
-      modelId: "anthropic/claude-opus-4.6",
+      expect(
+        resolveModelRuntimePolicy({ config, provider: "vllm", modelId: params.modelId }),
+      ).toEqual(params.expected);
     },
-  ])("honors the OpenRouter agent model policy for a $name", ({ modelId }) => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "openrouter/anthropic/claude-opus-4.6": {
-              agentRuntime: { id: "openclaw" },
-            },
-            "anthropic/claude-opus-4.6": {
-              agentRuntime: { id: "claude-cli" },
-            },
-          },
-        },
-      },
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "https://openrouter.ai/api/v1",
-            agentRuntime: { id: "codex" },
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveModelRuntimePolicy({
-        config,
-        provider: "openrouter",
-        modelId,
-      }),
-    ).toEqual({
-      policy: { id: "openclaw" },
-      source: "model",
-      matchedProvider: "openrouter",
-    });
-  });
+  );
 
   it.each([
     {

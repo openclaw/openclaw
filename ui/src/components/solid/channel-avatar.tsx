@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 export type ChannelAvatarProps = {
   routeUrl?: string | null;
@@ -45,7 +45,7 @@ export function ChannelAvatarContent(props: ChannelAvatarProps & { children?: JS
   );
 }
 
-export type ChannelAvatarElement = SolidBridgeElement<ChannelAvatarProps>;
+type ChannelAvatarElement = SolidBridgeElement<ChannelAvatarProps>;
 export const ChannelAvatar = defineSolidBridge<ChannelAvatarProps>(
   "openclaw-channel-avatar",
   (props, host) => {

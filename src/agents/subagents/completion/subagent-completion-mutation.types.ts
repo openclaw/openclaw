@@ -5,6 +5,7 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 export type BlockSubagentCompletionRequest = {
   subagent: SubagentRunRecord;
   reason: string;
+  operatorAuthorityUnavailable?: true;
   enqueuedAt?: number;
   suspendedReason?: "expiry" | "permanent_failure";
   storeReplaced?: true;
@@ -45,7 +46,6 @@ export type SubagentCompletionMutation =
 
 export type SubagentCompletionRecord = {
   subagent: SubagentRunRecord;
-  version: string;
   cleanupHandled?: boolean;
 };
 

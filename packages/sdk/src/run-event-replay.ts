@@ -40,7 +40,6 @@ type ReplayRun = {
   assistant?: AssistantProjection;
   scope?: ReplaySessionScope;
   textReceipt?: GatewayEventReceipt;
-  acceptanceReceipt?: GatewayEventReceipt;
   textRevision: number;
   activityRevision: number;
   unavailableObservations: number;
@@ -108,7 +107,6 @@ export class SdkRunReplay {
   }
 
   noteRunAcceptance(params: unknown, response: unknown): void {
-    const receipt = takeGatewayResponseReceipt(response);
     if (this.closed || this.streamEnded) {
       return;
     }
@@ -124,9 +122,6 @@ export class SdkRunReplay {
     run.owned = true;
     run.unavailableObservations = 0;
     run.recoveryExhausted = false;
-    if (receipt) {
-      run.acceptanceReceipt = { epoch: receipt.epoch, order: receipt.order };
-    }
     run.outstanding ||= !run.settled;
     const key = result.sessionKey ?? request.sessionKey ?? request.key;
     run.scope = {
@@ -268,18 +263,7 @@ export class SdkRunReplay {
       if (!replay.scope || !matchesUnsubscribedSession(replay.scope, subscription)) {
         continue;
       }
-      if (
-        receipt &&
-        [replay.textReceipt, replay.acceptanceReceipt].some(
-          (observed) =>
-            observed &&
-            (observed.epoch === receipt.epoch
-              ? observed.order > receipt.order
-              : observed.epoch.current || !receipt.epoch.current),
-        )
-      ) {
-        continue;
-      }
+      // Unsubscribe is best-effort if the caller starts another send before it finishes.
       delete replay.chatMessage;
       delete replay.assistant;
       if (replay.observers === 0) {

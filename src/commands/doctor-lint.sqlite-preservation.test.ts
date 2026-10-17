@@ -158,9 +158,9 @@ it.each([
        UPDATE config_machine_state SET value_json = '${schemaVersion}'
          WHERE state_key = 'state.schema.contentVersion';
        INSERT INTO cron_run_receipts (
-         receipt_id, store_key, job_id, config_revision, agent_id, status,
+         cursor_id, receipt_id, store_key, job_id, config_revision, agent_id, status,
          owner_pid, started_at_ms, finished_at_ms
-       ) VALUES ('published-receipt', 'default', 'retained-job', '1', 'main', 'ok', 1, 1, 2);`,
+       ) VALUES (1, 'published-receipt', 'default', 'retained-job', '1', 'main', 'ok', 1, 1, 2);`,
         );
         seedStoppedWalDatabase(
           agentPath,

@@ -73,6 +73,7 @@ describe("ordinary steering into automatic model fallback", () => {
       if (!holdBackend) {
         operation.attachBackend({
           kind: "embedded",
+          terminalReplyExpectation: "result-required",
           cancel() {},
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
         });
@@ -149,6 +150,7 @@ describe("ordinary steering into automatic model fallback", () => {
         if (replaceBackend) {
           operation.attachBackend({
             kind: "embedded",
+            terminalReplyExpectation: "result-required",
             cancel() {},
             messageInjectionV2: {
               version: 2,
@@ -203,7 +205,6 @@ describe("ordinary steering into automatic model fallback", () => {
     "changed-tools",
     "hook-route",
     "transport-alias",
-    "replaced-during-preparation",
   ] as const)("preserves admitted selection and authority: %s", async (scenario) => {
     const crossProfile = scenario === "cross-profile" || scenario === "cross-profile-pending";
     const key = `agent:main:fallback-steering-${scenario}`;
@@ -317,6 +318,7 @@ describe("ordinary steering into automatic model fallback", () => {
           });
           operation.attachBackend({
             kind: "embedded",
+            terminalReplyExpectation: "result-required",
             cancel: vi.fn(),
             messageInjectionV2: {
               version: 2,
@@ -339,10 +341,6 @@ describe("ordinary steering into automatic model fallback", () => {
                   throw new Error(
                     "A locked selection may only answer the pending fallback question",
                   );
-                }
-                if (scenario === "replaced-during-preparation") {
-                  await Promise.resolve();
-                  operation.setAutomaticFallbackRoute(operation.automaticFallbackRoute);
                 }
                 assertCurrent();
                 delivered.push(text);
@@ -395,17 +393,11 @@ describe("ordinary steering into automatic model fallback", () => {
         shouldInjectGroupIntro: false,
         typingMode: "never",
       });
-      if (scenario === "replaced-during-preparation") {
-        await expect(incoming).rejects.toThrow(
-          "Automatic model fallback changed during steering admission",
-        );
-      } else {
-        await incoming;
-        expect(resultState.admission).toEqual({
-          status: "accepted",
-          mode: shouldSteer ? "steer" : "followup",
-        });
-      }
+      await incoming;
+      expect(resultState.admission).toEqual({
+        status: "accepted",
+        mode: shouldSteer ? "steer" : "followup",
+      });
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       if (crossProfile) {
         const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);

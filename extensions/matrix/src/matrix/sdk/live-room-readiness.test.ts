@@ -47,15 +47,10 @@ vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
       const client = actual.createClient(...args);
       fixture.sdk = client;
       vi.spyOn(client, "initRustCrypto").mockImplementation(fixture.init);
-      // Only the read-only readiness probe uses this crypto fixture. Encryption
-      // and recovery are outside this suite; uploads retain the real SDK transport.
-      const crypto = {
+      // Mock only readiness; uploads retain the real SDK transport.
+      vi.mocked(vi.spyOn(client, "getCrypto"), { partial: true }).mockReturnValue({
         isEncryptionEnabledInRoom: fixture.probe,
-      } satisfies Pick<
-        NonNullable<ReturnType<MatrixJsClient["getCrypto"]>>,
-        "isEncryptionEnabledInRoom"
-      >;
-      vi.mocked(vi.spyOn(client, "getCrypto"), { partial: true }).mockReturnValue(crypto);
+      });
       vi.spyOn(client, "getRoom").mockImplementation(() => fixture.room ?? null);
       vi.spyOn(client, "getRooms").mockReturnValue([]);
       vi.spyOn(client, "getAccountDataFromServer").mockResolvedValue(null);
@@ -72,6 +67,25 @@ describe("Matrix live encrypted room ownership", () => {
   const roomId = "!room:matrix.test";
   let client: MatrixClient;
   let sdk: MatrixJsClient;
+  let releases: (() => void)[];
+  let pending: Promise<unknown>[];
+  function track<T>(operation: Promise<T>) {
+    pending.push(Promise.allSettled([operation]));
+    return operation;
+  }
+  function gate<T>(fallback: T) {
+    const started = createDeferred<void>();
+    const finish = createDeferred<T>();
+    releases.push(() => finish.resolve(fallback));
+    return {
+      started: started.promise,
+      finish: finish.resolve,
+      run: () => {
+        started.resolve();
+        return finish.promise;
+      },
+    };
+  }
   const makeRoom = () => {
     const room = new Room(roomId, sdk, "@bot:matrix.test");
     vi.spyOn(room, "getMyMembership").mockReturnValue("join");
@@ -79,27 +93,48 @@ describe("Matrix live encrypted room ownership", () => {
     return room;
   };
   const liveSync = () => sdk.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Syncing);
+  function holdProbe(once = false) {
+    const probe = gate(false);
+    if (once) {
+      fixture.probe.mockImplementationOnce(probe.run);
+    } else {
+      fixture.probe.mockImplementation(probe.run);
+    }
+    return probe;
+  }
+  function makeClient(options: ConstructorParameters<typeof MatrixClient>[2]) {
+    client = new MatrixClient("https://127.0.0.1:8008", "fixture-token", {
+      userId: "@bot:matrix.test",
+      encryption: true,
+      autoBootstrapCrypto: false,
+      idbSnapshotPath: path.join(tempDirs.make("matrix-live-room-"), "snapshot.json"),
+      ...options,
+    });
+    sdk = fixture.sdk!;
+    fixture.room = makeRoom();
+  }
+  const uploadFixture = () =>
+    client.uploadContent(Buffer.from("encrypted fixture"), "application/octet-stream", "fixture");
 
   beforeEach(async () => {
+    releases = [];
+    pending = [];
     installMatrixTestRuntime();
     vi.useFakeTimers();
     fixture.init.mockReset().mockResolvedValue(undefined);
     fixture.probe.mockReset().mockResolvedValue(true);
     fixture.stopped.mockReset();
     fixture.beforeResolve = undefined;
-    client = new MatrixClient("https://127.0.0.1:8008", "fixture-token", {
-      userId: "@bot:matrix.test",
+    makeClient({
       deviceId: "BOT",
-      encryption: true,
-      autoBootstrapCrypto: false,
-      idbSnapshotPath: path.join(tempDirs.make("matrix-live-room-"), "snapshot.json"),
       ssrfPolicy: { allowPrivateNetwork: true },
     });
-    sdk = fixture.sdk!;
-    fixture.room = makeRoom();
     await client.start();
   });
   afterEach(async () => {
+    releases.forEach((release) => release());
+    client.abortPendingRequests();
+    await Promise.all(pending);
     await client.stopWithoutPersist();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -110,82 +145,54 @@ describe("Matrix live encrypted room ownership", () => {
     "revalidates %s after a held crypto probe",
     async (change) => {
       liveSync();
-      const started = createDeferred<void>();
-      const finish = createDeferred<boolean>();
-      fixture.probe.mockImplementationOnce(() => {
-        started.resolve();
-        return finish.promise;
-      });
+      const { started, finish } = holdProbe(true);
       const send = vi.fn(async () => "$sent");
-      const operation = client.withLiveEncryptedRoom(roomId, send);
-      const settled = Promise.allSettled([operation]);
-      try {
-        await started.promise;
-        if (change === "room replacement") {
-          fixture.room = makeRoom();
-          fixture.probe.mockResolvedValue(false);
-        } else if (change === "missing room") {
-          fixture.room = undefined;
-        } else if (change === "membership") {
-          vi.mocked(fixture.room!).getMyMembership.mockReturnValue("leave");
-        } else if (change === "encryption") {
-          vi.mocked(fixture.room!).hasEncryptionStateEvent.mockReturnValue(false);
-        } else {
-          sdk.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
-        }
-        finish.resolve(true);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(send).not.toHaveBeenCalled();
+      const operation = track(client.withLiveEncryptedRoom(roomId, send));
+      await started;
+      if (change === "room replacement") {
         fixture.room = makeRoom();
-        fixture.probe.mockResolvedValue(true);
-        liveSync();
-        await expect(operation).resolves.toBe("$sent");
-      } finally {
-        finish.resolve(false);
-        client.abortPendingRequests();
-        await settled;
+        fixture.probe.mockResolvedValue(false);
+      } else if (change === "missing room") {
+        fixture.room = undefined;
+      } else if (change === "membership") {
+        vi.mocked(fixture.room!).getMyMembership.mockReturnValue("leave");
+      } else if (change === "encryption") {
+        vi.mocked(fixture.room!).hasEncryptionStateEvent.mockReturnValue(false);
+      } else {
+        sdk.emit(ClientEvent.Sync, SyncState.Reconnecting, SyncState.Syncing);
       }
+      finish(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).not.toHaveBeenCalled();
+      fixture.room = makeRoom();
+      fixture.probe.mockResolvedValue(true);
+      liveSync();
+      await expect(operation).resolves.toBe("$sent");
     },
   );
 
   it("cancels one waiter without canceling a sibling's shared crypto initialization", async () => {
-    const initialization = createDeferred<void>();
-    const started = createDeferred<void>();
-    fixture.init.mockImplementation(async () => {
-      started.resolve();
-      await initialization.promise;
-    });
+    const initialization = gate(undefined);
+    fixture.init.mockImplementation(initialization.run);
     await client.stopWithoutPersist();
-    client = new MatrixClient("https://127.0.0.1:8008", "fixture-token", {
-      userId: "@bot:matrix.test",
-      encryption: true,
-      autoBootstrapCrypto: false,
-      idbSnapshotPath: path.join(tempDirs.make("matrix-live-room-"), "snapshot.json"),
-    });
-    sdk = fixture.sdk!;
-    fixture.room = makeRoom();
-    const startup = client.start();
-    await started.promise;
+    makeClient({});
+    const startup = track(client.start());
+    await initialization.started;
     const abort = new AbortController();
     const canceledSend = vi.fn(async () => "$canceled");
-    const first = client.withLiveEncryptedRoom(roomId, canceledSend, { abortSignal: abort.signal });
+    const first = track(
+      client.withLiveEncryptedRoom(roomId, canceledSend, { abortSignal: abort.signal }),
+    );
     const siblingSend = vi.fn(async () => "$sibling");
-    const second = client.withLiveEncryptedRoom(roomId, siblingSend);
-    const settled = Promise.allSettled([first, second, startup]);
-    try {
-      abort.abort();
-      await expect(first).rejects.toMatchObject({ name: "AbortError" });
-      initialization.resolve();
-      await startup;
-      liveSync();
-      await expect(second).resolves.toBe("$sibling");
-      expect(canceledSend).not.toHaveBeenCalled();
-      expect(fixture.init).toHaveBeenCalledTimes(2);
-    } finally {
-      initialization.resolve();
-      client.abortPendingRequests();
-      await settled;
-    }
+    const second = track(client.withLiveEncryptedRoom(roomId, siblingSend));
+    abort.abort();
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    initialization.finish(undefined);
+    await startup;
+    liveSync();
+    await expect(second).resolves.toBe("$sibling");
+    expect(canceledSend).not.toHaveBeenCalled();
+    expect(fixture.init).toHaveBeenCalledTimes(2);
   });
 
   it.each(["caller cancellation", "STOPPED"] as const)(
@@ -194,44 +201,37 @@ describe("Matrix live encrypted room ownership", () => {
       liveSync();
       const state = vi.fn();
       client.on("sync.state", state);
-      const started = createDeferred<void>();
-      const finish = createDeferred<boolean>();
-      fixture.probe.mockImplementation(() => {
-        started.resolve();
-        return finish.promise;
-      });
+      const { started, finish } = holdProbe();
       const abort = new AbortController();
       const send = vi.fn(async () => "$sent");
-      const operation = client.withLiveEncryptedRoom(roomId, send, { abortSignal: abort.signal });
+      const operation = track(
+        client.withLiveEncryptedRoom(roomId, send, { abortSignal: abort.signal }),
+      );
       const settled = Promise.allSettled([operation]);
       let outcome: PromiseSettledResult<unknown> | undefined;
       void settled.then(([result]) => {
         outcome = result;
       });
-      let stop: Promise<void> | undefined;
-      try {
-        await started.promise;
-        if (cause === "STOPPED") {
-          sdk.emit(ClientEvent.Sync, SyncState.Stopped, SyncState.Prepared);
-        } else {
-          abort.abort();
-        }
-        await vi.advanceTimersByTimeAsync(0);
-        expect(outcome?.status).toBe("rejected");
-        if (cause === "STOPPED") {
-          await expect(operation).rejects.toThrow("sync stopped");
-          expect(state).toHaveBeenCalledExactlyOnceWith("STOPPED", "PREPARED", undefined);
-        } else {
-          await expect(operation).rejects.toMatchObject({ name: "AbortError" });
-        }
-        stop = client.stopWithoutPersist();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(fixture.stopped).not.toHaveBeenCalled();
-      } finally {
-        finish.resolve(true);
-        await settled;
-        await stop;
+      await started;
+      if (cause === "STOPPED") {
+        sdk.emit(ClientEvent.Sync, SyncState.Stopped, SyncState.Prepared);
+      } else {
+        abort.abort();
       }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outcome?.status).toBe("rejected");
+      if (cause === "STOPPED") {
+        await expect(operation).rejects.toThrow("sync stopped");
+        expect(state).toHaveBeenCalledExactlyOnceWith("STOPPED", "PREPARED", undefined);
+      } else {
+        await expect(operation).rejects.toMatchObject({ name: "AbortError" });
+      }
+      const stop = track(client.stopWithoutPersist());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.stopped).not.toHaveBeenCalled();
+      finish(true);
+      await settled;
+      await stop;
       expect(fixture.stopped).toHaveBeenCalledOnce();
       expect(send).not.toHaveBeenCalled();
     },
@@ -260,18 +260,11 @@ describe("Matrix live encrypted room ownership", () => {
       });
     });
     vi.stubGlobal("fetch", fetch);
-    const upload = client.withLiveEncryptedRoom(roomId, () =>
-      client.uploadContent(Buffer.from("encrypted fixture"), "application/octet-stream", "fixture"),
-    );
-    const settled = Promise.allSettled([upload]);
+    const upload = track(client.withLiveEncryptedRoom(roomId, uploadFixture));
     const signal = await dispatched.promise;
     client.abortPendingRequests();
     expect(signal.aborted).toBe(true);
-    const [result] = await settled;
-    expect(result.status).toBe("rejected");
-    if (result.status === "rejected") {
-      expect(result.reason).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-    }
+    await expect(upload).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -280,96 +273,65 @@ describe("Matrix live encrypted room ownership", () => {
     async (change) => {
       liveSync();
       let active = true;
-      const resolving = createDeferred<void>();
-      const resolved = createDeferred<void>();
-      fixture.beforeResolve = async () => {
-        resolving.resolve();
-        await resolved.promise;
-      };
+      const resolution = gate(undefined);
+      fixture.beforeResolve = resolution.run;
       const fetch = vi.fn<typeof globalThis.fetch>(async () =>
         Response.json({ content_uri: "mxc://matrix.test/image" }),
       );
       vi.stubGlobal("fetch", fetch);
-      const upload = client.withLiveEncryptedRoom(
-        roomId,
-        () =>
-          client.uploadContent(
-            Buffer.from("encrypted fixture"),
-            "application/octet-stream",
-            "fixture",
-          ),
-        {
+      const upload = track(
+        client.withLiveEncryptedRoom(roomId, uploadFixture, {
           assertCurrent: () => {
             if (!active) {
               throw new Error("operation stopped");
             }
           },
-        },
+        }),
       );
-      const settled = Promise.allSettled([upload]);
-      try {
-        await resolving.promise;
-        if (change === "room membership") {
-          vi.mocked(fixture.room!).getMyMembership.mockReturnValue("leave");
-          liveSync();
-        } else {
-          active = false;
-        }
-        resolved.resolve();
-        await settled;
-        expect(fetch).not.toHaveBeenCalled();
-        await expect(upload).rejects.toThrow(
-          change === "room membership" ? "room changed" : "operation stopped",
-        );
-      } finally {
-        resolved.resolve();
-        client.abortPendingRequests();
-        await settled;
+      await resolution.started;
+      if (change === "room membership") {
+        vi.mocked(fixture.room!).getMyMembership.mockReturnValue("leave");
+        liveSync();
+      } else {
+        active = false;
       }
+      resolution.finish(undefined);
+      await expect(upload).rejects.toThrow(
+        change === "room membership" ? "room changed" : "operation stopped",
+      );
+      expect(fetch).not.toHaveBeenCalled();
     },
   );
 
   it("waits for live sync before sending and allows healthy same-state sync during media preparation and upload", async () => {
-    const preparing = createDeferred<void>();
-    const prepared = createDeferred<void>();
-    const uploading = createDeferred<void>();
-    const uploaded = createDeferred<void>();
+    const preparation = gate(undefined);
+    const uploading = gate(undefined);
     const fetch = vi.fn<typeof globalThis.fetch>(async () => {
-      uploading.resolve();
-      await uploaded.promise;
+      await uploading.run();
       return Response.json({ content_uri: "mxc://matrix.test/image" });
     });
     vi.stubGlobal("fetch", fetch);
     const send = vi.fn(async (assertCurrent: () => void) => {
-      preparing.resolve();
-      await prepared.promise;
+      await preparation.run();
       assertCurrent();
       const uri = await client.uploadContent(Buffer.from("encrypted fixture"));
       assertCurrent();
       return uri;
     });
-    const operation = client.withLiveEncryptedRoom(roomId, send);
-    const settled = Promise.allSettled([operation]);
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(send).not.toHaveBeenCalled();
-      sdk.emit(ClientEvent.Sync, SyncState.Catchup, SyncState.Prepared);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(send).not.toHaveBeenCalled();
-      liveSync();
-      await preparing.promise;
-      liveSync();
-      prepared.resolve();
-      await uploading.promise;
-      liveSync();
-      uploaded.resolve();
-      await expect(operation).resolves.toBe("mxc://matrix.test/image");
-      expect(fetch).toHaveBeenCalledOnce();
-    } finally {
-      prepared.resolve();
-      uploaded.resolve();
-      client.abortPendingRequests();
-      await settled;
-    }
+    const operation = track(client.withLiveEncryptedRoom(roomId, send));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).not.toHaveBeenCalled();
+    sdk.emit(ClientEvent.Sync, SyncState.Catchup, SyncState.Prepared);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).not.toHaveBeenCalled();
+    liveSync();
+    await preparation.started;
+    liveSync();
+    preparation.finish(undefined);
+    await uploading.started;
+    liveSync();
+    uploading.finish(undefined);
+    await expect(operation).resolves.toBe("mxc://matrix.test/image");
+    expect(fetch).toHaveBeenCalledOnce();
   });
 });

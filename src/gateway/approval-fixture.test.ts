@@ -10,7 +10,6 @@ import { ExecApprovalManager } from "./exec-approval-manager.js";
 import * as approvalFixtures from "./exec-approval-manager.test-support.js";
 import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import {
-  createApprovalClientLookup,
   createApprovalRequestPolicy,
   createContext,
   createOperatorClient,
@@ -18,7 +17,10 @@ import {
   invokeDemoPolicy,
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
-import { waitForApprovalAccepted } from "./server-methods/approval-request.test-support.js";
+import {
+  createApprovalClientLookup,
+  waitForApprovalAccepted,
+} from "./server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { withRequestedExecApproval } from "./server-methods/exec-approval.test-support.js";
 import { createGatewayRequestContext } from "./server-request-context.js";

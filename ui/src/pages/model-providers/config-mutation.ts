@@ -6,7 +6,17 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
+import {
+  modelSettingPrimary,
+  modelSettingFallbacks,
+  modelSettingPatch,
+  withModelSettingPrimary,
+} from "../../lib/model-setting.ts";
 import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
+
+function replaceFirstFallback(fallbacks: string[], model: string | null): string[] {
+  return model ? [model, ...fallbacks.slice(1).filter((fallback) => fallback !== model)] : [];
+}
 
 export function modelDefaultsActions(
   getDefaults: () => DefaultModelSelection,
@@ -21,17 +31,21 @@ export function modelDefaultsActions(
     },
     onFallbackChange: (model: string | null) => {
       stageDefaults({
-        fallbacks: model
-          ? [
-              model,
-              ...getDefaults()
-                .fallbacks.slice(1)
-                .filter((fallback) => fallback !== model),
-            ]
-          : [],
+        fallbacks: replaceFirstFallback(getDefaults().fallbacks, model),
       });
     },
-    onUtilityChange: (model: string | null) => stageDefaults({ utilityModel: model }),
+    onUtilityChange: (model: string | null) =>
+      stageDefaults({ utilityModel: withModelSettingPrimary(getDefaults().utilityModel, model) }),
+    onUtilityFallbackChange: (model: string | null) => {
+      const current = getDefaults().utilityModel;
+      const primary = modelSettingPrimary(current);
+      stageDefaults({
+        utilityModel: {
+          ...(primary !== undefined ? { primary } : {}),
+          fallbacks: replaceFirstFallback(modelSettingFallbacks(current), model),
+        },
+      });
+    },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),
@@ -63,7 +77,10 @@ export function readModelBehaviorConfig(
  * destructive-array guard rejects such merge patches unless the exact path is
  * confirmed via replacePaths.
  */
-export const DEFAULT_MODELS_REPLACE_PATHS = ["agents.defaults.model.fallbacks"];
+export const DEFAULT_MODELS_REPLACE_PATHS = [
+  "agents.defaults.model.fallbacks",
+  "agents.defaults.utilityModel.fallbacks",
+];
 
 export function buildDefaultsPatch(
   params: Omit<DefaultModelSelection, "fallbacks"> &
@@ -82,7 +99,7 @@ export function buildDefaultsPatch(
                   : params.primary,
             }
           : {}),
-        utilityModel: params.utilityModel,
+        utilityModel: modelSettingPatch(params.utilityModel),
         ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
         thinkingDefault:
           params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,

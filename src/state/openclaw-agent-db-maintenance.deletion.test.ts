@@ -42,25 +42,27 @@ it.for(["journal replaced", "lease expired"] as const)(
       const original = fs.readFileSync(databasePath);
       const check = integrityWorker.assertSqliteIntegrityInWorker;
       let interrupted = false;
+      let restoreClock: (() => void) | undefined;
       const scan = vi
         .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
         .mockImplementationOnce(async (...args) => {
           await check(...args);
           signal.throwIfAborted();
+          if (loss === "lease expired") {
+            // Expire deletion's 60s grant while the separate maintenance grant stays live.
+            const expiredAt = Date.now() + 60_001;
+            const clock = vi.spyOn(Date, "now").mockReturnValue(expiredAt);
+            restoreClock = () => clock.mockRestore();
+            interrupted = true;
+            return;
+          }
           const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
           try {
-            const mutation =
-              loss === "journal replaced"
-                ? foreign
-                    .prepare(
-                      "UPDATE agent_deletion_journal SET operation_id = 'replacement' WHERE agent_id = 'worker'",
-                    )
-                    .run()
-                : foreign
-                    .prepare(
-                      "UPDATE state_leases SET expires_at = 0 WHERE scope = 'core:agent-deletion' AND lease_key = 'worker'",
-                    )
-                    .run();
+            const mutation = foreign
+              .prepare(
+                "UPDATE agent_deletion_journal SET operation_id = 'replacement' WHERE agent_id = 'worker'",
+              )
+              .run();
             expect(mutation.changes).toBe(1);
             interrupted = true;
           } finally {
@@ -80,13 +82,15 @@ it.for(["journal replaced", "lease expired"] as const)(
               deleteFiles: false,
               phase: "retiring",
             });
-            await withAgentDatabaseMaintenanceLease({ env: state.env }, (maintenance) =>
-              deletion.runDatabaseCleanup({ agentId: "worker", path: databasePath }, () =>
-                migrateOpenClawAgentDatabaseForMaintenance(
-                  { agentId: "worker", pathname: databasePath, env: state.env, register: true },
-                  maintenance,
+            await withAgentDatabaseMaintenanceLease(
+              { env: state.env, leaseMs: 120_000 },
+              (maintenance) =>
+                deletion.runDatabaseCleanup({ agentId: "worker", path: databasePath }, () =>
+                  migrateOpenClawAgentDatabaseForMaintenance(
+                    { agentId: "worker", pathname: databasePath, env: state.env, register: true },
+                    maintenance,
+                  ),
                 ),
-              ),
             );
           },
           { env: state.env },
@@ -101,6 +105,7 @@ it.for(["journal replaced", "lease expired"] as const)(
         expect(scan).toHaveBeenCalledOnce();
       } finally {
         scan.mockRestore();
+        restoreClock?.();
         await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
       }
       expect(fs.readFileSync(databasePath)).toEqual(original);

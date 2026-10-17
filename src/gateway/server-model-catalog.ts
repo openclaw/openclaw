@@ -166,6 +166,7 @@ function readPreparedGatewayModelCatalogSync(
   }
   const catalog = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
   return createPreparedGatewayModelCatalog({
+    config,
     entries: catalog.entries,
     routeVariants: catalog.routeVariants,
     pluginRegistry: owner.pluginRegistry,

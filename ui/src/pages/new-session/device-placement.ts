@@ -17,7 +17,10 @@ export type DevicePlacementOption = Readonly<
     facts: readonly string[];
     selectable: boolean;
     disabledReason?: string;
-  } & Pick<DraftEnvironment, "platform" | "workerSlots" | "capabilities" | "invocableCommands">
+  } & Pick<
+    DraftEnvironment,
+    "platform" | "workerSlots" | "workerHost" | "capabilities" | "invocableCommands"
+  >
 >;
 
 export type DevicePlacementRequirement = Readonly<{
@@ -121,6 +124,7 @@ export function projectDevicePlacements(
                 : undefined,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
           workerSlots: environment.workerSlots,
+          workerHost: environment.workerHost,
           capabilities: environment.capabilities,
           invocableCommands: environment.invocableCommands,
           selectable: disabledReason === undefined,
@@ -188,4 +192,32 @@ export function resolveSelectedDevicePlacement(
         ? undefined
         : (selected?.disabledReason ?? t("newSession.nodeUnavailable")),
   };
+}
+
+export function canUseDeviceFolder(
+  deviceId: string,
+  devices: readonly DevicePlacementOption[],
+): boolean {
+  return Boolean(
+    deviceId &&
+    devices.some(
+      (device) =>
+        device.deviceId === deviceId &&
+        device.selectable &&
+        device.workerHost?.deviceFolders === true,
+    ),
+  );
+}
+
+/** The selected device-folder host when its folders can be listed through node `fs.listDir`. */
+export function findBrowsableDeviceFolderHost(
+  deviceId: string,
+  devices: readonly DevicePlacementOption[],
+): DevicePlacementOption | undefined {
+  return devices.find(
+    (device) =>
+      device.deviceId === deviceId &&
+      device.workerHost?.deviceFolders === true &&
+      device.invocableCommands?.includes("fs.listDir"),
+  );
 }

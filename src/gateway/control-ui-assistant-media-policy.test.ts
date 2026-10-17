@@ -14,6 +14,8 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -22,16 +24,30 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const state = vi.hoisted(() => ({
   loaded: vi.fn(),
+  retained: vi.fn(),
+  config: undefined as OpenClawConfig | undefined,
   auth: vi.fn(),
   placements: vi.fn(),
   placementsAsync: vi.fn(),
 }));
-vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: state.loaded }));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string }) =>
+    state.loaded(params.key),
+}));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
+  readRetainedSessionEntryFacts: (_database: unknown, selection: unknown) =>
+    state.retained(selection),
+}));
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
+  getRuntimeConfig: () => state.config ?? {},
+}));
 vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
 vi.mock("./session-worker-placement-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-worker-placement-context.js")>()),
@@ -55,6 +71,7 @@ let entry: {
   sessionRoot?: string;
   permissionMode?: "full" | "workspace";
   execNode?: string;
+  deviceFolder?: { deviceId: string; path: string };
   repositoryWorkspaceId?: string;
   incognito?: boolean;
   visibility?: "draft" | "shared";
@@ -73,6 +90,7 @@ beforeEach(async () => {
     agents: { entries: { main: { workspace: path.join(temp, "agent") } } },
     tools: { fs: { workspaceOnly: true } },
   };
+  state.config = cfg;
   entry = {
     sessionId: "session-one",
     spawnedCwd: project,
@@ -83,7 +101,11 @@ beforeEach(async () => {
     cfg,
     agentId: "main",
     canonicalKey: requestedKey,
+    storePath: path.join(temp, "sessions.json"),
     entry,
+  }));
+  state.retained.mockImplementation(({ sessionKeys }: { sessionKeys: string[] }) => ({
+    entries: sessionKeys.map((key) => ({ sessionKey: key, entry })),
   }));
   state.auth.mockResolvedValue({
     authMethod: "token",
@@ -272,6 +294,19 @@ describe("assistant image session policy", () => {
       });
     },
   );
+  it("keeps device-folder Full Access off Gateway-local image paths", async () => {
+    entry.permissionMode = "full";
+    entry.deviceFolder = { deviceId: "paired-device", path: project };
+    const source = path.join(project, "image.png");
+    await fs.writeFile(source, PNG);
+    for (const options of [{}, { allow: true }]) {
+      expect((await request(source, options)).payload).toMatchObject({
+        available: false,
+        code: "blocked-local-file",
+      });
+    }
+  });
+
   it("keeps repository Full Access and Allow from exposing the configured Gateway workspace", async () => {
     entry.permissionMode = "full";
     const source = path.join(temp, "agent", "unrelated.png");
@@ -366,6 +401,7 @@ describe("assistant image session policy", () => {
       cfg,
       agentId: "other",
       canonicalKey: requestedKey,
+      storePath: path.join(temp, "other-sessions.json"),
       entry,
     }));
     const source = path.join(project, "image.png");
@@ -491,9 +527,6 @@ describe("assistant image session policy", () => {
         const metadata = await request(source);
         expect(metadata.payload).toMatchObject({ available: true });
         const ticket = String(metadata.payload!.mediaTicket);
-        // Ordinary mutations elsewhere must not revoke a still-authorized reader's ticket.
-        invalidateSessionSharingSnapshot("agent:main:unrelated");
-        expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
         if (change === "role assignment") {
           setUserProfileRole(profile.id, "denied");
           invalidateOperatorRolePolicy(profile.id);
@@ -548,7 +581,6 @@ describe("assistant image session policy", () => {
           if (filePath === source) {
             if (authority === "session") {
               entry.visibility = "draft";
-              invalidateSessionSharingSnapshot(sessionKey);
             } else {
               current = false;
             }
@@ -620,6 +652,63 @@ describe("assistant image session policy", () => {
       });
     },
   );
+
+  it("withdraws Gateway-local media after placement database replacement during byte preparation", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "placement-state") }, async () => {
+      const { createWorkerSessionPlacementStore } =
+        await import("./worker-environments/placement-store.js");
+      const placements = createWorkerSessionPlacementStore();
+      state.placements.mockImplementation((sessionIds: readonly string[]) =>
+        placements.getMany(sessionIds),
+      );
+      state.placementsAsync.mockImplementation((sessionIds: readonly string[]) =>
+        placements.getManyAsync(sessionIds),
+      );
+      entry.permissionMode = "full";
+      const source = path.join(temp, "gateway-only.png");
+      await fs.writeFile(source, PNG);
+      const metadata = await request(source);
+      expect(metadata.res.statusCode).toBe(200);
+      expect(metadata.payload?.mediaTicket).toEqual(expect.any(String));
+      const ticket = String(metadata.payload!.mediaTicket);
+      const databasePath = resolveOpenClawStateSqlitePath();
+      const original = await fs.stat(databasePath);
+      const openFile = fs.open;
+      let replaced = false;
+      let replacementError: unknown;
+      let preparedFile: Awaited<ReturnType<typeof fs.open>> | undefined;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const file = await openFile(filePath, flags, mode);
+        if (filePath === source && !preparedFile) {
+          preparedFile = file;
+          try {
+            await closeOpenClawStateDatabaseByPathAsync(databasePath);
+            await fs.rename(databasePath, `${databasePath}.retired`);
+            const replacement = createWorkerSessionPlacementStore();
+            expect(await replacement.getManyAsync([entry.sessionId])).toEqual(new Map());
+            expect((await fs.stat(databasePath)).ino).not.toBe(original.ino);
+            replaced = true;
+          } catch (error) {
+            // Fixture failures must not become the media handler's expected 404.
+            replacementError = error;
+          }
+        }
+        return file;
+      });
+      try {
+        const denied = await request(source, { ticket, bytes: true });
+        expect(replacementError).toBeUndefined();
+        expect(replaced).toBe(true);
+        expect(preparedFile?.fd).toBe(-1);
+        expect(entry.execNode).toBeUndefined();
+        expect(denied.res.statusCode).toBe(404);
+        expect(denied.bytes).not.toEqual(PNG);
+      } finally {
+        openSpy.mockRestore();
+        await preparedFile?.close();
+      }
+    });
+  });
 
   it.each([
     { name: "report.pdf", content: "%PDF-1.7\nexisting report\n", mime: "application/pdf" },

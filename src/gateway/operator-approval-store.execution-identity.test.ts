@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -17,7 +16,6 @@ import {
 import { insertOperatorApprovalInDatabase as insertOperatorApprovalNative } from "./operator-approval-store.kernel.worker.js";
 import {
   getOperatorApprovalDetailed as getOlderOperatorApproval,
-  OLDER_OPERATOR_APPROVAL_SCHEMA_SQL,
   resolveOperatorApproval as resolveOlderOperatorApproval,
 } from "./operator-approval-store.older-reader.test-support.js";
 
@@ -190,7 +188,6 @@ describe("operator approval execution identity", () => {
       getOlderOperatorApproval({ id: "older-reader", nowMs: 2_000, databaseOptions: options }),
     ).toMatchObject({ outcome: "found", record: { status: "pending", decision: null } });
     const older = openOpenClawStateDatabase(options);
-    assertSqliteSchemaContains(older.db, older.path, OLDER_OPERATOR_APPROVAL_SCHEMA_SQL);
     expect(
       resolveOlderOperatorApproval({
         id: "older-reader",

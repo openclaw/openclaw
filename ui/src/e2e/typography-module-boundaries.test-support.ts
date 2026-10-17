@@ -58,10 +58,10 @@ export function defineTypographyModuleBoundaryTests(
         const identity = page.locator(".sidebar-identity-card");
         await identity.focus();
         await page.keyboard.press("Enter");
-        const menu = page.locator("wa-dropdown.sidebar-identity-menu");
+        const menu = page.locator(".sidebar-identity-menu");
         await menu.waitFor();
         const shortcut = menu
-          .locator('wa-dropdown-item[value="command:settings"]')
+          .locator('[data-value="command:settings"]')
           .locator(".session-menu__shortcut");
 
         const report = await shortcut.evaluate((element) => ({

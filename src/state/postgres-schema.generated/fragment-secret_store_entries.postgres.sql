@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."secret_store_entries" (
+CREATE TABLE "secret_store_entries" (
   "scope_kind" text COLLATE "C" NOT NULL,
   "scope_id" text COLLATE "C" NOT NULL,
   "name" text COLLATE "C" NOT NULL,
@@ -23,6 +19,4 @@ CREATE TABLE "openclaw_state"."secret_store_entries" (
   CHECK ((("scope_kind" = 'team') AND ("scope_id" = '')) OR (("scope_kind" = 'identity') AND (char_length("scope_id") > 0)))
 );
 
-CREATE INDEX "secret_store_entries_live_idx" ON "openclaw_state"."secret_store_entries" (("scope_kind") ASC NULLS FIRST, ("scope_id") ASC NULLS FIRST, ("name") ASC NULLS FIRST) WHERE "deleted_at_ms" IS NULL;
-
-COMMIT;
+CREATE INDEX "secret_store_entries_live_idx" ON "secret_store_entries" (("scope_kind") ASC NULLS FIRST, ("scope_id") ASC NULLS FIRST, ("name") ASC NULLS FIRST) WHERE "deleted_at_ms" IS NULL;

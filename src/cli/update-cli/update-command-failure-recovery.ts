@@ -11,39 +11,24 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
+  UpdateServiceDefinitionRecovery,
 } from "./update-command-service-context-types.js";
 import {
   readManagedGatewayServiceForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
 import {
   readFailedUpdateGatewayState,
   verifyUpdatedGateway,
 } from "./update-command-verification.js";
 
-/** Preserve startup observation after activation, stop, rebind, or rollback. */
-export function shouldWaitForRecovery(
-  params: FinishUpdateParams,
-  service: PreManagedServiceStop | undefined,
-  rollbackAttempted: boolean,
-): boolean {
-  return (
-    params.result.status !== "error" ||
-    params.mutationStarted ||
-    params.preManagedServiceStop?.stopped === true ||
-    service?.stopped === true ||
-    Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
-    rollbackAttempted
-  );
-}
-
-/** Observe recovery after writers settle; this never starts or stops a Gateway. */
+/** Restore an owned stopped service after writers settle, then verify its installed runtime. */
 export async function verifyUpdateFailureRecovery(params: {
   result: UpdateRunResult;
   root: string;
@@ -51,7 +36,13 @@ export async function verifyUpdateFailureRecovery(params: {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   serviceStopped?: boolean;
+  gatewayStartAttempted?: "install" | "restart";
+  definitionRecovery?: UpdateServiceDefinitionRecovery;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  preManagedServiceStop?: PreManagedServiceStop;
+  onGatewayStartAttempted?: () => void;
+  nodeRunner?: string;
+  invocationCwd?: string;
   waitForStartup?: boolean;
   assertCurrent?: () => void;
 }): Promise<UpdateRunResult> {
@@ -92,14 +83,19 @@ export async function verifyUpdateFailureRecovery(params: {
     warnRecording(`Could not read update recovery history: ${formatErrorMessage(error)}`);
   }
   const constraint = recorded?.verification.recovery;
+  const dataAtRisk = [constraint, result.recovery].find(
+    (recovery) => recovery?.serviceRestartSafe === false && recovery.dataAtRisk,
+  );
   const previousRecovery =
-    constraint?.serviceRestartSafe === false
+    dataAtRisk ??
+    (constraint?.serviceRestartSafe === false
       ? constraint
-      : (result.recovery ?? constraint ?? undefined);
+      : (result.recovery ?? constraint ?? undefined));
   result.recovery = previousRecovery;
   result.rollbackOutcome ??= recorded?.verification.rollbackOutcome ?? undefined;
   result.verification = {};
   const rollback = previousRecovery?.packageRollbackVerified;
+  let restartAttempted = false;
   try {
     await withCommandProcessScope(async () => {
       // Package rollback restores files even on a headless install. Its original
@@ -168,6 +164,28 @@ export async function verifyUpdateFailureRecovery(params: {
           serviceCommand: (await readManagedGatewayServiceForUpdate(env))?.command,
         }));
       params.assertCurrent?.();
+      if (
+        // An unverified installer receipt does not prove a start; never repeat a restart.
+        params.gatewayStartAttempted !== "restart" &&
+        (!params.gatewayStartAttempted || params.definitionRecovery?.unverified) &&
+        params.opts.restart !== false &&
+        params.preManagedServiceStop?.stopped &&
+        params.preManagedServiceStop.serviceMutationAllowed !== false &&
+        params.preManagedServiceStop.serviceUpdateVerdict?.kind === "owned" &&
+        result.verification?.serviceRunning === false &&
+        !(previousRecovery?.serviceRestartSafe === false && previousRecovery.dataAtRisk)
+      ) {
+        restartAttempted =
+          (await maybeRestartServiceAfterFailedMutableUpdate({
+            ...params,
+            preManagedServiceStop: params.preManagedServiceStop,
+            updateRun: run,
+            recovery: { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) },
+            jsonMode: Boolean(params.opts.json),
+            finalRecovery: true,
+          })) === "healthy";
+        params.assertCurrent?.();
+      }
       const validation = await verifyUpdatedGateway({
         result,
         opts: params.opts,
@@ -183,7 +201,7 @@ export async function verifyUpdateFailureRecovery(params: {
       params.assertCurrent?.();
       Object.assign(result, appendPluginUpdateWarnings(result, validation.pluginWarnings ?? []));
       // Observed health cannot override an owner's unsafe restart verdict.
-      const restartUnsafe = previousRecovery?.serviceRestartSafe === false;
+      const restartUnsafe = previousRecovery?.serviceRestartSafe === false && !restartAttempted;
       result.recovery =
         validation.ok && !restartUnsafe
           ? {
@@ -203,6 +221,19 @@ export async function verifyUpdateFailureRecovery(params: {
                 serviceRestartSafe: false,
                 reason: "runtime-verification-failed",
               });
+      if (validation.ok && restartAttempted) {
+        warnRecording(
+          `Gateway recovered on ${version}; ${result.reason ?? "update recovery"} remains unverified. Recovery artifacts and package backups were retained. Run openclaw update repair.`,
+        );
+        if (result.reason === "service-definition-rollback-unverified") {
+          result.status = "ok";
+        }
+        if (run) {
+          recordUpdateRunDiagnostics(run.runId, { recovery: result.recovery }, warnRecording, {
+            env: run.env,
+          });
+        }
+      }
     });
   } catch (error) {
     assertRecoveryFailureCurrent(error);

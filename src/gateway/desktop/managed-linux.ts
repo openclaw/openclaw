@@ -128,15 +128,34 @@ function lastStderrLine(stderr: string): string | undefined {
     ?.trim();
 }
 
-async function readDisplaySocketNames(socketDir: string): Promise<string[]> {
+async function readDisplaySocketNames(
+  socketDir: string,
+  unixSocketTable: string,
+): Promise<string[]> {
+  let names: string[];
   try {
-    return await fs.readdir(socketDir);
+    names = await fs.readdir(socketDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
     }
-    throw error;
+    names = [];
   }
+  let table: string;
+  try {
+    // Read the Gateway's network namespace, including X servers with a private /tmp.
+    table = await fs.readFile(unixSocketTable, "utf8");
+  } catch {
+    return names;
+  }
+  const prefix = `${socketDir}/`;
+  for (const line of table.split("\n")) {
+    const socketPath = line.trim().split(/\s+/u)[7]?.replace(/^@/u, "");
+    if (socketPath?.startsWith(prefix)) {
+      names.push(socketPath.slice(prefix.length));
+    }
+  }
+  return names;
 }
 
 function binaryError(
@@ -169,6 +188,7 @@ export function createManagedLinuxDesktop(
         host: "127.0.0.1";
         exclusive: true;
       }) => Promise<number>;
+      unixSocketTable?: string;
       x11SocketDir?: string;
     };
   } = {},
@@ -187,6 +207,7 @@ export function createManagedLinuxDesktop(
   const tempRoot = params.runtime?.tempRoot ?? os.tmpdir();
   const pickPort = params.runtime?.tryListenOnPort ?? tryListenOnPort;
   const x11SocketDir = params.runtime?.x11SocketDir ?? "/tmp/.X11-unix";
+  const unixSocketTable = params.runtime?.unixSocketTable ?? "/proc/self/net/unix";
   const scopeKey = `host-desktop-managed-linux:${crypto.randomUUID()}`;
 
   let status: ManagedLinuxDesktopStatus = { state: "not-started" };
@@ -287,7 +308,9 @@ export function createManagedLinuxDesktop(
       }
       await fs.writeFile(passwordFile, filtered.stdout, { mode: 0o600, flag: "wx" });
       const port = await pickPort({ port: 0, host: "127.0.0.1", exclusive: true });
-      const display = chooseDisplayNumber(await readDisplaySocketNames(x11SocketDir));
+      const display = chooseDisplayNumber(
+        await readDisplaySocketNames(x11SocketDir, unixSocketTable),
+      );
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         DISPLAY: `:${display}`,

@@ -8,7 +8,7 @@ export { resolveSessionAgentId } from "../../agents/agent-scope.js";
 export { resolveSessionModelRef } from "../session-model-ref.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-export { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
+export { resolveSessionKeyBySessionIdAsync } from "../../config/sessions/session-accessor.transcript-target.js";
 export { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 export {
   resolveSessionStoreKey,

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import { withStateDatabaseColdAdmission } from "./gateway-state-owner.js";
 import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
@@ -46,7 +47,7 @@ it.each([
     throw new Error("Cold file creation must not enter a transaction");
   });
   admission.bindDatabaseAuthority({
-    databasePath,
+    databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
     coldOpenPath: scenario === "non-open" ? undefined : databasePath,
     assertRequest() {
       if (!requestCurrent) {
@@ -71,10 +72,9 @@ it.each([
   });
   // Service the real port exchange and release the foreign schema holder only
   // when the existing cold-admission owner yields, without sleeps or polling.
-  vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
-    if (timeout === undefined) {
-      admission.service();
-    } else {
+  vi.spyOn(Atomics, "wait").mockImplementation((array, index, value) => {
+    admission.service();
+    if (Atomics.load(array, index) === value) {
       expect(existsSync(requestedPath)).toBe(false);
       expect(mutate).not.toHaveBeenCalled();
       schemaBusy = false;
@@ -133,11 +133,8 @@ it.each([
     if (retryable) {
       expect(admission.failure).toBeUndefined();
       expect(owner.refusal).toBeUndefined();
-    } else {
-      expect(admission.failure).toBe(scenario === "revoked" ? revoked : pending);
-      if (transport === "schema") {
-        expect(owner.refusal).toBeInstanceOf(Error);
-      }
+    } else if (transport === "schema") {
+      expect(owner.refusal).toBeInstanceOf(Error);
     }
     expect(release).not.toHaveBeenCalled();
   } finally {

@@ -108,7 +108,7 @@ export async function recoverWorkspaceBeforeTurn(params: {
   workspace: WorkerSessionWorkspace;
   signal?: AbortSignal;
 }): Promise<void> {
-  if (params.workspace.kind === "repository") {
+  if (params.workspace.kind !== "local") {
     return;
   }
   const localWorkspaceDir = params.workspace.path;
@@ -157,6 +157,17 @@ export async function reconcileWorkspaceAfterTurn(params: {
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
+  if (params.workspace.kind === "device-folder") {
+    // This is a turn-completion fence only; the device owns all filesystem state.
+    await params.placements.prepareWorkspaceResultClaim(params.turnClaim);
+    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      throw new Error("Device folder turn lost its placement owner");
+    }
+    await params.placements.acceptWorkspaceResult(params.turnClaim);
+    await params.placements.closeWorkerTurnToolState(params.turnClaim);
+    await params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+    return undefined;
+  }
   const transcriptTarget = { ...params.transcriptTarget };
   const requireCurrentPlacement = () => {
     const currentPlacement = params.placements.preparedWorkspaceResultPlacement(params.turnClaim);

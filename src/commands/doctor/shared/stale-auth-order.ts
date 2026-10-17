@@ -8,9 +8,9 @@ import {
   resolveAuthProfileOrder,
 } from "../../../agents/auth-profiles/order.js";
 import {
-  resolveSharedAuthStoreOwnership,
-  resolveSharedAuthStorePath,
-} from "../../../agents/auth-profiles/path-resolve.js";
+  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
+  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
+} from "../../../agents/auth-profiles/path-resolve.native.js";
 import { mergeAuthProfileStores } from "../../../agents/auth-profiles/persisted.js";
 import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import {
@@ -424,24 +424,23 @@ function scanUndeclaredConfiguredAuthOrders(
   });
 }
 
+function formatAmbiguousAuthOrderWarning(hit: UndeclaredConfiguredAuthOrder): string {
+  const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
+  return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`;
+}
+
 function repairUndeclaredConfiguredAuthOrders(
   cfg: OpenClawConfig,
   loaded?: Extract<LoadedAuthStores, { status: "ready" }>,
 ): {
   config: OpenClawConfig;
   changes: string[];
-  warnings: string[];
 } {
   const hits = scanUndeclaredConfiguredAuthOrders(cfg, loaded);
   const order = readValidConfiguredAuthOrder(cfg) ?? {};
   const changes: string[] = [];
-  const warnings: string[] = [];
   for (const hit of hits) {
     if (hit.declaredProviderProfileIds.length !== 1) {
-      const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
-      warnings.push(
-        `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`,
-      );
       continue;
     }
     const replacement = hit.declaredProviderProfileIds[0];
@@ -472,7 +471,6 @@ function repairUndeclaredConfiguredAuthOrders(
             },
           },
     changes,
-    warnings,
   };
 }
 
@@ -569,12 +567,16 @@ export function maybeRepairStaleConfiguredAuthOrders(params: {
     return { config: params.cfg, changes: [], warnings: initialLoaded.warnings };
   }
   const declaredRepair = repairUndeclaredConfiguredAuthOrders(params.cfg, initialLoaded);
-  const cfg = declaredRepair.config;
-  const staleRepair = repairStaleConfiguredAuthOrders({ cfg, ...initialLoaded });
-  const remainingDeclaredWarnings = repairUndeclaredConfiguredAuthOrders(
+  const staleRepair = repairStaleConfiguredAuthOrders({
+    cfg: declaredRepair.config,
+    ...initialLoaded,
+  });
+  const remainingDeclaredWarnings = scanUndeclaredConfiguredAuthOrders(
     staleRepair.config,
     initialLoaded,
-  ).warnings;
+  )
+    .filter((hit) => hit.declaredProviderProfileIds.length !== 1)
+    .map(formatAmbiguousAuthOrderWarning);
   return {
     config: staleRepair.config,
     changes: [...declaredRepair.changes, ...staleRepair.changes],
@@ -602,8 +604,7 @@ export function collectStaleConfiguredAuthOrderWarnings(params: {
     if (hit.declaredProviderProfileIds.length === 1) {
       return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; run ${params.doctorFixCommand} to replace it with ${hit.declaredProviderProfileIds[0]}.`;
     }
-    const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
-    return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`;
+    return formatAmbiguousAuthOrderWarning(hit);
   });
   return [
     ...declaredWarnings,
@@ -612,10 +613,4 @@ export function collectStaleConfiguredAuthOrderWarnings(params: {
         `- auth.order.${hit.provider} references only missing profiles while compatible stored credentials exist; run ${params.doctorFixCommand} to remove the stale override and restore automatic selection.`,
     ),
   ];
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.staleAuthOrderTestApi")] = {
-    repairStaleConfiguredAuthOrders,
-  };
 }

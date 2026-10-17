@@ -121,31 +121,35 @@ it.each([false, true])(
       const inject = vi.fn(() => replaceSessionEntrySync(reset, next));
       if (successor) {
         const capture = execution.captureOpenClawAgentDatabaseExecution;
-        vi.spyOn(execution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-          (...args) => {
-            const owner = capture(...args);
-            return {
-              ...owner,
-              get fileIdentity() {
-                return owner.fileIdentity;
-              },
-              runExisting: (source, operation, options) =>
-                owner.runExisting(
-                  source,
-                  (worker) =>
-                    operation({
-                      execute: async (command, commandOptions) => {
-                        const result = await worker.execute(command, commandOptions);
-                        if (command.type === "session.nativeBindings.delete") {
-                          inject();
-                        }
-                        return result;
-                      },
-                    }),
-                  options,
-                ),
-            };
-          },
+        const capturePreparation = execution.captureOpenClawAgentDatabasePreparationExecution;
+        const withDelivery = (owner: ReturnType<typeof capture>): typeof owner => {
+          return {
+            ...owner,
+            get fileIdentity() {
+              return owner.fileIdentity;
+            },
+            runExisting: (source, operation, options) =>
+              owner.runExisting(
+                source,
+                (worker) =>
+                  operation({
+                    execute: async (command, commandOptions) => {
+                      const result = await worker.execute(command, commandOptions);
+                      if (command.type === "session.nativeBindings.delete") {
+                        inject();
+                      }
+                      return result;
+                    },
+                  }),
+                options,
+              ),
+          };
+        };
+        vi.spyOn(execution, "captureOpenClawAgentDatabaseExecution").mockImplementation((...args) =>
+          withDelivery(capture(...args)),
+        );
+        vi.spyOn(execution, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
+          (...args) => withDelivery(capturePreparation(...args)),
         );
       }
       let committed = false;

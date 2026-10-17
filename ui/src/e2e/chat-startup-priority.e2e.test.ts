@@ -6,7 +6,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -237,7 +237,7 @@ suite.define(() => {
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Current rollout progress", { exact: true })
           .waitFor();
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await closeChatDetails(activePane);
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -310,9 +310,7 @@ suite.define(() => {
             document.dispatchEvent(new Event("visibilitychange"));
           });
         } else {
-          await page
-            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
-            .click();
+          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
           await expect
@@ -474,9 +472,7 @@ suite.define(() => {
             await gateway.waitForRequest(method);
           }
         } else {
-          await page
-            .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
-            .click();
+          await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
           await page.waitForURL((url) => url.pathname === "/new");
           await page.locator("openclaw-new-session-page").waitFor();
         }

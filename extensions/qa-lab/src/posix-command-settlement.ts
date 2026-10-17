@@ -97,6 +97,10 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   const finishCleanup = () => {
     cleanupDone = true;
     if (drainTimedOut && !stdioDrained) {
+      // The drain deadline can expire while the process group is still in TERM grace.
+      if (!windows) {
+        errors.push(new Error("stdio-drain-timeout"));
+      }
       params.child.stdout?.destroy();
       params.child.stderr?.destroy();
       stdioDrained = true;
@@ -111,9 +115,6 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     }
     if (!stdioDrained) {
       drainTimedOut = true;
-      if (!windows && !errors.some((error) => error.message === "stdio-drain-timeout")) {
-        errors.push(new Error("stdio-drain-timeout"));
-      }
     }
     finishCleanup();
   };
@@ -142,7 +143,9 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   };
   const onDrainDeadline = () => {
     drainTimedOut = true;
-    errors.push(new Error("stdio-drain-timeout"));
+    if (windows) {
+      errors.push(new Error("stdio-drain-timeout"));
+    }
     startCleanup();
     if (cleanupDone) {
       finishCleanup();

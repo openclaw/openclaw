@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
@@ -13,7 +14,6 @@ import {
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import { mountRoster, settleRoster } from "./roster.test-support.ts";
-import "../../components/app-sidebar.ts";
 
 const sessionKey = "agent:main:attention";
 
@@ -164,9 +164,10 @@ describe("AppSidebar session attention", () => {
       await rosterActivityStore(context).refresh();
       await settleRoster(sidebar);
     };
-    const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
+    const home = () =>
+      sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
 
-    expect(home?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    expect(home()?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
 
     gatewayHarness.publishEvent("question.requested", {
       id: "question-home",
@@ -185,11 +186,11 @@ describe("AppSidebar session attention", () => {
       status: "pending",
     });
     await settleLitElement(sidebar);
-    expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+    expect(home()?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
     await publishRows([]);
     await settleLitElement(sidebar);
-    expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+    expect(home()?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
     gatewayHarness.publishEvent("question.resolved", {
       id: "question-home",
@@ -201,19 +202,19 @@ describe("AppSidebar session attention", () => {
       }),
     ]);
     await settleLitElement(sidebar);
-    expect(home?.querySelector('[data-session-attention="error"]')).not.toBeNull();
+    expect(home()?.querySelector('[data-session-attention="error"]')).not.toBeNull();
     expect(
-      home?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
+      home()?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
     ).toBe("Run failed:   Message failed:  delivery unavailable");
     expect(
-      home?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
+      home()?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
     ).not.toMatch(/[⚠✉]/u);
 
     await publishRows([
       { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
     ]);
     await settleLitElement(sidebar);
-    expect(home?.querySelector("[data-session-attention]")).toBeNull();
+    expect(home()?.querySelector("[data-session-attention]")).toBeNull();
   });
 
   it("shows question attention ahead of a run error and clears it on resolution", async () => {
@@ -360,12 +361,13 @@ describe("AppSidebar session attention", () => {
     );
     expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
 
-    sidebar.requestUpdate();
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    sidebar.invalidate();
     provider.remove();
     await settleLitElement(sidebar);
-    const requestUpdate = vi.spyOn(sidebar, "requestUpdate");
+    const invalidate = vi.spyOn(owner, "invalidate");
     await vi.advanceTimersByTimeAsync(60_001);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
 
     document.body.append(provider);
     await settleLitElement(sidebar);
@@ -404,9 +406,9 @@ describe("AppSidebar session attention", () => {
         `Waiting for approval\n${kind === "exec" ? "git status" : "Enable the calendar plugin"}`,
       );
       expect(indicator?.getAttribute("tabindex")).toBe("0");
-      expect(sidebar.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
-        "Waiting for approval",
-      );
+      const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+      expect(row?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+      expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
       expect(sidebar.textContent).not.toContain("Run failed:");
     },
   );
@@ -502,12 +504,14 @@ describe("AppSidebar session attention", () => {
     expect(description).not.toContain("Run failed:");
 
     sidebar.sidebarAgentsMode = "roster";
+    const agentHeader = () =>
+      sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
     await waitForFast(() => {
       expect(
         sidebar.querySelector(`openclaw-sidebar-agent-roster [data-session-key="${parentKey}"]`),
-      ).not.toBeNull();
+      ).toBeNull();
       expect(
-        parentRow()
+        agentHeader()
           ?.querySelector('[data-session-attention="error"]')
           ?.closest('[role="img"]')
           ?.getAttribute("aria-label"),
@@ -520,8 +524,8 @@ describe("AppSidebar session attention", () => {
     setRows(sessionsHarness, result.sessions);
     await rosterActivityStore(context).refresh();
     await waitForFast(() => {
-      expect(parentRow()).not.toBeNull();
-      expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();
+      expect(agentHeader()).not.toBeNull();
+      expect(agentHeader()?.querySelector('[data-session-attention="error"]')).toBeNull();
     });
   });
 

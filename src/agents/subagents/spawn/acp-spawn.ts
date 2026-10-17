@@ -57,6 +57,7 @@ import {
   resolveSpawnMode,
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
+import type { SpawnRequesterConversationSource } from "../../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
@@ -131,7 +132,7 @@ type SpawnAcpParams = {
   attachments?: AcpTurnAttachment[];
 };
 
-type SpawnAcpContext = {
+type SpawnAcpContext = SpawnRequesterConversationSource & {
   onSpawnEffectsStart?: () => void;
   assertActive?: SessionSourceAssertion;
   agentSessionKey?: string;
@@ -143,10 +144,6 @@ type SpawnAcpContext = {
   requesterAgentIdOverride?: string;
   agentChannel?: string;
   agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
   currentMessageId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;
@@ -477,7 +474,6 @@ export async function spawnAcpDirect(
         parentEntry,
         expectedParentSessionId: ctx.expectedParentSessionId,
         senderIsOwner: ctx.senderIsOwner,
-        readParentEntry,
       });
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
@@ -494,7 +490,6 @@ export async function spawnAcpDirect(
             subagentControlScope: admission.childSessionPatch.subagentControlScope,
           }
         : {};
-      await parentLineage.assertParentUnchanged();
       ctx.assertActive?.();
       childCreationEntry =
         (await upsertSessionEntryCore(
@@ -523,7 +518,7 @@ export async function spawnAcpDirect(
               : {}),
             ...(params.label ? { label: params.label } : {}),
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
-            ...parentLineage.receipt,
+            ...parentLineage,
           },
           sessionEntryCommitGuardOptions(ctx.assertActive),
         )) ?? undefined;

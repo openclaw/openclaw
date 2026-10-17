@@ -6,7 +6,11 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
+import {
+  closeChatDetails,
+  openChatDetails,
+  openDetailsPullRequests,
+} from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   chatThreadDistanceFromBottom,
@@ -254,7 +258,7 @@ suite.define(() => {
           }
 
           const latest = page.locator('.chat-scroll-to-bottom[data-visible="true"]');
-          await page.getByRole("button", { name: "Close details", exact: true }).click();
+          await closeChatDetails(page);
           await activate(latest, touch);
           await expect
             .poll(() => chatThreadDistanceFromBottom(page))

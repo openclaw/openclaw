@@ -33,6 +33,7 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -49,7 +50,7 @@ export function registerDetachedCleanupAuthorityTest({
   createLifecycleController: (
     params: { entry: SubagentRunRecord } & Pick<
       LifecycleControllerFixtureOptions,
-      "runSubagentAnnounceFlow" | "beforeWrite"
+      "runSubagentAnnounceFlow"
     >,
   ) => Pick<SubagentLifecycleController, "startSubagentAnnounceCleanupFlow">;
 }) {
@@ -81,7 +82,7 @@ export function registerDetachedCleanupAuthorityTest({
       payload: delivered,
     });
     const dispatchFinished = createDeferredCore<unknown>();
-    const cleanupFinished = createDeferredCore();
+    const joinCleanup = observeRootWork();
     const runSubagentAnnounceFlow = vi.fn(async () => {
       await cleanupReady.promise;
       try {
@@ -105,11 +106,6 @@ export function registerDetachedCleanupAuthorityTest({
     const controller = createLifecycleController({
       entry,
       runSubagentAnnounceFlow,
-      beforeWrite: ({ postimages }) => {
-        if (postimages.get(entry.runId)?.cleanupCompletedAt !== undefined) {
-          cleanupFinished.resolve();
-        }
-      },
     });
 
     await withGatewayToolCallerIdentity(
@@ -134,9 +130,10 @@ export function registerDetachedCleanupAuthorityTest({
     cleanupReady.resolve();
 
     await dispatchResult;
-    await cleanupFinished.promise;
+    await joinCleanup();
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
     expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });
@@ -169,6 +166,29 @@ export function registerDirectSessionCleanupAuthorityTests({
   };
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
 }) {
+  it("preserves a delivered receipt while cleaning up a suppressed completion", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      suppressCompletionDelivery: true,
+      delivery: {
+        status: "delivered",
+        disposition: "delivered",
+        deliveredAt: 4_010,
+        announcedAt: 4_020,
+      },
+    });
+    const controller = createLifecycleController({ entry });
+    const join = observeRootWork();
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+    expect(readLifecycleRun(entry)).toMatchObject({
+      delivery: entry.delivery,
+      cleanupCompletedAt: expect.any(Number),
+    });
+  });
+
   it("commits cancellation of a yielded run before browser cleanup", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });
     expect(markSubagentRunPausedAfterYield({ entry, endedAt: 3_000 })).toBe(true);
@@ -430,6 +450,7 @@ export function registerDeliveryRetryOwnerTests({
     );
     const controller = createLifecycleController({
       entry,
+      captureSubagentCompletionReply: vi.fn(async () => terminalReply.text),
       runSubagentAnnounceFlow,
       resumeSubagentRun,
     });
@@ -463,7 +484,10 @@ export function registerDeliveryRetryOwnerTests({
         expect(params.roundOneReply).toBe("A=alpha");
       }
       expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
-      expect(readLifecycleRun(entry).completion?.resultText).toBe("A=alpha");
+      expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+        "A=alpha",
+      );
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
       await vi.advanceTimersByTimeAsync(60_000);
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);

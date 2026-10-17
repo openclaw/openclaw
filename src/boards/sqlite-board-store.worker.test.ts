@@ -3,14 +3,10 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
-import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
@@ -26,13 +22,13 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as workerStore from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -48,15 +44,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function fixture(incognito = false) {
+function fixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("board-worker-mutations-") };
   const sessionKey = "agent:main:board";
   const database = openOpenClawAgentDatabase({
     agentId: "main",
     env,
-    ...(incognito
-      ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }) }
-      : {}),
   });
   replaceSessionEntrySync(
     { agentId: "main", sessionKey, storePath: database.path },
@@ -174,128 +167,6 @@ it.each([false, true])(
   },
 );
 
-it("preserves cross-store Board source authority through the write effect", async () => {
-  const { database, env, store, target } = fixture();
-  const sessionKey = "agent:source:authority";
-  const source = openOpenClawAgentDatabase({ agentId: "source", env });
-  const scope = { agentId: "source", sessionKey, storePath: source.path, env };
-  const entry = { sessionId: "source-session", updatedAt: 1, permissionMode: "full" as const };
-  replaceSessionEntrySync(scope, entry);
-  const refuse = (): never => {
-    throw new Error("Board source permission changed");
-  };
-  const assertCurrent = captureSessionEntrySourceAssertion({
-    scope,
-    expected: entry,
-    fields: ["permissionMode"],
-    assertCurrent() {
-      if (readExactSessionEntryRow(source, sessionKey)?.entry.permissionMode !== "full") {
-        refuse();
-      }
-    },
-    refuse,
-  });
-  const reads = trackSqliteStatementExecutions(database.db, ["session"], (sql) =>
-    /^select "entry_json" from "session_nodes"/iu.test(sql) ? "session" : null,
-  );
-  try {
-    const put = await store.putWidget(
-      {
-        ...target,
-        name: "permitted",
-        content: { kind: "html", html: "permitted" },
-        declared: { tools: ["health"] },
-      },
-      { assertCurrent },
-    );
-    expect(reads.counts.session).toBe(1);
-    await store.applyOps(
-      target,
-      [{ kind: "widget_resize", name: "permitted", sizeW: 8, sizeH: 6 }],
-      { assertCurrent },
-    );
-    expect(reads.counts.session).toBe(2);
-    await store.grant(target, "permitted", "granted", 1, put.widgets[0]?.instanceId, {
-      assertCurrent,
-    });
-    expect(reads.counts.session).toBe(3);
-  } finally {
-    reads.restore();
-  }
-  await expect(
-    store.putWidget(
-      {
-        ...target,
-        name: "revoked",
-        content: {
-          kind: "mcp-app",
-          descriptor: {
-            serverName: "server",
-            toolName: "tool",
-            uiResourceUri: "ui://app",
-            toolCallId: "call",
-          },
-          interactive: true,
-        },
-      },
-      {
-        assertCurrent,
-        async resolveMcpAppInteraction() {
-          replaceSessionEntrySync(scope, { ...entry, permissionMode: "guarded" });
-          return true;
-        },
-      },
-    ),
-  ).rejects.toThrow("Board source permission changed");
-  expect((await store.getSnapshot(target)).widgets.map(({ name }) => name)).toEqual(["permitted"]);
-});
-
-it("keeps incognito Board mutations on the process-held database without creating its disk path", async () => {
-  const { database, options, store, target } = fixture(true);
-  const changes: SessionRowChange[] = [];
-  const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
-  const facts: SessionRowChange[] = [];
-  const stopFacts = sessionChanges.subscribeFacts((change) => facts.push(change));
-  try {
-    expect(existsSync(options.path)).toBe(false);
-    await store.putWidget({
-      ...target,
-      name: "private",
-      content: { kind: "html", html: "<p>process-held</p>" },
-    });
-    const updated = await store.applyOps(target, [
-      { kind: "widget_resize", name: "private", sizeW: 8, sizeH: 6 },
-    ]);
-    expect(updated).toMatchObject({
-      revision: 2,
-      widgets: [{ name: "private", revision: 1, sizeW: 8, sizeH: 6 }],
-    });
-    expect(await store.getSnapshot(target)).toEqual(updated);
-    expect(await store.useWidgetDocument(target, "private", (document) => document)).toMatchObject({
-      html: "<p>process-held</p>",
-      revision: 1,
-    });
-    expect(openOpenClawAgentDatabase(options).db).toBe(database.db);
-    expect(changes).toEqual([
-      { sessionKey: target.sessionKey, storePath: options.path },
-      { sessionKey: target.sessionKey, storePath: options.path },
-    ]);
-    expect(facts).toEqual(
-      changes.map(() => ({
-        sessionKey: target.sessionKey,
-        storePath: options.path,
-        facts: { kind: "unchanged" },
-      })),
-    );
-    for (const suffix of ["", "-wal", "-shm"]) {
-      expect(existsSync(`${options.path}${suffix}`)).toBe(false);
-    }
-  } finally {
-    stopFacts();
-    unsubscribe();
-  }
-});
-
 it("executes Board mutations off the host and publishes each committed change once", async () => {
   const { database, store, target } = fixture();
   const changes: Array<{ change: SessionRowChange; inTransaction: boolean; revision: number }> = [];
@@ -315,7 +186,7 @@ it("executes Board mutations off the host and publishes each committed change on
       facts.push(change);
     }
   });
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  clearNodeSqliteKyselyCacheForDatabase(requireNativeSqliteDatabase(database.db));
   const host = observeHostDataSql();
   const expectPublication = (revision: number) => {
     expect(changes).toEqual([
@@ -546,40 +417,6 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
   },
 );
 
-it.each(["transaction", "commit"] as const)(
-  "refuses a Board write whose target changes at the %s grant",
-  async (stage) => {
-    const { options, store, target } = fixture();
-    await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "private" },
-    });
-    let sessionKey = target.sessionKey;
-    const reader = new SqliteBoardStore({
-      resolveSession: () => ({ ...options, sessionKey }),
-      env: options.env,
-    });
-    const interception = probe.admission(admission, (request, grant, admit) => {
-      if (request.stage === stage) {
-        sessionKey = "agent:main:replacement";
-      }
-      admit(request, grant);
-    });
-    try {
-      const pending = reader.putWidget({
-        ...target,
-        name: "denied",
-        content: { kind: "html", html: "denied" },
-      });
-      await expect(pending).rejects.toBeInstanceOf(BoardValidationError);
-    } finally {
-      interception.mockRestore();
-    }
-    expect((await store.getSnapshot(target)).widgets).toMatchObject([{ name: "status" }]);
-  },
-);
-
 it("reads Board snapshots and documents without a write-capable publication", async () => {
   const { store, target } = fixture();
   const put = await store.putWidget({
@@ -613,7 +450,15 @@ it("refuses Board disclosure when its target changes during a read", async () =>
   });
   let sessionKey = target.sessionKey;
   const reader = new SqliteBoardStore({
-    resolveSession: () => ({ ...options, sessionKey }),
+    resolveSession: () => ({
+      ...options,
+      sessionKey,
+      assertCurrent() {
+        if (sessionKey !== target.sessionKey) {
+          throw new BoardValidationError("invalid_operation", "board session changed; retry");
+        }
+      },
+    }),
     env: options.env,
   });
   const create = historyReaders.createSessionHistoryWorkerReaders;

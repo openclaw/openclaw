@@ -24,6 +24,7 @@ import type { ModelFallbackResultClassification } from "../model-fallback-attemp
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import { modelKey } from "../model-ref-shared.js";
+import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
@@ -31,6 +32,7 @@ import {
   sessionPlacementUsesWorkerInference,
   withRequiredSessionPlacement,
 } from "../session-placement-admission.js";
+import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
@@ -57,8 +59,8 @@ import type {
   EmbeddedAgentRunEntryParams,
   EmbeddedAgentRunEntryResult,
 } from "./run-entry.types.js";
-import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
-import type { EmbeddedAgentRunResult } from "./types.js";
+import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "./types.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
 export type { RunEntryCandidateOptions } from "./run-entry.types.js";
@@ -187,6 +189,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   const assistantErrorTranscript = createAssistantErrorTranscript();
   let failed = true;
   let candidateIndex = 0;
+  const completedCandidates: Array<EmbeddedAgentMeta | undefined> = [];
   const committedSideEffect =
     params.behavior.kind === "command-rpc" ? params.behavior.hasCommittedSideEffect : undefined;
   const readChannelDeliveryEvidence =
@@ -416,6 +419,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 contextEngineTurnCandidate = facts;
               },
             });
+            // Classification may run repeatedly and the selected result can be replaced.
+            // Account physical work once, only after a candidate returns its usage.
+            completedCandidates.push(result.meta.agentMeta);
             return {
               result,
               classification: classifyResult(result),
@@ -547,7 +553,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       params.behavior.kind === "command-rpc"
         ? resolveAgentRunAbortLifecycleFields(params.abortSignal)
         : {};
-    const candidateResult =
+    let candidateResult =
       abortFields.aborted === true
         ? ({
             ...fallbackResult.result.result,
@@ -557,6 +563,29 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             },
           } as T)
         : fallbackResult.result.result;
+    if (completedCandidates.length > 1 && candidateResult.meta.agentMeta) {
+      const usage = createUsageAccumulator();
+      const diagnosticUsage = createUsageAccumulator();
+      for (const candidate of completedCandidates) {
+        mergeCompletedAgentUsage({
+          usage,
+          diagnosticUsage,
+          agentMeta: candidate,
+          config: params.selection.cfg,
+          agentDir: params.selection.agentDir,
+        });
+      }
+      candidateResult = {
+        ...candidateResult,
+        meta: {
+          ...candidateResult.meta,
+          agentMeta: {
+            ...candidateResult.meta.agentMeta,
+            ...buildCompletedAgentUsageMeta(usage, diagnosticUsage),
+          },
+        },
+      };
+    }
     const outcome = fallbackResult.outcome;
     // A completed fallback search can still return a failed or interrupted run.
     const terminalOutcome = resolveRunEntryTerminalOutcome({
@@ -566,6 +595,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     failed = terminalOutcome.status === "error";
     const result = mergeRunEntryExecutionTrace({
       result: candidateResult,
+      config: params.selection.cfg,
       terminalStatus: terminalOutcome.status,
       provider: fallbackResult.provider,
       model: fallbackResult.model,

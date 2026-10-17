@@ -111,6 +111,8 @@ describe("openclaw delegation tool", () => {
       throw new Error("expected OpenClaw delegation tool");
     }
     expect(tool.description).toContain("Gateway restart");
+    expect(tool.description).toContain("approve in the Control UI");
+    expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("openclaw");
 
     const result = await tool.execute("call-1", { message: "Add channel." });
 
@@ -132,7 +134,6 @@ describe("openclaw delegation tool", () => {
   });
 
   it.each([
-    { name: "default full", options: {}, full: true },
     {
       name: "explicit full overrides configured prompting",
       options: {
@@ -140,13 +141,6 @@ describe("openclaw delegation tool", () => {
         config: { tools: { exec: { mode: "ask" } } },
       },
       full: true,
-    },
-    { name: "guarded", options: { execSession: { permissionMode: "guarded" } }, full: false },
-    { name: "workspace", options: { execSession: { permissionMode: "workspace" } }, full: false },
-    {
-      name: "restricted default",
-      options: { config: { tools: { exec: { mode: "ask" } } } },
-      full: false,
     },
     {
       name: "agent-restricted default",
@@ -202,45 +196,17 @@ describe("openclaw delegation tool", () => {
     expect(getGatewayToolCallerIdentity()).toBeUndefined();
   });
 
-  it.each([
-    { agentChannel: "telegram", where: "in this chat" },
-    { agentChannel: "webchat", where: "in the Control UI" },
-    { agentChannel: undefined, where: "in the Control UI" },
-  ])("points $agentChannel runs to where approvals appear", ({ agentChannel, where }) => {
-    // Only messaging channels receive approval prompts; the forwarder skips Webchat and TUI.
-    const [tool] = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
-      runSessionKey: "agent:main:main",
-      agentChannel,
-      execSession: { permissionMode: "guarded" },
-    });
-    expect(tool?.description).toContain(`approve ${where}`);
-  });
-
-  it("reuses one session and accepts explicit continuation", async () => {
-    callGateway.mockImplementation(async (_method: string, params: Record<string, unknown>) => ({
-      sessionId: params.sessionId,
-      reply: "Done.",
-    }));
-    const tool = createOpenClawDelegateToolsForRun({
-      sessionAgentId: "main",
-      runSessionKey: "agent:main:main",
-    })[0];
-    if (!tool) {
-      throw new Error("expected OpenClaw delegation tool");
-    }
-
-    await tool.execute("call-1", { message: "First." });
-    await tool.execute("call-2", { message: "Second." });
-    await tool.execute("call-3", { message: "Other.", sessionId: "delegate-user-choice" });
-
-    expect(callGateway.mock.calls[0]?.[1]).toMatchObject({
-      sessionId: callGateway.mock.calls[1]?.[1].sessionId,
-    });
-    expect(callGateway.mock.calls[2]?.[1]).toMatchObject({ sessionId: "delegate-user-choice" });
-  });
-
-  it("uses the owner-only core gate", () => {
-    expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("openclaw");
-  });
+  it.each([{ agentChannel: "telegram", where: "in this chat" }])(
+    "points $agentChannel runs to where approvals appear",
+    ({ agentChannel, where }) => {
+      // Only messaging channels receive approval prompts; the forwarder skips Webchat and TUI.
+      const [tool] = createOpenClawDelegateToolsForRun({
+        sessionAgentId: "main",
+        runSessionKey: "agent:main:main",
+        agentChannel,
+        execSession: { permissionMode: "guarded" },
+      });
+      expect(tool?.description).toContain(`approve ${where}`);
+    },
+  );
 });

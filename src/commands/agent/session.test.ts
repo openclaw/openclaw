@@ -31,7 +31,16 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   ) =>
     consume({
       database: { agentId: scope.agentId, path: scope.storePath },
-      reader: { readEntries: async () => ({ entries: mocks.listSessionEntriesReadOnly(scope) }) },
+      reader: {
+        readExactEntries: async (request: { selection: { sessionIdOrKey: string } }) => ({
+          entries: mocks
+            .listSessionEntriesReadOnly(scope)
+            .filter(
+              ({ entry }: { entry: { sessionId: string } }) =>
+                entry.sessionId === request.selection.sessionIdOrKey,
+            ),
+        }),
+      },
     }),
 }));
 
@@ -223,6 +232,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(mocks.listSessionEntriesReadOnly).toHaveBeenCalledWith({
       agentId: "mybot",
       storePath: MYBOT_STORE_PATH,
+      sessionId: "target-session-id",
     });
   });
 

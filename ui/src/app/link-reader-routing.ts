@@ -6,6 +6,7 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 export function availableLinkReaders(
@@ -84,6 +85,5 @@ export function startLinkReaderRouting(
       event.preventDefault();
     }
   };
-  document.addEventListener("click", handleClick);
-  return { dispose: () => document.removeEventListener("click", handleClick) };
+  return { dispose: listen(document, "click", handleClick) };
 }

@@ -9,6 +9,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
+import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { resolvePluginSkillRoots, resolvePluginSkillRootsFromMetadata } from "./plugin-skills.js";
 import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
 import {
@@ -77,18 +78,22 @@ export function resolveCustodianSkillAgentId(
     : undefined;
 }
 
+export type WorkspaceSkillSourcePlanOptions = {
+  config?: OpenClawConfig;
+  agentId?: string;
+  workspaceOnly?: boolean;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  pluginSkillsDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  /** Prepared on the discovery worker when the caller only needs root composition. */
+  pluginSkillRoots?: PluginSkillRoot[];
+};
+
 /** Source selection and precedence are shared by local discovery and provisioned remote discovery. */
 export function resolveWorkspaceSkillSourcePlan(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    agentId?: string;
-    workspaceOnly?: boolean;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    pluginSkillsDir?: string;
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  },
+  opts?: WorkspaceSkillSourcePlanOptions,
 ): WorkspaceSkillSourcePlan {
   const workspaceOnly = opts?.workspaceOnly === true;
   const userHomeDir = resolveSkillsUserHomeDir();
@@ -100,12 +105,13 @@ export function resolveWorkspaceSkillSourcePlan(
   const pluginParams = { workspaceDir, config: opts?.config, pluginSkillsDir };
   const pluginSkillRoots = workspaceOnly
     ? []
-    : opts?.pluginMetadataSnapshot
-      ? resolvePluginSkillRootsFromMetadata({
-          ...pluginParams,
-          metadataSnapshot: opts.pluginMetadataSnapshot,
-        })
-      : resolvePluginSkillRoots(pluginParams);
+    : (opts?.pluginSkillRoots ??
+      (opts?.pluginMetadataSnapshot
+        ? resolvePluginSkillRootsFromMetadata({
+            ...pluginParams,
+            metadataSnapshot: opts.pluginMetadataSnapshot,
+          })
+        : resolvePluginSkillRoots(pluginParams)));
   const roots: WorkspaceSkillSource[] = [];
   if (!workspaceOnly) {
     roots.push(

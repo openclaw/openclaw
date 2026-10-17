@@ -106,7 +106,6 @@ const runAckReaction = (overrides: Partial<AckReactionParams> = {}) =>
     agentId: "agent",
     sessionKey: "whatsapp:default:15551234567",
     verbose: false,
-    info: vi.fn(),
     warn: vi.fn(),
     ...overrides,
   });

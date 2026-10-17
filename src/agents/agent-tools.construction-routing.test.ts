@@ -47,6 +47,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
@@ -108,15 +109,53 @@ describe("createOpenClawCodingTools cron scope", () => {
     },
   );
 
-  it("scopes cron-triggered jobs to self-removal", () => {
+  it("lets the owner reach a retained owner-only tool and stops a non-owner before preparation", async () => {
+    for (const senderIsOwner of [true, false]) {
+      mocks.onToolExecute.mockClear();
+      mocks.onToolPrepare.mockClear();
+      const tools = createOpenClawCodingTools({ senderIsOwner });
+      const gateway = tools.find((tool) => tool.name === "gateway")!;
+      const result = await gateway.execute(`dispatch-${senderIsOwner}`, { action: "config.get" });
+      if (senderIsOwner) {
+        expect(mocks.onToolPrepare).toHaveBeenCalledOnce();
+        expect(mocks.onToolExecute).toHaveBeenCalledOnce();
+      } else {
+        expect(result.details).toMatchObject({ gated: true });
+        expect(mocks.onToolPrepare).not.toHaveBeenCalled();
+        expect(mocks.onToolExecute).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("keeps self-scoped automation inspection available without sender ownership", async () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",
       jobId: "job-current",
+      senderIsOwner: false,
     });
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
+    await expectOwnerGated(tools, "gateway");
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
+
+  it("preserves explicit automation denial for a scheduled run", () => {
+    const tools = createOpenClawCodingTools({
+      trigger: "cron",
+      jobId: "job-current",
+      senderIsOwner: false,
+      config: { tools: { deny: [AUTOMATIONS_TOOL_NAME] } },
+    });
+    expect(tools.map((tool) => tool.name)).not.toContain(AUTOMATIONS_TOOL_NAME);
+  });
+
+  it.each([{ trigger: "cron" as const }, { jobId: "job-current" }])(
+    "does not expose automation controls for an incomplete scheduled context: %j",
+    async (context) => {
+      const tools = createOpenClawCodingTools({ ...context, senderIsOwner: false });
+      await expectOwnerGated(tools, AUTOMATIONS_TOOL_NAME);
+    },
+  );
 
   it("admits only the automation tool for channel-owner management authority", async () => {
     const runId = "remote-management-tools";
@@ -155,7 +194,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     );
     const names = tools.map((tool) => tool.name);
     expect(names).toContain(AUTOMATIONS_TOOL_NAME);
-    expect(names).not.toContain("gateway");
+    await expectOwnerGated(tools, "gateway");
   });
 });
 
@@ -240,7 +279,12 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     mocks.createOpenClawToolsOptions.mockClear();
 
     const tools = createOpenClawCodingTools({
-      sandbox,
+      sandbox: { ...sandbox, agentId: "main" },
+      config: { agents: { entries: { main: {}, work: {} } } },
+      policyAgentId: "main",
+      agentId: "work",
+      sessionKey: "agent:main:policy",
+      runSessionKey: "agent:work:run",
       toolConstructionPlan: {
         includeBaseCodingTools: false,
         includeShellTools: false,
@@ -252,6 +296,9 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
     expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledOnce();
+    expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxAgentId: "main", requesterAgentIdOverride: "work" }),
+    );
   });
 
   it("rejects sandbox shell tools without their filesystem bridge", () => {

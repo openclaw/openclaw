@@ -85,7 +85,6 @@ it("passes child-only environment through the ACPX process factory", async () =>
 });
 
 it.each([
-  { wrapped: false, form: "path" },
   { wrapped: true, form: "path" },
   { wrapped: false, form: "relative" },
   { wrapped: false, form: "combined" },

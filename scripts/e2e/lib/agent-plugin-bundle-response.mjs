@@ -3,7 +3,7 @@ import { isRecord } from "../../lib/record-shared.mjs";
 import { readMockUserText } from "./mock-inference-facts.ts";
 
 const targetName = "weather-probe__weather_probe";
-const controls = ["tool_search", "tool_describe", "tool_call"];
+const controls = ["tool_search", "tool_describe", "dispatch_action"];
 
 function failure(reason) {
   return { text: `AGENT_BUNDLE_MCP_FAIL ${reason}` };
@@ -111,12 +111,12 @@ export function resolveAgentPluginBundleResponse(body) {
     return failure("unexpected-tool-output");
   }
   if (rounds.length === 2) {
-    return { tool: { name: "tool_call", args: { id: target.id, args: {} } } };
+    return { tool: { name: "dispatch_action", args: { id: target.id, args: {} } } };
   }
   const call = rounds[2];
   const result = call.value?.result;
   if (
-    call.name !== "tool_call" ||
+    call.name !== "dispatch_action" ||
     call.args?.id !== target.id ||
     !isRecord(call.args.args) ||
     Object.keys(call.args.args).length !== 0 ||

@@ -1,10 +1,10 @@
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import type {
   PendingInputSourceRead,
   PendingInputSourceSnapshot,
@@ -14,12 +14,12 @@ import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 
-/** Read comparison evidence only; recovered custody is claimed by the current host owner. */
+/** Worker-only comparison evidence; recovered custody is claimed by the current host owner. */
 export function readPendingInputSourceInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
   input: PendingInputSourceRead,
 ): PendingInputSourceSnapshot {
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const db = getSessionKysely(database.db);
     const session = executeSqliteQueryTakeFirstSync(
       database.db,
@@ -46,7 +46,7 @@ export function readPendingInputSourceInDatabase(
       .where("session_key", "=", input.sessionKey)
       .where("session_id", "=", input.sessionId)
       .where("idempotency_key", "=", input.idempotencyKey);
-    const pending = getAdmittedSqliteSchemaFacts(database.db)?.tables.has("session_pending_inputs")
+    const pending = hasSessionPendingInputsSchema(database.db)
       ? executeSqliteQueryTakeFirstSync(
           database.db,
           pendingQuery.select((eb) => eb.fn<number>("octet_length", ["message_json"]).as("bytes")),

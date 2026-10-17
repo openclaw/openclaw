@@ -9,6 +9,7 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfigSnapshot } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -32,12 +33,18 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { getSessionInputActor } from "./session-input-actor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   captureSessionTranscriptSourcePublication,
+  captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
@@ -64,15 +71,6 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error(
       `Session key owner "${keyAgentId}" does not match requested agent "${scopedAgentId}".`,
     );
-  }
-  const incognito = captureIncognitoSessionOperation({
-    agentId: scopedAgentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    env: params.env,
-  });
-  if (incognito) {
-    return incognito.actor.agentId;
   }
   const persistedStoreOwner =
     params.sessionStore && !params.storePath
@@ -155,7 +153,7 @@ export async function appendTranscriptMessages<TMessage>(
 }
 
 /**
- * Persists one logical transcript turn through the SQLite-backed session target.
+ * Persists one logical transcript turn through its selected session owner.
  * Transcript row append(s) and the requested
  * updatedAt touch happen before transcript update delivery is published.
  */
@@ -166,7 +164,11 @@ export async function persistSessionTranscriptTurn(
   },
   options: SessionTranscriptTurnPersistOptions,
 ): Promise<SessionTranscriptTurnPersistResult> {
-  const expectedSessionId = options.expectedSessionId;
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent: () => options.assertCurrent?.(),
+    authorize: () => options.assertCurrent?.(),
+  });
+  const expectedSessionId = options.expectedSessionId ?? (memory ? scope.sessionId : undefined);
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
@@ -325,13 +327,42 @@ async function persistExpectedSessionTranscriptTurn(
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
   const expectedSessionId = options.expectedSessionId;
+  const selectedScope = { ...scope, sessionId: expectedSessionId };
+  if (!getSessionActorStorageBinding(selectedScope)) {
+    const assertOwned = captureOwnedTranscriptWriteAssertion(selectedScope);
+    const assertCurrent = () => {
+      assertOwned();
+      options.assertCurrent?.();
+    };
+    const authority = { assertCurrent, authorize: assertCurrent };
+    if (captureSessionActorStorageOwner(selectedScope, authority)) {
+      const result = await withSessionActorStorage(
+        selectedScope,
+        {
+          authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          create: Boolean(options.initialSessionEntry),
+        },
+        () => persistExpectedSessionTranscriptTurn(scope, options, preparedTarget),
+      );
+      if (!result) {
+        throw new IncognitoSessionMissingError();
+      }
+      return result;
+    }
+  }
   const onCommittedSource = captureSessionTranscriptSourcePublication({
     ...scope,
     sessionId: expectedSessionId,
   });
-  const { selectedSessionId, selectedLifecycleRevision, ...target } =
+  const { selectedSessionId, selectedLifecycleRevision, resolveRuntimeTarget, ...prepared } =
     preparedTarget ??
-    (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
+    (await prepareTranscriptTurnTarget(
+      { ...scope, sessionId: expectedSessionId },
+      options.config,
+      !options.messages.some((append) => append.shouldAppend),
+    ));
+  let target = prepared;
   const ownerScope = { ...target, sessionKey: requestedSessionKey ?? target.sessionKey };
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
     sessionFile: target.sessionKey,
@@ -353,6 +384,7 @@ async function persistExpectedSessionTranscriptTurn(
           keyFormat: "agent-qualified",
           selectedSessionId,
           selectedLifecycleRevision,
+          resolveRuntimeTarget,
           expectedLifecycleRevision:
             options.expectedLifecycleRevision !== undefined
               ? options.expectedLifecycleRevision
@@ -379,6 +411,10 @@ async function persistExpectedSessionTranscriptTurn(
         ownerScope,
       ),
   );
+
+  if (turn.runtimeTarget) {
+    target = { ...target, ...turn.runtimeTarget, storePath: target.storePath, env: target.env };
+  }
 
   if (turn.rejectedReason === "session-rebound") {
     return {
@@ -420,10 +456,31 @@ async function prepareTranscriptTurnTarget(
     sessionStore?: Record<string, SessionEntry>;
   },
   config?: OpenClawConfig,
+  deferRuntimeTarget = false,
 ) {
   const sessionKey = scope.sessionKey?.trim();
   if (!sessionKey || !scope.sessionId) {
     throw new Error("Cannot persist a transcript turn without a session key and session id");
+  }
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(
+      {
+        ...scope,
+        agentId: memory.agentId,
+        sessionKey: memory.actor.target.sessionKey,
+        sessionId: scope.sessionId,
+        storePath: memory.path,
+      },
+      config,
+      { keyFormat: "agent-qualified" },
+    );
+    return {
+      ...runtimeTarget,
+      storePath: memory.path,
+      env: scope.env,
+      resolveRuntimeTarget: undefined,
+    };
   }
   const effectiveConfig =
     config ?? getRuntimeConfigSnapshot() ?? (await captureRuntimeConfigAsyncReader()());
@@ -451,12 +508,25 @@ async function prepareTranscriptTurnTarget(
     sessionKey,
     storePath,
   });
+  if (deferRuntimeTarget && (await getSessionInputActor(binding, true))) {
+    return {
+      ...binding,
+      selectedSessionId: undefined,
+      selectedLifecycleRevision: undefined,
+      resolveRuntimeTarget: true as const,
+    };
+  }
   const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, effectiveConfig, {
     keyFormat: "agent-qualified",
   });
   // Keep the selected locator and private storage namespace across the await.
   // Incognito accessors resolve their owner from env even with a concrete locator.
-  return { ...runtimeTarget, storePath: binding.storePath, env: binding.env };
+  return {
+    ...runtimeTarget,
+    storePath: binding.storePath,
+    env: binding.env,
+    resolveRuntimeTarget: undefined,
+  };
 }
 
 async function publishTranscriptTurnUpdate(params: {

@@ -38,7 +38,6 @@ import { requireSessionRowProjection } from "../session-row-projection-access.js
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
   allowedSessionVisibilities,
-  invalidateSessionSharingSnapshot,
   isSessionVisibilityAllowed,
   resolveSessionVisibility,
 } from "../session-sharing.js";
@@ -143,7 +142,6 @@ function publishSharingChange(params: {
   event: Omit<SessionSharingEvidenceEvent, "actorState">;
 }): void {
   bumpGatewayAccessRevision();
-  invalidateSessionSharingSnapshot(params.event.sessionKey);
   const eventOptions = {
     sessionKeys: [params.event.sessionKey],
   };

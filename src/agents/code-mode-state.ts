@@ -36,6 +36,7 @@ import { ToolInputError } from "./tools/common.js";
 
 export type CodeModeBridgeDispatchState = {
   started: boolean;
+  workerId?: string;
 };
 
 export type PendingBridgeState = PendingBridgeRequest & {
@@ -558,6 +559,8 @@ export function createPendingBridgeStates(
       params.bridgeDispatch.started = true;
     }
     const bridgeCall = runBridgeRequest({
+      activeRunId: params.activeRunId,
+      workerId: params.bridgeDispatch.workerId,
       runtime: params.runtime,
       results: params.results,
       sessionStore: params.sessionStore,

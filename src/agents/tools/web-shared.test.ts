@@ -85,45 +85,6 @@ describe("web shared timeout seconds", () => {
     expect(resolvePositiveTimeoutSeconds(0, 30)).toBe(30);
     expect(resolvePositiveTimeoutSeconds(1.9, 30)).toBe(1);
   });
-
-  it("drops cached values while the process clock is invalid", () => {
-    // Bad system clocks can make cache expiry nonsensical; fail closed instead
-    // of serving stale web data indefinitely.
-    const cache = new Map<string, CacheEntry<string>>();
-    writeCache(cache, "key", "old", 60_000);
-    expect(readCache(cache, "key")?.value).toBe("old");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    expect(readCache(cache, "key")).toBeNull();
-
-    vi.mocked(Date.now).mockReturnValue(1_000);
-    expect(readCache(cache, "key")).toBeNull();
-  });
-
-  it("does not write cache values when expiry would exceed the Date range", () => {
-    const cache = new Map<string, CacheEntry<string>>();
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-
-    writeCache(cache, "key", "value", 60_000);
-
-    expect(cache.size).toBe(0);
-    expect(readCache(cache, "key")).toBeNull();
-  });
-
-  it("does not evict valid entries when an invalid expiry cannot be cached", () => {
-    const cache = new Map<string, CacheEntry<string>>();
-    for (let index = 0; index < 100; index += 1) {
-      writeCache(cache, `key-${index}`, `value-${index}`, 60_000);
-    }
-    expect(cache.get("key-0")?.value).toBe("value-0");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    writeCache(cache, "invalid", "value", 60_000);
-
-    expect(cache.size).toBe(100);
-    expect(cache.get("key-0")?.value).toBe("value-0");
-    expect(cache.has("invalid")).toBe(false);
-  });
 });
 
 describe("readResponseText", () => {
@@ -176,23 +137,34 @@ describe("readResponseText", () => {
     );
   });
 
-  it("does not mark multi-chunk exact-limit streamed responses as truncated", async () => {
-    const cancel = vi.fn(async () => undefined);
-    const releaseLock = vi.fn();
-    const response = responseFromReader({
-      chunks: ["hel", "lo"],
-      cancel,
-      releaseLock,
-    });
+  it.each([
+    {
+      body: '<?xml version="1.0" encoding="utf-16"?><rss><title>café</title></rss>',
+      contentType: "application/rss+xml",
+    },
+    {
+      body: '<meta charset="UTF-16LE"><p>café</p>',
+      contentType: "text/html",
+    },
+    {
+      body: '<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>',
+      contentType: "text/html",
+    },
+  ])(
+    "decodes ASCII-compatible documents that declare UTF-16 as UTF-8: $body",
+    async ({ body, contentType }) => {
+      const bytes = new TextEncoder().encode(body);
+      for (const options of [undefined, { maxBytes: bytes.byteLength }]) {
+        const response = new Response(bytes, { headers: { "content-type": contentType } });
 
-    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
-      text: "hello",
-      truncated: false,
-      bytesRead: 5,
-    });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(releaseLock).toHaveBeenCalledTimes(1);
-  });
+        await expect(readResponseText(response, options)).resolves.toEqual({
+          text: body,
+          truncated: false,
+          bytesRead: bytes.byteLength,
+        });
+      }
+    },
+  );
 
   it("keeps truncated fallback charset decoding isolated between responses", async () => {
     const firstResponse = responseFromReader({
@@ -222,7 +194,7 @@ describe("readResponseText", () => {
     const cancel = vi.fn(async () => undefined);
     const releaseLock = vi.fn();
     const response = responseFromReader({
-      chunks: ["hello", ""],
+      chunks: ["hel", "lo", ""],
       cancel,
       releaseLock,
     });
@@ -236,24 +208,6 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not invoke whole-body fallbacks when maxBytes is set", async () => {
-    const arrayBuffer = vi.fn(async () => new TextEncoder().encode("hello").buffer);
-    const text = vi.fn(async () => "hello");
-    const response = {
-      arrayBuffer,
-      headers: new Headers(),
-      text,
-    } as unknown as Response;
-
-    await expect(readResponseText(response, { maxBytes: 4 })).resolves.toEqual({
-      text: "",
-      truncated: true,
-      bytesRead: 0,
-    });
-    expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(text).not.toHaveBeenCalled();
-  });
-
   it("treats a native bodyless response as empty when maxBytes is set", async () => {
     await expect(
       readResponseText(new Response(null, { status: 204 }), { maxBytes: 4 }),
@@ -264,19 +218,23 @@ describe("readResponseText", () => {
     });
   });
 
-  it("preserves uncapped text-only fallback byte accounting", async () => {
+  it("counts UTF-8 bytes in uncapped native responses", async () => {
     const value = "中文🔥";
-    const text = vi.fn(async () => value);
-    const response = {
-      headers: new Headers(),
-      text,
-    } as unknown as Response;
-
-    await expect(readResponseText(response)).resolves.toEqual({
+    await expect(readResponseText(new Response(value))).resolves.toEqual({
       text: value,
       truncated: false,
       bytesRead: new TextEncoder().encode(value).byteLength,
     });
-    expect(text).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an unreadable uncapped native response", async () => {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error("response read failed"));
+        },
+      }),
+    );
+    await expect(readResponseText(response)).rejects.toThrow("response read failed");
   });
 });

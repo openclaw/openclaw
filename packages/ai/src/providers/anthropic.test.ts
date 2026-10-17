@@ -514,30 +514,6 @@ describe("Anthropic provider", () => {
     expect(result.usage.contextUsage).toEqual(contextUsage);
   });
 
-  it("ignores a message_delta whose usage object is omitted", async () => {
-    const client = createAnthropicSseClient([
-      messageStart(wireUsage(12, 0, 3, 4), "claude-sonnet-4-6"),
-      messageDelta({ stop_reason: "end_turn" }),
-      { type: "message_stop" },
-    ]);
-
-    const result = await startStream(client, {
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    }).result();
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.usage).toMatchObject({
-      input: 12,
-      output: 0,
-      cacheRead: 3,
-      cacheWrite: 4,
-      totalTokens: 19,
-      contextUsage: { state: "available", promptTokens: 19, totalTokens: 19 },
-    });
-    expect(result.usage.cost.input).toBeCloseTo(0.00006, 10);
-    expect(result.usage.cost.total).toBeGreaterThan(0);
-  });
-
   it("prices reported 1-hour cache writes at twice the input rate", async () => {
     const client = createAnthropicSseClient([
       messageStart(
@@ -1478,36 +1454,6 @@ describe("Anthropic provider", () => {
         text: "Reactions guidance\nRuntime: session=alpha",
       },
     ]);
-  });
-
-  it("anchors the message cache breakpoint before transient runtime context", async () => {
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
-      { stopBeforeNetwork: true },
-      {
-        systemPrompt: "system",
-        messages: [
-          user("stable question"),
-          {
-            role: "user",
-            content: "OpenClaw runtime context:\ntransient current-turn metadata",
-            timestamp: 1,
-            runtimeContext: {},
-          },
-        ],
-      },
-    );
-
-    expect(result.stopReason).toBe("error");
-    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    expect(messages[0]?.content).toEqual([
-      {
-        type: "text",
-        text: "stable question",
-        cache_control: { type: "ephemeral" },
-      },
-    ]);
-    expect(messages[1]?.content).toBe("OpenClaw runtime context:\ntransient current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

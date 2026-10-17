@@ -105,7 +105,7 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
     const context = resolver?.();
     const execution = context?.chatAbortControllers.get(entry.runId);
     const settlement = execution?.executionSettlement;
-    const { runId, childSessionKey, generation, createdAt } = entry;
+    const { runId, childSessionKey } = entry;
     const lifecycleGeneration = entry.execution.lifecycleGeneration;
     if (
       !resolver ||
@@ -130,8 +130,6 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
       return (
         current.runId === runId &&
         current.childSessionKey === childSessionKey &&
-        current.generation === generation &&
-        current.createdAt === createdAt &&
         current.execution.lifecycleGeneration === lifecycleGeneration &&
         current.childSessionIdentity?.sessionId === recordSessionId &&
         current.childSessionIdentity?.lifecycleRevision === sessionLifecycleRevision

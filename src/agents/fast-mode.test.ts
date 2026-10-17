@@ -12,6 +12,30 @@ import {
 } from "./fast-mode.js";
 
 describe("resolveFastModeState", () => {
+  it.each(["serviceTier", "service_tier"])(
+    "keeps %s inherited until a speed is selected",
+    (key) => {
+      const cfg = {
+        agents: {
+          defaults: { models: { "openai/speed-fixture": { params: { [key]: "ultrafast" } } } },
+        },
+      } as OpenClawConfig;
+      const state = resolveFastModeState({ cfg, provider: "openai", model: "speed-fixture" });
+      expect(state).toMatchObject({ mode: "ultrafast", source: "config" });
+      expect(state.requestMode).toBeUndefined();
+      for (const mode of [false, true, "ultrafast"] as const) {
+        expect(
+          resolveFastModeState({
+            cfg,
+            provider: "openai",
+            model: "speed-fixture",
+            sessionEntry: { fastMode: mode },
+          }),
+        ).toMatchObject({ mode, requestMode: mode, source: "session" });
+      }
+    },
+  );
+
   it("prefers session overrides over per-agent and global defaults", () => {
     const state = resolveFastModeState({
       cfg: {

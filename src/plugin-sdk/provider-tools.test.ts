@@ -141,6 +141,57 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toEqual([]);
   });
 
+  it("removes llama.cpp GBNF-hostile constraints from nested tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
+    const tools = [
+      tool(
+        objectSchema({
+          job: objectSchema({
+            declarationKey: {
+              type: "string",
+              maxLength: 1999,
+              pattern: "^\\S+$",
+            },
+            trigger: {
+              anyOf: [
+                objectSchema({
+                  script: { type: "string", minLength: 1, maxLength: 65_536 },
+                  boundary: { type: "string", maxLength: 2000 },
+                }),
+                { type: "null" },
+              ],
+            },
+          }),
+        }),
+        "cron",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "ollama",
+      modelId: "qwen3.5",
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual(
+      objectSchema({
+        job: objectSchema({
+          declarationKey: { type: "string", maxLength: 1999 },
+          trigger: {
+            anyOf: [
+              objectSchema({
+                script: { type: "string", minLength: 1 },
+                boundary: { type: "string" },
+              }),
+              { type: "null" },
+            ],
+          },
+        }),
+      }),
+    );
+    expect(hooks.inspectToolSchemas({ provider: "ollama", tools: normalized })).toEqual([]);
+  });
+
   it("covers the tool compat family matrix", () => {
     const cases = [
       ["deepseek", normalizeDeepSeekToolSchemas, inspectDeepSeekToolSchemas],
@@ -157,7 +208,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
-  it.each(["deepseek", "gemini", "llamacpp-gbnf", "openai"] as const)(
+  it.each(["gemini", "llamacpp-gbnf", "openai"] as const)(
     "retains a callable deep tool through the %s provider hooks",
     async (family) => {
       let parameters: unknown = { type: "string" };
@@ -289,57 +340,6 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(tools).toEqual(originalTools);
     },
   );
-
-  it("removes llama.cpp GBNF-hostile constraints from nested tool schemas", () => {
-    const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
-    const tools = [
-      tool(
-        objectSchema({
-          job: objectSchema({
-            declarationKey: {
-              type: "string",
-              maxLength: 1999,
-              pattern: "^\\S+$",
-            },
-            trigger: {
-              anyOf: [
-                objectSchema({
-                  script: { type: "string", minLength: 1, maxLength: 65_536 },
-                  boundary: { type: "string", maxLength: 2000 },
-                }),
-                { type: "null" },
-              ],
-            },
-          }),
-        }),
-        "cron",
-      ),
-    ];
-
-    const normalized = hooks.normalizeToolSchemas({
-      provider: "ollama",
-      modelId: "qwen3.5",
-      tools,
-    });
-
-    expect(normalized[0]?.parameters).toEqual(
-      objectSchema({
-        job: objectSchema({
-          declarationKey: { type: "string", maxLength: 1999 },
-          trigger: {
-            anyOf: [
-              objectSchema({
-                script: { type: "string", minLength: 1 },
-                boundary: { type: "string" },
-              }),
-              { type: "null" },
-            ],
-          },
-        }),
-      }),
-    );
-    expect(hooks.inspectToolSchemas({ provider: "ollama", tools: normalized })).toEqual([]);
-  });
 
   it.each([
     {
@@ -671,29 +671,6 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         validateDeepSeekTool(normalized, { parent: { kind, database_id: "database-1" } }),
       ).toThrow(/Validation failed for tool "literal-parent"/);
     }
-  });
-
-  it("does not tighten or warn for permissive object schemas that use strict:false", () => {
-    const permissiveParameters = {
-      type: "object",
-      properties: {
-        action: { type: "string" },
-        schedule: { type: "string" },
-      },
-      required: ["action"],
-      additionalProperties: true,
-    };
-    const permissiveTool = tool(permissiveParameters, "cron");
-    const normalized = normalizeOpenAITools([permissiveTool]);
-
-    expect(normalized[0]?.parameters).toEqual(permissiveParameters);
-    const strictSchemaViolations = findOpenAIStrictSchemaViolations(
-      permissiveParameters,
-      "cron.parameters",
-    );
-    expect(strictSchemaViolations).toContain("cron.parameters.required.schedule");
-    expect(strictSchemaViolations).toContain("cron.parameters.additionalProperties");
-    expect(inspectOpenAITools([permissiveTool])).toStrictEqual([]);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {

@@ -8,11 +8,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { textResult } from "./tools/tool-results.js";
-
-function failText(text: string): AgentToolResult<unknown> {
-  return textResult(text, { status: "failed", error: text });
-}
+import { failText, textResult } from "./tools/tool-results.js";
 
 export async function writeProcessStdin(stdin: ManagedRunStdin, data: string | Buffer) {
   await new Promise<void>((resolve, reject) => {

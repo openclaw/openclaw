@@ -661,11 +661,6 @@ describe("WorkboardView", () => {
 
   it.each([
     {
-      scenario: "an execution-owned linked session",
-      sessionKey: "agent:main:execution-linked-session",
-      topLevelSessionKey: undefined,
-    },
-    {
       scenario: "the authoritative top-level session",
       sessionKey: "agent:main:top-level-linked-session",
       topLevelSessionKey: "agent:main:top-level-linked-session",

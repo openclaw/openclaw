@@ -69,7 +69,7 @@ export async function deliverRestartSentinelEvent(
       throw adoptionError;
     }
     const errorMessage = outcome.error ?? `restart session event ${outcome.status}`;
-    if (adopted || outcome.executionStarted) {
+    if (adopted || outcome.executionStarted || outcome.retryable === false) {
       throw new SessionDeliveryDeadLetteredError(errorMessage);
     }
     throw new SessionDeliverySafeRetryError(errorMessage);

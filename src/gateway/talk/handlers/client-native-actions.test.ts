@@ -7,6 +7,7 @@ import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
 } from "../../../agents/embedded-agent-runner/run-state.js";
+import type { EmbeddedAgentRunResult } from "../../../agents/embedded-agent.js";
 import { guardSessionManager } from "../../../agents/session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -24,6 +25,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
+import { runWithRetainedGatewayRootWork } from "../../../process/gateway-work-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -147,7 +149,7 @@ describe("native Talk action ownership through public plugin registration", () =
       const rowProjection = await createSessionRowProjection({
         cfg: { agents: { entries: { [AGENT_ID]: {} } } },
       });
-      const publications: Promise<void>[] = [];
+      const publications: ReturnType<typeof publish>[] = [];
       const published = vi.fn();
       const publish = createTranscriptUpdateBroadcastHandler({
         getSessionRowProjection: () => rowProjection,
@@ -158,8 +160,10 @@ describe("native Talk action ownership through public plugin registration", () =
       });
       const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
         if ((update.target?.sessionId ?? update.sessionId) === SESSION_ID) {
-          // Match the Gateway subscription: committed publications outlive their producer.
-          const publication = runOutsideAsyncWorkScope(() => publish(update));
+          // Match production subscription ownership: committed broadcasts outlive the producer.
+          const publication = runOutsideAsyncWorkScope(() =>
+            runWithRetainedGatewayRootWork(() => publish(update)),
+          );
           void publication.catch(() => {});
           publications.push(publication);
         }
@@ -196,7 +200,13 @@ describe("native Talk action ownership through public plugin registration", () =
             modelRun = session.prompt(params.prompt);
             await modelRun;
             await recorder?.waitForRuntimePersistence();
-            return { payloads: [{ text: "Both labels are preserved." }], meta: { durationMs: 0 } };
+            return {
+              payloads: [{ text: "Both labels are preserved." }],
+              meta: {
+                durationMs: 0,
+                terminalReply: { disposition: "visible", text: "Both labels are preserved." },
+              },
+            } satisfies EmbeddedAgentRunResult;
           }).catch((error: unknown) => {
             providerStarted.reject(error);
             throw error;
@@ -263,7 +273,7 @@ describe("native Talk action ownership through public plugin registration", () =
         await vi.waitFor(() =>
           expect(spokenMessages(socket.sent)).toContain("Both labels are preserved."),
         );
-        // A returned readback is a distinct voice record, not a deduplication signal.
+        // Speech stays a distinct raw record; the UI discloses it without claiming replacement.
         const readback = "Both labels are preserved.";
         const dialogue = "OpenClaw is waiting on the model.";
         for (const text of [readback, dialogue]) {
@@ -294,6 +304,15 @@ describe("native Talk action ownership through public plugin registration", () =
             : [],
         );
         expect(assistantRecords).toHaveLength(3);
+        expect(assistantRecords[0]).not.toHaveProperty("__openclaw.voiceTranscript");
+        expect(assistantRecords.slice(1)).toEqual([
+          expect.objectContaining({
+            __openclaw: expect.objectContaining({ voiceTranscript: "provider-owned" }),
+          }),
+          expect.objectContaining({
+            __openclaw: expect.objectContaining({ voiceTranscript: "provider-owned" }),
+          }),
+        ]);
         expect(assistantRecords.slice(1)).toEqual([
           expect.objectContaining({ api: "realtime", content: [{ type: "text", text: readback }] }),
           expect.objectContaining({ api: "realtime", content: [{ type: "text", text: dialogue }] }),

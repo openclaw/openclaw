@@ -8,7 +8,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type PreparedSessionEntryPredicate = {
   entry: SessionEntry | undefined;
   matches: (entry: SessionEntry | undefined) => boolean;
-  state: "current" | "unknown" | "changed";
+  state: "acquiring" | "current" | "unknown" | "changed";
   revision: number;
   pending: Set<object>;
 };
@@ -66,6 +66,16 @@ export function publishRetainedSessionEntryPredicate(
   if (predicate.state === "changed") {
     return;
   }
+  // Seed acquisition with the first committed fact. Later facts must agree before
+  // the selecting read can acknowledge them, including superseded receipts.
+  if (predicate.state === "acquiring" && predicate.revision === 0) {
+    predicate.entry = entry;
+    predicate.revision += 1;
+    if (!known) {
+      predicate.state = "unknown";
+    }
+    return;
+  }
   let matches: boolean | undefined;
   try {
     matches = known ? predicate.matches(entry) : undefined;
@@ -106,9 +116,11 @@ export function projectSessionEntryPredicateChange(
         ? { ...entry, owner: change.owner }
         : undefined;
     case "participants":
-      return change.projection
-        ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
-        : undefined;
+      return change.projectionChanged === false
+        ? entry
+        : change.projection
+          ? { ...entry, participants: undefined, participantCount: undefined, ...change.projection }
+          : undefined;
     case "category":
       return entry.sessionId === change.sessionId
         ? { ...entry, category: change.category ?? undefined }

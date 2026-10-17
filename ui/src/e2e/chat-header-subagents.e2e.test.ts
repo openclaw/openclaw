@@ -8,13 +8,14 @@ import {
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat header and delegated work" });
 
 suite.define(() => {
-  it("opens Subagents for a batch without duplicate wait status and leaves the next empty conversation collapsed", async () => {
+  it("keeps new batches collapsed until Subagents is opened manually without duplicate wait status", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -74,17 +75,16 @@ suite.define(() => {
         expect(await activePane.locator(".chat-pane__actions").getByRole("button").count()).toBe(3);
 
         const details = activePane.locator(".chat-pane__header-trailing > openclaw-chat-details");
+        const detailsDialog = activePane.getByRole("dialog", { name: "Details", exact: true });
         await details.getByRole("button", { name: "Details", exact: true }).click();
-        await details.getByRole("dialog", { name: "Details", exact: true }).waitFor();
+        await detailsDialog.waitFor();
         expect(
           await activePane
             .locator(".chat-main__conversation-frame > openclaw-chat-details")
             .count(),
         ).toBe(0);
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
-        await details
-          .getByRole("dialog", { name: "Details", exact: true })
-          .waitFor({ state: "hidden" });
+        await closeChatDetails(activePane);
+        await detailsDialog.waitFor({ state: "hidden" });
 
         const prompt = "Review the backend in a subagent.";
         await activePane.locator(".agent-chat__composer-combobox textarea").fill(prompt);
@@ -127,6 +127,10 @@ suite.define(() => {
           session: child,
           ancestorSessions: [runningParent],
         });
+        const runningCount = activePane.locator(".chat-pane__subagents-running");
+        await runningCount.waitFor();
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
         await panelRow.getByText("Backend review", { exact: true }).waitFor();
         expect(await activePane.locator(".chat-pane__subagents-running").textContent()).toContain(

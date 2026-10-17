@@ -7,7 +7,7 @@ const target = {
   name: "weather-probe__weather_probe",
   source: "mcp",
 };
-const controls = ["tool_search", "tool_describe", "tool_call"];
+const controls = ["tool_search", "tool_describe", "dispatch_action"];
 const probeText = "probe ok; PLUGIN_ROOT=/fixture; PLUGIN_DATA=/fixture-data; PROBE_MODE=live";
 type Round = { name: string; args: Record<string, unknown>; value: unknown };
 
@@ -35,7 +35,7 @@ function rounds(text = probeText): Round[] {
         parameters: { additionalProperties: false, properties: {}, type: "object" },
       },
     },
-    { name: "tool_call", args: { id: target.id, args: {} }, value: targetResult(text) },
+    { name: "dispatch_action", args: { id: target.id, args: {} }, value: targetResult(text) },
   ];
 }
 
@@ -76,7 +76,7 @@ describe("Agent Plugins bundle mock response", () => {
         tool: { name: "tool_describe", args: { id: target.id } },
       });
       expect(resolveAgentPluginBundleResponse(request(completed.slice(0, 2)))).toEqual({
-        tool: { name: "tool_call", args: { id: target.id, args: {} } },
+        tool: { name: "dispatch_action", args: { id: target.id, args: {} } },
       });
       expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
         text: "AGENT_BUNDLE_MCP_OK",

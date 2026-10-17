@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OpenClawNativeState
 import OpenClawProtocol
 import OSLog
 import Synchronization
@@ -22,6 +23,12 @@ public actor GatewayChannelActor {
     private var task: WebSocketTaskBox?
     var pending: [String: PendingRequest] = [:]
     private var connected = false
+    private var connectDeviceId: String?
+
+    public func connectedDeviceId() -> String? {
+        self.connected ? self.connectDeviceId : nil
+    }
+
     private var connectAttemptTask: Task<Void, Never>?
     /// Socket ownership epoch. Every callback and send stays bound to the task
     /// that admitted it so a late failure cannot tear down a replacement socket.
@@ -542,6 +549,7 @@ public actor GatewayChannelActor {
         let identity = try Self.loadDeviceIdentityForConnect(
             includeDeviceIdentity: options.includeDeviceIdentity,
             profile: options.deviceIdentityProfile)
+        self.connectDeviceId = identity?.deviceId
         let selectedAuth = self.selectConnectAuth(options: options, deviceId: identity?.deviceId)
         let scopes = self.resolveConnectScopes(
             role: role,
@@ -1509,6 +1517,7 @@ extension GatewayChannelActor {
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
         if error is CancellationError ||
+            error is OpenClawNativeStateError ||
             error is GatewayConnectAuthError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
@@ -1516,19 +1525,18 @@ extension GatewayChannelActor {
         {
             return error
         }
-        if let urlError = error as? URLError {
-            if let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure() {
-                return GatewayTLSValidationError(failure: failure, context: context)
-            }
-            let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
-            return NSError(
-                domain: URLError.errorDomain,
-                code: urlError.errorCode,
-                userInfo: [NSLocalizedDescriptionKey: "\(context): \(desc)"])
+        if error is URLError,
+           let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure()
+        {
+            return GatewayTLSValidationError(failure: failure, context: context)
         }
         let ns = error as NSError
-        let desc = ns.localizedDescription.isEmpty ? "unknown" : ns.localizedDescription
-        return NSError(domain: ns.domain, code: ns.code, userInfo: [NSLocalizedDescriptionKey: "\(context): \(desc)"])
+        let fallback = error is URLError ? "cancelled" : "unknown"
+        let desc = ns.localizedDescription.isEmpty ? fallback : ns.localizedDescription
+        var userInfo = ns.userInfo
+        // Keep the producer's causal chain and metadata; only presentation gains context.
+        userInfo[NSLocalizedDescriptionKey] = "\(context): \(desc)"
+        return NSError(domain: ns.domain, code: ns.code, userInfo: userInfo)
     }
 
     private func encodeRequest(

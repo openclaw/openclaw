@@ -3,10 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  ACTIVITY_SUMMARY_ENSURE_METHOD,
-  SessionActivityController,
-} from "./session-activity-controller.ts";
+import { ACTIVITY_SUMMARY_ENSURE_METHOD, createSessionActivity } from "./session-activity-owner.ts";
 
 const filters = { personId: null, time: "all" as const, query: "" };
 const row = (
@@ -29,7 +26,7 @@ const listing = (sessions: GatewaySessionRow[]): SessionsListResult => ({
   sessions,
   defaults: { model: null, modelProvider: null, contextTokens: null },
 });
-const controller = () => new SessionActivityController(() => {});
+const controller = () => createSessionActivity(() => {});
 
 it("rechecks latest row permissions before queued batches and does not consume skipped attempts", async () => {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
@@ -173,6 +170,7 @@ it("backfills newly visible sessions after the current batch settles", async () 
 it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
   "resumes recap generation after %s finishes in a hidden tab",
   async (heldMethod) => {
+    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
     const documentEvents = new EventTarget();
     const pageEvents = new EventTarget();
     let visibilityState = heldMethod === "sessions.list" ? "hidden" : "visible";
@@ -189,7 +187,6 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
           };
     const { promise: pending, resolve: finish } = createDeferred<unknown>();
     let held = false;
-    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
     const request = vi.spyOn(client, "request").mockImplementation(async (method) => {
       if (method === heldMethod && !held) {
         held = true;
@@ -199,7 +196,6 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
     });
     const state = controller();
     try {
-      state.connect();
       void state.load(client, filters, "query", true);
       await vi.waitFor(() => expect(held).toBe(true));
       if (visibilityState !== "hidden") {

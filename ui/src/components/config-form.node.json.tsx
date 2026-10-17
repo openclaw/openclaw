@@ -19,10 +19,7 @@ export function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Ele
   const sensitiveState = createMemo(() => getSensitiveRenderState(props.params));
   return (
     <FieldRow
-      label={field().label}
-      help={field().help}
-      helpId={field().helpId}
-      showLabel={field().showLabel}
+      {...field()}
       defaultDescription={
         sensitiveState().isRedacted
           ? undefined

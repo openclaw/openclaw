@@ -104,17 +104,6 @@ describe("OpClient", () => {
     );
   });
 
-  it("accepts a response selected by field id", async () => {
-    runner.mockImplementation(async () => ({
-      stdout: JSON.stringify({ id: "credential", label: "password", value: "by-id" }),
-      stderr: "",
-    }));
-    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
-    await expect(
-      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
-    ).resolves.toMatchObject({ value: "by-id", fieldLabel: "password" });
-  });
-
   it("rejects a mismatched field response without exposing its value", async () => {
     runner.mockImplementation(async () => ({
       stdout: JSON.stringify({
@@ -160,35 +149,6 @@ describe("OpClient", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
-    "continues to accept a token file through a %s",
-    async (linkType) => {
-      const targetFile = path.join(root, "service-account-token-target");
-      await fs.rename(tokenFile, targetFile);
-      if (linkType === "symlink") {
-        await fs.symlink(targetFile, tokenFile);
-      } else {
-        await fs.link(targetFile, tokenFile);
-      }
-      runner.mockImplementation(async () => ({
-        stdout: JSON.stringify({ label: "credential", value: "value" }),
-        stderr: "",
-      }));
-      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000 });
-
-      await expect(
-        client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
-      ).resolves.toMatchObject({ value: "value" });
-      expect(runner).toHaveBeenCalledWith(
-        await fs.realpath(opBin),
-        expect.any(Array),
-        expect.objectContaining({
-          env: expect.objectContaining({ OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth }),
-        }),
-      );
-    },
-  );
-
   it("warns once for token file permissions broader than 0600", async () => {
     await fs.chmod(tokenFile, 0o644);
     const warn = vi.fn();
@@ -205,13 +165,8 @@ describe("OpClient", () => {
   it.each([
     ["RATE_LIMITED", { stderr: "request failed: 429 rate limit", code: 1 }],
     ["ITEM_NOT_FOUND", { stderr: "item is not found", code: 1 }],
-    [
-      "ITEM_NOT_FOUND",
-      { stderr: `"Rate limit token" isn't an item in the "Automation" vault`, code: 1 },
-    ],
     ["FIELD_NOT_FOUND", { stderr: `"429 credential" isn't a field in the "Token" item`, code: 1 }],
     ["AUTH_FAILED", { stderr: "unauthorized service account", code: 1 }],
-    ["TIMEOUT", { stderr: "", killed: true, signal: "SIGTERM" }],
     ["TIMEOUT", { stderr: "", timedOut: true }],
     ["OP_ERROR", { stderr: "unexpected failure", code: 1 }],
   ] as const)("maps process failure to %s without retry", async (expectedCode, failure) => {

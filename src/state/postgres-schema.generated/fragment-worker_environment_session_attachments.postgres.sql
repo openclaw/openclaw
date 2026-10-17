@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."worker_environment_session_attachments" (
+CREATE TABLE "worker_environment_session_attachments" (
   "session_id" text COLLATE "C" NOT NULL,
   "session_key" text COLLATE "C" NOT NULL,
   "agent_id" text COLLATE "C" NOT NULL,
@@ -19,8 +15,6 @@ CREATE TABLE "openclaw_state"."worker_environment_session_attachments" (
   UNIQUE ("environment_id")
 );
 
-CREATE INDEX "worker_environment_session_attachments_session_key" ON "openclaw_state"."worker_environment_session_attachments" (("agent_id") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
+CREATE INDEX "worker_environment_session_attachments_session_key" ON "worker_environment_session_attachments" (("agent_id") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
 
-ALTER TABLE "openclaw_state"."worker_environment_session_attachments" ADD FOREIGN KEY ("environment_id") REFERENCES "openclaw_state"."worker_environments" ("environment_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "worker_environment_session_attachments" ADD FOREIGN KEY ("environment_id") REFERENCES "worker_environments" ("environment_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

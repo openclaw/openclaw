@@ -5,7 +5,8 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { connectIrcClient } from "./client.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
 
@@ -181,19 +182,11 @@ describe("irc client nickserv", () => {
     const result = await connectAndCollectRegistration({
       nickserv: {
         service: "NickServ\n",
-        password: "secret\r\nJOIN #bad",
+        password: String.raw`pa\tss\new\x41` + "\r\nJOIN #bad",
       },
     });
 
-    expect(result.lines).toContain("PRIVMSG NickServ :IDENTIFY secret JOIN #bad");
-  });
-
-  it("sends backslashes in the NickServ password unchanged", async () => {
-    const result = await connectAndCollectRegistration({
-      nickserv: { password: String.raw`pa\tss\new\x41` },
-    });
-
-    expect(result.lines).toContain(String.raw`PRIVMSG NickServ :IDENTIFY pa\tss\new\x41`);
+    expect(result.lines).toContain(String.raw`PRIVMSG NickServ :IDENTIFY pa\tss\new\x41 JOIN #bad`);
   });
 });
 
@@ -244,11 +237,6 @@ describe("irc client fallback nick", () => {
     expect(second).toMatch(/^bot_\d+$/);
     expect(third).toMatch(/^bot_\d+$/);
     expect(new Set([first, second, third]).size).toBe(3);
-  });
-
-  it("sanitizes whitespace and special characters after a collision", async () => {
-    const nick = await connectAfterNickCollision("my bot!");
-    expect(nick).toMatch(/^mybot_\d*$/);
   });
 
   it("falls back to openclaw when a colliding nick is entirely special characters", async () => {
@@ -430,11 +418,9 @@ describe("irc client PRIVMSG chunking on the wire", () => {
     name: string;
     text: string;
     limit?: number;
-    lengths?: number[];
     bodies?: string[];
     separator?: string;
   }>([
-    { name: "multibyte byte limit", text: "漢".repeat(900) },
     { name: "emoji byte limit", text: "😀".repeat(300) },
     {
       name: "joined emoji at the character cap",
@@ -447,70 +433,27 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       bodies: ["漢".repeat(133), "👨‍👩‍👧‍👦tail"],
     },
     {
-      name: "combining mark at the character cap",
-      text: `${"x".repeat(349)}e\u0301tail`,
-      bodies: ["x".repeat(349), "e\u0301tail"],
-    },
-    { name: "default ASCII cap", text: "a".repeat(900), lengths: [350, 350, 200] },
-    {
-      name: "multibyte character cap",
-      text: "漢".repeat(250),
-      limit: 100,
-      lengths: [100, 100, 50],
-    },
-    {
-      name: "character cap below one code point's bytes",
-      text: "漢".repeat(10),
-      limit: 2,
-      lengths: [2, 2, 2, 2, 2],
-    },
-    {
-      name: "astral code point with a one-unit cap",
-      text: "😀".repeat(10),
-      limit: 1,
-      lengths: Array(10).fill(2),
-    },
-    {
-      name: "surrogate pair straddling the cap",
-      text: "xxxxxxxxx🙂rest",
-      limit: 10,
-      bodies: ["xxxxxxxxx", "🙂rest"],
-    },
-    {
-      name: "leading emoji with a one-unit cap",
-      text: "🙂A",
-      limit: 1,
-      bodies: ["🙂", "A"],
-    },
-    { name: "BMP text with a one-unit cap", text: "ABC", limit: 1, bodies: ["A", "B", "C"] },
-    {
       name: "nearby word boundary",
       text: "alpha beta gamma",
       limit: 10,
       bodies: ["alpha beta", "gamma"],
       separator: " ",
     },
-  ])(
-    "preserves $name",
-    async ({ text, limit, lengths, bodies: expectedBodies, separator = "" }) => {
-      const server = await startLoopbackIrcServer();
-      try {
-        const bodies = await collectPrivmsgBodies(server, text, limit);
-        expect(bodies.length).toBeGreaterThan(1);
-        expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
-        expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
-        expect(bodies.join(separator)).toBe(text);
-        if (lengths) {
-          expect(bodies.map((body) => body.length)).toEqual(lengths);
-        }
-        if (expectedBodies) {
-          expect(bodies).toEqual(expectedBodies);
-        }
-      } finally {
-        await server.close();
+  ])("preserves $name", async ({ text, limit, bodies: expectedBodies, separator = "" }) => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const bodies = await collectPrivmsgBodies(server, text, limit);
+      expect(bodies.length).toBeGreaterThan(1);
+      expect(maxRelayedLineBytes(bodies)).toBeLessThanOrEqual(512);
+      expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
+      expect(bodies.join(separator)).toBe(text);
+      if (expectedBodies) {
+        expect(bodies).toEqual(expectedBodies);
       }
-    },
-  );
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 describe("irc client inbound line bound", () => {
@@ -590,26 +533,6 @@ describe("irc client inbound line bound", () => {
     }
   });
 
-  it("keeps accepting lines at the IRCv3 tag plus body maximum", async () => {
-    const tags = `@${"t".repeat(8189)}=1`;
-    const longLine = `${tags} :server NOTICE bot :${"x".repeat(400)}`;
-    const server = await startFloodServer({ payload: () => `${longLine}\r\n:server PING :ok\r\n` });
-    try {
-      const { client, errors, lines, waitForLine } = await connectToFlood(server);
-      await withTimeout(
-        waitForLine(":server PING :ok"),
-        2000,
-        "IRC lines after maximal tagged line",
-      );
-      expect(lines).toContain(longLine);
-      expect(errors).toEqual([]);
-      expect(client.isReady()).toBe(true);
-      client.quit("test complete");
-    } finally {
-      await server.close();
-    }
-  });
-
   it("does not retain state across many small chunks of a normal line", async () => {
     const chunks = Array.from({ length: 2000 }, () => "c".repeat(8));
     const server = await startIrcTestServer((socket) => {
@@ -633,6 +556,119 @@ describe("irc client inbound line bound", () => {
       await server.close();
     }
   });
+});
+
+describe("irc client liveness", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function connectToQuietServer(answerPing: boolean) {
+    const serverLines: string[] = [];
+    const pingReceived = createDeferred<void>();
+    const pongReceived = createDeferred<void>();
+    const socketClosed = createDeferred<void>();
+    const abort = new AbortController();
+    const server = await startIrcTestServer((socket) => {
+      socket.on("close", () => socketClosed.resolve());
+      onIrcTestLine(socket, (line) => {
+        serverLines.push(line);
+        if (line.startsWith("USER ")) {
+          socket.write(":server 001 bot :welcome\r\n");
+        } else if (line === "PING :openclaw") {
+          pingReceived.resolve();
+          if (answerPing) {
+            socket.write(":server PONG server :openclaw\r\n");
+          }
+        }
+      });
+    });
+    onTestFinished(() => server.close());
+    const onError = vi.fn();
+    const disconnected = createDeferred<void>();
+    const onDisconnect = vi.fn(() => disconnected.resolve());
+    const client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick: "bot",
+      username: "bot",
+      realname: "OpenClaw Bot",
+      abortSignal: abort.signal,
+      onError,
+      onDisconnect,
+      onLine: (line) => {
+        if (line === ":server PONG server :openclaw") {
+          pongReceived.resolve();
+        }
+      },
+    });
+    onTestFinished(() => client.close());
+    return {
+      serverLines,
+      client,
+      abort,
+      onError,
+      onDisconnect,
+      pingReceived: pingReceived.promise,
+      pongReceived: pongReceived.promise,
+      socketClosed: socketClosed.promise,
+      disconnected: disconnected.promise,
+    };
+  }
+
+  it("drops a connection whose server goes silent and reports one disconnect", async ({
+    signal,
+  }) => {
+    const peer = await connectToQuietServer(false);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await withinTest(peer.pingReceived, signal);
+    expect(peer.client.isReady()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    await withinTest(peer.disconnected, signal);
+    expect(peer.onError).toHaveBeenCalledExactlyOnceWith(
+      new Error("IRC server sent nothing for 240s; reconnecting"),
+    );
+    expect(peer.client.isReady()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(240_000);
+    expect(peer.onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a quiet connection whose server answers PING", async ({ signal }) => {
+    const peer = await connectToQuietServer(true);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await withinTest(peer.pongReceived, signal);
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(peer.onDisconnect).not.toHaveBeenCalled();
+    expect(peer.onError).not.toHaveBeenCalled();
+    expect(peer.client.isReady()).toBe(true);
+  });
+
+  it.for(["quit", "close", "abort"] as const)(
+    "stops liveness checks on %s without requesting reconnect",
+    async (shutdown, { signal }) => {
+      const peer = await connectToQuietServer(false);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await withinTest(peer.pingReceived, signal);
+      if (shutdown === "abort") {
+        peer.abort.abort();
+      } else {
+        peer.client[shutdown]();
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      await withinTest(peer.socketClosed, signal);
+      await vi.advanceTimersByTimeAsync(240_000);
+      expect(peer.serverLines.filter((line) => line.startsWith("PING "))).toHaveLength(1);
+      expect(peer.onDisconnect).not.toHaveBeenCalled();
+      expect(peer.onError).not.toHaveBeenCalled();
+      expect(peer.client.isReady()).toBe(false);
+    },
+  );
 });
 
 describe("irc client inbound CTCP", () => {

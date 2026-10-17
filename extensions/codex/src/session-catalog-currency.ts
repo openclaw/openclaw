@@ -171,16 +171,13 @@ export class CodexCatalogCurrency {
     }
   }
 
-  close(): Promise<void> | undefined {
+  async close(): Promise<void> {
     this.closed = true;
     this.cancelHydration();
     clearInterval(this.timer);
     this.timer = undefined;
     clearTimeout(this.initial);
     this.initial = undefined;
-    if (this.running && this.safetyRefresh) {
-      return Promise.allSettled([this.running, this.safetyRefresh]).then(() => {});
-    }
-    return this.running ?? this.safetyRefresh;
+    await Promise.allSettled([this.running, this.safetyRefresh]);
   }
 }

@@ -548,9 +548,7 @@ export function buildFoundryAuthResult(params: {
           },
         },
       },
-      ...(Array.isArray(params.currentPluginsAllow) &&
-      params.currentPluginsAllow.length > 0 &&
-      !params.currentPluginsAllow.includes(PROVIDER_ID)
+      ...(params.currentPluginsAllow?.length && !params.currentPluginsAllow.includes(PROVIDER_ID)
         ? { plugins: { allow: [...params.currentPluginsAllow, PROVIDER_ID] } }
         : {}),
     },

@@ -54,6 +54,7 @@ Public contract between plugins/core; changes can affect bundled + third-party p
 
 ## Expanding The Boundary
 
+- Before deprecation, removal, or an incompatible behavior/security change, use [plugin-sdk-impact](../../.agents/skills/plugin-sdk-impact/SKILL.md) to query public ClawHub consumers and interpret coverage alongside local callers.
 - SDK surface too large. No convenience compat barrels, aliases, fallback exports. Replace old entrypoints when cleaner.
 - Public third-party API = only compat exception: document/version breaks, migrate ALL bundled/internal plugins first, then aggressively deprecate unused exports.
 - Adding/changing public subpath: align:
@@ -64,7 +65,8 @@ Public contract between plugins/core; changes can affect bundled + third-party p
   - API diff + export checks
 - Bundled channel/helper crossing package boundaries: first ask whether truly generic. Yes → narrow generic subpath. No → plugin-local `api.ts` / `runtime-api.ts`.
 - Expanding provider-facing seams: update/add matching narrow contract tests — Plugin SDK diff/export checks for public subpaths + most direct provider/plugin tests for centralized behavior.
-- Breaking removals/renames = major-version work, never drive-by cleanup.
+- Breaking removals/renames require a shipped replacement, an announced stable-release deprecation window, and explicit maintainer approval; never drive-by cleanup. Leave removal dates unset until the owner approves them.
+- Deprecated synchronous SQLite SDK members have an approved final compatibility day of 2026-12-31; remove them in the first January 2027 stable release, without an SDK major. Keep replacements, actionable warnings, and the member migration guide aligned with that window; this preparation does not authorize early removal.
 
 ## Choose The Capability Surface
 

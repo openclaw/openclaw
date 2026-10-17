@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -115,6 +116,7 @@ async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
@@ -126,6 +128,7 @@ async function startHandoffAndReadCommand(params: {
   commandArgv: string[] | undefined;
   recoveryCommandArgv: string[];
   triageCommandArgv: string[];
+  triageContextCommand: string;
   parentExitTimeoutMs: number;
   parentExitDeadlineAt: number;
   spawnEnv: NodeJS.ProcessEnv | undefined;
@@ -139,6 +142,7 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    ...(params.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
     admission: params.admission,
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
@@ -161,6 +165,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv?: string[];
     recoveryCommandArgv: string[];
     triageCommandArgv: string[];
+    triageContextCommand: string;
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
   };
@@ -177,6 +182,7 @@ async function startHandoffAndReadCommand(params: {
     commandArgv: helperParams.commandArgv,
     recoveryCommandArgv: helperParams.recoveryCommandArgv,
     triageCommandArgv: helperParams.triageCommandArgv,
+    triageContextCommand: helperParams.triageContextCommand,
     parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
     parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
     spawnEnv: spawnCall?.[2]?.env,
@@ -204,6 +210,8 @@ describe("managed service update handoff command", () => {
       argv1: path.join(current, "openclaw.mjs"),
       channel: "beta",
     });
+    expect(prepared.triageCommandArgv.slice(-3)).toEqual(["triage", "--json", "--non-interactive"]);
+    expect(prepared.triageContextCommand).toContain("openclaw triage --run --update-result");
     for (const argv of [
       prepared.commandArgv,
       prepared.recoveryCommandArgv,
@@ -306,13 +314,13 @@ describe("managed service update handoff command", () => {
     },
   );
 
-  it.each(
+  it.for(
     (["readiness", "park"] as const).flatMap((phase) =>
       [30_000, 120_000].map((budgetMs) => ({ phase, budgetMs })),
     ),
   )(
     "waits for delayed $phase ACKs within the owning $budgetMs ms budget",
-    async ({ phase, budgetMs }) => {
+    async ({ phase, budgetMs }, { signal }) => {
       const { requestManagedServiceUpdateHandoffPark, startManagedServiceUpdateHandoff } =
         await import("./update-managed-service-handoff.js");
       const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
@@ -337,7 +345,18 @@ describe("managed service update handoff command", () => {
           (value) => ({ kind: "ready" as const, value }),
           (error: unknown) => ({ kind: "rejected" as const, error }),
         );
-        child = await spawned.promise;
+        child = await withinTest(
+          awaitGateBeforeSettlement(
+            spawned.promise,
+            starting.then((result) => {
+              if (result.kind === "rejected") {
+                throw result.error;
+              }
+            }),
+            "handoff settled before spawning its helper",
+          ),
+          signal,
+        );
         if (phase === "readiness") {
           await vi.advanceTimersByTimeAsync(31_000);
         }
@@ -367,7 +386,14 @@ describe("managed service update handoff command", () => {
             kind: "managed-update-handoff",
             ...started.value,
           });
-          await requested.promise;
+          await withinTest(
+            awaitGateBeforeSettlement(
+              requested.promise,
+              parked,
+              "handoff park settled before sending its request",
+            ),
+            signal,
+          );
           await vi.advanceTimersByTimeAsync(31_000);
           expect(await parked).toBe(budgetMs === 120_000);
         }
@@ -542,6 +568,15 @@ describe("managed service update handoff command", () => {
       const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
       expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
       expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+    },
+  );
+
+  it.each([true, false])(
+    "preserves full integrity selection=%s across the detached handoff",
+    async (fullIntegrityCheck) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", fullIntegrityCheck });
+      expect(result.commandArgv?.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
+      expect(result.command.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
     },
   );
 

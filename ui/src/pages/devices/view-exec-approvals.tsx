@@ -1,6 +1,5 @@
 import { createMemo, For } from "solid-js";
 import "../../components/agent-select-registration.ts";
-import { icons as legacyIcons } from "../../components/icons.ts";
 import {
   SettingsSection,
   SettingsRow,
@@ -139,7 +138,7 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     selectedScope,
     selectedAgent,
     agents,
-    allowlist: Array.isArray(allowlist) ? allowlist : [],
+    allowlist: allowlist ?? [],
     target,
     targetNodeId,
     targetNodes,
@@ -221,9 +220,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
 }
 
 function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
-  const rules = createMemo(() =>
-    props.snapshot.enabled && Array.isArray(props.snapshot.rules) ? props.snapshot.rules : [],
-  );
+  const rules = createMemo(() => (props.snapshot.enabled ? props.snapshot.rules : []));
   const defaultAction = createMemo(() =>
     props.snapshot.enabled
       ? props.snapshot.defaultAction
@@ -350,8 +347,7 @@ function ExecApprovalsScope(props: ExecApprovalsState) {
     {
       value: EXEC_APPROVALS_DEFAULT_SCOPE,
       label: t("devices.execApprovals.defaults"),
-      // The unported selector owns rendering this opaque Lit icon.
-      icon: legacyIcons.settings,
+      icon: "settings" as const,
     },
     ...props.agents.map((agent) => ({
       value: agent.id,

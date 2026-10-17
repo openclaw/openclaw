@@ -1,8 +1,5 @@
-import type { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import type { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import type { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type {
   CoreConfig,
   MatrixConfig,
@@ -11,10 +8,7 @@ import type {
   ReplyToMode,
 } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
-import type {
-  resolveMatrixMonitorLiveUserAllowlist,
-  MatrixResolvedAllowlistEntry,
-} from "./config.js";
+import type { MatrixResolvedAllowlistEntry } from "./config.js";
 import type { createDirectRoomTracker } from "./direct.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 
@@ -58,19 +52,10 @@ export type MatrixMonitorHandlerParams = {
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;
-  resolveLiveUserAllowlist?: typeof resolveMatrixMonitorLiveUserAllowlist;
-  resolveStorePath?: typeof resolveStorePath;
-  createChannelInboundEnvelopeBuilderAsync?: typeof createChannelInboundEnvelopeBuilderAsync;
-  finalizeInboundContext?: (ctx: Record<string, unknown>) => unknown;
-  resolveHumanDelayConfig?: typeof resolveHumanDelayConfig;
 };
 
 export type MatrixHandlerRuntimeConfig = MatrixMonitorHandlerParams & {
   allowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
   groupAllowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
   configuredBotUserIds: ReadonlySet<string>;
-  resolveLiveUserAllowlist: typeof resolveMatrixMonitorLiveUserAllowlist;
-  resolveStorePath: typeof resolveStorePath;
-  createChannelInboundEnvelopeBuilderAsync: typeof createChannelInboundEnvelopeBuilderAsync;
-  resolveHumanDelayConfig: typeof resolveHumanDelayConfig;
 };

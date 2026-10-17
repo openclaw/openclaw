@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isActiveStoreWriter } from "../../shared/store-writer-queue.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -19,6 +20,8 @@ it.each(["refusal", "eviction"] as const)(
       const sessionKey = "agent:main:ordered-retirement";
       const entry = { sessionId: "ordered-retirement-session", updatedAt: 1 };
       writeSessionEntry(database, sessionKey, entry);
+      // The test owns worker settlement, so discard the write's retained row facts.
+      sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
       const cleanupEntered = createDeferredCore();
       const releaseCleanup = createDeferredCore();
       const writerSettled = createDeferredCore();

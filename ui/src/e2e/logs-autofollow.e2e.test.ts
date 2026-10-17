@@ -2,8 +2,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  pauseVirtualClock,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -86,10 +91,10 @@ suite.define(() => {
       await page.getByText("resumed", { exact: true }).waitFor();
       expect(await page.locator(".log-message").allTextContents()).toEqual(["initial", "resumed"]);
 
-      await page.evaluate(() => {
-        document.querySelector("openclaw-logs-page")!.remove();
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await evaluateControlUiContext(page, (context) => context.navigate("about"));
+      await waitForControlUiRoute(page, { routeId: "about" });
+      await page.locator("openclaw-logs-page").waitFor({ state: "detached" });
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
       await page.clock.runFor(2_000);
       expect(await gateway.getRequests("logs.tail")).toHaveLength(reads + 1);
     });

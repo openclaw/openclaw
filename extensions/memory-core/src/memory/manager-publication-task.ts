@@ -1,4 +1,5 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
@@ -12,7 +13,12 @@ import type {
   refreshMemorySessionSourceState,
 } from "./manager-source-state.js";
 
-export type MemoryPublicationConnection = MemoryShadowConnection | { kind: "agent" };
+export const MEMORY_INDEX_WRITE_SCOPE = "memory-index";
+export const MEMORY_EMBEDDING_CACHE_WRITE_SCOPE = "memory-embedding-cache";
+
+export type MemoryPublicationConnection =
+  | MemoryShadowConnection
+  | { kind: "agent"; stageId?: string };
 export type MemoryPublicationState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
@@ -38,6 +44,13 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "database.reset": { input: undefined; output: MemoryPublicationResult<boolean> };
+  "database.stage.start": { input: undefined; output: MemoryPublicationResult<void> };
+  "database.stage.discard": { input: { stageId: string }; output: void };
+  "database.stage.publish": {
+    input: { stageId?: string; expectedRevision: number; vectorIndexComplete: boolean };
+    output: MemoryPublicationResult<void>;
+  };
   "connection.inspect": { input: undefined; output: MemoryShadowConnection };
   "vector.ensure": {
     input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };
@@ -48,13 +61,19 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<{ extensionPath: string; retiredLegacy: boolean }>;
   };
   "index.facts": { input: undefined; output: MemoryDatabaseFacts };
+  "index.upgradeProviderKey": {
+    input: { meta: MemoryIndexMeta; providerKey: string };
+    output: MemoryPublicationResult<boolean>;
+  };
   "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
       "cacheEnabled" | "ftsEnabled" | "ftsTokenizer"
     >;
-    output: MemoryPublicationResult<ReturnType<typeof ensureMemoryIndexSchema>>;
+    output: MemoryPublicationResult<
+      ReturnType<typeof ensureMemoryIndexSchema> & { admission?: MemoryDatabaseAdmission }
+    >;
   };
   "source.refresh": {
     input: Parameters<typeof refreshMemorySessionSourceState>[1];
@@ -115,6 +134,13 @@ export type MemoryPublicationOperations = {
   "source.replace": {
     input: { state: MemoryPublicationState };
     output: MemoryPublicationResult<boolean>;
+  };
+  "source.replace.group": {
+    input: {
+      sources: Array<{ header: MemorySourceIndexHeader; fragments: MemoryPublicationFragment[] }>;
+      state: MemoryPublicationState;
+    };
+    output: MemoryPublicationOperations["source.replace"]["output"];
   };
   "source.replace.inline": {
     input: {

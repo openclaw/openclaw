@@ -285,33 +285,73 @@ describe("session capability warm roster", () => {
     },
   );
 
-  it("publishes groups synchronously, then the cached roster without a connection or canonical revision", async () => {
-    const cached = createDeferred<BootRoster | null>();
-    const h = harness({ cached: cached.promise });
-    expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
-    expect(h.sessions.state.groups).toEqual(["Work"]);
-    expect(h.sessions.state.result).toBeNull();
-    let settled = false;
-    void h.sessions.whenCachedRosterSettled().then(() => {
-      settled = true;
-    });
-    await vi.dynamicImportSettled();
-    expect(settled).toBe(false);
-    cached.resolve(roster());
-    await h.sessions.whenCachedRosterSettled();
-    expect(settled).toBe(true);
-    expect(h.sessions.state).toMatchObject({
-      result: roster().result,
-      resultCached: true,
-      agentId: "main",
-    });
-    expect(h.sessions.canonicalListRevision).toBe(0);
-    expect(h.request).not.toHaveBeenCalled();
-    expect(h.sessions.captureBootRoster()).toBeNull();
-    h.publish({ phase: "reconnecting" });
-    expect(h.sessions.state.result?.sessions).toHaveLength(2);
-    expect(h.sessions.state.resultCached).toBe(true);
-  });
+  it.each(["task", "connect", "dispose"] as const)(
+    "publishes the cached roster before yielding route settlement and releases on %s",
+    async (release) => {
+      const channel = new MessageChannel();
+      const resume = channel.port2.postMessage.bind(channel.port2);
+      const queued = createDeferred();
+      const delivered = createDeferred();
+      channel.port1.addEventListener("message", () => delivered.resolve(), { once: true });
+      vi.spyOn(channel.port2, "postMessage").mockImplementation(() => queued.resolve());
+      vi.spyOn(globalThis, "MessageChannel").mockImplementationOnce(function () {
+        return channel;
+      });
+      const cached = createDeferred<BootRoster | null>();
+      const h = harness({ cached: cached.promise });
+      const settlement = h.sessions.whenCachedRosterSettled();
+      const settled = vi.fn();
+      void settlement.then(settled);
+      try {
+        expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
+        expect(h.sessions.state.groups).toEqual(["Work"]);
+        expect(h.sessions.state.result).toBeNull();
+        cached.resolve(roster());
+        await Promise.race([
+          queued.promise,
+          settlement.then(() => {
+            throw new Error("Cached route settled before yielding to a browser task");
+          }),
+        ]);
+        expect(settled).not.toHaveBeenCalled();
+        expect(h.sessions.state).toMatchObject({
+          result: roster().result,
+          resultCached: true,
+          agentId: "main",
+        });
+        expect(h.sessions.canonicalListRevision).toBe(0);
+        expect(h.request).not.toHaveBeenCalled();
+        expect(h.sessions.captureBootRoster()).toBeNull();
+        if (release !== "task") {
+          if (release === "connect") {
+            h.connect();
+          } else {
+            h.sessions.dispose();
+          }
+          await Promise.resolve();
+          expect(settled).toHaveBeenCalledOnce();
+          expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
+        }
+        const currentResult = h.sessions.state.result;
+        resume(null);
+        await delivered.promise;
+        await settlement;
+        expect(settled).toHaveBeenCalledOnce();
+        expect(h.sessions.state.result).toBe(currentResult);
+        if (release === "task") {
+          h.publish({ phase: "reconnecting" });
+          expect(h.sessions.state.result?.sessions).toHaveLength(2);
+          expect(h.sessions.state.resultCached).toBe(true);
+        }
+      } finally {
+        h.sessions.dispose();
+        cached.resolve(null);
+        h.live.resolve(sessionsResult([], 2));
+        channel.port1.close();
+        channel.port2.close();
+      }
+    },
+  );
 
   it("does not read or publish a cached roster without an accepted boot record", async () => {
     const h = harness({ withBootRecord: false });

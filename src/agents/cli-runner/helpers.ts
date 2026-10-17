@@ -95,6 +95,8 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
+  customInlineButtonHint?: boolean;
+  messageToolHints?: string[];
   ownerNumbers?: string[];
   docsPath?: string;
   sourcePath?: string;
@@ -134,6 +136,7 @@ export function buildCliAgentSystemPrompt(params: {
       channel: params.runtimeChannel,
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
+      customInlineButtonHint: params.customInlineButtonHint,
     },
   });
   return buildConfiguredAgentSystemPrompt({
@@ -157,6 +160,7 @@ export function buildCliAgentSystemPrompt(params: {
       surface: "cli_backend",
     }),
     runtimeInfo,
+    messageToolHints: params.messageToolHints,
     toolNames: params.tools.map((tool) => tool.name),
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,

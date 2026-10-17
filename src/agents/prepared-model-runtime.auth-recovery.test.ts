@@ -44,6 +44,7 @@ import {
 } from "../plugins/runtime/generation-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import { PreparedModelRuntimeAuthPublicationOwner } from "./prepared-model-runtime-auth-publication.js";
 import {
@@ -546,6 +547,7 @@ describe("prepared model auth publication", () => {
       version: 1,
       profiles: { "test:primary": { type: "token", provider: "test", token: "synthetic-token" } },
     };
+    prepareSharedAuthStoreOwnershipForNative(fixture.state.env);
     snapshots.setRuntimeAuthProfileStoreSnapshot(store, agentDir);
     const initial = await publishPreparedModelRuntimeSnapshot(input);
     const events = vi.fn();

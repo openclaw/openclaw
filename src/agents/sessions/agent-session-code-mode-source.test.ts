@@ -551,6 +551,7 @@ describe("AgentSession runtime and transcript projections", () => {
   });
 
   it("preserves source across reused managers and ordinary append batches", async () => {
+    setRuntimeConfigSnapshot({});
     const { dir, scope } = createSessionScope("source-reuse");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope, dir);

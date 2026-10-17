@@ -1,14 +1,31 @@
-// Meta live tests prove muse-spark auth and Responses API completion.
+// Meta live tests prove authentication, multimodal Responses turns, and tool replay.
 import { createHash } from "node:crypto";
-import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
+import {
+  streamSimple,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type ModelThinkingLevel,
+} from "openclaw/plugin-sdk/llm";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildMetaProvider } from "./provider-catalog.js";
 import { wrapMetaProviderStream } from "./stream.js";
 
 const MODEL_API_KEY = process.env.MODEL_API_KEY?.trim() ?? "";
-const STANDARD_LIVE_MODEL_IDS = ["muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1"] as const;
-const STANDARD_CAP_LIVE_MODEL_IDS = ["muse-spark-1.3", "muse-spark-1.2"] as const;
+const STANDARD_LIVE_MODEL_IDS = [
+  "muse-wonder-1.0",
+  "muse-spark-1.3",
+  "muse-spark-1.2",
+  "muse-spark-1.1",
+] as const;
+const STANDARD_CAP_LIVE_MODEL_IDS = [
+  "muse-wonder-1.0",
+  "muse-spark-1.3",
+  "muse-spark-1.2",
+] as const;
 const CONTRIBUTOR_LIVE_MODEL_IDS = [
   "muse-spark-1.3-contributor",
   "muse-spark-1.2-contributor",
@@ -21,6 +38,9 @@ const GREEN_VERTICAL_CENTER_DATA_URL = `data:image/png;base64,${GREEN_VERTICAL_C
 const LIVE_TEST_MAX_OUTPUT_TOKENS = 4_000;
 const LIVE =
   isLiveTestEnabled(["META_LIVE_TEST", "MODEL_API_LIVE_TEST"]) && MODEL_API_KEY.length > 0;
+if (LIVE) {
+  ensureGlobalUndiciEnvProxyDispatcher();
+}
 // Contributor prompts and completions may train future Meta models, so sending live
 // test content requires deliberate opt-in even though the fixture is synthetic.
 const CONTRIBUTOR_LIVE = LIVE && process.env.OPENCLAW_LIVE_META_CONTRIBUTOR === "1";
@@ -84,16 +104,20 @@ function sha256(value: string | Buffer): string {
 async function expectLiveCompletion(params: {
   modelId: string;
   context: Context;
-  expectedText: string | RegExp;
+  expectedText?: string | RegExp;
+  expectedStopReason?: "stop" | "toolUse";
+  reasoningLevel?: ModelThinkingLevel;
   expectImagePayload?: boolean;
   useZeroMaxTokens?: boolean;
   emitRedactedCapProof?: boolean;
   emitRedactedImageProof?: boolean;
-}): Promise<void> {
+}): Promise<{ result: AssistantMessage; payload: Record<string, unknown> }> {
   const {
     modelId,
     context,
     expectedText,
+    expectedStopReason = "stop",
+    reasoningLevel = "high",
     expectImagePayload = false,
     useZeroMaxTokens = false,
     emitRedactedCapProof = false,
@@ -101,36 +125,52 @@ async function expectLiveCompletion(params: {
   } = params;
   const model = resolveLiveModel(modelId);
   let capturedPayload: Record<string, unknown> | undefined;
+  let payloadCount = 0;
   let responseStatus: number | undefined;
   const stream = await resolveLiveStreamFn(modelId)(model, context, {
     apiKey: MODEL_API_KEY,
     maxTokens: useZeroMaxTokens ? 0 : LIVE_TEST_MAX_OUTPUT_TOKENS,
-    reasoning: "high",
+    reasoning: reasoningLevel,
     onPayload: (payload) => {
+      payloadCount += 1;
       capturedPayload = payload as Record<string, unknown>;
     },
     onResponse: (response) => {
       responseStatus = response.status;
     },
   });
+  let textDeltas = 0;
+  for await (const event of stream) {
+    if (event.type === "text_delta") {
+      textDeltas += 1;
+    }
+  }
   const result = await stream.result();
 
   if (result.stopReason === "error") {
     throw new Error(result.errorMessage || "Meta returned an error");
   }
 
+  expect(payloadCount).toBe(1);
+  expect(responseStatus).toBe(200);
+  expect(result.stopReason).toBe(expectedStopReason);
+  expect(result.responseModel ?? result.model).toBe(modelId);
+  expect(capturedPayload?.model).toBe(modelId);
   expect(capturedPayload?.store).toBe(false);
   expect(capturedPayload?.include).toEqual(expect.arrayContaining(["reasoning.encrypted_content"]));
   const reasoning = capturedPayload?.reasoning as { effort?: string } | undefined;
-  expect(reasoning?.effort).toBe("high");
+  expect(reasoning?.effort).toBe(reasoningLevel === "off" ? "minimal" : reasoningLevel);
   if (expectImagePayload) {
     expect(containsExpectedImagePayload(capturedPayload)).toBe(true);
   }
   const assistantText = extractNonEmptyAssistantText(result.content).trim();
   if (typeof expectedText === "string") {
     expect(assistantText).toBe(expectedText);
-  } else {
+  } else if (expectedText !== undefined) {
     expect(assistantText).toMatch(expectedText);
+  }
+  if (expectedText !== undefined) {
+    expect(textDeltas).toBeGreaterThan(0);
   }
   if (useZeroMaxTokens) {
     expect(model.maxTokens).toBe(131072);
@@ -170,6 +210,24 @@ async function expectLiveCompletion(params: {
       })}`,
     );
   }
+  if (!capturedPayload) {
+    throw new Error("Expected the Meta request payload");
+  }
+  console.info(
+    `[meta:live] ${JSON.stringify({
+      sourceCommit: process.env.GITHUB_SHA,
+      requestedModel: modelId,
+      effectiveModel: result.responseModel ?? result.model,
+      httpStatus: responseStatus,
+      reasoningEffort: reasoning?.effort,
+      stopReason: result.stopReason,
+      textDeltas,
+      payloadCount,
+      usage: result.usage,
+      requestPayloadSha256: sha256(JSON.stringify(capturedPayload)),
+    })}`,
+  );
+  return { result, payload: capturedPayload };
 }
 
 async function expectLiveTextCompletion(modelId: string): Promise<void> {
@@ -235,7 +293,7 @@ async function expectLiveImageCompletion(modelId: string): Promise<void> {
 }
 
 describeLive("meta plugin live", () => {
-  it("lists the standard catalog models via the /models endpoint", async () => {
+  it("lists the standard catalog including muse-wonder-1.0 via the /models endpoint", async () => {
     const ids = await fetchLiveModelIds();
     for (const modelId of STANDARD_LIVE_MODEL_IDS) {
       expect(ids).toContain(modelId);
@@ -265,6 +323,88 @@ describeLive("meta plugin live", () => {
     },
     120_000,
   );
+
+  it.each(["off", "max"] as const)(
+    "completes muse-wonder-1.0 with %s reasoning",
+    async (reasoningLevel) => {
+      await expectLiveCompletion({
+        modelId: "muse-wonder-1.0",
+        reasoningLevel,
+        context: {
+          messages: [
+            {
+              role: "user",
+              content: "Reply with exactly: WONDER_EFFORT_OK",
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        expectedText: "WONDER_EFFORT_OK",
+      });
+    },
+    120_000,
+  );
+
+  it("replays muse-wonder-1.0 encrypted reasoning across a tool-call round trip", async () => {
+    const context: Context = {
+      messages: [
+        {
+          role: "user",
+          content:
+            "Call get_probe_token exactly once. After the tool returns, reply with only its token. Do not invent the token.",
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [
+        {
+          name: "get_probe_token",
+          description: "Returns the token required for the final answer.",
+          parameters: Type.Object({}, { additionalProperties: false }),
+        },
+      ],
+    };
+    const first = await expectLiveCompletion({
+      modelId: "muse-wonder-1.0",
+      context,
+      expectedStopReason: "toolUse",
+    });
+    const calls = first.result.content.filter((block) => block.type === "toolCall");
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.name).toBe("get_probe_token");
+    expect(call.arguments).toEqual({});
+    context.messages.push(first.result, {
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [{ type: "text", text: "WONDER_REPLAY_OK_47A1" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+    const second = await expectLiveCompletion({
+      modelId: "muse-wonder-1.0",
+      context,
+      expectedText: "WONDER_REPLAY_OK_47A1",
+    });
+    const input = second.payload.input as Array<Record<string, unknown>>;
+    expect(input).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "reasoning",
+          encrypted_content: expect.any(String),
+        }),
+        expect.objectContaining({ type: "function_call_output", output: "WONDER_REPLAY_OK_47A1" }),
+      ]),
+    );
+    expect(
+      input.some(
+        (item) =>
+          item.type === "reasoning" &&
+          typeof item.encrypted_content === "string" &&
+          item.encrypted_content.length > 0,
+      ),
+    ).toBe(true);
+  }, 180_000);
 });
 
 describeContributorLive("meta contributor plugin live", () => {

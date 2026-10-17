@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
@@ -8,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB, WorkerEnvironments } from "../../state/openclaw-state-db.generated.js";
 import type {
   PreparedEnvironmentPlacementBinding,
@@ -19,6 +19,7 @@ import type {
 } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";
+import { workerPreparationSourceKey } from "./preparation-identity.schema.js";
 import { parseWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentNativePatch } from "./store-projection.js";
 import { executeWorkerEnvironmentWrite } from "./store-write.js";
@@ -32,7 +33,7 @@ type PreparationRow = Pick<
   | "preparation_expires_at_ms"
   | "preparation_consumed_at_ms"
 >;
-const query = (db: DatabaseSync) =>
+const query = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, "worker_environments" | "worker_session_placements">>(db);
 
 export function readWorkerEnvironmentPreparation(
@@ -88,7 +89,7 @@ export function workerEnvironmentPreparationColumns(
   return columns;
 }
 
-function hasPlacementReference(db: DatabaseSync, environmentId: string): boolean {
+function hasPlacementReference(db: EngineConnection, environmentId: string): boolean {
   return Boolean(
     executeSqliteQueryTakeFirstSync(
       db,
@@ -101,16 +102,12 @@ function hasPlacementReference(db: DatabaseSync, environmentId: string): boolean
   );
 }
 
-function snapshotProjectKey(snapshot: unknown): string {
-  if (
-    !isRecord(snapshot) ||
-    !isRecord(snapshot.project) ||
-    typeof snapshot.project.key !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(snapshot.project.key)
-  ) {
-    throw new Error("Prepared worker has an invalid project identity");
+function snapshotSourceKey(snapshot: unknown): string {
+  const key = isRecord(snapshot) ? workerPreparationSourceKey(snapshot) : undefined;
+  if (!key) {
+    throw new Error("Prepared worker has an invalid preparation source");
   }
-  return snapshot.project.key;
+  return key;
 }
 
 type PreparedReservationCandidate = Pick<
@@ -144,7 +141,7 @@ export function selectPreparedEnvironmentReservations(
       cleanupOrder: record.destroyRequestedAtMs !== null || record.state === "orphaned" ? 0 : 1,
       state: record.state,
       purpose: record.preparation!.purpose,
-      projectKey: snapshotProjectKey(record.profileSnapshot),
+      projectKey: snapshotSourceKey(record.profileSnapshot),
       createdAtMs: record.createdAtMs,
     }))
     .toSorted(
@@ -156,7 +153,7 @@ export function selectPreparedEnvironmentReservations(
 }
 
 type Reservations = ReturnType<typeof selectPreparedEnvironmentReservations>;
-function readPreparedReservations(db: DatabaseSync): Reservations {
+function readPreparedReservations(db: EngineConnection): Reservations {
   return selectPreparedEnvironmentReservations(
     executeSqliteQuerySync(
       db,
@@ -220,10 +217,10 @@ export function isPreparedReservationWithinCapacity(
 }
 
 export function createPreparedEnvironmentStoreOps(options: {
-  db: DatabaseSync;
+  db: EngineConnection;
   now: () => number;
   createIntent: (input: WorkerEnvironmentIntentInput) => WorkerEnvironmentRecord;
-  get: (db: DatabaseSync, environmentId: string) => WorkerEnvironmentRecord | undefined;
+  get: (db: EngineConnection, environmentId: string) => WorkerEnvironmentRecord | undefined;
 }) {
   const { db } = options;
   return {
@@ -316,8 +313,8 @@ export function createPreparedEnvironmentStoreOps(options: {
       ) {
         return undefined;
       }
-      if (snapshotProjectKey(input.intent.profileSnapshot) !== input.projectKey) {
-        throw new Error("Prepared worker capacity does not match the admitted project");
+      if (snapshotSourceKey(input.intent.profileSnapshot) !== input.projectKey) {
+        throw new Error("Prepared worker capacity does not match the admitted source");
       }
       return options.createIntent(input.intent);
     },
@@ -364,7 +361,7 @@ export function createPreparedEnvironmentStoreOps(options: {
 
 /** Placement and consumption commit together; dropping a placement never recreates a spare. */
 export function consumePreparedEnvironment(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: Omit<PreparedEnvironmentSelection, "assertCurrent">,
   nowMs: number,
 ):
@@ -435,7 +432,7 @@ export function consumePreparedEnvironment(
 }
 
 export function assertPreparedEnvironmentAttachment(
-  db: DatabaseSync,
+  db: EngineConnection,
   environment: WorkerEnvironmentRecord,
   sessionId: string,
   binding: Omit<PreparedEnvironmentPlacementBinding, "assertCurrent"> | undefined,

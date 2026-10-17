@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import {
@@ -23,13 +25,13 @@ import {
   ensurePrivateDirectory,
   generateChromeExtensionIdForPath,
   inspectInstalledCopy,
-  pathInfo,
   stableChromeExtensionDir,
 } from "./extension-install-layout.js";
 import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
 import {
   BROWSER_NATIVE_HOST_DESCRIPTION as NATIVE_HOST_DESCRIPTION,
   BROWSER_NATIVE_HOST_NAME,
+  NATIVE_HOST_MANIFEST_KEYS,
 } from "./extension-native-host.constants.js";
 import { isValidProfileName } from "./profiles.js";
 
@@ -37,10 +39,6 @@ const OWNED_LAUNCHER_MARKER = "# OpenClaw native messaging bootstrap v1";
 
 function nativeMessagingRoot(): string {
   return path.join(resolveInstallStateDir(), "browser", "native-messaging");
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export async function resolveNativeHostPath(pluginRoot: string): Promise<string> {
@@ -56,7 +54,7 @@ export async function resolveNativeHostPath(pluginRoot: string): Promise<string>
     cursor = parent;
   }
   for (const candidate of candidates) {
-    if (await pathInfo(candidate)) {
+    if (await lstatIfExists(candidate, "ENOENT")) {
       return await fs.realpath(candidate);
     }
   }
@@ -214,7 +212,7 @@ export async function inspectRegistration(
 ): Promise<NativeHostRegistrationStatus> {
   const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
   const registration = { product: root.product, browser: root.label, manifestPath };
-  if (!(await pathInfo(manifestPath))) {
+  if (!(await lstatIfExists(manifestPath, "ENOENT"))) {
     return {
       ...registration,
       extensionIds: [],
@@ -260,7 +258,7 @@ export async function inspectRegistration(
       ? expectedOriginsForExtensionIds(expectedPathExtensionIds)
       : null;
     if (
-      !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
+      !hasExactKeys(manifest, NATIVE_HOST_MANIFEST_KEYS) ||
       manifest.description !== NATIVE_HOST_DESCRIPTION ||
       manifest.type !== "stdio" ||
       !validOrigins ||
@@ -391,7 +389,7 @@ export async function installRegistration(params: {
     ? { path: existing.launcherPath, content: await fs.readFile(existing.launcherPath, "utf8") }
     : null;
   let createdLauncher = false;
-  if (await pathInfo(launcherPath)) {
+  if (await lstatIfExists(launcherPath, "ENOENT")) {
     await assertOwnedPath(launcherPath, "file");
     const existingLauncher = await fs.readFile(launcherPath, "utf8");
     if (existingLauncher !== launcher.content) {
@@ -600,7 +598,7 @@ export async function uninstallChromeExtensionNativeHosts(
       refused.push(status.manifestPath);
       continue;
     }
-    const launcher = await pathInfo(launcherPath);
+    const launcher = await lstatIfExists(launcherPath, "ENOENT");
     if (launcher) {
       await assertOwnedPath(launcherPath, "file");
       if (!(await fs.readFile(launcherPath, "utf8")).includes(OWNED_LAUNCHER_MARKER)) {

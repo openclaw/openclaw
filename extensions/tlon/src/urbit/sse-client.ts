@@ -121,6 +121,7 @@ export class UrbitSSEClient {
     await ensureUrbitChannelOpen(this.channelRequestContext(), {
       createBody: this.subscriptions,
       createAuditContext: "tlon-urbit-channel-create",
+      beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
     });
   }
 
@@ -207,7 +208,8 @@ export class UrbitSSEClient {
         ssrfPolicy: this.ssrfPolicy,
         lookupFn: this.lookupFn,
         fetchImpl: this.fetchImpl,
-        signal: controller.signal,
+        signal: AbortSignal.any([controller.signal, this.reconnectAbortController.signal]),
+        beforeRequest: () => this.reconnectAbortController.signal.throwIfAborted(),
         auditContext: "tlon-urbit-sse-stream",
       });
     } finally {
@@ -217,12 +219,19 @@ export class UrbitSSEClient {
     }
 
     const { response, release } = stream;
+    if (this.reconnectAbortController.signal.aborted) {
+      await release();
+      this.reconnectAbortController.signal.throwIfAborted();
+    }
     this.streamRelease = release;
 
-    if (!response.ok) {
+    if (!response.ok || !response.body) {
       this.streamRelease = null;
       await release();
-      throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
+      if (!response.ok) {
+        throw new UrbitHttpError({ operation: "Stream connection", status: response.status });
+      }
+      return;
     }
 
     this.processStream(response.body).catch((error: unknown) => {
@@ -397,9 +406,6 @@ export class UrbitSSEClient {
     if (this.lastHeardEventId - this.lastAcknowledgedEventId <= this.ackThreshold) {
       return;
     }
-    this.logger.log?.(
-      `[SSE] Acking event ${this.lastHeardEventId} (last acked: ${this.lastAcknowledgedEventId})`,
-    );
     // The acknowledged watermark advances only after PUT succeeds. A replay
     // therefore retries a failed ack instead of leaving the subscription clogged.
     await this.ack(this.lastHeardEventId);
@@ -409,6 +415,7 @@ export class UrbitSSEClient {
     return await pokeUrbitChannel(this.channelRequestContext(), {
       ...params,
       auditContext: "tlon-urbit-poke",
+      timeoutMs: 30_000,
     });
   }
 
@@ -497,6 +504,9 @@ export class UrbitSSEClient {
       this.reconnectAttempts = 0;
       this.logger.log?.("[SSE] Reconnection successful!");
     } catch (error) {
+      if (this.aborted) {
+        return;
+      }
       this.logger.error?.(`[SSE] Reconnection failed: ${String(error)}`);
       await this.attemptReconnect();
     }

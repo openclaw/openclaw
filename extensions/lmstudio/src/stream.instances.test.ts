@@ -124,7 +124,7 @@ it.each([
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt === 2) {
-          clock.mockReturnValue(now + 5_001);
+          clock.mockReturnValue(now + 60_001);
           discoveryUnavailable = true;
         }
         const events = [];

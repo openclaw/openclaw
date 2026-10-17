@@ -27,7 +27,8 @@ Scope includes:
 - Blank text-block cleanup before provider replay
 - Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
-- Empty assistant error-turn removal for provider replay
+- Empty assistant error/aborted-turn removal before both live requests and provider replay
+- Speech-only assistant turn replay as its spoken text
 
 If you need transcript storage details, see
 [Session management deep dive](/reference/session-management-compaction).
@@ -65,16 +66,19 @@ zero. The historical duplicate filter still removes marker-free delivery mirrors
 
 ## Failed attempts and recovery
 
-Text-only assistant errors are buffered until the logical run settles. Recovery
-discards their partial text because the recovered reply supersedes it. Terminal
-failure persists the last attempt's partial text and error.
+Failed attempts keep their original content, error, and usage in the append-only
+transcript. Recovery can hide failed streamed output without rewriting those rows.
 
-Tool calls, displayable non-text content, and attachment facts are persisted
-immediately, before dependent tool results or the recovered reply. These fact
-rows omit the error and use a replayable stop reason so provider replay retains
-the calls. For mixed text/fact messages, partial text and the error remain
-buffered separately; terminal settlement does not duplicate facts or usage.
-This uses existing assistant-row shapes and requires no database migration.
+Model projection drops empty error/aborted turns and failed tool-call frames with
+no completed result before both live requests and cold replay. When a failed frame
+has completed tool work, projection retains the completed calls and their signed
+thinking, omits unfinished calls and partial text, and uses a replayable stop reason.
+The stored failure and billing facts remain unchanged. This uses existing
+assistant-row shapes and requires no database migration.
+
+Direct Anthropic Messages append-only replay also keeps failed and recovered
+assistant frames separate, along with consecutive user turns. Strict routes
+retain their role-merging behavior.
 
 ## Global rule: runtime context is not user transcript
 
@@ -184,7 +188,7 @@ result is moved only when exactly one unresolved occurrence can own it; ambiguou
 extras are dropped and missing occurrences receive synthetic error results.
 
 Synthetic missing results tell the model that the outcome is unknown: retry only
-read-only or idempotent operations, and verify current state before repeating an
+read-only operations or operations safe to repeat, and verify current state before repeating an
 operation that may have had side effects. Responses-family transports retain
 their `aborted` placeholder. Neither placeholder proves that the tool did not run.
 
@@ -214,6 +218,10 @@ Empty length turns remain unchanged, as do length turns with visible text,
 tool calls, or unknown content blocks. Silent-reply turns with tool calls or
 unknown content blocks also remain unchanged. Stored transcripts are not
 rewritten.
+
+An assistant turn with no visible text or tool calls but recorded speech
+(`openclawDelivery.tts.text`) replays that speech as its text, so later turns
+still see the answer. Stored transcripts are not rewritten.
 
 Implementation: `normalizeAssistantReplayContent` in
 `src/agents/embedded-agent-runner/replay-history.ts`
@@ -253,23 +261,43 @@ inter-session user turns that only have provenance metadata.
 - SDK Responses replay uses the storage privacy shape and a fixed field order:
   summaries are empty, cleartext reasoning content is omitted, and completed
   ciphertext remains unchanged across live continuation and transcript reload.
+  A provider's empty `content: []` reasoning container is preserved across
+  transcript reload so reopening a session does not change its cached prefix;
+  an absent container stays absent.
   Native ChatGPT Responses retains its upstream Codex payload semantics.
-- Node turns canonicalize fresh reasoning signatures before returning the
+- SDK Responses streams normalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
-  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
-  and previously approved history remain unchanged.
+  the same terminal response item's signature bytes, even if `output_item.done`
+  carried different ciphertext. Async tool prefixes wait for terminal reasoning
+  settlement before persistence. If the stream errors, aborts, or ends without a
+  terminal response, already-completed async calls are still delivered, using the
+  `output_item.done` reasoning snapshot when no terminal snapshot was received.
+  Encrypted reasoning bytes, executable tool arguments, and previously approved
+  history remain unchanged.
+- Successful SDK Responses completions omit absent error fields. The session
+  owner attaches run metadata to fresh assistant and tool-result history before
+  persistence, so the next tool step and transcript reload retain the same run
+  envelope. This internal metadata is not sent in Responses tool outputs.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
-- OpenAI Responses-family replay preserves canonical `call_*|fc_*`
-  same-model reasoning pairs, but deterministically normalizes malformed or
+- OpenAI Responses-family replay preserves valid `call_*|fc_*`
+  tool-call pairs, but uses fixed rules to normalize malformed or
   overlong `call_id`/function-call item ids before pi-ai payload conversion.
+  When an assistant turn lacks preceding reasoning with an `rs_*` ID, the transport
+  omits its `fc_*` item IDs from the outbound payload without changing the
+  transcript's tool-call or tool-result IDs.
 - Tool result pairing repair may move real matched outputs and synthesize
   Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering; no thought signature stripping.
 
 **OpenAI-compatible Chat Completions**
 
+- Historical calls to tools absent from the outgoing catalog, including tools whose
+  schemas were rejected, replay as assistant text together with their results.
+  The model still sees errors such as `Tool session_status not found`. Declared
+  calls retain native tool protocol, with their results kept together in mixed
+  batches. This deterministic request projection leaves stored history unchanged.
 - Historical assistant thinking/reasoning blocks are stripped before replay
   so local and proxy-style OpenAI-compatible servers do not receive
   prior-turn reasoning fields such as `reasoning` or `reasoning_content`.
@@ -306,11 +334,10 @@ inter-session user turns that only have provenance metadata.
   repeated cache-read charges and context use for old carriers when nothing binds
   the prefix.
 - Tool result pairing repair and synthetic tool results.
-- Turn validation (merge consecutive user turns to satisfy strict
+- Turn validation (merge consecutive turns to satisfy strict
   alternation). For prefix-binding models on the Messages API, append-only replay keeps
-  consecutive user turns separate instead, so a command turn followed by a
-  prompt replays with the same per-turn timestamp stamps the active turn was
-  signed over; Bedrock Converse still merges them.
+  consecutive user and assistant turns separate, preserving per-turn timestamps
+  and failed/recovered boundaries; Bedrock Converse still merges them.
 - Trailing assistant prefill turns are stripped from outgoing Anthropic
   Messages payloads when thinking is enabled, including Cloudflare AI
   Gateway routes.

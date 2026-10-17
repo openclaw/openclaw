@@ -76,6 +76,7 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
       const publication = () =>
         stagePlacementTurnClaimWorkerPublication(identity, failed, undefined, failed.state, failed);
       const pending = publication();
+      expect(() => read.prepareRead()).toThrow("placement authority changed");
       expect(() => current()).toThrow("placement authority changed");
       pending.rollback();
       expect(current()).toEqual(failed);
@@ -128,6 +129,21 @@ it("installs the committed placement when acquisition overlaps its writer receip
       }
     } finally {
       retained.release();
+    }
+  });
+});
+
+it("retains a cold async placement read for SQL-free synchronous compatibility access", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const store = createWorkerSessionPlacementStore();
+    const sessionIds = ["cold-placement-absence"];
+    expect(await store.getManyAsync(sessionIds)).toEqual(new Map());
+    const sql = observeHostDataSql();
+    try {
+      expect(store.getMany(sessionIds)).toEqual(new Map());
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
     }
   });
 });

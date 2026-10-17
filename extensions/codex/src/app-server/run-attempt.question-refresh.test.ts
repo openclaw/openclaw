@@ -34,8 +34,8 @@ setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt question refresh", () => {
   beforeEach(() => {
-    // Keep cold fixture setup from expiring the turn before its question can be published.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    // Keep both deadline clocks paused during cold asynchronous fixture setup.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   });
 
   it.each([
@@ -118,7 +118,11 @@ describe("runCodexAppServerAttempt question refresh", () => {
       },
     });
 
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
+    // Flush the delivery task without advancing the run deadline during cold async setup.
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), {
+      ...fastWait,
+      interval: 0,
+    });
     await waitAndQueueActiveRunMessage(params.sessionId, "tool progress", { debounceMs: 0 });
     await vi.waitFor(
       () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/steer"),

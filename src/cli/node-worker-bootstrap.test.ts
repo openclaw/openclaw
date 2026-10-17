@@ -32,6 +32,7 @@ import {
   initializeNativeOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureCliExecutionBootstrap } from "./command-execution-startup.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 import { testApi as configGuardTestApi } from "./program/config-guard.js";
@@ -140,7 +141,7 @@ function readGatewayState() {
   return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
     const query = getNodeSqliteKysely<DB>(db);
     return {
-      version: readSqliteUserVersion(db),
+      version: readSqliteUserVersion(requireNativeSqliteDatabase(db)),
       // Includes the installed plugin index and Doctor's state/startup checkpoints.
       machine: executeSqliteQuerySync(
         db,

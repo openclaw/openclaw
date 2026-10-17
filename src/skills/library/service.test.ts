@@ -22,6 +22,7 @@ import {
 import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
@@ -228,7 +229,7 @@ describe("profile-owned skill publication and selection", () => {
     const { alice, options } = fixture();
     await saveSkillLibrary(alice, draft(), options);
     const pins = await seedSkillLibrarySelection(alice, options);
-    const { db } = openOpenClawStateDatabase(options);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
     db.setAuthorizer((action, table, column) =>
       action === constants.SQLITE_READ &&
       table === "skill_library_revisions" &&
@@ -313,16 +314,23 @@ describe("profile-owned skill publication and selection", () => {
       skillId,
       revision,
       ownerProfileId: null,
+      ownerLabel: "Team",
       authorProfileId: alice.profileId,
+      shared: true,
+      canEdit: true,
     });
     await expectAnonymousReadOnly();
     expect(
       (await listSkillLibrary(actor(undefined, true), { scope: "mine" }, options)).entries,
     ).toEqual([]);
-    await mutateSkillLibrary(
+    const removed = await mutateSkillLibrary(
       admin,
       { skillId, expectedRevision: revision, action: "remove" },
       options,
+    );
+    expect(removed).toMatchObject({ state: "removed", entry: { removed: true } });
+    expect((await readSkillLibrary(admin, skillId, undefined, options)).entry).toEqual(
+      removed.entry,
     );
     expect((await listSkillLibrary(bob, {}, options)).entries).toEqual([]);
     expect(loadSkillLibrarySelection(selection, options)[0]?.skill.filePath).toContain(revision);
@@ -340,6 +348,50 @@ describe("profile-owned skill publication and selection", () => {
     expect(bytes).toEqual(Buffer.from([0, 255, 128]));
   });
 
+  it("returns committed flags and relinquishes personal edit access on transfer", async () => {
+    const { options, alice, admin } = fixture();
+    const created = await saveSkillLibrary(alice, draft(), options);
+    const { skillId, revision } = created.entry;
+    for (const [action, shared, enabled] of [
+      ["disable", false, false],
+      ["share", true, false],
+      ["enable", true, true],
+      ["unshare", false, true],
+    ] as const) {
+      const receipt = await mutateSkillLibrary(
+        alice,
+        { skillId, expectedRevision: revision, action },
+        options,
+      );
+      expect(receipt.entry).toEqual({
+        ...created.entry,
+        shared,
+        enabled,
+        updatedAt: expect.any(Number),
+      });
+      expect((await readSkillLibrary(alice, skillId, undefined, options)).entry).toEqual(
+        receipt.entry,
+      );
+    }
+    const personalAdmin = { ...admin, namespace: "personal" as const };
+    const transferred = await mutateSkillLibrary(
+      personalAdmin,
+      { skillId, expectedRevision: revision, action: "transfer" },
+      options,
+    );
+    expect(transferred.entry).toEqual({
+      ...created.entry,
+      ownerProfileId: null,
+      ownerLabel: "Team",
+      shared: true,
+      canEdit: false,
+      updatedAt: expect.any(Number),
+    });
+    expect((await readSkillLibrary(personalAdmin, skillId, undefined, options)).entry).toEqual(
+      transferred.entry,
+    );
+  });
+
   it("makes identical saves a no-op, rejects racing writers, and leaves existing pins on the old bytes", async () => {
     const { options, alice } = fixture();
     const created = await saveSkillLibrary(alice, draft(), options);
@@ -353,7 +405,12 @@ describe("profile-owned skill publication and selection", () => {
       ["first", "second"].map((body) =>
         saveSkillLibrary(
           alice,
-          { ...draft(), skillId, expectedRevision: revision, content: `${content}\n${body}` },
+          {
+            ...draft(),
+            skillId,
+            expectedRevision: revision,
+            content: content.replace("A reusable test procedure", `${body} revision`),
+          },
           options,
         ),
       ),
@@ -370,6 +427,7 @@ describe("profile-owned skill publication and selection", () => {
       reason: { code: "CONFLICT" },
     });
     expect(current.revision).not.toBe(revision);
+    expect(current.description).not.toBe(created.entry.description);
     const staleMutation = mutateSkillLibrary(
       alice,
       { action: "disable", skillId, expectedRevision: revision },
@@ -387,12 +445,16 @@ describe("profile-owned skill publication and selection", () => {
       options,
     );
     expect(refreshed[0]?.revision).toBe(current.revision);
-    await mutateSkillLibrary(
+    const rolledBack = await mutateSkillLibrary(
       alice,
       { skillId, expectedRevision: current.revision, action: "rollback", revision },
       options,
     );
-    expect((await readSkillLibrary(alice, skillId, undefined, options)).content).toBe(content);
+    expect(rolledBack.entry).toMatchObject({ revision, description: created.entry.description });
+    expect(await readSkillLibrary(alice, skillId, undefined, options)).toMatchObject({
+      content,
+      entry: rolledBack.entry,
+    });
   });
 
   it("rejects lost authority after asynchronous publication work without publishing a pointer", async () => {
@@ -893,7 +955,7 @@ describe("library admission and imports", () => {
     expect(library.defaultSelectionNotice).toContain("detach");
     expect(selected).toHaveLength(64);
     const revisionReads = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase(options).db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
       ["revisions"],
       (sql) =>
         sql.startsWith("select ") && sql.includes('from "skill_library_revisions"')

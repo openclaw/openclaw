@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showInputDialog } from "./input-dialog.ts";
@@ -98,6 +99,7 @@ describe("showInputDialog", () => {
     expect(submit).not.toHaveBeenCalled();
 
     await type("  Client work  ");
+    expect(dialogInput().value).toBe("  Client work  ");
     expect(findButton("Create group").disabled).toBe(false);
     submitForm();
 
@@ -145,6 +147,7 @@ describe("showInputDialog", () => {
     submitForm();
     submitForm();
     expect(submit).toHaveBeenCalledOnce();
+    flush();
     expect(dialogInput().disabled).toBe(true);
 
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });
@@ -157,7 +160,7 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it.each(["synchronous"])(
+  it.each(["synchronous", "asynchronous"])(
     "recovers from a %s failure without discarding the input",
     async (mode) => {
       const submit = vi
@@ -181,6 +184,7 @@ describe("showInputDialog", () => {
       expect(dialogInput().disabled).toBe(false);
       expect(dialogInput().value).toBe("Client work");
       expect(findButton("Create group").disabled).toBe(false);
+      expect(document.activeElement).toBe(dialogInput());
 
       submitForm();
       await closed;

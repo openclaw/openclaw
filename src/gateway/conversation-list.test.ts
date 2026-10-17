@@ -12,7 +12,10 @@ import {
   readConversation,
   resolveCurrentSessionPrimaryConversation,
 } from "../config/sessions/conversation-registry.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
   targetDiscoveryLane,
@@ -512,15 +515,15 @@ describe("worker conversation reads", () => {
     },
   );
 
-  it("keeps process-held incognito conversations with their native owner", async () => {
-    const native = {
+  it("keeps process-held incognito conversations with their memory owner", async () => {
+    const memory = {
       agentId: "main",
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
       sessionKey: "agent:main:dashboard:incognito-conversation-read",
       sessionId: "incognito-conversation-read",
     };
-    replaceSessionEntrySync(native, {
-      sessionId: native.sessionId,
+    await replaceSessionEntry(memory, {
+      sessionId: memory.sessionId,
       updatedAt: 100,
       chatType: "channel",
       delivery: {
@@ -537,14 +540,14 @@ describe("worker conversation reads", () => {
     const worker = vi.spyOn(historyLane.pool, "run");
     const prepared = await prepareConversationRegistryScope({
       agentId: "main",
-      config: { session: { store: native.storePath } },
+      config: { session: { store: memory.storePath } },
     });
     const rows = await listConversations(prepared);
     expect(rows).toEqual([
-      expect.objectContaining({ sessionId: native.sessionId, sessionKey: native.sessionKey }),
+      expect.objectContaining({ sessionId: memory.sessionId, sessionKey: memory.sessionKey }),
     ]);
-    expect(await resolveCurrentSessionPrimaryConversation(native)).toEqual(rows[0]);
+    expect(await resolveCurrentSessionPrimaryConversation(memory)).toEqual(rows[0]);
     expect(worker).not.toHaveBeenCalled();
-    await expect(fs.stat(native.storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(memory.storePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

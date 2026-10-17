@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as providerRuntime from "../plugins/provider-runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createApiKeyCredential,
   createAuthProfileStoreFixture as authStore,
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { createOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 
 const authProfileMocks = vi.hoisted(() => ({ resolveApiKeyForProfile: vi.fn() }));
 vi.mock("./auth-profiles.js", async (importActual) => ({
@@ -13,9 +16,52 @@ vi.mock("./auth-profiles.js", async (importActual) => ({
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
 }));
 const { resolveApiKeyForProviderCore } = await import("./model-auth.js");
+beforeAll(() => {
+  prepareSharedAuthStoreOwnershipForNative();
+});
 afterEach(() => authProfileMocks.resolveApiKeyForProfile.mockReset());
 
 describe("resolveApiKeyForProviderCore OAuth refresh failure ordering", () => {
+  it("does not restore synthetic auth when the preferred OAuth profile fails to refresh", async () => {
+    const provider = "custom-auth";
+    const profileId = "custom-auth:synthetic";
+    const oauthProfileId = "custom-auth:oauth-refresh";
+    const refreshFailure = new OAuthRefreshFailureError({
+      provider,
+      profileId: oauthProfileId,
+      message: "OAuth token refresh failed for custom-auth: expired refresh credential",
+    });
+    const deferSyntheticAuth = vi
+      .spyOn(providerRuntime, "shouldDeferProviderSyntheticProfileAuthWithPlugin")
+      .mockImplementation(({ context }) => context.resolvedApiKey === "synthetic-defer");
+    authProfileMocks.resolveApiKeyForProfile.mockImplementation(
+      async ({ profileId: requestedProfileId }) => {
+        if (requestedProfileId === profileId) {
+          return { apiKey: "synthetic-defer", provider, profileId };
+        }
+        throw refreshFailure;
+      },
+    );
+    try {
+      await expect(
+        resolveApiKeyForProviderCore({
+          provider,
+          profileId,
+          cfg: {
+            plugins: { enabled: false },
+            auth: { order: { [provider]: [oauthProfileId] } },
+          },
+          store: authStore({
+            [profileId]: createApiKeyCredential(provider, "synthetic-defer"),
+            [oauthProfileId]: createOAuthRefreshCredential({ provider, expires: 1 }),
+          }),
+        }),
+      ).rejects.toBe(refreshFailure);
+    } finally {
+      deferSyntheticAuth.mockRestore();
+    }
+  });
+
   it("does not allow a locked OAuth profile to resolve as another profile", async () => {
     const profileId = "openai:default";
     authProfileMocks.resolveApiKeyForProfile.mockResolvedValueOnce({

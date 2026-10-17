@@ -47,9 +47,9 @@ describe("gateway board provider lifecycle", () => {
     expect(provider.snapshot$.value).toEqual(current);
   });
 
-  it.each(["reconnect"] as const)(
-    "stops definitive unavailable polling until %s without discarding its snapshot",
-    async () => {
+  it.each(["UNAVAILABLE", "FORBIDDEN"] as const)(
+    "stops definitive %s polling until reconnect without discarding its snapshot",
+    async (code) => {
       vi.useFakeTimers();
       const initial = {
         sessionKey: "agent:main:unavailable",
@@ -59,7 +59,7 @@ describe("gateway board provider lifecycle", () => {
       };
       const recovered = { ...initial, revision: 2 };
       const unavailable = new GatewayProtocolRequestError({
-        code: "UNAVAILABLE",
+        code,
         message: "Session dashboard unavailable",
         retryable: false,
       });

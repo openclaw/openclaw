@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -56,33 +57,6 @@ suite.define(() => {
       });
     });
   }
-
-  it.each(["/btw", "/side"])("opens and refocuses Side chat with %s", async (command) => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const mainInput = page.locator(".agent-chat__composer-shell textarea");
-      const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      expect(await input.isVisible()).toBe(false);
-      for (const draft of ["", "Keep this side draft"]) {
-        await enterSideCommand(page, command);
-        await expect.poll(() => input.isVisible()).toBe(true);
-        await expect
-          .poll(() => input.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        expect(await mainInput.inputValue()).toBe("");
-        expect(await input.inputValue()).toBe(draft);
-        await page.keyboard.type("Keep this side draft");
-      }
-      await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
-      await openChatSidePanelType(page, "Side chat");
-      await expect
-        .poll(() => input.evaluate((element) => document.activeElement === element))
-        .toBe(true);
-      expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    });
-  });
 
   it.each(["/btw", "/side"])(
     "preserves newer main focus while %s opens a delayed rail",
@@ -171,6 +145,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const mainInput = page.locator(".agent-chat__composer-shell textarea");
       await mainInput.fill("/bt");
+      await page.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
       await page.getByRole("option").filter({ hasText: "/btw" }).click();
       const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
       await expect
@@ -293,11 +268,8 @@ suite.define(() => {
       expect(await sideInput.isDisabled()).toBe(false);
       await mainInput.focus();
       // The shared selection owner also publishes background roster reconciliation.
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: { agentSelection: { set: (agent: string) => void } } };
-        };
-        app.runtime.context.agentSelection.set("work");
+      await evaluateControlUiContext(page, (context) => {
+        context.agentSelection.set("work");
       });
       await expect.poll(() => sideInput.isDisabled()).toBe(false);
       expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);

@@ -15,7 +15,8 @@ export type CronRunHistorySource = {
 export async function maintainCronRunHistory(
   context: OpenClawStateWorkerContext,
   assertCurrent: () => void,
-): Promise<void> {
+): Promise<{ nextSweepAtMs: number | null }> {
+  let nextSweepAtMs: number | null = null;
   await runCronRuntimeMutation({
     context,
     type: "cron.maintainHistory",
@@ -25,8 +26,11 @@ export async function maintainCronRunHistory(
       nowMs: Date.now(),
       protectedJobIds: listActiveCronJobIds(),
     },
-    publish() {},
+    publish(outcome) {
+      nextSweepAtMs = outcome.nextSweepAtMs;
+    },
   });
+  return { nextSweepAtMs };
 }
 
 export async function recordCronRun(
@@ -34,7 +38,6 @@ export async function recordCronRun(
   source?: CronRunHistorySource,
 ): Promise<void> {
   const context = source?.context ?? captureOpenClawStateWorkerContext();
-  const captured = structuredClone(input);
   const assertCurrent = () => {
     context.admission.assertCurrent();
   };
@@ -43,7 +46,7 @@ export async function recordCronRun(
     (scope) => {
       // Caller retirement after dispatch may race history; committed outcomes remain useful.
       assertCurrent();
-      return scope.execute({ type: "cron.recordRun", input: captured });
+      return scope.execute({ type: "cron.recordRun", input });
     },
     { assertCurrent },
   );

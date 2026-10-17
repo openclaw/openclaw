@@ -27,12 +27,14 @@ import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 
 export function createSubscriptionTestFixture() {
@@ -378,8 +380,90 @@ export function registerAuditSubscriptionTests(params: {
 
 export function registerSubscriptionRegistrationTests(
   start: typeof startGatewayEventSubscriptions,
+  prepareTerminalWrite: (terminal: Promise<void>) => void,
 ) {
   const { createParams } = createSubscriptionTestFixture();
+  it.each(["fulfilled", "rejected"] as const)(
+    "joins the subscription-owned terminal write during registration cleanup and restart (%s)",
+    async (outcome) => {
+      const params = createParams();
+      const runId = "terminal-cleanup-restart";
+      const sessionKey = "agent:main:main";
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId: "terminal-cleanup-session",
+        sessionKey,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
+      const terminal = createDeferred();
+      const failure = new Error("terminal write failed");
+      prepareTerminalWrite(terminal.promise);
+      const unsubs = start(params);
+      const marker =
+        vi.fn<
+          NonNullable<
+            Parameters<typeof prepareGatewayRunShutdown>[0]["markMainSessionsAbortedForRestart"]
+          >
+        >();
+      try {
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          sessionKey,
+          sessionId: registration.entry.sessionId,
+          lifecycleGeneration: registration.entry.lifecycleGeneration,
+          data: { phase: "end", endedAt: Date.now() },
+        });
+        const persistence = registration.entry.projectSessionTerminalPersistence;
+        expect(persistence).toBeInstanceOf(Promise);
+        registration.cleanup();
+        expect(params.chatAbortControllers.get(runId)).toBe(registration.entry);
+        const shutdown = prepareGatewayRunShutdown({
+          ...params,
+          resolveGatewayContext: () => undefined,
+          chatQueuedTurns: new Map(),
+          removeChatRun: (sessionId, clientRunId, key) =>
+            params.chatRunState.registry.remove(sessionId, clientRunId, key),
+          getPendingReplyCount: () => 0,
+          timeoutMs: 0,
+          warnings: [],
+          markMainSessionsAbortedForRestart: marker,
+        });
+        expect(marker).not.toHaveBeenCalled();
+        if (outcome === "fulfilled") {
+          terminal.resolve();
+        } else {
+          terminal.reject(failure);
+        }
+        await shutdown;
+        await unsubs.agentUnsub();
+        expect(params.chatAbortControllers.has(runId)).toBe(false);
+        expect(registration.entry.projectSessionTerminalPersisted).toBe(outcome === "fulfilled");
+        expect(marker).toHaveBeenCalledOnce();
+        expect(marker.mock.calls[0]?.[0]?.activeRuns).toEqual(
+          outcome === "fulfilled"
+            ? []
+            : [
+                expect.objectContaining({
+                  runId,
+                  sessionKey,
+                  sessionId: registration.entry.sessionId,
+                }),
+              ],
+        );
+        if (outcome === "rejected") {
+          await expect(waitForChatAbortTerminalPersistence(registration.entry)).rejects.toBe(
+            failure,
+          );
+        }
+      } finally {
+        terminal.resolve();
+        await unsubs.agentUnsub();
+        registration.cleanup();
+      }
+    },
+  );
+
   it("does not mark a reentrant replacement terminal from the previous claim", () => {
     const params = createParams();
     const runId = "replaced-terminal-claim";

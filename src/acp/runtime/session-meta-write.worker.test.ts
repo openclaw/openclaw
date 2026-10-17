@@ -28,6 +28,7 @@ import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryWorker from "./session-meta-entry.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import { readAcpSessionEntryAsync } from "./session-meta-read.js";
 import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
 import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "./session-meta.js";
@@ -134,23 +135,12 @@ it.each(["incognito", "file"] as const)(
             ? "agent:main:dashboard:incognito-private"
             : "agent:main:acp:worker",
         };
-        if (incognito) {
-          await replaceSessionEntry(scope, {
-            sessionId: "private-session",
-            lifecycleRevision: "private-revision",
-            updatedAt: 100,
-            label: "private-session-label",
-            skillsSnapshot: { prompt: "private-session-prompt", skills: [] },
-          });
-        }
-        const initial = incognito ? loadExactSessionEntry(scope)?.entry : undefined;
         const paths = [
           resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
           resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
         ].flatMap((database) => [database, `${database}-wal`, `${database}-shm`]);
         paths.push(path.join(state.sessionsDir("main"), "sessions.json"));
         if (incognito) {
-          expect(initial).toBeDefined();
           expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
         }
         const observe = observeHostDataSql();
@@ -200,7 +190,7 @@ it.each(["incognito", "file"] as const)(
             throw new Error("Expected the initialized ACP session");
           }
           if (incognito) {
-            expect(readAcpSessionEntry(scope)?.acp).toEqual(META);
+            expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(META);
           } else {
             expect(await readMetadata(created)).toEqual([META]);
           }
@@ -233,7 +223,7 @@ it.each(["incognito", "file"] as const)(
             expect(updated?.acp).toEqual(updatedMeta);
             expect(observedAcp.at(-1)?.acp).toEqual(updatedMeta);
             if (incognito) {
-              expect(readAcpSessionEntry(scope)?.acp).toEqual(updatedMeta);
+              expect((await readAcpSessionEntryAsync(scope))?.acp).toEqual(updatedMeta);
             } else {
               expect(await readMetadata(created)).toEqual([updatedMeta]);
               expect(retainedMembership.length).toBeGreaterThan(0);
@@ -248,34 +238,33 @@ it.each(["incognito", "file"] as const)(
           expect(initialize).toHaveBeenCalledOnce();
           expect(update).toHaveBeenCalledOnce();
           expect(update.mock.calls[0]?.[0]).toEqual(META);
-          const cleared = await upsertAcpSessionMeta({ ...scope, mutate: () => null });
-          expect(cleared?.acp).toBeUndefined();
-          expect(observedAcp.at(-1)?.acp).toBeNull();
           if (!incognito) {
-            expect(await readMetadata(created)).toEqual([null]);
-            expect(observe.queries).toEqual([]);
             expect(maintenance.mock.calls.length).toBeGreaterThan(0);
             expect(
               maintenance.mock.calls.every(([input]) => input.maintenanceConfig?.maxEntries === 37),
             ).toBe(true);
           }
+          maintenance.mockClear();
+          const cleared = await upsertAcpSessionMeta({ ...scope, mutate: () => null });
+          expect(cleared?.acp).toBeUndefined();
+          expect(observedAcp.at(-1)?.acp).toBeNull();
+          if (!incognito) {
+            expect(await readMetadata(created)).toEqual([null]);
+          }
+          expect(maintenance).not.toHaveBeenCalled();
+          expect(observe.queries).toEqual([]);
         } finally {
           releaseFacts();
           releaseObservers();
           observe.restore();
           maintenance.mockRestore();
         }
-        expect(readAcpSessionEntry(scope)?.acp).toBeUndefined();
-        const persisted = loadExactSessionEntry(scope)?.entry;
+        const result = await readAcpSessionEntryAsync(scope);
+        expect(result?.acp).toBeUndefined();
+        const persisted = result?.entry;
         expect(persisted?.sessionId).toBeTruthy();
         expect(persisted?.acp).toBeUndefined();
         if (incognito) {
-          expect(persisted).toMatchObject({
-            sessionId: initial?.sessionId,
-            lifecycleRevision: initial?.lifecycleRevision,
-            label: initial?.label,
-            skillsSnapshot: initial?.skillsSnapshot,
-          });
           expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
         } else {
           expect(
@@ -289,7 +278,7 @@ it.each(["incognito", "file"] as const)(
               ...invalid,
               mutate: () => ({ ...META, uncloneable: () => undefined }),
             }),
-          ).rejects.toThrow(/could not be cloned/);
+          ).rejects.toMatchObject({ name: "DataCloneError" });
           expect(loadExactSessionEntry(invalid)?.entry).toBeUndefined();
         }
       },

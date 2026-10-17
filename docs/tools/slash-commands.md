@@ -550,7 +550,7 @@ the command asks the owner to retry from a direct chat.
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
-/plugins install clawhub:<package>
+/plugins install <package>
 /plugins install npm:@openclaw/<official-package>
 /plugins install npm:<package> --force
 /plugins install git:<repository>@<ref> --force
@@ -561,6 +561,8 @@ plugin lifecycle and report the runtime application result without restarting it
 New agent turns use the updated plugin runtime. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
+Package specs default to ClawHub. Bare plugin ids without a version or tag
+retain the CLI's bundled and official catalog shortcuts. Use `npm:<package>` to select npm explicitly.
 Trusted ClawHub and official-catalog installs do not need a provenance acknowledgement. Arbitrary npm,
 git, archive, `npm-pack:`, and local path sources show a provenance warning and
 require a trailing `--force` after you review the source. This flag acknowledges
@@ -576,7 +578,7 @@ returns the plugin's declared capabilities and an exact retry command. Review
 that reply, then rerun with `--accept-capabilities`:
 
 ```text
-/plugins install clawhub:<package> --accept-capabilities
+/plugins install <package> --accept-capabilities
 /plugins enable <plugin-id> --accept-capabilities
 ```
 

@@ -317,6 +317,28 @@ describe("GatewayClient socket factory recovery", () => {
     client.stop();
   });
 
+  it("releases a loopback proxy bypass when WebSocket construction rejects the URL", () => {
+    vi.useFakeTimers();
+    const unregister = vi.fn();
+    const registerGatewayLoopbackBypass = vi.fn(() => unregister);
+    const onConnectError = vi.fn<(error: Error) => void>();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789/#invalid-fragment",
+      onConnectError,
+      hostDeps: { registerGatewayLoopbackBypass },
+    });
+
+    client.start();
+
+    expect(registerGatewayLoopbackBypass).toHaveBeenCalledOnce();
+    expect(unregister).toHaveBeenCalledOnce();
+    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "The URL contains a fragment identifier" }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    client.stop();
+  });
+
   it("keeps a loopback proxy policy failure terminal and observable", () => {
     vi.useFakeTimers();
     const registerGatewayLoopbackBypass = vi.fn(() => {

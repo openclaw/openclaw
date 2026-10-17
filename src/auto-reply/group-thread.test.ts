@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import {
   readAgentRunTerminalOutcome,
   recordAgentRunTerminalOutcome,
@@ -142,7 +143,10 @@ function dispatch(
       const ledger = createReplyTurnLedger(turn.dispatcher);
       let final = 0;
       for (const replyText of replies) {
-        const payload = { text: replyText };
+        const payload = { text: prepareAgentRunTerminalReply({ rawText: replyText }).text };
+        if (!payload.text) {
+          continue;
+        }
         const delivery = params.prepared
           ? ledger.sendPreparedQueued(
               "final",

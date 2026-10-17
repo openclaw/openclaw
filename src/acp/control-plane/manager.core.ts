@@ -3,6 +3,7 @@ import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { recordSubagentTerminalState } from "../../sessions/subagent-terminal-state.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
@@ -112,12 +113,17 @@ export class AcpSessionManager {
     });
   }
 
-  /** @deprecated Use resolveSessionAsync; retained for the v2026.9.4 Plugin SDK contract. */
+  /** @deprecated Use resolveSessionAsync; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   resolveSession(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
     agentId?: string;
   }): AcpSessionResolution {
+    warnPluginSdkDeprecation({
+      family: "acp-session",
+      method: "AcpSessionManager.resolveSession",
+      replacement: "AcpSessionManager.resolveSessionAsync",
+    });
     if (!params.sessionKey.trim()) {
       return { kind: "none", sessionKey: "" };
     }

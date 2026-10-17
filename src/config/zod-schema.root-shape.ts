@@ -109,7 +109,7 @@ export const OpenClawSchemaShape = {
       cdpUrl: z.string().optional(),
       /** Override the browser executable path (all platforms). */
       executablePath: z.string().optional(),
-      /** Start Chrome headless (best-effort). Default: false */
+      /** Local managed browsers default to headless; false requests a visible window. */
       headless: z.boolean().optional(),
       /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
       noSandbox: z.boolean().optional(),
@@ -531,7 +531,7 @@ export const OpenClawSchemaShape = {
            * sit outside the configured source root.
            */
           allowSymlinkTargets: z.array(z.string()).optional(),
-          /** Watch skill folders for changes and refresh the skills snapshot. */
+          /** Enable passive skill rescans; explicit changes and startup still refresh immediately. */
           watch: z.boolean().optional(),
         })
         .optional(),

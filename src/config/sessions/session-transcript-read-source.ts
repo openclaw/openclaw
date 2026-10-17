@@ -4,16 +4,8 @@ import {
   type DatabaseFileIdentity,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
-import { captureExistingOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
@@ -21,7 +13,6 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -55,13 +46,13 @@ export type SessionTranscriptWorkerReadSource = {
   assertCurrent: () => void;
 };
 
-/** Retain the original physical transcript through preparation, reading and consumption. */
+/** Read through an anchor locator while retaining the requested physical source and its authority. */
 export async function withSessionTranscriptReadSource<T>(
   scope: SessionTranscriptReadScope,
-  readInProcess: (scope: SessionTranscriptReadScope) => T | Promise<T>,
   readInWorker: (source: SessionTranscriptWorkerReadSource) => Promise<T>,
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
+  throughStorePath?: string,
 ): Promise<T> {
   const captured = {
     ...scope,
@@ -75,158 +66,100 @@ export async function withSessionTranscriptReadSource<T>(
       captured.defaultAgentId,
   );
   signal?.throwIfAborted();
-  if (
-    isIncognitoSessionKey(captured.sessionKey) ||
-    (captured.storePath &&
-      isIncognitoOpenClawAgentSqlitePath(captured.storePath, { agentId, env: captured.env }))
-  ) {
-    return readInProcess(captured);
-  }
   const storePath =
     captured.storePath ?? resolveOpenClawAgentSqlitePath({ agentId, env: captured.env });
   const selected = getOwnedSessionTranscriptReader(captured);
   const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
-  const exact = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-  // A selected admission and an exact locator borrow the same prepared execution owner.
-  const execution = selected
-    ? captureExistingOpenClawAgentDatabaseExecution(selected.database)
-    : exact.agentId || exact.shared
-      ? captureExistingOpenClawAgentDatabaseExecution({ path: exact.path, env: captured.env })
-      : undefined;
-  let releaseStarted = false;
-  const releaseExecution = () => {
-    releaseStarted = true;
-    return execution?.release();
-  };
-  try {
-    const claim = execution?.capturePreparedGenerationClaim();
-    const readResolved = (
-      resolved: ResolvedTranscriptReadScope & { path: string },
-      identity: DatabasePathIdentity,
-      assertSource: () => void,
-      requestedPaths: readonly string[],
-    ) => {
-      const options = toDatabaseOptions(resolved);
-      return withSessionHistoryWorkerDatabase(
-        { ...options, requestedPaths },
-        async (owner) => {
-          const assertCurrent = () => {
-            assertSource();
-            owner.assertCurrent();
-            claim?.assertCurrent();
-          };
-          assertCurrent();
-          const expectedIdentity = identity.key.startsWith("file:") ? identity : undefined;
-          if (claim && (!expectedIdentity || execution?.agentId !== options.agentId)) {
-            throw new Error("Transcript discovery changed its prepared execution owner");
-          }
-          const preparedReads =
-            execution && claim && expectedIdentity
-              ? createPreparedSessionTranscriptReads({
-                  execution,
-                  claim,
-                  expectedIdentity,
-                  assertCurrent,
-                  reader: owner,
-                })
-              : undefined;
-          try {
-            return await readInWorker({
-              scope: { ...captured, agentId: resolved.agentId, storePath: resolved.path },
-              resolved,
-              owner,
-              preparedReads,
+  const readResolved = (
+    resolved: ResolvedTranscriptReadScope & { path: string },
+    identity: DatabasePathIdentity,
+    assertSource: () => void,
+    requestedPaths: readonly string[],
+  ) => {
+    const expectedIdentity = identity.key.startsWith("file:") ? identity : undefined;
+    const readPath = expectedIdentity ? (throughStorePath ?? resolved.path) : resolved.path;
+    const options = toDatabaseOptions({ ...resolved, path: readPath });
+    return withSessionHistoryWorkerDatabase(
+      { ...options, requestedPaths },
+      async (owner) => {
+        const assertCurrent = () => {
+          assertSource();
+          owner.assertCurrent();
+        };
+        assertCurrent();
+        const preparedReads = expectedIdentity
+          ? createPreparedSessionTranscriptReads({
               expectedIdentity,
               assertCurrent,
-            });
-          } finally {
-            assertCurrent();
-          }
-        },
-        lane,
-      );
+              reader: owner,
+            })
+          : undefined;
+        return await readInWorker({
+          scope: { ...captured, agentId: resolved.agentId, storePath: readPath },
+          resolved,
+          owner,
+          preparedReads,
+          expectedIdentity,
+          assertCurrent,
+        });
+      },
+      lane,
+    );
+  };
+  if (selected) {
+    const assertSource = () => {
+      signal?.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      selected.assertCurrent();
     };
-    if (selected) {
+    assertSource();
+    const identity = readDatabasePathIdentitySync(selected.database.path);
+    if (!identity.key.startsWith("file:")) {
+      throw new Error("Admitted transcript database is no longer available");
+    }
+    return await readResolved(
+      {
+        agentId: selected.logicalAgentId,
+        databaseAgentId: selected.database.agentId,
+        path: identity.canonicalPath,
+        ownerStorePath: storePath,
+        env: selected.database.env,
+        sessionKey: selected.sessionKey,
+        sessionId: captured.sessionId,
+      },
+      identity,
+      assertSource,
+      selected.storePaths,
+    );
+  }
+  const candidates = captureSessionStoreReadCandidates(storePath);
+  const identities = captureSessionStoreCandidateIdentities(candidates);
+  return await withSessionHistoryWorkerReadCandidates(
+    candidates,
+    async (discovery) => {
+      const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
+      const options = toDatabaseOptions(resolved);
+      const databasePath = resolveOpenClawAgentSqlitePath(options);
+      const identity = identities.get(assertSessionStoreReadCandidate(databasePath, candidates));
+      const selectedIdentity = identity ?? readDatabasePathIdentitySync(databasePath);
+      if (!identity && selectedIdentity.key.startsWith("file:")) {
+        throw new Error("Transcript read changed its captured database owner");
+      }
       const assertSource = () => {
         signal?.throwIfAborted();
         context.maintenanceScope?.assertAdmission();
         context.admission.assertCurrent();
-        selected.assertCurrent();
+        discovery.assertCurrent();
       };
       assertSource();
-      const identity = readDatabasePathIdentitySync(selected.database.path);
-      if (!identity.key.startsWith("file:")) {
-        throw new Error("Admitted transcript database is no longer available");
-      }
       return await readResolved(
-        {
-          agentId: selected.logicalAgentId,
-          databaseAgentId: selected.database.agentId,
-          path: identity.canonicalPath,
-          ownerStorePath: storePath,
-          env: selected.database.env,
-          sessionKey: selected.sessionKey,
-          sessionId: captured.sessionId,
-        },
-        identity,
+        { ...resolved, path: selectedIdentity.canonicalPath },
+        selectedIdentity,
         assertSource,
-        selected.storePaths,
+        [storePath],
       );
-    }
-    const candidates = captureSessionStoreReadCandidates(storePath);
-    const identities = captureSessionStoreCandidateIdentities(candidates);
-    return await withSessionHistoryWorkerReadCandidates(
-      candidates,
-      async (discovery) => {
-        try {
-          const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
-          const options = toDatabaseOptions(resolved);
-          const databasePath = resolveOpenClawAgentSqlitePath(options);
-          const identity = identities.get(
-            assertSessionStoreReadCandidate(databasePath, candidates),
-          );
-          const selectedIdentity = identity ?? readDatabasePathIdentitySync(databasePath);
-          if (!identity && selectedIdentity.key.startsWith("file:")) {
-            throw new Error("Transcript read changed its captured database owner");
-          }
-          const assertSource = () => {
-            signal?.throwIfAborted();
-            context.maintenanceScope?.assertAdmission();
-            context.admission.assertCurrent();
-            discovery.assertCurrent();
-            assertSessionStoreReadCandidate(databasePath, candidates);
-            const current = readDatabasePathIdentitySync(databasePath);
-            if (
-              current.key !== selectedIdentity.key ||
-              current.birthtime !== selectedIdentity.birthtime
-            ) {
-              throw new Error("Transcript read changed its captured database owner");
-            }
-          };
-          assertSource();
-          const result = await readResolved(
-            { ...resolved, path: selectedIdentity.canonicalPath },
-            selectedIdentity,
-            assertSource,
-            [storePath],
-          );
-          // Keep alias revocation registered until the borrowed execution has settled.
-          if (execution) {
-            await releaseExecution();
-          }
-          assertSource();
-          return result;
-        } finally {
-          if (execution && !releaseStarted) {
-            await releaseExecution();
-          }
-        }
-      },
-      lane,
-    );
-  } finally {
-    if (execution && !releaseStarted) {
-      await releaseExecution();
-    }
-  }
+    },
+    lane,
+  );
 }

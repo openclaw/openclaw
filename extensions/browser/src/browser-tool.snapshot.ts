@@ -121,6 +121,7 @@ export function wrapBrowserExternalJson(params: {
     truncated: wrapped.truncated,
     safeDetails: {
       ok: true,
+      text: wrapped.text,
       externalContent: {
         untrusted: true,
         source: "browser",
@@ -297,17 +298,18 @@ export async function executeSnapshotAction(params: {
     text: string,
     details: Record<string, unknown>,
   ): Promise<AgentToolResult<unknown>> => {
+    const resultDetails = { ...details, text };
     if (labels && snapshot.format === "ai" && snapshot.imagePath) {
       return await imageResultFromFile({
         label: "browser:snapshot",
         path: snapshot.imagePath,
         extraText: text,
         // Keep model-only screenshots out of automatic channel delivery.
-        details: { ...details, media: { outbound: false } },
+        details: { ...resultDetails, media: { outbound: false } },
         imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
-    return textResult(text, details);
+    return textResult(text, resultDetails);
   };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {

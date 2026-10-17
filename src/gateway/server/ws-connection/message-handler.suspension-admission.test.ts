@@ -48,6 +48,10 @@ vi.mock("../health-state.js", () => ({
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
 }));
+vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
+}));
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 

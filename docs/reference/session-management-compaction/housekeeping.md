@@ -10,10 +10,10 @@ title: "Silent turns and the memory flush"
 
 OpenClaw supports "silent" turns for background tasks where the user should not see intermediate output.
 
-- The assistant starts its output with the exact silent token `NO_REPLY` / `no_reply` to mean "do not deliver a reply to the user." OpenClaw strips/suppresses this in the delivery layer.
-- Exact silent-token suppression is case-insensitive: `NO_REPLY` and `no_reply` both count when the whole payload is just the silent token.
-- As of `2026.1.10`, OpenClaw also suppresses draft/typing streaming when a partial chunk begins with `NO_REPLY`, so silent operations do not leak partial output mid-turn.
-- This is for true background/no-delivery turns only - it is not a shortcut for ordinary actionable user requests.
+- The assistant returns an entire final that trims to uppercase `NO_REPLY` to request no user-visible text. Lowercase, punctuation, quotes, JSON, and trailing tokens remain visible.
+- The terminal producer records the decision and prepares output once; delivery and clients consume that fact instead of parsing text. One literal leading `NO_REPLY\n` removes only that control line and preserves the remainder as visible text.
+- Streaming control buffering belongs to producer preparation, so a possible control line does not leak into drafts or typing activity.
+- Use this for intentional silence, not missing output. External turns honor it even when a reply was required; internal result-required turns still need an answer.
 
 ## Pre-compaction memory flush
 
@@ -23,7 +23,7 @@ erase critical context. Memory Core writes `memory/YYYY-MM-DD.md` in the agent
 workspace; other providers can expose their own persistence tools. OpenClaw
 monitors session context usage, and once it crosses a soft threshold below the
 compaction threshold, it sends a silent "write memory now" directive using the
-exact silent token `NO_REPLY` / `no_reply` so the user sees nothing.
+exact silent token `NO_REPLY` so the user sees nothing.
 
 Memory flushing runs against a private, detached view of the conversation. Its
 internal prompts and replies never enter the original transcript, including when

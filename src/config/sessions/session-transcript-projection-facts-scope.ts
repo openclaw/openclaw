@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
@@ -14,10 +14,7 @@ export function withSessionTranscriptProjectionReceipt<T>(
   return projectionReceipts.run(receipt, read);
 }
 
-export function readSessionTranscriptProjectionReceipt(
-  database: { db: DatabaseSync; path: string },
-  sessionId: string,
-) {
+function readCurrentReceipt(database: { db: EngineConnection; path: string }, sessionId: string) {
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
@@ -28,5 +25,29 @@ export function readSessionTranscriptProjectionReceipt(
   ) {
     return undefined;
   }
-  return structuredClone(receipt.facts);
+  return receipt;
+}
+
+export function readSessionTranscriptProjectionReceipt(
+  database: { db: EngineConnection; path: string },
+  sessionId: string,
+) {
+  const receipt = readCurrentReceipt(database, sessionId);
+  return (
+    receipt &&
+    structuredClone({
+      facts: receipt.facts,
+      contextStats: receipt.contextStats,
+      contextOnly: receipt.contextOnly,
+    })
+  );
+}
+
+/** Accounting needs row validity, already established by the complete actor postimage. */
+export function hasSessionTranscriptEntryReceipt(
+  database: { db: EngineConnection; path: string },
+  sessionId: string,
+  sessionKey: string,
+): boolean {
+  return readCurrentReceipt(database, sessionId)?.entrySessionKey === sessionKey;
 }

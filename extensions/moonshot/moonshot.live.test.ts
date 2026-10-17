@@ -1,3 +1,4 @@
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 // Moonshot tests cover moonshot plugin behavior.
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -94,7 +95,7 @@ describeLive("moonshot plugin live", () => {
       },
     } as never);
 
-    let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
+    let result: Record<string, unknown> | undefined;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -117,13 +118,20 @@ describeLive("moonshot plugin live", () => {
     }
 
     expect(result?.provider).toBe("kimi");
-    expect(typeof result?.content).toBe("string");
-    expect((result!.content as string).length).toBeGreaterThan(20);
-    expect(Array.isArray(result?.citations)).toBe(true);
+    expect(result?.count).toBe(1);
+    expect(result?.results).toEqual([
+      expect.objectContaining({
+        title: expect.stringContaining("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+        url: expect.stringMatching(/^https?:\/\//),
+        description: expect.any(String),
+      }),
+    ]);
   }, 180_000);
 });
 
-function resolveMoonshotModels(modelId: string): Model<"openai-completions">[] {
+function resolveMoonshotModels(
+  modelId: string,
+): [Model<"openai-completions">, Model<"openai-completions">] {
   const provider = buildMoonshotProvider();
   // K2.6 still has a documented replay contract outside the recommended model catalog.
   const model =
@@ -237,6 +245,74 @@ describe("moonshot K3 native video live", () => {
     async () => await proveK3NativeVideoRegion(MOONSHOT_CN_BASE_URL, MOONSHOT_CN_API_KEY),
     120_000,
   );
+});
+
+describeModelLive("moonshot typed union branches live", () => {
+  it("accepts typed union branches through the plugin and managed transport", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const model = resolveMoonshotModels("kimi-k2.6")[0];
+    const context: Context = {
+      messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }],
+      tools: [
+        {
+          name: "probe",
+          description: "Accept a string or number.",
+          parameters: Type.Unsafe({
+            type: "object",
+            properties: { v: { anyOf: [{ enum: ["x", "y"] }, { minimum: 1 }] } },
+            required: ["v"],
+          }),
+        },
+      ],
+    };
+
+    // The SDK facade installs the production host before the managed transport reuses it.
+    for (const route of ["plugin", "managed"] as const) {
+      const wrappedStream = provider.wrapStreamFn?.({
+        provider: "moonshot",
+        modelId: model.id,
+        thinkingLevel: "off",
+        streamFn: route === "plugin" ? streamSimple : createOpenAICompletionsTransportStreamFn(),
+      } as never);
+      if (!wrappedStream) {
+        throw new Error("Moonshot provider did not register a stream wrapper");
+      }
+      let payload: unknown;
+      const response = await collectDoneMessage(
+        wrappedStream(model, context, {
+          apiKey: MOONSHOT_API_KEY,
+          maxTokens: 128,
+          onPayload: (value) => {
+            payload = value;
+          },
+        }),
+      );
+
+      expect(response.stopReason, route).not.toBe("error");
+      expect(payload, route).toMatchObject({
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "probe",
+              parameters: {
+                type: "object",
+                properties: {
+                  v: {
+                    anyOf: [
+                      { type: "string", enum: ["x", "y"] },
+                      { type: "number", minimum: 1 },
+                    ],
+                  },
+                },
+                required: ["v"],
+              },
+            },
+          },
+        ],
+      });
+    }
+  }, 120_000);
 });
 
 describeModelLive("moonshot K2.6 replay live", () => {

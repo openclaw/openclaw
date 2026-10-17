@@ -1,7 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished as onVitestTestFinished,
+  vi,
+} from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
@@ -34,13 +41,16 @@ import {
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
-import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
+import {
+  parseRemoteWorkspaceManifestEnvelope,
+  type RemoteWorkspaceManifestEnvelope,
+} from "./workspace-hash-memo.js";
+import type { WorkspaceComputationHashResult } from "./workspace-manifest-computation.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
-const workspaceDebug = vi.hoisted(() => vi.fn());
 const tunnelWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
@@ -49,7 +59,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
       if (subsystem === "gateway/worker-workspace") {
-        return { ...logger, debug: workspaceDebug, info: workspaceInfo };
+        return { ...logger, info: workspaceInfo };
       }
       return subsystem === "gateway/worker-tunnel" ? { ...logger, warn: tunnelWarn } : logger;
     },
@@ -59,137 +69,186 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("node worker tunnel manager", () => {
-  it.each([
+  it.for<[string, boolean]>([
     ["gateway-push", true],
     ["published-origin", false],
     ["prepared-project", false],
-  ])("preserves the Gateway Git author through %s workspaces", async (syncPath, dirty) => {
-    const localPath = tempDirs.make("node-worker-git-author-gateway-");
-    const remoteWorkspaceDir = path.join(tempDirs.make("node-worker-git-author-remote-"), "worker");
-    const gitEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-    };
-    delete gitEnv.GIT_AUTHOR_NAME;
-    delete gitEnv.GIT_AUTHOR_EMAIL;
-    delete gitEnv.GIT_COMMITTER_NAME;
-    delete gitEnv.GIT_COMMITTER_EMAIL;
-    const localGit = (args: string[]) =>
-      execFileSync("git", ["-C", localPath, ...args], { encoding: "utf8", env: gitEnv }).trim();
-    localGit(["init", "--quiet"]);
-    localGit(["config", "user.name", "Gateway Repository Author"]);
-    localGit(["config", "user.email", "gateway-author@example.invalid"]);
-    await fs.writeFile(path.join(localPath, "tracked.txt"), "base\n");
-    localGit(["add", "tracked.txt"]);
-    localGit(["commit", "--quiet", "-m", "base"]);
-    localGit(["remote", "add", "origin", "https://example.invalid/repository.git"]);
-    if (dirty) {
-      await fs.writeFile(path.join(localPath, "tracked.txt"), "gateway change\n");
-    }
-    const baseCommit = localGit(["rev-parse", "HEAD"]);
-    const snapshot = workspaceSnapshot(localPath, { version: 1, baseCommit, entries: [] });
-    const { manifestRef } = snapshot;
-    const nodeTransport = transport();
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async ({ command, params }) => {
-      if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
-        return { ok: true, payloadJSON: "null" };
-      }
-      const input = params as NodeWorkerWorkspaceExecInput;
-      let stdout = "";
-      let stderr = "";
-      let code = 0;
-      if (input.transfer || input.argv.includes("clone")) {
-        const clone = ["clone", "--quiet", "--no-checkout", localPath, remoteWorkspaceDir];
-        execFileSync("git", clone, { env: gitEnv });
-        if (input.transfer) {
-          execFileSync("git", ["-C", remoteWorkspaceDir, "checkout", "--quiet", baseCommit], {
-            env: gitEnv,
-          });
-          stdout = `${manifestRef}\n`;
-        }
-      } else if (input.argv[0] === "git" || input.argv.includes("--")) {
-        const result = spawnSync(input.argv[0]!, input.argv.slice(1), {
+  ])(
+    "preserves the Gateway Git author through %s workspaces",
+    async ([syncPath, dirty], { onTestFinished }) => {
+      const localPath = tempDirs.make("node-worker-git-author-gateway-");
+      const remoteWorkspaceDir = path.join(
+        tempDirs.make("node-worker-git-author-remote-"),
+        "worker",
+      );
+      const gitEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_AUTHOR_NAME: "Gateway Repository Author",
+        GIT_AUTHOR_EMAIL: "gateway-author@example.invalid",
+        GIT_COMMITTER_NAME: "Gateway Repository Author",
+        GIT_COMMITTER_EMAIL: "gateway-author@example.invalid",
+      };
+      const sourceIdentityArgs = [
+        "-c",
+        "user.name=Gateway Repository Author",
+        "-c",
+        "user.email=gateway-author@example.invalid",
+      ];
+      // The real fallback reader must see the temporary source identity,
+      // without clearing inherited Git policy or changing process.env.
+      const runCommand = runCommandWithTimeout;
+      const sourceGit = vi
+        .spyOn(await import("../../process/exec.js"), "runCommandWithTimeout")
+        .mockImplementation((argv, options) =>
+          runCommand(
+            argv[0] === "git" && argv[1] === "-C" && argv[2] === localPath
+              ? ["git", ...sourceIdentityArgs, ...argv.slice(1)]
+              : argv,
+            options,
+          ),
+        );
+      onTestFinished(() => sourceGit.mockRestore());
+      const localGit = (args: string[]) =>
+        execFileSync("git", [...sourceIdentityArgs, "-C", localPath, ...args], {
           encoding: "utf8",
           env: gitEnv,
-          cwd: remoteWorkspaceDir,
-          input: input.input,
-        });
-        stdout = result.stdout;
-        stderr = result.stderr;
-        code = result.status ?? 1;
-      } else {
-        stdout = `${manifestRef}\n`;
+        }).trim();
+      localGit(["init", "--quiet"]);
+      localGit(["config", "user.name", "Gateway Repository Author"]);
+      localGit(["config", "user.email", "gateway-author@example.invalid"]);
+      await fs.writeFile(path.join(localPath, "tracked.txt"), "base\n");
+      localGit(["add", "tracked.txt"]);
+      localGit(["commit", "--quiet", "-m", "base"]);
+      localGit(["remote", "add", "origin", "https://example.invalid/repository.git"]);
+      if (dirty) {
+        await fs.writeFile(path.join(localPath, "tracked.txt"), "gateway change\n");
       }
-      return {
-        ok: true,
-        payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, { stdout, stderr, code }),
-      };
-    });
-    nodeTransport.invoke = withWorkspaceDrain(invoke);
-    const transfer = workspaceTransfer({
-      prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
-    });
-    const handle = await createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: environment,
-      listEnvironments: () => [environment()],
-      getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
-      workspaceTransfer: transfer,
-    }).start(startRequest());
-
-    await expect(
-      handle.syncWorkspace({
-        source: {
-          kind: "local",
-          path: localPath,
-          ...(syncPath === "prepared-project" ? { projectKey: "a".repeat(64) } : {}),
-        },
-        sessionId: "session-1",
-        generation: 1,
-        gitAuthor: { name: "Configured Gateway Author" },
-      }),
-    ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
-
-    if (syncPath === "prepared-project") {
-      const commands = invoke.mock.calls.map(
-        ([call]) => call.params as NodeWorkerWorkspaceExecInput,
-      );
-      expect(
-        commands.some(
-          (command) => command.argv.includes("clone") || command.argv.includes("fetch"),
-        ),
-      ).toBe(false);
-      expect(commands.find((command) => command.transfer)?.transfer).toMatchObject({
-        seedKey: workerProjectSeedKey({ key: "a".repeat(64), baseCommit }),
+      const baseCommit = localGit(["rev-parse", "HEAD"]);
+      const snapshot = workspaceSnapshot(localPath, { version: 1, baseCommit, entries: [] });
+      const { manifestRef } = snapshot;
+      const nodeTransport = transport();
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async ({ command, params }) => {
+        if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+          return { ok: true, payloadJSON: "null" };
+        }
+        const input = params as NodeWorkerWorkspaceExecInput;
+        let stdout = "";
+        let stderr = "";
+        let code = 0;
+        if (input.transfer || input.argv.includes("clone")) {
+          const clone = ["clone", "--quiet", "--no-checkout", localPath, remoteWorkspaceDir];
+          execFileSync("git", clone, { env: gitEnv });
+          if (input.transfer) {
+            execFileSync("git", ["-C", remoteWorkspaceDir, "checkout", "--quiet", baseCommit], {
+              env: gitEnv,
+            });
+            stdout = `${manifestRef}\n`;
+          }
+        } else if (input.argv[0] === "git" || input.argv.includes("--")) {
+          const result = spawnSync(input.argv[0]!, input.argv.slice(1), {
+            encoding: "utf8",
+            env: gitEnv,
+            cwd: remoteWorkspaceDir,
+            input: input.input,
+          });
+          stdout = result.stdout;
+          stderr = result.stderr;
+          code = result.status ?? 1;
+        } else {
+          stdout = `${manifestRef}\n`;
+        }
+        return {
+          ok: true,
+          payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, { stdout, stderr, code }),
+        };
       });
-    }
+      nodeTransport.invoke = withWorkspaceDrain(invoke);
+      const transfer = workspaceTransfer({
+        prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
+      });
+      const handle = await createNodeWorkerTunnelManager({
+        gatewayDeviceId: "gateway-device-1",
+        getEnvironment: environment,
+        listEnvironments: () => [environment()],
+        getTransport: () => nodeTransport,
+        launchNodeWorker: vi.fn(),
+        validateWorkerTurn: () => true,
+        workspaceTransfer: transfer,
+      }).start(startRequest());
 
-    const commitArgs = [
-      "-c",
-      "user.useConfigOnly=true",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "worker result",
-    ];
-    const commit = spawnSync("git", ["-C", remoteWorkspaceDir, ...commitArgs], {
-      encoding: "utf8",
-      env: gitEnv,
-    });
-    expect(commit.stderr).not.toContain("Author identity unknown");
-    expect(commit.status).toBe(0);
-    expect(
-      execFileSync("git", ["-C", remoteWorkspaceDir, "show", "-s", "--format=%an <%ae>"], {
+      await expect(
+        handle.syncWorkspace({
+          source: {
+            kind: "local",
+            path: localPath,
+            ...(syncPath === "prepared-project" ? { projectKey: "a".repeat(64) } : {}),
+          },
+          sessionId: "session-1",
+          generation: 1,
+          gitAuthor: { name: "Configured Gateway Author" },
+        }),
+      ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
+
+      if (syncPath === "prepared-project") {
+        const commands = invoke.mock.calls.map(
+          ([call]) => call.params as NodeWorkerWorkspaceExecInput,
+        );
+        expect(
+          commands.some(
+            (command) => command.argv.includes("clone") || command.argv.includes("fetch"),
+          ),
+        ).toBe(false);
+        expect(commands.find((command) => command.transfer)?.transfer).toMatchObject({
+          seedKey: workerProjectSeedKey({ key: "a".repeat(64), baseCommit }),
+        });
+      }
+
+      const readRemoteAuthor = (key: "name" | "email") =>
+        execFileSync(
+          "git",
+          ["-C", remoteWorkspaceDir, "config", "--local", "--get", `user.${key}`],
+          {
+            encoding: "utf8",
+            env: gitEnv,
+          },
+        ).trim();
+      const name = readRemoteAuthor("name");
+      const email = readRemoteAuthor("email");
+      // The simulated node commits with the identity production persisted there;
+      // caller-owned author overrides must not replace that remote fixture context.
+      const commitEnv = {
+        ...gitEnv,
+        GIT_AUTHOR_NAME: name,
+        GIT_AUTHOR_EMAIL: email,
+        GIT_COMMITTER_NAME: name,
+        GIT_COMMITTER_EMAIL: email,
+      };
+      const commitArgs = [
+        "-c",
+        "user.useConfigOnly=true",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "worker result",
+      ];
+      const commit = spawnSync("git", ["-C", remoteWorkspaceDir, ...commitArgs], {
         encoding: "utf8",
-        env: gitEnv,
-      }).trim(),
-    ).toBe("Configured Gateway Author <gateway-author@example.invalid>");
+        env: commitEnv,
+      });
+      expect(commit.stderr).not.toContain("Author identity unknown");
+      expect(commit.status).toBe(0);
+      expect(
+        execFileSync("git", ["-C", remoteWorkspaceDir, "show", "-s", "--format=%an <%ae>"], {
+          encoding: "utf8",
+          env: gitEnv,
+        }).trim(),
+      ).toBe("Configured Gateway Author <gateway-author@example.invalid>");
 
-    await handle.stop();
-  });
+      await handle.stop();
+    },
+  );
 
   it.each(["stop", "stopAll"] as const)(
     "%s fences a pending workspace resolver without waiting for it",
@@ -816,6 +875,7 @@ describe("node worker tunnel manager", () => {
       const nodeTransport = transport();
       const memoInputs: Array<Array<[string, string]>> = [];
       const captureBytes: Array<{ input: number; output: number }> = [];
+      const remoteReports: RemoteWorkspaceManifestEnvelope[] = [];
       nodeTransport.invoke = withWorkspaceDrain(async ({ command, params }) => {
         if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
           return { ok: true, payloadJSON: "null" };
@@ -841,6 +901,7 @@ describe("node worker tunnel manager", () => {
         });
         const { stdout, stderr, code, signal, killed, termination } = result;
         if (input.argv.at(-1) === "memo-v1") {
+          remoteReports.push(parseRemoteWorkspaceManifestEnvelope(stdout));
           captureBytes.push({
             input: Buffer.byteLength(input.input!),
             output: Buffer.byteLength(stdout),
@@ -880,9 +941,16 @@ describe("node worker tunnel manager", () => {
         commit: vi.fn(async () => {}),
         abort: vi.fn(async () => {}),
       };
-      workspaceDebug.mockClear();
+      const workerOperations = vi.spyOn(
+        await import("../../infra/git-worker.js"),
+        "runGitWorkerOperation",
+      );
+      onVitestTestFinished(() => workerOperations.mockRestore());
+      const gatewayReports: WorkspaceComputationHashResult<unknown>[][] = [];
 
       for (let turn = 0; turn < 2; turn += 1) {
+        const firstOperation = workerOperations.mock.results.length;
+        const firstRemoteReport = remoteReports.length;
         const reconciliation = await handle.reconcileWorkspace({
           source: {
             kind: "local",
@@ -894,34 +962,43 @@ describe("node worker tunnel manager", () => {
           baseManifestRef: manifestRef,
         });
         await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+        expect(remoteReports).toHaveLength(firstRemoteReport + 1);
+        const results = await Promise.all(
+          workerOperations.mock.results.slice(firstOperation).map((result) => result.value),
+        );
+        gatewayReports.push(
+          results.flatMap((result) =>
+            result !== null &&
+            typeof result === "object" &&
+            "hashes" in result &&
+            "metrics" in result
+              ? [result]
+              : [],
+          ),
+        );
       }
 
-      const reports = workspaceDebug.mock.calls
-        .filter(([message]) => message === "worker workspace reconcile completed")
-        .map(([, data]) => data as WorkspaceReconcileMetrics);
-      expect(reports).toHaveLength(2);
+      expect(gatewayReports.every((reports) => reports.length > 0)).toBe(true);
       // Turn one hashes the managed worktree; turn two must reuse the
       // placement-owned memo instead of re-hashing every file.
-      expect(reports[0]!.gateway.contentHashCount).toBeGreaterThan(0);
-      expect(reports[1]!.gateway.contentHashCount).toBe(0);
-      expect(reports[1]!.gateway.memoHitCount).toBeGreaterThan(0);
+      expect(gatewayReports[0]!.some((report) => report.metrics.contentHashCount > 0)).toBe(true);
+      expect(gatewayReports[1]!.every((report) => report.metrics.contentHashCount === 0)).toBe(
+        true,
+      );
+      expect(gatewayReports[1]!.some((report) => report.metrics.memoHitCount > 0)).toBe(true);
       const retained = memoInputs[1]!.length;
       const uncached = fileCount - retained;
       expect(retained).toBeGreaterThan(0);
-      expect(reports[0]).toMatchObject({
-        remoteManifestCalls: 1,
-        remoteContentHashCount: fileCount,
-      });
-      expect(reports[1]).toMatchObject({
-        remoteManifestCalls: 1,
-        remoteContentHashCount: uncached,
-        remoteMemoHitCount: retained,
+      expect(remoteReports).toHaveLength(2);
+      expect(remoteReports[0]!.metrics.contentHashCount).toBe(fileCount);
+      expect(remoteReports[1]!.metrics).toMatchObject({
+        contentHashCount: uncached,
+        memoHitCount: retained,
       });
       expect(memoInputs).toHaveLength(2);
       expect(memoInputs[0]).toEqual([]);
       expect(memoInputs.slice(1).every((entries) => entries.length === retained)).toBe(true);
       expect(memoInputs.flat().every(([identity]) => identity.startsWith("worker:"))).toBe(true);
-      expect(reports[1]!.remoteManifestWallDurationMs).toBeGreaterThan(0);
       expect(
         captureBytes.every((bytes) => bytes.input <= NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES),
       ).toBe(true);
@@ -930,7 +1007,7 @@ describe("node worker tunnel manager", () => {
       ).toBe(true);
       if (fileCount > 1) {
         expect(retained).toBeLessThan(fileCount);
-        expect(reports[1]!.remoteMemoTruncatedCount).toBeGreaterThan(0);
+        expect(remoteReports[1]!.metrics.memoTruncatedCount).toBeGreaterThan(0);
       }
 
       await fs.writeFile(path.join(remoteWorkspaceDir, files[0]!), "next  turn\n");

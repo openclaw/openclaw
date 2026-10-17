@@ -53,6 +53,7 @@ export function registerSessionsSendRequesterRetirementTests({
   callGatewayMock,
   calls,
   writeEntry,
+  writeFinal,
   settleSessionWork,
   drainRootWork,
 }: {
@@ -61,6 +62,7 @@ export function registerSessionsSendRequesterRetirementTests({
     MockInstance<(request: GatewayCall) => Promise<unknown>>;
   calls: GatewayCall[];
   writeEntry: (sessionKey: string, entry: SessionEntry, storePath?: string) => Promise<void>;
+  writeFinal: (sessionKey: string, runId: string, text: string) => Promise<void>;
   settleSessionWork: () => Promise<void>;
   drainRootWork: () => Promise<void>;
 }) {
@@ -87,7 +89,8 @@ export function registerSessionsSendRequesterRetirementTests({
       });
       await resetSubagentRegistryForTests();
       const childPending = createDeferredCore();
-      const terminalReply = { disposition: "visible", text: "Result after requester retirement" };
+      const fullReply = "Result after requester retirement";
+      const terminalReply = { disposition: "visible" as const, text: fullReply };
       callGatewayMock.mockImplementation(async (request: GatewayCall) => {
         calls.push(request);
         if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
@@ -100,6 +103,7 @@ export function registerSessionsSendRequesterRetirementTests({
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
           await childPending.promise;
+          await writeFinal(childSessionKey, runId, fullReply);
           return { runId, status: "ok", startedAt: 1, endedAt: Date.now(), terminalReply };
         }
         if (request.method === "agent") {
@@ -150,7 +154,11 @@ export function registerSessionsSendRequesterRetirementTests({
           expectsCompletionMessage: true,
           createdAt: 1,
           execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-          completion: { required: true, resultText: "Original result" },
+          completion: {
+            required: true,
+            resultText: "Original result",
+            terminalReply: { disposition: "visible", text: "Original result" },
+          },
           delivery: { status: "delivered" },
           cleanupCompletedAt: 3,
         });
@@ -342,13 +350,15 @@ export function registerSessionsSendRequesterRetirementTests({
           throw new Error("Unexpected child completion wait");
         }
         await childrenPending[children.indexOf(child)]!.promise;
+        const fullReply = `Watched child result ${child.runId}`;
+        await writeFinal(child.childSessionKey, child.runId, fullReply);
         return {
           status: "ok",
           startedAt: 1,
           endedAt: Date.now(),
           terminalReply: {
             disposition: "visible",
-            text: `Watched child result ${child.runId}`,
+            text: fullReply,
           },
         };
       }

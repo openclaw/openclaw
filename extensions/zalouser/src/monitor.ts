@@ -620,7 +620,6 @@ async function processMessage(
           mediaMaxBytes: account.mediaMaxBytes,
           chatId,
           isGroup,
-          runtime,
           core,
           config,
           accountId: account.accountId,
@@ -660,12 +659,11 @@ async function deliverZalouserReply(params: {
   profile: string;
   chatId: string;
   isGroup: boolean;
-  runtime: RuntimeEnv;
   core: ZalouserCoreRuntime;
   config: OpenClawConfig;
   accountId?: string;
 }): Promise<{ visibleReplySent: boolean }> {
-  const { payload, profile, chatId, isGroup, runtime, core, config, accountId } = params;
+  const { payload, profile, chatId, isGroup, core, config, accountId } = params;
   let visibleReplySent = false;
   const reply = resolveSendableOutboundReplyParts(payload);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
@@ -695,7 +693,6 @@ async function deliverZalouserReply(params: {
       text: reply.text,
       sendText: sendReplyPart,
       sendMedia: async ({ mediaUrl, caption }) => {
-        logVerbose(core, runtime, `Sending media to ${chatId}`);
         await sendReplyPart(caption ?? "", mediaUrl);
       },
     });
@@ -831,22 +828,13 @@ export async function monitorZalouserProvider(
     return stopTask;
   };
 
-  let settled = false;
   const { promise: waitForExit, resolve: resolveRun, reject: rejectRun } = createDeferred<void>();
 
   const settleSuccess = () => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     void stop().then(resolveRun, rejectRun);
   };
 
   const settleFailure = (error: unknown) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
     const failure = error instanceof Error ? error : new Error(String(error));
     void stop().then(
       () => rejectRun(failure),
@@ -867,7 +855,6 @@ export async function monitorZalouserProvider(
         if (stopped) {
           return;
         }
-        logVerbose(core, runtime, `[${account.accountId}] inbound message`);
         statusSink?.({ lastInboundAt: Date.now() });
         await ingress.receive(msg);
       },

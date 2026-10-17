@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -33,14 +34,14 @@ export function readSessionMembershipFactsInDatabase(
 }
 
 /** Connection-bound catalog rows; the transport supplies its own store identity. */
-export function readSessionMembershipRowsInDatabase(
+function readSessionMembershipRowsInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
   sessionKeys?: readonly string[],
 ): SessionMembershipFact[] {
   if (sessionKeys?.length === 0) {
     return [];
   }
-  return withSqlitePostCommitPublications(database.db, () =>
+  return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
     runSqliteReadSnapshotSync(database.db, () => {
       assertCanonicalSqliteSessionKeysCurrent(database);
       let entries = selectSessionEntryRows(database, "list")

@@ -294,15 +294,8 @@ async function buildOpenClawCodingToolsOptions(
   const sandbox = input.sandbox ?? undefined;
 
   const model = a.model;
-  const modelHasVision = Array.isArray(model?.input) && model.input.includes("image");
-  const modelCompat =
-    model &&
-    typeof model === "object" &&
-    "compat" in model &&
-    model.compat &&
-    typeof model.compat === "object"
-      ? (model.compat as OpenClawCodingToolsOptions["modelCompat"])
-      : undefined;
+  const modelHasVision = model?.input?.includes("image") ?? false;
+  const modelCompat = model?.compat;
 
   return {
     agentId: input.agentId,

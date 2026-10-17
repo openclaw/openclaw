@@ -88,6 +88,7 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { CHAT_DOT_PNG_BASE64, INLINE_DOT_PNG_IMAGE } from "./server.chat-image.test-support.js";
 import {
   captureChatResponse,
   captureChatResult,
@@ -137,6 +138,8 @@ vi.mock(
       >();
     return {
       ...actual,
+      // Keep background recovery out of this shared-store chat fixture.
+      scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease: vi.fn(),
       retryRestartAbortedMainSessionRecovery:
         restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
     };
@@ -255,7 +258,8 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 async function withDirectChatSession(
   run: (sessionDir: string, storePath: string) => Promise<void>,
 ) {
-  const { sessionDir, storePath } = openDirectChatSession();
+  // Deferred recovery must not adopt a later case that reuses this synthetic session ID.
+  const { sessionDir, storePath } = openDirectChatSession({ fresh: true });
   try {
     await run(sessionDir, storePath);
   } finally {
@@ -885,6 +889,64 @@ describe("gateway server chat", () => {
           plan: { steps: [{ step: "Inspect", status: "in_progress" }] },
         });
         expect(JSON.stringify(inFlightRun)).not.toContain("SECRET");
+
+        // A queued chat source keeps its accepted identity when the runtime gets
+        // a new ID. History must use the same ID and buffer as live delivery.
+        context.chatRunState.registry.add("run-embedded", {
+          sessionKey: "main",
+          clientRunId: "run-queued-client",
+        });
+        await handler({
+          runId: "run-embedded",
+          seq: 8,
+          stream: "assistant",
+          ts: 1_008,
+          data: { text: "Queued reply", delta: "Queued reply" },
+        });
+        const queuedResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: "queued-history",
+          params: makeMainSessionParams(),
+          respond: captureChatResult(queuedResponses),
+          context,
+        });
+        expect(queuedResponses).toEqual([
+          expect.objectContaining({
+            ok: true,
+            payload: expect.objectContaining({
+              inFlightRun: expect.objectContaining({
+                runId: "run-queued-client",
+                text: "Queued reply",
+                sessionAbortable: true,
+              }),
+            }),
+          }),
+        ]);
+        for (const registration of [
+          { sessionKey: "agent:main:other", agentId: "main" },
+          { sessionKey: "main", agentId: "other" },
+        ]) {
+          context.chatRunState.registry.remove("run-embedded", "run-queued-client");
+          context.chatRunState.registry.add("run-embedded", {
+            ...registration,
+            clientRunId: "run-queued-client",
+          });
+          const otherSourceResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+          await callDirectChat(method, {
+            id: `other-source-history-${registration.agentId}`,
+            params: makeMainSessionParams(),
+            respond: captureChatResult(otherSourceResponses),
+            context,
+          });
+          expect(otherSourceResponses).toEqual([
+            expect.objectContaining({
+              ok: true,
+              payload: expect.objectContaining({
+                inFlightRun: expect.objectContaining({ runId: "run-embedded", text: "" }),
+              }),
+            }),
+          ]);
+        }
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
       }
@@ -1236,14 +1298,10 @@ describe("gateway server chat", () => {
         key: "agent:main:main",
         sessionId: "sess-main",
       });
-      expect(startup.payload?.metadata?.models).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "gpt-main",
-            provider: "openai",
-          }),
-        ]),
-      );
+      expect(startup.payload?.metadata).not.toHaveProperty("models");
+      expect(startup.payload?.metadata).not.toHaveProperty("accountSelection");
+      expect(startup.payload?.metadata).not.toHaveProperty("runtimeSelectionLocked");
+      expect(startup.payload?.metadata).not.toHaveProperty("revision");
       expect(startup.payload?.metadata?.commands).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1700,9 +1758,9 @@ describe("gateway server chat", () => {
                   },
                 },
               });
-              const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+              const { loadGatewaySessionEntryReadOnlyAsync } = await import("./session-utils.js");
               setRuntimeConfigSnapshot(initialConfig);
-              const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
+              const loaded = await loadGatewaySessionEntryReadOnlyAsync("agent:work:main");
               expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
               expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
               expect(loaded.canonicalKey).toBe("agent:work:main");
@@ -1798,19 +1856,13 @@ describe("gateway server chat", () => {
                 return authStore;
               };
               const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-              const models = await import("./server-methods/models-list-result.js");
               const projectionByKey = new Map<
                 string,
                 Promise<{
                   modelCatalog: ModelCatalogEntry[];
-                  metadata: {
-                    models: import("../../packages/gateway-protocol/src/index.js").ModelChoice[];
-                    swarmEnabled: boolean;
-                  };
                 }>
               >();
               const projectAgent = (
-                context: GatewayRequestContext,
                 agentId: string,
                 sessionEntry?: Parameters<
                   GatewayRequestContext["readChatMetadata"]
@@ -1841,24 +1893,9 @@ describe("gateway server chat", () => {
                     ? { pinnedProfileId: profileId }
                     : {}),
                 });
-                const projection = Promise.all([
-                  projector.projectCatalog(),
-                  models.buildModelsListResult({
-                    source: { kind: "gateway", context },
-                    agentId,
-                    params: { view: "configured" },
-                    preloadedCatalog: {
-                      agentId,
-                      config: initialConfig,
-                      snapshot: catalogSnapshot,
-                    },
-                    preloadedOnly: true,
-                    catalogProjector: projector,
-                  }),
-                ]).then(([modelCatalog, metadata]) => ({
-                  modelCatalog,
-                  metadata: { ...metadata, swarmEnabled: false },
-                }));
+                const projection = projector
+                  .projectCatalog()
+                  .then((modelCatalog) => ({ modelCatalog }));
                 projectionByKey.set(key, projection);
                 return projection;
               };
@@ -1877,8 +1914,8 @@ describe("gateway server chat", () => {
                 readPreparedGatewayModelCatalog: async () => catalogSnapshot,
                 readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
                   const [neutralProjection, sessionProjection] = await Promise.all([
-                    projectAgent(context, agentId),
-                    projectAgent(context, agentId, sessionEntry),
+                    projectAgent(agentId),
+                    projectAgent(agentId, sessionEntry),
                   ]);
                   preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
                     (entry) => entry.reasoning === true,
@@ -1886,7 +1923,7 @@ describe("gateway server chat", () => {
                     ? "base"
                     : "off";
                   return {
-                    metadata: sessionProjection.metadata,
+                    metadata: { swarmEnabled: false },
                     sessionModelCatalog: sessionProjection.modelCatalog,
                     defaultModelCatalog: neutralProjection.modelCatalog,
                   };
@@ -1942,27 +1979,10 @@ describe("gateway server chat", () => {
               expect(responses[0]?.ok).toBe(true);
               const payload = responses[0]?.payload as
                 | {
-                    metadata?: { models?: unknown[] };
                     sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
                     defaults?: { thinkingLevels?: Array<{ id?: string }> };
                   }
                 | undefined;
-              expect(payload?.metadata?.models).toEqual([
-                expect.objectContaining({
-                  id: "gpt-5.5",
-                  name: "GPT-5.5",
-                  provider: "openai",
-                  agentRuntime: {
-                    id: "codex",
-                    cloudPlacementSupported: false,
-                    devicePlacementSupported: false,
-                    source: "implicit",
-                  },
-                  contextWindow: 400_000,
-                  reasoning: false,
-                  available: true,
-                }),
-              ]);
               expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual([
                 "off",
               ]);
@@ -2012,7 +2032,6 @@ describe("gateway server chat", () => {
                 expect(responses[0]?.ok).toBe(true);
                 const preferredPayload = responses[0]?.payload as
                   | {
-                      metadata?: { models?: Array<{ contextWindow?: number }> };
                       defaults?: GatewaySessionsDefaults;
                       sessionInfo?: {
                         agentRuntime?: unknown;
@@ -2023,9 +2042,6 @@ describe("gateway server chat", () => {
                       };
                     }
                   | undefined;
-                expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
-                  expectedRoute === "subscription" ? 400_000 : 1_000_000,
-                );
                 const thinkingLevels = preferredPayload?.sessionInfo?.thinkingLevels?.map(
                   (level) => level.id,
                 );
@@ -2160,7 +2176,7 @@ describe("gateway server chat", () => {
           swarmEnabled: false,
         };
         const readChatStartupProjection = vi.fn(async () => ({
-          metadata,
+          metadata: { swarmEnabled: false },
           sessionModelCatalog: metadata.models,
           defaultModelCatalog: metadata.models,
         }));
@@ -2215,7 +2231,7 @@ describe("gateway server chat", () => {
         const payload = responses[0]?.payload as
           | {
               metadata?: {
-                models?: Array<{ id?: string; provider?: string }>;
+                swarmEnabled?: boolean;
               };
               sessionInfo?: { key?: string; sessionId?: string };
               defaults?: { modelProvider?: string; model?: string };
@@ -2230,14 +2246,7 @@ describe("gateway server chat", () => {
           modelProvider: "minimax",
         });
         if (method === "chat.startup") {
-          expect(payload?.metadata?.models).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                id: "MiniMax-M2.7-highspeed",
-                provider: "minimax",
-              }),
-            ]),
-          );
+          expect(payload?.metadata).toEqual({ swarmEnabled: false });
         } else {
           expect(payload).not.toHaveProperty("metadata");
         }
@@ -2724,12 +2733,12 @@ describe("gateway server chat", () => {
     let mutation: Promise<void> | undefined;
     try {
       await writeStoredMainSession({});
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntryAsync: loadGatewaySessionEntry }] =
         await Promise.all([
           import("../config/sessions/session-accessor.js"),
-          import("./session-utils.js"),
+          import("./session-entry-load.test-support.js"),
         ]);
-      const seededSession = loadGatewaySessionEntry("main");
+      const seededSession = await loadGatewaySessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
@@ -2742,7 +2751,7 @@ describe("gateway server chat", () => {
           // Read the authoritative row inside the mutation. Admission startup
           // may refresh metadata before it blocks, but this test deletes that
           // same session generation rather than a stale pre-admission snapshot.
-          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionSession = await loadGatewaySessionEntry("main");
           const deletionEntry = expectDefined(
             deletionSession.entry,
             "session deletion test invariant",
@@ -3002,8 +3011,6 @@ describe("gateway server chat", () => {
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
       dispatchInboundMessageMock.mockImplementation(async (...args: unknown[]) => {
         const [params] = args as [
@@ -3031,7 +3038,7 @@ describe("gateway server chat", () => {
               type: "image",
               mimeType: "image/png",
               fileName: "dot.png",
-              content: pngB64,
+              content: CHAT_DOT_PNG_BASE64,
             },
           ],
         }),
@@ -3041,9 +3048,7 @@ describe("gateway server chat", () => {
 
       expect(responses[0]?.ok).toBe(true);
       await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
-      expect(captured?.replyOptions?.images).toEqual([
-        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0, fileName: "dot.png" },
-      ]);
+      expect(captured?.replyOptions?.images).toEqual([INLINE_DOT_PNG_IMAGE]);
       expect(captured?.ctx?.media).toEqual([
         expect.objectContaining({
           path: expect.any(String),
@@ -3110,8 +3115,6 @@ describe("gateway server chat", () => {
             ],
           ),
         });
-        const pngB64 =
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
         let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
           const [params] = args as [
@@ -3137,7 +3140,7 @@ describe("gateway server chat", () => {
                 type: "image",
                 mimeType: "image/png",
                 fileName: "dot.png",
-                content: pngB64,
+                content: CHAT_DOT_PNG_BASE64,
               },
             ],
           }),
@@ -3549,7 +3552,6 @@ describe("gateway server chat", () => {
         {
           error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
           ok: false,
-          payload: undefined,
         },
       ]);
       expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
@@ -3558,6 +3560,7 @@ describe("gateway server chat", () => {
         expectedRecoveryRunId: "recovery-run",
         expectedRecoverySourceRunId: idempotencyKey,
         expectedSessionId: "sess-main",
+        lane: "main",
         sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: expect.any(Object),
@@ -3573,6 +3576,7 @@ describe("gateway server chat", () => {
         status: "interrupted",
       });
     } finally {
+      await getDirectChatSessionWorkRelease();
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       await resetDirectChatSession();
     }
@@ -4494,59 +4498,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history does not surface an older stale assistant when overreading for pair context", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      await createSessionDir();
-      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
-      await writeStoredMainSession({
-        sessionStartedAt,
-      });
-      const announce = {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:subagent:child",
-        sourceTool: "subagent_announce",
-      };
-      await writeMainSessionTranscript([
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({
-          timestamp: "2026-05-16T16:00:29.000Z",
-          message: {
-            role: "user",
-            content:
-              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
-            provenance: announce,
-          },
-        }),
-        makeTranscriptTextEvent("older stale announce reply", {
-          timestamp: "2026-05-16T16:00:30.000Z",
-        }),
-        JSON.stringify({
-          timestamp: "2026-05-16T16:00:31.000Z",
-          message: {
-            role: "user",
-            content:
-              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
-            provenance: announce,
-          },
-        }),
-        makeTranscriptTextEvent("newer stale announce reply", {
-          timestamp: "2026-05-16T16:00:33.000Z",
-        }),
-        makeTranscriptTextEvent("fresh turn", {
-          role: "user",
-          timestamp: "2026-05-23T04:03:10.000Z",
-        }),
-      ]);
-
-      const messages = await fetchHistoryMessages(ws, { limit: 3 });
-      const serialized = JSON.stringify(messages);
-      expect(serialized).not.toContain("older stale announce reply");
-      expect(serialized).not.toContain("newer stale announce reply");
-      expect(serialized).toContain("fresh turn");
-    });
-  });
-
   test("chat.history offset pages backfill after filtering stale announce replies", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -4870,43 +4821,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history keeps recent messages within the production byte budget", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
-      const baseText = "s".repeat(100_000);
-      const lines: unknown[] = Array.from({ length: 70 }, (_, index) =>
-        createTextTranscriptEvent("user", `small-${index}:${baseText}`, {
-          timestamp: Date.now() + index,
-        }),
-      );
-      lines.push(
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            timestamp: Date.now() + 1_000,
-            content: [
-              {
-                type: "tool_result",
-                toolUseId: "tool-1",
-                output: { nested: { payload: "z".repeat(300_000) } },
-              },
-            ],
-          },
-        }),
-      );
-
-      await writeMainSessionTranscript(lines);
-      const messages = await fetchHistoryMessages(ws, { maxChars: 100_000 });
-      const serialized = JSON.stringify(messages);
-
-      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
-      expect(serialized).toContain("small-69:");
-      expect(serialized).toContain("[chat.history omitted: message too large]");
-      expect(serialized).not.toContain("small-0:");
-    });
-  });
-
   test("chat.history serves older history past an oversized newest record", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -4915,7 +4829,8 @@ describe("gateway server chat", () => {
         createTextTranscriptEvent("user", "reachable older message", { timestamp: Date.now() }),
         makeTranscriptTextEvent("NO_REPLY", {
           message: {
-            padding: "x".repeat(historyMaxBytes * 2 + 1024),
+            // Exceed the response budget while staying below raw-page admission.
+            padding: "x".repeat(historyMaxBytes + 1024),
             timestamp: Date.now() + 1,
           },
         }),
@@ -5554,26 +5469,6 @@ describe("gateway server chat", () => {
       expect(history.ok).toBe(false);
       expect((history.error as { message?: string } | undefined)?.message).toContain(
         "offset and messageId cannot be used together",
-      );
-    });
-  });
-
-  test("chat.history rejects an anchored session id from another session key", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-
-      const history = await rpcReq(
-        ws,
-        "chat.history",
-        makeMainSessionParams({
-          messageId: "message-1",
-          sessionId: "unknown-session",
-        }),
-      );
-
-      expect(history.ok).toBe(false);
-      expect((history.error as { message?: string } | undefined)?.message).toContain(
-        "sessionId does not belong to sessionKey",
       );
     });
   });

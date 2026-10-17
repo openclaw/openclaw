@@ -1,5 +1,6 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   buildSessionObserverPrompt,
   normalizeSessionObserverModelOutput,
@@ -55,6 +56,7 @@ export function createSessionObserverCompletion(params: {
       () => controller.abort(),
       SESSION_OBSERVER_MODEL_TIMEOUT_MS,
     );
+    const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
@@ -89,12 +91,18 @@ export function createSessionObserverCompletion(params: {
         );
       };
       return await racePromiseWithAbortSignal(
-        execute(),
+        ownedWork.track(execute),
         controller.signal,
         () => new Error("session observer model call timed out or was cancelled"),
       );
     } finally {
       params.clearTimeoutFn(timeout);
+      // A logical result can precede tracked cleanup. Join this digest's scope,
+      // never the shared parent that is itself waiting for this completion.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [ownedWork],
+        () => ownedWork.drain(),
+      );
       if (state.activeController === controller) {
         state.activeController = undefined;
       }

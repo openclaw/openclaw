@@ -39,6 +39,11 @@ struct ChatProTab: View {
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
+    private var chatTraceDisplayOptions: OpenClawChatDisplayOptions {
+        guard self.showsAssistantTrace else { return [] }
+        return self.viewModel?.currentSessionReasoningVisible == true ? .assistantTrace : .toolActivity
+    }
+
     private var viewModel: OpenClawChatViewModel? {
         self.appModel.chatPresentation.viewModel
     }
@@ -145,7 +150,7 @@ struct ChatProTab: View {
                 drawsBackground: true,
                 showsSessionSwitcher: false,
                 userAccent: self.chatUserAccent,
-                showsAssistantTrace: self.showsAssistantTrace,
+                displayOptions: self.chatTraceDisplayOptions,
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,

@@ -51,8 +51,15 @@ export const en = {
       modelAlias: "Model alias (optional)",
       modelAliasPlaceholder: "e.g. local, ollama",
       modelId: "Model ID",
+      modelIdManual: "Enter a model ID manually",
+      modelDiscoveryUnavailable:
+        "Could not discover models from this endpoint. Check the base URL and credentials, or enter a model ID manually.",
       modelIdPlaceholder: "e.g. llama3, claude-3-7-sonnet",
       modelIdRequired: "Model ID is required",
+      noAuthConfirm:
+        "No API key entered. Use no-auth mode for this endpoint (requests send no Authorization header)?",
+      noAuthCompatKeyRequired:
+        "No-auth mode supports OpenAI Chat Completions endpoints only. Enter an API key (a placeholder works if the server ignores keys).",
       retryChoice: "What would you like to change?",
       verifying: "Verifying...",
       verificationFailedError: "Verification failed: {error}",
@@ -1190,8 +1197,8 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
-      daemonRuntimeBun: "Bun 1.4+",
-      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
+      daemonRuntimeBun: "Bun 1.4.3+",
+      daemonRuntimeBunHint: "Requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',

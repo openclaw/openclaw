@@ -5,6 +5,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
@@ -20,6 +21,7 @@ type TranscriptStatsRow = Omit<
   lastObservedMutationAtMs: number | null;
   generation: string | null;
   coldSessionId: string | null;
+  sessionKey: string | null;
 };
 
 function transcriptStatsFromRow(row: TranscriptStatsRow | undefined): SessionTranscriptStats {
@@ -34,7 +36,7 @@ function transcriptStatsFromRow(row: TranscriptStatsRow | undefined): SessionTra
   };
 }
 
-const transcriptStatsQuery = createSqliteQueryCache((database) => {
+const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
   const prepare = (point: boolean, includeGeneration = false) =>
     prepareSqliteQuerySync<readonly string[], TranscriptStatsRow>(database, (parameter) => {
@@ -54,13 +56,17 @@ const transcriptStatsQuery = createSqliteQueryCache((database) => {
               eb.fn.count<number>("seq").as("event_count"),
               eb.fn.max<number>("seq").as("max_seq"),
               // kysely-allow-raw: JSONL byte size includes newline separators without decoding payloads.
-              sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()}), 0) + COUNT(*) - 1`.as(
+              sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql()}), 0) + COUNT(*) - 1 AS BIGINT)`.as(
                 "size_bytes",
               ),
             ])
             .$call((query) =>
               point
-                ? query.where("session_id", "=", id)
+                ? query
+                    .where("session_id", "=", id)
+                    .$if(isPostgresSqlConnection(database), (pointQuery) =>
+                      pointQuery.groupBy("session_id"),
+                    )
                 : query
                     .where(
                       "session_id",
@@ -90,6 +96,7 @@ const transcriptStatsQuery = createSqliteQueryCache((database) => {
           "session.transcript_observed_at as lastObservedMutationAtMs",
           "session.transcript_updated_at as lastMutationAtMs",
           "cold.session_id as coldSessionId",
+          (includeGeneration ? eb.ref("session.session_key") : eb.val(null)).as("sessionKey"),
           (includeGeneration
             ? eb
                 .selectFrom("transcript_rewrite_watermarks as rewrite")
@@ -99,21 +106,63 @@ const transcriptStatsQuery = createSqliteQueryCache((database) => {
           ).as("generation"),
         ]);
     });
-  return { point: prepare(true), batch: prepare(false), export: prepare(true, true) };
+  return {
+    point: prepare(true),
+    batch: prepare(false),
+    export: prepare(true, true),
+    batchWithGeneration: prepare(false, true),
+  };
 });
 
 /** Read ordered stats in bounded statements, preserving duplicate and missing session IDs. */
 export function readTranscriptStatsBatchFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionIds: readonly string[],
-): SessionTranscriptStats[] {
+  options: { includeGeneration: true },
+): Array<
+  SessionTranscriptStats & { generation: string | null; cold: boolean; sessionKey: string | null }
+>;
+export function readTranscriptStatsBatchFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionIds: readonly string[],
+  options?: { includeGeneration?: false },
+): SessionTranscriptStats[];
+export function readTranscriptStatsBatchFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionIds: readonly string[],
+  options: { includeGeneration?: boolean } = {},
+): Array<
+  SessionTranscriptStats & {
+    generation?: string | null;
+    cold?: boolean;
+    sessionKey?: string | null;
+  }
+> {
   const queries = transcriptStatsQuery(database.db);
-  // Keep cheap indexed point reads for small requests; both shapes share projection and decoding.
-  const point = sessionIds.length <= 10;
-  const read = point ? queries.point : queries.batch;
+  // Export groups always share their metadata read, including small indexing batches.
+  const point = sessionIds.length <= (options.includeGeneration ? 1 : 10);
+  const read = options.includeGeneration
+    ? point
+      ? queries.export
+      : queries.batchWithGeneration
+    : point
+      ? queries.point
+      : queries.batch;
   return chunkItems(sessionIds, point ? 1 : 400).flatMap((chunk) => {
     const rows = new Map(read(chunk).rows.map((row) => [row.position, row]));
-    return chunk.map((_, position) => transcriptStatsFromRow(rows.get(position)));
+    return chunk.map((_, position) => {
+      const row = rows.get(position);
+      return {
+        ...transcriptStatsFromRow(row),
+        ...(options.includeGeneration
+          ? {
+              generation: row?.generation ?? null,
+              cold: row?.coldSessionId != null,
+              sessionKey: row?.sessionKey ?? null,
+            }
+          : {}),
+      };
+    });
   });
 }
 
@@ -123,17 +172,4 @@ export function readTranscriptStatsFromDatabase(
   sessionId: string,
 ): SessionTranscriptStats {
   return readTranscriptStatsBatchFromDatabase(database, [sessionId])[0]!;
-}
-
-/** Export readers carry the rewrite identity in their existing statistics statement. */
-export function readTranscriptExportStatsFromDatabase(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-): { stats: SessionTranscriptStats; generation: string | null; cold: boolean } {
-  const row = transcriptStatsQuery(database.db).export([sessionId]).rows[0];
-  return {
-    generation: row?.generation ?? null,
-    cold: row?.coldSessionId != null,
-    stats: transcriptStatsFromRow(row),
-  };
 }

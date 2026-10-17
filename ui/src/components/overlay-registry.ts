@@ -1,3 +1,4 @@
+import { listen } from "../lib/reactive/listener.ts";
 import type { Overlay, OverlayOptions } from "./overlay-types.ts";
 
 type OverlayRoot = Document | ShadowRoot;
@@ -85,60 +86,17 @@ export function reconcileNative(registry: OverlayRegistry, except?: Overlay) {
   orderStack(registry);
 }
 
-export function branchRevision(owner: Overlay): string {
-  return JSON.stringify([owner.id, owner.revision, [...owner.children].map(branchRevision)]);
-}
-
-export function prepareClosures(
-  registry: OverlayRegistry,
-  readOwners: () => Overlay[],
-  admitted: Set<Overlay>,
-) {
-  const prepared = new Map<Overlay, { commit: () => boolean; revision: string }>();
-  for (;;) {
-    reconcileNative(registry);
-    const owners = readOwners();
-    if (
-      owners.some((owner) => !admitted.has(owner)) ||
-      owners.some((owner) => {
-        const prior = prepared.get(owner);
-        return prior && prior.revision !== branchRevision(owner);
-      })
-    ) {
+export function prepareClosures(owners: readonly Overlay[]): (() => boolean) | null {
+  const commits: (() => boolean)[] = [];
+  for (const owner of owners) {
+    const commit = owner.prepareClose();
+    if (!commit) {
       return null;
     }
-    const missing = owners.filter((owner) => !prepared.has(owner));
-    if (missing.length === 0) {
-      return {
-        current() {
-          reconcileNative(registry);
-          const live = readOwners();
-          return (
-            live.length === owners.length &&
-            live.every(
-              (owner) =>
-                owners.includes(owner) && prepared.get(owner)?.revision === branchRevision(owner),
-            )
-          );
-        },
-        commit() {
-          for (const owner of owners) {
-            if (!prepared.get(owner)?.commit()) {
-              return false;
-            }
-          }
-          return true;
-        },
-      };
-    }
-    for (const owner of missing) {
-      const commit = owner.prepareClose();
-      if (!commit) {
-        return null;
-      }
-      prepared.set(owner, { commit, revision: branchRevision(owner) });
-    }
+    commits.push(commit);
   }
+  // Hide listeners may veto; mutating the overlay tree inside one is best effort.
+  return () => commits.every((commit) => commit());
 }
 
 function collectRoots(elements: Iterable<Element | undefined>): Set<OverlayRoot> {
@@ -174,7 +132,7 @@ function connectedSurfaceRoot(surface: HTMLElement): OverlayRoot | undefined {
   return view && root instanceof view.ShadowRoot ? root : undefined;
 }
 
-function refreshSurfaceRoot(registry: OverlayRegistry, overlay: Overlay, entry: RegisteredOverlay) {
+function refreshSurfaceRoot(overlay: Overlay, entry: RegisteredOverlay) {
   const next = connectedSurfaceRoot(overlay.surface);
   if (next === entry.surfaceRoot) {
     return;
@@ -183,20 +141,8 @@ function refreshSurfaceRoot(registry: OverlayRegistry, overlay: Overlay, entry: 
   entry.releaseSurfaceRoot = undefined;
   entry.surfaceRoot = next;
   release?.();
-  if (
-    !next ||
-    registry.members.get(overlay) !== entry ||
-    connectedSurfaceRoot(overlay.surface) !== next
-  ) {
-    return;
-  }
-  const cleanup = entry.options.onRootChange?.(next);
-  if (typeof cleanup === "function") {
-    if (registry.members.get(overlay) === entry && connectedSurfaceRoot(overlay.surface) === next) {
-      entry.releaseSurfaceRoot = cleanup;
-    } else {
-      cleanup();
-    }
+  if (next) {
+    entry.releaseSurfaceRoot = entry.options.onRootChange?.(next) ?? undefined;
   }
 }
 
@@ -217,7 +163,7 @@ export function refreshOverlayRoots(registry: OverlayRegistry, overlay: Overlay)
       registration.roots.delete(root);
     }
   }
-  refreshSurfaceRoot(registry, overlay, registration);
+  refreshSurfaceRoot(overlay, registration);
 }
 
 export function registerOverlay(
@@ -410,7 +356,7 @@ function createRegistryEvents(registry: OverlayRegistry) {
     }
   };
   const pointercancel = (event: PointerEvent) => {
-    if (press?.pointerId === event.pointerId) {
+    if (press && press.pointerId === event.pointerId) {
       press.canceled = true;
       press = undefined;
     }
@@ -490,18 +436,14 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       ["focusin", events.focusinCapture, true],
       ["focusin", events.focusin, false],
     ] as const;
-    for (const [type, listener, capture] of listeners) {
+    const releaseListeners = listeners.map(([type, listener, capture]) =>
       // SAFETY: Each table entry pairs its native event name with that event's handler.
-      root.addEventListener(type, listener as EventListener, capture);
-    }
+      listen(root, type, listener as EventListener, capture),
+    );
     const observer = new MutationObserver(() => {
-      const entries = Array.from(registry.members);
-      for (const [entry, registration] of entries) {
-        if (registry.members.get(entry) !== registration) {
-          continue;
-        }
+      for (const [entry, registration] of registry.members) {
         refreshOverlayRoots(registry, entry);
-        if (!registration.valid()) {
+        if (entry.phase !== "hidden" && !registration.valid()) {
           entry.retire();
         }
       }
@@ -511,10 +453,7 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
       references: 1,
       release() {
         observer.disconnect();
-        for (const [type, listener, capture] of listeners) {
-          // SAFETY: These are the same native event/handler pairs installed above.
-          root.removeEventListener(type, listener as EventListener, capture);
-        }
+        releaseListeners.forEach((release) => release());
       },
     };
     registry.roots.set(root, binding);

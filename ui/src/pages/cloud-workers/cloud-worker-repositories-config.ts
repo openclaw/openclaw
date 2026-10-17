@@ -2,12 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeCloudRepo } from "../../../../src/config/cloud-worker-project-profiles.js";
 
 export type CloudWorkerRepository = { repository: string; profileId: string };
-type CloudWorkerRepositoryError =
-  | "repository"
-  | "repositoryExists"
-  | "repositoryMissing"
-  | "repositoryProfile"
-  | "preparedPool";
+type CloudWorkerRepositoryError = "repository" | "repositoryProfile" | "preparedPool";
 export type CloudWorkerRepositoryPatch =
   | { patch: Record<string, unknown>; replacePaths: string[] }
   | { error: CloudWorkerRepositoryError };
@@ -48,54 +43,25 @@ export function buildCloudWorkerPreparedPoolPatch(maxTotal: string): CloudWorker
   };
 }
 
-export function buildCloudWorkerRepositoryUpsertPatch(
+export function buildCloudWorkerRepositoryProfilePatch(
   config: Readonly<Record<string, unknown>>,
-  draft: CloudWorkerRepository,
-  original: CloudWorkerRepository | null,
+  repositoryInput: string,
+  profileId: string,
 ): CloudWorkerRepositoryPatch {
-  const repository = normalizeCloudRepo(draft.repository);
+  const repository = normalizeCloudRepo(repositoryInput);
   if (!repository || normalizeCloudRepo(`https://${repository}`) !== repository) {
     return { error: "repository" };
-  }
-  const records = repositoryRecords(config);
-  if (original && records[original.repository] !== original.profileId) {
-    return { error: "repositoryMissing" };
-  }
-  if (repository !== original?.repository && Object.hasOwn(records, repository)) {
-    return { error: "repositoryExists" };
   }
   const profiles = cloudWorkerConfig(config).profiles;
   if (
     !isRecord(profiles) ||
-    !Object.hasOwn(profiles, draft.profileId) ||
-    !isRecord(profiles[draft.profileId])
+    !Object.hasOwn(profiles, profileId) ||
+    !isRecord(profiles[profileId])
   ) {
     return { error: "repositoryProfile" };
   }
   return {
-    patch: {
-      cloudWorkers: {
-        projectProfiles: {
-          ...(original && original.repository !== repository
-            ? { [original.repository]: null }
-            : {}),
-          [repository]: draft.profileId,
-        },
-      },
-    },
-    replacePaths: [],
-  };
-}
-
-export function buildCloudWorkerRepositoryDeletePatch(
-  config: Readonly<Record<string, unknown>>,
-  original: CloudWorkerRepository,
-): CloudWorkerRepositoryPatch {
-  if (repositoryRecords(config)[original.repository] !== original.profileId) {
-    return { error: "repositoryMissing" };
-  }
-  return {
-    patch: { cloudWorkers: { projectProfiles: { [original.repository]: null } } },
+    patch: { cloudWorkers: { projectProfiles: { [repository]: profileId } } },
     replacePaths: [],
   };
 }

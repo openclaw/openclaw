@@ -20,6 +20,8 @@ export type WorkerTaskPoolOptions<Output> = RuntimePoolOptions<Output> & {
 };
 
 export type WorkerTaskPoolOwnerOptions = RuntimeOwnerOptions & {
+  /** Canonical databases stay read-only; writes to private snapshot files are allowed. */
+  databaseAccess?: "read-only";
   nativeSource?: RetainedNativeWorkerSource;
   nativeResource?: NativeWorkerResourceDescriptor;
 };

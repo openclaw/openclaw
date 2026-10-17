@@ -9,19 +9,21 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { captureSqliteAuthSchema } from "../infra/sqlite-readonly-auth-schema.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
+import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import {
   inspectAgentAuthProfileJsonCellReadOnly,
   readAuthProfileRowsReadOnly,
-  writeAuthProfileJsonCell,
 } from "./auth-profiles/sqlite-json.js";
 import {
   acquireAuthProfileReadDatabase,
@@ -42,9 +44,11 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
 }));
 
+// mock-isolation: Reader lifecycle and SQL counts cover seeded databases only; provider discovery opens unrelated stores.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 
@@ -71,9 +75,10 @@ function withReaders(
 }
 
 describe("auth profile sqlite reader lifecycle", () => {
-  it("reads a captured owner projection after native close without retaining schema metadata", () => {
+  it("reuses a reader with a captured owner projection after the writer closes", () => {
     const databasePath = path.join(tempDirs.make("auth-schema-transfer-"), "agent.sqlite");
     const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    registerOpenClawAgentDatabaseIdentity(writer, databasePath);
     writer.exec(`CREATE TABLE auth_profile_store (
       store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`);
@@ -90,12 +95,15 @@ describe("auth profile sqlite reader lifecycle", () => {
     const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
     try {
       for (let index = 0; index < 2; index += 1) {
-        expect(readAuthProfileRowsReadOnly(databasePath, schema)).toMatchObject({
+        expect(
+          readAuthProfileRowsReadOnly(databasePath, openSqliteReadOnlyDatabase, schema),
+        ).toMatchObject({
           store: { status: "readable", raw: store },
           state: { status: "missing", reason: "table" },
         });
-        expect(open.mock.results[index]?.value.isOpen).toBe(false);
+        expect(open.mock.results[0]?.value.isOpen).toBe(true);
       }
+      expect(open).toHaveBeenCalledOnce();
       expect(
         observed.queries.filter((sql) =>
           /sqlite_(?:schema|master)|\bPRAGMA\s+(?:encoding|user_version|schema_version)\b/iu.test(
@@ -113,6 +121,7 @@ describe("auth profile sqlite reader lifecycle", () => {
   it("reuses admitted auth table facts across readers and refreshes them after owner writes", () => {
     const databasePath = path.join(tempDirs.make("auth-schema-facts-"), "agent.sqlite");
     const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+    registerOpenClawAgentDatabaseIdentity(writer, databasePath);
     const storeSchema = `CREATE TABLE auth_profile_store (
       store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`;
@@ -133,15 +142,28 @@ describe("auth profile sqlite reader lifecycle", () => {
         state: PersistedAuthProfileStoreInspection = missingTable,
       ) => {
         reads.queries.length = 0;
-        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        expect(
+          inspectAgentAuthProfileJsonCellReadOnly(
+            databasePath,
+            "store",
+            openSqliteReadOnlyDatabase,
+          ),
+        ).toEqual(store);
         expect(
           readAuthProfileRowsReadOnly(
             databasePath,
+            openSqliteReadOnlyDatabase,
             captureSqliteAuthSchema(databasePath, readDatabasePathIdentitySync(databasePath).key),
           ),
         ).toMatchObject({ store, state });
-        // The batched reader closes its native handle; the next read borrows the same facts.
-        expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
+        // Both readers borrow the same admitted facts after each committed write.
+        expect(
+          inspectAgentAuthProfileJsonCellReadOnly(
+            databasePath,
+            "store",
+            openSqliteReadOnlyDatabase,
+          ),
+        ).toEqual(store);
         expect(
           reads.queries.filter((sql) => /\b(?:sqlite_master|sqlite_schema)\b/iu.test(sql)),
         ).toEqual([]);
@@ -176,7 +198,7 @@ describe("auth profile sqlite reader lifecycle", () => {
     }
   });
 
-  it("revalidates format after final pool close and rejects a replacement file", async () => {
+  it("reuses sealed format after final pool close and rejects a replacement file", async () => {
     await withReaders((agentDir) => {
       const pathname = resolveAuthProfileDatabasePath(agentDir);
       const observed = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
@@ -187,21 +209,19 @@ describe("auth profile sqlite reader lifecycle", () => {
           ),
         );
       try {
-        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        expect(acquireAuthProfileReadDatabase(pathname, openSqliteReadOnlyDatabase).status).toBe(
+          "readable",
+        );
         closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
         observed.queries.length = 0;
-        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
-        expect(
-          formatQueries().filter((sql) => /^PRAGMA schema_version\b/iu.test(sql)),
-        ).toHaveLength(1);
-        expect(formatQueries().filter((sql) => /^PRAGMA user_version\b/iu.test(sql))).toHaveLength(
-          1,
+        expect(acquireAuthProfileReadDatabase(pathname, openSqliteReadOnlyDatabase).status).toBe(
+          "readable",
         );
-        expect(
-          formatQueries().filter((sql) => /FROM main\.sqlite_schema\b/iu.test(sql)),
-        ).toHaveLength(1);
+        expect(formatQueries()).toEqual([]);
         observed.queries.length = 0;
-        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("readable");
+        expect(acquireAuthProfileReadDatabase(pathname, openSqliteReadOnlyDatabase).status).toBe(
+          "readable",
+        );
         expect(formatQueries()).toEqual([]);
         closeAuthProfileReadPool({ kind: "database", databasePath: pathname });
         const replacement = `${pathname}.replacement`;
@@ -212,7 +232,9 @@ describe("auth profile sqlite reader lifecycle", () => {
         }
         renameSync(replacement, pathname);
         observed.queries.length = 0;
-        expect(acquireAuthProfileReadDatabase(pathname).status).toBe("unreadable");
+        expect(acquireAuthProfileReadDatabase(pathname, openSqliteReadOnlyDatabase).status).toBe(
+          "unreadable",
+        );
         expect(formatQueries().length).toBeGreaterThan(0);
       } finally {
         observed.restore();
@@ -220,7 +242,7 @@ describe("auth profile sqlite reader lifecycle", () => {
     });
   });
 
-  it("observes foreign commits through cached readers and closes them on snapshot replacement", async () => {
+  it("observes foreign commits through cached readers and retains them on snapshot replacement", async () => {
     await withReaders((agentDir, open) => {
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
       const reader = expectDefined(open.mock.results[0]?.value, "pooled auth reader");
@@ -243,11 +265,13 @@ describe("auth profile sqlite reader lifecycle", () => {
         writer.close();
       }
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: apiKeyStore("qa-main") }]);
-      expect(reader.isOpen).toBe(false);
+      expect(reader.isOpen).toBe(true);
       expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject(
         apiKeyStore("synthetic-external"),
       );
-      expect(open).toHaveBeenCalledTimes(2);
+      expect(open).toHaveBeenCalledOnce();
+      clearRuntimeAuthProfileStoreSnapshots();
+      expect(reader.isOpen).toBe(false);
     });
   });
 

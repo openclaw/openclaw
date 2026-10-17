@@ -3,7 +3,7 @@ import { resolveGatewayRestartProbeContext } from "../cli/daemon-cli/restart-hea
 import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command-verification.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
-import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
+import { readDeferredPluginMigrationsAsync } from "./deferred-plugin-migrations.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
@@ -35,7 +35,7 @@ vi.mock("./package-json.js", () => ({ readPackageVersion: vi.fn() }));
 vi.mock("./package-update-activation.js", () => ({ assertNoPendingPackageActivation: vi.fn() }));
 vi.mock("./deferred-plugin-migrations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrations: vi.fn(),
+  readDeferredPluginMigrationsAsync: vi.fn(),
 }));
 vi.mock("./update-git-runtime.js", () => ({ collectGitRuntimeErrors: vi.fn() }));
 vi.mock("./update-global.js", () => ({ collectInstalledGlobalPackageErrors: vi.fn() }));
@@ -161,7 +161,7 @@ const successfulTurn = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(readDeferredPluginMigrations).mockReturnValue([]);
+  vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([]);
   validateDoctor.mockResolvedValue({
     ok: true,
     score: 0,
@@ -267,7 +267,7 @@ describe("saved update failure resolution", () => {
       },
     ];
     vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-      vi.mocked(readDeferredPluginMigrations).mockReturnValue(pending);
+      vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(pending);
       return true;
     });
     const result = await validate(failure(), {
@@ -278,11 +278,12 @@ describe("saved update failure resolution", () => {
       ok: false,
       summary: expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished'),
     });
-    expect(result.summary).toContain("Let the current update or repair finish.");
+    expect(result.summary).toContain('Run "openclaw doctor --fix" to retry the upgrade.');
+    expect(result.stopReason).toBe(result.summary);
   });
 
   it("preserves the caller's post-core convergence context in pending migration guidance", async () => {
-    vi.mocked(readDeferredPluginMigrations).mockReturnValue(
+    vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(
       ["first", "second"].map((pluginId) => ({
         pluginId,
         reason: "Package repair deferred.",
@@ -291,22 +292,22 @@ describe("saved update failure resolution", () => {
     );
     const env = {
       OPENCLAW_STATE_DIR: "/fixture/state",
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
     };
     const result = await validate(failure(), env);
 
     expect(result).toMatchObject({
       ok: false,
-      summary: expect.stringContaining("Let the current update or repair finish."),
+      summary: expect.stringContaining('Run "openclaw update repair"'),
     });
     expect(result.summary).toContain('Plugin "first"');
     expect(result.summary).toContain('Plugin "second"');
-    expect(result.summary.match(/Let the current update or repair finish/g)).toHaveLength(2);
-    expect(result.summary).toContain(
-      'If this warning remains afterward, run "openclaw update repair"',
-    );
+    expect(result.summary.match(/Run "openclaw update repair"/g)).toHaveLength(2);
+    expect(result.summary).toContain('then "openclaw doctor --fix" to retry the upgrade.');
+    expect(result.summary).not.toContain("Let the current update or repair finish.");
     expect(result.stopReason).toBe(result.summary);
-    expect(readDeferredPluginMigrations).toHaveBeenCalledWith({ env });
+    expect(readDeferredPluginMigrationsAsync).toHaveBeenCalledWith({ env });
     expect(validateDoctor).not.toHaveBeenCalled();
   });
 
@@ -347,27 +348,29 @@ describe("saved update failure resolution", () => {
       ok: true,
     });
   });
-  it.each(["restart-unhealthy", "update-recovery-pending"])(
-    "requires a later verified updater outcome for %s",
-    async (reason) => {
-      failedRun.reason = reason;
-      const savedFailure = failure(reason);
-      const successfulRun = latestRun;
-      latestRun = failedRun;
-      expect(await validate(savedFailure)).toMatchObject({
-        ok: false,
-        summary: expect.stringContaining("Next step:"),
-      });
-      expect(failedRun.status).toBe("failed");
-      expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
+  it.each([
+    "restart-unhealthy",
+    "update-recovery-pending",
+    "package-recovery-permissions-unsafe",
+    "managed-handoff-lease-identity-changed",
+  ])("requires a later verified updater outcome for %s", async (reason) => {
+    failedRun.reason = reason;
+    const savedFailure = failure(reason);
+    const successfulRun = latestRun;
+    latestRun = failedRun;
+    expect(await validate(savedFailure)).toMatchObject({
+      ok: false,
+      summary: expect.stringContaining("Next step:"),
+    });
+    expect(failedRun.status).toBe("failed");
+    expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
 
-      latestRun = successfulRun;
-      expect(await validate(savedFailure)).toMatchObject({ ok: true });
+    latestRun = successfulRun;
+    expect(await validate(savedFailure)).toMatchObject({ ok: true });
 
-      vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
-      expect(await validate(savedFailure)).toMatchObject({ ok: false });
-    },
-  );
+    vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
+    expect(await validate(savedFailure)).toMatchObject({ ok: false });
+  });
 
   it("does not invent a target for an error-only artifact", async () => {
     expect(await validate({ error: "Update failed" })).toEqual({

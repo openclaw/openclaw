@@ -10,7 +10,10 @@ function userText(text: string, timestamp: number): AgentMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp };
 }
 
-function assistantText(text: string, timestamp: number): AgentMessage {
+function assistantText(
+  text: string,
+  timestamp: number,
+): Extract<AgentMessage, { role: "assistant" }> {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -30,7 +33,10 @@ function assistantText(text: string, timestamp: number): AgentMessage {
   };
 }
 
-function toolResultText(text: string, timestamp: number): AgentMessage {
+function toolResultText(
+  text: string,
+  timestamp: number,
+): Extract<AgentMessage, { role: "toolResult" }> {
   return {
     role: "toolResult",
     toolCallId: "call-1",
@@ -87,6 +93,127 @@ function buildTranscriptWithToolResult(toolResult: AgentMessage): SessionTreeEnt
 }
 
 describe("findCutPoint", () => {
+  function asynchronousExchange(resultBeforeText = false): SessionTreeEntry[] {
+    const call: AgentMessage = {
+      ...assistantText("", 2),
+      content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {}, async: true }],
+      stopReason: "toolUse",
+    };
+    const progress = assistantText("Independent explanation. ".repeat(50), 3);
+    const result = toolResultText("The actual lookup result is 7319.", 4);
+    return [
+      userText("Run the lookup and explain the approach.", 1),
+      call,
+      ...(resultBeforeText ? [result, progress] : [progress, result]),
+      assistantText("Done.", 5),
+    ].map(messageEntry);
+  }
+
+  it("retains an async call whose result follows another assistant fragment", () => {
+    const entries = asynchronousExchange();
+    const result = findCutPoint(entries, 0, entries.length, 100);
+
+    expect(result.firstKeptEntryIndex).toBe(1);
+    expect(result.isSplitTurn).toBe(true);
+  });
+
+  it("can summarize a completed tool exchange before the retained explanation", () => {
+    const entries = asynchronousExchange(true);
+
+    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(3);
+  });
+
+  it("summarizes the complete exchange when its call cannot fit the foreground budget", () => {
+    const entries = asynchronousExchange();
+    const maxTokens = entries.slice(2).reduce((total, entry) => {
+      return total + (entry.type === "message" ? estimateTokens(entry.message) : 0);
+    }, 0);
+
+    expect(
+      findCutPoint(entries, 0, entries.length, 100, {
+        budget: { maxTokens, reserveTokens: 0, estimateTokens },
+      }).firstKeptEntryIndex,
+    ).toBe(4);
+  });
+
+  it("refuses a foreground tail that can only fit an incomplete tool exchange", () => {
+    const entries = asynchronousExchange().slice(0, -1);
+    const maxTokens = entries.slice(2).reduce((total, entry) => {
+      return total + (entry.type === "message" ? estimateTokens(entry.message) : 0);
+    }, 0);
+
+    expect(
+      findCutPoint(entries, 0, entries.length, 100, {
+        budget: { maxTokens, reserveTokens: 0, estimateTokens },
+      }).firstKeptEntryIndex,
+    ).toBe(entries.length);
+  });
+
+  it("keeps an older call when a pending user message arrives before its result", () => {
+    const messages = asynchronousExchange().flatMap((entry) =>
+      entry.type === "message" ? [entry.message] : [],
+    );
+    messages.splice(3, 0, userText("Please preserve this pending request.", 3));
+    const entries = messages.map(messageEntry);
+
+    expect(
+      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: "entry-3" })
+        .firstKeptEntryIndex,
+    ).toBe(1);
+  });
+
+  it("does not pull a previous completed occurrence with a reused provider id into the tail", () => {
+    const messages = asynchronousExchange().flatMap((entry) =>
+      entry.type === "message" ? [entry.message] : [],
+    );
+    const earlierCall = messages[1];
+    if (earlierCall?.role !== "assistant") {
+      throw new Error("The fixture is missing its tool-calling assistant");
+    }
+    messages.splice(
+      1,
+      0,
+      structuredClone(earlierCall),
+      toolResultText("Earlier completed result.", 2),
+    );
+    const entries = messages.map(messageEntry);
+
+    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(3);
+  });
+
+  it("keeps the real late result with the call whose synthetic result it replaces", () => {
+    const messages = asynchronousExchange().flatMap((entry) =>
+      entry.type === "message" ? [entry.message] : [],
+    );
+    messages.splice(2, 0, {
+      ...toolResultText("Missing result.", 2),
+      isError: true,
+      details: { openclawSyntheticMissingToolResult: true },
+    });
+    const entries = messages.map(messageEntry);
+
+    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(1);
+  });
+
+  it("keeps overlapping asynchronous calls and out-of-order results in one retained group", () => {
+    const messages = asynchronousExchange().flatMap((entry) =>
+      entry.type === "message" ? [entry.message] : [],
+    );
+    messages.splice(2, 0, {
+      ...assistantText("", 2),
+      content: [{ type: "toolCall", id: "call-2", name: "read", arguments: {}, async: true }],
+      stopReason: "toolUse",
+    });
+    messages.splice(4, 0, {
+      ...toolResultText("Second call finished first.", 4),
+      toolCallId: "call-2",
+      toolName: "read",
+    });
+    const entries = messages.map(messageEntry);
+
+    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(1);
+  });
+
   it("preserves the pending suffix before a foreground budget exists", () => {
     const pending = messageEntry(userText("first admitted input", 3), 2);
     const entries = [

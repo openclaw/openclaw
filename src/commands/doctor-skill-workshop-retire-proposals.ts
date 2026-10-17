@@ -7,10 +7,12 @@ import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identit
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { pathExists, root } from "../infra/fs-safe.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -544,6 +546,9 @@ async function retireProposals(params: {
   assertCurrent();
   const dropped = runOpenClawStateWriteTransaction(
     ({ db }) => {
+      if (isPostgresSqlConnection(db)) {
+        requireNativeDatabaseFile("postgres", "repair");
+      }
       assertCurrent();
       // Reread inside the transaction: a proposal written since planning keeps the tables.
       const pending = tableExists(db, "skill_workshop_proposals")

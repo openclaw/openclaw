@@ -11,10 +11,7 @@ import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  SubagentRegistryVersionConflictError,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
@@ -128,9 +125,6 @@ function createRequesterWakeReceiptHolds(
               if (phase) {
                 executions.push(phase);
               }
-              if (typeof result === "object" && result !== null && "conflictRunIds" in result) {
-                return result;
-              }
               if (hold && phase) {
                 observed.add(phase);
                 hold.entered.resolve(members);
@@ -142,7 +136,7 @@ function createRequesterWakeReceiptHolds(
         workerOptions,
       ).catch((error: unknown) => {
         const phase = capturedMutation?.phase;
-        if (phase && !(error instanceof SubagentRegistryVersionConflictError)) {
+        if (phase) {
           holds[phase].entered.reject(error);
         }
         throw error;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -11,6 +11,8 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -20,6 +22,7 @@ import { createGatewaySession } from "./session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "./session-create-service.types.js";
 
 describe("session creation display titles", () => {
+  afterEach(() => memorySessionActorOwners.reset());
   it.each(["durable", "incognito", "cross-agent", "shared"])(
     "does not retain a fork that loses its label claim in %s storage",
     async (storage) => {
@@ -51,25 +54,40 @@ describe("session creation display titles", () => {
           message: { role: "user", content: "Preserve this parent history." },
         });
         const parentEvents = await loadTranscriptEvents(parentScope);
-        const database = openOpenClawAgentDatabase(
-          toDatabaseOptions(
-            resolveSqliteScope({ sessionKey: childKey, agentId: childAgent, storePath }),
-          ),
-        );
+        const memory = incognito
+          ? captureSessionActorStorageOwner(
+              { sessionKey: childKey, agentId: childAgent },
+              { assertCurrent() {}, authorize() {} },
+            )
+          : undefined;
+        const database = incognito
+          ? undefined
+          : openOpenClawAgentDatabase(
+              toDatabaseOptions(
+                resolveSqliteScope({ sessionKey: childKey, agentId: childAgent, storePath }),
+              ),
+            );
         const transcriptIds = () =>
-          database.db
-            .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id")
-            .all();
+          memory
+            ? (memory.owner?.listSessions(memory.authority) ?? [])
+                .flatMap((row) => (row.entry ? [{ session_id: row.entry.sessionId }] : []))
+                .toSorted((a, b) => a.session_id.localeCompare(b.session_id))
+            : database!.db
+                .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id")
+                .all();
         const beforeIds = transcriptIds();
         const entered = createDeferredCore();
         const proceed = createDeferredCore();
         let phase = "";
+        let forkPrepared = false;
         const withCommit: PreparedGatewaySessionLifecycle["withCommit"] = async (run) => {
-          if (phase === "writerAdmission" || phase === "commit") {
+          if (phase === "writerAdmission" || phase === "commit" || (incognito && forkPrepared)) {
             entered.resolve();
             await proceed.promise;
           }
-          return run(() => {});
+          const result = await run(() => {});
+          forkPrepared = true;
+          return result;
         };
         const loser = createGatewaySession({
           ...common,
@@ -105,16 +123,20 @@ describe("session creation display titles", () => {
         if (!winner.ok) {
           throw new Error(winner.error.message);
         }
-        expect(
-          database.db
-            .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
-            .get(childKey),
-        ).toBeUndefined();
-        expect(
-          database.db
-            .prepare("SELECT session_id FROM session_windows WHERE session_key = ?")
-            .all(childKey),
-        ).toEqual([]);
+        if (memory) {
+          expect(memory.owner?.readSession(childKey, memory.authority)).toBeUndefined();
+        } else {
+          expect(
+            database!.db
+              .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
+              .get(childKey),
+          ).toBeUndefined();
+          expect(
+            database!.db
+              .prepare("SELECT session_id FROM session_windows WHERE session_key = ?")
+              .all(childKey),
+          ).toEqual([]);
+        }
         expect(transcriptIds()).toEqual(
           [...beforeIds, { session_id: winner.entry.sessionId }].toSorted((a, b) =>
             String(a.session_id).localeCompare(String(b.session_id)),

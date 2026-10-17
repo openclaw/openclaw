@@ -1,5 +1,6 @@
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
+import nodePath from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
@@ -17,13 +18,14 @@ import {
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
+import { getPreparedAgentDeletionDiscovery } from "../../state/agent-deletion-journal-status.js";
 import {
   listOpenClawRegisteredAgentDatabases,
-  listOpenIncognitoAgentDatabases,
   readOpenClawAgentDatabaseRegistryToken,
-  readOpenIncognitoAgentDatabaseGeneration,
 } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionModelSources,
@@ -32,8 +34,9 @@ import {
   type GatewayStoredSessionTargets,
 } from "./combined-store-model-sources.js";
 import {
+  createGatewayConfiguredDatabaseMatcher,
   createGatewayRetainedStoreMatcher,
-  discoveryReadOptions,
+  gatewayDiscoveryReadOptions,
   isStorePathTemplate,
   resolveSharedStoreRowOwner,
   resolveCombinedDatabasePath,
@@ -49,25 +52,22 @@ import type {
 } from "./combined-store.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { resolveSessionStorePathCore } from "./paths.js";
-import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
-  isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
-  listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
-  resolveConfiguredAgentDatabaseCandidatePaths,
   resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
-export type {
-  GatewayStoredSessionTarget,
-  GatewayStoredSessionTargets,
-} from "./combined-store-model-sources.js";
+export type { GatewayStoredSessionTarget } from "./combined-store-model-sources.js";
 export type {
   GatewaySessionStoreOptions,
   ResolvedGatewaySessionStoreTargets,
@@ -85,47 +85,13 @@ function capturePhysicalStoreTargets() {
 
 type PreparedConfiguredSessionStoreTargets = {
   cfg: OpenClawConfig;
-  includeIncognito: boolean;
-  incognitoGeneration: number;
   registryToken: symbol;
+  deletionFacts: ReturnType<typeof getPreparedAgentDeletionDiscovery>;
   resolved: ResolvedGatewaySessionStoreTargets;
 };
 
-// Gateway aliases, config, registry, and incognito topology are process-stable until
-// an explicit generation change or restart; generic CLI/Doctor dedupe stays fresh.
+// Durable target discovery follows config and registry receipts. Memory owners are read directly.
 let preparedConfiguredSessionStoreTargets: PreparedConfiguredSessionStoreTargets | undefined;
-
-function loadGatewayStoreEntries(params: {
-  agentId: string;
-  includeOpenDatabases?: boolean;
-  projection: GatewaySessionEntryProjection;
-  storePath: string;
-}) {
-  const listEntries = params.includeOpenDatabases
-    ? listSessionEntriesCore
-    : listSessionEntriesReadOnly;
-  return listEntries({
-    agentId: params.agentId,
-    clone: false,
-    projection: params.projection,
-    storePath: params.storePath,
-  });
-}
-
-/** Snapshot the existing process-held ephemeral stores without durable discovery. */
-export function loadOpenIncognitoSessionStores(
-  projection: GatewaySessionEntryProjection = "list",
-  targets: readonly SessionStoreTarget[] = listOpenIncognitoAgentDatabases(),
-) {
-  return targets.map((target) => ({
-    ...target,
-    entries: loadGatewayStoreEntries({
-      ...target,
-      includeOpenDatabases: true,
-      projection,
-    }),
-  }));
-}
 
 // The listing accessor owns delivery-key validation; federation owns config aliases and targets.
 function mergeSessionEntryIntoCombined(params: {
@@ -157,7 +123,7 @@ export function projectGatewaySessionEntry(
   entry: SessionEntry,
   resolveSourceKey?: (key: string) => string,
 ): SessionEntry {
-  const projected = { ...entry };
+  let projected = entry;
   // Global display uses the captured parent selection; per-sender lineage stays literal.
   // Raw sentinels keep their physical owner and are never reinterpreted here.
   if (cfg.session?.scope === "global") {
@@ -165,9 +131,15 @@ export function projectGatewaySessionEntry(
       const sessionKey = projected[field];
       const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
       if (sessionKey && parsed) {
-        projected[field] =
+        const sourceKey =
           resolveSourceKey?.(sessionKey) ??
           canonicalizeMainSessionAlias({ cfg, agentId: parsed.agentId, sessionKey });
+        if (sourceKey !== sessionKey) {
+          if (projected === entry) {
+            projected = { ...entry };
+          }
+          projected[field] = sourceKey;
+        }
       }
     }
   }
@@ -183,11 +155,10 @@ function mergeOpenIncognitoStores(params: {
   readEntries?: (target: SessionStoreTarget) => SessionEntrySummary[];
 }): string[] {
   const storePaths: string[] = [];
-  const readEntries = params.readEntries;
-  const stores = readEntries
-    ? params.targets.map((target) => ({ ...target, entries: readEntries(target) }))
-    : loadOpenIncognitoSessionStores(params.projection, params.targets);
-  for (const { entries: store, ...target } of stores) {
+  for (const target of params.targets) {
+    const store = params.readEntries
+      ? params.readEntries(target)
+      : (captureMemoryExactSessionReader(target)?.entries(params.projection) ?? []);
     let merged = false;
     const addModelEntry = params.modelSources.prepareStore(target);
     const modelTarget = { agentId: target.agentId, storeTarget: target };
@@ -265,18 +236,18 @@ function filterCombinedStoreToConfiguredAgents(params: {
 
 function resolvePreparedConfiguredSessionStoreTargets(
   cfg: OpenClawConfig,
-  includeIncognito: boolean,
   discovery?: GatewaySessionStoreDiscovery,
 ): ResolvedGatewaySessionStoreTargets {
-  const readOptions = discoveryReadOptions(discovery);
+  const readOptions = gatewayDiscoveryReadOptions(cfg, discovery);
   const registryToken = discovery ? undefined : readOpenClawAgentDatabaseRegistryToken();
-  const incognitoGeneration = readOpenIncognitoAgentDatabaseGeneration();
+  const deletionFacts = discovery
+    ? undefined
+    : getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath());
   const cached = discovery ? undefined : preparedConfiguredSessionStoreTargets;
   if (
     cached?.cfg === cfg &&
     cached.registryToken === registryToken &&
-    cached.incognitoGeneration === incognitoGeneration &&
-    cached.includeIncognito === includeIncognito
+    cached.deletionFacts === deletionFacts
   ) {
     return cached.resolved;
   }
@@ -285,12 +256,10 @@ function resolvePreparedConfiguredSessionStoreTargets(
   const defaultAgentId = normalizeAgentId(resolveSessionStoreCompatibilityAgentId(cfg));
   const configuredIds = listConfiguredSessionStoreAgentIds(cfg);
   const configuredAgentIds = new Set(configuredIds);
-  const incognitoTargets = includeIncognito ? listOpenIncognitoAgentDatabases() : [];
-  const incognitoTargetKeys = new Set(incognitoTargets.map(storeTargetKey));
   const diagnostics: string[] = [];
   const { physicalTargets, onResolvedTarget } = capturePhysicalStoreTargets();
   let sharedStoreRowOwner: ResolvedGatewaySessionStoreTargets["sharedStoreRowOwner"];
-  const candidates = dedupeSessionStoreTargetsBySqliteTarget(
+  const durableTargets = dedupeSessionStoreTargetsBySqliteTarget(
     [
       ...(readOptions.registeredDatabases ?? listOpenClawRegisteredAgentDatabases()).map(
         ({ agentId, path }) => ({
@@ -302,8 +271,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
         agentId,
         storePath: resolveSessionStorePathCore(storeConfig, { agentId, env: readOptions.env }),
       })),
-      ...incognitoTargets,
-    ],
+    ].filter((target) => !readOptions.excludeTarget(target)),
     {
       defaultAgentId,
       ...readOptions,
@@ -314,20 +282,13 @@ function resolvePreparedConfiguredSessionStoreTargets(
       },
     },
   );
-  const durableTargets = candidates.filter(
-    (target) => !incognitoTargetKeys.has(storeTargetKey(target)),
-  );
   const resolved = Object.freeze({
     configuredAgentIds,
     defaultAgentId,
     diagnostics: Object.freeze(diagnostics),
     durableStorePath: resolveCombinedDatabasePath(durableTargets, physicalTargets),
     durableTargets: Object.freeze(durableTargets.map((target) => Object.freeze({ ...target }))),
-    incognitoTargets: Object.freeze(
-      candidates
-        .filter((target) => incognitoTargetKeys.has(storeTargetKey(target)))
-        .map((target) => Object.freeze({ ...target })),
-    ),
+    incognitoTargets: [],
     sharedStoreRowOwner,
     physicalTargets,
     storeConfig,
@@ -335,41 +296,52 @@ function resolvePreparedConfiguredSessionStoreTargets(
   if (registryToken) {
     preparedConfiguredSessionStoreTargets = {
       cfg,
-      includeIncognito,
-      incognitoGeneration,
       registryToken,
+      deletionFacts,
       resolved,
     };
   }
   return resolved;
 }
 
+export function listMemorySessionStoreTargets(env?: NodeJS.ProcessEnv): SessionStoreTarget[] {
+  const selected = captureSessionActorStorageOwner({ env });
+  const stateDir = selected ? nodePath.resolve(selected.path, "../../../..") : resolveStateDir(env);
+  const targets = memorySessionActorOwners
+    .list()
+    .filter((owner) => nodePath.resolve(owner.path, "../../../..") === stateDir)
+    .map((owner) => ({ agentId: owner.agentId, storePath: owner.path }));
+  if (selected && !targets.some((target) => target.storePath === selected.path)) {
+    targets.push({ agentId: selected.agentId, storePath: selected.path });
+  }
+  return targets;
+}
+
 function resolveGatewaySessionStoreTopology(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions,
 ): ResolvedGatewaySessionStoreTargets {
-  const readOptions = discoveryReadOptions(opts.discovery);
+  const readOptions = gatewayDiscoveryReadOptions(cfg, opts.discovery);
   const storeConfig = cfg.session?.store;
   const diagnostics: string[] = [];
   const requestedAgentId =
     typeof opts.agentId === "string" && opts.agentId.trim()
       ? normalizeAgentId(opts.agentId)
       : undefined;
-  if (opts.configuredAgentsOnly === true && !requestedAgentId) {
-    return resolvePreparedConfiguredSessionStoreTargets(
-      cfg,
-      opts.includeIncognito !== false,
-      opts.discovery,
-    );
-  }
-  const defaultAgentId = normalizeAgentId(resolveSessionStoreCompatibilityAgentId(cfg));
-  const { physicalTargets, onResolvedTarget } = capturePhysicalStoreTargets();
   const incognitoTargets =
     opts.includeIncognito === false
       ? []
-      : listOpenIncognitoAgentDatabases().filter(
+      : listMemorySessionStoreTargets(readOptions.env).filter(
           (target) => !requestedAgentId || target.agentId === requestedAgentId,
         );
+  if (opts.configuredAgentsOnly === true && !requestedAgentId) {
+    return {
+      ...resolvePreparedConfiguredSessionStoreTargets(cfg, opts.discovery),
+      incognitoTargets,
+    };
+  }
+  const defaultAgentId = normalizeAgentId(resolveSessionStoreCompatibilityAgentId(cfg));
+  const { physicalTargets, onResolvedTarget } = capturePhysicalStoreTargets();
 
   if (storeConfig && !isStorePathTemplate(storeConfig)) {
     const ownerIds = [
@@ -382,10 +354,12 @@ function resolveGatewaySessionStoreTopology(
     ];
     let sharedStoreRowOwner: ResolvedGatewaySessionStoreTargets["sharedStoreRowOwner"];
     const durableTargets = dedupeSessionStoreTargetsBySqliteTarget(
-      ownerIds.map((agentId) => ({
-        agentId,
-        storePath: resolveSessionStorePathCore(storeConfig, { agentId, env: readOptions.env }),
-      })),
+      ownerIds
+        .map((agentId) => ({
+          agentId,
+          storePath: resolveSessionStorePathCore(storeConfig, { agentId, env: readOptions.env }),
+        }))
+        .filter((target) => !readOptions.excludeTarget(target)),
       {
         defaultAgentId,
         ...readOptions,
@@ -431,7 +405,7 @@ export function resolveGatewaySessionStoreTargets(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions = {},
 ): ResolvedGatewaySessionStoreTargets {
-  const readOptions = discoveryReadOptions(opts.discovery);
+  const readOptions = gatewayDiscoveryReadOptions(cfg, opts.discovery);
   if (opts.agentId?.trim()) {
     assertAgentDatabaseAdmitted(opts.agentId, { env: readOptions.env });
   }
@@ -458,7 +432,7 @@ export function resolveGatewaySessionStoreTargets(
               ![...resolved.physicalTargets.values()].some((target) => target.storePath === path),
           )
           .map(({ agentId, path }) => ({ agentId, storePath: path })),
-      ],
+      ].filter((target) => !readOptions.excludeTarget(target)),
       { defaultAgentId: resolved.defaultAgentId, onResolvedTarget, ...readOptions },
     );
     resolved = { ...resolved, durableTargets, physicalTargets, groupDiscovery };
@@ -491,19 +465,13 @@ export function applyGatewaySessionStoreAdmission(
   if (opts.agentId?.trim()) {
     assertAgentDatabaseAdmitted(opts.agentId, { env });
   }
-  const configuredTargets =
+  const isConfiguredDatabase =
     opts.preserveSentinelOwners === "physical" && getAgentDatabaseStartupAdmission()
-      ? resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }).map((pathname) => ({
-          path: pathname,
-        }))
+      ? createGatewayConfiguredDatabaseMatcher(cfg, env)
       : undefined;
   const admitted = (target: SessionStoreTarget): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
-    if (
-      configuredTargets &&
-      physical &&
-      !isConfiguredAgentDatabaseTarget(configuredTargets, physical.agentId, physical.storePath)
-    ) {
+    if (isConfiguredDatabase && physical && !isConfiguredDatabase(physical.storePath)) {
       return false;
     }
     const refusal =
@@ -572,10 +540,11 @@ export function mergeCombinedSessionStore(
   opts: GatewaySessionStoreOptions,
   prepared: PreparedCombinedSessionStore,
   readEntries: (target: SessionStoreTarget) => SessionEntrySummary[],
+  readQualifiedParent: GatewaySessionLineageReader,
   incognitoEntries?: (target: SessionStoreTarget) => SessionEntrySummary[],
-  preparedLineage?: GatewaySessionLineageReader,
 ): GatewayCombinedSessionStore {
   const env = opts.discovery?.env;
+  const excluded = createGatewayRetainedStoreMatcher(cfg, opts.discovery);
   // Store-wide metadata reads must not materialize saved prompts for every row.
   // Consumers of retained prompt fields opt into the full projection.
   const { projection } = prepared;
@@ -601,7 +570,8 @@ export function mergeCombinedSessionStore(
     cfg,
     projectionDiagnostics,
     preparedAgentIds,
-    preparedLineage,
+    readQualifiedParent,
+    (agentId, storePath) => Boolean(excluded(storePath, agentId)),
   );
   for (const { target, storeTarget } of prepared.reads) {
     const agentId = target.agentId;
@@ -640,6 +610,9 @@ export function mergeCombinedSessionStore(
         );
       }
       const canonicalAgentId = normalizeAgentId(parsed?.agentId ?? rowAgentId);
+      if (excluded(storeTarget.storePath, canonicalAgentId)) {
+        continue;
+      }
       preparedAgentIds?.add(canonicalAgentId);
       // A scoped row can inherit a differently owned parent from this same physical store.
       const source = addModelEntry(canonicalAgentId, canonicalKey, entry);
@@ -714,16 +687,4 @@ export function mergeCombinedSessionStore(
     store: combined,
     targetsBySessionKey,
   };
-}
-
-export function loadCombinedSessionStoreForGatewayCore(
-  cfg: OpenClawConfig,
-  opts: GatewaySessionStoreOptions = {},
-): GatewayCombinedSessionStore {
-  const prepared = prepareCombinedSessionStore(cfg, opts);
-  return mergeCombinedSessionStore(cfg, opts, prepared, (target) =>
-    opts.loadEntries
-      ? opts.loadEntries(target, prepared.projection)
-      : loadGatewayStoreEntries({ ...target, projection: prepared.projection }),
-  );
 }

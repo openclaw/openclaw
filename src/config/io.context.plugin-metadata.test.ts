@@ -53,6 +53,7 @@ function manifestRecord(id: string, source: string, channels: string[] = []): Pl
     name: id,
     description: "test plugin",
     version: "1.0.0",
+    configSchema: { type: "object", additionalProperties: false },
   });
 }
 
@@ -112,6 +113,7 @@ describe("config IO plugin metadata snapshots", () => {
       const config: OpenClawConfig = {
         agents: { entries: { ops: { workspace: "/srv/ops" } } },
         logging: { level: "info" },
+        plugins: { allow: ["prepared"] },
       };
       const prepared = manifestRecord("prepared", "/srv/ops/prepared");
       const snapshot = workspaceSnapshot(
@@ -140,7 +142,7 @@ describe("config IO plugin metadata snapshots", () => {
             }),
       );
 
-      expect(result.ok).toBe(true);
+      expect(result).toMatchObject({ ok: true });
       expect(loader.getSnapshot()).toBe(snapshot);
       expect(mocks.resolvePluginMetadataSnapshotInput).not.toHaveBeenCalled();
     },
@@ -148,6 +150,7 @@ describe("config IO plugin metadata snapshots", () => {
 
   it("discovers the new workspace when reload changes legacy default ownership", async () => {
     const legacyConfig = (defaultAgent: "ops" | "research") => ({
+      plugins: { allow: ["new-workspace-plugin"] },
       agents: {
         defaults: { workspace: "/srv/base" },
         entries: {
@@ -181,7 +184,7 @@ describe("config IO plugin metadata snapshots", () => {
       }),
     );
 
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([added.id]);
     expect(
       mocks.resolvePluginMetadataSnapshotInput.mock.calls.map(([params]) => params.workspaceDir),

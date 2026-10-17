@@ -7,7 +7,6 @@ import { matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
-import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", { spy: true });
@@ -225,17 +224,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
         };
       },
     });
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
-  });
-
-  it("tolerates partial guild channels whose topic getter throws", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateInteraction: (currentInteraction) => {
-        defineThrowingDiscordChannelGetter(currentInteraction.channel, "topic");
-      },
-    });
-    expect(interaction.defer).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
   });

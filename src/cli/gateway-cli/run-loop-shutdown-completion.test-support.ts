@@ -48,11 +48,15 @@ export function registerGracefulGatewayShutdownTests({
   flushLogger,
   requestGatewayRestartWithSignalAdmission,
   armShutdownHardExitWatchdog,
+  abortEmbeddedAgentRun,
+  abortActiveCronTaskRuns,
 }: UpdateRespawnFixtures): void {
   registerTimedOutGatewayStopTests({
     createSignaledLoopHarness,
     waitForGatewayActiveWork,
     gatewayLog,
+    abortEmbeddedAgentRun,
+    abortActiveCronTaskRuns,
   });
 
   it("exits 0 on SIGTERM after graceful close", async () => {
@@ -298,7 +302,7 @@ export function registerGracefulGatewayShutdownTests({
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
         onSnapshot: expect.any(Function),
       });
       expect(close).toHaveBeenCalledWith({

@@ -45,6 +45,11 @@ describe("configured model runtime refresh inputs", () => {
       const [replacement] = listConfiguredRefreshInputs(config(configuredWorkspace), {}, owners);
       expect.soft(replacement?.workspaceDir).toBe(configuredWorkspace);
       expect.soft(replacement?.preserveWorkspaceDirOnRefresh).not.toBe(true);
+      const defaultsConfig = config();
+      defaultsConfig.agents!.defaults!.workspace = configuredWorkspace;
+      const [defaultReplacement] = listConfiguredRefreshInputs(defaultsConfig, {}, owners);
+      expect.soft(defaultReplacement?.workspaceDir).toBe(configuredWorkspace);
+      expect.soft(defaultReplacement?.preserveWorkspaceDirOnRefresh).not.toBe(true);
       const [relocated] = listConfiguredRefreshInputs(
         config(undefined, state.path("new-agent-dir")),
         { defaultWorkspaceDir: nextLaunchWorkspace },

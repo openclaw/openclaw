@@ -1,4 +1,4 @@
-import "../../components/select-picker.ts";
+import { Picker } from "../../components/select-picker.ts";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -13,9 +13,8 @@ export function LanguageSelect(props: {
   onLocaleChange: (locale: Locale | undefined) => void;
 }) {
   return (
-    <openclaw-select-picker
-      class="settings-select picker-select"
-      prop:params={{
+    <Picker
+      params={{
         label: t("quickSettings.language"),
         value: props.localeOverride ?? "system",
         options: [
@@ -23,10 +22,10 @@ export function LanguageSelect(props: {
             value: "system",
             label: `${t("common.system")} (${languageLabel(props.systemLocale)})`,
           },
-          ...SUPPORTED_LOCALES.map((locale) => ({ value: locale, label: languageLabel(locale) })),
+          ...SUPPORTED_LOCALES.map((value) => ({ value, label: languageLabel(value) })),
         ],
         showOptionTooltips: false,
-        onChange: (value: string) =>
+        onChange: (value) =>
           props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === value)),
       }}
     />

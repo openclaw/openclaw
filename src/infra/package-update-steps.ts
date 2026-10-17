@@ -27,6 +27,7 @@ import {
   validatePnpmIsolatedUpdate,
 } from "./package-update-manager-preflight.js";
 import { prepareNpmGitSourceInstallSpec } from "./package-update-npm-pack.js";
+import { PACKAGE_REFUSAL_CODES, type PackageRefusalCode } from "./package-update-refusal.js";
 import {
   PackageUpdateActivationError,
   type PackageActivationOptions,
@@ -64,7 +65,7 @@ import {
 
 type PackageUpdateStepsResult = {
   localOverrides?: LocalPackageOverridesResult;
-  reason?: "already-current" | typeof UPDATE_GLOBAL_PERMISSION_REASON;
+  reason?: "already-current" | typeof UPDATE_GLOBAL_PERMISSION_REASON | PackageRefusalCode;
   steps: UpdateStepResult[];
   activePackageRoot: string | null;
   afterVersion: string | null;
@@ -163,11 +164,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       : await verifyUnchangedPackageUpdateRecovery(originalPackageRoot, initialRecovery);
     return {
       localOverrides,
-      ...(finalFailedStep.failureFacts?.some(
-        (fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON,
-      )
-        ? { reason: UPDATE_GLOBAL_PERMISSION_REASON }
-        : {}),
+      reason: ([UPDATE_GLOBAL_PERMISSION_REASON, ...PACKAGE_REFUSAL_CODES] as const).find((code) =>
+        finalFailedStep.failureFacts?.some((fact) => fact.code === code),
+      ),
       steps: finalFailedSteps,
       activePackageRoot,
       afterVersion,
@@ -391,7 +390,12 @@ export async function runGlobalPackageUpdateSteps(params: {
     steps.push(updateStep);
     let finalInstallStep = updateStep;
     if (updateStep.exitCode !== 0) {
-      if (updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON)) {
+      if (
+        updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON) ||
+        [updateStep.stdoutTail, updateStep.stderrTail].some((output) =>
+          output?.includes("[update-schema-bump-unfenced]"),
+        )
+      ) {
         return await packageUpdateFailure(updateStep, steps);
       }
       const cleanupFailure = await cleanupStage();

@@ -5,10 +5,9 @@
 // mocked Bot Framework turn context. OUT events are the raw SDK surface calls:
 // context.sendActivity activities and stream.emit/update/close writes.
 //
-// msteams cancel has no inbound event: user Stop makes Teams 403 the next chunk
-// and the SDK throws StreamCancelledError synchronously from the write, so the
-// cancel scenario arms a stream write fault at setup and maps the scripted
-// `cancel` step to nothing.
+// msteams cancel has no inbound event: user Stop makes a background chunk POST
+// fail with HTTP 403. emit/update only queue work; the SDK then marks the stream
+// canceled. The scenario arms that wire fault and maps `cancel` to nothing.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import {
   deliveryTraceScenarios,
@@ -23,22 +22,15 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { describe, it } from "vitest";
-import type { OpenClawConfig, ReplyPayload } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-/** Core-owned dispatcher options returned by the Teams delivery plan. */
-type CapturedDispatcherOptions = {
-  onReplyStart?: () => Promise<void> | void;
-  deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<void> | void;
-  typingCallbacks?: { onIdle?: () => void };
-};
-
 /**
  * Deterministic stream write fault. Writes are counted across emit/update/close;
- * the fault fires at `atWrite` and every later write, matching a canceled
- * SDK HttpStream for the rest of the turn.
+ * the fault fires at `atWrite`; background writes publish cancellation after
+ * returning, while close can reject its awaited send.
  */
 type StreamWriteFault = { atWrite: number };
 
@@ -53,34 +45,41 @@ function createStreamCancelledError(): Error {
 function createRecordingStream(recorder: WireRecorder, fault?: StreamWriteFault) {
   let writes = 0;
   let canceled = false;
-  const applyFault = (method: string, payload?: unknown): void => {
+  const applyFault = (method: string, payload?: unknown): boolean => {
     writes += 1;
     if (!fault || writes < fault.atWrite) {
-      return;
+      return false;
     }
-    // SDK behavior on user Stop: the chunk POST 403s, the streamer flips its
-    // canceled flag, and this and every later write throws StreamCancelledError.
-    canceled = true;
+    // HttpStream observes the rejected POST asynchronously, not inside emit/update.
+    queueMicrotask(() => {
+      canceled = true;
+    });
     recorder.recordWireCall({
       method,
       ...(payload !== undefined ? { payload } : {}),
       result: { error: "StreamCancelledError" },
     });
-    throw createStreamCancelledError();
+    return true;
   };
   return {
     emit(activity: unknown): void {
       const payload = typeof activity === "string" ? { text: activity } : activity;
-      applyFault("stream.emit", payload);
+      if (applyFault("stream.emit", payload)) {
+        return;
+      }
       recorder.recordWireCall({ method: "stream.emit", payload });
     },
     update(text: string): void {
-      applyFault("stream.update", { text });
+      if (applyFault("stream.update", { text })) {
+        return;
+      }
       recorder.recordWireCall({ method: "stream.update", payload: { text } });
     },
     clearText(): void {},
     async close(): Promise<unknown> {
-      applyFault("stream.close");
+      if (applyFault("stream.close")) {
+        throw createStreamCancelledError();
+      }
       recorder.recordWireCall({ method: "stream.close", result: { id: "stream-final" } });
       return { id: "stream-final" };
     },
@@ -123,10 +122,7 @@ function createRecordingTurnContext(params: {
   };
 }
 
-function createTraceRuntimeStub(
-  recorder: WireRecorder,
-  captureDispatcherOptions: (options: CapturedDispatcherOptions) => void,
-): PluginRuntime {
+function createTraceRuntimeStub(recorder: WireRecorder): PluginRuntime {
   return {
     channel: {
       // Real text helpers: chunking behavior is part of the recorded lifecycle.
@@ -135,23 +131,6 @@ function createTraceRuntimeStub(
         chunkMarkdownTextWithMode,
         convertMarkdownTables,
         resolveMarkdownTableMode,
-      },
-      reply: {
-        createReplyDispatcherWithTyping: (options: CapturedDispatcherOptions) => {
-          captureDispatcherOptions(options);
-          return {
-            dispatcher: {},
-            replyOptions: {},
-            // Mirror core createReplyDispatcherWithTyping.markDispatchIdle: with
-            // no typing controller bound it stops typing via the callbacks, which
-            // ends the 8s keepalive loop and the 10min TTL timer.
-            markDispatchIdle: () => {
-              options.typingCallbacks?.onIdle?.();
-            },
-            markRunComplete: () => {},
-          };
-        },
-        resolveHumanDelayConfig: () => undefined,
       },
     },
     system: {
@@ -188,14 +167,14 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
   {
     // Same script in a channel: native streaming is DM-only and typing is
     // unsupported for channel conversations, so everything batches as block
-    // sends that flush at markDispatchIdle.
+    // sends that flush at settlement.
     golden: "block-fallback-channel",
     scenario: "streaming-happy",
     conversationType: "channel",
     conversationId: "19:channel-trace@thread.tacv2;messageid=1000",
   },
   {
-    // User Stop: the second stream write throws StreamCancelledError. Terminal
+    // User Stop: the second background write publishes cancellation. Terminal
     // state is canceled — no finalize chrome, no block redelivery, and typing
     // pulses are suppressed for the rest of the turn.
     golden: "cancel-via-write-error",
@@ -207,7 +186,7 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
 ];
 
 function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) {
-  setMSTeamsRuntime(createTraceRuntimeStub(recorder, () => undefined));
+  setMSTeamsRuntime(createTraceRuntimeStub(recorder));
   const stream = createRecordingStream(recorder, traceCase.streamWriteFault);
   const context = createRecordingTurnContext({
     recorder,
@@ -219,7 +198,6 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
     cfg: { channels: { msteams: {} } } as OpenClawConfig,
     agentId: "agent",
     sessionKey: "agent:msteams:trace",
-    runtime: { error: () => {} } as never,
     log: { info: () => {}, error: () => {} },
     app: {} as never,
     conversationRef: {
@@ -244,7 +222,7 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
   const options = {
     ...created.dispatcherOptions,
     deliver: created.delivery.deliver,
-  } as CapturedDispatcherOptions;
+  };
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -276,7 +254,7 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
         break;
       case "cancel":
         // No cancel event exists on msteams: cancellation is detected via the
-        // armed StreamCancelledError write fault, so this step maps to nothing.
+        // armed background write fault, so this step maps to nothing.
         break;
       case "idle":
         await created.dispatcherOptions.onSettled?.();

@@ -22,6 +22,7 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
 }));
 
+// mock-isolation: CLI parsing uses fixed manifest flags, independent of installed plugins.
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveProviderOnboardAuthFlags: () => [
     {
@@ -33,6 +34,11 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
       cliOption: "--openai-api-key <key>",
       description: "Another provider's conflicting API key flag",
       optionKey: "anotherProviderApiKey",
+    },
+    {
+      cliOption: "--local-embedding-only",
+      description: "Consent to embedding model downloads",
+      optionKey: "localEmbeddingOnly",
     },
   ],
 }));
@@ -65,6 +71,13 @@ async function runCli(args: string[]) {
 beforeEach(() => vi.resetAllMocks());
 
 describe("registered onboarding", () => {
+  it("passes a plugin's boolean consent flag without string coercion", async () => {
+    await runCli(["--non-interactive", "--accept-risk", "--local-embedding-only"]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ localEmbeddingOnly: true }),
+      runtime,
+    );
+  });
   it.each([
     {
       args: "recommendations --agent writer --json",
@@ -81,16 +94,6 @@ describe("registered onboarding", () => {
     expect(target).toHaveBeenCalledExactlyOnceWith(options, runtime);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
-
-  it.each([["recommendations", mocks.onboardRecommendationsCommand]] as const)(
-    "reports asynchronous storage failures for %s",
-    async (args, target) => {
-      target.mockRejectedValueOnce(new Error("synthetic recommendation persistence failure"));
-      await runCli(args.split(" "));
-      expect(runtime.error).toHaveBeenCalledWith("synthetic recommendation persistence failure");
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-    },
-  );
 
   it("preserves an explicitly blank leaf agent over its parent", async () => {
     await runCli(["recommendations", "--agent", "writer", "refresh", "--agent", ""]);

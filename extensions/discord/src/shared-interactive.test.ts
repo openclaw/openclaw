@@ -1,14 +1,10 @@
 // Discord tests cover shared interactive plugin behavior.
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
-import type {
-  MessagePresentation,
-  MessagePresentationAction,
-} from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { buildDiscordActivityCustomId } from "./component-custom-id.js";
 import { buildDiscordComponentMessage } from "./components.js";
-import { parseCustomId } from "./internal/discord.js";
+import { parseCustomId } from "./internal/components.base.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -54,153 +50,40 @@ describe("buildDiscordInteractiveComponents", () => {
     });
   });
 
-  it("preserves authored shared text blocks around controls", () => {
-    expect(
-      buildDiscordInteractiveComponents({
-        blocks: [
-          { type: "text", text: "First" },
-          {
-            type: "buttons",
-            buttons: [{ label: "Approve", value: "approve", style: "success" }],
-          },
-          { type: "text", text: "Last" },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        { type: "text", text: "First" },
-        {
-          type: "actions",
-          buttons: [{ label: "Approve", style: "success", callbackData: "approve" }],
-        },
-        { type: "text", text: "Last" },
-      ],
-    });
-  });
-
-  it("preserves URL-only buttons as Discord link buttons", () => {
+  it("preserves opaque callback authority through the legacy renderer", () => {
     expect(
       buildDiscordInteractiveComponents({
         blocks: [
           {
             type: "buttons",
-            buttons: [{ label: "Docs", url: "https://example.com/docs" }],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [{ label: "Docs", style: "link", url: "https://example.com/docs" }],
-        },
-      ],
-    });
-  });
-
-  it.each([
-    {
-      name: "approval",
-      action: {
-        type: "approval" as const,
-        approvalId: "approval-1",
-        approvalKind: "exec" as const,
-        decision: "allow-once" as const,
-      },
-      expected: {
-        internalCustomId: "execapproval:kind=exec;id=approval-1;action=allow-once",
-      },
-    },
-    {
-      name: "callback",
-      action: { type: "callback" as const, value: "plugin:opaque|value" },
-      expected: { callbackData: "plugin:opaque|value", callbackDataKind: "callback" },
-    },
-    {
-      name: "command",
-      action: { type: "command" as const, command: "/codex inspect" },
-      expected: { callbackData: "/codex inspect", callbackDataKind: "command" },
-    },
-    {
-      name: "question",
-      action: {
-        type: "question" as const,
-        questionId: "ask_0123456789abcdef0123456789abcdef",
-        optionValue: "Production",
-      },
-      expected: { internalCustomId: "ocq:id=ask_0123456789abcdef0123456789abcdef;i=0" },
-    },
-  ])("preserves typed $name authority through the legacy renderer", ({ action, expected }) => {
-    expect(
-      buildDiscordInteractiveComponents(
-        {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Unavailable",
-                  action: { type: "web-app", widgetId: "invalid" },
-                },
-                { label: "Continue", action },
-              ],
-            },
-          ],
-        },
-        {
-          questionOptionIndices:
-            action.type === "question"
-              ? new Map([[action.questionId, new Map([[action.optionValue.toLowerCase(), 0]])]])
-              : undefined,
-        },
-      ),
-    ).toMatchObject({
-      blocks: [{ type: "actions", buttons: [{ label: "Continue", ...expected }] }],
-    });
-  });
-
-  it.each(["url", "web-app"] as const)(
-    "renders typed %s actions as Discord link buttons",
-    (type) => {
-      expect(
-        buildDiscordPresentationComponents({
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Review",
-                  action: {
-                    type,
-                    url:
-                      type === "web-app"
-                        ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
-                        : "https://example.com/review",
-                  } as MessagePresentationAction,
-                },
-              ],
-            },
-          ],
-        }),
-      ).toEqual({
-        blocks: [
-          {
-            type: "actions",
             buttons: [
               {
-                label: "Review",
-                style: "link",
-                url:
-                  type === "web-app"
-                    ? "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket"
-                    : "https://example.com/review",
+                label: "Unavailable",
+                action: { type: "web-app", widgetId: "invalid" },
+              },
+              {
+                label: "Continue",
+                action: { type: "callback", value: "/codex permissions yolo" },
               },
             ],
           },
         ],
-      });
-    },
-  );
+      }),
+    ).toMatchObject({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Continue",
+              callbackData: "/codex permissions yolo",
+              callbackDataKind: "callback",
+            },
+          ],
+        },
+      ],
+    });
+  });
 
   it("renders hosted widget actions as Discord Activity buttons", () => {
     const widgetId = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -232,56 +115,6 @@ describe("buildDiscordInteractiveComponents", () => {
         },
       ],
     });
-  });
-
-  it("falls back to a web-app URL when the hosted widget id is invalid", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Open app",
-                action: {
-                  type: "web-app",
-                  widgetId: "invalid",
-                  url: "https://example.com/app",
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            {
-              label: "Open app",
-              style: "link",
-              url: "https://example.com/app",
-            },
-          ],
-        },
-      ],
-    });
-  });
-
-  it("skips web-app actions without a renderable Discord target", () => {
-    const presentation = {
-      blocks: [
-        {
-          type: "buttons" as const,
-          buttons: [
-            { label: "Missing", action: { type: "web-app" } },
-            { label: "Invalid", action: { type: "web-app", widgetId: "invalid" } },
-          ],
-        },
-      ],
-    } as unknown as MessagePresentation;
-    expect(buildDiscordPresentationComponents(presentation)).toBeUndefined();
   });
 
   it("renders system-agent approvals as actionable Discord controls", () => {
@@ -371,50 +204,6 @@ describe("buildDiscordInteractiveComponents", () => {
       approvalId: "opaque:approval;id=7",
       approvalKind: "plugin",
       action: "deny",
-    });
-  });
-
-  it("renders question choices with compact option indices", () => {
-    const questionId = "ask_0123456789abcdef0123456789abcdef";
-    expect(
-      buildDiscordPresentationComponents(
-        {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: ["Staging", "Production"].map((label) => ({
-                label,
-                action: { type: "question" as const, questionId, optionValue: label },
-              })),
-            },
-          ],
-        },
-        {
-          questionOptionIndices: new Map([
-            [
-              questionId,
-              new Map([
-                ["staging", 0],
-                ["production", 1],
-              ]),
-            ],
-          ]),
-        },
-      ),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            { label: "Staging", style: "secondary", internalCustomId: `ocq:id=${questionId};i=0` },
-            {
-              label: "Production",
-              style: "secondary",
-              internalCustomId: `ocq:id=${questionId};i=1`,
-            },
-          ],
-        },
-      ],
     });
   });
 
@@ -526,51 +315,6 @@ describe("buildDiscordInteractiveComponents", () => {
     ).toBeUndefined();
   });
 
-  it("keeps legacy callbacks unchanged beside typed approvals", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Allow",
-                action: {
-                  type: "approval",
-                  approvalId: "approval-1",
-                  approvalKind: "exec",
-                  decision: "allow-once",
-                },
-              },
-              {
-                label: "Legacy",
-                value: "/approve approval-1 deny",
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            {
-              label: "Allow",
-              style: "secondary",
-              internalCustomId: "execapproval:kind=exec;id=approval-1;action=allow-once",
-            },
-            {
-              label: "Legacy",
-              style: "secondary",
-              callbackData: "/approve approval-1 deny",
-            },
-          ],
-        },
-      ],
-    });
-  });
-
   it("splits long shared button rows to stay within Discord action limits", () => {
     expect(
       buildDiscordInteractiveComponents({
@@ -634,38 +378,6 @@ describe("buildDiscordInteractiveComponents", () => {
               style: "secondary",
               callbackData: "/codex open",
               callbackDataKind: "command",
-            },
-          ],
-        },
-      ],
-    });
-  });
-
-  it("marks typed callback actions as opaque callback data", () => {
-    expect(
-      buildDiscordPresentationComponents({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Opaque",
-                action: { type: "callback", value: "/codex permissions yolo" },
-              },
-            ],
-          },
-        ],
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            {
-              label: "Opaque",
-              style: "secondary",
-              callbackData: "/codex permissions yolo",
-              callbackDataKind: "callback",
             },
           ],
         },

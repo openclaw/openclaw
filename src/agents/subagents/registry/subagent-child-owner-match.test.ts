@@ -91,26 +91,7 @@ describe("subagent child authority policy", () => {
     }
   });
 
-  it("reports legacy suppression once across row publication copies", () => {
-    const entry: SubagentRunRecord = {
-      ...owned,
-      runId: "legacy-warning-policy",
-      createdAt: 23,
-      requesterDisplayKey: "parent",
-      task: "legacy warning",
-      cleanup: "keep",
-      execution: { status: "running" },
-      childSessionIdentity: undefined,
-    };
-    const warn = vi.fn();
-    warnLegacySubagentAuthority(entry, warn);
-    warnLegacySubagentAuthority({ ...entry }, warn);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("child-session effects suppressed"),
-      { runId: entry.runId },
-    );
-  });
-  it("warns once per legacy run even when the legacy population exceeds any cache bound", () => {
+  it("summarizes unsettled legacy runs once per process, deduplicating only by run ID", () => {
     const warn = vi.fn();
     const entries: SubagentRunRecord[] = Array.from({ length: 5000 }, (_, index) => ({
       ...owned,
@@ -122,13 +103,52 @@ describe("subagent child authority policy", () => {
       execution: { status: "running" },
       childSessionIdentity: undefined,
     }));
-    // Recovery sweeps revisit every retained run; a second sweep must not warn again.
-    for (const sweep of [1, 2]) {
-      for (const entry of entries) {
-        warnLegacySubagentAuthority({ ...entry }, warn);
-      }
-      expect(warn).toHaveBeenCalledTimes(entries.length);
-      expect(sweep).toBeGreaterThan(0);
+    const verified = { ...entries[0]!, childSessionIdentity: identity };
+    const mismatch = { ...entries[0]!, childSessionKey: "global" };
+    const settled: SubagentRunRecord[] = [
+      {
+        ...entries[0]!,
+        runId: "cleaned-terminal",
+        execution: { status: "terminal" },
+        cleanupCompletedAt: 1,
+      },
+      { ...entries[0]!, runId: "cleaned-running", cleanupCompletedAt: 1 },
+      {
+        ...entries[0]!,
+        runId: "suppressed-terminal",
+        execution: { status: "terminal" },
+        suppressCompletionDelivery: true,
+      },
+    ];
+    warnLegacySubagentAuthority([], warn);
+    warnLegacySubagentAuthority([verified, mismatch, ...settled], warn);
+    expect(warn).not.toHaveBeenCalled();
+
+    for (const entry of settled) {
+      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
     }
+    warnLegacySubagentAuthority(
+      [
+        verified,
+        mismatch,
+        ...entries.flatMap((entry) => [
+          entry,
+          { ...entry, createdAt: entry.createdAt + 1, generation: 2 },
+        ]),
+        ...settled,
+        { ...entries[0]!, runId: "suppressed-running", suppressCompletionDelivery: true },
+      ],
+      warn,
+    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("child-session effects suppressed"),
+      {
+        count: 5004,
+        sampleRunIds: ["legacy-population-0", "legacy-population-1", "legacy-population-2"],
+      },
+    );
+    warnLegacySubagentAuthority(entries, warn);
+    warnLegacySubagentAuthority([{ ...entries[0]!, runId: "later-legacy-run" }], warn);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

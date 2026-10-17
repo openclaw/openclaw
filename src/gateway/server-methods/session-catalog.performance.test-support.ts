@@ -289,7 +289,7 @@ export async function createComposedCatalogFixture(
     await service.start(serviceContext);
     const connection = new AbortController();
     let sequence = 0;
-    const setupPublications = new Map<string, (catalog: SessionCatalog) => void>();
+    const listPublications = new Map<string, (catalog: SessionCatalog) => void>();
     const client = {
       connectionSignal: connection.signal,
       connId: "composed-catalog",
@@ -304,7 +304,7 @@ export async function createComposedCatalogFixture(
           event === "sessions.catalog.host" &&
           Value.Check(SessionsCatalogHostEventSchema, payload)
         ) {
-          setupPublications.get(payload.progressId)?.(payload.catalog);
+          listPublications.get(payload.progressId)?.(payload.catalog);
         }
       },
       nodeSendToSession: () => {},
@@ -364,44 +364,47 @@ export async function createComposedCatalogFixture(
       }
       return host;
     };
+    const readSingleList = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      const work = new AsyncWorkScope();
+      const progressId = `catalog-list-${++sequence}`;
+      let published: SessionCatalog | undefined;
+      listPublications.set(progressId, (catalog) => {
+        if (catalog.id === "codex" && catalog.hosts.every((host) => !host.pending)) {
+          published = catalog;
+        }
+      });
+      try {
+        const result = await work.track(() => requestList({ ...params, progressId }));
+        // Warm responses can precede refresh publication; count that work in the same sample.
+        return await work.runWhenIdle(() => {
+          const current = result.catalogs.find((value) => value.id === "codex");
+          return current?.error?.code === "catalog_pending" ? (published ?? current) : current;
+        });
+      } finally {
+        listPublications.delete(progressId);
+        await work.drain();
+      }
+    };
     const list = async (params: Partial<SessionsCatalogListParams> = {}) =>
-      readHost((await requestList(params)).catalogs.find((value) => value.id === "codex"));
+      readHost(await readSingleList(params));
     const setupList = async (params: Partial<SessionsCatalogListParams> = {}) => {
       for (let attempt = 1; ; attempt++) {
-        const work = new AsyncWorkScope();
-        const progressId = `catalog-setup-${++sequence}`;
-        let published: SessionCatalog | undefined;
-        setupPublications.set(progressId, (catalog) => {
-          if (catalog.id === "codex" && catalog.hosts.every((host) => !host.pending)) {
-            published = catalog;
-          }
-        });
-        try {
-          const result = await work.track(() => requestList({ ...params, progressId }));
-          // The persistence marker can precede this request's provider and host publication.
-          const catalog = await work.runWhenIdle(() => {
-            const current = result.catalogs.find((value) => value.id === "codex");
-            return current?.error?.code === "catalog_pending" ? (published ?? current) : current;
-          });
-          const host = catalog?.hosts[0];
-          if (
-            attempt < SETUP_LIST_MAX_ATTEMPTS &&
-            !catalog?.error &&
-            catalog?.hosts.length === 1 &&
-            host?.hostId === "gateway:local" &&
-            host.error?.code === "APP_SERVER_UNAVAILABLE" &&
-            host.error.message === "Codex session catalog is still loading. Retry shortly."
-          ) {
-            // Foreground cold-list expiry does not stop index-owned hydration. Retry only
-            // fixture setup; measured list() calls retain the original single-request boundary.
-            await nextTurn();
-            continue;
-          }
-          return readHost(catalog);
-        } finally {
-          setupPublications.delete(progressId);
-          await work.drain();
+        const catalog = await readSingleList(params);
+        const host = catalog?.hosts[0];
+        if (
+          attempt < SETUP_LIST_MAX_ATTEMPTS &&
+          !catalog?.error &&
+          catalog?.hosts.length === 1 &&
+          host?.hostId === "gateway:local" &&
+          host.error?.code === "APP_SERVER_UNAVAILABLE" &&
+          host.error.message === "Codex session catalog is still loading. Retry shortly."
+        ) {
+          // Foreground cold-list expiry does not stop index-owned hydration. Retry only
+          // fixture setup; measured list() calls retain the original single-request boundary.
+          await nextTurn();
+          continue;
         }
+        return readHost(catalog);
       }
     };
     const setupMaintenance = { completed: 0 };

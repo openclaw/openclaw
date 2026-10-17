@@ -27,7 +27,6 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
-import { isSilentReplyPayloadText } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
   commandReply as stopWithText,
@@ -184,7 +183,7 @@ async function handleTtsLatestAction(
     }),
   });
   const latestText = latest?.text.trim();
-  if (!latestText || isSilentReplyPayloadText(latestText)) {
+  if (!latestText) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");
   }
   const hash = crypto.createHash("sha256").update(latestText).digest("hex");

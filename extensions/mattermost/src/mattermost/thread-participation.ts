@@ -29,7 +29,7 @@ const threadParticipation = createPersistentDedupeCache<MattermostThreadParticip
   persistent: {
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
-    openStore: (options) => getOptionalMattermostRuntime()?.state.openKeyedStore(options),
+    openStore: (options) => getOptionalMattermostRuntime()?.state.openKeyedStoreV2(options),
     logError: createPluginStateErrorReporter(
       getOptionalMattermostRuntime,
       "mattermost",

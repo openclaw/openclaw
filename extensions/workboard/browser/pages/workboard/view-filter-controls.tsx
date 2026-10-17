@@ -94,11 +94,8 @@ export function ActiveFilters(props: { filters: ActiveFilter[]; requestUpdate?: 
                 aria-label={t("workboard.removeFilter", {
                   filter: filter().label,
                 })}
-                onClick={(event: MouseEvent) => {
+                onClick={(event) => {
                   const button = event.currentTarget;
-                  if (!(button instanceof HTMLButtonElement)) {
-                    return;
-                  }
                   const toolbar = button.closest(".workboard-toolbar");
                   const buttons = [
                     ...(toolbar?.querySelectorAll<HTMLElement>(".workboard-filter-chip__remove") ??
@@ -409,10 +406,7 @@ export function MultiFilter<Value extends string>(props: {
               <input
                 type="checkbox"
                 checked={props.values.has(option().value)}
-                onChange={(event: Event) => {
-                  if (!(event.currentTarget instanceof HTMLInputElement)) {
-                    return;
-                  }
+                onChange={(event) => {
                   if (event.currentTarget.checked) {
                     props.values.add(option().value);
                   } else {

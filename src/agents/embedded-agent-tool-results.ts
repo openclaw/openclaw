@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { readNodePermissionError } from "./node-permission-error.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -156,6 +157,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
   const errorRecord = readRecord(error);
   const rawDetails = readRecord(errorRecord?.details);
   const nodeError = readRecord(rawDetails?.nodeError);
+  const permissionMissing = readNodePermissionError(error);
   const gatewayCode =
     normalizeOptionalString(errorRecord?.gatewayCode) ?? normalizeOptionalString(errorRecord?.code);
   const message = error instanceof Error ? error.message : String(error);
@@ -166,6 +168,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
       error: message,
       ...(gatewayCode ? { gatewayCode } : {}),
       ...(nodeError ? { nodeError } : {}),
+      ...(permissionMissing ? { permissionMissing } : {}),
     },
   };
 }

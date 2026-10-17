@@ -168,9 +168,12 @@ it("rejects a reply when an archive commits before admission", async () => {
   );
   const admission = admit({ storePath });
   await release();
-  await expect(admission).rejects.toThrow(
-    `Session "${sessionKey}" is archived. Restore it before starting new work.`,
-  );
+  await expect(admission).rejects.toMatchObject({
+    name: "SessionWorkStartError",
+    reason: "archived",
+    retryable: false,
+    message: `Session "${sessionKey}" is archived. Restore it before starting new work.`,
+  });
 });
 it("rejects a reply when deletion commits before admission", async () => {
   const storePath = store();

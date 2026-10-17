@@ -124,11 +124,12 @@ describe("sidebar session row tint", () => {
                 rowState.includes("selected"),
               );
               const style = getComputedStyle(row);
+              const fill = getComputedStyle(row, "::after");
               const colored = row.classList.contains("sidebar-recent-session--colored");
               const selected = rowState.includes("selected");
               const active = rowState.includes("active");
               const hover = rowState.includes("hover");
-              const background = paint(style.backgroundColor);
+              const background = paint(fill.backgroundColor);
               const token = selected ? "--accent" : active ? "--text" : "--session-color";
               const alpha = selected
                 ? 0.14
@@ -147,7 +148,7 @@ describe("sidebar session row tint", () => {
                   const element = row.querySelector(selector)!;
                   const textStyle = getComputedStyle(element);
                   // Composite the text over the row and its actual opaque sidebar.
-                  paint(style.backgroundColor);
+                  paint(fill.backgroundColor);
                   ctx.fillStyle = textStyle.color;
                   ctx.globalAlpha = Number(textStyle.opacity);
                   ctx.fillRect(0, 0, 1, 1);
@@ -161,6 +162,11 @@ describe("sidebar session row tint", () => {
               return {
                 id: row.id,
                 colored,
+                outerBackground: style.backgroundColor,
+                insets: [
+                  Number.parseFloat(style.borderTopWidth) + Number.parseFloat(fill.top),
+                  Number.parseFloat(style.borderBottomWidth) + Number.parseFloat(fill.bottom),
+                ],
                 background,
                 expected,
                 metadata,
@@ -174,18 +180,20 @@ describe("sidebar session row tint", () => {
         );
         for (const sample of samples) {
           const label = theme + "/" + state + "/" + sample.id;
+          expect(sample.outerBackground, label + " transparent gutter").toBe("rgba(0, 0, 0, 0)");
+          expect(sample.insets, label + " paint inset").toEqual([2, 2]);
           if (sample.colored || state.includes("active") || state.includes("selected")) {
             sample.background.forEach((channel, i) =>
               expect(
                 Math.abs(channel - sample.expected[i]!),
-                label + " full-row paint",
+                label + " inset row paint",
               ).toBeLessThanOrEqual(1),
             );
           } else if (state === "idle") {
             expect(
               await page
                 .locator("#" + sample.id)
-                .evaluate((row) => getComputedStyle(row).backgroundColor),
+                .evaluate((row) => getComputedStyle(row, "::after").backgroundColor),
             ).toBe("rgba(0, 0, 0, 0)");
           }
           expect(sample.title, label + " neutral title").toEqual(sample.expectedTitle);

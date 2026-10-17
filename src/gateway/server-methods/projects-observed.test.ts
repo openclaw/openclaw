@@ -16,8 +16,18 @@ const seededSessions = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Supply observed session rows without opening real session stores.
-vi.mock("./projects-session-store.js", () => ({
-  loadProjectSessionStore: () => ({ store: seededSessions.store, agents: new Map() }),
+vi.mock("./projects-session-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./projects-session-store.js")>()),
+  loadProjectSessionStore: () => ({
+    store: seededSessions.store,
+    agentId: () => undefined,
+    assertCurrent() {},
+  }),
+}));
+
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  readResidentUserProfileAliases: (profileId: string) => new Set([profileId]),
 }));
 
 vi.mock("../../projects/project-registry.js", () => ({
@@ -80,7 +90,11 @@ async function listObservedProjects(params: {
   } as never);
   const responses: Parameters<RespondFn>[] = [];
   const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: {},
+    modelCatalog: [],
+  });
   try {
     await handlers["projects.list"]?.({
       params: { includeObserved: true },

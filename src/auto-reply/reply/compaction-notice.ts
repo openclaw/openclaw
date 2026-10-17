@@ -4,6 +4,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { BOUNDED_CONTEXT_NOTICE } from "../../context-engine/transcript-byte-limit.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -24,8 +25,7 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   incomplete: "🧹 Compaction incomplete",
   skipped: "🧹 Compaction not needed",
   memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
-  context_bounded:
-    "⚠️ Continuing with bounded recent context. Older history outside that window is omitted for this turn; resend any earlier details needed for your request. Full history remains saved.",
+  context_bounded: BOUNDED_CONTEXT_NOTICE,
 };
 
 export function formatCompactionStatus(
@@ -59,9 +59,7 @@ export function resolveCompactionCompletionNotice(
   return {
     phase: "end",
     text:
-      result.compactionKind === "server-endpoint" &&
-      typeof before === "number" &&
-      typeof after === "number"
+      result.compactionKind === "server-endpoint" && before !== undefined && after !== undefined
         ? `🧹 Server-side compaction complete (${formatTokenCount(before)} → ${formatTokenCount(after)})`
         : undefined,
   };

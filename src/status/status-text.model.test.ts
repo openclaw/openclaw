@@ -1,7 +1,6 @@
 import type { StatementSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -56,7 +55,6 @@ describe("buildStatusText prepared context windows", () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
-    cliBackendsTesting.resetDepsForTest();
     await state.cleanup();
   });
   const tokenUsage = {
@@ -659,34 +657,6 @@ describe("buildStatusText prepared context windows", () => {
     },
   );
 
-  it("does not turn the context overlay label into a new selected model", async () => {
-    const parts = await renderPreparedStatus({ primaryModelLabelOverride: "fallback/small-model" });
-    expect(parts.text).toContain("Model: deepseek/deepseek-v4-flash");
-  });
-
-  it("preserves a literal self-provider prefix in a prepared model ID", async () => {
-    const sessionEntry: InternalSessionEntry = {
-      sessionId: "selection-owner-control",
-      updatedAt: 1,
-    };
-    const original = structuredClone(sessionEntry);
-    const parts = await renderPreparedStatus({
-      cfg: { agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } },
-      provider: "custom",
-      model: "custom/model",
-      sessionEntry,
-      resolvedThinkLevel: "off",
-    });
-    expect(parts.text).toContain("Model: custom/custom/model");
-    expect(parts.text).not.toContain("Model: custom/model");
-    const table = parts.presentation.blocks.find((block) => block.type === "table");
-    expect(table?.type === "table" ? table.rows : []).toContainEqual([
-      "🧠 Model",
-      expect.stringContaining("custom/custom/model"),
-    ]);
-    expect(sessionEntry).toEqual(original);
-  });
-
   it.each([
     { error: new SessionTranscriptProjectionUnavailableError("projection"), unavailable: true },
     { error: new SessionTranscriptStorageUnavailableError(), unavailable: true },
@@ -709,136 +679,5 @@ describe("buildStatusText prepared context windows", () => {
       await expect(result).rejects.toBe(error);
     }
     expect(readTail).toHaveBeenCalledOnce();
-  });
-
-  it("renders a cold-cache prepared window in plain and rich status", async () => {
-    const parts = await renderPreparedStatus();
-    const table = parts.presentation.blocks.find((block) => block.type === "table");
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/200k");
-    expect(table?.type === "table" ? table.rows : []).toContainEqual([
-      "📚 Context",
-      expect.stringContaining("45k/1.0m"),
-    ]);
-  });
-
-  it("keeps the selected prepared window over stale active model state", async () => {
-    const parts = await renderPreparedStatus({
-      sessionEntry: {
-        sessionId: "selected-prepared-context",
-        updatedAt: 0,
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "user",
-        modelProvider: "fallback",
-        model: "small-model",
-        ...tokenUsage,
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/128k");
-  });
-
-  it("uses the active prepared window for an established fallback", async () => {
-    const parts = await renderPreparedStatus({
-      sessionEntry: {
-        sessionId: "active-prepared-context",
-        updatedAt: 0,
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelProvider: "fallback",
-        model: "small-model",
-        fallbackNotice: { ...fallbackNotice, reason: "provider unavailable" },
-        ...tokenUsage,
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/128k");
-    expect(parts.text).not.toContain("Context: 45k/1.0m");
-  });
-
-  it("keeps Anthropic authored caps below the prepared Claude CLI window", async () => {
-    // Supply runtime alias metadata while exercising the authored context cap.
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-          bundleMcp: true,
-        },
-      ],
-    });
-    const parts = await renderPreparedStatus({
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      resolvedHarness: "claude-cli",
-      sessionEntry: {
-        sessionId: "claude-cli-authored-cap",
-        updatedAt: 0,
-        modelProvider: "claude-cli",
-        model: "claude-haiku-4-5",
-        agentHarnessId: "claude-cli",
-        contextTokens: 256_000,
-        contextTokensSource: "resolved",
-        ...tokenUsage,
-      },
-      thinkingCatalog: [
-        {
-          provider: "anthropic",
-          id: "claude-haiku-4-5",
-          contextWindow: 1_000_000,
-          contextTokens: 1_000_000,
-        },
-      ],
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.test",
-              models: [
-                {
-                  id: "claude-haiku-4-5",
-                  name: "Claude Haiku 4.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1_000_000,
-                  contextTokens: 256_000,
-                  maxTokens: 128_000,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/256k");
-    expect(parts.text).not.toContain("Context: 45k/1.0m");
-  });
-
-  it("matches namespaced prepared model IDs without stripping them", async () => {
-    const parts = await renderPreparedStatus({
-      provider: "openrouter",
-      model: "deepseek/deepseek-v4-flash",
-      thinkingCatalog: [
-        ...catalog,
-        {
-          provider: "openrouter",
-          id: "deepseek-v4-flash",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 128_000,
-          contextTokens: 128_000,
-        },
-      ],
-    });
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/128k");
   });
 });

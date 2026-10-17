@@ -131,7 +131,9 @@ Other balance failures include guidance for checking the server or its access pe
     top-level request fields instead of nested `options`. Local native chat
     requests default to `truncate: false` and `shift: false`, so supporting
     servers reject overflowing input instead of silently dropping history.
-    OpenClaw then attempts compaction and retries, or reports the failure.
+    OpenClaw then attempts compaction and retries. If recovery cannot make the
+    request fit, a replay-safe turn can use the configured model fallback chain,
+    preferring candidates with known context headroom; otherwise it reports the failure.
     Generation that fills the window can still produce a labeled partial reply.
     This behavior is verified with Ollama 0.33.3; older servers may ignore the
     fields. Explicit per-model values override these defaults. Hosted models
@@ -254,6 +256,14 @@ Other balance failures include guidance for checking the server or its access pe
     [memory search](/concepts/memory). It uses the configured Ollama base URL
     and API key, calls `/api/embed`, and batches multiple memory chunks into
     one `input` request when possible.
+
+    For rootless Podman, a configured Ollama provider at
+    `http://host.containers.internal:11434` can resolve to a canonical IPv4
+    link-local host gateway such as `169.254.1.2`. Memory embeddings allow this
+    exact provider origin, including a remote override that matches it. Other
+    hostnames, cloud metadata addresses, and IPv6-encoded link-local addresses
+    keep their existing restrictions. These requests reject cross-origin
+    redirects, including changes to the scheme or port.
 
     When `proxy.enabled=true`, embedding requests to the exact host-local
     loopback origin derived from the configured `baseUrl` use OpenClaw's

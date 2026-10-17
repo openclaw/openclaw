@@ -72,7 +72,8 @@ beforeEach(() => {
   resetContextWindowCacheForTest();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   resetContextWindowCacheForTest();
   vi.useRealTimers();
 });
@@ -197,7 +198,6 @@ describe("context cache lifecycle", () => {
     state.config = config("synthetic", model("recovered-model", 96_000));
     await context.prewarmContextWindowCacheAfterReady({ config: state.config });
     expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
     expect(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig).toBeUndefined();
     await context.ensureContextWindowCacheLoaded();
     expect(state.loadOwner).toHaveBeenCalledWith({ config: state.config, readOnly: true });
@@ -213,18 +213,6 @@ describe("context cache lifecycle", () => {
       config("synthetic", model("current-model", 96_000)),
     );
     expect(context.resolveContextTokensForModel({ model: "stale-model", cfg: {} })).toBeUndefined();
-  });
-
-  it("retires an unpublished prewarm marker when shutdown cancels during import", async () => {
-    let cancelled = false;
-    const pending = context.prewarmContextWindowCacheAfterReady({
-      config: {},
-      isCancelled: () => cancelled,
-    });
-    cancelled = true;
-    await pending;
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
-    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
   });
 
   it("does not publish prewarm cancelled during cooperative projection", async () => {

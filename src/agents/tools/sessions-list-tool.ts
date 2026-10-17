@@ -502,7 +502,7 @@ export function createSessionsListTool(opts?: {
               displayName: row.displayName,
               label: row.label,
               subject: readStringValue((entry as { subject?: unknown }).subject),
-              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
+              updatedAt: row.updatedAt ?? 0,
             },
             sessionKey: resolveInternalSessionKey({ key, alias }),
           });

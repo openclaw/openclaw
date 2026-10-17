@@ -49,7 +49,10 @@ import {
   type SecretOwnerRefState,
 } from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
-import { isSecretsRuntimeDisplayChange } from "./runtime-source-contract.js";
+import {
+  hasSameSecretProviderDefinition,
+  isSecretsRuntimeDisplayChange,
+} from "./runtime-source-contract.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -124,9 +127,7 @@ function cloneSecretsRuntimeRefreshContext(
     includeConfigRefs: context.includeConfigRefs ?? true,
     includeAuthStoreRefs: context.includeAuthStoreRefs,
     loadablePluginOrigins: new Map(context.loadablePluginOrigins),
-    ...(context.manifestRegistry
-      ? { manifestRegistry: structuredClone(context.manifestRegistry) }
-      : {}),
+    ...(context.manifestRegistry ? { manifestRegistry: context.manifestRegistry } : {}),
     ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
   };
 }
@@ -356,31 +357,6 @@ function mergeRollbackValue(previous: unknown, candidate: unknown, current: unkn
     }
   }
   return merged;
-}
-
-export function hasSameSecretProviderDefinition(
-  ref: SecretRef,
-  configs: OpenClawConfig[],
-): boolean {
-  const definition = configs[0]?.secrets?.providers?.[ref.provider];
-  if (
-    !configs.every((config) =>
-      isDeepStrictEqual(config.secrets?.providers?.[ref.provider], definition),
-    )
-  ) {
-    return false;
-  }
-  if (!definition || !("pluginIntegration" in definition)) {
-    return true;
-  }
-  // Plugin integration ownership is not fully normalized to one entry. Preserve a resolved value
-  // only across an unchanged plugin/channel snapshot, or rollback can pair it with rejected owner state.
-  const dependency = (config: OpenClawConfig) => ({
-    plugins: config.plugins,
-    channels: config.channels,
-  });
-  const previous = dependency(configs[0]!);
-  return configs.every((config) => isDeepStrictEqual(dependency(config), previous));
 }
 
 function preserveResolvedSecretRefValues(
@@ -817,6 +793,8 @@ export function activateSecretsRuntimeSnapshotState(params: {
   runtimeSourceConfig?: OpenClawConfig;
   mergeLiveAuthBookkeeping?: boolean;
   preserveActivationLineage?: boolean;
+  /** Provider-only refreshes retain admission when resolved config is unchanged. */
+  preserveRuntimeConfigPublication?: boolean;
 }): void {
   if (!hasCurrentAuthStoreCredentialsRevision(params.snapshot)) {
     throw new Error(
@@ -848,7 +826,9 @@ export function activateSecretsRuntimeSnapshotState(params: {
   const nextRefreshContext = params.refreshContext
     ? cloneSecretsRuntimeRefreshContext(params.refreshContext)
     : null;
-  setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+  if (!params.preserveRuntimeConfigPublication) {
+    setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+  }
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
@@ -1008,6 +988,17 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
   return snapshot;
 }
 
+/** Observation can evict live stores before their retained activation roster is refreshed. */
+export function hasActiveSecretsRuntimeAuthStorePath(databasePath: string): boolean {
+  return (
+    activeSnapshot?.authStores.some(
+      (entry) =>
+        entry.databasePath === databasePath ||
+        (entry.owner.kind === "resolved" && entry.owner.sharedDatabasePath === databasePath),
+    ) ?? false
+  );
+}
+
 /** Reuse resolved owners when only Control UI presentation changed. */
 export function prepareSecretsRuntimeDisplaySnapshot(
   params: Omit<
@@ -1038,12 +1029,12 @@ export function prepareSecretsRuntimeDisplaySnapshot(
   if (params.config.ui === undefined) {
     delete snapshot.config.ui;
   } else {
-    snapshot.config.ui = structuredClone(params.config.ui);
+    snapshot.config.ui = snapshot.sourceConfig.ui;
   }
   if (params.config.meta === undefined) {
     delete snapshot.config.meta;
   } else {
-    snapshot.config.meta = structuredClone(params.config.meta);
+    snapshot.config.meta = snapshot.sourceConfig.meta;
   }
   return snapshot;
 }
@@ -1051,6 +1042,11 @@ export function prepareSecretsRuntimeDisplaySnapshot(
 /** Stable token for compare-and-activate ownership across cloned snapshot reads. */
 export function getActiveSecretsRuntimeSnapshotRevisionState(): number {
   return activeSnapshotRevision;
+}
+
+/** Stable activation owner across provider-only refreshes. */
+export function getActiveSecretsRuntimeSnapshotLineageRevisionState(): number {
+  return activeSnapshotLineageStartRevision;
 }
 
 /** Whether the active snapshot is the activation or a scoped descendant of one revision. */

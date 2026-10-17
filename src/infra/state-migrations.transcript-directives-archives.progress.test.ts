@@ -14,14 +14,22 @@ import {
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
-import * as directiveTransform from "./state-migrations.transcript-directives-transform.js";
+import { repairHistoricalTranscriptEventJson } from "./state-migrations.transcript-directives-transform.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
 const original = Buffer.from('{"type":"custom","data":"original"}\n');
-const replacement = '{"type":"custom","data":"normalized"}\n';
+const replacementLine = '{"type":"custom","data":"normalized"}';
+const replacement = `${replacementLine}\n`;
 const count = 202;
 const key = (index: number) => String(index).padStart(3, "0");
+const directiveLine = (raw: string, owner: string) =>
+  repairHistoricalTranscriptEventJson({
+    raw,
+    owner,
+    scope: "all",
+    resolveMaskedProvider: () => undefined,
+  });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -73,9 +81,9 @@ function fixture(emptySessionIds = false) {
     database,
     pathname,
     start: { generation: "", sessionId: "" },
-    transformContent: (content: string) => ({
-      changed: content !== replacement,
-      content: replacement,
+    transformLine: (content: string) => ({
+      changed: content !== replacementLine,
+      content: replacementLine,
     }),
     writeCursor(cursor: { sessionId: string } | { phase: "complete" }) {
       database
@@ -114,25 +122,22 @@ describe("canonical archive migration progress", () => {
         await f.run(() =>
           migrateCanonicalTranscriptArchives({
             ...f.options,
-            transformContent(content) {
-              visit();
-              return f.options.transformContent(content);
-            },
+            onArchive: visit,
           }),
         );
         expect(f.rewritten()).toBe(count);
         expect(f.cursor()).toEqual({ phase: "complete" });
       } else {
-        const parse = directiveTransform.parseDirectiveMigrationTranscriptEvent;
-        vi.spyOn(directiveTransform, "parseDirectiveMigrationTranscriptEvent").mockImplementation(
-          (...args) => {
-            visit();
-            return parse(...args);
-          },
-        );
-        expect(await transcriptDirectiveArchivesNeedMigration(f.database, f.options.start)).toBe(
-          false,
-        );
+        expect(
+          await transcriptDirectiveArchivesNeedMigration(
+            f.database,
+            f.options.start,
+            (raw, owner) => {
+              visit();
+              return directiveLine(raw, owner);
+            },
+          ),
+        ).toBe(false);
         expect(f.rewritten()).toBe(0);
       }
       expect(visited).toBe(count);
@@ -162,19 +167,17 @@ describe("canonical archive migration progress", () => {
   it("honors Doctor cancellation at the first committed batch boundary", async () => {
     const f = fixture();
     const interrupted = new Error("Doctor interrupted by SIGINT");
-    let scheduled = false;
     await expect(
       withSqliteReadOnlyWorkerScope(
         () =>
           f.run(() =>
             migrateCanonicalTranscriptArchives({
               ...f.options,
-              transformContent(content) {
-                if (!scheduled) {
-                  scheduled = true;
-                  setImmediate(() => f.controller.abort(interrupted));
+              writeCursor(cursor) {
+                f.options.writeCursor(cursor);
+                if ("sessionId" in cursor && cursor.sessionId === "031") {
+                  queueMicrotask(() => f.controller.abort(interrupted));
                 }
-                return f.options.transformContent(content);
               },
             }),
           ),
@@ -186,20 +189,24 @@ describe("canonical archive migration progress", () => {
     expect(f.cursor()).toEqual({ sessionId: "031", generation: "retained" });
   });
 
-  it("cancels archive inspection between batches", async () => {
+  it("cancels archive inspection while decoding a batch", async () => {
     const f = fixture();
     const interrupted = new Error("Doctor interrupted by SIGINT");
-    const parsed = vi.spyOn(directiveTransform, "parseDirectiveMigrationTranscriptEvent");
+    let calls = 0;
     await expect(
       withSqliteReadOnlyWorkerScope(
-        async () => {
-          setImmediate(() => f.controller.abort(interrupted));
-          return transcriptDirectiveArchivesNeedMigration(f.database, f.options.start);
-        },
+        () =>
+          transcriptDirectiveArchivesNeedMigration(f.database, f.options.start, (raw, owner) => {
+            const line = directiveLine(raw, owner);
+            if (++calls === TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE) {
+              f.controller.abort(interrupted);
+            }
+            return line;
+          }),
         { signal: f.controller.signal, deadlineOwnedByCaller: true },
       ),
     ).rejects.toBe(interrupted);
-    expect(parsed).toHaveBeenCalledTimes(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    expect(calls).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
     expect(f.rewritten()).toBe(0);
   });
 
@@ -243,11 +250,14 @@ describe("canonical archive migration progress", () => {
     await f.run(() =>
       migrateCanonicalTranscriptArchives({
         ...f.options,
-        transformContent(content, owner) {
-          if (Number(owner.split(":")[0]) % TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE === 0) {
+        onArchive(archivePath) {
+          if (
+            Number(path.basename(archivePath, ".jsonl")) %
+              TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE ===
+            0
+          ) {
             now += 75;
           }
-          return f.options.transformContent(content);
         },
       }),
     );

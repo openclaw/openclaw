@@ -36,6 +36,7 @@ import {
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
 } from "../../internal-runtime-context.js";
+import { resolveCommandReplyExpectation } from "../../reply-completion.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import {
   SOURCE_OWNER_CHANGED,
@@ -62,7 +63,7 @@ import {
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
-  withSubagentRequesterSource,
+  withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
@@ -103,6 +104,7 @@ export type SubagentAnnounceDirectParams = {
   requesterIsSubagent: boolean;
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
+  onDeliveryError?: (error: unknown) => void;
   signal?: AbortSignal;
   onExecutionStarted?: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -122,23 +124,10 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return withSubagentRequesterSource(
+  return withSubagentRequesterDelivery(
     params.targetRequesterSessionKey,
-    params.requesterAgentId,
-    async (
-      isRequesterCurrent,
-    ): Promise<Awaited<ReturnType<typeof sendSubagentAnnounceDirectly>>> => {
-      const guardedParams = isRequesterCurrent
-        ? {
-            ...params,
-            isSourceSessionEffectsAllowed: () =>
-              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
-            isSourceSessionAdmissionAllowed: () =>
-              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
-          }
-        : params;
-      return sendSubagentAnnounceDirectlyBound(guardedParams);
-    },
+    params,
+    sendSubagentAnnounceDirectlyBound,
   );
 }
 
@@ -240,8 +229,8 @@ async function sendSubagentAnnounceDirectlyBound(
       params.targetRequesterSessionKey,
       requester,
     );
-    // Private findings bind to the requester incarnation that produced them,
-    // including a deliverable settle continuation that is no longer parentOnly.
+    // Settlement and private findings bind to the captured requester incarnation,
+    // including a visible continuation after the spawning turn has yielded.
     const requesterSessionBound =
       parentOnly ||
       (sourceToolId === "subagent_settle" && params.completionRequesterSessionId !== undefined);
@@ -255,7 +244,7 @@ async function sendSubagentAnnounceDirectlyBound(
         delivered: false,
         path: "none",
         reason: "completion_handoff_unavailable",
-        error: "private completion requester session is unavailable or replaced",
+        error: "completion requester session is unavailable or replaced",
         terminal: true,
         disposition: "intentional_non_delivery",
       };
@@ -310,6 +299,7 @@ async function sendSubagentAnnounceDirectlyBound(
       deliverCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
+        requesterSessionId,
         requesterAgentId: params.requesterAgentId,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
@@ -318,6 +308,7 @@ async function sendSubagentAnnounceDirectlyBound(
         agentResult,
         signal: params.signal,
         onDeliveryResult: params.onDeliveryResult,
+        onDeliveryError: params.onDeliveryError,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
     // A private settle turn never delivers; automatic only keeps a tool-only mode from
@@ -415,6 +406,16 @@ async function sendSubagentAnnounceDirectlyBound(
       : sessionOnlyOriginChannel
         ? sessionOnlyOrigin
         : undefined;
+    const replyExpectation = resolveCommandReplyExpectation({
+      cfg,
+      sessionKey: canonicalRequesterSessionKey,
+      sessionEntry: requesterEntry,
+      messageChannel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
+      opts: {
+        ...(parentOnly ? { privateCompletion: true as const } : {}),
+        inputProvenance: { kind: "inter_session" },
+      },
+    });
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     let directAgentParams: Record<string, unknown> = {
@@ -457,6 +458,7 @@ async function sendSubagentAnnounceDirectlyBound(
       params,
       parentOnly,
       requesterSessionBound,
+      replyExpectation,
       deliveryTarget,
       shouldDeliverAgentFinal,
       requiresMessageToolDelivery,
@@ -486,6 +488,12 @@ async function sendSubagentAnnounceDirectlyBound(
               }
               return await runAnnounceAgentCall({
                 agentParams: directAgentParams,
+                // Individual result delivery and an owed public synthesis remain
+                // required; optional settle intake may complete without repeating it.
+                replyExpectation:
+                  params.expectsCompletionMessage || params.requireVisibleReply
+                    ? "required"
+                    : "optional",
                 // A resumed parent has no inbound channel dispatcher to keep activity visible.
                 typing:
                   sourceToolId === "subagent_settle" &&
@@ -572,6 +580,7 @@ async function sendSubagentAnnounceDirectlyBound(
           return textDelivery;
         }
       }
+      params.onDeliveryError?.(err);
       directFailure = {
         delivered: false,
         path: "direct",
@@ -664,6 +673,7 @@ async function sendSubagentAnnounceDirectlyBound(
       ? settledRecovery.delivery
       : classifyResponse({ status: "ok", result: settledRecovery.result });
   } catch (err) {
+    params.onDeliveryError?.(err);
     const disposition = hasAnnounceSendEvidence(err)
       ? "ambiguous"
       : isPermanentAnnounceDeliveryError(err)

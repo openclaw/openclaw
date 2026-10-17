@@ -85,6 +85,24 @@ describe("session descriptor reads", () => {
     expect(h.read).toHaveBeenCalledTimes(10);
   });
 
+  it("reuses a descriptor across unchanged row observations without a time limit", async () => {
+    const h = harness();
+    const first = { ...initial, snapshotAt: 1 };
+    h.setRow(first);
+    await h.sessions.refresh({ agentId: "main" });
+    const described = await h.sessions.describe({ key });
+    for (let step = 1; step <= 12; step += 1) {
+      await vi.advanceTimersByTimeAsync(31_000);
+      const observed = { ...first, snapshotAt: step + 1 };
+      h.setRow(observed);
+      await h.sessions.refresh({ agentId: "main", force: true });
+      expect(h.sessions.state.result?.sessions[0]?.snapshotAt).toBe(step + 1);
+      await h.sessions.describe({ key });
+    }
+    expect(h.read).toHaveBeenCalledTimes(1);
+    expect(await h.sessions.describe({ key })).toEqual(described);
+  });
+
   it.each([
     { cause: "observed revision", phase: "completed" },
     { cause: "sessions.changed", phase: "pending" },
@@ -180,6 +198,61 @@ describe("session descriptor reads", () => {
         session: coverage === "unrelated" ? parent : next,
       });
       expect(h.read).toHaveBeenCalledTimes(coverage === "unrelated" ? 1 : 2);
+    },
+  );
+
+  it.each(["pending", "completed"] as const)(
+    "reuses a %s parent descriptor across unchanged ancestor references",
+    async (phase) => {
+      const h = harness();
+      const parent = { ...initial, lifecycleRevision: "first-life" };
+      h.setRow(parent);
+      const child = {
+        key: "agent:main:subagent:worker",
+        kind: "direct" as const,
+        sessionId: "child",
+        spawnedBy: key,
+        updatedAt: 2,
+      };
+      const emit = (snapshotAt: number, changed = false) =>
+        h.emitEvent({
+          type: "event",
+          event: snapshotAt % 2 ? "sessions.changed" : "session.message",
+          payload: {
+            agentId: "main",
+            reason: "send",
+            session: { ...child, updatedAt: snapshotAt, snapshotAt },
+            ancestorSessions: changed
+              ? [{ ...parent, snapshotAt, ancestorRevision: "parent-content" }]
+              : [],
+            ...(changed
+              ? {}
+              : {
+                  ancestorSessionRefs: [
+                    { key, sessionId: parent.sessionId, revision: "parent-content", snapshotAt },
+                  ],
+                }),
+          },
+        });
+      emit(2, true);
+      const pending = createDeferred<{ session: GatewaySessionRow }>();
+      h.read.mockReturnValueOnce(pending.promise);
+      const first = h.sessions.describe({ key });
+      if (phase === "completed") {
+        pending.resolve({ session: parent });
+        await first;
+      }
+      const readers = [first];
+      for (let update = 3; update < 19; update++) {
+        emit(update);
+        readers.push(h.sessions.describe({ key }));
+      }
+      pending.resolve({ session: parent });
+      expect(await Promise.all(readers)).toEqual(readers.map(() => ({ session: parent })));
+      expect(h.read).toHaveBeenCalledTimes(1);
+      emit(19, true);
+      await h.sessions.describe({ key });
+      expect(h.read).toHaveBeenCalledTimes(2);
     },
   );
 

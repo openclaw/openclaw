@@ -273,18 +273,21 @@ test("sessions.create commits no session after delegated authority closes", asyn
   const sessionKey = "agent:main:dashboard:authority-race";
   let authorityCurrent = true;
   const firstGuard = createDeferredCore();
+  const context = {
+    validateAgentRuntimeApprovalAuthority: () => {
+      firstGuard.resolve();
+      return authorityCurrent;
+    },
+  };
+  const listed = await directSessionReq("sessions.list", {}, { context });
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
   const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
 
   const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },
     {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => {
-          firstGuard.resolve();
-          return authorityCurrent;
-        },
-      },
+      context,
       client: {
         connect: { scopes: ["operator.write"] },
         internal: {
@@ -355,6 +358,9 @@ test("sessions.create commits no child after its worker turn closes", async () =
     runId: "worker-run",
     owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 7 },
   });
+  const context = {};
+  const listed = await directSessionReq("sessions.list", {}, { context });
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
   const readStarted = createDeferredCore();
   const readEntry = sessionStoreWorker.loadGatewaySessionEntryReadOnlyInWorker;
   const lookup = vi
@@ -369,6 +375,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
     "sessions.create",
     { agentId: "main", key: sessionKey },
     {
+      context,
       sessionMutationAuthorization: {
         assertCurrent: () => {
           if (!placements.validateTurnClaim(turnClaim)) {

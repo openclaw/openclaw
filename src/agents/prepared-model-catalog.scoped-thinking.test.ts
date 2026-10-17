@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
@@ -99,6 +100,7 @@ const entry = {
 
 describe("loadProviderScopedThinkingCatalog", () => {
   beforeEach(() => {
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
     vi.clearAllMocks();
     manifestCatalogMock.mockReturnValue([]);
     scopedCatalogMock.mockResolvedValue({ entries: [], routeVariants: [] });

@@ -3,15 +3,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindInProcessSessionRun } from "../../gateway/in-process-session-run.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
+import { withSessionSendDelivery } from "../../gateway/session-send-delivery.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -46,6 +48,9 @@ import {
   resolveSessionToolAccess,
 } from "./sessions-access.js";
 
+/** A current permission decision rejected delivery, rather than an unavailable dependency. */
+export class SessionCommunicationDeniedError extends Error {}
+
 /** One prepared peer operation; identity bounds never choose its completion route. */
 export async function prepareSessionsSendCommunication(params: {
   config: OpenClawConfig;
@@ -65,20 +70,15 @@ export async function prepareSessionsSendCommunication(params: {
   /** Creates empty metadata through the caller's existing creation owner, never model input. */
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
   signal?: AbortSignal;
+  /** Recovery cannot ask for fresh consent on behalf of an ended sender turn. */
+  allowApproval?: boolean;
   assertSourceCurrent?: () => void;
   assertAccessCurrent?: () => void;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
-  const requesterSource = captureIncognitoSessionSource(params.source);
-  const requesterClaim =
-    requesterSource && !("kind" in requesterSource)
-      ? requesterSource.actor.sessions.captureCurrent(params.source.sessionKey)
-      : undefined;
   const message = params.message;
   const dispatchMessage = params.dispatchMessage ?? message;
-  const inputProvenance = params.inputProvenance
-    ? structuredClone(params.inputProvenance)
-    : undefined;
+  const inputProvenance = params.inputProvenance;
   const targetAgentId = params.target.agentId;
   const targetSessionKey = params.target.sessionKey;
   const targetsThread = Boolean(resolveSessionThreadInfo(targetSessionKey).threadId);
@@ -121,11 +121,6 @@ export async function prepareSessionsSendCommunication(params: {
       throw new Error("Session communication admission closed.");
     }
     params.signal?.throwIfAborted();
-    requesterSource?.admissionSignal?.throwIfAborted();
-    if (requesterSource && "kind" in requesterSource) {
-      requesterSource.assertCurrent();
-    }
-    requesterClaim?.assertCurrent();
     assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
@@ -179,6 +174,8 @@ export async function prepareSessionsSendCommunication(params: {
     );
     if (
       !selected.length ||
+      // Metadata notifications (including worker turn claims) do not replace stored policy.
+      (!change.facts && !change.factsInvalidated) ||
       change.facts?.kind === "unchanged" ||
       change.facts?.kind === "participants" ||
       change.facts?.kind === "category"
@@ -198,22 +195,17 @@ export async function prepareSessionsSendCommunication(params: {
     }
   });
   const read = async (endpoint: CommunicationEndpoint): Promise<CommunicationEndpoint> => {
-    if (
-      requesterSource &&
-      endpoint.agentId === params.source.agentId &&
-      endpoint.sessionKey === params.source.sessionKey
-    ) {
-      return withIncognitoSessionEntry(
-        requesterSource,
-        endpoint.sessionKey,
-        assertSource,
-        async (entry) => ({
-          agentId: endpoint.agentId,
-          sessionKey: endpoint.sessionKey,
-          storePath: "kind" in requesterSource ? requesterSource.path : requesterSource.actor.path,
-          entry,
-        }),
-      );
+    const source = captureSessionActorStorageOwner(endpoint, {
+      assertCurrent: assertSource,
+      authorize() {},
+    });
+    if (source) {
+      return {
+        agentId: source.agentId,
+        sessionKey: endpoint.sessionKey,
+        storePath: source.path,
+        entry: readCapturedSessionActorEntry(source, endpoint.sessionKey),
+      };
     }
     const loaded = await resolveGatewaySessionStoreTargetInWorker({
       cfg: currentConfig,
@@ -340,7 +332,7 @@ export async function prepareSessionsSendCommunication(params: {
         });
         assertSource();
         if (!decision.allowed) {
-          throw new Error(
+          throw new SessionCommunicationDeniedError(
             formatSessionToolAccessDenial(decision, {
               action: "send",
               targetSessionKey: target[0]!.sessionKey,
@@ -386,7 +378,7 @@ export async function prepareSessionsSendCommunication(params: {
           ownedTask,
         });
         if (!result.allowed) {
-          throw new Error(result.error);
+          throw new SessionCommunicationDeniedError(result.error);
         }
         for (const approval of result.approvals) {
           approvals.set(
@@ -405,6 +397,11 @@ export async function prepareSessionsSendCommunication(params: {
     const initialPlan = plan();
     await refresh();
     const approve = async (approval: (typeof initialPlan.approvals)[number]) => {
+      if (params.allowApproval === false) {
+        throw new SessionCommunicationDeniedError(
+          "Session delivery requires fresh human communication approval.",
+        );
+      }
       await refresh();
       if (!context || (!assertCaller && !params.assertSourceCurrent)) {
         throw new Error("Human communication approval requires a live admitted Gateway caller.");
@@ -487,9 +484,11 @@ export async function prepareSessionsSendCommunication(params: {
       }
     };
     await refresh();
-    const callGateway: AgentToolGatewayRequestCaller = async (request) => {
+    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+      request: Parameters<AgentToolGatewayRequestCaller>[0],
+    ) => {
       if (request.method !== "agent") {
-        return params.callGateway(request);
+        return params.callGateway<T>(request);
       }
       await refresh();
       if (
@@ -502,8 +501,10 @@ export async function prepareSessionsSendCommunication(params: {
         throw new Error("Communication approval cannot be redirected to another session.");
       }
 
+      const runId = request.params.idempotencyKey;
+      const hasRunId = typeof runId === "string";
       const resume = readInProcessSubagentResume(request);
-      if (ownedTask && resume && typeof request.params.idempotencyKey === "string") {
+      if (ownedTask && resume && hasRunId) {
         if (
           resume.childSessionKey !== targetSessionKey ||
           resume.childSessionId !== target[0]!.entry?.sessionId ||
@@ -512,7 +513,7 @@ export async function prepareSessionsSendCommunication(params: {
         ) {
           throw new Error("Task resume differs from the captured communication owner.");
         }
-        resumedTask = { resume, runId: request.params.idempotencyKey };
+        resumedTask = { resume, runId };
       }
       const endpoint = target[0]!;
       if (
@@ -522,11 +523,19 @@ export async function prepareSessionsSendCommunication(params: {
       ) {
         throw new Error("Communication target incarnation changed before admission.");
       }
-      const input = {
+      let input: Record<string, unknown> = {
         ...request.params,
         expectedExistingSessionId: endpoint.entry.sessionId,
         expectedExistingSessionLifecycleRevision: endpoint.entry.lifecycleRevision ?? null,
       };
+      if (context && hasRunId) {
+        input = bindInProcessSessionRun(input, {
+          sessionKey: targetSessionKey,
+          sessionId: endpoint.entry.sessionId,
+          lifecycleRevision: endpoint.entry.lifecycleRevision ?? null,
+          runId,
+        });
+      }
       const expectedInput = structuredClone(input);
       const assertAdmission = () => {
         request.sessionMutationCommitGuard?.();
@@ -535,24 +544,65 @@ export async function prepareSessionsSendCommunication(params: {
           throw new Error("Approved communication input changed before admission.");
         }
       };
-      return params.callGateway(
-        bindInProcessSubagentResume(
+      const dispatch = () =>
+        params.callGateway<T>(
+          bindInProcessSubagentResume(
+            {
+              ...request,
+              params: input,
+              // A standalone transport can fence submission, never serialize a host capability.
+              ...(context
+                ? { sessionMutationCommitGuard: assertAdmission }
+                : {
+                    assertDispatchCurrent: () => {
+                      request.assertDispatchCurrent?.();
+                      assertAdmission();
+                    },
+                  }),
+            },
+            resume,
+          ),
+        );
+      const sender = source[0]!;
+      // Task continuations keep their existing task owner. Ordinary peer input
+      // transfers to the Gateway pending-input owner, independent of the sender turn.
+      if (
+        context &&
+        !ownedTask &&
+        !resume &&
+        sender.entry &&
+        hasRunId &&
+        inputProvenance?.sourceTool === "sessions_send"
+      ) {
+        return withSessionSendDelivery(
           {
-            ...request,
-            params: input,
-            // A standalone transport can fence submission, never serialize a host capability.
-            ...(context
-              ? { sessionMutationCommitGuard: assertAdmission }
-              : {
-                  assertDispatchCurrent: () => {
-                    request.assertDispatchCurrent?.();
-                    assertAdmission();
-                  },
-                }),
+            delivery: {
+              version: 1,
+              runId,
+              source: {
+                agentId: sender.agentId,
+                sessionKey: sender.sessionKey,
+                sessionId: sender.entry.sessionId,
+                ...(sender.entry.lifecycleRevision === undefined
+                  ? {}
+                  : { lifecycleRevision: sender.entry.lifecycleRevision }),
+              },
+              target: {
+                agentId: endpoint.agentId,
+                sessionKey: endpoint.sessionKey,
+                sessionId: endpoint.entry.sessionId,
+                ...(endpoint.entry.lifecycleRevision === undefined
+                  ? {}
+                  : { lifecycleRevision: endpoint.entry.lifecycleRevision }),
+              },
+              sandboxed,
+              message: dispatchMessage,
+            },
           },
-          resume,
-        ),
-      );
+          dispatch,
+        );
+      }
+      return dispatch();
     };
     return {
       assertCurrent,

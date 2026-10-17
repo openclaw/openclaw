@@ -11,6 +11,12 @@ export const DEFAULT_NATIVE_TOOLS = [
 
 export const agentsApiConfigSchema = z.strictObject({
   nativeTools: z.array(z.looseObject({ type: z.string().min(1) })).default(DEFAULT_NATIVE_TOOLS),
+  forwarding: z
+    .strictObject({
+      gatewayTools: z.boolean().default(true),
+      mcpServers: z.boolean().default(true),
+    })
+    .default({ gatewayTools: true, mcpServers: true }),
   plugins: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -97,12 +103,14 @@ export function requireAgentsApiSessionFingerprint({
   environment,
   mcpTools,
   webSearchEnabled,
+  forwarding,
 }: {
   existingFingerprint?: string;
   model: string;
   environment: AgentsApiEnvironment;
   mcpTools: AgentToolParam.AgentToolConfigParamMcp[];
   webSearchEnabled: boolean;
+  forwarding: AgentsApiConfig["forwarding"];
 }): string {
   const identity = [
     model,
@@ -111,11 +119,13 @@ export function requireAgentsApiSessionFingerprint({
     ...(mcpTools.length ? [mcpTools] : []),
     // Legacy bindings have no restriction marker; never assume their tools are disabled.
     ...(!webSearchEnabled ? [{ webSearch: false }] : []),
+    // Default forwarding keeps the exact legacy identity, including when explicitly enabled.
+    ...(!forwarding.gatewayTools || !forwarding.mcpServers ? [{ forwarding }] : []),
   ];
   const fingerprint = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
   if (existingFingerprint && existingFingerprint !== fingerprint) {
     throw new Error(
-      "Agents API model, environment, MCP, or web-search policy changed; reset the OpenClaw session before continuing",
+      "Agents API model, environment, MCP, web-search, or forwarding policy changed; reset the OpenClaw session before continuing",
     );
   }
   return fingerprint;

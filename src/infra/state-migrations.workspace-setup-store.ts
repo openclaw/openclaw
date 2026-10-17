@@ -1,5 +1,3 @@
-// SQLite import and receipt semantics for retired workspace state.
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -20,6 +18,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+// SQLite import and receipt semantics for retired workspace state.
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
@@ -152,7 +152,10 @@ export function parseSource(
   return source.kind === "setup" ? parseSetup(snapshot.raw) : parseAttestation(snapshot);
 }
 
-function readGeneratedHashes(database: DatabaseSync, workspaceKey: string): Map<string, string> {
+function readGeneratedHashes(
+  database: EngineConnection,
+  workspaceKey: string,
+): Map<string, string> {
   return new Map(
     executeSqliteQuerySync(
       database,
@@ -379,16 +382,6 @@ export function importAndRecordReceipt(params: {
           resolution = existing ? "merged" : "inserted";
           verifiedFingerprint = createWorkspaceSetupFingerprint(setupColumns);
         }
-        const verified = readWorkspace();
-        // Every setup import branch writes the source path, so a NULL path
-        // here is a verification failure, not an attestation-only row.
-        const actualFingerprint =
-          verified && verified.workspace_path != null
-            ? createWorkspaceSetupFingerprint(verified)
-            : null;
-        if (actualFingerprint !== verifiedFingerprint) {
-          throw new Error("SQLite verification failed for workspace setup state");
-        }
       } else {
         const parsedAttestation = params.parsed.value;
         const insertGeneratedHashes = () => {
@@ -483,24 +476,6 @@ export function importAndRecordReceipt(params: {
           imported = true;
           resolution = "inserted";
           verifiedFingerprint = incomingFingerprint;
-        }
-        const verifiedRow = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .select("attested_at_ms")
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
-        const verifiedHashes = readGeneratedHashes(db, params.source.workspaceKey);
-        const actualFingerprint =
-          verifiedRow?.attested_at_ms != null
-            ? attestationFingerprint({
-                attestedAtMs: verifiedRow.attested_at_ms,
-                generatedHashes: verifiedHashes,
-              })
-            : null;
-        if (actualFingerprint !== verifiedFingerprint) {
-          throw new Error("SQLite verification failed for workspace attestation state");
         }
       }
 

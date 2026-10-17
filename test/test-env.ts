@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
@@ -365,6 +364,7 @@ function restoreClaudeConfigFromBackupIfNeeded(tempHome: string): void {
 }
 
 function sanitizeLiveConfig(raw: string): string {
+  const JSON5 = requireFromHere("json5") as typeof import("json5");
   try {
     const parsed: {
       agents?: {
@@ -544,7 +544,14 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
       return { cleanup: () => {}, tempHome: realHome };
     }
 
-    const credentialEnvKeys = live ? [] : Object.keys(process.env).filter(isCredentialEnvName);
+    // Git config keys and potentially credential-valued entries form one counted tuple.
+    // Removing only KEY_n leaves malformed config and inherited auth values behind.
+    const credentialEnvKeys = live
+      ? []
+      : Object.keys(process.env).filter(
+          (key) =>
+            isCredentialEnvName(key) || /^GIT_CONFIG_(?:COUNT|(?:KEY|VALUE)_\d+)$/u.test(key),
+        );
     const restore = resolveRestoreEntries(credentialEnvKeys);
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
     initializeIsolatedTestEnv(tempHome, credentialEnvKeys);

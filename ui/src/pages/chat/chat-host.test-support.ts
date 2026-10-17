@@ -184,8 +184,7 @@ export function makeChatHost(
   const settings = { lastActiveSessionKey: "", ...hostOverrides.settings };
   let disposed = false;
   const pendingEffects = new Set<() => void>();
-  const renderLifecycle: RenderLifecycle = {
-    invalidate: vi.fn(),
+  const renderLifecycle: Pick<RenderLifecycle, "afterCommit"> = {
     afterCommit: (effect, onCancel) => {
       if (disposed) {
         onCancel?.();
@@ -212,7 +211,6 @@ export function makeChatHost(
         }
       };
       pendingEffects.add(cancel);
-      renderLifecycle.invalidate();
       queueMicrotask(() => {
         if (!active) {
           return;

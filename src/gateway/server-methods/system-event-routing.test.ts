@@ -7,8 +7,12 @@ import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
 } from "../../../packages/gateway-protocol/src/schema.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +27,7 @@ vi.mock("../../infra/heartbeat-wake.js", async (importOriginal) => ({
 
 vi.mock("../session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: mocks.loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnlyAsync: mocks.loadGatewaySessionEntryReadOnly,
 }));
 
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
@@ -33,6 +37,26 @@ vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
 }));
 
 import { systemHandlers } from "./system.js";
+
+const eventHandler = expectDefined(systemHandlers["system-event"], "system-event handler");
+const eventText = "OpenClaw updated. Welcome the user back.";
+function eventRequest(
+  params: GatewayRequestHandlerOptions["params"],
+  respond = vi.fn(),
+  config: OpenClawConfig = { agents: { entries: { main: {} } } },
+): GatewayRequestHandlerOptions {
+  return {
+    params,
+    respond,
+    context: { publishPresence: vi.fn(), getRuntimeConfig: () => config },
+  } as unknown as GatewayRequestHandlerOptions;
+}
+
+async function sendEvent(params: GatewayRequestHandlerOptions["params"], config?: OpenClawConfig) {
+  const respond = vi.fn();
+  await eventHandler(eventRequest(params, respond, config));
+  return respond;
+}
 
 describe("system-event routing", () => {
   beforeEach(() => {
@@ -46,28 +70,11 @@ describe("system-event routing", () => {
   });
 
   it("queues and immediately wakes the requested session", async () => {
-    const respond = vi.fn();
     const sessionKey = "agent:main:main";
     mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry: { sessionId: "session" } });
-    const request = {
-      params: {
-        text: "OpenClaw updated. Welcome the user back.",
-        sessionKey,
-        wake: true,
-      },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
+    const respond = await sendEvent({ text: eventText, sessionKey, wake: true });
 
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
-
-    expect(peekSystemEvents(sessionKey)).toEqual(["OpenClaw updated. Welcome the user back."]);
+    expect(peekSystemEvents(sessionKey)).toEqual([eventText]);
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "immediate",
@@ -78,28 +85,82 @@ describe("system-event routing", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("keeps ambient explicit-owner events on the global session queue", async () => {
-    const respond = vi.fn();
-    const request = {
-      params: { text: "Wake the system owner.", wake: true },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({
-          session: { scope: "global" },
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: { main: {}, molty: {} },
-          },
-        })),
+  it("wakes an unbound memory session and observes its next committed archive", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/synthetic/system-event-memory" };
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const sessionKey = "agent:main:dashboard:incognito-wake";
+    const authority = { assertCurrent() {}, authorize() {} };
+    const binding = await acquireSessionActorStorage(
+      {
+        agentId: "main",
+        sessionKey,
+        env,
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
       },
-    } as unknown as GatewayRequestHandlerOptions;
-
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
+      { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+    );
+    if (!binding) {
+      throw new Error("Memory session fixture was not acquired");
+    }
+    try {
+      expect(
+        await binding.actor.storage.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: { sessionId: "memory-wake", updatedAt: 1, incognito: true },
+            },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+      const respond = vi.fn();
+      const request = eventRequest(
+        { text: "Synthetic memory wake", sessionKey, wake: true },
+        respond,
+      );
+      await eventHandler(request);
+      expect(respond).toHaveBeenLastCalledWith(true, { ok: true }, undefined);
+      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+      expect(mocks.loadGatewaySessionEntryReadOnly).not.toHaveBeenCalled();
+      expect(
+        await binding.actor.storage.mutate(
+          {
+            type: "session.entry.patch",
+            input: {
+              operation: { kind: "fields", patch: { archivedAt: 2 } },
+            },
+          },
+          authority,
+        ),
+      ).toMatchObject({ kind: "committed" });
+      await eventHandler(request);
+      expect(respond).toHaveBeenLastCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: `Unknown or archived session "${sessionKey}"`,
+        }),
+      );
+      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+    } finally {
+      await binding.actor.release();
+      memorySessionActorOwners.reset();
+      vi.unstubAllEnvs();
+    }
+  });
+  it("keeps ambient explicit-owner events on the global session queue", async () => {
+    const respond = await sendEvent(
+      { text: "Wake the system owner.", wake: true },
+      {
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, molty: {} },
+        },
+      },
+    );
 
     expect(peekSystemEvents("agent:main:global")).toEqual(["Wake the system owner."]);
     expect(peekSystemEvents("agent:main:main")).toEqual([]);
@@ -114,137 +175,65 @@ describe("system-event routing", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("rejects immediate wakes for unconfigured agents", async () => {
-    const respond = vi.fn();
-    const request = {
-      params: {
-        text: "OpenClaw updated. Welcome the user back.",
-        sessionKey: "agent:bogus:main",
+  it.each(["unknown-agent", "missing", "archived-zero", "archived", "node"] as const)(
+    "rejects immediate wake for %s without queueing or starting work",
+    async (kind) => {
+      const sessionKey = kind === "unknown-agent" ? "agent:bogus:main" : "agent:main:missing";
+      if (kind !== "unknown-agent" && kind !== "node") {
+        mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({
+          entry:
+            kind === "missing"
+              ? undefined
+              : {
+                  sessionId: "archived-session",
+                  archivedAt: kind === "archived-zero" ? 0 : 1,
+                },
+        });
+      }
+      const respond = await sendEvent({
+        text: kind === "node" ? "Node: Operator Mac" : eventText,
+        sessionKey,
         wake: true,
-      },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
-
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
-
-    expect(peekSystemEvents("agent:bogus:main")).toEqual([]);
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: 'Unknown agent id "bogus"' }),
-    );
-  });
-
-  it.each([undefined, 0, 1])(
-    "rejects immediate wakes for missing or archived sessions (%s)",
-    async (archivedAt) => {
-      const respond = vi.fn();
-      const sessionKey = "agent:main:missing";
-      mocks.loadGatewaySessionEntryReadOnly.mockReturnValue({
-        entry: archivedAt === undefined ? undefined : { sessionId: "archived-session", archivedAt },
+        ...(kind === "node" ? { deviceId: "device-1" } : {}),
       });
-      const request = {
-        params: {
-          text: "OpenClaw updated. Welcome the user back.",
-          sessionKey,
-          wake: true,
-        },
-        respond,
-        context: {
-          publishPresence: vi.fn(),
-          getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-        },
-      } as unknown as GatewayRequestHandlerOptions;
-
-      await expectDefined(
-        systemHandlers["system-event"],
-        'systemHandlers["system-event"] test invariant',
-      )(request);
-
       expect(peekSystemEvents(sessionKey)).toEqual([]);
       expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({ message: `Unknown or archived session "${sessionKey}"` }),
+        expect.objectContaining({
+          message:
+            kind === "unknown-agent"
+              ? 'Unknown agent id "bogus"'
+              : kind === "node"
+                ? "wake is not supported for node presence events"
+                : `Unknown or archived session "${sessionKey}"`,
+        }),
       );
+      if (kind === "node") {
+        expect(mocks.loadGatewaySessionEntryReadOnly).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it("rejects wake requests mixed with node presence events", async () => {
-    const respond = vi.fn();
-    const sessionKey = "agent:main:main";
-    const request = {
-      params: {
-        text: "Node: Operator Mac",
-        deviceId: "device-1",
-        sessionKey,
-        wake: true,
-      },
-      respond,
-      context: {
-        publishPresence: vi.fn(),
-        getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-      },
-    } as unknown as GatewayRequestHandlerOptions;
-
-    await expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    )(request);
-
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
-    expect(mocks.loadGatewaySessionEntryReadOnly).not.toHaveBeenCalled();
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "wake is not supported for node presence events" }),
-    );
-  });
-
   it("passes explicit input activity clearing into system presence", async () => {
     const instanceId = `presence-clear-${randomUUID()}`;
-    const handler = expectDefined(
-      systemHandlers["system-event"],
-      'systemHandlers["system-event"] test invariant',
-    );
-    const context = {
-      publishPresence: vi.fn(),
-      getRuntimeConfig: vi.fn(() => ({ agents: { entries: { main: {} } } })),
-    };
 
-    await handler({
-      params: {
-        text: "Node: Operator Mac",
-        instanceId,
-        host: "Operator Mac",
-        mode: "ui",
-        lastInputSeconds: 5,
-      },
-      respond: vi.fn(),
-      context,
-    } as unknown as GatewayRequestHandlerOptions);
-    await handler({
-      params: {
-        text: "Node: Operator Mac",
-        instanceId,
-        host: "Operator Mac",
-        mode: "ui",
-        lastInputSeconds: SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
-        tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
-      },
-      respond: vi.fn(),
-      context,
-    } as unknown as GatewayRequestHandlerOptions);
+    await sendEvent({
+      text: "Node: Operator Mac",
+      instanceId,
+      host: "Operator Mac",
+      mode: "ui",
+      lastInputSeconds: 5,
+    });
+    await sendEvent({
+      text: "Node: Operator Mac",
+      instanceId,
+      host: "Operator Mac",
+      mode: "ui",
+      lastInputSeconds: SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
+      tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
+    });
 
     const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
     expect(entry?.lastInputSeconds).toBeUndefined();

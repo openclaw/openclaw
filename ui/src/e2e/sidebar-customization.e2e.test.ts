@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
@@ -83,8 +84,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light") {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -405,7 +404,7 @@ suite.define(() => {
       const openSettingsFromIdentity = async () => {
         await identityCard.click();
         await sidebar
-          .locator("wa-dropdown.sidebar-identity-menu")
+          .locator(".sidebar-identity-menu")
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };
@@ -630,7 +629,42 @@ suite.define(() => {
         .filter({ has: page.getByRole("link", { name: "Usage", exact: true }) });
       await usage.getByRole("button", { name: "Pin", exact: true }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      // A pinned page keeps a filled pin at rest, and hovering the pin keeps the
+      // whole entry, pin included, inside the row highlight.
+      const usagePin = usage.getByRole("button", { name: "Unpin", exact: true });
+      await page.mouse.move(900, 600);
+      await expect
+        .poll(() =>
+          usagePin.evaluate((pin) => ({
+            opacity: getComputedStyle(pin).opacity,
+            filled: getComputedStyle(pin.querySelector("svg")!).fill !== "none",
+          })),
+        )
+        .toEqual({ opacity: "1", filled: true });
+      await usagePin.hover();
+      await expect
+        .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
+        .not.toBe("rgba(0, 0, 0, 0)");
       await captureUiProof(page, "02-personal-pin.png");
+      // Rail pins match the view buttons: same icon size, and the same fill for
+      // hover and for the current page.
+      const railUsage = pinnedItems.first();
+      const iconWidth = (locator: typeof railUsage) =>
+        locator
+          .locator("svg")
+          .first()
+          .evaluate((svg) => svg.getBoundingClientRect().width);
+      const background = (locator: typeof railUsage) =>
+        locator.evaluate((element) => getComputedStyle(element).backgroundColor);
+      expect(await iconWidth(railUsage)).toBe(await iconWidth(pagesButton));
+      const pressedBackground = await background(pagesButton);
+      await railUsage.hover();
+      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
+      await railUsage.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
+      await page.mouse.move(900, 600);
+      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       // The transient selected view resets, but saved personal pins do not.
@@ -651,8 +685,8 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // Collapsing the list retains the personal icon rail; the content chrome
-      // provides the matching expand control.
+      // Collapsing the list retains the personal icon rail; its view buttons
+      // provide the matching expand controls.
       const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
       await collapseButton.click();
       await expect
@@ -669,8 +703,7 @@ suite.define(() => {
       await expect.poll(() => sidebar.isVisible()).toBe(true);
       await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
       await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
-      const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
-      await expect.poll(() => navExpand.isVisible()).toBe(true);
+      await expect.poll(() => pagesButton.isVisible()).toBe(true);
       await page.reload();
       // Sidebar visibility is tab-local and intentionally not persisted; width is.
       await expect.poll(() => collapseButton.isVisible()).toBe(true);
@@ -796,25 +829,13 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
-        await sidebar.evaluate(async (element) => {
-          const host = element as HTMLElement & {
-            requestUpdate(): void;
-            updateComplete: Promise<unknown>;
-          };
-          // The shell refreshes this snapshot whenever its lazy outbox runtime
-          // loads. Keep the warning fixture stable until geometry is measured.
-          const storedOutboxes = {
+        await sidebar.evaluate((element) => {
+          // This layout fixture supplies the sidebar's declared presentation input.
+          (element as AppSidebarElement).storedOutboxes = {
             total: 1,
             attentionCountForSession: () => 1,
             hasSessionDraft: () => false,
           };
-          Object.defineProperty(host, "storedOutboxes", {
-            configurable: true,
-            get: () => storedOutboxes,
-            set: () => undefined,
-          });
-          host.requestUpdate();
-          await host.updateComplete;
         });
 
         const activity = home.locator(".session-glyph");
@@ -903,7 +924,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("update.available", {
           schedule: {
             autoEnabled: false,
-            channel: "dev",
+            channel: "beta",
             install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
             target: {
               kind: "git",
@@ -913,7 +934,7 @@ suite.define(() => {
             },
           },
           updateAvailable: {
-            channel: "dev",
+            channel: "beta",
             commitsBehind: 246,
             currentSha: "1111111111111111111111111111111111111111",
             currentVersion: "2026.8.1",

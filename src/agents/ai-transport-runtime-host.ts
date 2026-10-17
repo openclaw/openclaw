@@ -5,6 +5,10 @@ import {
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
@@ -18,6 +22,10 @@ import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { createOpenAICompletionsPayloadPolicyWrapper } from "./openai-completions-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import {
+  attachModelProviderLocalServiceReconciler,
+  getModelProviderLocalServiceReconciler,
+} from "./provider-local-service-reconcile.js";
 import {
   attachModelProviderLocalService,
   getModelProviderLocalService,
@@ -110,16 +118,18 @@ export function configureAiTransportRuntimeHost(): void {
         capability: "llm",
         transport: "stream",
       }).headers,
-    requiresManagedTransport: (model) => {
-      const request = getModelProviderRequestTransport(model);
-      return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
-    },
     inheritManagedTransport: (source, target) =>
       inheritModelProviderRequestRouteFacts(
         source,
-        attachModelProviderLocalService(
-          attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
-          getModelProviderLocalService(source),
+        attachModelProviderLocalServiceReconciler(
+          attachModelProviderLocalService(
+            attachModelProviderRequestTransport(
+              attachProviderAuthAuthority(target, getProviderAuthAuthority(source)),
+              getModelProviderRequestTransport(source),
+            ),
+            getModelProviderLocalService(source),
+          ),
+          getModelProviderLocalServiceReconciler(source),
         ),
       ),
     transformTransportMessages,

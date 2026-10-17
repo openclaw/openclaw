@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { invalidateOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -70,14 +71,15 @@ describe("cold canonical session validation", () => {
       const scope = createScope();
       const entry = { sessionId: "cold-key", updatedAt: 1, label: "before" };
       replaceSessionEntrySync(scope, entry);
+      const pending = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
       if (certifiedReopen) {
-        const pending = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
         pending.db.exec(
           "UPDATE session_nodes SET entry_json = entry_json || ' '; UPDATE session_nodes SET entry_valid = 1",
         );
         markCanonicalSessionValidationPending(pending, [scope.sessionKey]);
         closeOpenClawAgentDatabaseByPath(scope.storePath);
       } else {
+        invalidateOpenClawAgentCanonicalValidation(pending);
         closeOpenClawAgentDatabasesForTest();
       }
       openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
@@ -128,6 +130,7 @@ describe("cold canonical session validation", () => {
       { sessionId: "later", updatedAt: 1 },
     );
     const database = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+    markCanonicalSessionValidationPending(database, [otherKey]);
     database.db
       .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
       .run(otherKey);
@@ -339,6 +342,7 @@ describe("cold canonical session validation", () => {
       skillsSnapshot: { prompt: "synthetic saved prompt", skills: [] },
     });
     const database = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+    markCanonicalSessionValidationPending(database, [scope.sessionKey]);
     database.db
       .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
       .run("agent:main:different", scope.sessionKey);

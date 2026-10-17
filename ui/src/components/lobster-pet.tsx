@@ -1,49 +1,48 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
-import { LobsterPetController, type LobsterPetProps } from "./lobster-pet-controller.ts";
-import { LobsterPetDismissMenu } from "./lobster-pet-dismiss-menu.tsx";
+import { createEffect, lazy, Loading, onSettled, Show } from "solid-js";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import type { LobsterPetProps } from "./lobster-pet-contract.ts";
+import { LobsterPetOwner } from "./lobster-pet-owner.ts";
 import { LobsterPetScene } from "./lobster-pet-scene-view.tsx";
 
+const LobsterPetDismissMenu = lazy(() => import("./lobster-pet-dismiss-menu.tsx"), {
+  export: "LobsterPetDismissMenu",
+});
+
 // A bridge remount retires the view, not the host's once-per-load visitor history.
-const pets = new WeakMap<HTMLElement, LobsterPetController>();
+const pets = new WeakMap<HTMLElement, LobsterPetOwner>();
 
 export const LobsterPet = defineSolidBridge<LobsterPetProps>(
   "openclaw-lobster-pet",
   (props, host) => {
-    const [revision, setRevision] = createSignal(0);
-    const notify = () => setRevision((n) => n + 1);
     const pet =
-      pets.get(host) ??
-      new LobsterPetController(host, notify, () => {
-        host.visitsEnabled = false;
-      });
+      pets.get(host) ?? new LobsterPetOwner(host, () => (host.visitsEnabled = false), props);
     pets.set(host, pet);
+    const state = projectOwner(pet, (owner) => owner.snapshot()).read;
     onSettled(() => {
-      pet.connect(notify);
+      pet.connect();
       pet.update({ ...props });
+      return () => pet.dispose();
     });
     createEffect(
       () => ({ ...props }),
       (next) => pet.update(next),
     );
-    createEffect(revision, () => pet.afterCommit());
-    onCleanup(() => pet.dispose());
-    const scene = () => {
-      revision();
-      return pet.scene();
-    };
-    const position = () => {
-      revision();
-      return pet.menuPosition();
-    };
+    createEffect(state, () => pet.afterCommit());
     return (
       <>
-        <LobsterPetScene scene={scene()} />
-        <LobsterPetDismissMenu
-          position={position()}
-          onDismiss={(permanently) => pet.dismiss(permanently)}
-          onClose={() => pet.closeMenu()}
-        />
+        <LobsterPetScene scene={state().scene} />
+        <Show when={state().menuPosition}>
+          {(menuPosition) => (
+            <Loading>
+              <LobsterPetDismissMenu
+                position={menuPosition()}
+                onDismiss={(permanently) => pet.dismiss(permanently)}
+                onClose={() => pet.closeMenu()}
+              />
+            </Loading>
+          )}
+        </Show>
       </>
     );
   },

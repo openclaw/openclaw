@@ -30,11 +30,11 @@ function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
 }
 
 /** No config bytes changed, so this completion does not depend on config rollback. */
-export function recordUnwrittenWebhookCompletion(
+export function prepareUnwrittenWebhookCompletion(
   snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
   mutation: ChannelDoctorConfigMutation,
   env: NodeJS.ProcessEnv,
-): boolean {
+) {
   const readOnly = resolveIsConfigReadOnly(env);
   const markerOnly = cloneConfigWithResolutionFacts(snapshot.sourceConfig);
   markerOnly.meta ??= {};
@@ -42,33 +42,59 @@ export function recordUnwrittenWebhookCompletion(
   markerOnly.meta.migrations.webhookListeners = mutation.config.meta?.migrations?.webhookListeners;
   if (!isDeepStrictEqual(markerOnly, mutation.config)) {
     if (!readOnly) {
-      return false;
+      return undefined;
     }
     throw new Error(
       `Webhook listeners need migration in the externally managed config. Add the required legacyWebhook endpoints and meta.migrations.webhookListeners completion marker in that source, then restart.\n${mutation.changes.join("\n")}`,
     );
   }
-  writeConfigMachineState(webhookCompletionKey(env), markerOnly.meta.migrations.webhookListeners, {
-    env,
-  });
+  return { key: webhookCompletionKey(env), value: markerOnly.meta.migrations.webhookListeners };
+}
+
+function recordUnwrittenWebhookCompletion(
+  snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
+  mutation: ChannelDoctorConfigMutation,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const completion = prepareUnwrittenWebhookCompletion(snapshot, mutation, env);
+  if (!completion) {
+    return false;
+  }
+  writeConfigMachineState(completion.key, completion.value, { env });
   return true;
 }
 
+type HistoricalWebhookPinState = {
+  env: NodeJS.ProcessEnv;
+  completion?: { marker: true | Record<string, string[][]> | undefined };
+  existingInstallation?: boolean;
+};
+
+/** One synchronous pass shares its receipt, including its own rehearsal writes. */
+export function createHistoricalWebhookPinMigration(env: NodeJS.ProcessEnv = process.env) {
+  const state: HistoricalWebhookPinState = { env };
+  return applyHistoricalWebhookPins.bind(undefined, state);
+}
+
 /** Pins and completion travel together through Doctor's config backup and publication. */
-export function applyHistoricalWebhookPins(
+function applyHistoricalWebhookPins(
+  state: HistoricalWebhookPinState,
   mutation: ChannelDoctorConfigMutation,
   declaration: PluginDoctorHistoricalWebhookListener | undefined,
   context: {
-    env?: NodeJS.ProcessEnv;
     startup?: boolean;
     pluginId?: string;
     origin?: PluginOrigin;
   } = {},
 ): ChannelDoctorConfigMutation {
-  const env = context.env ?? process.env;
+  const { env } = state;
   const marker =
     mutation.config.meta?.migrations?.webhookListeners ??
-    readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), { env });
+    (state.completion ??= {
+      marker: readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), {
+        env,
+      }),
+    }).marker;
   if (marker === true || mutation.warnings?.length) {
     return mutation;
   }
@@ -90,19 +116,21 @@ export function applyHistoricalWebhookPins(
   const existing =
     marker !== undefined ||
     isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        const query = getNodeSqliteKysely<DB>(db);
-        return [
-          query.selectFrom("gateway_boot_lifecycle").select("boot_id as evidence").limit(1),
-          query.selectFrom("channel_ingress_events").select("event_id as evidence").limit(1),
-          // The update ledger exists only after its first write.
-          tableExists(db, "update_runs") &&
-            query.selectFrom("update_runs").select("run_id as evidence").limit(1),
-        ].some((statement) => statement && executeSqliteQueryTakeFirstSync(db, statement));
-      },
-      { env },
-    );
+    (state.existingInstallation ??= Boolean(
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => {
+          const query = getNodeSqliteKysely<DB>(db);
+          return [
+            query.selectFrom("gateway_boot_lifecycle").select("boot_id as evidence").limit(1),
+            query.selectFrom("channel_ingress_events").select("event_id as evidence").limit(1),
+            // The update ledger exists only after its first write.
+            tableExists(db, "update_runs") &&
+              query.selectFrom("update_runs").select("run_id as evidence").limit(1),
+          ].some((statement) => statement && executeSqliteQueryTakeFirstSync(db, statement));
+        },
+        { env },
+      ),
+    ));
   const completed = { ...marker };
   const channelId = declaration?.channelId;
   if (existing && (!channelId || !accountIds || Object.hasOwn(completed, channelId))) {
@@ -167,6 +195,7 @@ export function applyHistoricalWebhookPins(
     resolveUpdateRehearsalRoot(env) &&
     recordUnwrittenWebhookCompletion({ sourceConfig: mutation.config }, result, env)
   ) {
+    state.completion = { marker: result.config.meta?.migrations?.webhookListeners };
     return mutation;
   }
   return result;

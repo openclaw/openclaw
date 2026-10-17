@@ -6,13 +6,16 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
@@ -126,6 +129,7 @@ export function installEmbeddedAttemptStreamGuards(
       providerTextTransforms,
     },
   } = input.prepared.sessionRuntime;
+  setInternalRepetitionGuard(session.agent, isSmallModel);
   const { liveAllowedToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
   const installStreamWrapper = <Args extends unknown[]>(
@@ -208,10 +212,16 @@ export function installEmbeddedAttemptStreamGuards(
         const changes =
           observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
           observation.dropCause;
-        log.warn(
+        log[observation.dropCause?.startsWith("unattributed:") ? "debug" : "warn"](
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
+            `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
+            // Turn facts attribute a drop to the kind of turn that changed the prefix.
+            `trigger=${attempt.trigger ?? "unknown"} ` +
+            `provenance=${attempt.inputProvenance?.kind ?? "none"}${attempt.inputProvenance?.sourceTool ? `:${attempt.inputProvenance.sourceTool}` : ""} ` +
+            `replyMode=${attempt.sourceReplyDeliveryMode ?? "unset"} ` +
+            `senderIsOwner=${attempt.senderIsOwner ?? "unset"} ` +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
@@ -388,13 +398,15 @@ export function installEmbeddedAttemptStreamGuards(
       } as typeof options);
     };
   }
-  let diagnosticModelCallSeq = 0;
+  const modelCallSequence = (attempt.modelCallSequence ??= { value: 0 });
+  const firstModelCallNumber = modelCallSequence.value + 1;
   let modelResponseTerminal = false;
   let activeModelCallId: string | undefined;
   installStreamWrapper(wrapStreamFnWithDiagnosticModelCallEvents, {
     config: attempt.config,
     runId: attempt.runId,
     agentId: sessionAgentId,
+    priority: resolveModelCallUrgency(attempt) === "foreground" ? "interactive" : "background",
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,
@@ -415,8 +427,9 @@ export function installEmbeddedAttemptStreamGuards(
       : {}),
     trace: input.diagnostics.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
-    nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
       modelResponseTerminal = true;
@@ -429,6 +442,10 @@ export function installEmbeddedAttemptStreamGuards(
     onStarted: (callId) => {
       activeModelCallId = callId;
       modelResponseTerminal = false;
+      if (modelCallSequence.value === firstModelCallNumber) {
+        input.setup.prepStages.mark("model-dispatch");
+        input.setup.emitPrepStageSummary("model-dispatch");
+      }
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
         provider: attempt.provider,
@@ -440,9 +457,9 @@ export function installEmbeddedAttemptStreamGuards(
   });
   return {
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
-      const request = cacheObserver.onModelRequest(...args);
+      const request = await cacheObserver.onModelRequest(...args);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&

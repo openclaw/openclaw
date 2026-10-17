@@ -87,27 +87,30 @@ it.each([
   );
 });
 
-it("dispatchReplyFromConfig keeps a deferred literal in its complete-text fallback", async () => {
-  installCaptionedVoiceTestPlugin("telegram");
-  const delivered: Array<{ text?: string; kind: string }> = [];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload, { kind }) => {
-      delivered.push({ text: payload.text, kind });
-    },
-  });
-  await dispatchReplyFromConfig({
-    ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-    cfg: emptyConfig,
-    dispatcher,
-    replyResolver: async (_ctx, opts) => {
-      await opts?.onBlockReply?.({ text: "See [" });
-      return undefined;
-    },
-  });
-  dispatcher.markComplete();
-  await dispatcher.waitForIdle();
-  expect(delivered).toEqual([{ text: "See [", kind: "final" }]);
-});
+it.each(["See [", "Example:\n```text\nkeep two spaces  \nkeep a tab\t\n```"])(
+  "dispatchReplyFromConfig keeps deferred literal %j in its complete-text fallback",
+  async (text) => {
+    installCaptionedVoiceTestPlugin("telegram");
+    const delivered: Array<{ text?: string; kind: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, { kind }) => {
+        delivered.push({ text: payload.text, kind });
+      },
+    });
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text });
+        return undefined;
+      },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(delivered).toEqual([{ text, kind: "final" }]);
+  },
+);
 
 it("settles retained followup streams before external cleanup", async () => {
   let retained: GetReplyOptions | undefined;
@@ -218,6 +221,13 @@ describe("source completion", () => {
         }
       : undefined;
     if (actualSessions) {
+      const actorScope = await import("../../config/sessions/session-actor-scope.js");
+      const actualActorScope = await vi.importActual<
+        typeof import("../../config/sessions/session-actor-scope.js")
+      >("../../config/sessions/session-actor-scope.js");
+      vi.spyOn(actorScope, "withSessionActor").mockImplementation(
+        actualActorScope.withSessionActor,
+      );
       const sessionAccessors = await import("../../config/sessions/session-accessor.js");
       const patch = actualSessions.patchSessionEntryCore;
       vi.spyOn(sessionAccessors, "patchSessionEntryCore").mockImplementation((...args) =>
@@ -334,7 +344,6 @@ describe("source completion", () => {
           const { replyPayloads } = await buildReplyPayloads({
             payloads: [finalPayload],
             isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: true,
             blockReplyPipeline: pipeline,
             replyToMode: "off",
@@ -473,7 +482,6 @@ describe("source completion", () => {
           const { replyPayloads } = await buildReplyPayloads({
             payloads: [{ text: "See [" }],
             isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: true,
             blockReplyPipeline: pipeline,
             replyToMode: "off",

@@ -37,7 +37,7 @@ const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
 describe("config cli integration", () => {
-  it("protects pending plugin inputs while admitting explicit plugin entry removal", async () => {
+  it("edits canonical config without consuming pending plugin migrations", async () => {
     const pluginPath = "plugins.entries.sample.config";
     const raw = JSON.stringify({
       gateway: { mode: "local", port: 18789 },
@@ -61,27 +61,21 @@ describe("config cli integration", () => {
               },
             ],
           });
-          for (const args of [
-            ["set", `${pluginPath}.legacyRoot`, "/srv/replacement"],
-            ["set", `${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run"],
-            ["unset", `${pluginPath}.legacyRoot`],
-            ["set", pluginPath, '{"legacyRoot":"/srv/replacement"}', "--replace"],
-            ["unset", "plugins.entries"],
-          ]) {
-            await reject(run(...args));
-            expect(errors.at(-1)).toContain('Plugin "sample" data/settings upgrade is unfinished');
-            expect(errors.at(-1)).toContain("openclaw plugins install @example/sample");
-            expect(read(configPath)).toBe(raw);
-            expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
-            expect(logs.join("\n")).not.toMatch(/Updated|Removed|Applied/);
-          }
+          const pending = readDeferredPluginMigrations();
+          await set(`${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run");
+          expect(read(configPath)).toBe(raw);
+          expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+          await set(`${pluginPath}.legacyRoot`, "/srv/replacement");
+          expect(load(configPath).plugins.entries.sample.config).toEqual({
+            legacyRoot: "/srv/replacement",
+          });
+          expect(read(`${configPath}.bak`)).toBe(raw);
           await set("gateway.port", "18790");
           expect(load(configPath)).toMatchObject({
             gateway: { port: 18790 },
-            plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
+            plugins: { entries: { sample: { config: { legacyRoot: "/srv/replacement" } } } },
           });
           const beforeRemoval = read(configPath);
-          const pending = readDeferredPluginMigrations();
           await run("unset", "plugins.entries.sample");
           expect(load(configPath)).not.toHaveProperty("plugins.entries.sample");
           expect(load(configPath)).toMatchObject({
@@ -91,6 +85,7 @@ describe("config cli integration", () => {
           expect(read(`${configPath}.bak`)).toBe(beforeRemoval);
           expect(readDeferredPluginMigrations()).toEqual(pending);
           expect(logs.join("\n")).toContain("Removed plugins.entries.sample");
+          expect(errors.join("\n")).not.toContain("upgrade is unfinished");
         } finally {
           closeOpenClawStateDatabaseForTest();
         }
@@ -485,12 +480,13 @@ describe("config cli integration", () => {
     });
   });
 
-  it("redacts SecretRef ids and plugin-only sensitive fields in JSON/text order", async () => {
+  it("redacts SecretRef ids and core and plugin schema-sensitive fields in JSON/text order", async () => {
     const secretRefId = "CONFIG_GET_TEST_TOKEN";
-    const schemaOnlySecrets = ["first-private-route", "second-private-route"];
+    const schemaOnlySecrets = ["first-private-route", "second-private-route", "core-private-route"];
     await withConfig(
       `${JSON.stringify(
         {
+          tools: { web: { fetch: { headers: { "X-Route": schemaOnlySecrets[2] } } } },
           channels: {
             discord: {
               enabled: false,
@@ -529,6 +525,11 @@ describe("config cli integration", () => {
           path: "plugins.entries.codex.config.appServer.headers",
           runtime: output.runtime,
         });
+        await runConfigGet({
+          path: "tools.web.fetch.headers",
+          json: true,
+          runtime: output.runtime,
+        });
 
         expect(output.errors).toStrictEqual([]);
         expect(output.logs).toStrictEqual([
@@ -536,6 +537,7 @@ describe("config cli integration", () => {
           `${REDACTED_SENTINEL}\n`,
           JSON.stringify(REDACTED_SENTINEL),
           `${REDACTED_SENTINEL}\n`,
+          JSON.stringify({ "X-Route": REDACTED_SENTINEL }, null, 2),
         ]);
         expect(output.logs.join("\n")).not.toContain(secretRefId);
         for (const secret of schemaOnlySecrets) {
@@ -566,17 +568,25 @@ describe("config cli integration", () => {
       expectedError: "schema construction unavailable",
     },
   ])("fails closed before config get emits values when $name", async (testCase) => {
-    await withConfig("{ gateway: { port: 19001 } }\n", async () => {
+    const raw = JSON.stringify({
+      plugins: {
+        entries: { codex: { config: { appServer: { headers: { "X-Route": "private-route" } } } } },
+      },
+    });
+    await withConfig(raw, async () => {
       await testCase.installFailure();
       const output = createTestRuntime();
 
-      await expect(runConfigGet({ path: "gateway.port", runtime: output.runtime })).rejects.toThrow(
-        "__exit__:1",
-      );
+      await expect(
+        runConfigGet({
+          path: "plugins.entries.codex.config.appServer.headers",
+          runtime: output.runtime,
+        }),
+      ).rejects.toThrow("__exit__:1");
 
       expect(output.logs).toStrictEqual([]);
       expect(output.errors.join("\n")).toContain(testCase.expectedError);
-      expect(output.errors.join("\n")).not.toContain("19001");
+      expect(output.errors.join("\n")).not.toContain("private-route");
     });
   });
 

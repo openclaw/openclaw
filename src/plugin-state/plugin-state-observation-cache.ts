@@ -8,7 +8,7 @@ import { pluginStatePublication, pluginStatePublicationKey } from "./plugin-stat
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateEntry } from "./plugin-state-store.types.js";
 
-type Key = { pluginId: string; namespace: string; key: string };
+type Key = Parameters<typeof pluginStateComparisonScope>[1];
 type Entry = { identity: string; loaded: boolean; row?: PluginStateReadRow };
 type NamespaceEntry = {
   identity: string;
@@ -119,9 +119,6 @@ export function preparePluginStateObservationCacheRead(identity: string, key: Ke
 }
 
 export function readPluginStateEntriesCache(identity: string, key: Omit<Key, "key">) {
-  if (state.pending.has(identity)) {
-    return undefined;
-  }
   const entries = state.namespaces.get(
     JSON.stringify([identity, key.pluginId, key.namespace]),
   )?.entries;

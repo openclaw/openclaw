@@ -328,14 +328,11 @@ export async function ensureGatewayServiceForOnboarding(params: {
         ],
       }));
     if (action === "restart") {
-      let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
+      let restartDoneMessage = t("wizard.finalize.gatewayService");
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       try {
         progress.update(t("wizard.finalize.gatewayServiceRestarting"));
-        const restartResult = await service.restart({
-          env: process.env,
-          stdout: process.stdout,
-        });
+        const restartResult = await service.restart({ env: process.env, stdout: process.stdout });
         const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
         restartDoneMessage = restartStatus.scheduled
           ? t("wizard.finalize.gatewayServiceRestartScheduled")
@@ -344,6 +341,8 @@ export async function ensureGatewayServiceForOnboarding(params: {
           status: "ready",
           action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
         };
+      } catch (error) {
+        gateway = { status: "failed", error: formatErrorMessage(error) };
       } finally {
         progress.stop(restartDoneMessage);
       }
@@ -701,7 +700,7 @@ export async function finalizeSetupWizard(
         })
       : undefined;
     const modelAuthStatus = modelCatalogFacts
-      ? resolveDefaultModelAuthStatus(nextConfig, {
+      ? await resolveDefaultModelAuthStatus(nextConfig, {
           agentDir,
           ...(modelCatalogFacts.observedRoutes
             ? { observedRoutes: modelCatalogFacts.observedRoutes }

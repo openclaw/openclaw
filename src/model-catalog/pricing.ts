@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { MODEL_PRICING_SOURCES } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
@@ -12,7 +13,6 @@ import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getPluginCache,
-  getPluginCacheRetirementSignal,
   isPluginCacheFactInvalidatedError,
   retainPluginCache,
   withPluginCache,
@@ -37,6 +37,8 @@ type ExternalPricingPolicy = {
   authoritative: boolean;
   /** Sources whose vendor/model rates this provider charges unchanged, as for gateways. */
   passthroughSources: readonly string[];
+  /** Provider whose rows price this one's models when it has no price of its own. */
+  priceAs?: string;
 };
 export type PricingContext = {
   config: OpenClawConfig;
@@ -142,6 +144,7 @@ function buildPricingContext(
           const source = policy[id];
           return source && source.passthroughProviderModel ? [id] : [];
         }),
+        ...(policy.priceAs ? { priceAs: policy.priceAs } : {}),
       });
     }
   }
@@ -194,13 +197,13 @@ function buildPricingContext(
     upstream,
     normalizedHosted,
     policies,
-    fingerprint,
+    fingerprint: createHash("sha256").update(fingerprint).digest("hex"),
   };
 }
 
 /** Reuses policy and prices for the config's exact accepted catalog generation. */
 export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG): PricingContext {
-  const catalog = getActiveRemoteModelCatalog(config, false);
+  const catalog = getActiveRemoteModelCatalog(config);
   const existing = readPricingContext(config, catalog);
   if (existing) {
     return existing;
@@ -216,7 +219,7 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
     snapshot = undefined;
   }
   const context = buildPricingContext(config, snapshot);
-  retainPricingContext(config, getActiveRemoteModelCatalog(config, false), context);
+  retainPricingContext(config, getActiveRemoteModelCatalog(config), context);
   return context;
 }
 
@@ -224,20 +227,12 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
 export async function prepareModelPricingContext(
   config: OpenClawConfig = EMPTY_CONFIG,
 ): Promise<void> {
-  if (readPricingContext(config, getActiveRemoteModelCatalog(config, false))) {
+  if (readPricingContext(config, getActiveRemoteModelCatalog(config))) {
     return;
   }
   const env = cloneEnvWithPlatformSemantics(process.env);
   const cache = getPluginCache();
   const release = retainPluginCache(cache);
-  const metadata = cache.metadata;
-  const signal = getPluginCacheRetirementSignal(cache);
-  const assertCurrent = () => {
-    signal.throwIfAborted();
-    if (cache.metadata !== metadata) {
-      throw new Error("Pricing metadata changed during preparation; retry the operation.");
-    }
-  };
   try {
     await withPluginCache(cache, async () => {
       let snapshot: PluginMetadataSnapshot | undefined;
@@ -253,16 +248,13 @@ export async function prepareModelPricingContext(
         }
         snapshot = undefined;
       }
-      assertCurrent();
       if (snapshot && isRemoteModelCatalogRefreshEnabled(config)) {
         await prepareRemoteModelCatalogStartupSnapshot({ env });
       }
-      assertCurrent();
-      const catalog = getActiveRemoteModelCatalog(config, false);
+      const catalog = getActiveRemoteModelCatalog(config);
       // A synchronous reader may have prepared this exact pair while metadata awaited I/O.
       if (!readPricingContext(config, catalog)) {
         const context = buildPricingContext(config, snapshot);
-        assertCurrent();
         retainPricingContext(config, catalog, context);
       }
     });
@@ -331,22 +323,55 @@ function isPrivateOrLoopbackUrl(value: string | undefined): boolean {
   }
 }
 
-/** Resolves catalog-first pricing for a key prepared by this metadata context. */
+/**
+ * Resolves catalog-first pricing for a key prepared by this metadata context. A provider without
+ * a price of its own falls back to its `priceAs` provider's row for the same model, one hop only.
+ */
 export function resolveModelPricing(
   context: PricingContext,
   key: string,
 ): PricingValue | undefined {
   const provider = key.slice(0, key.indexOf("/"));
+  if (hasPrivatePricingEndpoint(context, provider, key)) {
+    return undefined;
+  }
+  const own = resolveProviderModelPricing(context, provider, key);
+  if (own) {
+    return own;
+  }
+  // The mapping inherits the source provider's exclusions: external:false stays unpriced.
+  const policy = context.policies.get(provider);
+  const priceAs = policy?.external === false ? undefined : policy?.priceAs;
+  if (!priceAs || priceAs === provider) {
+    return undefined;
+  }
+  const targetKey = context.normalizeKey(priceAs, key.slice(provider.length + 1));
+  return hasPrivatePricingEndpoint(context, priceAs, targetKey)
+    ? undefined
+    : resolveProviderModelPricing(context, priceAs, targetKey);
+}
+
+/** Private or loopback endpoints never inherit published prices. */
+function hasPrivatePricingEndpoint(
+  context: PricingContext,
+  provider: string,
+  key: string,
+): boolean {
   const providerConfig = context.config.models?.providers?.[provider];
   const configuredModel = providerConfig?.models?.find(
     (entry) => context.normalizeKey(provider, entry.id) === key,
   );
-  if (
+  return (
     isPrivateOrLoopbackUrl(configuredModel?.baseUrl) ||
     isPrivateOrLoopbackUrl(providerConfig?.baseUrl)
-  ) {
-    return undefined;
-  }
+  );
+}
+
+function resolveProviderModelPricing(
+  context: PricingContext,
+  provider: string,
+  key: string,
+): PricingValue | undefined {
   // Routing shortcuts inherit an estimate, never the price of a distinct variant.
   const baseModel = /^openrouter\/([^:]+):(?:nitro|floor)$/u.exec(key)?.[1];
   const pricingKeys = baseModel ? [key, `openrouter/${baseModel}`] : [key];

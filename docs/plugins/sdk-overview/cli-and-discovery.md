@@ -156,6 +156,11 @@ with `code: "commander.invalidArgument"` so Commander names the rejected option.
 AI CLI backend such as `claude-cli` or `my-cli`.
 
 - The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
+- Set `modelProvider` to the canonical model provider id to bind that provider's
+  models to this CLI runtime. There is no inferred default. A missing or blank
+  value emits a warning during runtime or setup-only registration naming the
+  plugin, backend, and missing field; direct CLI references remain available,
+  but no provider-to-runtime binding is created.
 - The backend `config` is the authoritative command adapter: argv, environment,
   parser, session, image, and reliability behavior live in plugin code.
 - Users select the backend through model refs or model-scoped `agentRuntime.id`;
@@ -178,12 +183,12 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   the core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an exact
-  `ctx.toolAvailability.native` list plus canonical
+  `ctx.toolAvailability.native` list plus standard
   `ctx.toolAvailability.openClaw` names. Declare
   `toolAvailabilityEnforcement: "execution-args"` and enforce the contract in
   final fresh/resume argv, or declare `"prepare-execution"`, enforce it in
   staged policy, and return `toolAvailabilityEnforced: true`. OpenClaw disables
-  native tools for runtime caps such as cron `toolsAllow` and fails closed when
+  native tools for runtime caps such as cron `toolsAllow` and blocks execution when
   the declared enforcement path is incomplete.
 
 For an end-to-end authoring guide, see

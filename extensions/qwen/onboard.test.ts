@@ -57,7 +57,7 @@ describe("Qwen setup", () => {
   it.each([
     { name: "coding", provider: "qwen", apply: applyQwenConfig, rows: 10 },
     { name: "standard", provider: "qwen", apply: applyQwenStandardConfig, rows: 14 },
-    { name: "Token Plan", provider: "qwen-token-plan", apply: applyTokenPlanGlobal, rows: 8 },
+    { name: "Token Plan", provider: "qwen-token-plan", apply: applyTokenPlanGlobal, rows: 7 },
   ])("retains the shipped $name replace catalog", ({ provider, apply, rows }) => {
     const config = apply({ models: { mode: "replace" } });
     expect(config.models?.providers?.[provider]?.models).toHaveLength(rows);

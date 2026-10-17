@@ -39,7 +39,11 @@ access. A successful listing replaces the catalog, including tools removed by
 the server. Explicit config changes, removals, and plugin reloads retire the
 changed runtime immediately; unchanged servers keep their catalogs.
 
-When OpenClaw's built-in MCP client cannot start a server, new runtimes skip it during an exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory shows the server as unavailable, with that runtime's next retry time and a reachability check as the next step. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
+For legacy SSE servers, reconnecting to the same session endpoint preserves the
+session. If the server announces a new endpoint, OpenClaw reconnects and
+initializes a fresh session before sending further tool calls.
+
+When OpenClaw's built-in MCP client cannot start a server, new runtimes skip it during an exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. If that runtime has never listed the server successfully, the first turn after a retry is due waits for the bounded connection and catalog listing, so recovered tools are available on that turn. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory shows the server as unavailable, with that runtime's next retry time and a reachability check as the next step. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
 
 ## Add a server from the composer
 
@@ -136,9 +140,11 @@ Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition 
 
 Confirm the `command` resolves in the Gateway process environment and that `cwd` exists. Arguments belong in `args`, and an explicit `transport: "stdio"` requires a non-empty command.
 
-For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr diagnostics with `bundle-mcp:<name>:`. Unicode characters survive split writes, and shutdown diagnostics are retained. Output without a newline is briefly buffered for up to 250 ms before being logged as progress fragments; this does not wait for the server to stop writing. A diagnostic exceeding the 8 KiB buffer retains its Unicode-safe tail with a `[stderr line truncated]` marker.
+For servers launched by OpenClaw's built-in MCP client, debug logs report stderr activity once per connection as `bundle-mcp:<name>: stderr output omitted`. Server output is not copied into ordinary logs because it can contain message text or tool content. Stderr is still drained through shutdown. Startup and connection failures retain their normal diagnostics. Explicit SDK stderr collectors and their returned failure tails are unchanged.
 
 ### An HTTP server needs authorization
+
+If a Streamable HTTP server refuses initialization with HTTP 401, its startup log and catalog diagnostic report `authentication refused (401)` alongside the configured server name. Check the credentials for that entry under `mcp.servers`, or sign in again if it uses OAuth. Response bodies and header values remain redacted; the diagnostic does not expose the server's raw error message.
 
 Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
 

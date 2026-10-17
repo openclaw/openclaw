@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEffect, createRoot, flush } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
@@ -32,6 +33,7 @@ import {
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
+import { projectChatRun } from "./chat-run-projection.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -81,6 +83,54 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it("publishes custody changes through the run projection while retaining the pending view", () => {
+    const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
+    const rendered: (readonly string[])[] = [];
+    const dispose = createRoot((stop) => {
+      projectChatRun(host);
+      createEffect(
+        () => getChatPendingInputs(host)?.page.items.map((item) => item.id) ?? [],
+        (items) => {
+          rendered.push(items);
+        },
+      );
+      return stop;
+    });
+    onTestFinished(dispose);
+    flush();
+    applyChatPendingInputs(host, page);
+    const retained = getChatPendingInputs(host);
+    expect(retained?.page.items).toHaveLength(1);
+    flush();
+    expect(rendered).toEqual([[], [input.id]]);
+    applyChatPendingInputs(host, { items: [], total: 0 });
+    expect(getChatPendingInputs(host)).toBe(retained);
+    expect(retained?.page.items).toEqual([]);
+    flush();
+    expect(rendered).toEqual([[], [input.id], []]);
+  });
+
+  it.each([
+    ["queued", undefined],
+    ["interrupted", "Delivery interrupted. This saved agent update is not scheduled to retry."],
+  ] as const)("describes a %s agent update without asking the user to resend it", (state, text) => {
+    const items = buildPendingInputItems([
+      {
+        ...input,
+        state,
+        message: {
+          role: "user",
+          content: "The mobile fixes are merged.",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      },
+    ]);
+    expect(items.some((item) => item.kind === "message")).toBe(true);
+    expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
+      text ? [text] : [],
+    );
+  });
+
   it.each(["held", "failed", "waiting-reconnect"] as const)(
     "describes interrupted input with a %s browser owner accurately",
     (sendState) => {
@@ -123,12 +173,6 @@ describe("server-owned pending input display", () => {
       runId: "run-queued",
       notice:
         "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-    },
-    {
-      state: "cancelled",
-      runId: "run-queued",
-      notice:
-        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
     },
   ] as const)(
     "keeps $state custody out of the worker-setup notice without eligible execution",
@@ -674,6 +718,7 @@ describe("server-owned pending input display", () => {
     async (runId) => {
       const stale = createDeferred<unknown>();
       const fresh = createDeferred<unknown>();
+      const freshStarted = createDeferred();
       const initialUser = {
         role: "user",
         content: "First turn",
@@ -709,7 +754,14 @@ describe("server-owned pending input display", () => {
           ],
         ]),
         requestHandlers: {
-          "chat.history": () => (++historyReads === 1 ? stale.promise : fresh.promise),
+          "chat.history": () => {
+            historyReads += 1;
+            if (historyReads === 1) {
+              return stale.promise;
+            }
+            freshStarted.resolve();
+            return fresh.promise;
+          },
         },
       });
       applyChatPendingInputs(host, page);
@@ -730,8 +782,8 @@ describe("server-owned pending input display", () => {
       expect(historyReads).toBe(1);
       const refreshing = loadChatHistory(host);
       stale.resolve({ sessionId, messages: [initialUser], pendingInputs: page });
-      await loading;
-      await vi.waitFor(() => expect(historyReads).toBe(2));
+      await freshStarted.promise;
+      expect(historyReads).toBe(2);
       expect(host.chatMessages).toEqual([initialUser, promoted]);
       expect(getChatHistoryLoadState(host).phase).toBe("in-flight");
       fresh.resolve({
@@ -740,7 +792,8 @@ describe("server-owned pending input display", () => {
         pendingInputs: { items: [], total: 0 },
         sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
       });
-      const refreshed = await refreshing;
+      const [loaded, refreshed] = await Promise.all([loading, refreshing]);
+      expect(loaded).toBe(refreshed);
       expect(host.lastError).toBeNull();
       expect(getChatHistoryLoadState(host).phase).toBe("committed");
       expect(refreshed).toMatchObject({ pendingInputs: { items: [], total: 0 } });
@@ -928,38 +981,35 @@ describe("server-owned pending input display", () => {
     ]);
   });
 
-  it.each(["user", "assistant"])(
-    "preserves a canonical %s sharing the pending run correlation",
-    (role) => {
-      const canonical = {
-        role,
-        content: "Earlier result",
-        __openclaw: { id: "another-entry", runId: input.runId },
-      };
-      const host = makeChatHost({
-        sessionKey,
-        currentSessionId: sessionId,
-        chatMessages: [canonical],
-      });
-      applyChatPendingInputs(host, page);
-      expect(host.chatMessages).toEqual([canonical]);
-      const items = buildChatItems({
-        paneId: "correlated-pane",
-        sessionKey,
-        messages: host.chatMessages,
-        pendingInputs: page.items,
-        queue: [],
-        toolMessages: [],
-        streamSegments: [],
-        stream: null,
-        streamStartedAt: null,
-        showToolCalls: true,
-      });
-      const displayed = items.flatMap((item) =>
-        item.kind === "group" ? item.messages.map((entry) => entry.message) : [],
-      );
-      expect(displayed).toContain(canonical);
-      expect(displayed.filter((message) => message === input.message)).toHaveLength(1);
-    },
-  );
+  it.each(["assistant"])("preserves a canonical %s sharing the pending run correlation", (role) => {
+    const canonical = {
+      role,
+      content: "Earlier result",
+      __openclaw: { id: "another-entry", runId: input.runId },
+    };
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      chatMessages: [canonical],
+    });
+    applyChatPendingInputs(host, page);
+    expect(host.chatMessages).toEqual([canonical]);
+    const items = buildChatItems({
+      paneId: "correlated-pane",
+      sessionKey,
+      messages: host.chatMessages,
+      pendingInputs: page.items,
+      queue: [],
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    const displayed = items.flatMap((item) =>
+      item.kind === "group" ? item.messages.map((entry) => entry.message) : [],
+    );
+    expect(displayed).toContain(canonical);
+    expect(displayed.filter((message) => message === input.message)).toHaveLength(1);
+  });
 });

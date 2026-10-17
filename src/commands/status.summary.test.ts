@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   clearActiveCredentialDegradedOwner,
@@ -61,7 +62,8 @@ vi.mock("../status/summary.runtime.js", async (importOriginal) => {
         provider: "openai",
         model: "gpt-5.5",
       })),
-      resolveSessionRuntime: vi.fn(async () => ({ id: "openclaw", label: "OpenClaw Default" })),
+      resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
+      readSessionRuntimeMetadata: vi.fn(async (_cfg, candidates) => candidates.map(() => null)),
       resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
         typeof model === "string" && model.length > 0
           ? {
@@ -251,7 +253,7 @@ describe("getStatusSummary", () => {
     });
     statusSummaryMocks.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
     vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
-    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockResolvedValue({
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
       id: "openclaw",
       label: "OpenClaw Default",
     });
@@ -404,6 +406,60 @@ describe("getStatusSummary", () => {
       recent: [],
       byAgent: [{ agentId: "main", path: "[redacted]", count: 1, recent: [] }],
     });
+  });
+
+  it("redacts admitted database paths without mutating the owner's facts", async () => {
+    const privatePath = "/private/status-operator-read/agent.sqlite";
+    const store: DatabaseStoreDiagnostic = {
+      family: "agent",
+      path: privatePath,
+      configured: { default: "postgres", override: null, effective: "postgres", fixedLocal: false },
+      observed: "postgres",
+      mismatch: false,
+      schema: { versioning: "versioned", version: 5, expectedVersion: null, pending: null },
+      connectivity: "unknown",
+      namespace: "oc_agent_fixture",
+      storeId: "fixture-store",
+      database: null,
+      extensions: null,
+      admittedExtensions: null,
+      degraded: null,
+      custody: "unverifiable",
+      lease: "unverifiable",
+      backup: null,
+      legacyMigrations: { state: "unknown", pending: [] },
+      issues: [],
+      nextSteps: ["Run openclaw doctor on the Gateway host."],
+    };
+    const admitted = vi
+      .spyOn(
+        await import("../infra/database-engine/admitted-diagnostics.js"),
+        "describeAdmittedDatabaseStores",
+      )
+      .mockReturnValue([store]);
+    try {
+      const redacted = await getStatusSummary({
+        includeSensitive: false,
+        includeCliProjection: true,
+        includeChannelSummary: false,
+      });
+      expect(redacted.databaseStores?.[0]).toMatchObject({
+        family: "agent",
+        path: null,
+        observed: "postgres",
+        namespace: "oc_agent_fixture",
+      });
+      expect(JSON.stringify(redacted)).not.toContain(privatePath);
+      expect(store.path).toBe(privatePath);
+      const sensitive = await getStatusSummary({
+        includeSensitive: true,
+        includeCliProjection: true,
+        includeChannelSummary: false,
+      });
+      expect(sensitive.databaseStores?.[0]?.path).toBe(privatePath);
+    } finally {
+      admitted.mockRestore();
+    }
   });
 
   it("reports stale snapshot and cold credential owners without exposing ref identifiers", async () => {
@@ -705,5 +761,11 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.count).toBe(3);
     expect(summary.sessions.byAgent[0]?.count).toBe(1);
     expect(summary.sessions.byAgent[0]?.recent.map(({ key }) => key)).toEqual(["agent:main:main"]);
+    expect(statusSummaryRuntime.readSessionRuntimeMetadata).toHaveBeenCalledOnce();
+    expect(
+      vi
+        .mocked(statusSummaryRuntime.readSessionRuntimeMetadata)
+        .mock.calls[0]?.[1].map(({ sessionKey }) => sessionKey),
+    ).toEqual(["agent:ops:main", "agent:research:main", "agent:main:main"]);
   });
 });

@@ -84,6 +84,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
       id: "",
       sessionKey: injection.sessionKey,
     }),
+    steerActiveRun: async () => ({ steered: false as const, reason: "test api" }),
     registerTrustedToolPolicy() {},
     registerToolMetadata() {},
     registerControlUiDescriptor() {},

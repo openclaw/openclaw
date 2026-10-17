@@ -33,6 +33,7 @@ import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-ident
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { findRestartRecoveryUnsafeChatAdmissionHook } from "../../plugins/restart-recovery-hook-safety.js";
+import { CommandLane } from "../../process/lanes.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,
@@ -187,6 +188,7 @@ export function resolveDurableChatClaim(params: {
       await retryRestartAbortedMainSessionRecovery({
         canonicalSessionKey: params.canonicalSessionKey,
         cfg: params.cfg,
+        lane: CommandLane.Main,
         expectedRecoveryRunId: entry.restartRecoveryDeliveryRunId,
         expectedRecoverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
         expectedSessionId: entry.sessionId,
@@ -336,7 +338,7 @@ export function resolveRestartSafeChatAdmission(params: {
   const placement = params.placement;
   // Only local input may be consumed before turn admission. Worker setup and
   // reconciliation retain approved input in custody until their writer is ready.
-  if (placement && placement.state !== "local") {
+  if (params.cfg.cloudWorkers?.requiredProfile || (placement && placement.state !== "local")) {
     return undefined;
   }
   if (!request || !entry || !isRestartSafeChatSession({ ...params, entry })) {

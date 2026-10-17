@@ -689,14 +689,21 @@ describe("descendant cascade ownership", () => {
         await proceed.promise;
         return { ok: true, messageId: "aborted-partial" };
       });
-    if (!hasOwnedActive) {
+    if (!hasOwnedActive && kind !== "orphan") {
       releaseSwarmRun("capacity");
     }
+    const mixedOwner = ["mixed active", "mixed queued", "mixed pending agent"].includes(kind);
+    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const pending = invokeChatAbortHandler({
       handler: (options) =>
         handleChatAbortRequestWithLifecycle(
           options,
-          kind === "ordinary" ? {} : { cascadeDescendants: true },
+          kind === "ordinary"
+            ? {}
+            : {
+                cascadeDescendants: true,
+                ...(mixedOwner ? { onAuthorizedAfterQueuedAbort } : {}),
+              },
         ),
       context,
       request: {
@@ -739,7 +746,28 @@ describe("descendant cascade ownership", () => {
       admission?.release();
       proceed.resolve();
       const respond = await pending;
+      if (kind === "orphan") {
+        releaseSwarmRun("capacity");
+      }
       expect(requireLastRespondCall(respond)[0]).toBe(!kind.startsWith("all foreign"));
+      if (mixedOwner) {
+        expect(requireLastRespondCall(respond)[1]).toMatchObject({
+          aborted: true,
+          runIds: ["run-mine"],
+        });
+        expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
+        expect(mine.controller.signal.aborted).toBe(true);
+        expect(context.chatAbortControllers.has("run-mine")).toBe(false);
+        if (kind === "mixed active") {
+          expect(context.chatAbortControllers.get("run-foreign")).toBe(foreign);
+        } else if (kind === "mixed queued") {
+          expect(context.chatQueuedTurns.get("run-foreign")?.controller).toBe(foreign.controller);
+        } else {
+          expect(context.dedupe.get("agent:run-foreign")).toMatchObject({
+            payload: { status: "accepted" },
+          });
+        }
+      }
       const child = await getSubagentRunByChildSessionKey(childKey);
       if (canCascade) {
         expect(child).toMatchObject({

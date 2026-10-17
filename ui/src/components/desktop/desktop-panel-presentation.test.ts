@@ -19,6 +19,52 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
+function mockFullscreen() {
+  let current: Element | null = null;
+  const properties: readonly (readonly [object, string])[] = [
+    [document, "fullscreenElement"],
+    [document, "fullscreenEnabled"],
+    [document, "exitFullscreen"],
+    [Element.prototype, "requestFullscreen"],
+  ];
+  const descriptors = properties.map(([object, property]) => ({
+    object,
+    property,
+    descriptor: Object.getOwnPropertyDescriptor(object, property),
+  }));
+  const change = (element: Element | null) => {
+    current = element;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
+  const exit = vi.fn(async () => change(null));
+  const request = vi.fn(async function (this: Element) {
+    change(this);
+  });
+  Object.defineProperties(document, {
+    fullscreenElement: { configurable: true, get: () => current },
+    fullscreenEnabled: { configurable: true, value: true },
+    exitFullscreen: { configurable: true, value: exit },
+  });
+  Object.defineProperty(Element.prototype, "requestFullscreen", {
+    configurable: true,
+    value: request,
+  });
+  return {
+    change,
+    exit,
+    request,
+    restore: () => {
+      for (const { object, property, descriptor } of descriptors) {
+        if (descriptor) {
+          Object.defineProperty(object, property, descriptor);
+        } else {
+          Reflect.deleteProperty(object, property);
+        }
+      }
+    },
+  };
+}
+
 describe("desktop panel presentation lifecycle", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -28,6 +74,164 @@ describe("desktop panel presentation lifecycle", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("receives global toggles only while mounted as a standalone panel", async () => {
+    const request = vi.fn(async () => ({ environments: [] }));
+    const panel = createPanel();
+    updatePanel(panel, { available: true, client: createGatewayClient(request).client });
+    await mountPanel(panel);
+    const toggle = (detail: { open: boolean; environmentId?: string }) =>
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail }));
+    try {
+      toggle({ open: true });
+      await panel.updateComplete;
+      expect(panel.querySelector("section.bp")).not.toBeNull();
+
+      updatePanel(panel, { embedded: true, presented: true });
+      await panel.updateComplete;
+      request.mockClear();
+      toggle({ open: true, environmentId: "ignored-global-target" });
+      await panel.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+
+      updatePanel(panel, { embedded: false });
+      await panel.updateComplete;
+      toggle({ open: false });
+      await panel.updateComplete;
+      expect(panel.querySelector("section.bp")).toBeNull();
+
+      await unmountPanel(panel);
+      request.mockClear();
+      toggle({ open: true });
+      await panel.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      await unmountPanel(panel);
+    }
+  });
+
+  it("admits one same-turn launch and retires pending feedback with the panel", async () => {
+    let launch = createDeferred();
+    const environment = {
+      ...desktopEnvironment,
+      worker: { ...desktopEnvironment.worker, desktopApps: ["browser"] },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.status") {
+        return environment;
+      }
+      if (method === "desktop.observe") {
+        return {
+          transport: "rfb",
+          wsPath: "/desktop/observe?token=launch-test",
+          expiresAtMs: 60_000,
+          control: false,
+        };
+      }
+      if (method === "desktop.launch") {
+        return launch.promise;
+      }
+      throw new Error(`Unexpected Desktop request: ${method}`);
+    });
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return createConnectionHandle();
+    });
+    const panel = createPanel();
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      requestedSource: environment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    await mountPanel(panel);
+    try {
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+      const button = panel.querySelector<HTMLButtonElement>(".desktop-app-button")!;
+      button.click();
+      button.click();
+      expect(request.mock.calls.filter(([method]) => method === "desktop.launch")).toHaveLength(1);
+      await waitForSolid(() => expect(button.getAttribute("aria-busy")).toBe("true"));
+      launch.reject(new Error("App launch unavailable"));
+      await waitForSolid(() => {
+        expect(panel.textContent).toContain("App launch unavailable");
+        expect(button.disabled).toBe(false);
+      });
+
+      launch = createDeferred();
+      button.click();
+      await waitForSolid(() => {
+        expect(button.getAttribute("aria-busy")).toBe("true");
+        expect(panel.textContent).not.toContain("App launch unavailable");
+      });
+      await unmountPanel(panel);
+      launch.reject(new Error("Retired launch failure"));
+      await launch.promise.catch(() => {});
+      await waitForSolid(() => expect(panel.childElementCount).toBe(0));
+    } finally {
+      launch.resolve();
+      await unmountPanel(panel);
+    }
+  });
+
+  it("preserves the desktop panel and returns focus after native fullscreen exits", async () => {
+    const fullscreen = mockFullscreen();
+    const panel = createPanel();
+    try {
+      updatePanel(panel, { available: true });
+      await mountPanel(panel);
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      await panel.updateComplete;
+      const section = panel.querySelector("section.bp");
+      const button = panel.querySelector<HTMLButtonElement>(".desktop-fullscreen-button")!;
+      button.click();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
+      expect(document.fullscreenElement).toBe(section);
+      expect(panel.querySelector("section.bp")).toBe(section);
+      expect(panel.querySelector("resizable-divider")).toBeNull();
+
+      button.blur();
+      await document.exitFullscreen();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("false"));
+      expect(document.activeElement).toBe(button);
+      expect(panel.querySelector("resizable-divider")).not.toBeNull();
+
+      fullscreen.change(button);
+      await panel.updateComplete;
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+      await unmountPanel(panel);
+      expect(fullscreen.exit).toHaveBeenCalledOnce();
+    } finally {
+      await unmountPanel(panel);
+      fullscreen.restore();
+    }
+  });
+
+  it("reports fullscreen failures and exits owned fullscreen when unmounted", async () => {
+    const fullscreen = mockFullscreen();
+    const panel = createPanel();
+    try {
+      updatePanel(panel, { available: true });
+      await mountPanel(panel);
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      await panel.updateComplete;
+      const button = panel.querySelector<HTMLButtonElement>(".desktop-fullscreen-button")!;
+      fullscreen.request.mockRejectedValueOnce(new Error("Fullscreen permission denied"));
+      button.click();
+      await waitForSolid(() => expect(panel.textContent).toContain("Fullscreen permission denied"));
+      button.click();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
+      expect(panel.textContent).not.toContain("Fullscreen permission denied");
+      await unmountPanel(panel);
+      expect(fullscreen.exit).toHaveBeenCalledOnce();
+      expect(document.fullscreenElement).toBeNull();
+    } finally {
+      await unmountPanel(panel);
+      fullscreen.restore();
+    }
   });
 
   it("does not claim fullscreen while its section is unrendered", async () => {
@@ -40,25 +244,25 @@ describe("desktop panel presentation lifecycle", () => {
     });
     const panel = createPanel();
     try {
-      mountPanel(panel);
+      await mountPanel(panel);
       await panel.updateComplete;
-      expect(panel.renderRoot.querySelector("section.bp")).toBeNull();
+      expect(panel.querySelector("section.bp")).toBeNull();
 
       document.dispatchEvent(new Event("fullscreenchange"));
       updatePanel(panel, { available: true });
       window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
       await panel.updateComplete;
-      const button = panel.renderRoot.querySelector(".desktop-fullscreen-button");
+      const button = panel.querySelector(".desktop-fullscreen-button");
       expect(button).not.toBeNull();
       expect.soft(button?.getAttribute("aria-pressed")).toBe("false");
 
       updatePanel(panel, { available: false });
       await panel.updateComplete;
-      expect(panel.renderRoot.querySelector("section.bp")).toBeNull();
-      unmountPanel(panel);
+      expect(panel.querySelector("section.bp")).toBeNull();
+      await unmountPanel(panel);
       expect(exitFullscreen).not.toHaveBeenCalled();
     } finally {
-      unmountPanel(panel);
+      await unmountPanel(panel);
       for (const [index, name] of properties.entries()) {
         const descriptor = original[index];
         if (descriptor) {
@@ -88,19 +292,17 @@ describe("desktop panel presentation lifecycle", () => {
       requestedSource: desktopEnvironment.id,
       desktopClientFactory: () => ({ connect }),
     });
-    mountPanel(panel);
+    await mountPanel(panel);
     await panel.updateComplete;
     clickPanelButton(panel, "[aria-label='Disconnect']");
     await panel.updateComplete;
     inventory.resolve(desktopEnvironment);
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".desktop-status > div")?.textContent?.trim()).toBe(
+    expect(panel.querySelector(".desktop-status > div")?.textContent?.trim()).toBe(
       "Desktop disconnected",
     );
-    expect(panel.renderRoot.querySelector("[aria-busy='true']")).toBeNull();
-    expect(panel.renderRoot.querySelector(".desktop-status button")?.textContent).toContain(
-      "Reconnect",
-    );
+    expect(panel.querySelector("[aria-busy='true']")).toBeNull();
+    expect(panel.querySelector(".desktop-status button")?.textContent).toContain("Reconnect");
     updatePanel(panel, { presented: false });
     await panel.updateComplete;
     updatePanel(panel, { presented: true });
@@ -138,17 +340,18 @@ describe("desktop panel presentation lifecycle", () => {
       presented: true,
       desktopClientFactory: () => ({ connect }),
     });
-    mountPanel(panel);
+    await mountPanel(panel);
 
     await waitForSolid(() => {
       expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(
         1,
       );
+      expect(panel.querySelector(".desktop-environment button")).not.toBeNull();
     });
     clickPanelButton(panel);
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     await panel.updateComplete;
-    const surface = panel.renderRoot.querySelector(".desktop-surface");
+    const surface = panel.querySelector(".desktop-surface");
     selectSizing(panel, "actual");
     vi.useFakeTimers();
 
@@ -163,7 +366,7 @@ describe("desktop panel presentation lifecycle", () => {
     await panel.updateComplete;
     await vi.advanceTimersByTimeAsync(2_000);
     expect(disconnect).not.toHaveBeenCalled();
-    expect(panel.renderRoot.querySelector(".desktop-surface")).toBe(surface);
+    expect(panel.querySelector(".desktop-surface")).toBe(surface);
     expect(sizingMenu(panel).value).toBe("actual");
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
     expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
@@ -173,12 +376,12 @@ describe("desktop panel presentation lifecycle", () => {
     await panel.updateComplete;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(disconnect).toHaveBeenCalledOnce();
-    expect(panel.renderRoot.querySelector(".desktop-surface")).toBeNull();
+    expect(panel.querySelector(".desktop-surface")).toBeNull();
     updatePanel(panel, { presented: true });
     await panel.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
-    expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
+    expect(panel.querySelector(".desktop-picker")).not.toBeNull();
   });
 
   it("keeps disconnect recovery live when a hide and show share one update", async () => {
@@ -200,9 +403,9 @@ describe("desktop panel presentation lifecycle", () => {
       presented: true,
       desktopClientFactory: () => ({ connect }),
     });
-    mountPanel(panel);
+    await mountPanel(panel);
     await waitForSolid(() =>
-      expect(panel.renderRoot.querySelector(".desktop-environment button")).not.toBeNull(),
+      expect(panel.querySelector(".desktop-environment button")).not.toBeNull(),
     );
     clickPanelButton(panel);
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
@@ -216,11 +419,9 @@ describe("desktop panel presentation lifecycle", () => {
     expect(connect).toHaveBeenCalledOnce();
     connect.mock.calls[0]![0].onDisconnect?.({ clean: false, reason: "Desktop connection lost" });
     await panel.updateComplete;
-    expect(panel.renderRoot.textContent).toContain("Desktop connection lost");
-    expect(panel.renderRoot.querySelector(".desktop-surface")).toBeNull();
-    expect(panel.renderRoot.querySelector(".desktop-status button")?.textContent).toContain(
-      "Reconnect",
-    );
+    expect(panel.textContent).toContain("Desktop connection lost");
+    expect(panel.querySelector(".desktop-surface")).toBeNull();
+    expect(panel.querySelector(".desktop-status button")?.textContent).toContain("Reconnect");
   });
 
   it.each(["session", "source", "client", "unavailable", "unmount"] as const)(
@@ -246,7 +447,7 @@ describe("desktop panel presentation lifecycle", () => {
         requestedSource: desktopEnvironment.id,
         desktopClientFactory: () => ({ connect }),
       });
-      mountPanel(panel);
+      await mountPanel(panel);
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       await panel.updateComplete;
       vi.useFakeTimers();
@@ -263,7 +464,7 @@ describe("desktop panel presentation lifecycle", () => {
       } else if (change === "unavailable") {
         updatePanel(panel, { available: false });
       } else {
-        unmountPanel(panel);
+        await unmountPanel(panel);
       }
       await panel.updateComplete;
       expect(handle.disconnect).toHaveBeenCalledOnce();

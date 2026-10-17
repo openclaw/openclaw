@@ -552,7 +552,7 @@ describe("update-cli", () => {
     expect(process.exitCode).toBe(130);
     expect(processExitSpy).not.toHaveBeenCalled();
     expect(resumeScheduledTaskAutoStartAfterUpdate.mock.calls.length).toBe(0);
-    await expect(fs.access(path.join(root, "dist", "index.js"))).resolves.toBeUndefined();
+    await fs.access(path.join(root, "dist", "index.js"));
     expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
       version: "1.0.0",
     });
@@ -897,11 +897,7 @@ describe("update-cli", () => {
 
       await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      if (failureKind === "post-core exception") {
-        expect(triageAfterFailure.mock.calls.map(([, context]) => context)).toContainEqual(
-          expect.objectContaining({ kind: "update", error: failure.message }),
-        );
-      }
+      expect(triageAfterFailure).not.toHaveBeenCalled();
       expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();
       expect(serviceStop).toHaveBeenCalledOnce();
       expect(suspendScheduledTaskAutoStartForUpdate.mock.invocationCallOrder[0]).toBeLessThan(

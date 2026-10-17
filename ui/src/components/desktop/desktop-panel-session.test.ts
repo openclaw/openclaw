@@ -36,7 +36,7 @@ describe("session desktop connection", () => {
     vi.unstubAllGlobals();
   });
 
-  function mount(
+  async function mount(
     request: (
       method: string,
       params?: { control?: boolean; environmentId?: string },
@@ -68,7 +68,7 @@ describe("session desktop connection", () => {
       desktopClientFactory: () => ({ connect }),
       ...options,
     });
-    mountPanel(panel);
+    await mountPanel(panel);
     return { panel, gateway, connect, disconnect };
   }
 
@@ -98,7 +98,7 @@ describe("session desktop connection", () => {
       },
     );
     const onFocusTargetChange = vi.fn();
-    const { panel, connect, disconnect } = mount(request, { onFocusTargetChange });
+    const { panel, connect, disconnect } = await mount(request, { onFocusTargetChange });
     if (phase === "opening") {
       await waitForSolid(() => expect(first).toBe(false));
     } else {
@@ -143,7 +143,7 @@ describe("session desktop connection", () => {
         control: true,
         ...(explicit ? { source: desktopEnvironment.id } : { session: "agent:main:preview" }),
       });
-      expect(panel.renderRoot.textContent).not.toContain("Agent input is paused");
+      expect(panel.textContent).not.toContain("Agent input is paused");
       clickPanelButton(panel, 'button[aria-label="Switch to view only"]');
       await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
       expect(request).toHaveBeenLastCalledWith("desktop.observe", {
@@ -179,7 +179,7 @@ describe("session desktop connection", () => {
         }
         return { transport: "rfb", wsPath: "/desktop/observe?token=synthetic", control: false };
       });
-      const { panel, connect } = mount(request, { documentMode }, outcome === "ready");
+      const { panel, connect } = await mount(request, { documentMode }, outcome === "ready");
       await waitForSolid(() =>
         expect(request).toHaveBeenCalledWith("environments.status", {
           environmentId: desktopEnvironment.id,
@@ -187,12 +187,10 @@ describe("session desktop connection", () => {
       );
       expect(reads).toBe(1);
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(panel.renderRoot.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
-      expect(panel.renderRoot.textContent).toContain("Starting your machine");
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+      expect(panel.textContent).toContain("Starting your machine");
       const takeControl = [
-        ...panel.renderRoot.querySelectorAll<HTMLButtonElement>(
-          'button[aria-label="Take control"]',
-        ),
+        ...panel.querySelectorAll<HTMLButtonElement>('button[aria-label="Take control"]'),
       ];
       expect(takeControl.length).toBeGreaterThan(0);
       for (const button of takeControl) {
@@ -244,7 +242,7 @@ describe("session desktop connection", () => {
         vncPassword: "synthetic-worker-password",
       };
     });
-    const { panel, connect } = mount(request, {
+    const { panel, connect } = await mount(request, {
       embedded: false,
       documentMode: true,
       sessionKey: null,
@@ -252,7 +250,7 @@ describe("session desktop connection", () => {
     });
 
     await waitForSolid(() =>
-      expect(panel.renderRoot.querySelector(".desktop-environment button")).not.toBeNull(),
+      expect(panel.querySelector(".desktop-environment button")).not.toBeNull(),
     );
     clickPanelButton(panel);
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
@@ -299,7 +297,7 @@ describe("session desktop connection", () => {
         }
         throw new Error("Global inventory unavailable");
       });
-      const { panel, gateway, connect, disconnect } = mount(request, {
+      const { panel, gateway, connect, disconnect } = await mount(request, {
         embedded: presentation === "embedded",
         documentMode: presentation !== "embedded",
         sessionKey: presentation === "source document" ? null : sessionKey,
@@ -318,9 +316,9 @@ describe("session desktop connection", () => {
           request.mock.calls.filter(([method]) => method === "sessions.describe"),
         ).toHaveLength(presentation === "session document" ? 1 : 0);
         if (panel.embedded) {
-          expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
+          expect(panel.querySelector(".desktop-picker")).toBeNull();
         }
-        expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0);
+        expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(0);
         expect(connect).not.toHaveBeenCalled();
       } else {
         await waitForSolid(() =>
@@ -330,8 +328,8 @@ describe("session desktop connection", () => {
       const error =
         failure === "status" ? "Desktop is still starting" : "Session lookup unavailable";
       pending.reject(new Error(error));
-      await waitForSolid(() => expect(panel.renderRoot.textContent).toContain(error));
-      expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
+      await waitForSolid(() => expect(panel.textContent).toContain(error));
+      expect(panel.querySelector(".desktop-picker")).toBeNull();
       expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
       response = Promise.resolve(failure === "session" ? described : desktopEnvironment);
       clickPanelButton(panel, ".desktop-status button");
@@ -341,7 +339,7 @@ describe("session desktop connection", () => {
         control: false,
       });
       expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
-      expect(panel.renderRoot.querySelector(".desktop-picker")).toBeNull();
+      expect(panel.querySelector(".desktop-picker")).toBeNull();
       if (failure === "session") {
         failRefresh = true;
         gateway.emit("sessions.changed", { sessionKey, reason: "placement" });
@@ -378,7 +376,7 @@ describe("session desktop connection", () => {
         }
         throw new Error("Global inventory must not participate");
       });
-      const { panel, gateway, connect } = mount(request, {
+      const { panel, gateway, connect } = await mount(request, {
         embedded: false,
         documentMode: true,
         sessionKey,
@@ -405,15 +403,13 @@ describe("session desktop connection", () => {
       await previousRequest.catch(() => undefined);
       await panel.updateComplete;
       expect(connect).not.toHaveBeenCalled();
-      expect(panel.renderRoot.textContent).not.toContain("Retired target unavailable");
+      expect(panel.textContent).not.toContain("Retired target unavailable");
       if (outcome === "lookup failure") {
         nextSession.reject(new Error("Current target lookup unavailable"));
         await waitForSolid(() =>
-          expect(panel.renderRoot.textContent).toContain("Current target lookup unavailable"),
+          expect(panel.textContent).toContain("Current target lookup unavailable"),
         );
-        expect(panel.renderRoot.querySelector(".desktop-status button")?.textContent).toContain(
-          "Retry",
-        );
+        expect(panel.querySelector(".desktop-status button")?.textContent).toContain("Retry");
         expect(connect).not.toHaveBeenCalled();
         expect(request.mock.calls.some(([method]) => method === "environments.list")).toBe(false);
         return;

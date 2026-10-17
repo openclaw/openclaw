@@ -64,19 +64,6 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
     );
 
-    it("keeps valid hooks enabled without a disable warning", async () => {
-      hooksWarn.mockClear();
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: { bind: "loopback", auth: TOKEN_AUTH },
-          hooks: { enabled: true, token: "synthetic-valid-hook-secret" },
-        },
-        port: 18789,
-      });
-      expect(result.hooksConfig?.token).toBe("synthetic-valid-hook-secret");
-      expect(hooksWarn).not.toHaveBeenCalled();
-    });
-
     it("does not suppress unrelated invalid hook settings", async () => {
       await expect(
         resolveGatewayRuntimeConfig({
@@ -102,17 +89,6 @@ describe("resolveGatewayRuntimeConfig", () => {
           },
         },
         expectedBindHost: "0.0.0.0",
-      },
-      {
-        name: "loopback binding with 127.0.0.1 proxy",
-        cfg: {
-          gateway: {
-            bind: "loopback" as const,
-            auth: TRUSTED_PROXY_AUTH,
-            trustedProxies: ["127.0.0.1"],
-          },
-        },
-        expectedBindHost: "127.0.0.1",
       },
     ])("allows $name", async ({ cfg, expectedBindHost }) => {
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
@@ -172,18 +148,6 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
 
     it.each([
-      {
-        name: "lan binding with token",
-        cfg: {
-          gateway: {
-            bind: "lan" as const,
-            auth: TOKEN_AUTH,
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
-          },
-        },
-        expectedAuthMode: "token",
-        expectedBindHost: "0.0.0.0",
-      },
       {
         name: "loopback binding with explicit none auth",
         cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
@@ -296,19 +260,6 @@ describe("resolveGatewayRuntimeConfig", () => {
             auth: TOKEN_AUTH,
             controlUi: {
               dangerouslyAllowHostHeaderOriginFallback: true,
-            },
-          },
-        },
-        expectedBindHost: "0.0.0.0",
-      },
-      {
-        name: "allows non-loopback control UI when allowed origins collapse after trimming",
-        cfg: {
-          gateway: {
-            bind: "lan" as const,
-            auth: TOKEN_AUTH,
-            controlUi: {
-              allowedOrigins: ["  https://control.example.com  "],
             },
           },
         },

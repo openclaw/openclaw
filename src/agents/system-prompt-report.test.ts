@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // System prompt report tests cover prompt accounting, bootstrap injection
 // matching, and hash output used to compare prompt/tool parity.
 import { describe, expect, it } from "vitest";
@@ -46,7 +47,7 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("accounts for project context with LF markers and UTF-16 content", () => {
-    const systemPrompt = "lead\n# Project Context\n汉🦞\n## Silent Replies\ntail";
+    const systemPrompt = `lead\n# Project Context\n汉🦞${SYSTEM_PROMPT_CACHE_BOUNDARY}\n## Skills\nRun-scoped catalog\n## Silent Replies\ntail`;
     const report = makeReport({ systemPrompt });
     expect(report.systemPrompt).toMatchObject({
       chars: systemPrompt.length,

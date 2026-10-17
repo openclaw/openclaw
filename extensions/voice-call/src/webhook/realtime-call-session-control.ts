@@ -81,7 +81,6 @@ export function buildVerbatimGreetingInstructions(
 export function createOutboundGreetingController(params: {
   enabled: boolean;
   instructions?: string;
-  fallbackMs?: number;
   holdOpeningMaxMs?: number;
   call?: Pick<CallRecord, "direction" | "metadata">;
   acknowledge?: (instructions: string) => void;
@@ -199,7 +198,7 @@ export function createOutboundGreetingController(params: {
         if (claim()) {
           session.triggerGreeting(params.instructions);
         }
-      }, params.fallbackMs ?? OUTBOUND_GREETING_FALLBACK_MS);
+      }, OUTBOUND_GREETING_FALLBACK_MS);
       timer.unref?.();
     },
   };
@@ -207,8 +206,6 @@ export function createOutboundGreetingController(params: {
 
 export function createRealtimeCallActivityController(params: {
   idleHangupMs?: number;
-  mediaInactivityMs?: number;
-  mediaGraceMs?: number;
   /** While true (for example an answering-machine hold), speech idle is not timed. */
   isPaused?: () => boolean;
   onIdle: () => void;
@@ -270,12 +267,9 @@ export function createRealtimeCallActivityController(params: {
       clearMedia();
       mediaTimer = setTimeout(() => {
         params.onMediaWarning();
-        mediaTimer = setTimeout(
-          params.onMediaTimeout,
-          params.mediaGraceMs ?? REALTIME_DISCONNECT_HANGUP_GRACE_MS,
-        );
+        mediaTimer = setTimeout(params.onMediaTimeout, REALTIME_DISCONNECT_HANGUP_GRACE_MS);
         mediaTimer.unref?.();
-      }, params.mediaInactivityMs ?? REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
+      }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
       mediaTimer.unref?.();
     },
     noteSpeech: resetIdle,

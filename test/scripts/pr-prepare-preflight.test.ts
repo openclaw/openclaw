@@ -38,8 +38,9 @@ function runGatesBash(script: string, options: { env?: NodeJS.ProcessEnv } = {})
 
 describe("resolve_pr_gates_remote_mode", () => {
   it.each([
-    { mode: undefined, hosted: undefined, code: 0, output: "local" },
+    { mode: undefined, hosted: undefined, code: 0, output: "github" },
     { mode: "", hosted: "1", code: 0, output: "local" },
+    { mode: "local", hosted: undefined, code: 0, output: "local" },
     { mode: "testbox", hosted: undefined, code: 0, output: "testbox" },
     { mode: "crabbox-aws", hosted: undefined, code: 0, output: "crabbox-aws" },
     { mode: "github", hosted: undefined, code: 0, output: "github" },
@@ -49,7 +50,7 @@ describe("resolve_pr_gates_remote_mode", () => {
       code: 1,
       output: "Unsupported OPENCLAW_PR_GATES_REMOTE=azure",
     },
-    ...["testbox", "crabbox-aws", "github"].map((mode) => ({
+    ...["local", "testbox", "crabbox-aws", "github"].map((mode) => ({
       mode,
       hosted: "1",
       code: 2,

@@ -5,12 +5,15 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
+import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -123,6 +126,12 @@ export async function prepareGatewayKernelState(params: {
     getPluginRegistry: () => pluginRuntime.registry,
     hostDesktopService,
   });
+  await startupTrace.measure("device-identity", () =>
+    loadOrCreateProcessDeviceIdentityAsync().catch(() => {
+      // Chat fingerprints are optional; admission owns the bounded unavailability warning.
+    }),
+  );
+  await startupTrace.measure("device-pairing", () => readDevicePairingNodeSnapshot());
   const workerEnvironmentRuntime = workerEnvironmentStartup
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
         const workerModule = await import("./server-worker-environment-startup.js");
@@ -193,31 +202,29 @@ export async function prepareGatewayKernelState(params: {
             gatewayNamespace: nodeWorkerGatewayNamespace,
             nodeWorkerBundleRetention,
             getSessionChangeContext: () => pluginGatewayContext.current,
-            persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
+            persistAbandonedPartial: async (request) => {
               // Placement runtime starts before chat state exists; callers run only after startup.
-              const partial = connectionState.chatRunState.resolveBuffer(runId, { final: true });
+              const partial = connectionState.chatRunState.resolveBuffer(request.runId, {
+                final: true,
+              });
               const text = partial.displayText ?? partial.text;
-              if (!text.trim()) {
+              if (!text.trim() && !request.missingToolResultText) {
                 return;
               }
-              const {
-                captureAbortedPartial,
-                persistAbortedPartials,
-                prepareChatAbortSessionSnapshot,
-              } = await import("./server-methods/chat-transcript-persistence.runtime.js");
-              await persistAbortedPartials({
+              const transcript =
+                await import("./server-methods/chat-transcript-persistence.runtime.js");
+              await transcript.persistAbortedPartials({
                 context: { logGateway: log },
+                missingToolResultText: request.missingToolResultText,
                 snapshots: [
-                  captureAbortedPartial({
-                    sessionKey,
-                    sessionId,
-                    runId,
+                  transcript.captureAbortedPartial({
+                    ...request,
                     text,
                     abortOrigin: "placement-abandon",
-                    session: await prepareChatAbortSessionSnapshot({
+                    session: await transcript.prepareChatAbortSessionSnapshot({
                       cfg: getCommittedRuntimeConfig(),
-                      key: sessionKey,
-                      agentId,
+                      key: request.sessionKey,
+                      agentId: request.agentId,
                     }),
                   }),
                 ],
@@ -408,7 +415,10 @@ export async function prepareGatewayKernelState(params: {
     loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor({ scheduler });
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor({
+    scheduler,
+    isIdle: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) === 0,
+  });
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
@@ -460,7 +470,6 @@ export async function prepareGatewayKernelState(params: {
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
       openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(resolveDatabasePath()),
-    allowPendingAgentDatabases: !opts.updateCanary,
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(

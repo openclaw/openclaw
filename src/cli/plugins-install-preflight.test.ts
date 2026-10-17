@@ -72,15 +72,17 @@ describe("plugin install mutation-free preflight", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed explicit ClawHub sources before the lifecycle lease", async () => {
-    const raw = " clawhub:demo@ ";
-    await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
-      "__exit__:1",
-    );
+  it.each([" clawhub:demo@ ", "demo@", "@composio/composio@", "unknown:demo"])(
+    "rejects malformed ClawHub source %s before the lifecycle lease",
+    async (raw) => {
+      await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
+        "__exit__:1",
+      );
 
-    expect(runtimeErrors.at(-1)).toContain(`Unsupported ClawHub plugin spec: ${raw}`);
-    expectNoPluginInstallSideEffects();
-  });
+      expect(runtimeErrors.at(-1)).toContain(`Unsupported ClawHub plugin spec: ${raw}`);
+      expectNoPluginInstallSideEffects();
+    },
+  );
 
   it("rejects a whitespace-only install source before the lifecycle lease", async () => {
     const raw = "\t";
@@ -159,6 +161,11 @@ describe("plugin install mutation-free preflight", () => {
       label: "empty git source",
       args: ["git:"],
       error: "unsupported git: plugin spec: git:",
+    },
+    {
+      label: "missing explicit file path",
+      args: ["file:openclaw-missing-plugin-preflight-test.js"],
+      error: "Plugin path not found:",
     },
     {
       label: "missing local path",

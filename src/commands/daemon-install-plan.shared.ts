@@ -44,7 +44,7 @@ export async function resolveRunningBunFallback(params: {
       : params.nodePath;
   if (
     nodePath ||
-    (await resolveBunRuntimeInfo(process.execPath, undefined, params.env)).status !== "supported"
+    (await resolveBunRuntimeInfo(process.execPath, params.env)).status !== "supported"
   ) {
     return undefined;
   }

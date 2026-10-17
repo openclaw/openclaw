@@ -259,15 +259,7 @@ async function createWaSocketInternal(
           return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.get(type, ids)));
         },
         set(data) {
-          const task = (async () => {
-            try {
-              await cachedSignalKeys.set(data);
-            } catch (error) {
-              reportCredentialPersistenceError(error);
-              throw error;
-            }
-          })();
-          return observeCredentialPersistence(task);
+          return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.set(data)), true);
         },
       }
     : cachedSignalKeys;

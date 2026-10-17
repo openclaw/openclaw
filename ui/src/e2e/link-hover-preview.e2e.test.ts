@@ -7,6 +7,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -213,37 +214,93 @@ suite.define(() => {
     );
   });
 
-  it("keeps title hints when the optional hover runtime cannot load", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const hovercardModule = controlUiE2eBuiltModuleRequest(
-        "ui/src/components/link-reader-hovercard.ts",
-      );
-      await page.route(hovercardModule, (route) => route.abort());
-      const gateway = await installMockGateway(page, {
-        automaticallyFetchFavicons: true,
-        historyMessages: [
-          {
-            role: "assistant",
-            content: '[Field guide](https://example.com/field-guide "Guide details")',
-            timestamp: 2000,
-          },
-        ],
+  it.each([
+    {
+      route: "settings/about",
+      routeId: "about",
+      selector: 'openclaw-about-page .about-hero__link[href="https://docs.openclaw.ai"]',
+      reader: false,
+      input: "pointer",
+    },
+    {
+      route: "chat",
+      routeId: "chat",
+      selector: '.chat-group.assistant a[href="https://example.com/field-guide"]',
+      reader: false,
+      input: "pointer",
+    },
+    {
+      route: "chat",
+      routeId: "chat",
+      selector: '.chat-group.assistant a[href="https://github.com/openclaw/openclaw/pull/42"]',
+      reader: true,
+      input: "pointer",
+    },
+    {
+      route: "chat",
+      routeId: "chat",
+      selector: '.chat-group.assistant a[href="https://github.com/openclaw/openclaw/pull/42"]',
+      reader: true,
+      input: "focus",
+    },
+  ])(
+    "keeps $route $input title hints (reader: $reader) when the optional hover runtime cannot load",
+    async ({ route, routeId, selector, reader, input }) => {
+      await suite.withPage({}, async ({ page }) => {
+        const hovercardModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/components/link-reader-hovercard.ts",
+        );
+        await page.route(hovercardModule, (request) => request.abort());
+        const gateway = await installMockGateway(page, {
+          automaticallyFetchFavicons: true,
+          historyMessages: route === "chat" ? historyMessages : [],
+          controlUiLinkReaders: reader ? [TEST_LINK_READER] : [],
+          featureMethods: [...defaultControlUiFeatureMethods, "forge.preview", "forge.detail"],
+        });
+        await page.goto(suite.server.baseUrl + route);
+        await waitForControlUiRoute(page, { routeId });
+        const link = page.locator(selector);
+        await link.waitFor({ state: "visible" });
+        await link.evaluate((anchor) => anchor.setAttribute("title", "Guide details"));
+        expect(
+          await page.evaluate(
+            () => customElements.get("openclaw-link-reader-hovercard-provider") === undefined,
+          ),
+        ).toBe(true);
+        expect(
+          await link.evaluate(
+            (anchor) =>
+              getComputedStyle(anchor.closest("openclaw-link-reader-hovercard-provider")!).display,
+          ),
+        ).toBe("contents");
+        // A missing hashed chunk reloads the page; wait before hovering the new document.
+        await Promise.all([
+          page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
+          page.waitForEvent("domcontentloaded"),
+          link.hover(),
+        ]);
+        await waitForControlUiRoute(page, { routeId });
+        await link.waitFor({ state: "visible" });
+        await link.evaluate((anchor) => anchor.setAttribute("title", "Guide details"));
+        expect(
+          await link.evaluate(
+            (anchor) =>
+              getComputedStyle(anchor.closest("openclaw-link-reader-hovercard-provider")!).display,
+          ),
+        ).toBe("contents");
+        await page.mouse.move(0, 0);
+        if (input === "focus") {
+          await link.focus();
+        } else {
+          await link.hover();
+        }
+        await page.locator(".tooltip-content").filter({ hasText: "Guide details" }).waitFor();
+        expect(await page.locator(".link-hovercard").count()).toBe(0);
+        expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
+        expect(await gateway.getRequests("forge.preview")).toEqual([]);
       });
-      await page.goto(suite.server.baseUrl + "chat");
-      const link = page.getByRole("link", { name: "Field guide", exact: true });
-      // A missing hashed chunk reloads the page; wait before hovering the new document.
-      await Promise.all([
-        page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
-        page.waitForEvent("domcontentloaded"),
-        link.hover(),
-      ]);
-      await page.mouse.move(0, 0);
-      await link.hover();
-      await page.locator(".tooltip-content").filter({ hasText: "Guide details" }).waitFor();
-      expect(await page.locator(".link-hovercard").count()).toBe(0);
-      expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
-    });
-  });
+    },
+  );
 
   it("preserves detail-only, internal, session, file and explicit external-panel links", async () => {
     await suite.withPage({}, async ({ page }) => {
@@ -300,12 +357,26 @@ suite.define(() => {
       await link.hover();
       await page.clock.runFor(400);
       expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
-      await page.getByRole("link", { name: "Control", exact: true }).hover();
-      // Network module loading is not virtual time; await it before advancing the open timer.
-      await page.evaluate(() =>
-        customElements.whenDefined("openclaw-link-reader-hovercard-provider"),
-      );
+      const control = page.getByRole("link", { name: "Control", exact: true });
+      expect(
+        await page.evaluate(
+          () => customElements.get("openclaw-link-reader-hovercard-provider") === undefined,
+        ),
+      ).toBe(true);
+      const originalControl = await control.elementHandle();
+      await control.hover();
+      // Wait for lazy activation before advancing the opening delay; do not move the pointer again.
+      await page.evaluate(async () => {
+        await customElements.whenDefined("openclaw-link-reader-hovercard-provider");
+        await document.querySelector("openclaw-link-reader-hovercard-provider")?.updateComplete;
+      });
       await page.clock.runFor(400);
+      expect(
+        await originalControl?.evaluate((anchor) => anchor.isConnected && anchor.matches(":hover")),
+      ).toBe(true);
+      expect(
+        await control.evaluate((anchor, original) => anchor === original, originalControl),
+      ).toBe(true);
       await page.locator(".link-hovercard").getByText(preview.title).waitFor();
       expect(
         (await gateway.getRequests("controlUi.linkPreview")).map((request) => request.params),

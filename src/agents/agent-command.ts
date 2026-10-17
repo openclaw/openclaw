@@ -1,15 +1,13 @@
 import { addAbortListener } from "node:events";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import {
-  createSessionWorkStartChangedError,
-  resolveSessionWorkStartError,
-} from "../config/sessions/lifecycle.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../config/sessions/session-incognito-binding.js";
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -20,7 +18,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv, withoutRuntimeOutput } from "../runtime.js";
 import { isSubagentCoordinationInputProvenance } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
@@ -37,20 +35,17 @@ import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   bindCommandHarnessCompletionAssertion,
-  resolveCommandRecoveryOptions,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
+import { createCompactionSessionIdReporter } from "./command/compaction-accounting.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { prepareCommandForegroundRun } from "./command/maintenance.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
-import {
-  createCompactionSessionIdReporter,
-  finalizeEmbeddedAgentCommand,
-} from "./command/post-run.js";
+import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandRuntimeContext,
@@ -89,11 +84,19 @@ async function agentCommandInternal(
   watchSkills = false,
 ) {
   const sessionSource = prepared.sessionKey
-    ? captureIncognitoSessionSource({
-        agentId: prepared.sessionAgentId,
-        storePath: prepared.storePath,
-        sessionKey: prepared.sessionKey,
-      })
+    ? captureSessionActorStorageOwner(
+        {
+          agentId: prepared.sessionAgentId,
+          storePath: prepared.storePath,
+          sessionKey: prepared.sessionKey,
+        },
+        {
+          assertCurrent() {
+            prepared.opts.assertSourceCurrent?.();
+          },
+          authorize() {},
+        },
+      )
     : undefined;
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = prepared.opts.modelRun === true || prepared.opts.promptMode === "none";
@@ -101,7 +104,7 @@ async function agentCommandInternal(
   const preserveUserFacingSessionModelState =
     prepared.opts.preserveUserFacingSessionModelState === true;
   const lifecycleAbortController = new AbortController();
-  const preparedOpts = resolveCommandRecoveryOptions(prepared);
+  const preparedOpts = prepared.opts;
   const parentAbortSignal = preparedOpts.abortSignal;
   if (parentAbortSignal?.aborted) {
     lifecycleAbortController.abort(parentAbortSignal.reason);
@@ -230,16 +233,7 @@ async function agentCommandInternal(
         const currentEntry =
           sessionStoreRuntime && storePath && sessionKey
             ? sessionSource
-              ? await withIncognitoSessionEntry(
-                  sessionSource,
-                  normalizeStoreSessionKey(sessionKey),
-                  () => {
-                    opts.abortSignal?.throwIfAborted();
-                    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                    opts.assertSourceCurrent?.();
-                  },
-                  async (entry) => entry,
-                )
+              ? readCapturedSessionActorEntry(sessionSource, normalizeStoreSessionKey(sessionKey))
               : await sessionStoreRuntime.readSessionEntryInWorker({
                   ...scope,
                   readConsistency: "latest",
@@ -253,12 +247,9 @@ async function agentCommandInternal(
         if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
           throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
-        const archivedSessionError = resolveSessionWorkStartError(
-          sessionKey ?? sessionId,
-          currentEntry,
-        );
-        if (archivedSessionError) {
-          throw new Error(archivedSessionError);
+        const workStartError = resolveSessionWorkStartBlock(sessionKey ?? sessionId, currentEntry);
+        if (workStartError) {
+          throw workStartError;
         }
         operatorSession?.assertAuthorized(currentEntry);
         sessionEntry = currentEntry;
@@ -537,6 +528,7 @@ async function agentCommandInternal(
       sessionEntry = embeddedAttempt.sessionEntry;
       lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
       const finalized = await finalizeEmbeddedAgentCommand({
+        admittedRecoverySource: preparedRunAdmission.pendingFinalRecoverySource,
         prepared: attemptPrepared,
         opts,
         deps: resolvedDeps,
@@ -640,6 +632,7 @@ async function agentCommandFromIngressInternal(
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
+  const ingressRuntime = withoutRuntimeOutput(runtime);
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   const generation = runtimeContext?.pluginGeneration;
@@ -655,7 +648,7 @@ async function agentCommandFromIngressInternal(
           senderIsOwner: opts.senderIsOwner === true,
         },
         prepare: async (preparedOpts) =>
-          await prepareAgentCommandExecution(preparedOpts, runtime, runtimeContext),
+          await prepareAgentCommandExecution(preparedOpts, ingressRuntime, runtimeContext),
         restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
         run: async (prepared) => {
           preparedAgentDir = prepared.agentDir;
@@ -663,7 +656,7 @@ async function agentCommandFromIngressInternal(
             await agentCommandInternal(
               prepared,
               { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-              runtime,
+              ingressRuntime,
               deps,
               true,
             );

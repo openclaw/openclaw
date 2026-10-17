@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createContext, createRenderEffect, onCleanup, untrack, useContext } from "solid-js";
 import { ShellLayoutOwner, type ShellLayoutTraits } from "./shell-layout-owner.ts";
 
-/** The host is the connected route mount, not its still-detached rendered children. */
+/** The scope anchors page reporters to the shell content owner. */
 export const ShellLayoutProvider = createContext<{ owner: ShellLayoutOwner; host: Element } | null>(
   null,
 );

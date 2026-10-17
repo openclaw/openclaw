@@ -1,14 +1,22 @@
 /* @vitest-environment jsdom */
+import { createComponent } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext } from "../../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
-import { ChatSubagentActivityLive } from "./chat-subagent-activity-live.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.tsx";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
+
+type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 
 it("keeps live child headlines scoped to their run, incarnation, and connection", async () => {
   const connection = createApplicationGateway();
@@ -38,18 +46,23 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
       },
       false,
     ).activity;
-  const element = new ChatSubagentActivityLive();
   const sessions = createTestSessionCapability(connection.gateway);
-  element.context = createContext(connection.gateway, sessions);
+  const provider = createSolidApplicationContextProvider(
+    createContext(connection.gateway, sessions),
+  );
   const subscriptions = vi.spyOn(connection.gateway, "subscribeEvents");
-  element.rows = rows(child);
-  document.body.append(element);
+  const view = mountSolid(() => createComponent(ChatSubagentActivity, { rows: rows(child) }), {
+    wrapper: provider.wrapper,
+  });
+  const element = view.container.querySelector<ChatSubagentActivityLive>(
+    "openclaw-chat-subagent-activity",
+  )!;
   onTestFinished(() => {
-    element.remove();
+    view.unmount();
     sessions.dispose();
     disposeSidebarContextLifecycles();
   });
-  await element.updateComplete;
+  flush();
   const digest: SessionObserverDigest = {
     sessionKey: child.key,
     agentId: "main",
@@ -67,7 +80,7 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
       event: "session.observer",
       payload: { ...digest, ...patch },
     });
-    await element.updateComplete;
+    flush();
   };
   await emit();
   expect(element.textContent).toContain(digest.headline);
@@ -84,21 +97,33 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   }
   await emit({ revision: 3, headline: "Running the backend tests" });
   expect(element.textContent).toContain("Running the backend tests");
+  element.compact = true;
+  await emit({
+    revision: 4,
+    headline: "Running the backend tests",
+    planProgress: { completed: 1, total: 3 },
+  });
+  expect(element.querySelector(".chat-subagent-activity__steps")?.textContent).toBe("1/3");
+  expect(element.querySelector("meter")?.value).toBe(1);
+  expect(element.querySelector(".chat-subagent-activity__row")?.getAttribute("title")).toBe(
+    "Backend implementation. Running. Running the backend tests. 1 of 3 steps",
+  );
+  await emit({ revision: 5, headline: "Running the backend tests" });
+  expect(element.querySelector(".chat-subagent-activity__steps")).toBeNull();
+  element.compact = false;
   connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([]) });
-  await element.updateComplete;
+  flush();
   expect(element.textContent).not.toContain("Running the backend tests");
   await emit();
   expect(element.textContent).toContain(digest.headline);
   element.rows = rows({ ...child, activeRunIds: ["replacement-run"] });
-  await element.updateComplete;
+  flush();
   expect(element.textContent).not.toContain(digest.headline);
   await emit({ revision: 10 });
   expect(element.textContent).not.toContain(digest.headline);
-  element.requestUpdate();
-  element.remove();
-  await element.updateComplete;
+  view.unmount();
+  flush();
   expect(subscriptions).toHaveBeenCalledTimes(1);
-  const update = vi.spyOn(element, "requestUpdate");
   await emit({ runId: "replacement-run" });
-  expect(update).not.toHaveBeenCalled();
+  expect(view.container.textContent).toBe("");
 });

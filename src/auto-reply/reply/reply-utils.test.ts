@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
@@ -62,8 +61,6 @@ describe("normalizeReplyPayload", () => {
 
   it("records skip reasons for silent, empty, and internal artifact payloads", () => {
     for (const [text, reason] of [
-      ['"NO_REPLY"', "silent"],
-      [`${SILENT_REPLY_TOKEN}\n\n${SILENT_REPLY_TOKEN}`, "silent"],
       ["   ", "empty"],
       ["set-thought <channel|>", "silent"],
       ["───", "silent"],
@@ -119,53 +116,13 @@ describe("normalizeReplyPayload", () => {
     expect(secondMessaging.transformReplyPayload).toHaveBeenCalledTimes(1);
   });
 
-  it("strips NO_REPLY from mixed emoji message (#30916)", () => {
-    expect(expectNormalizedReply(normalizeReplyPayload({ text: "😄 NO_REPLY" })).text).toBe("😄");
-  });
-
-  it("strips newline-separated leading silent tokens", () => {
-    expect(
-      expectNormalizedReply(
-        normalizeReplyPayload({ text: "NO_REPLY NO_REPLY\nThe user is saying hello" }),
-      ).text,
-    ).toBe("The user is saying hello");
-  });
-
-  it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
-    const onSkip = vi.fn();
-    expect(
-      normalizeReplyPayload(
-        {
-          text: "think\nCav is talking about a follow-up conversation.\nI will stay quiet here.NO_REPLY",
-        },
-        { onSkip },
-      ),
-    ).toBeNull();
-    expect(onSkip.mock.calls).toEqual([["silent"]]);
-  });
-
-  it("suppresses tagged leaked reasoning ending in silence narration (#66701)", () => {
-    const onSkip = vi.fn();
-    expect(
-      normalizeReplyPayload(
-        {
-          text: "<think>Cav is talking about a follow-up conversation.</think>\nI will stay quiet here.NO_REPLY",
-        },
-        { onSkip },
-      ),
-    ).toBeNull();
-    expect(onSkip.mock.calls).toEqual([["silent"]]);
-  });
-
-  it("strips JSON NO_REPLY action text but keeps media payload", () => {
-    const reply = expectNormalizedReply(
-      normalizeReplyPayload({
-        text: '{"action":"NO_REPLY"}',
-        mediaUrl: "https://example.com/img.png",
-      }),
-    );
-    expect(reply.text).toBe("");
-    expect(reply.mediaUrl).toBe("https://example.com/img.png");
+  it.each([
+    "😄 NO_REPLY",
+    "NO_REPLY NO_REPLY\nThe user is saying hello",
+    "NO_REPLYThe user is saying hello",
+    "An answer followed by NO_REPLY",
+  ])("preserves non-control token mentions: %s", (text) => {
+    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
   });
 });
 
@@ -315,7 +272,7 @@ describe("createTypingSignaler", () => {
   it("does not start typing for non-renderable deltas", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({ typing, mode: "message", isHeartbeat: false });
-    for (const text of [undefined, "", " \t\n", SILENT_REPLY_TOKEN]) {
+    for (const text of [undefined, "", " \t\n"]) {
       await signaler.signalTextDelta(text);
       await signaler.signalMessageStart();
       await signaler.signalToolStart();
@@ -445,6 +402,16 @@ describe("createReplyReferencePlanner", () => {
 });
 
 describe("createStreamingDirectiveAccumulator", () => {
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "strips a chunked leading %s control line",
+    (token) => {
+      const accumulator = createStreamingDirectiveAccumulator();
+      expect(accumulator.consume(token.slice(0, 4))).toBeNull();
+      expect(accumulator.consume(token.slice(4))).toBeNull();
+      expect(accumulator.consume("\nVisible reply")).toMatchObject({ text: "Visible reply" });
+    },
+  );
+
   it("handles reply tags split before the second bracket", () => {
     const accumulator = createStreamingDirectiveAccumulator();
     expect(accumulator.consume("[")).toBeNull();
@@ -500,10 +467,10 @@ describe("createStreamingDirectiveAccumulator", () => {
     });
   });
 
-  it("strips a glued leading NO_REPLY token from streamed text", () => {
+  it("preserves a glued leading NO_REPLY mention in streamed text", () => {
     expect(
       createStreamingDirectiveAccumulator().consume("NO_REPLYThe user is saying hello")?.text,
-    ).toBe("The user is saying hello");
+    ).toBe("NO_REPLYThe user is saying hello");
   });
 
   it("keeps a complete final MEDIA line available to the final parser", () => {

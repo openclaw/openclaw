@@ -1,4 +1,3 @@
-import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   readDatabasePathIdentitySync,
@@ -19,14 +18,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import type { AgentDatabaseGenerationClaim } from "./openclaw-agent-execution-admission-contract.js";
-import type {
-  OpenClawAgentDatabaseExecution,
-  AgentDatabaseNativeGeneration,
-  AgentDatabaseFileExecutionOwner,
-  AgentDatabaseExecutionFileIdentity,
-} from "./openclaw-agent-execution-contract.js";
-import type { IncognitoAgentExecutionOwner } from "./openclaw-agent-execution-incognito.js";
+import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-contract.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceWorkerAccess,
@@ -49,31 +41,6 @@ export type AgentDatabaseExecutionPreparedTarget = {
   expectedCreationIdentity?: DatabasePathIdentity;
   requestedPath?: string;
 };
-
-/** A read can borrow an already-selected file owner only within its current storage scope. */
-export function borrowExistingAgentDatabaseExecution(
-  owners: ReadonlyMap<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>,
-  options: { path: string; env?: NodeJS.ProcessEnv },
-  capture?: (target: OpenClawAgentDatabaseOptions) => OpenClawAgentDatabaseExecution,
-): OpenClawAgentDatabaseExecution | undefined {
-  const pathname = path.resolve(options.path);
-  const owner =
-    owners.get(pathname) ?? owners.get(readDatabasePathIdentitySync(pathname).canonicalPath);
-  if (!owner || owner.kind !== "file") {
-    return undefined;
-  }
-  const target = { ...options, agentId: owner.agentId, path: pathname };
-  if (!supportsAgentDatabaseExecutionScope(target)) {
-    return undefined;
-  }
-  try {
-    assertAgentDatabaseExecutionSharedState(target, owner.sharedDatabaseKey);
-    return capture ? capture(target) : owner.borrow(pathname);
-  } catch {
-    // Initial read selection does not inherit failures of an unrelated writable lifecycle.
-    return undefined;
-  }
-}
 
 export function assertAgentDatabaseExecutionSharedState(
   options: OpenClawAgentDatabaseOptions,
@@ -103,7 +70,7 @@ export function supportsAgentDatabaseExecutionScope(
   );
 }
 
-/** These native-only scopes still need their complete owning caller cutover. */
+/** Memory sessions have no database; maintenance scopes retain their local durable owner. */
 export function supportsOpenClawAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
 ): boolean {
@@ -135,9 +102,6 @@ export function captureNativeAgentDatabaseExecutionIdentity(
     }
   };
   assertCurrent();
-  if (typeof native.identity !== "string") {
-    throw new Error("Agent execution requires an admitted native file");
-  }
   const fileIdentity: AgentDatabaseExecutionFileIdentity = {
     kind: "file",
     physicalIdentity: native.identity,
@@ -185,7 +149,8 @@ export function assertBorrowedAgentDatabaseFileIdentity({
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   nativeIdentity: AgentDatabaseExecutionFileIdentity | undefined;
 }): void {
-  if (!fileIdentity || creatingTarget) {
+  // After admission the borrower follows its canonical owner, not a retargeted alias.
+  if (!fileIdentity) {
     const current = readDatabasePathIdentitySync(borrowedPath);
     if (
       current.canonicalPath !== identity.canonicalPath ||
@@ -216,28 +181,4 @@ export function assertBorrowedAgentDatabaseFileIdentity({
       throw new Error("Agent database borrower belongs to another physical file");
     }
   }
-}
-
-/** Bind a native claim to the same borrower and logical generation that captured it. */
-export function captureBorrowedAgentDatabaseGenerationClaim(
-  assertBorrowed: () => void,
-  readGeneration: () => AgentDatabaseNativeGeneration | undefined,
-): AgentDatabaseGenerationClaim {
-  assertBorrowed();
-  const captured = readGeneration();
-  if (!captured) {
-    throw new Error("Agent database execution has no admitted generation");
-  }
-  const claim = captured.captureClaim();
-  return {
-    identity: claim.identity,
-    incarnation: claim.incarnation,
-    assertCurrent() {
-      assertBorrowed();
-      if (readGeneration() !== captured) {
-        throw new Error("Agent database execution generation was replaced");
-      }
-      claim.assertCurrent();
-    },
-  };
 }

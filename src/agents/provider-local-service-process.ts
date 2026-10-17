@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { sleepWithAbort } from "@openclaw/retry";
 import { isChildProcessTreeAlive, signalChildProcessTree } from "../process/child-process-tree.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 const PROCESS_TREE_EXIT_POLL_MS = 25;
@@ -9,11 +10,11 @@ export type ManagedLocalServiceProcess = {
   child: ChildProcess;
   closed: boolean;
   windowsRootGone?: boolean;
-  pendingSignals: Set<"SIGTERM" | "SIGKILL">;
+  pendingSignals: Map<"SIGTERM" | "SIGKILL", Promise<void>>;
 };
 
 export function trackLocalServiceProcess(child: ChildProcess): ManagedLocalServiceProcess {
-  const owned: ManagedLocalServiceProcess = { child, closed: false, pendingSignals: new Set() };
+  const owned: ManagedLocalServiceProcess = { child, closed: false, pendingSignals: new Map() };
   child.once("close", () => {
     owned.closed = true;
   });
@@ -59,11 +60,16 @@ function signalLocalServiceProcess(
   if (owned.pendingSignals.has(signal) || !isLocalServiceProcessTreeAlive(owned)) {
     return;
   }
-  owned.pendingSignals.add(signal);
-  try {
-    signalChildProcessTree(owned.child, signal, () => owned.pendingSignals.delete(signal));
-  } catch (error) {
+  const completion = createDeferredCore();
+  owned.pendingSignals.set(signal, completion.promise);
+  const complete = () => {
     owned.pendingSignals.delete(signal);
+    completion.resolve();
+  };
+  try {
+    signalChildProcessTree(owned.child, signal, complete);
+  } catch (error) {
+    complete();
     throw error;
   }
 }
@@ -87,9 +93,11 @@ export async function stopLocalServiceProcess(owned: ManagedLocalServiceProcess)
   }
   await waitForChildProcessTreeExit(owned, gracefulDeadline);
   if (!isLocalServiceProcessSettled(owned)) {
-    const forceDeadline = Date.now() + DEFAULT_PROBE_TIMEOUT_MS;
     signalLocalServiceProcess(owned, "SIGKILL");
-    await waitForChildProcessTreeExit(owned, forceDeadline);
+    // Windows taskkill owns its bounded completion deadline. Join every helper
+    // before timing final exit observation, even if the service already closed.
+    await Promise.all(owned.pendingSignals.values());
+    await waitForChildProcessTreeExit(owned, Date.now() + DEFAULT_PROBE_TIMEOUT_MS);
   }
   if (!isLocalServiceProcessSettled(owned)) {
     throw new Error(`Local model service process tree ${owned.child.pid} did not stop`);

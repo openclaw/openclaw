@@ -195,12 +195,9 @@ export async function ensureManagerRuntimeHandle(
     });
     try {
       assertCurrent();
-      if (params.readAcpControl?.()) {
-        await assertControlBindingCurrent();
-      }
       return ensured;
     } catch (error) {
-      // A control read can yield to reset before the caller receives this handle.
+      // Ensure may finish after its actor was reset.
       if (!isCurrentActor()) {
         await closeSupersededRuntimeHandle({
           runtime,
@@ -363,9 +360,6 @@ export async function ensureManagerRuntimeHandle(
       if (publication.refusal) {
         throw publication.refusal.error;
       }
-    }
-    if (expectedControlBinding || params.readAcpControl?.()) {
-      await assertControlBindingCurrent();
     }
     assertCurrent();
     params.runtimeHandles.set(params, {

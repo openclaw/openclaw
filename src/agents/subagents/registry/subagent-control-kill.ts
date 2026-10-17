@@ -5,8 +5,6 @@ import { isCurrentChatAbortExecution } from "../../../gateway/chat-abort-lifecyc
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { captureSubagentCommands } from "./subagent-control-commands.js";
 import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
@@ -18,8 +16,8 @@ import {
   type KillPublicationPreparation,
 } from "./subagent-control-kill-scope.js";
 import {
-  ensureSubagentControllerOwnsRun,
   getLatestOwnedSubagentRun,
+  prepareSessionSubagentKillSelection,
   type captureExecRequestSubagentSelection,
 } from "./subagent-control-scope.js";
 import {
@@ -36,9 +34,7 @@ import {
   captureSubagentExecution,
   getSubagentExecutionCleanup,
 } from "./subagent-registry-execution-cleanup.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
-import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
-import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -96,37 +92,21 @@ async function killSubagentRun(
   if (!stopAcceptance.accepted) {
     params.cancellationControl.assertCurrent();
   }
-  if (captured) {
-    const entry = getCurrentSubagentRunOwner(subagentRuns, params.entry) ?? captured.entry;
-    const resolver = getGatewayContextResolver(entry);
+  const originalSettlement = captured?.execution.executionSettlement ?? retiredCleanup?.settlement;
+  if (!originalSettlement?.cleanupSettled && (captured || retiredCleanup)) {
     const cleanup =
-      resolver === undefined ? getSubagentExecutionCleanup(entry, params.session.entry) : undefined;
-    const releasedToSelfCleanup =
+      retiredCleanup ?? getSubagentExecutionCleanup(params.entry, params.session.entry);
+    const capturedStillCurrent =
+      captured !== undefined && captureSubagentExecution(params)?.execution === captured.execution;
+    const selfCleanup =
       cleanup !== undefined &&
-      cleanup.settlement === captured.execution.executionSettlement &&
       cleanup.isCurrent() &&
-      cleanup.isSelf();
-    if (releasedToSelfCleanup) {
+      cleanup.isSelf() &&
+      (!captured || cleanup.settlement === captured.execution.executionSettlement);
+    if (selfCleanup) {
       params.session.assertCurrent();
     }
-    const releasedBinding =
-      resolver === undefined &&
-      (captured.execution.executionSettlement?.cleanupSettled === true || releasedToSelfCleanup);
-    if (
-      entry.runId !== captured.runId ||
-      (resolver !== captured.resolver && !releasedBinding) ||
-      captured.resolver?.() !== captured.context ||
-      (captured.context.chatAbortControllers.has(captured.runId) &&
-        captured.context.chatAbortControllers.get(captured.runId) !== captured.execution)
-    ) {
-      throw new Error("Subagent execution owner changed during cancellation");
-    }
-  } else if (retiredCleanup) {
-    params.session.assertCurrent();
-    if (
-      !retiredCleanup.isCurrent() ||
-      (!retiredCleanup.isSelf() && !retiredCleanup.settlement.cleanupSettled)
-    ) {
+    if (!capturedStillCurrent && !selfCleanup) {
       throw new Error("Subagent execution owner changed during cancellation");
     }
   }
@@ -546,26 +526,12 @@ export async function killSessionSubagentRuns(params: {
   agentId: string;
   assertCurrent?: () => void;
 }) {
-  const controller = { controllerSessionKey: params.sessionKey, controllerAgentId: params.agentId };
-  return killSelectedSubagentRuns({
-    cfg: params.cfg,
-    assertCurrent: params.assertCurrent,
-    runs: [
-      ...listSubagentRunsForRequester(params.sessionKey, { requesterAgentId: params.agentId }),
-      ...listRunsForControllerFromRuns(subagentRuns, params.sessionKey, params.agentId),
-    ],
-    // Ordinary controller mutations retain their narrower authority. Only an admitted
-    // lifecycle boundary can retire work whose completion belongs to this session.
-    ownsRoot: (entry) =>
-      !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) ||
-      (entry.requesterSessionKey === params.sessionKey &&
-        resolveSubagentRequesterAgentId(params.cfg, entry) === params.agentId),
-    suppressTaskDelivery: true,
-  });
+  return killSelectedSubagentRuns(await prepareSessionSubagentKillSelection(params));
 }
 
 async function killSelectedSubagentRuns(
   params: KillSelection & {
+    preparationErrors?: string[];
     suppressTaskDelivery?: boolean;
     beforeKill?: (sealRootSelection: () => void) => boolean | Promise<boolean>;
   },
@@ -586,6 +552,8 @@ async function killSelectedSubagentRuns(
     });
     return { ...stopped, ...collectKillErrors(acceptedTrees) };
   });
+  result.errors.unshift(...(params.preparationErrors ?? []));
+  result.failed += params.preparationErrors?.length ?? 0;
   if (result.errors.length > 0) {
     return {
       status: "error" as const,

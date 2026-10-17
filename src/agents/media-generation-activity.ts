@@ -19,6 +19,8 @@ export type MediaGenerationOperation = {
   endedAt?: number;
   lastEventAt?: number;
   progressSummary?: string;
+  /** The durable queue owns delivery; the requester must release its turn. */
+  completionDelivery?: "queued";
   terminalSummary?: string;
   terminalOutcome?: "blocked";
   error?: string;
@@ -173,6 +175,7 @@ export function updateMediaGenerationOperation(
       | "endedAt"
       | "lastEventAt"
       | "progressSummary"
+      | "completionDelivery"
       | "terminalSummary"
       | "terminalOutcome"
       | "error"

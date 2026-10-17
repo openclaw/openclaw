@@ -99,7 +99,6 @@ export function readKnownSessionBranchMergedHeads(
   read.assertCurrent();
   const access = prepareSessionPullRequestGitHubRead(
     context.host ?? "github.com",
-    fetch,
     read.assertCurrent,
   );
   const entry = branchCache.get(
@@ -112,7 +111,6 @@ export function readKnownSessionBranchMergedHeads(
 type LoadSessionPullRequestDeps = {
   read: ControlUiSessionPrReadContext;
   cacheSignal?: AbortSignal;
-  fetchImpl?: typeof fetch;
   resolveGitRoot?: (params: ControlUiSessionPullRequestsParams) => Promise<string | null>;
   resolveGitContext?: (
     params: ControlUiSessionPullRequestsParams,
@@ -549,7 +547,6 @@ async function cachedBranchPullRequests(
   try {
     read = prepareSessionPullRequestGitHubRead(
       context.host ?? "github.com",
-      deps.fetchImpl ?? fetch,
       deps.read.assertCurrent,
     );
   } catch (error) {
@@ -577,12 +574,9 @@ async function cachedBranchPullRequests(
     entry.access = createGitHubReadGroup();
   }
   const release = entry.access.add(read.assertCurrent, deps.cacheSignal);
-  const transportRead = prepareSessionPullRequestGitHubRead(
-    read.host,
-    deps.fetchImpl ?? fetch,
-    entry.access.assertCurrent,
-    { signal: entry.access.signal },
-  );
+  const transportRead = prepareSessionPullRequestGitHubRead(read.host, entry.access.assertCurrent, {
+    signal: entry.access.signal,
+  });
   try {
     if (reusable) {
       branchCache.set(key, entry, deps.cacheSignal);

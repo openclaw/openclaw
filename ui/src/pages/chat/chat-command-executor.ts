@@ -15,6 +15,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
@@ -42,6 +43,7 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import { normalizeChatSendAckStatus } from "./chat-send-ack.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
 
@@ -50,8 +52,6 @@ type SlashCommandResult = {
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh";
-  /** Model-dependent tools need refreshing after a confirmed selection. */
-  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
@@ -61,6 +61,7 @@ type SlashCommandResult = {
 };
 
 type SlashCommandContext = {
+  attachments?: readonly ChatAttachment[];
   sessions: SessionCapability;
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
@@ -99,7 +100,7 @@ async function patchSession(
   context: SlashCommandContext,
   sessionKey: string,
   patch: Parameters<typeof patchChatCommandSessionSettings>[2],
-  success: () => Pick<SlashCommandResult, "content" | "modelChanged">,
+  success: () => Pick<SlashCommandResult, "content">,
   failureKey: string,
   options?: Parameters<typeof patchChatCommandSessionSettings>[3],
 ): Promise<SlashCommandResult> {
@@ -255,7 +256,6 @@ async function executeModel(
     { model: requestedModel },
     () => ({
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-      modelChanged: true,
     }),
     "chat.commandResults.model.setFailed",
     { ownsModelOverride: context.ownsModelOverride },
@@ -427,8 +427,9 @@ async function executeUsage(
     if (!session) {
       return { content: t("chat.commandResults.usage.noActiveThread") };
     }
-    const hasInputTokens = Number.isFinite(session.inputTokens);
-    const hasOutputTokens = Number.isFinite(session.outputTokens);
+    const usageAvailable = session.usageReport?.state !== "unavailable";
+    const hasInputTokens = usageAvailable && Number.isFinite(session.inputTokens);
+    const hasOutputTokens = usageAvailable && Number.isFinite(session.outputTokens);
     const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
     const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
     const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
@@ -450,10 +451,10 @@ async function executeUsage(
     const lines = [
       `**${t("chat.commandResults.usage.title")}**`,
       t("chat.commandResults.usage.inputTokens", {
-        count: `**${formatCompactTokenCount(input)}**`,
+        count: `**${hasInputTokens ? formatCompactTokenCount(input) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.outputTokens", {
-        count: `**${formatCompactTokenCount(output)}**`,
+        count: `**${hasOutputTokens ? formatCompactTokenCount(output) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.totalTokens", { count: `**${totalDisplay}**` }),
     ];
@@ -577,13 +578,17 @@ async function executeRunCommand(
   try {
     const message = args.trim();
     if (!message) {
-      return { content: t(`chat.commandResults.${command}.usage`) };
+      return {
+        content: t(`chat.commandResults.${command}.usage`),
+        ...(context.attachments?.length ? { failed: true } : {}),
+      };
     }
     assertCurrentSlashCommand(context);
     const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
       sessionKey,
       ...selectedGlobalScope(sessionKey, context),
       message,
+      attachments: buildChatApiAttachments(context.attachments),
       ...(command === "steer"
         ? { deliver: false, queueMode: "steer" }
         : { queueMode: "interrupt" }),

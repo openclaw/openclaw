@@ -5,6 +5,7 @@ import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sq
 import { readSessionEntryCacheValidityToken } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
@@ -191,6 +192,7 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       database.close();
       const options = { agentId: "main", path: pathname, env: state.env };
       const opened = openOpenClawAgentDatabase(options);
+      const native = requireNativeSqliteDatabase(opened.db);
       const readRevision = () =>
         opened.db
           .prepare(
@@ -208,9 +210,9 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
         );
       }, options);
       expect(readExactSessionEntryRow(opened, "agent:main:fixture-0")?.entry.label).toBe("Renamed");
-      expect(snapshotRows(opened.db)).toEqual(coldRows);
+      expect(snapshotRows(native)).toEqual(coldRows);
       expect(readRevision()).toEqual(migratedRevision);
-      expect(transcriptRows(opened.db)).toEqual(beforeTranscript);
+      expect(transcriptRows(native)).toEqual(beforeTranscript);
       const revision = readSessionEntryCacheValidityToken(opened.db);
       opened.db.exec("BEGIN");
       try {
@@ -229,7 +231,7 @@ it("migrates a copied large v23 store without losing snapshots or rewriting tran
       expect(rolledBackRevision).not.toEqual(revision);
       expect(readSessionEntryCacheValidityToken(opened.db)).toEqual(rolledBackRevision);
       expect(readRevision()).toEqual(migratedRevision);
-      expect(snapshotRows(opened.db)).toEqual(coldRows);
+      expect(snapshotRows(native)).toEqual(coldRows);
     } finally {
       if (database.isOpen) {
         database.close();

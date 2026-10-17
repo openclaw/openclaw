@@ -1,13 +1,11 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { retainPreparedSessionSharingFacts } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import { projectSessionSharingEntry } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { retainPreparedSessionGenerationFacts } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { withTimeout } from "../infra/fs-safe.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   closeSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -23,7 +21,6 @@ import {
   type WorkerPlacementSessionRuntime,
 } from "./server-worker-placement-session-target.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
 import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
@@ -50,12 +47,6 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       sessionKey,
       agentId,
     });
-    const metadata = captureSessionEntryMetadataRead({
-      sessionKey,
-      agentId,
-      storePath: target.storePath,
-    });
-    const nativeIncognito = !metadata && isIncognitoSessionKey(target.canonicalKey);
     const assertRoutingCurrent = captureSessionMutationRouting(
       config,
       () =>
@@ -64,7 +55,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         ),
       [{ sessionKey, agentId, preserveQualifiedAddress: true }],
     );
-    let retained: ReturnType<typeof retainPreparedSessionSharingFacts> | undefined;
+    let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
     let active = true;
     let unregister = () => {};
     const release = () => {
@@ -82,43 +73,31 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         );
       }
     };
+    const metadata = captureSessionEntryMetadataRead(
+      { sessionKey: target.canonicalKey, agentId: target.agentId, storePath: target.storePath },
+      assertActive,
+    );
+    const selectedKey = target.storeKeys.find((key) => target.store[key]) ?? target.canonicalKey;
+    const preparedEntry = target.store[selectedKey];
+    const source = target.capturedReadSource;
     try {
-      if (!metadata && !nativeIncognito) {
-        await withSessionEntryReadOnlyInWorker(
-          {
-            agentId: target.agentId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
-            projection: "list",
-          },
-          () => {
-            assertActive();
-            assertRoutingCurrent(getRuntimeConfig());
-          },
-          async (read) => {
-            if (!read.ok) {
-              throw read.error;
-            }
-            retained?.initialize({
-              entry: read.value && projectSessionSharingEntry(read.value),
-              membership: new Set(),
-            });
-            target.store = read.value ? { [target.canonicalKey]: read.value } : {};
-          },
-          (database, identity) => {
-            retained = retainPreparedSessionSharingFacts({
-              databaseIdentity: identity.key,
-              sessionKey: target.canonicalKey,
-              acquiring: true,
-            });
-            unregister = registerOpenClawAgentDatabaseAsyncResource({
-              agentId: database.agentId,
-              path: database.path,
-              revoke: release,
-              close: async () => release(),
-            });
-          },
-        );
+      if (!metadata) {
+        if (!preparedEntry || !source || typeof source.databaseIdentity !== "string") {
+          throw new WorkerDispatchTargetChangedError(
+            `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+          );
+        }
+        retained = retainPreparedSessionGenerationFacts({
+          databaseIdentity: `file:${source.databaseIdentity}`,
+          sessionKey: selectedKey,
+          entry: preparedEntry,
+        });
+        unregister = registerOpenClawAgentDatabaseAsyncResource({
+          agentId: source.agentId,
+          path: source.path,
+          revoke: release,
+          close: async () => release(),
+        });
       }
     } catch (error) {
       release();
@@ -126,21 +105,15 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     }
     const readCurrentTarget = () => {
       assertActive();
-      if (nativeIncognito) {
-        return resolveGatewaySessionStoreTargetWithStore({
-          cfg: getRuntimeConfig(),
-          key: sessionKey,
-          agentId,
-          preserveQualifiedAddress: true,
-          clone: false,
-          exactRead: true,
-        });
-      }
       if (!metadata) {
         assertRoutingCurrent(getRuntimeConfig());
       }
-      const entry = metadata ? metadata.readCurrent() : retained?.readCurrent()?.entry;
-      return { ...target, store: entry ? { [target.canonicalKey]: entry } : {} };
+      if (source) {
+        assertCapturedSessionEntryReadSource(source);
+      }
+      const generation = retained?.readCurrent();
+      const entry = metadata ? metadata.readCurrent() : generation;
+      return { ...target, entry };
     };
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     const cancelAndDrain = async (
@@ -254,10 +227,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     const revision = entry?.lifecycleRevision ?? null;
     const assertTargetCurrent = () => {
       const current = readCurrentTarget();
-      const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
-        current.store,
-        current.storeKeys,
-      );
+      const currentEntry = current.entry;
       if (
         current.storePath !== target.storePath ||
         current.canonicalKey !== target.canonicalKey ||
@@ -276,7 +246,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         assertTargetCurrent();
       },
       {
-        // Transport waits keep caller custody; both write grants reread the session target.
+        // Transport waits keep caller custody; both write grants check the retained generation.
         assertWorkerLifetime: () => (authorize?.assertWorkerLifetime ?? authorize)?.(),
         assertWorkerGrant: () => {
           (authorize?.assertWorkerGrant ?? authorize)?.();
@@ -433,14 +403,10 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         sessionKey,
         agentId,
       });
-      const { sessionRuntime, target, readCurrentTarget, lifecycleIdentities, cancelAndDrain } =
-        context;
+      const { target, readCurrentTarget, lifecycleIdentities, cancelAndDrain } = context;
       const assertCurrent = () => {
         const currentTarget = readCurrentTarget();
-        const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
-          currentTarget.store,
-          currentTarget.storeKeys,
-        );
+        const currentEntry = currentTarget.entry;
         if (
           currentTarget.storePath !== target.storePath ||
           currentTarget.canonicalKey !== target.canonicalKey ||

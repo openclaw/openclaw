@@ -50,8 +50,12 @@ import {
 } from "./workspace-result-staging.js";
 
 // mock-isolation: This fixture clones a local Git origin without GitHub credentials.
-vi.mock("./worker-github-binding.js", () => ({
-  prepareGitHubPublicationFact: async () => undefined,
+vi.mock("./repository-github-identity.js", () => ({
+  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
+    token: undefined,
+    assertSelected: assertCurrent,
+    start: async (start: () => Promise<unknown>) => await start(),
+  }),
 }));
 
 describe("repository workspace result ownership", () => {
@@ -71,7 +75,7 @@ describe("repository workspace result ownership", () => {
     const sql = observeMainThreadSql();
     sql.calibrate();
     try {
-      using access = await resolveRepositoryWorkspaceAccess(loaded, context);
+      using access = await resolveRepositoryWorkspaceAccess(loaded, context, () => {});
       if (access?.kind !== "active") {
         throw new Error("Expected live repository editor access");
       }
@@ -345,6 +349,7 @@ describe("repository workspace result ownership", () => {
           agentId: sessionTarget.agentId,
         }),
         context,
+        authorize,
       );
       if (access?.kind !== "active") {
         throw new Error("Expected live repository editor access");

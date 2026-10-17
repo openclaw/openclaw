@@ -126,6 +126,27 @@ describe("worker placement terminal persistence", () => {
       expect(failed.terminalReason).toHaveLength(1_024);
       expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
       expect(failed.recoveryError).toBe(failed.terminalReason);
+      expect(store.get(claim.sessionId)).toMatchObject({
+        state: "failed",
+        generation: claim.placementGeneration + 3,
+        turnClaim: null,
+        terminalAtMs: 2_000,
+      });
+      const updated = await store.fail({
+        sessionId: claim.sessionId,
+        expectedGeneration: failed.generation,
+        recoveryError: "synthetic cleanup failure",
+      });
+      expect(updated.terminalReason).toBe(failed.terminalReason);
+      expect(updated.recoveryError).toBe("synthetic cleanup failure");
+      await expect(
+        store.fail({
+          sessionId: claim.sessionId,
+          expectedGeneration: claim.placementGeneration,
+          recoveryError: "stale cleanup failure",
+        }),
+      ).rejects.toThrow("changed before failure");
+      expect(store.get(claim.sessionId)?.recoveryError).toBe("synthetic cleanup failure");
       expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(closedClaims).toEqual([claim]);
       unregister();
@@ -300,6 +321,31 @@ describe("worker placement terminal persistence", () => {
       terminalReason: null,
       terminalAtMs: null,
     });
+  });
+
+  it("preserves the placement when settlement finds no pending result", async () => {
+    await advanceToActive();
+    const { active, claim, pending } = await pendingResult();
+    database.db
+      .prepare("DELETE FROM worker_workspace_pending_results WHERE session_id = ?")
+      .run(active.sessionId);
+
+    await expect(store.completeWorkspaceResultAndReleaseTurn(claim)).rejects.toThrow(
+      "workspace result",
+    );
+    await expect(
+      store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
+    ).rejects.toThrow("workspace result changed");
+    const preserved = {
+      state: "active",
+      generation: active.generation,
+      turnClaim: { claimId: claim.claimId },
+      terminalReason: null,
+      terminalAtMs: null,
+    };
+    expect(store.get(active.sessionId)).toMatchObject(preserved);
+    expect(await store.listAsync()).toMatchObject([preserved]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("rolls back placement failure when pending-result removal aborts", async () => {

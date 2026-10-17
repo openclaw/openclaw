@@ -131,6 +131,23 @@ describe("cleanSchemaForGemini", () => {
     ).toStrictEqual({ type: "object", properties: { filter } });
   });
 
+  it("resolves same-named definitions in the namespace named by each reference", () => {
+    expect(
+      cleanSchemaForGemini({
+        type: "object",
+        $defs: { Value: { type: "string" } },
+        definitions: { Value: { type: "integer" } },
+        properties: {
+          modern: { $ref: "#/$defs/Value" },
+          legacy: { $ref: "#/definitions/Value" },
+        },
+      }),
+    ).toStrictEqual({
+      type: "object",
+      properties: { modern: { type: "string" }, legacy: { type: "integer" } },
+    });
+  });
+
   it("preserves shared definitions across inline and reference traversal", () => {
     const node = {
       type: "object",

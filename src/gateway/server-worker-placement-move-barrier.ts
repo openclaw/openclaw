@@ -19,7 +19,6 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 
 export type WorkerPlacementHandoffParams = {
   placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">;
-  awaitTurnClaimRelease: (sessionId: string, wait: () => Promise<void>) => Promise<void>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
 };
 
@@ -88,21 +87,19 @@ export async function runWorkerPlacementHandoff<T>(
         });
         return;
       }
-      await params.awaitTurnClaimRelease(sessionId, async () => {
-        const released = await interruptSessionWorkAdmissions({
-          scope: target.storePath,
-          identities: lifecycleIdentities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-        if (!released) {
-          throw new Error(
-            `Session ${sessionKey} is still active; ${action === "dispatch" ? "dispatch stopped" : "placement move interrupted"}`,
-          );
-        }
-        await params.placements.waitForTurnClaimRelease(sessionId, {
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          signal,
-        });
+      const released = await interruptSessionWorkAdmissions({
+        scope: target.storePath,
+        identities: lifecycleIdentities,
+        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      });
+      if (!released) {
+        throw new Error(
+          `Session ${sessionKey} is still active; ${action === "dispatch" ? "dispatch stopped" : "placement move interrupted"}`,
+        );
+      }
+      await params.placements.waitForTurnClaimRelease(sessionId, {
+        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        signal,
       });
       await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
     },
@@ -123,7 +120,12 @@ export function createGatewayWorkerPlacementMoveBarrier(
       params,
       { ...request, action: "move" },
       await params.loadSessionRuntime(),
-      async () => {
+      async ({ workspace }) => {
+        if (workspace.kind === "device-folder") {
+          throw new Error(
+            "Device folders cannot move or Continue on Gateway; reconnect the original device or start a new session.",
+          );
+        }
         request.authorize?.();
         return await request.begin(async (runId) => {
           if (params.persistAbandonedPartial) {

@@ -167,19 +167,22 @@ describe("chat metadata with published model owners", () => {
         expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
         expect(builds).toBe(count + 1);
         const added = await add("added");
-        await expect(runtime.refresh()).rejects.toBeInstanceOf(
+        await runtime.refresh();
+        expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
+        expect(builds).toBe(count + 2);
+        await expect(runtime.read({ agentId: "added" })).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );
         await publish(added);
         await runtime.refresh();
         expect((await runtime.read({ agentId: "added" })).models).toContainEqual(expectedModel);
-        expect(builds).toBe(count + 2);
+        expect(builds).toBe(count + 3);
         delete entries.added;
         await runtime.refresh();
         await expect(runtime.read({ agentId: "added" })).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );
-        expect(builds).toBe(count + 2);
+        expect(builds).toBe(count + 3);
         // Leave substantial linear headroom; fail repeated per-agent roster traversal.
         expect(unchangedReads).toBeLessThanOrEqual(8 * count);
       } finally {

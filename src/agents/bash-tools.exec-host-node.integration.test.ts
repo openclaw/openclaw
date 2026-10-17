@@ -559,6 +559,34 @@ it.each([
   }
 });
 
+it.each([
+  "'http://127.0.0.1:9876/oauth2/callback?state=x&code=y'",
+  String.raw`http://127.0.0.1:9876/oauth2/callback?state=x\&code=y`,
+])("requests human approval with unchanged argv for callback %s", async (callback) => {
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const command = `/usr/bin/printf %s ${callback}`;
+  const execution = executeNodeHostCommand({
+    ...request,
+    command,
+    security: "allowlist",
+    ask: "on-miss",
+  });
+  const drained = execution.catch(() => undefined);
+  try {
+    await Promise.race([decisionEntered.promise, execution]);
+    const approval = rpc.mock.calls.find(([method]) => method === "exec.approval.request");
+    expect(approval?.[2]).toMatchObject({
+      systemRunPlan: { argv: buildNodeShellCommand(command, "darwin") },
+    });
+    expect(invokeCount).toBe(0);
+    resolveDecision({ decision: "deny" });
+    await expect(execution).rejects.toThrow("exec denied: user-denied");
+  } finally {
+    resolveDecision({ decision: "deny" });
+    await drained;
+  }
+});
+
 it("collects live conversation context only when the node exec tool reaches review", async () => {
   let currentTranscript: ExecAutoReviewTranscript | undefined;
   const reviewTranscript = vi.fn(() => currentTranscript);
@@ -749,7 +777,7 @@ it.each(["caller", "node", "approvals"] as const)(
         workdir: link,
         ...(owner === "caller" ? { ask: "always" as const } : {}),
       }),
-    ).rejects.toThrow("canonical cwd");
+    ).rejects.toThrow("working directory without symlink path components");
     expect(invokeCount).toBe(0);
   },
 );
@@ -785,7 +813,9 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
   const result = await execution;
   expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
   expect(result.content).toEqual([
-    expect.objectContaining({ text: expect.stringContaining("canonical cwd") }),
+    expect.objectContaining({
+      text: expect.stringContaining("working directory without symlink path components"),
+    }),
   ]);
 });
 

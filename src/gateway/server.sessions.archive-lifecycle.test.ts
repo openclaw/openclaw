@@ -28,7 +28,7 @@ import {
 } from "./server.sessions.archive-lifecycle.test-support.js";
 import {
   resolveSessionMutationAuthorization,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "./session-sharing.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
@@ -230,7 +230,7 @@ test("identity changes fence archive before cancellation and force fresh authori
     if (!authorized.authorization) {
       throw new Error("expected captured archive authorization");
     }
-    const sharingTarget = resolveSessionSharingTarget({
+    const sharingTarget = await resolveSessionSharingTargetAsync({
       cfg: requestContext.getRuntimeConfig(),
       sessionKey,
     });
