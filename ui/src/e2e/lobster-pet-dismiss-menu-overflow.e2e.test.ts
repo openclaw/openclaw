@@ -1,6 +1,4 @@
-// Measures the lobster dismiss menu's internal overflow in the real New Session
-// composer context, with classic (space-taking) scrollbars forced on so the
-// Linux run matches what a macOS "Always show scrollbars" operator sees.
+// Force classic scrollbars to reproduce macOS "Always show scrollbars" overflow.
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -23,9 +21,6 @@ type BrowserLobsterPet = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
-/** Shared setup for a fresh page: mock gateway, load, and park the clock so
- *  the pet's own timers don't fire mid-assertion. Reused across the default
- *  1280x900 context and the per-test contexts below (compact/edge/theme). */
 async function loadControlUiPage(currentPage: Page) {
   await currentPage.clock.install({ time: new Date("2026-07-09T12:00:00") });
   await installMockGateway(currentPage);
@@ -43,12 +38,11 @@ async function withDismissMenuPage(
 ) {
   await suite.withPage({ viewport: { width: 1280, height: 900 }, ...options }, async ({ page }) => {
     await loadControlUiPage(page);
+    await configureRealComposerPet(page, 42);
     await run(page);
   });
 }
 
-/** Configures the pet already mounted on the real composer so production
- *  positioning and hit testing remain part of the assertion. */
 async function configureRealComposerPet(currentPage: Page, seed: number) {
   await currentPage.evaluate(async (petSeed) => {
     const pet = document.querySelector("openclaw-lobster-pet") as BrowserLobsterPet | null;
@@ -63,8 +57,6 @@ async function configureRealComposerPet(currentPage: Page, seed: number) {
   }, seed);
 }
 
-/** Reads the geometry that decides whether the popup scrolls or overflows
- *  the viewport. */
 async function measureDismissMenu(currentPage: Page) {
   return await currentPage.evaluate(() => {
     const menu = document.querySelector<HTMLElement>(".lobster-pet-dismiss-menu__panel");
@@ -99,13 +91,9 @@ async function measureDismissMenu(currentPage: Page) {
   });
 }
 
-// The largest text-scale stop a user can actually pick from Appearance
-// settings (TEXT_SCALE_STOPS in ui/src/app/settings.ts), applied the same
-// way ui/src/app/bootstrap.ts:79 applies it at runtime.
+// Largest Appearance TEXT_SCALE_STOPS value, applied through the runtime token.
 const ENLARGED_TEXT_SCALE = "1.4";
 
-/** Long labels and the real Appearance text-scale setting exercise the
- * owned menu's wrapping without depending on network-loaded locale chunks. */
 async function useOversizedDismissLabels(currentPage: Page) {
   await currentPage.evaluate((scale) => {
     document.documentElement.style.setProperty("--control-ui-text-scale", scale);
@@ -121,10 +109,17 @@ async function useOversizedDismissLabels(currentPage: Page) {
   }, ENLARGED_TEXT_SCALE);
 }
 
+async function openDismissMenu(page: Page) {
+  const sprite = page.locator(".lobster-pet");
+  await sprite.waitFor();
+  await sprite.click({ button: "right" });
+  await page.locator(".lobster-pet-dismiss-menu__panel").waitFor();
+  await page.getByText("Dismiss and don't show again", { exact: true }).waitFor();
+}
+
 suite.define(() => {
   it("keeps the composer critter clickable and its dismissal menu inside the viewport", () =>
     withDismissMenuPage({}, async (page) => {
-      await configureRealComposerPet(page, 42);
       const sprite = page.locator(".lobster-pet");
       await sprite.waitFor();
       // Native dismissal completion needs live animation frames.
@@ -172,13 +167,7 @@ suite.define(() => {
 
   it("keeps both items fully visible under long labels and an enlarged type scale", () =>
     withDismissMenuPage({}, async (page) => {
-      await configureRealComposerPet(page, 42);
-      const sprite = page.locator(".lobster-pet");
-      await sprite.waitFor();
-
-      await sprite.click({ button: "right" });
-      await page.locator(".lobster-pet-dismiss-menu__panel").waitFor();
-      await page.getByText("Dismiss and don't show again", { exact: true }).waitFor();
+      await openDismissMenu(page);
       const baseline = await measureDismissMenu(page);
 
       await useOversizedDismissLabels(page);
@@ -191,11 +180,7 @@ suite.define(() => {
         .toBe(0);
       const measurement = await measureDismissMenu(page);
 
-      // Guards against --control-ui-text-scale/the label injection silently
-      // no-opping: the rendered label font-size and its unclamped box height
-      // must both actually grow, or this test would pass without exercising
-      // the real type-scale token (the row's own height can't tell a real
-      // increase from a no-op — see firstItemLabelHeightPx above).
+      // Verify the scale/label injection changed both font size and wrapping.
       expect(measurement.firstItemFontSizePx).not.toBeNull();
       expect(measurement.firstItemFontSizePx).toBeGreaterThan(baseline.firstItemFontSizePx ?? 0);
       expect(measurement.firstItemLabelHeightPx).not.toBeNull();
@@ -206,13 +191,7 @@ suite.define(() => {
 
   it("keeps the popup within the viewport at a compact composer height", async () => {
     await withDismissMenuPage({ viewport: { width: 1280, height: 420 } }, async (shortPage) => {
-      await configureRealComposerPet(shortPage, 42);
-      const sprite = shortPage.locator(".lobster-pet");
-      await sprite.waitFor();
-
-      await sprite.click({ button: "right" });
-      await shortPage.locator(".lobster-pet-dismiss-menu__panel").waitFor();
-      await shortPage.getByText("Dismiss and don't show again", { exact: true }).waitFor();
+      await openDismissMenu(shortPage);
 
       const measurement = await measureDismissMenu(shortPage);
 
@@ -226,7 +205,6 @@ suite.define(() => {
   for (const edge of ["left", "right"] as const) {
     it(`keeps the popup within the viewport for pointer coordinates near the ${edge} edge`, () =>
       withDismissMenuPage({}, async (page) => {
-        await configureRealComposerPet(page, 42);
         // Exercise the popup's raw pointer-coordinate boundary without moving
         // the composer outside its scroll container and invalidating its lanes.
         const sprite = page.locator(".lobster-pet");
@@ -256,21 +234,12 @@ suite.define(() => {
   }
 
   it("does not scroll its two dismissal items under a dark color scheme", async () => {
-    await withDismissMenuPage(
-      { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
-      async (darkPage) => {
-        await configureRealComposerPet(darkPage, 42);
-        const sprite = darkPage.locator(".lobster-pet");
-        await sprite.waitFor();
+    await withDismissMenuPage({ colorScheme: "dark" }, async (darkPage) => {
+      await openDismissMenu(darkPage);
 
-        await sprite.click({ button: "right" });
-        await darkPage.locator(".lobster-pet-dismiss-menu__panel").waitFor();
-        await darkPage.getByText("Dismiss and don't show again", { exact: true }).waitFor();
+      const measurement = await measureDismissMenu(darkPage);
 
-        const measurement = await measureDismissMenu(darkPage);
-
-        expect(measurement).toMatchObject({ overflowPx: 0 });
-      },
-    );
+      expect(measurement).toMatchObject({ overflowPx: 0 });
+    });
   });
 });

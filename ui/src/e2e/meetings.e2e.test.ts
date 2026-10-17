@@ -5,8 +5,8 @@ import type {
   TranscriptsGetResult,
   TranscriptsStatusResult,
 } from "@openclaw/gateway-protocol";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -49,6 +49,15 @@ const detail: TranscriptsGetResult = {
   },
 };
 
+async function captureMeeting(page: Page, name: string) {
+  await page.screenshot({ path: path.join(suite.artifactDir, name), animations: "disabled" });
+}
+async function expectSummarySelected(view: Locator) {
+  expect(await view.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe(
+    "true",
+  );
+}
+
 suite.define(() => {
   it("returns from capture settings to the same meeting and preserves native new-tab links", async () => {
     await suite.withPage(
@@ -83,52 +92,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Back to app", exact: true }).click();
         await page.waitForURL(meetingUrl);
         expect(page.url()).toBe(meetingUrl);
-        try {
-          await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
-        } catch (error) {
-          // This navigation failure otherwise retains only generic route readiness in CI.
-          const diagnostic = await page
-            .evaluate(
-              ({ selector, search }) => {
-                const hosts = [...document.querySelectorAll("openclaw-meetings-page")];
-                const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-                const reads = gateway?.findRequests("transcripts.get") ?? [];
-                return {
-                  hostCount: hosts.length,
-                  hosts: hosts.slice(0, 2).map((host) => ({
-                    routeSearch:
-                      Reflect.get(host, "routeSearch") === search
-                        ? search
-                        : Reflect.get(host, "routeSearch") === ""
-                          ? ""
-                          : "other",
-                    headings: [...host.querySelectorAll("h1, h2, h3")]
-                      .slice(0, 8)
-                      .map((heading) => {
-                        const text = heading.textContent?.trim();
-                        return text === "Design review" || text === "Meetings" ? text : "other";
-                      }),
-                    readerPresent: host.querySelector(".transcripts-reader") !== null,
-                    alertCount: host.querySelectorAll('[role="alert"]').length,
-                  })),
-                  mainClass: document.querySelector("main.content")?.className ?? null,
-                  listRequests: gateway?.findRequests("transcripts.list").length ?? 0,
-                  getRequests: reads.length,
-                  requestedSelectors: reads.slice(-6).map((request) => {
-                    const requested =
-                      request.params && typeof request.params === "object"
-                        ? Reflect.get(request.params, "selector")
-                        : undefined;
-                    return requested === selector ? selector : requested == null ? null : "other";
-                  }),
-                };
-              },
-              { selector: meeting.selector, search: new URL(meetingUrl).search },
-            )
-            .catch(() => ({ unavailable: true }));
-          console.error("[meetings] capture return diagnostics", diagnostic);
-          throw error;
-        }
+        await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
         expect(
           await view.getByRole("searchbox", { name: "Search meetings", exact: true }).inputValue(),
         ).toBe("design");
@@ -198,13 +162,8 @@ suite.define(() => {
         const row = view.getByRole("link", { name: /Product huddle/ });
         await reader.getByRole("heading", { name: "Product huddle", exact: true }).waitFor();
         await expect.poll(() => reader.getAttribute("aria-busy")).toBe("false");
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "meetings-live-initial.png"),
-          animations: "disabled",
-        });
-        expect(await view.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe(
-          "true",
-        );
+        await captureMeeting(page, "meetings-live-initial.png");
+        await expectSummarySelected(view);
         expect(await reader.getByText("Live capture", { exact: true }).isVisible()).toBe(true);
         await view.getByRole("tab", { name: "Transcript", exact: true }).click();
         await reader.getByText("Waiting for speech…", { exact: true }).waitFor();
@@ -249,10 +208,7 @@ suite.define(() => {
         ).toEqual(["Ada", "Sam"]);
         await expect.poll(() => row.textContent()).toContain("2 saved utterances");
         expect((await gateway.getRequests("transcripts.list")).length).toBeGreaterThan(1);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "meetings-live-speech.png"),
-          animations: "disabled",
-        });
+        await captureMeeting(page, "meetings-live-speech.png");
         await page.setViewportSize({ width: 390, height: 844 });
         await page.emulateMedia({ reducedMotion: "reduce" });
         expect(await reader.getByText("Live capture", { exact: true }).isVisible()).toBe(true);
@@ -263,10 +219,7 @@ suite.define(() => {
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);
         await reader.scrollIntoViewIfNeeded();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "meetings-live-mobile-reduced-motion.png"),
-          animations: "disabled",
-        });
+        await captureMeeting(page, "meetings-live-mobile-reduced-motion.png");
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.emulateMedia({ reducedMotion: "no-preference" });
 
@@ -312,13 +265,8 @@ suite.define(() => {
         expect(await reader.getByText(speech.utterances![0]!.text, { exact: true }).count()).toBe(
           0,
         );
-        expect(await view.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe(
-          "true",
-        );
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "meetings-live-summary.png"),
-          animations: "disabled",
-        });
+        await expectSummarySelected(view);
+        await captureMeeting(page, "meetings-live-summary.png");
         const completed: TranscriptsGetResult = {
           ...interim,
           session: {
@@ -338,13 +286,8 @@ suite.define(() => {
         expect(await reader.getByText(interim.summary!.overview, { exact: true }).isVisible()).toBe(
           true,
         );
-        expect(await view.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe(
-          "true",
-        );
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "meetings-awaiting-notes.png"),
-          animations: "disabled",
-        });
+        await expectSummarySelected(view);
+        await captureMeeting(page, "meetings-awaiting-notes.png");
         const notes: TranscriptsGetResult = {
           ...completed,
           session: {
@@ -354,14 +297,10 @@ suite.define(() => {
             overview: "The team agreed to simplify setup and verify keyboard navigation.",
           },
           summary: {
+            ...interim.summary!,
             generatedAt: "2026-09-18T16:06:04Z",
             overview: "The team agreed to simplify setup and verify keyboard navigation.",
             decisions: ["Simplify setup."],
-            actionItems: ["Sam will test keyboard navigation."],
-            risks: [],
-            participants: ["Ada", "Sam"],
-            utteranceCount: 2,
-            source: "model",
             markdown:
               "# Product huddle\n\n## Overview\nThe team agreed to simplify setup and verify keyboard navigation.\n\n## Action items\n- Sam will test keyboard navigation.",
           },
@@ -373,13 +312,8 @@ suite.define(() => {
         });
         await reader.getByText(notes.summary!.overview, { exact: true }).waitFor();
         await expect.poll(() => row.textContent()).toContain(notes.summary!.overview);
-        expect(await view.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe(
-          "true",
-        );
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "meetings-completed-notes.png"),
-          animations: "disabled",
-        });
+        await expectSummarySelected(view);
+        await captureMeeting(page, "meetings-completed-notes.png");
       },
     );
   });
@@ -442,9 +376,7 @@ suite.define(() => {
         expect(
           await view.getByText("Ada: prepare the revised prototype.", { exact: true }).isVisible(),
         ).toBe(true);
-        expect(await view.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe(
-          "true",
-        );
+        await expectSummarySelected(view);
         expect(await view.getByRole("heading", { name: "Transcript", exact: true }).count()).toBe(
           0,
         );
@@ -473,10 +405,7 @@ suite.define(() => {
                 .evaluate((element) => getComputedStyle(element).color),
             )
             .toBe(mutedColor);
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `meetings-${theme}.png`),
-            animations: "disabled",
-          });
+          await captureMeeting(page, `meetings-${theme}.png`);
         }
         await page.reload();
         await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();

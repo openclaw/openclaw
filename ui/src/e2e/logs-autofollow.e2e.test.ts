@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -26,20 +27,40 @@ beforeEach(() => {
   }
 });
 
-const logLines = Array.from({ length: 200 }, (_value, index) =>
-  JSON.stringify({
+function logLine(index: number, level = "info") {
+  return JSON.stringify({
     "0": JSON.stringify({ subsystem: "autofollow-e2e" }),
-    "1": `log line ${index + 1}`,
-    time: new Date(Date.UTC(2026, 6, 13, 12, 0, index)).toISOString(),
-    _meta: { logLevelName: "info" },
-  }),
-);
-const appendedLogLine = JSON.stringify({
-  "0": JSON.stringify({ subsystem: "autofollow-e2e" }),
-  "1": "log line 201",
-  time: new Date(Date.UTC(2026, 6, 13, 12, 3, 20)).toISOString(),
-  _meta: { logLevelName: "warn" },
-});
+    "1": `log line ${index}`,
+    time: new Date(Date.UTC(2026, 6, 13, 12, 0, index - 1)).toISOString(),
+    _meta: { logLevelName: level },
+  });
+}
+const logLines = Array.from({ length: 200 }, (_, index) => logLine(index + 1));
+function tail(cursor: number, lines: string[], reset = false) {
+  return { cursor, lines, reset, file: "/tmp/openclaw.log" };
+}
+async function capture(page: Page, name: string, target: Locator) {
+  if (captureUiProof) {
+    await writeFile(
+      path.join(proofDir, name),
+      await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [target]),
+    );
+  }
+}
+async function visibility(page: Page, value: "hidden" | "visible", repeats = 1) {
+  await page.evaluate(
+    (state) => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: state.value,
+      });
+      for (let i = 0; i < state.repeats; i++) {
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+    },
+    { value, repeats },
+  );
+}
 
 suite.define(() => {
   it("pauses hidden log reads and catches up without overlapping a slow tail", async () => {
@@ -59,25 +80,12 @@ suite.define(() => {
       await page.getByText("initial", { exact: true }).waitFor();
       await pauseVirtualClock(page);
       const reads = (await gateway.getRequests("logs.tail")).length;
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          value: "hidden",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await visibility(page, "hidden");
       await page.clock.runFor(6_000);
       expect(await gateway.getRequests("logs.tail")).toHaveLength(reads);
 
       await gateway.deferNext("logs.tail");
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          value: "visible",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await visibility(page, "visible", 2);
       const catchup = await gateway.getRequests("logs.tail");
       expect(catchup).toHaveLength(reads + 1);
       expect(catchup.at(-1)?.params).toMatchObject({ cursor: 1 });
@@ -125,24 +133,9 @@ suite.define(() => {
           methodResponses: {
             "logs.tail": {
               sequence: [
-                {
-                  cursor: logLines.length,
-                  file: "/tmp/openclaw.log",
-                  lines: logLines,
-                  reset: true,
-                },
-                {
-                  cursor: logLines.length + 1,
-                  file: "/tmp/openclaw.log",
-                  lines: [appendedLogLine],
-                  reset: false,
-                },
-                {
-                  cursor: logLines.length + 1,
-                  file: "/tmp/openclaw.log",
-                  lines: [],
-                  reset: false,
-                },
+                tail(logLines.length, logLines, true),
+                tail(logLines.length + 1, [logLine(201, "warn")]),
+                tail(logLines.length + 1, []),
               ],
             },
           },
@@ -152,14 +145,7 @@ suite.define(() => {
         try {
           await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
         } finally {
-          if (captureUiProof) {
-            await writeFile(
-              path.join(proofDir, "initial-tail.png"),
-              await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
-                page.locator(".log-row").first(),
-              ]),
-            );
-          }
+          await capture(page, "initial-tail.png", page.locator(".log-row").first());
         }
         expect((await gateway.getRequests("logs.tail"))[0]?.params).toEqual({
           limit: 500,
@@ -200,14 +186,11 @@ suite.define(() => {
             ),
           )
           .toBeLessThan(2);
-        if (captureUiProof) {
-          await writeFile(
-            path.join(proofDir, "incremental-tail-and-autofollow.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
-              stream.locator(".log-row", { hasText: "log line 201" }),
-            ]),
-          );
-        }
+        await capture(
+          page,
+          "incremental-tail-and-autofollow.png",
+          stream.locator(".log-row", { hasText: "log line 201" }),
+        );
         expect(pageErrors).toEqual([]);
       },
     );

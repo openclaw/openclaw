@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { PhotonImage, resize, SamplingFilter, watermark } from "@silvia-odwyer/photon-node";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -50,6 +51,25 @@ const preview = {
   faviconDataUrl:
     "data:image/png;base64," + readFileSync("ui/public/favicon-32.png").toString("base64"),
 };
+
+async function assertBounds(card: Locator, width: number, height: number, checkLeft = true) {
+  const bounds = (await card.boundingBox())!;
+  if (checkLeft) {
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+  }
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(height);
+}
+function hasGuideTooltip(page: Page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll("openclaw-tooltip")].some(
+      (element) => element.content === "Guide details",
+    ),
+  );
+}
+async function capture(page: Page, artifacts: string, name: string) {
+  await page.screenshot({ path: path.join(artifacts, name), animations: "disabled" });
+}
 
 suite.define(() => {
   it("previews ordinary Web UI links on mobile", async () => {
@@ -112,19 +132,10 @@ suite.define(() => {
         expect(await card.textContent()).toContain(preview.description);
         expect(await card.locator(".link-hovercard__identity img").count()).toBe(1);
         expect(await card.getAttribute("role")).toBe("dialog");
-        expect(
-          await page.evaluate(() =>
-            [...document.querySelectorAll("openclaw-tooltip")].some(
-              (element) => element.content === "Guide details",
-            ),
-          ),
-        ).toBe(false);
-        const bounds = await card.boundingBox();
-        expect(bounds!.x).toBeGreaterThanOrEqual(0);
-        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(height);
+        expect(await hasGuideTooltip(page)).toBe(false);
+        await assertBounds(card, width, height);
         expect(directRequests).toEqual([]);
-        await page.screenshot({ path: path.join(artifacts, "after.png"), animations: "disabled" });
+        await capture(page, artifacts, "after.png");
         await card.hover();
         expect(await card.isVisible()).toBe(true);
         const opened = context.waitForEvent("page");
@@ -145,13 +156,7 @@ suite.define(() => {
         ).toBe(true);
         await page.keyboard.press("Escape");
         expect(await card.count()).toBe(0);
-        expect(
-          await page.evaluate(() =>
-            [...document.querySelectorAll("openclaw-tooltip")].some(
-              (element) => element.content === "Guide details",
-            ),
-          ),
-        ).toBe(false);
+        expect(await hasGuideTooltip(page)).toBe(false);
         expect(await link.evaluate((element) => element === document.activeElement)).toBe(true);
         const repository = page.getByRole("link", { name: "OpenClaw repository", exact: true });
         await repository.hover();
@@ -163,14 +168,8 @@ suite.define(() => {
         expect(await card.locator(".link-hovercard__identity").textContent()).toContain(
           "github.com",
         );
-        const repositoryBounds = await card.boundingBox();
-        expect(repositoryBounds!.x).toBeGreaterThanOrEqual(0);
-        expect(repositoryBounds!.x + repositoryBounds!.width).toBeLessThanOrEqual(width);
-        expect(repositoryBounds!.y + repositoryBounds!.height).toBeLessThanOrEqual(height);
-        await page.screenshot({
-          path: path.join(artifacts, "repository.png"),
-          animations: "disabled",
-        });
+        await assertBounds(card, width, height);
+        await capture(page, artifacts, "repository.png");
         const github = page.getByRole("link", { name: "project update", exact: true });
         await github.hover();
         await page
@@ -184,10 +183,7 @@ suite.define(() => {
         await notes.hover();
         await card.getByText("reference notes", { exact: true }).waitFor();
         expect(await card.locator("img").count()).toBe(0);
-        await page.screenshot({
-          path: path.join(artifacts, "fallback.png"),
-          animations: "disabled",
-        });
+        await capture(page, artifacts, "fallback.png");
         expect(
           (await gateway.getRequests("controlUi.linkPreview")).map((request) => request.params),
         ).toEqual([{ url }, { url: repositoryUrl }, { url: "https://example.org/notes" }]);
@@ -203,13 +199,8 @@ suite.define(() => {
         await expect
           .poll(() => card.locator(".link-hovercard__title").textContent())
           .toContain("A detailed field guide");
-        const longBounds = await card.boundingBox();
-        expect(longBounds!.x + longBounds!.width).toBeLessThanOrEqual(width);
-        expect(longBounds!.y + longBounds!.height).toBeLessThanOrEqual(height);
-        await page.screenshot({
-          path: path.join(artifacts, "long-content.png"),
-          animations: "disabled",
-        });
+        await assertBounds(card, width, height, false);
+        await capture(page, artifacts, "long-content.png");
       },
     );
   });

@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Frame } from "playwright";
+import type { Frame, Page } from "playwright";
 import { expect, inject, it } from "vitest";
 import {
   disposeAllSessionMcpRuntimes,
@@ -73,6 +73,82 @@ let fixtureHistoryUrl: string;
 let fixture: ReturnType<typeof createMcpAppFixtureControl>;
 let showFixture: (callId: string) => Promise<string>;
 
+async function writeProof(name: string, value: unknown) {
+  await fs.writeFile(path.join(proofDir, name), JSON.stringify(value, null, 2));
+}
+async function expectBridge(app: Frame, contextSupported: boolean) {
+  await waitForText(app.locator("#input"), '{"city":"Paris"}');
+  await waitForTextContaining(app.locator("#result"), "initial-result");
+  for (const capability of ["serverTools", "serverResources"]) {
+    await waitForTextContaining(app.locator("#capabilities"), capability);
+  }
+  await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", contextSupported);
+  await waitForText(app.locator("#ping"), "{}");
+  await app.locator("#list-tools").click();
+  await waitForTextContaining(app.locator("#tools"), "app_companion");
+  await waitForTextContaining(app.locator("#tools"), "model_only", false);
+  await waitForText(app.locator("#isolation"), "isolated");
+}
+async function expectAppTools(app: Frame) {
+  await app.locator("#call-app").click();
+  await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+  await app.locator("#call-model").click();
+  await waitForTextContaining(app.locator("#model-tool"), "denied:");
+  await app.locator("#read-resource").click();
+  await waitForTextContaining(app.locator("#resource"), "resource-ok");
+}
+async function expectTheme(app: Frame, theme: "light" | "dark") {
+  const [background, color, backgroundRgb, colorRgb] =
+    theme === "dark"
+      ? ["#161920", "#d4d4d8", "rgb(22, 25, 32)", "rgb(212, 212, 216)"]
+      : ["#ffffff", "#403c35", "rgb(255, 255, 255)", "rgb(64, 60, 53)"];
+  await waitForText(app.locator("#host-theme"), theme);
+  // A light proxy between dark documents paints an opaque UA canvas.
+  await expect
+    .poll(() =>
+      app.parentFrame()?.evaluate(() => getComputedStyle(document.documentElement).colorScheme),
+    )
+    .toBe(theme);
+  await waitForTextContaining(
+    app.locator("#host-variables"),
+    `"--color-background-primary":"${background}"`,
+  );
+  await waitForTextContaining(app.locator("#host-variables"), `"--color-text-primary":"${color}"`);
+  await waitForText(
+    app.locator("#computed-theme"),
+    JSON.stringify({
+      background: backgroundRgb,
+      color: colorRgb,
+      accent: "rgb(255, 79, 79)",
+    }),
+  );
+}
+
+function mountHost(page: Page) {
+  return mountControlUiHost(page, {
+    baseUrl: suite.server.baseUrl,
+    gatewayPort,
+    authValue,
+    sessionKey,
+    viewId,
+  });
+}
+function configureImmediate(scenario: string) {
+  return fixture.configure({ scenario, callDelayMs: 0 });
+}
+function companionEvents(events: FixtureEvent[], event: string) {
+  return events.filter((entry) => entry.event === event && entry.tool === "app_companion");
+}
+async function waitForFixtureEvent(scenario: string, event: string, timeout?: number) {
+  await expect
+    .poll(
+      async () =>
+        (await fixture.readEvents(scenario)).filter((entry) => entry.event === event).length,
+      { timeout },
+    )
+    .toBe(1);
+}
+
 const failures: Array<{ step: string; error: string }> = [];
 async function settleCleanup(step: string, cleanup: () => Promise<unknown>): Promise<boolean> {
   try {
@@ -85,10 +161,7 @@ async function settleCleanup(step: string, cleanup: () => Promise<unknown>): Pro
 }
 async function recordCleanup() {
   if (proofDir) {
-    await fs.writeFile(
-      path.join(proofDir, "cleanup.json"),
-      JSON.stringify({ failures, terminalAtMs: Date.now() }, null, 2),
-    );
+    await writeProof("cleanup.json", { failures, terminalAtMs: Date.now() });
   }
   expect(failures).toEqual([]);
 }
@@ -124,7 +197,7 @@ const suite = createControlUiE2eSuite({
       fixtureControlPath = state.path("fixture-control.json");
       fixtureEventsPath = state.path("fixture-events.jsonl");
       fixture = createMcpAppFixtureControl(fixtureControlPath, fixtureEventsPath);
-      await fixture.configure({ scenario: "setup", callDelayMs: 0 });
+      await configureImmediate("setup");
       await fs.writeFile(fixtureEventsPath, "");
       const bundledPluginsDir = state.path("empty-plugins");
       await fs.mkdir(bundledPluginsDir, { recursive: true });
@@ -232,13 +305,7 @@ const suite = createControlUiE2eSuite({
         }
         return nextViewId;
       };
-      const result = await show.execute("mcp-app-conformance-call", { city: "Paris" });
-      viewId =
-        (result.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } }).mcpAppPreview
-          ?.mcpApp?.viewId ?? "";
-      if (!viewId) {
-        throw new Error("MCP App fixture did not create a view");
-      }
+      viewId = await showFixture("mcp-app-conformance-call");
       signal.throwIfAborted();
       const startupConfigSnapshotRead = await readConfigFileSnapshotWithPluginMetadata({
         observe: false,
@@ -330,13 +397,7 @@ suite.define(() => {
             browserDiagnostics.push(`response:${response.status()}:${response.url()}`);
           }
         });
-        await mountControlUiHost(controlPage, {
-          baseUrl: suite.server.baseUrl,
-          gatewayPort,
-          authValue,
-          sessionKey,
-          viewId,
-        });
+        await mountHost(controlPage);
         let app: Frame;
         try {
           app = await findAppFrame(controlPage);
@@ -345,67 +406,16 @@ suite.define(() => {
             cause: error,
           });
         }
-        await waitForText(app.locator("#input"), '{"city":"Paris"}');
-        await waitForTextContaining(app.locator("#result"), "initial-result");
-        await waitForTextContaining(app.locator("#capabilities"), "serverTools");
-        await waitForTextContaining(app.locator("#capabilities"), "serverResources");
-        await waitForTextContaining(app.locator("#capabilities"), "updateModelContext");
-        await waitForText(app.locator("#ping"), "{}");
-        await app.locator("#list-tools").click();
-        await waitForTextContaining(app.locator("#tools"), "app_companion");
-        await waitForTextContaining(app.locator("#tools"), "model_only", false);
-        await waitForText(app.locator("#isolation"), "isolated");
-        await waitForText(app.locator("#host-theme"), "dark");
-        // A light proxy between dark documents paints an opaque UA canvas.
-        const proxyColorScheme = () =>
-          app.parentFrame()?.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
-        await expect.poll(proxyColorScheme).toBe("dark");
-        await waitForTextContaining(
-          app.locator("#host-variables"),
-          '"--color-background-primary":"#161920"',
-        );
-        await waitForTextContaining(
-          app.locator("#host-variables"),
-          '"--color-text-primary":"#d4d4d8"',
-        );
-        await waitForText(
-          app.locator("#computed-theme"),
-          JSON.stringify({
-            background: "rgb(22, 25, 32)",
-            color: "rgb(212, 212, 216)",
-            accent: "rgb(255, 79, 79)",
-          }),
-        );
+        await expectBridge(app, true);
+        await expectTheme(app, "dark");
         await controlPage.evaluate(() => {
           const setTheme = Reflect.get(window, "mcpConformanceSetTheme") as
             | ((theme: "light" | "dark") => void)
             | undefined;
           setTheme?.("light");
         });
-        await waitForText(app.locator("#host-theme"), "light");
-        await expect.poll(proxyColorScheme).toBe("light");
-        await waitForTextContaining(
-          app.locator("#host-variables"),
-          '"--color-background-primary":"#ffffff"',
-        );
-        await waitForTextContaining(
-          app.locator("#host-variables"),
-          '"--color-text-primary":"#403c35"',
-        );
-        await waitForText(
-          app.locator("#computed-theme"),
-          JSON.stringify({
-            background: "rgb(255, 255, 255)",
-            color: "rgb(64, 60, 53)",
-            accent: "rgb(255, 79, 79)",
-          }),
-        );
-        await app.locator("#call-app").click();
-        await waitForTextContaining(app.locator("#app-tool"), "companion-called");
-        await app.locator("#call-model").click();
-        await waitForTextContaining(app.locator("#model-tool"), "denied:");
-        await app.locator("#read-resource").click();
-        await waitForTextContaining(app.locator("#resource"), "resource-ok");
+        await expectTheme(app, "light");
+        await expectAppTools(app);
         if (captureUiProof) {
           await controlPage.screenshot({
             path: path.join(proofDir, "control-ui-resource-allowed.png"),
@@ -435,10 +445,7 @@ suite.define(() => {
         });
 
         const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
-        await fixture.configure({
-          scenario: "control-ui-graceful-teardown",
-          callDelayMs: 0,
-        });
+        await configureImmediate("control-ui-graceful-teardown");
         await teardownProof.run("control-ui-graceful-teardown", controlPage, app, async () => {
           await controlPage.evaluate(async () => {
             const unmount = Reflect.get(window, "mcpConformanceUnmount") as
@@ -466,30 +473,13 @@ suite.define(() => {
         });
         const standalonePage = await standaloneContext.newPage();
         standalonePage.on("console", (message) => standaloneDiagnostics.push(message.text()));
-        await fixture.configure({
-          scenario: "standalone-bridge",
-          callDelayMs: 0,
-        });
+        await configureImmediate("standalone-bridge");
         const absoluteStandaloneUrl = `http://127.0.0.1:${gatewayPort}${standaloneUrl}`;
         const ticket = standaloneUrl.split("#")[1] ?? "";
         await standalonePage.goto(absoluteStandaloneUrl);
         app = await findAppFrame(standalonePage);
-        await waitForText(app.locator("#input"), '{"city":"Paris"}');
-        await waitForTextContaining(app.locator("#result"), "initial-result");
-        await waitForTextContaining(app.locator("#capabilities"), "serverTools");
-        await waitForTextContaining(app.locator("#capabilities"), "serverResources");
-        await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", false);
-        await waitForText(app.locator("#ping"), "{}");
-        await app.locator("#list-tools").click();
-        await waitForTextContaining(app.locator("#tools"), "app_companion");
-        await waitForTextContaining(app.locator("#tools"), "model_only", false);
-        await waitForText(app.locator("#isolation"), "isolated");
-        await app.locator("#call-app").click();
-        await waitForTextContaining(app.locator("#app-tool"), "companion-called");
-        await app.locator("#call-model").click();
-        await waitForTextContaining(app.locator("#model-tool"), "denied:");
-        await app.locator("#read-resource").click();
-        await waitForTextContaining(app.locator("#resource"), "resource-ok");
+        await expectBridge(app, false);
+        await expectAppTools(app);
         expect(authorizationHeaders.length).toBeGreaterThanOrEqual(3);
         expect(authorizationHeaders.every((value) => value.startsWith("MCP-App v1."))).toBe(true);
         expect(authorizationHeaders.some((value) => value === `Bearer ${authValue}`)).toBe(false);
@@ -498,10 +488,7 @@ suite.define(() => {
         expect(referrers.some((value) => value.includes(ticket))).toBe(false);
         expect(standaloneDiagnostics.some((value) => value.includes(ticket))).toBe(false);
 
-        await fixture.configure({
-          scenario: "standalone-graceful-teardown",
-          callDelayMs: 0,
-        });
+        await configureImmediate("standalone-graceful-teardown");
         await teardownProof.run("standalone-graceful-teardown", standalonePage, app, async () => {
           await app.locator("#request-teardown").click();
         });
@@ -521,10 +508,7 @@ suite.define(() => {
             ),
           ).toMatchObject([{ id, isError: false }]);
         }
-        await fixture.configure({
-          scenario: "standalone-after-teardown",
-          callDelayMs: 0,
-        });
+        await configureImmediate("standalone-after-teardown");
         await standalonePage.reload();
         app = await findAppFrame(standalonePage);
         await waitForTextContaining(app.locator("#result"), "initial-result");
@@ -555,13 +539,7 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#resource"), "denied:");
 
         const revokedControlPage = await controlContext.newPage();
-        await mountControlUiHost(revokedControlPage, {
-          baseUrl: suite.server.baseUrl,
-          gatewayPort,
-          authValue,
-          sessionKey,
-          viewId,
-        });
+        await mountHost(revokedControlPage);
         const revokedControlApp = await findAppFrame(revokedControlPage);
         await waitForTextContaining(
           revokedControlApp.locator("#capabilities"),
@@ -591,20 +569,13 @@ suite.define(() => {
         lease.expiresAtMs = Date.now() - 1;
         await app.locator("#call-app").click();
         await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
-        await fs.writeFile(
-          path.join(proofDir, "bridge-conformance.json"),
-          JSON.stringify(
-            {
-              test: "drives the authenticated Control UI and ticketed standalone bridges",
-              result: "passed",
-              completedAtMs: Date.now(),
-              sourceBoundary:
-                "real source-mounted component, Gateway and official App; not full dashboard",
-            },
-            null,
-            2,
-          ),
-        );
+        await writeProof("bridge-conformance.json", {
+          test: "drives the authenticated Control UI and ticketed standalone bridges",
+          result: "passed",
+          completedAtMs: Date.now(),
+          sourceBoundary:
+            "real source-mounted component, Gateway and official App; not full dashboard",
+        });
       },
     });
   }, 90_000);
@@ -614,20 +585,13 @@ suite.define(() => {
       run: async (signal) => {
         signal.throwIfAborted();
         const recordHost = recordMcpAppHost.bind(undefined, { proofDir, captureUiProof });
-        await fs.writeFile(
-          path.join(proofDir, "runtime.json"),
-          JSON.stringify(
-            {
-              node: process.version,
-              chromium: suite.browser.version(),
-              executable: chromiumExecutablePath,
-              sourceBoundary:
-                "real Gateway/stdio/official App; source-mounted Control UI component, not full dashboard",
-            },
-            null,
-            2,
-          ),
-        );
+        await writeProof("runtime.json", {
+          node: process.version,
+          chromium: suite.browser.version(),
+          executable: chromiumExecutablePath,
+          sourceBoundary:
+            "real Gateway/stdio/official App; source-mounted Control UI component, not full dashboard",
+        });
         const diagnostics: Array<Record<string, unknown>> = [];
         const http = observeMcpAppHttpResponses(gatewayPort);
         const cancellationResults: Array<Record<string, unknown>> = [];
@@ -639,22 +603,13 @@ suite.define(() => {
           settledAtMs: number;
         }> = [];
         try {
-          await fixture.configure({
-            scenario: "timing-setup",
-            callDelayMs: 0,
-          });
+          await configureImmediate("timing-setup");
           viewId = await showFixture("timing-view");
           const controlContext = await newProofContext();
           const standaloneContext = await newProofContext();
           try {
             const controlPage = await controlContext.newPage();
-            await mountControlUiHost(controlPage, {
-              baseUrl: suite.server.baseUrl,
-              gatewayPort,
-              authValue,
-              sessionKey,
-              viewId,
-            });
+            await mountHost(controlPage);
             await findAppFrame(controlPage);
             const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
             const standalonePage = await standaloneContext.newPage();
@@ -692,10 +647,7 @@ suite.define(() => {
               settledAtMs,
             });
             await recordHost(standalonePage, timingSpec.scenario);
-            await fs.writeFile(
-              path.join(proofDir, "timing-results.json"),
-              JSON.stringify(timingResults, null, 2),
-            );
+            await writeProof("timing-results.json", timingResults);
             assertMcpAppTimingEvents(timingEvents, timingSpec);
             expect(output).toContain("companion-called");
             const initializations = (await fixture.readEvents()).filter(
@@ -726,14 +678,7 @@ suite.define(() => {
                 await app
                   .locator(spec.action === "timeout" ? "#call-expiring" : "#call-app")
                   .click();
-                await expect
-                  .poll(
-                    async () =>
-                      (await fixture.readEvents(spec.scenario)).filter(
-                        (event) => event.event === "tool-start",
-                      ).length,
-                  )
-                  .toBe(1);
+                await waitForFixtureEvent(spec.scenario, "tool-start");
                 const startedResponses = http.responses.slice(httpStart);
                 expect(startedResponses).toHaveLength(1);
                 const response = startedResponses[0]!;
@@ -748,33 +693,19 @@ suite.define(() => {
                 } else {
                   await waitForTextContaining(app.locator("#app-tool"), "denied:");
                 }
-                await expect
-                  .poll(
-                    async () =>
-                      (await fixture.readEvents(spec.scenario)).filter(
-                        (event) => event.event === "tool-cancellation-observed",
-                      ).length,
-                  )
-                  .toBe(1);
+                await waitForFixtureEvent(spec.scenario, "tool-cancellation-observed");
                 // Release noncooperative work only after cancellation really reached the SDK.
                 if (releasePath) {
                   await fs.writeFile(releasePath, "released");
                 }
                 // The SDK suppresses late replies even when a server ignores cancellation.
-                await expect
-                  .poll(
-                    async () =>
-                      (await fixture.readEvents(spec.scenario)).filter(
-                        (event) =>
-                          event.event === (spec.cooperative ? "tool-stopped" : "tool-complete"),
-                      ).length,
-                    { timeout: 8000 },
-                  )
-                  .toBe(1);
-                const events = await fixture.readEvents(spec.scenario);
-                const calls = events.filter(
-                  (event) => event.event === "incoming" && event.tool === "app_companion",
+                await waitForFixtureEvent(
+                  spec.scenario,
+                  spec.cooperative ? "tool-stopped" : "tool-complete",
+                  8000,
                 );
+                const events = await fixture.readEvents(spec.scenario);
+                const calls = companionEvents(events, "incoming");
                 expect(calls).toHaveLength(1);
                 const call = calls[0]!;
                 expect(
@@ -804,10 +735,7 @@ suite.define(() => {
                   events: await fixture.readEvents(spec.scenario),
                   state: await recordHost(standalonePage, spec.scenario + "-after"),
                 });
-                await fs.writeFile(
-                  path.join(proofDir, "cancellation-results.json"),
-                  JSON.stringify(cancellationResults, null, 2),
-                );
+                await writeProof("cancellation-results.json", cancellationResults);
               }
               if (spec.action === "teardown" || spec.action === "pagehide") {
                 const reopenNetworkStart = diagnostics.length;
@@ -837,10 +765,7 @@ suite.define(() => {
                   ).toHaveLength(1);
                 }
               }
-              await fixture.configure({
-                scenario: spec.scenario + "-control",
-                callDelayMs: 0,
-              });
+              await configureImmediate(spec.scenario + "-control");
               const controlHttpStart = http.responses.length;
               await app.locator("#call-app").click();
               await waitForTextContaining(app.locator("#app-tool"), "companion-called");
@@ -848,34 +773,15 @@ suite.define(() => {
               expect(controlResponses).toHaveLength(1);
               expect(controlResponses[0]?.writableFinished).toBe(true);
               const controlEvents = await fixture.readEvents(spec.scenario + "-control");
-              expect(
-                controlEvents.filter(
-                  (event) => event.event === "incoming" && event.tool === "app_companion",
-                ),
-              ).toHaveLength(1);
-              expect(
-                controlEvents.filter(
-                  (event) => event.event === "response-written" && event.tool === "app_companion",
-                ),
-              ).toHaveLength(1);
+              expect(companionEvents(controlEvents, "incoming")).toHaveLength(1);
+              expect(companionEvents(controlEvents, "response-written")).toHaveLength(1);
               // A subsequent real response is a causal barrier for the cancelled handler's late reply.
               const settledEvents = await fixture.readEvents(spec.scenario);
               observation.events = settledEvents;
               observation.afterControlAtMs = Date.now();
-              await fs.writeFile(
-                path.join(proofDir, "cancellation-results.json"),
-                JSON.stringify(cancellationResults, null, 2),
-              );
-              expect(
-                settledEvents.filter(
-                  (event) => event.event === "response-written" && event.tool === "app_companion",
-                ),
-              ).toEqual([]);
-              expect(
-                settledEvents.filter(
-                  (event) => event.event === "incoming" && event.tool === "app_companion",
-                ),
-              ).toHaveLength(1);
+              await writeProof("cancellation-results.json", cancellationResults);
+              expect(companionEvents(settledEvents, "response-written")).toEqual([]);
+              expect(companionEvents(settledEvents, "incoming")).toHaveLength(1);
               await recordHost(standalonePage, spec.scenario + "-control");
             }
             expect(
@@ -926,10 +832,7 @@ suite.define(() => {
                   });
                 }
               });
-              await fixture.configure({
-                scenario: "history-forward",
-                callDelayMs: 0,
-              });
+              await configureImmediate("history-forward");
               historyObservations.phase = "initial-control";
               await historyPage.goto(fixtureHistoryUrl);
               await recordHistory();
@@ -986,19 +889,13 @@ suite.define(() => {
                   historyObservations.observationError =
                     error instanceof Error ? error.name : "unknown";
                 });
-                await fs.writeFile(
-                  path.join(proofDir, "history-navigation.json"),
-                  JSON.stringify(historyObservations, null, 2),
-                );
+                await writeProof("history-navigation.json", historyObservations);
               } finally {
                 await suite.closeBrowserContext(historyContext);
               }
             }
           } finally {
-            await fs.writeFile(
-              path.join(proofDir, "timing-results.json"),
-              JSON.stringify(timingResults, null, 2),
-            );
+            await writeProof("timing-results.json", timingResults);
             await Promise.allSettled(
               standaloneContext
                 .pages()
@@ -1019,18 +916,9 @@ suite.define(() => {
           ).toContain("companion-called");
         } finally {
           http.stop();
-          await fs.writeFile(
-            path.join(proofDir, "browser-diagnostics.json"),
-            JSON.stringify(diagnostics, null, 2),
-          );
-          await fs.writeFile(
-            path.join(proofDir, "cancellation-results.json"),
-            JSON.stringify(cancellationResults, null, 2),
-          );
-          await fs.writeFile(
-            path.join(proofDir, "timing-results.json"),
-            JSON.stringify(timingResults, null, 2),
-          );
+          await writeProof("browser-diagnostics.json", diagnostics);
+          await writeProof("cancellation-results.json", cancellationResults);
+          await writeProof("timing-results.json", timingResults);
           await fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl"));
         }
       },

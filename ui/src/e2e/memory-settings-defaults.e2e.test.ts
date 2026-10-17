@@ -23,24 +23,38 @@ beforeEach(() => {
   }
 });
 
-const memoryPlugins = [
-  {
-    id: "memory-core",
-    name: "memory-core",
-    installed: true,
-    enabled: true,
-    state: "enabled",
-    kind: ["memory"],
-  },
-  {
-    id: "memory-lancedb",
-    name: "Memory LanceDB",
-    installed: true,
-    enabled: true,
-    state: "enabled",
-    kind: ["memory"],
-  },
-];
+const memoryPlugins = ["memory-core", "memory-lancedb"].map((id) => ({
+  id,
+  name: id === "memory-core" ? id : "Memory LanceDB",
+  installed: true,
+  enabled: true,
+  state: "enabled",
+  kind: ["memory"],
+}));
+
+function objectSchema<T>(properties: T) {
+  return { type: "object", properties };
+}
+
+function withMemoryPage(run: (page: Page) => Promise<void>) {
+  return suite.withPage(
+    {
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+    },
+    ({ page }) => run(page),
+  );
+}
+
+async function expectQuery(advanced: Locator, section: Locator) {
+  await expect
+    .poll(() => advanced.evaluate((element) => (element as HTMLDetailsElement).open))
+    .toBe(true);
+  await section.locator("summary").filter({ hasText: "Query" }).click();
+  expect(await section.getByRole("spinbutton").inputValue()).toBe("6");
+}
 
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
@@ -75,196 +89,153 @@ async function captureProof(page: Page, name: string, locator?: Locator) {
 
 suite.define(() => {
   it("reveals advanced Memory search matches across navigation, reload, and legacy links", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1440 },
-      },
-      async ({ page }) => {
-        const config = { memory: { search: { enabled: true, query: { maxResults: 6 } } } };
-        await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config,
-              hash: "memory-search-e2e",
-              raw: JSON.stringify(config),
-              valid: true,
-              issues: [],
-            },
-            "config.schema": {
-              schema: {
-                type: "object",
-                properties: {
-                  memory: {
-                    type: "object",
-                    properties: {
-                      search: {
-                        type: "object",
-                        properties: {
-                          enabled: { type: "boolean", title: "Enable Memory Search" },
-                          query: {
-                            type: "object",
-                            properties: {
-                              maxResults: { type: "integer", title: "Memory Search Max Results" },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-              uiHints: {
-                "memory.search.enabled": { advanced: false },
-                "memory.search.query.maxResults": { advanced: true },
-              },
-              version: "memory-search-e2e",
-            },
-            "plugins.list": { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true },
+    await withMemoryPage(async (page) => {
+      const config = { memory: { search: { enabled: true, query: { maxResults: 6 } } } };
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": {
+            config,
+            hash: "memory-search-e2e",
+            raw: JSON.stringify(config),
+            valid: true,
+            issues: [],
           },
+          "config.schema": {
+            schema: objectSchema({
+              memory: objectSchema({
+                search: objectSchema({
+                  enabled: { type: "boolean", title: "Enable Memory Search" },
+                  query: objectSchema({
+                    maxResults: { type: "integer", title: "Memory Search Max Results" },
+                  }),
+                }),
+              }),
+            }),
+            uiHints: {
+              "memory.search.enabled": { advanced: false },
+              "memory.search.query.maxResults": { advanced: true },
+            },
+            version: "memory-search-e2e",
+          },
+          "plugins.list": { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      const section = page.locator("#config-section-memory");
+      const advanced = section.locator("details.config-advanced-disclosure");
+      await advanced.waitFor();
+      expect(await advanced.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+        false,
+      );
+
+      await page
+        .getByRole("searchbox", { name: "Search settings", exact: true })
+        .fill("max results");
+      await page.locator(".settings-sidebar__subitem").filter({ hasText: "Memory" }).click();
+      await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-memory");
+      await section.waitFor();
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(page, section, [advanced], {
+          animations: "disabled",
+          scrollTo: section,
         });
-        await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-        const section = page.locator("#config-section-memory");
-        const advanced = section.locator("details.config-advanced-disclosure");
-        await advanced.waitFor();
-        expect(await advanced.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
-          false,
-        );
+        await writeFile(path.join(uiProofArtifactDir, "memory-search-destination.png"), frame.png);
+      }
+      await expectQuery(advanced, section);
+      expect(new URL(page.url()).pathname).toBe("/settings/memory/settings");
 
-        await page
-          .getByRole("searchbox", { name: "Search settings", exact: true })
-          .fill("max results");
-        await page.locator(".settings-sidebar__subitem").filter({ hasText: "Memory" }).click();
-        await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-memory");
-        await section.waitFor();
-        if (captureUiProofEnabled) {
-          const frame = await takeControlUiScreenshotFrame(page, section, [advanced], {
-            animations: "disabled",
-            scrollTo: section,
-          });
-          await writeFile(
-            path.join(uiProofArtifactDir, "memory-search-destination.png"),
-            frame.png,
-          );
-        }
-        await expect
-          .poll(() => advanced.evaluate((element) => (element as HTMLDetailsElement).open))
-          .toBe(true);
-        await section.locator("summary").filter({ hasText: "Query" }).click();
-        expect(await section.getByRole("spinbutton").inputValue()).toBe("6");
-        expect(new URL(page.url()).pathname).toBe("/settings/memory/settings");
+      await page.reload();
+      await expectQuery(advanced, section);
 
-        await page.reload();
-        await expect
-          .poll(() => advanced.evaluate((element) => (element as HTMLDetailsElement).open))
-          .toBe(true);
-        await section.locator("summary").filter({ hasText: "Query" }).click();
-        expect(await section.getByRole("spinbutton").inputValue()).toBe("6");
+      await page.goto(
+        `${suite.server.baseUrl}settings/memory?section=memory&advanced=1#config-section-memory`,
+      );
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/memory/settings");
+      await expectQuery(advanced, section);
 
-        await page.goto(
-          `${suite.server.baseUrl}settings/memory?section=memory&advanced=1#config-section-memory`,
-        );
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/memory/settings");
-        await expect
-          .poll(() => advanced.evaluate((element) => (element as HTMLDetailsElement).open))
-          .toBe(true);
-        await section.locator("summary").filter({ hasText: "Query" }).click();
-        expect(await section.getByRole("spinbutton").inputValue()).toBe("6");
-
-        await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-        await advanced.waitFor();
-        expect(await advanced.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
-          false,
-        );
-      },
-    );
+      await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      await advanced.waitFor();
+      expect(await advanced.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+        false,
+      );
+    });
   });
 
   it("persists a cleared dreaming frequency and preserves the explicit engine across reload", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1440 },
-      },
-      async ({ page }) => {
-        const config = {
-          agents: { defaults: { userTimezone: "Asia/Singapore" } },
-          plugins: {
-            slots: { memory: "memory-core" },
-            entries: {
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    frequency: "0 6 * * *",
-                    verboseLogging: true,
-                  },
+    await withMemoryPage(async (page) => {
+      const config = {
+        agents: { defaults: { userTimezone: "Asia/Singapore" } },
+        plugins: {
+          slots: { memory: "memory-core" },
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  frequency: "0 6 * * *",
+                  verboseLogging: true,
                 },
               },
             },
           },
-        };
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config,
-              hash: "memory-defaults-e2e",
-              appliedConfigHash: "memory-defaults-e2e",
-              issues: [],
-              raw: JSON.stringify(config),
-              valid: true,
-            },
-            "plugins.list": {
-              plugins: memoryPlugins,
-              diagnostics: [],
-              mutationAllowed: true,
-            },
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": {
+            config,
+            hash: "memory-defaults-e2e",
+            appliedConfigHash: "memory-defaults-e2e",
+            issues: [],
+            raw: JSON.stringify(config),
+            valid: true,
           },
-        });
+          "plugins.list": {
+            plugins: memoryPlugins,
+            diagnostics: [],
+            mutationAllowed: true,
+          },
+        },
+      });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-        expect(response?.status()).toBe(200);
+      const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      expect(response?.status()).toBe(200);
 
-        const engineRow = settingsRow(page, "Memory engine");
-        const frequencyRow = settingsRow(page, "Dreaming frequency");
-        await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
-        await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
-        await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
+      const engineRow = settingsRow(page, "Memory engine");
+      const frequencyRow = settingsRow(page, "Dreaming frequency");
+      await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
+      await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
+      await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
 
-        await captureProof(page, "01-explicit-engine.png");
-        await captureProof(page, "02-explicit-dreaming.png", scheduleSection(page));
+      await captureProof(page, "01-explicit-engine.png");
+      await captureProof(page, "02-explicit-dreaming.png", scheduleSection(page));
 
-        await frequencyRow.getByRole("textbox").fill("");
-        await frequencyRow.getByRole("textbox").blur();
+      await frequencyRow.getByRole("textbox").fill("");
+      await frequencyRow.getByRole("textbox").blur();
 
-        const saved = requestRaw(await gateway.waitForRequest("config.set"));
-        expect(saved).toHaveProperty("plugins.slots.memory", "memory-core");
-        expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
-        expect(saved).toHaveProperty(
-          "plugins.entries.memory-core.config.dreaming.verboseLogging",
-          true,
-        );
-        await expect
-          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Saved");
+      const saved = requestRaw(await gateway.waitForRequest("config.set"));
+      expect(saved).toHaveProperty("plugins.slots.memory", "memory-core");
+      expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
+      expect(saved).toHaveProperty(
+        "plugins.entries.memory-core.config.dreaming.verboseLogging",
+        true,
+      );
+      await expect
+        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .toContain("Saved");
 
-        await page.reload();
-        const reloadedEngineRow = settingsRow(page, "Memory engine");
-        const reloadedFrequencyRow = settingsRow(page, "Dreaming frequency");
-        await expect
-          .poll(() => reloadedEngineRow.textContent())
-          .toContain("Default: OpenClaw Memory");
-        await expect.poll(() => reloadedFrequencyRow.textContent()).not.toContain("Using default:");
-        await expect.poll(() => reloadedFrequencyRow.getByRole("textbox").inputValue()).toBe("");
-        await expect
-          .poll(() => reloadedFrequencyRow.getByRole("textbox").getAttribute("placeholder"))
-          .toBe("0 3 * * *");
-        await captureProof(page, "03-preserved-engine.png");
-        await captureProof(page, "04-inherited-dreaming.png", scheduleSection(page));
-      },
-    );
+      await page.reload();
+      const reloadedEngineRow = settingsRow(page, "Memory engine");
+      const reloadedFrequencyRow = settingsRow(page, "Dreaming frequency");
+      await expect
+        .poll(() => reloadedEngineRow.textContent())
+        .toContain("Default: OpenClaw Memory");
+      await expect.poll(() => reloadedFrequencyRow.textContent()).not.toContain("Using default:");
+      await expect.poll(() => reloadedFrequencyRow.getByRole("textbox").inputValue()).toBe("");
+      await expect
+        .poll(() => reloadedFrequencyRow.getByRole("textbox").getAttribute("placeholder"))
+        .toBe("0 3 * * *");
+      await captureProof(page, "03-preserved-engine.png");
+      await captureProof(page, "04-inherited-dreaming.png", scheduleSection(page));
+    });
   });
 });
