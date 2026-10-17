@@ -41,12 +41,15 @@ const LINE_TEST_CFG = { channels: { line: { accounts: { default: {} } } } };
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Pin reads to loopback configuration, not the operator runtime.
 vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
   requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? LINE_TEST_CFG),
 }));
 
+// mock-isolation: Pin the loopback account without loading operator accounts.
 vi.mock("./accounts.js", () => ({ resolveLineAccount: vi.fn(() => ({ accountId: "default" })) }));
 
+// mock-isolation: Use the synthetic token without reading stored credentials.
 vi.mock("./channel-access-token.js", () => ({
   resolveLineChannelAccessToken: vi.fn(() => "line-loopback-proof-token"),
 }));
@@ -62,6 +65,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Route transport to the owned loopback server without external DNS.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   resolvePinnedHostnameWithPolicy: vi.fn(async () => ({
     hostname: "api.line.me",

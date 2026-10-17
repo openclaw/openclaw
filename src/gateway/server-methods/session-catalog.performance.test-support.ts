@@ -176,15 +176,26 @@ export async function createComposedCatalogFixture(
   const cleanup = async () => {
     projection?.dispose();
     serviceScheduler.beginClose();
-    await Promise.resolve()
-      .then(() => stopCatalog?.())
-      .finally(() => scheduler.stop())
-      .finally(closeEndpoint)
-      .finally(() => (stateOwner ? closeStateDatabaseForTest() : undefined))
-      .finally(() => {
-        stateOwner?.release();
-        restoreActivePluginRegistrySnapshot(previous);
-      });
+    try {
+      await stopCatalog?.();
+    } finally {
+      try {
+        try {
+          await scheduler.stop();
+        } finally {
+          await closeEndpoint();
+        }
+      } finally {
+        try {
+          if (stateOwner) {
+            await closeStateDatabaseForTest();
+          }
+        } finally {
+          stateOwner?.release();
+          restoreActivePluginRegistrySnapshot(previous);
+        }
+      }
+    }
   };
   try {
     const pluginConfig = {

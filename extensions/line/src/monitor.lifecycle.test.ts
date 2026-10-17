@@ -52,6 +52,7 @@ function requireBot(index = 0) {
   return expectDefined(createLineBotMock.mock.results[index]?.value, "registered LINE webhook bot");
 }
 
+// mock-isolation: Drive lifecycle with the fixture-owned bot instead of starting a LINE client.
 vi.mock("./bot.js", () => ({ createLineBot: createLineBotMock }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
@@ -69,6 +70,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Observe dispatch without sending through a real LINE client.
 vi.mock("./auto-reply-delivery.js", () => ({ deliverLineAutoReply: vi.fn() }));
 
 function startMonitor(options: Partial<Parameters<typeof monitorLineProvider>[0]> = {}) {

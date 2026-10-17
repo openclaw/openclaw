@@ -13,6 +13,7 @@ import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
 
+// mock-isolation: Capture credential subprocess requests without executing host Git or gh.
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: run }));
 vi.mock("./github-oauth-records.js", () => ({ inspectGitHubOAuthRecord: oauthMocks.inspect }));
 
@@ -362,7 +363,15 @@ describe("GitHub tool identity", () => {
     expect(identity).toMatchObject({ env: expectedEnv, accessExpiresAtMs });
     expect(Object.isFrozen(identity)).toBe(true);
     expect(Object.isFrozen(identity.env)).toBe(true);
-    expect(childEnv).toMatchObject(expectedEnv);
+    expect(childEnv).toMatchObject({
+      GIT_EDITOR: expectedEnv.GIT_EDITOR,
+      GH_CONFIG_DIR: profileDir,
+      GH_TOKEN: expectedEnv.GH_TOKEN,
+      GH_ENTERPRISE_TOKEN: expectedEnv.GH_ENTERPRISE_TOKEN,
+    });
+    expect(childEnv.GITHUB_TOKEN).toBeUndefined();
+    expect(childEnv.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
+    expect(childEnv.PREVIEW_SERVICE_TOKEN).toBeUndefined();
     const matches = (id: string) =>
       matchesPreparedGitHubPublicationIdentity({
         config: { tools: { github: { profileId: id } } },

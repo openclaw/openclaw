@@ -42,6 +42,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
   resolvePluginSetupRegistry: () => ({ providers: [] }),
 }));
+// mock-isolation: Use a synthetic OAuth provider without loading installed providers or opening a real login.
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () =>
     [

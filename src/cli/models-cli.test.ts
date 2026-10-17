@@ -80,7 +80,9 @@ vi.mock("../commands/models/fallbacks-shared.js", async (importOriginal) => ({
   clearFallbacksCommand: mocks.clearFallbacksCommand,
   listFallbacksCommand: mocks.noopAsync,
 }));
+// mock-isolation: Observe CLI routing without scanning live providers.
 vi.mock("../commands/models/scan.js", () => ({ modelsScanCommand: mocks.modelsScanCommand }));
+// mock-isolation: Observe CLI routing without changing stored model configuration.
 vi.mock("../commands/models/set.js", () => ({ modelsSetCommand: mocks.modelsSetCommand }));
 vi.mock("../commands/models/refresh.js", () => ({
   modelsRefreshCommand: mocks.modelsRefreshCommand,

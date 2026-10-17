@@ -23,8 +23,10 @@ vi.mock("./apply.js", () => ({
   normalizeMemoryWikiMutationInput: vi.fn(),
 }));
 
+// mock-isolation: Test gateway dispatch without starting vault compilation.
 vi.mock("./compile.js", () => ({ compileMemoryWikiVault: vi.fn() }));
 
+// mock-isolation: Observe ingestion dispatch without importing external files.
 vi.mock("./ingest.js", () => ({ ingestMemoryWikiSource: vi.fn() }));
 
 vi.mock("./compiled-cache.js", async (importOriginal) => ({
@@ -32,8 +34,10 @@ vi.mock("./compiled-cache.js", async (importOriginal) => ({
   loadMemoryWikiCompiledDashboards: vi.fn(),
 }));
 
+// mock-isolation: Supply gateway responses independently of durable import state.
 vi.mock("./import-runs.js", () => ({ listMemoryWikiImportRuns: vi.fn() }));
 
+// mock-isolation: Test lint dispatch independently of vault scans.
 vi.mock("./lint.js", () => ({ lintMemoryWikiVault: vi.fn() }));
 
 vi.mock("./obsidian.js", async (importOriginal) => ({
@@ -48,6 +52,7 @@ vi.mock("./query.js", () => ({
   WIKI_SEARCH_MODES: ["auto", "find-person", "route-question", "source-evidence", "raw-claim"],
 }));
 
+// mock-isolation: Control background synchronization without importing external sources.
 vi.mock("./source-sync.js", () => ({ syncMemoryWikiImportedSources: vi.fn() }));
 
 vi.mock("./status.js", () => ({
@@ -55,6 +60,7 @@ vi.mock("./status.js", () => ({
   resolveMemoryWikiStatus: vi.fn(),
 }));
 
+// mock-isolation: Observe initialization without mutating the vault.
 vi.mock("./vault.js", () => ({ initializeMemoryWikiVault: vi.fn() }));
 
 const { createPluginApi, createVault } = createMemoryWikiTestHarness();

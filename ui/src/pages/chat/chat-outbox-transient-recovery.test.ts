@@ -56,7 +56,9 @@ function historyRequests(host: { request: ReturnType<typeof makeRequestMock> }) 
 
 function useFakeClock() {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
 }
 
 function unavailable(message = "History is temporarily unavailable") {

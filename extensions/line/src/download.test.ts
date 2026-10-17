@@ -16,6 +16,7 @@ function cancellableResponse(status: number) {
   return { response: new Response(new ReadableStream<Uint8Array>({ cancel }), { status }), cancel };
 }
 
+// mock-isolation: Consume synthetic streams without writing to the real media store.
 vi.mock("openclaw/plugin-sdk/media-store", () => ({ saveMediaStream: saveMediaStreamMock }));
 
 let downloadLineMedia: typeof import("./download.js").downloadLineMedia;

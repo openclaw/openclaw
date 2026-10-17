@@ -64,9 +64,13 @@ vi.mock("../commands/models/auth.js", () => ({
   modelsAuthPasteTokenCommand: mocks.domain,
   modelsAuthSetupTokenCommand: mocks.domain,
 }));
+// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-list.js", () => ({ modelsAuthListCommand: mocks.domain }));
+// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-activate.js", () => ({ modelsAuthActivateCommand: mocks.domain }));
+// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-logout.js", () => ({ modelsAuthLogoutCommand: mocks.domain }));
+// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderGetCommand: mocks.domain,
   modelsAuthOrderUpdateCommand: mocks.domain,

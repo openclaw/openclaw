@@ -41,10 +41,12 @@ const {
   },
 }));
 
+// mock-isolation: Keep real queue ownership while replacing external transport.
 vi.mock("../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore: sendBatch,
 }));
 
+// mock-isolation: Control recovery outcomes without sending external messages.
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: recover,
 }));
@@ -55,6 +57,7 @@ vi.mock("../infra/outbound/channel-resolution.js", async (importOriginal) => ({
 }));
 
 vi.mock("../utils/sleep.js", () => ({ sleep: mocks.sleep }));
+// mock-isolation: Observe test hooks without invoking installed plugin hooks.
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hooks,
 }));

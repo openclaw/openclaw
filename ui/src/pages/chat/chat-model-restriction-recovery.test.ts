@@ -75,7 +75,7 @@ function fixture(
     ...(options.unbound ? { defaultsModel: "original", defaultsProvider: "fixture" } : {}),
   });
   result.sessions[0] = {
-    ...result.sessions[0],
+    ...result.sessions[0]!,
     key: sessionKey,
     updatedAt: 1,
     sessionId: options.materializedSessionId ?? recovery.sessionId,

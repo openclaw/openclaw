@@ -224,7 +224,10 @@ it("attributes cold worker reservations to bounded commands and actual outer tra
         input: undefined,
       });
       try {
-        const execute = (type: string, value: string) =>
+        const execute = (
+          type: FixtureOperations["database.domain.execute"]["input"]["command"]["type"],
+          value: string,
+        ) =>
           store.execute({
             type: "database.domain.execute",
             input: { command: { type, input: { value } } },

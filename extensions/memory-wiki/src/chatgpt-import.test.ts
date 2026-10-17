@@ -129,13 +129,13 @@ async function createRollbackVault(runId: string, initialize = true) {
     readRun: () => getMemoryWikiImportRunStateStore().read(vault.rootDir, runId),
     readRecovery: (recoveryPath: string) =>
       fs.readFile(path.join(vault.rootDir, recoveryPath), "utf8"),
-    reopen() {
+    reopen: () => {
       resetPluginStateStoreForTests();
       configureDurableImportRunStore(stateDir);
     },
     seedCreated: (contentHash = hash(imported)) =>
       seed({ createdPaths: [{ path: relativePath, contentHash }] }),
-    async seedUpdated(snapshot: string, content = imported) {
+    seedUpdated: async (snapshot: string, content = imported) => {
       const snapshotRelativePath = "snapshots/target.md";
       const snapshotPath = path.join(runDir, snapshotRelativePath);
       await fs.mkdir(path.dirname(snapshotPath), { recursive: true });

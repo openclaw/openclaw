@@ -123,7 +123,7 @@ function selectionControls(result: SessionsListResult, models: ModelCatalogEntry
     container,
     draw,
     row,
-    async select(button: HTMLButtonElement) {
+    select: async (button: HTMLButtonElement) => {
       button.click();
       await selection;
     },

@@ -197,9 +197,7 @@ it.each([
         message: expect.stringContaining(stagingRoot),
       });
       expect((error as Error).message).toContain("XDG_CACHE_HOME");
-      expect((error as Error).message.includes("free disk space/quota")).toBe(
-        code === "ENOSPC" || code === "EDQUOT",
-      );
+      expect((error as Error).message.includes("free disk space/quota")).toBe(code === "EDQUOT");
       expect((error as Error).message.match(/snapshot staging root/gu)).toHaveLength(1);
     });
 

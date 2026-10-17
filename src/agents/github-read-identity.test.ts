@@ -11,6 +11,7 @@ import { commandResult } from "./github-identity.test-support.js";
 import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
+// mock-isolation: Capture credential subprocess requests without executing host Git or gh.
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: run }));
 
 import {

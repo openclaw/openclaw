@@ -161,9 +161,9 @@ it("publishes decoded set and clear postimages without rereading metadata after 
     agentId: "main",
     storageSessionKey: "agent:main:acp:cache",
     sessionKey: "agent:main:acp:cache",
-    entry: { ...command.entries[0].entry, updatedAt: 200 },
+    entry: { ...command.entries[0]!.entry, updatedAt: 200 },
   };
-  const result = { kind: "acp", ...command.entries[0].entry, sessionStartedAt: undefined };
+  const result = { kind: "acp", ...command.entries[0]!.entry, sessionStartedAt: undefined };
   const meta = createAcpMeta({
     runtimeSessionName: "returned-row",
     state: "error",

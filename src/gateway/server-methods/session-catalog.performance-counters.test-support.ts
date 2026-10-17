@@ -14,27 +14,31 @@ const workerCounter = vi.hoisted(() => ({
 vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../plugin-state/plugin-state-worker-client.js")>();
-  const reads = new Set([
-    "lookupPluginStateInWorker",
-    "lookupManyPluginStateInWorker",
-    "listPluginStateInWorker",
-    "listPluginStateInKeyRangeInWorker",
-    "countPluginStateInWorker",
-    "observePluginStateInWorker",
-  ]);
-  const counted: Record<string, unknown> = { ...actual };
-  for (const [name, value] of Object.entries(actual)) {
-    if (typeof value !== "function") {
-      continue;
-    }
-    counted[name] = (...args: unknown[]) => {
-      if (workerCounter.enabled) {
-        workerCounter.operations++;
-        workerCounter.reads += Number(reads.has(name));
-      }
-      return Reflect.apply(value, undefined, args);
-    };
-  }
+  const counted = Object.fromEntries(
+    Object.entries(actual).map(([name, value]) => [
+      name,
+      typeof value !== "function"
+        ? value
+        : (...args: unknown[]) => {
+            if (workerCounter.enabled) {
+              workerCounter.operations++;
+              if (
+                [
+                  "lookupPluginStateInWorker",
+                  "lookupManyPluginStateInWorker",
+                  "listPluginStateInWorker",
+                  "listPluginStateInKeyRangeInWorker",
+                  "countPluginStateInWorker",
+                  "observePluginStateInWorker",
+                ].includes(name)
+              ) {
+                workerCounter.reads++;
+              }
+            }
+            return Reflect.apply(value, undefined, args);
+          },
+    ]),
+  );
   return {
     ...counted,
     registerPluginStateInWorker: async (
