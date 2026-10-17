@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page, Locator } from "playwright";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
@@ -9,6 +10,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { exactButton, polledAttribute } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSessionMenuSubmenu } from "./session-management.test-support.ts";
 
@@ -57,7 +59,43 @@ const sharedManagementActions = [
   "Move to group",
   "Archive session",
 ] as const;
-const compactManagementActions = sharedManagementActions;
+async function installTerminalGateway(page: Page, text: string) {
+  return installMockGateway(page, {
+    basePath,
+    featureMethods: [
+      "chat.startup",
+      "sessions.assignOwner",
+      "sessions.groups.put",
+      "sessions.patch",
+    ],
+    historyMessages: [
+      { content: [{ type: "text", text }], role: "assistant", timestamp: Date.now() },
+    ],
+    methodResponses: { "sessions.list": sessionsListResponse() },
+    operatorScopes: ["operator.read", "operator.write"],
+    presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+    sessionKey,
+  });
+}
+
+async function openTerminalSession(page: Page, text: string) {
+  const gateway = await installTerminalGateway(page, text);
+  await page.goto(
+    controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
+  );
+  const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+  // A retained boot pane may render the same history: bind to this session first.
+  await expect
+    .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+    .toBe(sessionKey);
+  return { gateway, activePane };
+}
+
+async function expectAdvancedItems(dropdown: Locator) {
+  for (const label of ["Fork conversation", "Icon & color", "Copy details", "Open in", "Delete…"]) {
+    await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
+  }
+}
 
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {
@@ -69,38 +107,15 @@ suite.define(() => {
         viewport: { width: 1440, height: 900 },
       },
       async ({ context, page }) => {
-        const gateway = await installMockGateway(page, {
-          basePath,
-          featureMethods: [
-            "chat.startup",
-            "sessions.assignOwner",
-            "sessions.groups.put",
-            "sessions.patch",
-          ],
-          historyMessages: [
-            {
-              content: [{ type: "text", text: "Ready for terminal continuation." }],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-          methodResponses: { "sessions.list": sessionsListResponse() },
-          operatorScopes: ["operator.read", "operator.write"],
-          presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
-          sessionKey,
-        });
         const pageUrl = new URL(suite.server.baseUrl);
         const gatewayUrl = `ws://${pageUrl.host}${basePath}`;
         await context.grantPermissions(["clipboard-read", "clipboard-write"], {
           origin: pageUrl.origin,
         });
-        await page.goto(
-          controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
+        const { gateway, activePane } = await openTerminalSession(
+          page,
+          "Ready for terminal continuation.",
         );
-        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-        await expect
-          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
-          .toBe(sessionKey);
         await waitForControlUiRoute(page, {
           routeId: "chat",
           pathname: controlUiSessionPath(sessionKey, basePath),
@@ -113,22 +128,14 @@ suite.define(() => {
         const menuTrigger = activePane.getByRole("button", {
           name: "Actions for Terminal continuation",
         });
-        await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("false");
+        await polledAttribute(menuTrigger, "aria-expanded").toBe("false");
         await menuTrigger.press("Enter");
         const dropdown = activePane.locator("openclaw-chat-header-session-menu");
         for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
         await openSessionMenuSubmenu(page, "Advanced");
-        for (const label of [
-          "Fork conversation",
-          "Icon & color",
-          "Copy details",
-          "Open in",
-          "Delete…",
-        ]) {
-          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
-        }
+        await expectAdvancedItems(dropdown);
         await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
@@ -148,7 +155,7 @@ suite.define(() => {
         });
         expect(await dialog.textContent()).not.toMatch(/--token|--password|bootstrap/i);
         await page.screenshot({ path: path.join(artifactDir, "02-modal.png"), fullPage: true });
-        await dialog.getByRole("button", { name: "Copy command", exact: true }).click();
+        await exactButton(dialog, "Copy command").click();
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(command);
 
         await dialog.getByRole("button", { name: "Close" }).click();
@@ -176,35 +183,8 @@ suite.define(() => {
         viewport: { width: 390, height: 844 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
-          basePath,
-          featureMethods: [
-            "chat.startup",
-            "sessions.assignOwner",
-            "sessions.groups.put",
-            "sessions.patch",
-          ],
-          historyMessages: [
-            {
-              content: [{ type: "text", text: "Mobile session menu proof." }],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-          methodResponses: { "sessions.list": sessionsListResponse() },
-          operatorScopes: ["operator.read", "operator.write"],
-          presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
-          sessionKey,
-        });
-        await page.goto(
-          controlUiSessionUrl(new URL(`${basePath}/`, suite.server.baseUrl).href, sessionKey),
-        );
-        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-        // Mock history also renders in the retained boot pane. Wait for this session's pane
-        // before Playwright resolves a control that can stay mounted beneath its replacement.
-        await expect
-          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
-          .toBe(sessionKey);
+        const { activePane } = await openTerminalSession(page, "Mobile session menu proof.");
+
         await waitForControlUiRoute(page, { routeId: "chat" });
         await activePane
           .getByRole("paragraph")
@@ -215,21 +195,13 @@ suite.define(() => {
           name: "Actions for Terminal continuation",
         });
         await menuTrigger.click();
-        await expect.poll(() => menuTrigger.getAttribute("aria-expanded")).toBe("true");
+        await polledAttribute(menuTrigger, "aria-expanded").toBe("true");
         const dropdown = activePane.locator("openclaw-chat-header-session-menu");
-        for (const label of compactManagementActions) {
+        for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
         await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        for (const label of [
-          "Fork conversation",
-          "Icon & color",
-          "Copy details",
-          "Open in",
-          "Delete…",
-        ]) {
-          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
-        }
+        await expectAdvancedItems(dropdown);
         await dropdown.getByRole("menuitem", { name: "Back", exact: true }).click();
         await page.screenshot({
           animations: "disabled",

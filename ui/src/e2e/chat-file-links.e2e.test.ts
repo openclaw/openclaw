@@ -1,8 +1,7 @@
 // Real-browser proof for opening workspace files from chat links and the workspace browser.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -14,6 +13,12 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  exactButton,
+  polledAttribute,
+  polledCount,
+  polledText,
+} from "./chat-presentation.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -29,6 +34,24 @@ beforeEach(() => {
 let browser: Browser;
 let server: ControlUiE2eServer;
 
+async function withPage(run: (page: Page) => Promise<void>, recordVideo = captureUiProof) {
+  const context = await browser.newContext({
+    recordVideo: recordVideo ? { dir: artifactDir, size: { height: 900, width: 1280 } } : undefined,
+    viewport: { height: 900, width: 1280 },
+  });
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    await run(page);
+  } finally {
+    await context.close();
+  }
+}
+
+function fileInfo<T extends object>(name: string, fields: T) {
+  return { kind: "read", missing: false, name, path: name, workspacePath: name, ...fields };
+}
+
 describeControlUiE2e("Control UI chat file links", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
@@ -41,10 +64,7 @@ describeControlUiE2e("Control UI chat file links", () => {
   });
 
   it("preserves domain/path text in user messages", async () => {
-    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
-    try {
-      const page = await context.newPage();
-      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    await withPage(async (page) => {
       const text = "Please check the portal.example/service.test reference.";
       const gateway = await installMockGateway(page, {
         historyMessages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
@@ -57,36 +77,23 @@ describeControlUiE2e("Control UI chat file links", () => {
       expect(await bubble.textContent()).toContain(text);
       expect(await bubble.locator("a[data-file-path]").count()).toBe(0);
       expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    }, false);
   });
 
   it.each(["file", "close", "list"] as const)(
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {
-      const context = await browser.newContext({
-        recordVideo: captureUiProof
-          ? { dir: artifactDir, size: { height: 900, width: 1280 } }
-          : undefined,
-        viewport: { height: 900, width: 1280 },
-      });
-      const page = await context.newPage();
-      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-      try {
+      await withPage(async (page) => {
         const file = {
           root: "/workspace",
           sessionKey: "agent:main:main",
-          file: {
+          file: fileInfo("slow.ts", {
             previewKind: "text",
             contentEncoding: "utf8",
             content: "export const loaded = true;\n",
-            kind: "read",
-            missing: false,
-            name: "slow.ts",
             path: "src/slow.ts",
             workspacePath: "src/slow.ts",
-          },
+          }),
         };
         const gateway = await installMockGateway(page, {
           deferredMethods: [
@@ -112,9 +119,6 @@ describeControlUiE2e("Control UI chat file links", () => {
         });
         const response = await page.goto(`${server.baseUrl}chat`);
         expect(response?.status()).toBe(200);
-        const indexSha256 = createHash("sha256")
-          .update(await response!.body())
-          .digest("hex");
         if (intent === "list") {
           await openChatSidePanelType(page, "Files");
           await gateway.waitForRequest("sessions.files.list");
@@ -132,7 +136,7 @@ describeControlUiE2e("Control UI chat file links", () => {
           .filter({ hasText: "slow.ts" });
         expect(await fileTab.count()).toBe(1);
         if (intent === "close") {
-          await page.getByRole("button", { name: "Close tab: slow.ts", exact: true }).click();
+          await exactButton(page, "Close tab: slow.ts").click();
           await fileTab.waitFor({ state: "detached" });
         } else if (intent === "list") {
           await gateway.resolveDeferred("sessions.files.list");
@@ -146,28 +150,10 @@ describeControlUiE2e("Control UI chat file links", () => {
         const fileView = page.locator(".sidebar-file-view:visible");
         // Capture either settled outcome before the strict assertion, including a failing baseline.
         if ((await fileView.count()) > 0) {
-          await expect
-            .poll(() => fileView.locator(".cm-content").textContent())
-            .toContain("export const loaded = true;");
+          await polledText(fileView.locator(".cm-content")).toContain(
+            "export const loaded = true;",
+          );
         }
-        fs.writeFileSync(
-          path.join(artifactDir, "intent-requests.json"),
-          JSON.stringify(
-            {
-              intent,
-              bundle: {
-                indexSha256,
-                assets: await page.evaluate(
-                  "performance.getEntriesByType('resource').map(entry => new URL(entry.name).pathname).filter(path => path.includes('/assets/'))",
-                ),
-              },
-              files: await gateway.getRequests("sessions.files.get"),
-              lists: await gateway.getRequests("sessions.files.list"),
-            },
-            null,
-            2,
-          ),
-        );
         await page.screenshot({ path: path.join(artifactDir, `intent-${intent}-settled.png`) });
         if (intent === "close") {
           expect(await fileTab.count()).toBe(0);
@@ -178,9 +164,7 @@ describeControlUiE2e("Control UI chat file links", () => {
             "export const loaded = true;",
           );
         }
-      } finally {
-        await context.close();
-      }
+      });
     },
   );
 
@@ -205,15 +189,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         marker: `WORKSPACE_CONTENT_${index}`,
       })),
     ];
-    const context = await browser.newContext({
-      recordVideo: captureUiProof
-        ? { dir: artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-      viewport: { height: 900, width: 1280 },
-    });
-    try {
-      const page = await context.newPage();
-      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         workspace: "/workspace",
         historyMessages: [
@@ -241,16 +217,13 @@ describeControlUiE2e("Control UI chat file links", () => {
               response: {
                 root: "/workspace",
                 sessionKey: "agent:main:main",
-                file: {
+                file: fileInfo(file.name, {
                   content: `// 1\n// 2\n// 3\n// 4\n// 5\n// 6\n${file.marker}\n`,
                   contentEncoding: "utf8",
-                  kind: "read",
-                  missing: false,
-                  name: file.name,
                   path: file.workspacePath,
                   previewKind: "text",
                   workspacePath: file.workspacePath,
-                },
+                }),
               },
             })),
           },
@@ -269,7 +242,6 @@ describeControlUiE2e("Control UI chat file links", () => {
       );
       // Keep the wrong-label baseline visible even when the final assertion fails.
       await page.screenshot({ path: path.join(artifactDir, "root-identity-links.png") });
-      const opened = [];
       for (const [index, file] of files.entries()) {
         const before = (await gateway.getRequests("sessions.files.get")).length;
         const target = page.locator(`.chat-thread a[data-file-path="${file.requestPath}"]`);
@@ -282,42 +254,16 @@ describeControlUiE2e("Control UI chat file links", () => {
         await gateway.waitForRequest("sessions.files.get", { after: before });
         const fileView = page.locator(".sidebar-file-view");
         await fileView.waitFor({ state: "visible" });
-        await expect
-          .poll(() => fileView.locator(".cm-content").textContent())
-          .toContain(file.marker);
-        await expect
-          .poll(() => fileView.locator(".file-view__line--target").getAttribute("data-line"))
-          .toBe("7");
-        opened.push({
-          path: await fileView.locator(".sidebar-file-view__path").textContent(),
-          content: await fileView.locator(".cm-content").textContent(),
-          line: await fileView.locator(".file-view__line--target").getAttribute("data-line"),
-        });
+        await polledText(fileView.locator(".cm-content")).toContain(file.marker);
+        await polledAttribute(fileView.locator(".file-view__line--target"), "data-line").toBe("7");
         await page.screenshot({
           path: path.join(artifactDir, `root-identity-file-${index + 1}.png`),
         });
         expect(page.url()).toBe(chatUrl);
-        await page.getByRole("button", { name: `Close tab: ${file.name}`, exact: true }).click();
+        await exactButton(page, `Close tab: ${file.name}`).click();
         await fileView.waitFor({ state: "detached" });
       }
       const requests = await gateway.getRequests("sessions.files.get");
-      fs.writeFileSync(
-        path.join(artifactDir, "root-identity.json"),
-        JSON.stringify(
-          {
-            labels,
-            requests,
-            opened,
-            indexSha256: response
-              ? createHash("sha256")
-                  .update(await response.body())
-                  .digest("hex")
-              : null,
-          },
-          null,
-          2,
-        ),
-      );
       expect(response?.status()).toBe(200);
       expect(labels.map(({ path: targetPath, line }) => ({ path: targetPath, line }))).toEqual([
         { path: "/workspace/src/file.ts", line: "7" },
@@ -346,21 +292,11 @@ describeControlUiE2e("Control UI chat file links", () => {
         "日本語.txt",
         "README.md",
       ]);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("reveals and saves the selected file without losing Files search or focus", async () => {
-    const context = await browser.newContext({
-      recordVideo: captureUiProof
-        ? { dir: artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-    try {
+    await withPage(async (page) => {
       const initialText = "# Project\n\nNested workspace notes.\n";
       const initialSize = Buffer.byteLength(initialText, "utf8");
       const savedText = "# Project\n\nSaved workspace notes — café 雪 🦞.\n";
@@ -401,34 +337,29 @@ describeControlUiE2e("Control UI chat file links", () => {
                 match: { path: "README.md" },
                 response: {
                   root: "/workspace",
-                  file: {
+                  file: fileInfo("README.md", {
                     previewKind: "text",
                     contentEncoding: "utf8",
                     content: initialText,
                     hash: "before-hash",
                     kind: "modified",
-                    missing: false,
-                    name: "README.md",
-                    path: "README.md",
                     workspacePath: "packages/app/README.md",
-                  },
+                  }),
                 },
               },
               {
                 match: { path: "/workspace/packages/app/README.md" },
                 response: {
                   root: "/workspace",
-                  file: {
+                  file: fileInfo("README.md", {
                     previewKind: "text",
                     contentEncoding: "utf8",
                     content: initialText,
                     hash: "before-hash",
                     kind: "modified",
-                    missing: false,
-                    name: "README.md",
                     path: "packages/app/README.md",
                     workspacePath: "packages/app/README.md",
-                  },
+                  }),
                 },
               },
             ],
@@ -453,7 +384,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       await openChatSidePanelType(page, "Review");
       await gateway.waitForRequest("sessions.diff");
       await openChatSidePanelType(page, "Files");
-      await page.getByRole("button", { name: "1 changed", exact: true }).click();
+      await exactButton(page, "1 changed").click();
       const chatLink = page.locator('a.markdown-file-link[data-file-path="README.md"]');
       await chatLink.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-file-link.png") });
@@ -511,7 +442,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         .poll(async () => (await gateway.getRequests("sessions.files.list")).at(-1)?.params)
         .toMatchObject({ search: "README" });
       await browserRow.locator(".chat-workspace-rail__file-open").click();
-      await fileView.getByRole("button", { name: "Edit file", exact: true }).click();
+      await exactButton(fileView, "Edit file").click();
       await fileView.locator(".cm-content").fill(savedText);
       await gateway.setMethodResponse("sessions.files.list", {
         ...listing,
@@ -524,16 +455,14 @@ describeControlUiE2e("Control UI chat file links", () => {
           ),
         },
       });
-      await fileView.getByRole("button", { name: "Save", exact: true }).click();
-      await expect
-        .poll(() => fileView.getByRole("button", { name: "Save", exact: true }).isDisabled())
-        .toBe(true);
+      await exactButton(fileView, "Save").click();
+      await expect.poll(() => exactButton(fileView, "Save").isDisabled()).toBe(true);
       expect((await gateway.getRequests("sessions.files.set")).at(-1)?.params).toMatchObject({
         content: savedText,
         expectedHash: "before-hash",
       });
       expect(await fileView.isVisible()).toBe(true);
-      await page.getByRole("button", { name: "Close tab: README.md", exact: true }).click();
+      await exactButton(page, "Close tab: README.md").click();
       await search.waitFor({ state: "visible" });
       expect(await search.inputValue()).toBe("README");
       const metadata = page.locator(".chat-workspace-rail__file-meta");
@@ -544,9 +473,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       } finally {
         await page.screenshot({ path: path.join(artifactDir, "04-saved-file-list.png") });
       }
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("previews text and browser-safe images while falling back for unsupported binaries", async () => {
@@ -557,60 +484,37 @@ describeControlUiE2e("Control UI chat file links", () => {
       "/workspace/notes.txt": {
         root: "/workspace",
         sessionKey: "agent:main:main",
-        file: {
+        file: fileInfo("notes.txt", {
           content: "Exact-head workspace preview proof.\n",
           contentEncoding: "utf8",
           hash: "a".repeat(64),
-          kind: "read",
           mimeType: "text/plain",
-          missing: false,
-          name: "notes.txt",
-          path: "notes.txt",
           previewKind: "text",
           size: 36,
-          workspacePath: "notes.txt",
-        },
+        }),
       },
       "/workspace/openclaw.png": {
         root: "/workspace",
         sessionKey: "agent:main:main",
-        file: {
+        file: fileInfo("openclaw.png", {
           content: pngBase64,
           contentEncoding: "base64",
-          kind: "read",
           mimeType: "image/png",
-          missing: false,
-          name: "openclaw.png",
-          path: "openclaw.png",
           previewKind: "image",
           size: png.byteLength,
-          workspacePath: "openclaw.png",
-        },
+        }),
       },
       "/workspace/unsupported-binary.bmp": {
         root: "/workspace",
         sessionKey: "agent:main:main",
-        file: {
-          kind: "read",
+        file: fileInfo("unsupported-binary.bmp", {
           mimeType: "image/bmp",
-          missing: false,
-          name: "unsupported-binary.bmp",
-          path: "unsupported-binary.bmp",
           previewKind: "unsupported",
           size: 4096,
-          workspacePath: "unsupported-binary.bmp",
-        },
+        }),
       },
     } satisfies Record<string, Record<string, unknown>>;
-    const context = await browser.newContext({
-      recordVideo: captureUiProof
-        ? { dir: artifactDir, size: { height: 900, width: 1280 } }
-        : undefined,
-      viewport: { height: 900, width: 1280 },
-    });
-    try {
-      const page = await context.newPage();
-      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+    await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.files.get": {
@@ -640,7 +544,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         await fileRow.locator(".chat-workspace-rail__file-open").click();
       };
       const closePreview = async (filePath: string) => {
-        await page.getByRole("button", { name: `Close tab: ${filePath}`, exact: true }).click();
+        await exactButton(page, `Close tab: ${filePath}`).click();
         await page.locator("openclaw-chat-detail-panel").waitFor({ state: "detached" });
       };
 
@@ -691,9 +595,7 @@ describeControlUiE2e("Control UI chat file links", () => {
           sessionKey: "agent:main:main",
         },
       ]);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("previews skill source on hover, focus, and touch without leaving the chat", async () => {
@@ -747,7 +649,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         const card = page.getByRole("dialog", { name: "Skill file preview" });
         const code = card.getByLabel("Skill source");
         await code.waitFor();
-        await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+        await polledCount(page.locator("openclaw-tooltip[open]")).toBe(0);
         expect(await code.textContent()).toContain("Read the source");
         expect(await code.locator(".skill-file-hovercard__line").count()).toBe(400);
         expect(await code.textContent()).not.toContain("End of the full skill.");
@@ -779,9 +681,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         await page.locator(".sidebar-file-view").waitFor();
         await page.locator(".sidebar-file-view .cm-scroller").hover();
         await page.mouse.wheel(0, 30_000);
-        await expect
-          .poll(() => page.locator(".cm-content").textContent())
-          .toContain("End of the full skill.");
+        await polledText(page.locator(".cm-content")).toContain("End of the full skill.");
         expect((await gateway.getRequests("skills.files.get")).length).toBe(2);
         expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
       } finally {

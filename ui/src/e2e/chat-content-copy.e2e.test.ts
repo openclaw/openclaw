@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { exactButton, polledAttribute, polledCount } from "./chat-presentation.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -14,14 +15,9 @@ const userMarkdown = "Please preserve **this formatting**.\n\nSecond paragraph."
 const code = [
   "",
   "  const lines = [",
-  '    "first",',
-  '    "second",',
-  '    "third",',
-  '    "fourth",',
-  '    "fifth",',
-  '    "sixth",',
-  '    "<copy>",',
-  '    "café",',
+  ...["first", "second", "third", "fourth", "fifth", "sixth", "<copy>", "café"].map(
+    (line) => `    "${line}",`,
+  ),
   "  ];",
   "\tconsole.log(lines);",
   "  ",
@@ -43,14 +39,20 @@ const videoUrl = `data:video/mp4;base64,${readFileSync(
   new URL("./fixtures/video-poster.mp4", import.meta.url),
 ).toString("base64")}`;
 
+async function withClipboard(run: (page: Page) => Promise<void>) {
+  await suite.withPage(createControlUiE2eContextOptions(), async ({ context, page }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(suite.server.baseUrl).origin,
+    });
+    await run(page);
+  });
+}
+
 suite.define(() => {
   it.each(["unavailable", "rejecting"])(
     "copies expanded-table TSV when clipboard.writeText is %s",
     async (clipboardMode) => {
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ context, page }) => {
-        await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-          origin: new URL(suite.server.baseUrl).origin,
-        });
+      await withClipboard(async (page) => {
         await installMockGateway(page, {
           historyMessages: [
             {
@@ -62,7 +64,7 @@ suite.define(() => {
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByRole("button", { name: "Expand table", exact: true }).click();
+        await exactButton(page, "Expand table").click();
         const expandedTable = page.locator(".markdown-table-dialog");
         await expandedTable.waitFor({ state: "visible" });
         await page.evaluate(async (mode) => {
@@ -85,7 +87,7 @@ suite.define(() => {
         await expect
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(tableText);
-        await expect.poll(() => menu.count()).toBe(0);
+        await polledCount(menu).toBe(0);
         expect(await expandedTable.isVisible()).toBe(true);
         await expandedTable
           .getByRole("button", { name: "Close expanded table", exact: true })
@@ -96,10 +98,7 @@ suite.define(() => {
   );
 
   it("copies clicked chat content through the browser clipboard and preserves native controls", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ context, page }) => {
-      await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: new URL(suite.server.baseUrl).origin,
-      });
+    await withClipboard(async (page) => {
       const gateway = await installMockGateway(page, {
         historyMessages: [
           {
@@ -146,7 +145,7 @@ suite.define(() => {
       const menu = page.locator(".chat-reply-context-menu");
       const expectClipboard = async (text: string) => {
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(text);
-        await expect.poll(() => menu.count()).toBe(0);
+        await polledCount(menu).toBe(0);
       };
       const copyFromContextMenu = async (
         target: Locator,
@@ -187,7 +186,7 @@ suite.define(() => {
 
       const table = assistant.locator(".markdown-table");
       await copyFromContextMenu(table.locator("td").first(), "Copy table", tableText);
-      await table.getByRole("button", { name: "Expand table", exact: true }).click();
+      await exactButton(table, "Expand table").click();
       const expandedTable = page.locator(".markdown-table-dialog");
       await expandedTable.waitFor({ state: "visible" });
       await copyFromContextMenu(
@@ -257,7 +256,7 @@ suite.define(() => {
         });
         // Task checkboxes are read-only. Force bypasses enabled-state waiting, not pointer input.
         await control.click({ button: "right", force: true });
-        await expect.poll(() => control.getAttribute("data-context-menu-prevented")).toBe("false");
+        await polledAttribute(control, "data-context-menu-prevented").toBe("false");
         expect(await control.getAttribute("data-context-menu-trusted")).toBe("true");
         expect(await menu.count()).toBe(0);
         await page.keyboard.press("Escape");

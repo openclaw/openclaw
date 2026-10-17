@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { polledCount } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI emoji entry" });
@@ -35,6 +36,11 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const composer = page.locator(selector);
         await composer.waitFor({ state: "visible" });
+        const openMenu = async (text = "") => {
+          await composer.fill(text);
+          await composer.pressSequentially(":smi");
+          await page.getByRole("listbox", { name: /emoji/i }).waitFor({ state: "visible" });
+        };
         await composer.fill(prefix);
         await expect
           .poll(() => composer.evaluate((element) => element.scrollHeight - element.clientHeight))
@@ -59,10 +65,7 @@ suite.define(() => {
         const menu = page.getByRole("listbox", { name: /emoji/i });
         await menu.waitFor({ state: "visible" });
         expect(await menu.getByRole("option").count()).toBeGreaterThan(1);
-        const word = await composer.evaluate((element, draftPrefix) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new Error("Expected composer");
-          }
+        const word = await composer.evaluate((element: HTMLTextAreaElement, draftPrefix) => {
           const style = getComputedStyle(element);
           const context = document.createElement("canvas").getContext("2d")!;
           context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
@@ -116,7 +119,7 @@ suite.define(() => {
         await expect
           .poll(() => composer.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        await expect.poll(() => menu.count()).toBe(0);
+        await polledCount(menu).toBe(0);
         await expect
           .poll(() =>
             anchor.evaluate((element) => element instanceof Element && element.isConnected),
@@ -129,12 +132,9 @@ suite.define(() => {
         await expect.poll(() => composer.inputValue()).toBe("Nice 😄");
 
         await composer.fill("Before :smi after");
-        await composer.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new Error("Expected composer");
-          }
-          element.setSelectionRange(11, 11);
-        });
+        await composer.evaluate((element: HTMLTextAreaElement) =>
+          element.setSelectionRange(11, 11),
+        );
         await composer.press("ArrowLeft");
         await composer.press("ArrowRight");
         await menu.waitFor({ state: "visible" });
@@ -156,21 +156,17 @@ suite.define(() => {
           await composer.fill(literalPrefix);
           await composer.pressSequentially(":");
           await expect.poll(() => composer.inputValue()).toBe(`${literalPrefix}:`);
-          await expect.poll(() => menu.count()).toBe(0);
+          await polledCount(menu).toBe(0);
         }
 
-        await composer.fill("");
-        await composer.pressSequentially(":smi");
-        await menu.waitFor({ state: "visible" });
+        await openMenu();
         await composer.press("Escape");
-        await expect.poll(() => menu.count()).toBe(0);
+        await polledCount(menu).toBe(0);
         await expect.poll(() => composer.inputValue()).toBe(":smi");
-        await composer.fill("");
-        await composer.pressSequentially(":smi");
-        await menu.waitFor({ state: "visible" });
+        await openMenu();
         await page.keyboard.down("Enter");
         await expect.poll(() => composer.inputValue()).toBe("😄");
-        await expect.poll(() => menu.count()).toBe(0);
+        await polledCount(menu).toBe(0);
         await page.keyboard.down("Enter");
         await page.keyboard.up("Enter");
         expect(await composer.inputValue()).toBe("😄");
@@ -199,7 +195,7 @@ suite.define(() => {
       await composer.evaluate((element) => {
         element.scrollTop = 0;
       });
-      await expect.poll(() => menu.count()).toBe(0);
+      await polledCount(menu).toBe(0);
       await composer.dispatchEvent("select");
       expect(await composer.getAttribute("aria-expanded")).not.toBe("true");
       await expect.poll(() => composer.inputValue()).toBe("Context line\n".repeat(50) + ":smi");
