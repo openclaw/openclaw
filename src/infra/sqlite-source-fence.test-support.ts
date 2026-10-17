@@ -6,7 +6,6 @@ import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
 import {
   SOURCE_FENCE_ACCEPTED,
   SQLITE_WORKER_SOURCE_FENCE,
-  type SqliteSourceFence,
   type SqliteSourceFenceIdentity,
 } from "./sqlite-source-fence-contract.js";
 import type { SqliteWorkerPreparedBackend } from "./sqlite-worker-contract.js";
@@ -51,13 +50,6 @@ export type FenceFixtureOperations = {
   };
 };
 
-type FixtureBackend = SqliteWorkerPreparedBackend<FenceFixtureOperations> & {
-  [SQLITE_WORKER_SOURCE_FENCE](command: {
-    type: "persist";
-    input: FenceFixtureCommand;
-  }): SqliteSourceFence;
-};
-
 export const openExistingSqliteWorkerBackend = createSqliteWorkerBackend;
 
 function openBinding(identity: SqliteSourceFenceIdentity, path = identity.physical.canonicalPath) {
@@ -69,7 +61,9 @@ function readRevision(database: ReturnType<typeof openNodeSqliteDatabase>) {
 }
 
 /** Worker-only fault injection keeps barriers at the real native transaction boundary. */
-export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBackend {
+export function createSqliteWorkerBackend(
+  input: FenceFixtureInput,
+): SqliteWorkerPreparedBackend<FenceFixtureOperations> {
   const words: unknown = getEnvironmentData(FENCE_FIXTURE_ENV);
   assert(words instanceof SharedArrayBuffer);
   const barrier = new Int32Array(words);
@@ -119,9 +113,7 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
       try {
         exec(sql);
       } catch (error) {
-        if (sql === "BEGIN IMMEDIATE" && current?.observeRetry) {
-          retryObserved = true;
-        }
+        retryObserved ||= sql === "BEGIN IMMEDIATE" && current?.observeRetry === true;
         throw error;
       }
       if (sql === "ROLLBACK" && retryObserved) {
@@ -141,9 +133,11 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
           const db = resolve(selected);
           validatedSource = db;
           sourceRevision = readRevision(db);
-          if (sourceRevision !== current?.expectedRevision) {
-            throw new Error("Fixture source authority was revoked");
-          }
+          assert.equal(
+            sourceRevision,
+            current?.expectedRevision,
+            "Fixture source authority was revoked",
+          );
           if (current.pause === "validate") {
             pause(1);
           }
@@ -158,9 +152,7 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
       destination
         .prepare("INSERT INTO requests (id, revision) VALUES (?, ?)")
         .run(id, sourceRevision);
-      if (fault === "kernel") {
-        throw new Error("Fixture mutation failed between destination rows");
-      }
+      assert.notEqual(fault, "kernel", "Fixture mutation failed between destination rows");
       destination.prepare("INSERT INTO lifecycles (id) VALUES (?)").run(id);
       const result: FenceFixtureOperations["persist"]["output"] = { id, revision: sourceRevision };
       if (fault === "host-admission") {
@@ -183,11 +175,10 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
       return result;
     },
     assertSettled() {
-      for (const db of databases) {
-        if (db.isOpen && db.isTransaction) {
-          throw new Error("Fixture native transaction did not settle");
-        }
-      }
+      assert(
+        databases.every((db) => !db.isOpen || !db.isTransaction),
+        "Fixture native transaction did not settle",
+      );
     },
     close() {
       for (const db of databases) {

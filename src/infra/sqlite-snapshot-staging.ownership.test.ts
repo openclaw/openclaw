@@ -71,7 +71,7 @@ it("shares one token process across concurrent and nested async snapshot lifetim
   `;
   fs.writeFileSync(preloadPath, preload);
   await withEnvAsync(sqliteWorkerPreloadEnv(preloadPath), async () => {
-    const nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
+    using nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
       throw new Error("snapshot token opened on the host");
     });
     const directories: string[] = [];
@@ -101,18 +101,15 @@ it("shares one token process across concurrent and nested async snapshot lifetim
       expect(tokenPid).toBeGreaterThan(0);
       expect(isPidAlive(tokenPid)).toBe(true);
     } finally {
-      try {
-        // A rejected allocation must not discard successful siblings' cleanup custody.
-        await Promise.allSettled(allocations);
-        for (const directory of directories.toReversed()) {
-          expect.soft(await removeTempDirectoryAsync(directory), directory).toBe(true);
-        }
-      } finally {
-        nativeOpen.mockRestore();
+      // A rejected allocation must not discard successful siblings' cleanup custody.
+      await Promise.allSettled(allocations);
+      for (const directory of directories.toReversed()) {
+        expect.soft(await removeTempDirectoryAsync(directory), directory).toBe(true);
       }
     }
     expect(fs.readdirSync(cache)).toEqual([]);
     expect(isPidAlive(tokenPid)).toBe(false);
+    expect(nativeOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -121,9 +118,8 @@ function createFixture() {
   const cache = path.join(root, "cache");
   const source = path.join(root, "source.sqlite");
   fs.mkdirSync(cache);
-  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(source);
+  using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(source);
   database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  database.close();
   return { root, cache, source };
 }
 
@@ -136,18 +132,12 @@ async function reclaimWithLog(root: string, cache: string) {
 }
 
 function drainReclamation(cache: string, report?: (message: string) => void) {
-  for (const _ of reclaimAbandonedSqliteSnapshots(cache, report)) {
-    // The generator bounds each reclamation pass.
-  }
+  Array.from(reclaimAbandonedSqliteSnapshots(cache, report));
 }
 
 function assertReadable(location: string) {
-  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
-  try {
-    expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
-  } finally {
-    database.close();
-  }
+  using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+  expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
 }
 
 function ageSnapshotTree(directory: string, ageMs = 25 * 60 * 60 * 1000): void {

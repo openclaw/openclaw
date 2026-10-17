@@ -9,6 +9,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createRetainedOperation,
   flatMapRetainedOperation,
+  type NativeWorkerEvents,
   type RetainedOperation,
   type RetainedOutcome,
 } from "@openclaw/worker-runtime/lifecycle";
@@ -37,18 +38,15 @@ import type {
   WorkerTaskPoolOwnerOptions,
 } from "./worker-task-pool.types.js";
 
-type ReleaseGate = {
-  ordinal: number;
+type Gate = {
   entered: ReturnType<typeof createDeferredCore<void>>;
   open: boolean;
   advance?: () => void;
 };
-type ReplyGate = {
+type ReleaseGate = Gate & { ordinal: number };
+type ReplyGate = Gate & {
   kind: "allocated" | "prepared";
-  entered: ReturnType<typeof createDeferredCore<void>>;
-  open: boolean;
   directory?: string;
-  deliver?: () => void;
 };
 const requestContext = new AsyncLocalStorage<string>();
 const observation = {
@@ -62,21 +60,13 @@ const observation = {
   snapshots: new Set<() => { workers: number; activeTasks: number; pendingTasks: number }>(),
 };
 
-type NativeSubscription =
-  | [event: "message", listener: (message: unknown) => void]
-  | [event: "error" | "messageerror", listener: (error: Error) => void]
-  | [event: "started", listener: () => void]
-  | [event: "execution-exit", listener: (code: number | undefined) => void]
-  | [event: "exit", listener: (code: number | undefined) => void];
+type NativeSubscription = {
+  [Event in keyof NativeWorkerEvents]: [Event, (...args: NativeWorkerEvents[Event]) => void];
+}[keyof NativeWorkerEvents];
 
 function observeNativeReplies(native: RetainedNativeWorker): RetainedNativeWorker {
   const on = native.on.bind(native);
-  function listen(event: "message", listener: (message: unknown) => void): unknown;
-  function listen(event: "error" | "messageerror", listener: (error: Error) => void): unknown;
-  function listen(event: "started", listener: () => void): unknown;
-  function listen(event: "execution-exit", listener: (code: number | undefined) => void): unknown;
-  function listen(event: "exit", listener: (code: number | undefined) => void): unknown;
-  function listen(...[event, listener]: NativeSubscription): unknown {
+  const listen: RetainedNativeWorker["on"] = (...[event, listener]: NativeSubscription) => {
     if (event !== "message") {
       // EventEmitter.once also forwards its exit subscription through this method.
       return Reflect.apply(on, native, [event, listener]);
@@ -86,7 +76,7 @@ function observeNativeReplies(native: RetainedNativeWorker): RetainedNativeWorke
       if (
         gate &&
         !gate.open &&
-        !gate.deliver &&
+        !gate.advance &&
         isRecord(message) &&
         message.status === "ok" &&
         typeof message.taskId === "number" &&
@@ -95,13 +85,16 @@ function observeNativeReplies(native: RetainedNativeWorker): RetainedNativeWorke
         typeof message.value.directory === "string"
       ) {
         gate.directory = message.value.directory;
-        gate.deliver = () => listener(message);
+        gate.advance = () => {
+          gate.advance = undefined;
+          listener(message);
+        };
         gate.entered.resolve();
         return;
       }
       listener(message);
     });
-  }
+  };
   native.on = listen;
   return native;
 }
@@ -195,19 +188,10 @@ function holdRelease(ordinal: number): ReleaseGate {
   return gate;
 }
 
-function releaseGate(gate: ReleaseGate | undefined): void {
+function releaseGate(gate: Gate | undefined): void {
   if (gate) {
     gate.open = true;
     gate.advance?.();
-  }
-}
-
-function releaseReplyGate(gate: ReplyGate | undefined): void {
-  if (gate) {
-    gate.open = true;
-    const deliver = gate.deliver;
-    gate.deliver = undefined;
-    deliver?.();
   }
 }
 
@@ -270,7 +254,7 @@ beforeEach(() => {
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    releaseReplyGate(observation.replyGate);
+    releaseGate(observation.replyGate);
     releaseGate(observation.gate);
     await disposeRequests();
     vi.restoreAllMocks();
@@ -285,24 +269,42 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
 
 function createProbe(root: string, name = "source", value = "preserved") {
   const filename = path.join(root, `${name}.sqlite`);
-  const database = new (requireNodeSqlite().DatabaseSync)(filename);
-  try {
-    database.exec("CREATE TABLE probe(value TEXT)");
-    database.prepare("INSERT INTO probe VALUES(?)").run(value);
-  } finally {
-    database.close();
-  }
+  using database = new (requireNodeSqlite().DatabaseSync)(filename);
+  database.exec("CREATE TABLE probe(value TEXT)");
+  database.prepare("INSERT INTO probe VALUES(?)").run(value);
   return filename;
+}
+
+function fixture(cache = false) {
+  const root = directories.make("staging-owner-");
+  if (cache) {
+    const directory = path.join(root, "cache");
+    fs.mkdirSync(directory);
+    vi.stubEnv("XDG_CACHE_HOME", directory);
+  }
+  const controller = new AbortController();
+  const reason = new Error("snapshot caller canceled");
+  const abort = () => controller.abort(reason);
+  cancellations.push(abort);
+  return { root, signal: controller.signal, reason, abort };
+}
+
+function expectEntries(root: string, ...filenames: string[]) {
+  expect(fs.readdirSync(root).toSorted()).toEqual(
+    filenames.map((name) => path.basename(name)).toSorted(),
+  );
+}
+
+function expectSiblingAlive(sentinel: string) {
+  expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
+  expect([...observation.snapshots].some((snapshot) => snapshot().workers === 1)).toBe(true);
 }
 
 it.each(["pre-aborted", "queued", "accepted"] as const)(
   "sends preparation cancellation only after dispatch (%s)",
   async (phase) => {
-    const root = directories.make("staging-prepare-cancel-");
+    const { root, signal, reason, abort } = fixture();
     const pathname = createProbe(root);
-    const controller = new AbortController();
-    const reason = new Error("snapshot caller canceled");
-    cancellations.push(() => controller.abort(reason));
     const gate = phase === "queued" ? holdRelease(1) : undefined;
     const first = gate ? allocate(root) : undefined;
     // oxlint-disable-next-line typescript/unbound-method -- call keeps the real MessagePort receiver.
@@ -320,24 +322,23 @@ it.each(["pre-aborted", "queued", "accepted"] as const)(
         message.input.type === "prepare" &&
         message.input.abortPort instanceof MessagePort
       ) {
-        // The genuine task send has transferred its cancellation endpoint.
-        controller.abort(reason);
+        abort();
       }
     });
     if (gate && first) {
       await waitForGate(gate, first);
     }
     if (phase === "pre-aborted") {
-      controller.abort(reason);
+      abort();
     }
-    const request = startPreparation(root, pathname, controller.signal);
+    const request = startPreparation(root, pathname, signal);
     const rejected =
       phase === "accepted"
         ? expect(request.result).rejects.toThrow("SQLite snapshot preparation stopped")
         : expect(request.result).rejects.toBe(reason);
     if (phase === "queued") {
       expect(observation.admitted).toHaveLength(1);
-      controller.abort(reason);
+      abort();
     }
     releaseGate(gate);
     await rejected;
@@ -348,19 +349,16 @@ it.each(["pre-aborted", "queued", "accepted"] as const)(
       observation.admitted.filter((input) => isRecord(input) && input.type === "prepare"),
     ).toHaveLength(phase === "accepted" ? 1 : 0);
     await disposeRequests();
-    expect(fs.readdirSync(root)).toEqual([path.basename(pathname)]);
+    expectEntries(root, pathname);
   },
 );
 
 it.each(["queued", "accepted"] as const)(
   "settles %s allocation cancellation without retiring a sibling token",
   async (phase) => {
-    const root = directories.make("staging-cancel-custody-");
+    const { root, signal, reason, abort } = fixture();
     const gate = phase === "queued" ? holdRelease(1) : undefined;
     let replyGate: ReplyGate | undefined;
-    const controller = new AbortController();
-    const reason = new Error("snapshot caller canceled");
-    cancellations.push(() => controller.abort(reason));
     const first = allocate(root);
     if (gate) {
       await waitForGate(gate, first);
@@ -368,7 +366,7 @@ it.each(["queued", "accepted"] as const)(
       await first;
       replyGate = holdReply("allocated");
     }
-    const second = allocate(root, controller.signal);
+    const second = allocate(root, signal);
     const rejected = expect(second).rejects.toBe(reason);
     if (replyGate) {
       await waitForGate(replyGate, second);
@@ -382,55 +380,48 @@ it.each(["queued", "accepted"] as const)(
       expect(observation.taskReads.get(2)?.()).toEqual({ status: "pending" });
       expect(replyGate.directory).toBeDefined();
       expect(fs.existsSync(replyGate.directory!)).toBe(true);
-      expect(fs.readdirSync(root).toSorted()).toEqual(
-        [observation.allocated[0]!, replyGate.directory!]
-          .map((directory) => path.basename(directory))
-          .toSorted(),
-      );
+      expectEntries(root, observation.allocated[0]!, replyGate.directory!);
     }
     const sibling = observation.allocated[0]!;
     const sentinel = path.join(sibling, "retained.txt");
     fs.writeFileSync(sentinel, "sibling snapshot bytes");
-    controller.abort(reason);
+    abort();
     await nextTurn();
     if (replyGate) {
       expect(observation.taskReads.get(2)?.()).toEqual({ status: "pending" });
     }
-    expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
-    expect([...observation.snapshots].some((snapshot) => snapshot().workers === 1)).toBe(true);
+    expectSiblingAlive(sentinel);
     releaseGate(gate);
-    releaseReplyGate(replyGate);
+    releaseGate(replyGate);
     expect(await first).toBe(sibling);
     await rejected;
     expect(observation.admitted).toHaveLength(phase === "queued" ? 1 : 2);
     expect(observation.allocated).toHaveLength(phase === "queued" ? 1 : 2);
-    expect(fs.readFileSync(sentinel, "utf8")).toBe("sibling snapshot bytes");
-    expect(fs.readdirSync(root)).toEqual([path.basename(sibling)]);
-    expect([...observation.snapshots].some((snapshot) => snapshot().workers === 1)).toBe(true);
+    expectSiblingAlive(sentinel);
+    expectEntries(root, sibling);
     await disposeRequests();
-    expect(fs.readdirSync(root)).toEqual([]);
+    expectEntries(root);
   },
 );
 
 it("preserves allocation launch facts while waiting behind another token command", async () => {
-  const root = directories.make("staging-captured-launch-");
+  const { root } = fixture();
   const changedCwd = path.join(root, "changed-cwd");
   fs.mkdirSync(changedCwd);
   const originalCwd = process.cwd();
   const cwd = vi.spyOn(process, "cwd");
   vi.stubEnv("OPENCLAW_SNAPSHOT_HOST_CAPTURE_FIXTURE", "captured");
   const gate = holdRelease(1);
-  const first = allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
-  let second: ReturnType<typeof allocateWorkerOwnedSqliteSnapshotDirectory> | undefined;
+  const allocations = [allocateWorkerOwnedSqliteSnapshotDirectory(root, false)];
   try {
-    await waitForGate(gate, first);
-    second = allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
+    await waitForGate(gate, allocations[0]!);
+    allocations.push(allocateWorkerOwnedSqliteSnapshotDirectory(root, false));
     expect(observation.tasks).toBe(2);
     expect(observation.admitted).toHaveLength(1);
     cwd.mockReturnValue(changedCwd);
     vi.stubEnv("OPENCLAW_SNAPSHOT_HOST_CAPTURE_FIXTURE", "changed-while-queued");
     releaseGate(gate);
-    const owned = await Promise.all([first, second]);
+    const owned = await Promise.all(allocations);
     expect(observation.admitted).toHaveLength(2);
     for (const command of observation.admitted) {
       expect(command).toMatchObject({
@@ -446,20 +437,17 @@ it("preserves allocation launch facts while waiting behind another token command
     cwd.mockRestore();
     vi.unstubAllEnvs();
     releaseGate(gate);
-    for (const result of await Promise.allSettled([first, second])) {
-      if (result.status === "fulfilled" && result.value) {
+    for (const result of await Promise.allSettled(allocations)) {
+      if (result.status === "fulfilled") {
         await result.value.startRetire().result;
       }
     }
   }
-  expect(fs.readdirSync(root)).toEqual(["changed-cwd"]);
+  expectEntries(root, "changed-cwd");
 });
 
 it("services a queued snapshot while the earlier caller's Promise reactions are blocked", async () => {
-  const root = directories.make("staging-cross-request-progress-");
-  const cache = path.join(root, "cache");
-  fs.mkdirSync(cache);
-  vi.stubEnv("XDG_CACHE_HOME", cache);
+  const { root } = fixture(true);
   const sqlite = requireNodeSqlite();
   const sources = ["first", "second"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
@@ -468,21 +456,18 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
     startSqliteReadOnlyLocationAsync(sources[0]!, { preserveSourceArtifacts: true }),
   );
   let firstCallbackRan = false;
-  void first.result.then(
-    () => {
-      firstCallbackRan = true;
-    },
-    () => {
-      firstCallbackRan = true;
-    },
-  );
-  let second: ReturnType<typeof startSqliteReadOnlyLocationAsync> | undefined;
+  const markFirstCallback = () => {
+    firstCallbackRan = true;
+  };
+  void first.result.then(markFirstCallback, markFirstCallback);
+  const requests = [first];
   try {
     await waitForGate(replyGate, first.result);
     expect(observation.taskReads.get(1)?.()).toEqual({ status: "pending" });
-    second = requestContext.run("second", () =>
+    const second = requestContext.run("second", () =>
       startSqliteReadOnlyLocationAsync(sources[1]!, { preserveSourceArtifacts: true }),
     );
+    requests.push(second);
     second.service();
     expect(observation.tasks).toBe(2);
     expect(observation.admitted).toHaveLength(1);
@@ -501,7 +486,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
     syncBuiltinESMExports();
     let outcome: RetainedOutcome<RetainedPreparedSqliteReadOnlyLocation>;
     try {
-      releaseReplyGate(replyGate);
+      releaseGate(replyGate);
       expect(observation.taskReads.get(1)?.().status).toBe("fulfilled");
       const barrier = new Int32Array(new SharedArrayBuffer(4));
       const deadline = performance.now() + 10_000;
@@ -517,9 +502,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
       sqlite.DatabaseSync = originalConstructor;
       syncBuiltinESMExports();
     }
-    expect(microtaskRan).toBe(false);
-    expect(firstCallbackRan).toBe(false);
-    expect(nativeConstructions).toBe(0);
+    expect([microtaskRan, firstCallbackRan, nativeConstructions]).toEqual([false, false, 0]);
     if (outcome.status !== "fulfilled") {
       throw new Error("Queued snapshot did not progress without the earlier caller's reactions", {
         cause: outcome.status === "rejected" ? outcome.error : undefined,
@@ -527,21 +510,16 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
     }
     expect(observation.releaseContexts.get(1)).toBe("first");
     expect(observation.releaseContexts.get(2)).toBe("second");
-    const reader = new sqlite.DatabaseSync(outcome.value.location, { readOnly: true });
-    try {
+    {
+      using reader = new sqlite.DatabaseSync(outcome.value.location, { readOnly: true });
       expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "second" });
-    } finally {
-      reader.close();
     }
     expect(sources.map((filename) => fs.readFileSync(filename))).toEqual(original);
   } finally {
-    releaseReplyGate(replyGate);
+    releaseGate(replyGate);
     // Yield only after the blocked-host assertions; both accepted owners must then settle.
-    const outcomes = await Promise.allSettled([first.result, ...(second ? [second.result] : [])]);
-    const closed = await Promise.allSettled([
-      first.startClose().result,
-      ...(second ? [second.startClose().result] : []),
-    ]);
+    const outcomes = await Promise.allSettled(requests.map((request) => request.result));
+    const closed = await Promise.allSettled(requests.map((request) => request.startClose().result));
     for (const closure of closed) {
       expect(closure).toMatchObject({ status: "fulfilled", value: undefined });
     }
@@ -554,16 +532,15 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
 });
 
 it("retains an early preparation close until its original accepted result joins", async () => {
-  const root = directories.make("staging-request-early-close-");
+  const { root } = fixture();
   const source = createProbe(root, "source", "early");
   const gate = holdReply("prepared");
   const request = startPreparation(root, source);
   await waitForGate(gate, request.result);
   const closing = request.startClose();
-  expect(request.read().status).toBe("pending");
-  expect(closing.read().status).toBe("pending");
+  expect([request.read().status, closing.read().status]).toEqual(["pending", "pending"]);
   expect(fs.existsSync(gate.directory!)).toBe(true);
-  releaseReplyGate(gate);
+  releaseGate(gate);
   const reply = await request.result;
   expect(reply.type).toBe("prepared");
   await closing.result;
@@ -574,20 +551,28 @@ it("retains an early preparation close until its original accepted result joins"
 });
 
 it("keeps an unbound snapshot reader alive across retained generation close and subsequent admission", async () => {
-  const root = directories.make("staging-generation-reader-");
-  const cache = path.join(root, "cache");
-  fs.mkdirSync(cache);
-  vi.stubEnv("XDG_CACHE_HOME", cache);
+  const { root, signal, abort } = fixture(true);
   const source = createProbe(root);
   const original = fs.readFileSync(source);
   const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging");
-  const resolveGeneration = (name: string) => (url: URL) => {
-    if (url.href !== stagingUrl.href) {
-      return url;
-    }
-    const retained = new URL(url);
-    retained.searchParams.set("snapshot-test-generation", name);
-    return retained;
+  const released = new Set<string>();
+  const inGeneration = (name: string, run: () => Promise<void>) => {
+    return withRuntimeWorkerGeneration(
+      async (bind) => {
+        bind((url) => {
+          if (url.href !== stagingUrl.href) {
+            return url;
+          }
+          const retained = new URL(url);
+          retained.searchParams.set("snapshot-test-generation", name);
+          return retained;
+        });
+        await run();
+      },
+      async () => {
+        released.add(name);
+      },
+    );
   };
   const readProbe = (location: string) => {
     const result = spawnSync(
@@ -608,32 +593,24 @@ it("keeps an unbound snapshot reader alive across retained generation close and 
     return JSON.parse(result.stdout);
   };
   const unbound = AsyncLocalStorage.snapshot();
-  const controller = new AbortController();
-  const options = { preserveSourceArtifacts: true, signal: controller.signal };
+  const options = { preserveSourceArtifacts: true, signal };
   const gate = holdRelease(1);
   const firstReady = createDeferredCore<RetainedPreparedSqliteReadOnlyLocation>();
   const finishFirst = createDeferredCore();
-  let firstReleased = false;
-  const firstGeneration = withRuntimeWorkerGeneration(
-    async (bind) => {
-      try {
-        bind(resolveGeneration("first"));
-        const prepared = await startSqliteReadOnlyLocationAsync(source, options).result;
-        firstReady.resolve(prepared);
-        await finishFirst.promise;
-        expect(await prepared.cleanupAsync()).toBe(true);
-      } catch (error) {
-        firstReady.reject(error);
-        throw error;
-      }
-    },
-    async () => {
-      firstReleased = true;
-    },
-  );
+  const firstGeneration = inGeneration("first", async () => {
+    try {
+      const prepared = await startSqliteReadOnlyLocationAsync(source, options).result;
+      firstReady.resolve(prepared);
+      await finishFirst.promise;
+      expect(await prepared.cleanupAsync()).toBe(true);
+    } catch (error) {
+      firstReady.reject(error);
+      throw error;
+    }
+  });
   const firstSettled = firstGeneration.then(
-    () => ({ released: true }),
-    (error: unknown) => ({ error }),
+    () => true,
+    () => false,
   );
   let second: ReturnType<typeof startSqliteReadOnlyLocationAsync> | undefined;
   let releaseReader: (() => void) | undefined;
@@ -647,44 +624,36 @@ it("keeps an unbound snapshot reader alive across retained generation close and 
     );
     finishFirst.resolve();
     await expect(firstGeneration).resolves.toBeUndefined();
-    expect(firstReleased).toBe(true);
+    expect(released.has("first")).toBe(true);
     expect(readProbe(survivor.location)).toEqual({ value: "preserved" });
     releaseReader();
     releaseReader = undefined;
     expect(await survivor.cleanupAsync()).toBe(true);
     expect(fs.existsSync(survivor.location)).toBe(false);
 
-    let subsequentReleased = false;
-    await withRuntimeWorkerGeneration(
-      async (bind) => {
-        bind(resolveGeneration("subsequent"));
-        const prepared = await startSqliteReadOnlyLocationAsync(source, options).result;
-        try {
-          expect(readProbe(prepared.location)).toEqual({ value: "preserved" });
-        } finally {
-          expect(await prepared.cleanupAsync()).toBe(true);
-        }
-      },
-      async () => {
-        subsequentReleased = true;
-      },
-    );
-    expect(subsequentReleased).toBe(true);
+    await inGeneration("subsequent", async () => {
+      const prepared = await startSqliteReadOnlyLocationAsync(source, options).result;
+      try {
+        expect(readProbe(prepared.location)).toEqual({ value: "preserved" });
+      } finally {
+        expect(await prepared.cleanupAsync()).toBe(true);
+      }
+    });
+    expect(released.has("subsequent")).toBe(true);
     expect(fs.readFileSync(source)).toEqual(original);
   } finally {
     releaseGate(gate);
     finishFirst.resolve();
     releaseReader?.();
-    controller.abort(new Error("Snapshot generation fixture stopped"));
+    abort();
     for (const result of await Promise.allSettled([firstReady.promise, second?.result])) {
       if (result.status === "fulfilled" && result.value) {
         expect(await result.value.cleanupAsync()).toBe(true);
       }
     }
-    const generation = await firstSettled;
-    if ("error" in generation) {
+    if (!(await firstSettled)) {
       // A failed generation stays retained even after its snapshot tokens later join.
-      expect(firstReleased).toBe(false);
+      expect(released.has("first")).toBe(false);
     }
   }
 });

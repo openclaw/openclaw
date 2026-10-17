@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readSqliteSchemaCatalog } from "../../scripts/lib/sqlite-schema-catalog.mts";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../daemon/runtime-pin-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../state/openclaw-agent-transcript-fts-schema-source.js";
@@ -8,12 +8,11 @@ import {
   withSqliteForeignKeysDisabled,
 } from "./sqlite-strict.js";
 
-const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
+const unchanged = { migratedTables: [] };
 
 function createDatabase(schema = ""): import("node:sqlite").DatabaseSync {
   const sqlite = requireNodeSqlite();
   const database = new sqlite.DatabaseSync(":memory:");
-  openDatabases.push(database);
   database.exec(schema);
   return database;
 }
@@ -40,63 +39,58 @@ function strictSchema(schema: string) {
     .replace(/\);/g, ") STRICT;");
 }
 
-function readStrictFlag(database: import("node:sqlite").DatabaseSync, tableName: string): number {
-  const row = database
-    .prepare("SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?")
-    .get(tableName) as { strict?: unknown } | undefined;
-  return Number(row?.strict ?? -1);
+function strictFlags(database: import("node:sqlite").DatabaseSync, ...tables: string[]) {
+  const statement = database.prepare(
+    "SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?",
+  );
+  return tables.map((table) => statement.get(table)?.strict ?? -1);
 }
 
 function catalogMigrationOptions(schemaSql: string, useCatalog: boolean) {
   if (!useCatalog) {
     return {};
   }
-  return { expectedSchema: readSqliteSchemaCatalog(createDatabase(schemaSql)) };
+  using database = createDatabase(schemaSql);
+  return { expectedSchema: readSqliteSchemaCatalog(database) };
 }
 
-afterEach(() => {
-  for (const database of openDatabases.splice(0)) {
-    if (database.isOpen) {
-      database.close();
-    }
-  }
-});
+type RejectedSchema = Record<"table" | "before" | "after" | "error", string>;
 
 describe("withSqliteForeignKeysDisabled", () => {
   it.each([0, 1])("restores previous enforcement %i after success and failure", (enabled) => {
-    const database = createDatabase(`PRAGMA foreign_keys = ${enabled};`);
+    using database = createDatabase(`PRAGMA foreign_keys = ${enabled};`);
     const operation = () => {
-      expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+      expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: 0 });
       return 42;
     };
     expect(withSqliteForeignKeysDisabled(database, operation)).toBe(42);
-    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: enabled });
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: enabled });
     expect(() =>
       withSqliteForeignKeysDisabled(database, () => {
         operation();
         throw new Error("staging failed");
       }),
     ).toThrow("staging failed");
-    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: enabled });
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: enabled });
   });
 
   it("rejects an active transaction before invoking the callback", () => {
-    const database = createDatabase("PRAGMA foreign_keys = ON; BEGIN;");
+    using database = createDatabase("PRAGMA foreign_keys = ON; BEGIN;");
     let called = false;
     expect(() => withSqliteForeignKeysDisabled(database, () => (called = true))).toThrow(
       "cannot change inside a transaction",
     );
     expect(called).toBe(false);
-    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
     database.exec("ROLLBACK;");
   });
 
   it("rejects asynchronous work and restores enforcement", () => {
-    const database = createDatabase("PRAGMA foreign_keys = ON;");
+    using database = createDatabase("PRAGMA foreign_keys = ON;");
     expect(() => withSqliteForeignKeysDisabled(database, async () => 42)).toThrow(
       "must be synchronous",
     );
-    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
   });
 });
 
@@ -142,7 +136,7 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it("keeps database-local indexes and triggers", () => {
-    const database = createDatabase(`
+    using database = createDatabase(`
       CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE item_audit (item_id INTEGER NOT NULL, action TEXT NOT NULL);
       CREATE UNIQUE INDEX items_name_custom ON items(name);
@@ -173,9 +167,8 @@ describe("migrateSqliteSchemaToStrict", () => {
       CREATE TABLE counters (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);
       CREATE TABLE events (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL);
     `;
-    const database = createDatabase(`
-      CREATE TABLE counters (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);
-      CREATE TABLE events (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL) STRICT;
+    using database =
+      createDatabase(`${schema.replace("amount INTEGER NOT NULL);", "amount INTEGER NOT NULL) STRICT;")}
       INSERT INTO counters (id, value) VALUES (1, 0);
       CREATE VIEW counter_totals AS SELECT id, value FROM counters;
       CREATE TRIGGER events_update_counter AFTER INSERT ON events BEGIN
@@ -194,7 +187,7 @@ describe("migrateSqliteSchemaToStrict", () => {
   });
 
   it.each([false, true])("preserves AUTOINCREMENT high-water marks (catalog=%s)", (useCatalog) => {
-    const database = createDatabase(`
+    using database = createDatabase(`
       CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);
       INSERT INTO entries (value) VALUES ('first'), ('second'), ('third');
       DELETE FROM entries WHERE id = 3;
@@ -206,7 +199,7 @@ describe("migrateSqliteSchemaToStrict", () => {
     migrate(database, schema, catalogMigrationOptions(schema, useCatalog));
     database.prepare("INSERT INTO entries (value) VALUES (?)").run("fourth");
 
-    expect(database.prepare("SELECT id, value FROM entries ORDER BY id").all()).toEqual([
+    expect(rows(database, "SELECT id, value FROM entries ORDER BY id")).toEqual([
       { id: 1, value: "first" },
       { id: 2, value: "second" },
       { id: 41, value: "fourth" },
@@ -223,7 +216,7 @@ describe("migrateSqliteSchemaToStrict", () => {
         CREATE TABLE integer_items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE without_items (id TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
       `;
-      const database = createDatabase(
+      using database = createDatabase(
         schema +
           `
         INSERT INTO implicit_items (rowid, value) VALUES (100, 'implicit');
@@ -260,34 +253,22 @@ describe("migrateSqliteSchemaToStrict", () => {
     ${"rowid aliases"}      | ${"aliases"} | ${"rowid TEXT, _rowid_ TEXT, oid TEXT"}       | ${"rowid TEXT, _rowid_ TEXT, oid TEXT"}          | ${"shadows every rowid alias"}
     ${"rowid model change"} | ${"entries"} | ${"id TEXT PRIMARY KEY, value TEXT NOT NULL"} | ${"id INTEGER PRIMARY KEY, value TEXT NOT NULL"} | ${"changes rowid storage from implicit to integer-primary-key"}
     ${"column drift"}       | ${"entries"} | ${"id TEXT PRIMARY KEY, obsolete TEXT"}       | ${"id TEXT PRIMARY KEY, current TEXT"}           | ${"SQLite table entries does not match its canonical columns"}
-  `(
-    "rejects $name",
-    ({
-      table,
-      before,
-      after,
-      error,
-    }: {
-      table: string;
-      before: string;
-      after: string;
-      error: string;
-    }) => {
-      const database = createDatabase(`CREATE TABLE ${table} (${before});`);
-      expect(() =>
-        migrate(database, `CREATE TABLE IF NOT EXISTS ${table} (${after}) STRICT;`),
-      ).toThrow(error);
-      expect(readStrictFlag(database, table)).toBe(0);
-      if (before.includes("obsolete")) {
-        expect(
-          rows(database, "SELECT name FROM pragma_table_info('entries') ORDER BY cid"),
-        ).toEqual([{ name: "id" }, { name: "obsolete" }]);
-      }
-    },
-  );
+  `("rejects $name", ({ table, before, after, error }: RejectedSchema) => {
+    using database = createDatabase(`CREATE TABLE ${table} (${before});`);
+    expect(() =>
+      migrate(database, `CREATE TABLE IF NOT EXISTS ${table} (${after}) STRICT;`),
+    ).toThrow(error);
+    expect(strictFlags(database, table)).toEqual([0]);
+    if (before.includes("obsolete")) {
+      expect(rows(database, "SELECT name FROM pragma_table_info('entries') ORDER BY cid")).toEqual([
+        { name: "id" },
+        { name: "obsolete" },
+      ]);
+    }
+  });
 
   it.each([false, true])("rolls back a canonical type violation (catalog=%s)", (useCatalog) => {
-    const database = createDatabase(
+    using database = createDatabase(
       "PRAGMA foreign_keys = ON; CREATE TABLE counters (id TEXT, value TEXT);",
     );
     database.prepare("INSERT INTO counters (id, value) VALUES (?, ?)").run("one", "not-a-number");
@@ -297,51 +278,43 @@ describe("migrateSqliteSchemaToStrict", () => {
       "Failed migrating SQLite table counters to STRICT",
     );
 
-    expect(readStrictFlag(database, "counters")).toBe(0);
-    expect(database.prepare("SELECT id, value FROM counters").get()).toEqual({
+    expect(strictFlags(database, "counters")).toEqual([0]);
+    expect(query(database, "SELECT id, value FROM counters")).toEqual({
       id: "one",
       value: "not-a-number",
     });
-    expect(database.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(query(database, "PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
   });
 
   it("rolls back when existing rows violate a foreign key", () => {
-    const database = createDatabase(`
-      PRAGMA foreign_keys = OFF;
+    const schema = `
       CREATE TABLE parents (id INTEGER PRIMARY KEY);
       CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id));
+    `;
+    using database = createDatabase(`PRAGMA foreign_keys = OFF; ${schema}
       INSERT INTO children (id, parent_id) VALUES (1, 99);
       PRAGMA foreign_keys = ON;
     `);
 
-    expect(() =>
-      migrate(
-        database,
-        `
-          CREATE TABLE IF NOT EXISTS parents (id INTEGER PRIMARY KEY) STRICT;
-          CREATE TABLE IF NOT EXISTS children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id)) STRICT;
-        `,
-      ),
-    ).toThrow("foreign_key_check failed");
+    expect(() => migrate(database, strictSchema(schema))).toThrow("foreign_key_check failed");
 
-    expect(readStrictFlag(database, "parents")).toBe(0);
-    expect(readStrictFlag(database, "children")).toBe(0);
-    expect(database.prepare("SELECT * FROM children").get()).toEqual({ id: 1, parent_id: 99 });
+    expect(strictFlags(database, "parents", "children")).toEqual([0, 0]);
+    expect(query(database, "SELECT * FROM children")).toEqual({ id: 1, parent_id: 99 });
   });
 
   it("rejects canonical schemas that still contain non-STRICT tables", () => {
-    const database = createDatabase();
+    using database = createDatabase();
 
     expect(() =>
       migrate(database, "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY);"),
     ).toThrow("Canonical SQLite schema contains non-STRICT tables: entries");
-    expect(database.prepare("PRAGMA table_list").all()).not.toContainEqual(
+    expect(rows(database, "PRAGMA table_list")).not.toContainEqual(
       expect.objectContaining({ name: "entries" }),
     );
   });
 
   it("ignores virtual tables while migrating ordinary tables", () => {
-    const database = createDatabase(`
+    using database = createDatabase(`
       CREATE TABLE documents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
       CREATE VIRTUAL TABLE documents_fts USING fts5(body);
       INSERT INTO documents (id, body) VALUES (1, 'hello');
@@ -357,56 +330,50 @@ describe("migrateSqliteSchemaToStrict", () => {
     );
 
     expect(result.migratedTables).toEqual(["documents"]);
-    expect(readStrictFlag(database, "documents")).toBe(1);
-    expect(database.prepare("SELECT rowid, body FROM documents_fts").all()).toEqual([
+    expect(strictFlags(database, "documents")).toEqual([1]);
+    expect(rows(database, "SELECT rowid, body FROM documents_fts")).toEqual([
       { rowid: 1, body: "hello" },
     ]);
   });
 
   it("is idempotent once every canonical table is STRICT", () => {
-    const database = createDatabase();
+    using database = createDatabase();
     const schema = "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, value BLOB) STRICT;";
     database.exec(schema);
-    database.prepare("INSERT INTO entries (id, value) VALUES (?, ?)").run("one", null);
+    database.exec("INSERT INTO entries (id, value) VALUES ('one', NULL);");
 
-    expect(migrate(database, schema)).toEqual({ migratedTables: [] });
-    expect(database.prepare("SELECT id, value FROM entries").get()).toEqual({
+    expect(migrate(database, schema)).toEqual(unchanged);
+    expect(query(database, "SELECT id, value FROM entries")).toEqual({
       id: "one",
       value: null,
     });
   });
 
   it("installs a generated schema once and retains data on readmission", () => {
-    const database = createDatabase();
+    using database = createDatabase();
     const options = { expectedSchema: DAEMON_RUNTIME_PIN_SCHEMA_SQL };
-    expect(migrate(database, DAEMON_RUNTIME_PIN_SCHEMA_SQL, options)).toEqual({
-      migratedTables: [],
-    });
+    expect(migrate(database, DAEMON_RUNTIME_PIN_SCHEMA_SQL, options)).toEqual(unchanged);
     database
       .prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)")
       .run("runtime", '{"version":"synthetic"}', 123);
-    expect(migrate(database, DAEMON_RUNTIME_PIN_SCHEMA_SQL, options)).toEqual({
-      migratedTables: [],
-    });
-    expect(database.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([
+    expect(migrate(database, DAEMON_RUNTIME_PIN_SCHEMA_SQL, options)).toEqual(unchanged);
+    expect(rows(database, "SELECT * FROM daemon_runtime_pins")).toEqual([
       { state_key: "runtime", value_json: '{"version":"synthetic"}', updated_at_ms: 123 },
     ]);
   });
 
   it("repairs generated-schema indexes when the caller does not own object creation", () => {
-    const database = createDatabase();
+    using database = createDatabase();
     database.exec(DEPLOYED_FTS_ROWS_SCHEMA);
     database.exec("DROP INDEX idx_agent_transcript_fts_rows_session;");
-    expect(migrate(database, DEPLOYED_FTS_ROWS_SCHEMA)).toEqual({
-      migratedTables: [],
-    });
-    expect(database.prepare("PRAGMA index_list(session_transcript_fts_rows)").all()).toContainEqual(
+    expect(migrate(database, DEPLOYED_FTS_ROWS_SCHEMA)).toEqual(unchanged);
+    expect(rows(database, "PRAGMA index_list(session_transcript_fts_rows)")).toContainEqual(
       expect.objectContaining({ name: "idx_agent_transcript_fts_rows_session" }),
     );
   });
 
   it("creates missing catalog tables while preserving existing rows during migration", () => {
-    const database = createDatabase(
+    using database = createDatabase(
       "CREATE TABLE entries (id INTEGER PRIMARY KEY); INSERT INTO entries VALUES (7);",
     );
     const schema = `
@@ -416,8 +383,7 @@ describe("migrateSqliteSchemaToStrict", () => {
     expect(migrate(database, schema, catalogMigrationOptions(schema, true))).toEqual({
       migratedTables: ["entries"],
     });
-    expect(readStrictFlag(database, "entries")).toBe(1);
-    expect(readStrictFlag(database, "added")).toBe(1);
-    expect(database.prepare("SELECT * FROM entries").all()).toEqual([{ id: 7 }]);
+    expect(strictFlags(database, "entries", "added")).toEqual([1, 1]);
+    expect(rows(database, "SELECT * FROM entries")).toEqual([{ id: 7 }]);
   });
 });

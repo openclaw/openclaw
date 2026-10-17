@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createRetainedOperation, mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -58,9 +59,7 @@ it("services shared production and final cleanup without a host microtask turn",
     ...production.operation,
     startClose: () =>
       mapRetainedOperation(removal.operation, (cleaned) => {
-        if (!cleaned) {
-          throw new Error("Retained producer cleanup failed");
-        }
+        expect(cleaned).toBe(true);
       }),
   };
   const controller = new AbortController();
@@ -89,10 +88,7 @@ it("services shared production and final cleanup without a host microtask turn",
   });
   surviving.service();
   const ready = surviving.read();
-  expect(ready.status).toBe("fulfilled");
-  if (ready.status !== "fulfilled") {
-    throw new Error("The retained snapshot did not become available");
-  }
+  assert(ready.status === "fulfilled", "The retained snapshot did not become available");
   const cleanup = ready.value.startCleanup();
   cleanup.service();
   expect(cleanup.read()).toEqual({ status: "pending" });

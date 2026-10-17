@@ -12,32 +12,23 @@ import { prepareUpdateDatabaseRestoreSourceInProcess } from "./update-database-r
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function withDatabase<T>(file: string, readOnly: boolean, run: (db: DatabaseSync) => T): T {
-  const db = new DatabaseSync(file, { readOnly });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
-}
-
 function assertSnapshot(file: string) {
-  withDatabase(file, true, (db) => {
-    expect(db.prepare("SELECT rowid,value FROM evidence").all()).toEqual([
-      { rowid: 71, value: "keep" },
-    ]);
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-  });
+  using db = new DatabaseSync(file, { readOnly: true });
+  expect(db.prepare("SELECT rowid,value FROM evidence").all()).toEqual([
+    { rowid: 71, value: "keep" },
+  ]);
+  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
 }
 
 function fixture(target = "target.sqlite") {
   const directory = fsSync.realpathSync(directories.make("sqlite-snapshot-file-"));
   const sourcePath = path.join(directory, "source.sqlite");
-  withDatabase(sourcePath, false, (database) =>
+  {
+    using database = new DatabaseSync(sourcePath);
     database.exec(
       "CREATE TABLE evidence(value TEXT); INSERT INTO evidence(rowid,value) VALUES(71,'keep');",
-    ),
-  );
+    );
+  }
   return {
     directory,
     sourcePath,
@@ -47,12 +38,9 @@ function fixture(target = "target.sqlite") {
 }
 
 function changeSnapshotBytes(file: string) {
-  const writer = fsSync.openSync(file, "r+");
-  try {
-    fsSync.writeSync(writer, Buffer.from("lost"), 0, 4, 100);
-  } finally {
-    fsSync.closeSync(writer);
-  }
+  const bytes = fsSync.readFileSync(file);
+  bytes.write("lost", 100);
+  fsSync.writeFileSync(file, bytes, { flag: "r+" });
 }
 
 it.each([
@@ -69,7 +57,6 @@ it.each([
   const open = fs.open.bind(fs);
   const lstat = fs.lstat.bind(fs);
   const lstatSync = fsSync.lstatSync.bind(fsSync);
-  const statSync = fsSync.statSync.bind(fsSync);
   const fstatSync = fsSync.fstatSync.bind(fsSync);
   const ids = new Map<string, bigint>();
   const createdId = 2n ** 54n + 1n;
@@ -96,14 +83,13 @@ it.each([
     // Model only OS stat representation. All copying, receipts, hashing and publication are real.
     // The Node fallback lets the same observations reach the dependency's descriptor fences.
     configureFsSafeNative({ mode: "off" });
-    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-      const stat = lstatSync(...args);
-      return stat ? project(stat, observe(args[0])) : stat;
-    });
-    vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
-      const stat = statSync(...args);
-      return stat ? project(stat, observe(args[0])) : stat;
-    });
+    for (const method of ["lstatSync", "statSync"] as const) {
+      const original = fsSync[method].bind(fsSync);
+      vi.spyOn(fsSync, method).mockImplementation((...args) => {
+        const stat = original(...args);
+        return stat ? project(stat, observe(args[0])) : stat;
+      });
+    }
     vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
       project(fstatSync(...args), fstatSync(args[0], { bigint: true })),
     );
