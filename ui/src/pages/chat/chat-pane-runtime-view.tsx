@@ -33,6 +33,7 @@ import {
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
@@ -111,6 +112,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
     const theme = projectTheme(context.theme);
+    // Startup attaches one host for this mounted pane's lifetime.
+    const state = runtime.readState();
+    const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
     const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
     const realtimeOwner = createMemo(() => {
       revision();
@@ -121,8 +125,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       return owner && projectOwner(owner, (source) => source.snapshot);
     });
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
-    // Startup attaches one host for this mounted pane's lifetime.
-    const state = runtime.readProviderReviewState();
     const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
     const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
@@ -195,6 +197,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         realtime()?.read();
         projects.read();
         theme.preferences.read();
+        workspace?.read();
         goals?.read();
         resources.read();
         discussion.read();
@@ -209,7 +212,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const frame = createMemo(() => lifecycle.snapshot());
     const providerReview: ChatProviderReviewOwner = createChatProviderReview({
       source: () => frame().providerReviewSource,
-      readState: () => runtime.readProviderReviewState(),
+      readState: () => runtime.readState(),
     });
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(
