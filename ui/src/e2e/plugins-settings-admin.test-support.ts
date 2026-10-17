@@ -1,9 +1,5 @@
 import type { BrowserContextOptions, Locator, Page } from "playwright";
-import type {
-  PluginCatalogItem,
-  PluginListResult,
-  PluginsInspectResult,
-} from "../lib/plugins/index.ts";
+import type * as Plugins from "../lib/plugins/index.ts";
 
 export function named(scope: Page | Locator, role: Parameters<Page["getByRole"]>[0], name: string) {
   return scope.getByRole(role, { name, exact: true });
@@ -14,6 +10,12 @@ export function objectSchema<P>(
   options: { title?: string; additionalProperties?: boolean } = {},
 ) {
   return { type: "object", ...options, properties };
+}
+
+export function pluginConfigSchema<P>(id: string, schema: P) {
+  return objectSchema({
+    plugins: objectSchema({ entries: objectSchema({ [id]: objectSchema({ config: schema }) }) }),
+  });
 }
 
 function titledObject<P>(title: string, properties: P) {
@@ -45,38 +47,34 @@ export const workboard = {
   enabled: true,
   state: "enabled",
   removable: true,
-} satisfies PluginCatalogItem;
+} satisfies Plugins.PluginCatalogItem;
 
 const calendar = {
   id: "calendar",
   name: "Calendar",
-  packageName: "@openclaw/calendar",
-  description: "Coordinate schedules and events.",
-  kind: ["productivity"],
   origin: "bundled",
   installed: true,
   enabled: false,
   state: "needs-setup",
   removable: false,
-} satisfies PluginCatalogItem;
+} satisfies Plugins.PluginCatalogItem;
 
 export const brokenPlugin = {
   id: "broken-plugin",
   name: "Broken plugin",
-  description: "Demonstrates plugin diagnostics.",
   origin: "global",
   installed: true,
   enabled: false,
   state: "error",
   error: "Dependency check failed. Reinstall the plugin and restart OpenClaw.",
   removable: true,
-} satisfies PluginCatalogItem;
+} satisfies Plugins.PluginCatalogItem;
 
 export const inventory = {
   plugins: [workboard, calendar],
   diagnostics: [],
   mutationAllowed: true,
-} satisfies PluginListResult;
+} satisfies Plugins.PluginListResult;
 
 export const inspection = {
   ok: true,
@@ -117,11 +115,8 @@ export const inspection = {
       catalog: {
         name: "Workboard",
         summary: "Plan and track agent-owned work.",
-        author: "openclaw",
         official: true,
         categories: ["tools"],
-        latestVersion: "1.2.3",
-        downloads: 1200,
       },
       local: {
         present: true,
@@ -135,17 +130,11 @@ export const inspection = {
     detail: {
       origin: "clawhub",
       packageName: "@openclaw/workboard",
-      author: { handle: "openclaw", displayName: "OpenClaw" },
-      topics: ["planning"],
-      updatedAt: 1_788_000_000_000,
-      readme: "# Workboard\n\nCoordinate agent work in one place.",
-      compatibility: { minGatewayVersion: ">=1.0.0" },
+      topics: [],
       configuration: [],
       mcpServers: ["workboard"],
       skills: [{ name: "Weekly planning" }],
-      versions: [
-        { version: "1.2.3", createdAt: 1_788_000_000_000, changelog: "", tags: ["latest"] },
-      ],
+      versions: [],
       security: {
         status: "clean",
         verdict: "clean",
@@ -159,7 +148,7 @@ export const inspection = {
       allowConversationAccess: { effective: false, configured: false },
     },
   },
-} satisfies PluginsInspectResult;
+} satisfies Plugins.PluginsInspectResult;
 
 export const config = {
   plugins: {
@@ -171,11 +160,7 @@ export const config = {
       workboard: {
         enabled: true,
         hooks: { allowPromptInjection: false },
-        config: {
-          workspaceLabel: "Planning",
-          refreshMinutes: 15,
-          notifications: true,
-        },
+        config: { workspaceLabel: "Planning", refreshMinutes: 15, notifications: true },
       },
     },
   },
@@ -197,9 +182,7 @@ export const configMocks = {
         enabled: field("boolean", "Plugin system enabled"),
         allow: stringList("Allowed plugin IDs"),
         deny: stringList("Blocked plugin IDs"),
-        load: titledObject("Plugin loading", {
-          paths: stringList("Additional plugin load paths"),
-        }),
+        load: titledObject("Plugin loading", { paths: stringList("Additional plugin load paths") }),
         entries: titledObject("Plugin entries", {
           workboard: titledObject("Workboard", {
             enabled: field("boolean", "Enabled"),
@@ -211,17 +194,9 @@ export const configMocks = {
               { additionalProperties: false },
             ),
             config: titledObject("Configuration", {
-              workspaceLabel: {
-                type: "string",
-                title: "Workspace label",
-                default: "Planning",
-              },
+              workspaceLabel: { type: "string", title: "Workspace label", default: "Planning" },
               notifications: field("boolean", "Notifications"),
-              refreshMinutes: {
-                type: "integer",
-                title: "Refresh interval (minutes)",
-                minimum: 1,
-              },
+              refreshMinutes: { type: "integer", title: "Refresh interval (minutes)", minimum: 1 },
             }),
           }),
         }),

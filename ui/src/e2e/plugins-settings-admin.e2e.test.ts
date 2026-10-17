@@ -1,16 +1,15 @@
-// Control UI tests cover the canonical installed-plugin administration surface.
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   adminPageOptions,
   named,
-  objectSchema,
+  pluginConfigSchema,
   workboard,
   brokenPlugin,
   inventory,
@@ -25,14 +24,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-});
-
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("plugin-settings-admin");
-  }
 });
 
 const pluginMethods = [
@@ -52,61 +43,60 @@ function withPluginEntry(id: string, entry: unknown) {
   };
 }
 
+function installAdminGateway(page: Page, scenario: Parameters<typeof installMockGateway>[1] = {}) {
+  return installMockGateway(page, {
+    featureMethods: pluginMethods,
+    operatorScopes: ["operator.read", "operator.admin"],
+    methodResponses: pluginResponses(),
+    ...scenario,
+  });
+}
+
+const settingsLink = (page: Page) =>
+  named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings");
+const waitForSettingsRoute = (page: Page, suffix = "") =>
+  waitForControlUiRoute(page, {
+    pathname: `/settings/plugins${suffix}`,
+    routeId: "plugin-settings",
+  });
+
 async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], baseUrl: string) {
   const response = await page.goto(`${baseUrl}settings/plugins`);
   expect(response?.status()).toBe(200);
-  await waitForControlUiRoute(page, {
-    pathname: "/settings/plugins",
-    routeId: "plugin-settings",
-  });
+  await waitForSettingsRoute(page);
 
   await page.getByRole("heading", { level: 1, name: "Plugins", exact: true }).waitFor();
   await named(page, "tab", "Installed").waitFor();
   await named(page, "tab", "Advanced").waitFor();
   const search = named(page, "searchbox", "Search installed plugins");
   await search.waitFor();
-  const inventoryGeometry = await page.evaluate(() => {
-    const surface = document.querySelector<HTMLElement>(".settings-page.oc-app-surface");
-    const title = surface?.querySelector<HTMLElement>(".content-header--settings h1.page-title");
-    const tabs = surface?.querySelector<HTMLElement>(".plugins-settings-tabs.oc-segmented");
-    const searchField = surface?.querySelector<HTMLElement>(".plugins-settings-search");
-    const section = surface?.querySelector<HTMLElement>("#plugin-settings-panel .settings-group");
-    if (!surface || !title || !tabs || !searchField || !section) {
-      return null;
-    }
-    const surfaceRect = surface.getBoundingClientRect();
-    const titleRect = title.getBoundingClientRect();
-    const tabsRect = tabs.getBoundingClientRect();
-    const searchRect = searchField.getBoundingClientRect();
-    const sectionRect = section.getBoundingClientRect();
-    return {
-      titleLeft: titleRect.left,
-      searchLeft: searchRect.left,
-      sectionLeft: sectionRect.left,
-      surfaceWidth: surfaceRect.width,
-      tabsWidth: tabsRect.width,
-      tabsToSearch: searchRect.top - tabsRect.bottom,
-      searchToSection: sectionRect.top - searchRect.bottom,
-    };
+  expect(
+    await page.evaluate(() => {
+      const surface = document.querySelector(".settings-page.oc-app-surface")!;
+      const box = (selector: string) => surface.querySelector(selector)!.getBoundingClientRect();
+      const title = box(".content-header--settings h1.page-title");
+      const tabs = box(".plugins-settings-tabs.oc-segmented");
+      const searchField = box(".plugins-settings-search");
+      const section = box("#plugin-settings-panel .settings-group");
+      const tabsToSearch = searchField.top - tabs.bottom;
+      const searchToSection = section.top - searchField.bottom;
+      return {
+        compactTabs: tabs.width < surface.getBoundingClientRect().width / 2,
+        titleAligned: Math.abs(title.left - searchField.left) <= 1,
+        sectionAligned: Math.abs(searchField.left - section.left) <= 1,
+        tabsToSearch: tabsToSearch > 0,
+        searchToSection: searchToSection > 0,
+        equalGaps: Math.abs(tabsToSearch - searchToSection) <= 1,
+      };
+    }),
+  ).toEqual({
+    compactTabs: true,
+    titleAligned: true,
+    sectionAligned: true,
+    tabsToSearch: true,
+    searchToSection: true,
+    equalGaps: true,
   });
-  expect(inventoryGeometry).not.toBeNull();
-  expect(inventoryGeometry?.tabsWidth ?? Infinity).toBeLessThan(
-    (inventoryGeometry?.surfaceWidth ?? 0) / 2,
-  );
-  expect(
-    Math.abs((inventoryGeometry?.titleLeft ?? 0) - (inventoryGeometry?.searchLeft ?? 0)),
-  ).toBeLessThanOrEqual(1);
-  expect(
-    Math.abs((inventoryGeometry?.searchLeft ?? 0) - (inventoryGeometry?.sectionLeft ?? 0)),
-  ).toBeLessThanOrEqual(1);
-  expect(inventoryGeometry?.tabsToSearch ?? 0).toBeGreaterThan(0);
-  expect(inventoryGeometry?.searchToSection ?? 0).toBeGreaterThan(0);
-  expect(
-    Math.abs(
-      (inventoryGeometry?.tabsToSearch ?? Infinity) -
-        (inventoryGeometry?.searchToSection ?? -Infinity),
-    ),
-  ).toBeLessThanOrEqual(1);
   expect(
     await page
       .locator("#plugin-settings-panel article[data-plugin-id]")
@@ -126,18 +116,9 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   expect(await enabledStatus.getAttribute("title")).toBe("Enabled");
   expect(await workboardRow.getByRole("switch").count()).toBe(0);
   await page.locator(".settings-page.oc-app-surface").waitFor();
-  if (captureUiProof) {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage: true,
-      path: path.join(proofDir, "01-installed-inventory.png"),
-    });
-  }
+
   await workboardLink.click();
-  await waitForControlUiRoute(page, {
-    pathname: "/settings/plugins/workboard",
-    routeId: "plugin-settings",
-  });
+  await waitForSettingsRoute(page, "/workboard");
 }
 
 suite.define(() => {
@@ -200,8 +181,7 @@ suite.define(() => {
           enabled: true,
           config: pluginConfig,
         });
-        const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
+        const gateway = await installAdminGateway(page, {
           operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
           methodResponses: {
             ...pluginResponses(),
@@ -232,13 +212,7 @@ suite.define(() => {
             },
             "config.schema": {
               ...configMocks["config.schema"],
-              schema: objectSchema({
-                plugins: objectSchema({
-                  entries: objectSchema({
-                    [manifest.id]: objectSchema({ config: manifest.configSchema }),
-                  }),
-                }),
-              }),
+              schema: pluginConfigSchema(manifest.id, manifest.configSchema),
               uiHints: Object.fromEntries(
                 Object.entries(uiHints).map(([key, hint]) => [
                   `plugins.entries.${manifest.id}.config.${key}`,
@@ -252,12 +226,7 @@ suite.define(() => {
         await named(page.locator(".plugin-editor"), "searchbox", "Search settings").waitFor();
         const apiKey = page.locator("input").and(page.getByLabel(new RegExp(`${label}$`, "u")));
         await apiKey.waitFor();
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "credential-inputs.png"),
-          });
-        }
+
         expect(await apiKey.count()).toBe(1);
         expect(await apiKey.getAttribute("type")).toBe("password");
         const reference = page
@@ -292,27 +261,17 @@ suite.define(() => {
         await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
         expect(await reference.inputValue()).toBe("");
         expect(await reference.getAttribute("readonly")).not.toBeNull();
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "credential-reloaded.png"),
-          });
-        }
       });
     },
   );
 
   it("drills from searchable inventory into overview and same-URL Settings", async () => {
     await suite.withPage(adminPageOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: pluginMethods,
-        methodResponses: pluginResponses(),
-        operatorScopes: ["operator.read", "operator.admin"],
-      });
+      const gateway = await installAdminGateway(page);
 
       await openWorkboard(page, suite.server.baseUrl);
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
-      await named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").waitFor();
+      await settingsLink(page).waitFor();
       await page.getByText("Plan and track agent-owned work.", { exact: true }).waitFor();
       expect(await named(page, "link", "View on ClawHub").count()).toBe(0);
       const securityAudit = page.getByRole("link", { name: /Security audit/iu });
@@ -328,7 +287,7 @@ suite.define(() => {
       ).toBe(3);
       expect(await securityAudit.getByText("clean", { exact: true }).count()).toBe(0);
       expect(await page.getByRole("tab").count()).toBe(0);
-      await named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+      await settingsLink(page).click();
       await named(page, "searchbox", "Search settings").last().waitFor();
       expect(await gateway.getRequests("plugins.inspect")).toHaveLength(1);
 
@@ -340,24 +299,12 @@ suite.define(() => {
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       await page.getByText("workboard_list", { exact: true }).waitFor();
       await page.getByText("1.2.3", { exact: true }).first().waitFor();
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(proofDir, "02-plugin-detail.png"),
-        });
-      }
+
       await page.reload();
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/plugins/workboard",
-        routeId: "plugin-settings",
-      });
+      await waitForSettingsRoute(page, "/workboard");
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       await page.locator(".plugins-settings-breadcrumb__parent").click();
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/plugins",
-        routeId: "plugin-settings",
-      });
+      await waitForSettingsRoute(page);
     });
   });
 
@@ -370,8 +317,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
-          featureMethods: pluginMethods,
+        await installAdminGateway(page, {
           methodResponses: {
             ...pluginResponses(),
             "plugins.list": { ...inventory, plugins: [brokenPlugin] },
@@ -385,15 +331,11 @@ suite.define(() => {
               },
             },
           },
-          operatorScopes: ["operator.read", "operator.admin"],
         });
 
         const response = await page.goto(`${suite.server.baseUrl}settings/plugins/broken-plugin`);
         expect(response?.status()).toBe(200);
-        await waitForControlUiRoute(page, {
-          pathname: "/settings/plugins/broken-plugin",
-          routeId: "plugin-settings",
-        });
+        await waitForSettingsRoute(page, "/broken-plugin");
 
         await page.getByRole("heading", { level: 1, name: "Broken plugin", exact: true }).waitFor();
         await page
@@ -402,9 +344,7 @@ suite.define(() => {
             hasText: "Dependency check failed. Reinstall the plugin and restart OpenClaw.",
           })
           .waitFor();
-        expect(
-          await named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").count(),
-        ).toBe(1);
+        expect(await settingsLink(page).count()).toBe(1);
         expect(await named(page, "button", "Reload").count()).toBe(0);
         expect(await page.getByText("This plugin has no configurable settings.").count()).toBe(0);
         expect(await named(page, "button", "Reload Broken plugin").count()).toBe(0);
@@ -414,11 +354,7 @@ suite.define(() => {
 
   it("commits grouped plugin settings on blur and actions through the route", async () => {
     await suite.withPage(adminPageOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: pluginMethods,
-        methodResponses: pluginResponses(),
-        operatorScopes: ["operator.read", "operator.admin"],
-      });
+      const gateway = await installAdminGateway(page);
       await openWorkboard(page, suite.server.baseUrl);
 
       const toggle = named(page, "button", "Disable Workboard");
@@ -449,15 +385,10 @@ suite.define(() => {
       expect(await page.locator(".plugins-row-message.oc-banner-success").count()).toBe(0);
       expect(await gateway.getRequests("connect")).toHaveLength(connections);
 
-      await named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+      await settingsLink(page).click();
       const workspace = page.getByLabel("Workspace label", { exact: true });
       await workspace.waitFor();
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "grouped-settings.png"),
-        });
-      }
+
       expect(await named(page, "heading", "Workboard settings").count()).toBe(0);
       expect(await page.locator(".plugin-editor__section > h2").allTextContents()).toEqual([
         "Workspace",
@@ -478,17 +409,14 @@ suite.define(() => {
       expect(geometry.gap).toBeGreaterThanOrEqual(35);
       expect(Math.abs(geometry.top)).toBeLessThanOrEqual(1);
       expect(Math.abs(geometry.menuTop)).toBeLessThanOrEqual(1);
-      if (captureUiProof) {
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         for (const viewport of [
           { width: 390, height: 844 },
           { width: 768, height: 1024 },
           { width: 1366, height: 768 },
         ]) {
           await page.setViewportSize(viewport);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, `grouped-settings-${viewport.width}.png`),
-          });
+
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           ).toBe(true);
@@ -518,18 +446,12 @@ suite.define(() => {
       const checkboxInspections = (await gateway.getRequests("plugins.inspect")).length;
       await page.locator('[data-setting="notifications"] .plugin-editor__title').click();
       const checkboxSave = await gateway.waitForRequest("config.set", { after: 1 });
-      expect(JSON.parse(String(asRecord(checkboxSave.params).raw))).toMatchObject({
-        plugins: {
-          entries: {
-            workboard: {
-              config: {
-                workspaceLabel: "Release planning",
-                notifications: false,
-                refreshMinutes: 15,
-              },
-            },
-          },
-        },
+      expect(
+        JSON.parse(String(asRecord(checkboxSave.params).raw)).plugins.entries.workboard.config,
+      ).toMatchObject({
+        workspaceLabel: "Release planning",
+        notifications: false,
+        refreshMinutes: 15,
       });
       await gateway.waitForRequest("plugins.inspect", { after: checkboxInspections });
       const resetInspections = (await gateway.getRequests("plugins.inspect")).length;
@@ -558,9 +480,7 @@ suite.define(() => {
       const permissionSave = await gateway.waitForRequest("config.set", { after: 3 });
       await gateway.waitForRequest("plugins.inspect", { after: inspections });
       // A saved edit refreshes inspection without retiring the active editor.
-      if (captureUiProof) {
-        await page.screenshot({ path: path.join(proofDir, "permission-inspection-refresh.png") });
-      }
+
       expect(await permission.isVisible()).toBe(true);
       expect(await permission.isChecked()).toBe(true);
       expect(await search.inputValue()).toBe("Allow prompt changes");
@@ -568,19 +488,13 @@ suite.define(() => {
       await expect.poll(() => permission.isVisible()).toBe(true);
       expect(await permission.isChecked()).toBe(true);
       expect(await search.inputValue()).toBe("Allow prompt changes");
-      expect(JSON.parse(String(asRecord(permissionSave.params).raw))).toEqual({
-        ...disabledConfig,
-        plugins: {
-          ...disabledConfig.plugins,
-          entries: {
-            workboard: {
-              enabled: false,
-              hooks: { allowPromptInjection: true },
-              config: { refreshMinutes: 15, notifications: false },
-            },
-          },
-        },
-      });
+      expect(JSON.parse(String(asRecord(permissionSave.params).raw))).toEqual(
+        withPluginEntry("workboard", {
+          enabled: false,
+          hooks: { allowPromptInjection: true },
+          config: { refreshMinutes: 15, notifications: false },
+        }),
+      );
       await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(4);
       expect(await page.locator("openclaw-settings-save-indicator").count()).toBe(1);
       await search.fill("");
@@ -597,10 +511,7 @@ suite.define(() => {
         plugins: inventory.plugins.filter((plugin) => plugin.id !== workboard.id),
       });
       await gateway.resolveDeferred("plugins.uninstall");
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/plugins",
-        routeId: "plugin-settings",
-      });
+      await waitForSettingsRoute(page);
       await page.locator('[data-plugin-id="calendar"]').waitFor();
       expect(await page.locator('[data-plugin-id="workboard"]').count()).toBe(0);
       expect(await page.locator(".plugins-row-message").count()).toBe(0);
@@ -613,11 +524,7 @@ suite.define(() => {
     "retains Settings opened with %j while refreshed inspection finishes",
     async (activation) => {
       await suite.withPage(adminPageOptions, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
-          methodResponses: pluginResponses(),
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
+        const gateway = await installAdminGateway(page);
         await openWorkboard(page, suite.server.baseUrl);
         await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
         const inspections = (await gateway.getRequests("plugins.inspect")).length;
@@ -625,11 +532,7 @@ suite.define(() => {
         await named(page, "button", "Disable Workboard").click();
         await gateway.waitForRequest("plugins.inspect", { after: inspections });
 
-        const configuration = named(
-          page.locator(".plugin-catalog-detail__actions"),
-          "link",
-          "Settings",
-        );
+        const configuration = settingsLink(page);
         await configuration.waitFor();
         if (activation === "click") {
           await configuration.click();
@@ -638,12 +541,6 @@ suite.define(() => {
         }
         await gateway.resolveDeferred("plugins.inspect", inspection);
         await named(page.locator(".plugin-editor"), "searchbox", "Search settings").waitFor();
-        if (captureUiProof && activation === "click") {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "selected-tab-after-inspection.png"),
-          });
-        }
 
         await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
         expect(await page.getByRole("tab").count()).toBe(0);
@@ -654,11 +551,7 @@ suite.define(() => {
 
   it("keeps global plugin policy in Advanced and exposes read-only details without mutations", async () => {
     await suite.withPage(adminPageOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: pluginMethods,
-        methodResponses: pluginResponses(),
-        operatorScopes: ["operator.read"],
-      });
+      const gateway = await installAdminGateway(page, { operatorScopes: ["operator.read"] });
 
       await page.goto(`${suite.server.baseUrl}settings/plugins`);
       await named(page, "tab", "Advanced").click();
@@ -677,20 +570,15 @@ suite.define(() => {
 
       await named(page, "tab", "Installed").click();
       await page.locator('[data-plugin-id="workboard"]').click();
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/plugins/workboard",
-        routeId: "plugin-settings",
-      });
+      await waitForSettingsRoute(page, "/workboard");
       expect(await page.locator(".callout.info").count()).toBe(0);
       expect(await named(page, "button", "Save configuration").count()).toBe(0);
       const toggle = named(page, "button", "Disable Workboard");
-      await named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+      await settingsLink(page).click();
       const workspace = page.getByLabel("Workspace label", { exact: true });
       expect(await workspace.isDisabled()).toBe(true);
       await named(page, "link", "Workboard").click();
-      const uninstall = page.getByRole("button", {
-        name: /(?:Remove|Uninstall) Workboard/iu,
-      });
+      const uninstall = page.getByRole("button", { name: /(?:Remove|Uninstall) Workboard/iu });
       expect(await toggle.getAttribute("aria-disabled")).toBe("true");
       expect(await uninstall.getAttribute("aria-disabled")).toBe("true");
       await toggle.dispatchEvent("click");
@@ -703,22 +591,14 @@ suite.define(() => {
 
   it("recovers catalog, configuration, and inspection failures in place", async () => {
     await suite.withPage(adminPageOptions, async ({ page }) => {
-      const failure = (message: string) => ({
-        __mockError: { code: "UNAVAILABLE", message },
-      });
-      const gateway = await installMockGateway(page, {
-        featureMethods: pluginMethods,
+      const failure = (message: string) => ({ __mockError: { code: "UNAVAILABLE", message } });
+      const gateway = await installAdminGateway(page, {
         methodResponses: {
           ...configMocks,
           "config.get": failure("Configuration unavailable"),
-          "plugins.inspect": {
-            sequence: [failure("Inspection unavailable"), inspection],
-          },
-          "plugins.list": {
-            sequence: [failure("Catalog unavailable"), inventory],
-          },
+          "plugins.inspect": { sequence: [failure("Inspection unavailable"), inspection] },
+          "plugins.list": { sequence: [failure("Catalog unavailable"), inventory] },
         },
-        operatorScopes: ["operator.read", "operator.admin"],
       });
 
       await page.goto(`${suite.server.baseUrl}settings/plugins`);
@@ -745,7 +625,7 @@ suite.define(() => {
       await named(inspectionError, "button", "Try again").click();
       await expect.poll(async () => (await gateway.getRequests("plugins.inspect")).length).toBe(2);
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
-      await named(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+      await settingsLink(page).click();
       await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
       expect(await named(page, "checkbox", "Add context to prompts").count()).toBe(0);
 

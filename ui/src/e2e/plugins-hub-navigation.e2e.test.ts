@@ -1,13 +1,9 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { BrowserContext, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import type { PluginsListResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { joinClawHubPluginCatalog } from "../../../src/plugins/catalog-discovery.js";
 import { projectPluginCatalogCategoryFacts } from "../../../src/plugins/management-catalog.js";
 import { metadataSnapshot } from "../../../src/plugins/management-service.test-helpers.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   discoveryCategories,
@@ -22,24 +18,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("plugins-workspace-shell");
-  }
-});
-
 const methodResponses = {
-  "agents.list": {
-    agents: [
-      { id: "main", identity: { name: "Main" }, name: "Main" },
-      { id: "reviewer", identity: { name: "Reviewer" }, name: "Reviewer" },
-    ],
-    defaultId: "main",
-    mainKey: "main",
-    scope: "agent",
-  },
   "config.get": {
     config: {},
     sourceConfig: {},
@@ -48,39 +27,9 @@ const methodResponses = {
     raw: "{}",
     valid: true,
   },
-  "plugins.list": {
-    plugins: [
-      {
-        id: "workboard",
-        name: "Workboard",
-        description: "Dashboard workboard for agent-owned issues and sessions.",
-        kind: ["productivity"],
-        origin: "bundled",
-        installed: true,
-        enabled: true,
-        state: "enabled",
-        category: "tool",
-        removable: false,
-      },
-    ],
-    diagnostics: [],
-    mutationAllowed: true,
-  },
+  "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
   "plugins.catalog.browse": discoveryResult,
   "plugins.catalog.categories": discoveryCategories,
-  "skills.workshop.list": {
-    agentId: "main",
-    mode: "auto",
-    root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
-    skills: [],
-    archived: [],
-  },
-  "skills.workshop.changes": { changes: [] },
-  "skills.status": {
-    workspaceDir: "/tmp/openclaw-e2e/workspace",
-    managedSkillsDir: "/tmp/openclaw-e2e/skills",
-    skills: [],
-  },
   "skills.search": {
     results: [
       {
@@ -102,35 +51,14 @@ const methodResponses = {
   },
 };
 
-type HeaderGeometry = {
-  height: number;
-  left: number;
-  title: string;
-  top: number;
-  width: number;
-};
+type HeaderGeometry = Awaited<ReturnType<typeof headerGeometry>>;
 
-async function createContext(viewport: { height: number; width: number }): Promise<BrowserContext> {
-  return suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport,
-    ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
-  });
-}
-
-async function headerGeometry(page: Page): Promise<HeaderGeometry> {
+async function headerGeometry(page: Page) {
   const header = page.locator(".plugins-hub-header");
   await header.waitFor({ state: "visible" });
   return header.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return {
-      height: rect.height,
-      left: rect.left,
-      title: element.querySelector("h1")?.textContent?.trim() ?? "",
-      top: rect.top,
-      width: rect.width,
-    };
+    const { left, top, width } = element.getBoundingClientRect();
+    return { left, top, width, title: element.querySelector("h1")?.textContent?.trim() ?? "" };
   });
 }
 
@@ -141,47 +69,39 @@ function expectStableHeader(actual: HeaderGeometry, expected: HeaderGeometry) {
 }
 
 async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skill-workshop") {
-  const expected = {
-    plugins: {
-      title: "Plugins",
-      subtitle: "Extend your Claw with tools",
-      docs: "https://docs.openclaw.ai/plugins/manage-plugins",
-    },
-    skills: {
-      title: "Skills",
-      subtitle: "Manage your agent skills",
-      docs: "https://docs.openclaw.ai/tools/skills",
-    },
-    "skill-workshop": {
-      title: "Skill workshop",
-      subtitle: "Skills your agent learned, recent changes, and undo.",
-      docs: "https://docs.openclaw.ai/tools/skill-workshop",
-    },
-  }[active];
+  const [title, subtitle, docsPath] = (
+    {
+      plugins: ["Plugins", "Extend your Claw with tools", "plugins/manage-plugins"],
+      skills: ["Skills", "Manage your agent skills", "tools/skills"],
+      "skill-workshop": [
+        "Skill workshop",
+        "Skills your agent learned, recent changes, and undo.",
+        "tools/skill-workshop",
+      ],
+    } as const
+  )[active];
   const header = page.locator(".plugins-hub-header");
-  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
-  // All three routes share the settings-style header. Allow subtitle wrapping
-  // to change its height, but keep the visible title and tabs left-aligned.
+  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(title);
   await expect
     .poll(() =>
       header.evaluate((element) => {
-        const title = element.querySelector(".page-title")?.getBoundingClientRect();
+        const titleBox = element.querySelector(".page-title")?.getBoundingClientRect();
         const intro = element.querySelector(".hub-page-header__title")?.getBoundingClientRect();
         const tabs = element.querySelector(".hub-page-header__tabs")?.getBoundingClientRect();
-        if (!title || !intro || !tabs) {
+        if (!titleBox || !intro || !tabs) {
           return null;
         }
         return {
-          visibleTitle: title.width > 1 && title.height > 1,
-          leftAligned: Math.abs(tabs.left - title.left) <= 1,
+          visibleTitle: titleBox.width > 1 && titleBox.height > 1,
+          leftAligned: Math.abs(tabs.left - titleBox.left) <= 1,
           tabsBelowIntro: tabs.top >= intro.bottom,
         };
       }),
     )
     .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowIntro: true });
-  expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
+  expect(await header.locator(".page-subtitle").textContent()).toContain(subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
-    expected.docs,
+    `https://docs.openclaw.ai/${docsPath}`,
   );
 }
 
@@ -201,18 +121,6 @@ async function installButtonPresentation(page: Page) {
   });
 }
 
-async function captureScreenshot(page: Page, name: string) {
-  if (!captureUiProof) {
-    return;
-  }
-  await writeFile(
-    path.join(proofDir, name),
-    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-      page.locator(".plugins-hub-tabs"),
-    ]),
-  );
-}
-
 async function expectActivePanelLabel(page: Page, labelId: string) {
   const panel = page.locator("#plugins-hub-panel");
   await panel.waitFor({ state: "visible" });
@@ -220,10 +128,45 @@ async function expectActivePanelLabel(page: Page, labelId: string) {
   expect(await page.locator(`#${labelId}`).count()).toBe(1);
 }
 
+const catalogMethods = ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"];
+function withWorkspace(
+  viewport: { height: number; width: number },
+  scenario: Parameters<typeof installMockGateway>[1],
+  run: (page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) => Promise<void>,
+) {
+  return suite.withPage(
+    { locale: "en-US", serviceWorkers: "block", viewport },
+    async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: catalogMethods,
+        methodResponses,
+        ...scenario,
+      });
+      await run(page, gateway);
+    },
+  );
+}
+
+async function expectWorkspace(
+  page: Page,
+  active: "plugins" | "skills" | "skill-workshop",
+  baseline?: HeaderGeometry,
+) {
+  await waitForControlUiRoute(page, {
+    pathname: active === "skill-workshop" ? "/skills/workshop" : `/${active}`,
+    routeId: active,
+  });
+  const header = await headerGeometry(page);
+  if (baseline) {
+    expectStableHeader(header, baseline);
+  }
+  await expectHeaderCopy(page, active);
+  await expectActivePanelLabel(page, `plugins-tab-${active}`);
+  return header;
+}
+
 suite.define(() => {
   it("keeps model-provider video capabilities discoverable in Media across pagination", async () => {
-    const context = await createContext({ width: 1200, height: 928 });
-    const page = await context.newPage();
     const local: PluginsListResult = {
       plugins: ["novita", "zai"].map((id) => {
         const snapshot = metadataSnapshot({
@@ -257,16 +200,6 @@ suite.define(() => {
       ["media"],
       ["media"],
     ]);
-    // The baseline used the same purpose metadata but published no derived membership.
-    // Both captures render the real UI; only the Gateway catalog input differs.
-    const before = {
-      ...local,
-      plugins: local.plugins.map((plugin) => {
-        const previous = { ...plugin };
-        delete previous.capabilityCategories;
-        return previous;
-      }),
-    };
     const fal = {
       packageName: "@openclaw/fal",
       displayName: "fal",
@@ -303,52 +236,40 @@ suite.define(() => {
       ...(!category ? { categories: discoveryCategories.categories } : {}),
       ...(category === "media" && !cursor ? { nextCursor: "media-page-two" } : {}),
     });
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
-      methodResponses: {
-        ...methodResponses,
-        "plugins.list": local,
-        "plugins.catalog.browse": browse(captureUiProof ? before : local),
+    await withWorkspace(
+      { width: 1200, height: 928 },
+      {
+        methodResponses: {
+          ...methodResponses,
+          "plugins.list": local,
+          "plugins.catalog.browse": browse(local),
+        },
       },
-    });
-    try {
-      await page.goto(suite.server.baseUrl + "plugins");
-      const chips = page.locator(".plugin-catalog-chips");
-      await named(chips, "button", "Media").waitFor();
-      const cards = page.locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)");
-      const expectFilteredCards = async (category: string, names: string[]) => {
+      async (page, gateway) => {
+        await page.goto(suite.server.baseUrl + "plugins");
+        const chips = page.locator(".plugin-catalog-chips");
+        await named(chips, "button", "Media").waitFor();
+        const cards = page.locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)");
+        const expectFilteredCards = async (category: string, names: string[]) => {
+          await expect
+            .poll(async () => ({
+              selected: await named(chips, "button", category).getAttribute("aria-pressed"),
+              names: await page
+                .locator(".plugin-catalog-grid--results .plugin-catalog-card__primary-link")
+                .evaluateAll((links) =>
+                  links.map((link) => link.getAttribute("aria-label") ?? "").toSorted(),
+                ),
+            }))
+            .toEqual({ selected: "true", names: names.toSorted() });
+        };
+
         await expect
-          .poll(async () => ({
-            selected: await named(chips, "button", category).getAttribute("aria-pressed"),
-            names: await page
-              .locator(".plugin-catalog-grid--results .plugin-catalog-card__primary-link")
-              .evaluateAll((links) =>
-                links.map((link) => link.getAttribute("aria-label") ?? "").toSorted(),
-              ),
-          }))
-          .toEqual({ selected: "true", names: names.toSorted() });
-      };
-      if (captureUiProof) {
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(before, "models"));
-        await named(chips, "button", "Models").click();
-        await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "models" } });
-        await expectFilteredCards("Models", ["Novita", "Z.AI"]);
-        await captureScreenshot(page, "models-discovery-before.png");
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(before, "media"));
-        await named(chips, "button", "Media").click();
-        await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "media" } });
-        await expectFilteredCards("Media", ["fal"]);
-        await captureScreenshot(page, "media-discovery-before.png");
-        await gateway.setMethodResponse("plugins.catalog.browse", browse(local));
-        await named(chips, "button", "All").click();
-      }
-      await expect
-        .poll(() => page.locator('[data-catalog-section="models"] .plugin-catalog-card').count())
-        .toBe(2);
-      await expect
-        .poll(() => page.locator('[data-catalog-section="media"] .plugin-catalog-card').count())
-        .toBe(3);
-      if (captureUiProof) {
+          .poll(() => page.locator('[data-catalog-section="models"] .plugin-catalog-card').count())
+          .toBe(2);
+        await expect
+          .poll(() => page.locator('[data-catalog-section="media"] .plugin-catalog-card').count())
+          .toBe(3);
+
         const priorModels = (
           await gateway.getRequests("plugins.catalog.browse", { category: "models" })
         ).length;
@@ -359,104 +280,89 @@ suite.define(() => {
           match: { category: "models" },
         });
         await expectFilteredCards("Models", ["Novita", "Z.AI"]);
-        await captureScreenshot(page, "models-discovery-after.png");
-      }
-      const priorMedia = (
-        await gateway.getRequests("plugins.catalog.browse", { category: "media" })
-      ).length;
-      await gateway.setMethodResponse("plugins.catalog.browse", browse(local, "media"));
-      await named(chips, "button", "Media").click();
-      await gateway.waitForRequest("plugins.catalog.browse", {
-        after: priorMedia,
-        match: { category: "media" },
-      });
-      await expectFilteredCards("Media", ["fal", "Novita", "Z.AI"]);
-      for (const name of ["Novita", "Z.AI"]) {
-        expect(await cards.filter({ hasText: name }).count()).toBe(1);
-      }
-      await captureScreenshot(page, "media-discovery-after.png");
-      await gateway.setMethodResponse(
-        "plugins.catalog.browse",
-        browse(local, "media", "media-page-two", true),
-      );
-      await named(page, "button", "Load more").click();
-      await gateway.waitForRequest("plugins.catalog.browse", {
-        match: { category: "media", cursor: "media-page-two" },
-      });
-      await expect.poll(() => named(page, "button", "Load more").count()).toBe(0);
-      expect(await cards.count()).toBe(3);
-      expect(await cards.filter({ hasText: "Novita" }).count()).toBe(1);
-    } finally {
-      await context.close();
-    }
+
+        const priorMedia = (
+          await gateway.getRequests("plugins.catalog.browse", { category: "media" })
+        ).length;
+        await gateway.setMethodResponse("plugins.catalog.browse", browse(local, "media"));
+        await named(chips, "button", "Media").click();
+        await gateway.waitForRequest("plugins.catalog.browse", {
+          after: priorMedia,
+          match: { category: "media" },
+        });
+        await expectFilteredCards("Media", ["fal", "Novita", "Z.AI"]);
+        for (const name of ["Novita", "Z.AI"]) {
+          expect(await cards.filter({ hasText: name }).count()).toBe(1);
+        }
+
+        await gateway.setMethodResponse(
+          "plugins.catalog.browse",
+          browse(local, "media", "media-page-two", true),
+        );
+        await named(page, "button", "Load more").click();
+        await gateway.waitForRequest("plugins.catalog.browse", {
+          match: { category: "media", cursor: "media-page-two" },
+        });
+        await expect.poll(() => named(page, "button", "Load more").count()).toBe(0);
+        expect(await cards.count()).toBe(3);
+        expect(await cards.filter({ hasText: "Novita" }).count()).toBe(1);
+      },
+    );
   });
 
   it("loads category filters independently of cards and recovers a failed category read", async () => {
-    const context = await createContext({ width: 1200, height: 928 });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
-      deferredMethods: ["plugins.catalog.browse", "plugins.catalog.categories"],
-      methodResponses,
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}plugins`);
-      await gateway.waitForRequest("plugins.catalog.browse");
-      const chips = page.locator(".plugin-catalog-chips");
-      await chips.locator(".plugin-catalog-chip--skeleton").first().waitFor();
-      expect(await chips.getByRole("button").count()).toBe(3);
-      expect(await named(chips, "button", "All").isEnabled()).toBe(true);
-      await expectHeaderCopy(page, "plugins");
-      await gateway.rejectDeferred("plugins.catalog.categories", {
-        message: "Categories temporarily unavailable",
-      });
-      const error = page
-        .getByRole("alert")
-        .filter({ hasText: "Categories temporarily unavailable" });
-      await error.waitFor();
-      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
-      await error.getByRole("button", { name: "Try again" }).click();
-      await named(chips, "button", "Channels").waitFor();
-      expect(await page.locator(".plugin-catalog-grid--skeleton").count()).toBeGreaterThan(0);
-      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
-      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
-      await gateway.resolveDeferred("plugins.catalog.browse");
-      await page
-        .locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)")
-        .first()
-        .waitFor();
-      await named(chips, "button", "Featured").click();
-      await gateway.waitForRequest("plugins.catalog.browse", { match: { intent: "featured" } });
-      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
-    } finally {
-      await context.close();
-    }
+    await withWorkspace(
+      { width: 1200, height: 928 },
+      {
+        deferredMethods: ["plugins.catalog.browse", "plugins.catalog.categories"],
+      },
+      async (page, gateway) => {
+        await page.goto(`${suite.server.baseUrl}plugins`);
+        await gateway.waitForRequest("plugins.catalog.browse");
+        const chips = page.locator(".plugin-catalog-chips");
+        await chips.locator(".plugin-catalog-chip--skeleton").first().waitFor();
+        expect(await chips.getByRole("button").count()).toBe(3);
+        expect(await named(chips, "button", "All").isEnabled()).toBe(true);
+        await expectHeaderCopy(page, "plugins");
+        await gateway.rejectDeferred("plugins.catalog.categories", {
+          message: "Categories temporarily unavailable",
+        });
+        const error = page
+          .getByRole("alert")
+          .filter({ hasText: "Categories temporarily unavailable" });
+        await error.waitFor();
+        expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+        await error.getByRole("button", { name: "Try again" }).click();
+        await named(chips, "button", "Channels").waitFor();
+        expect(await page.locator(".plugin-catalog-grid--skeleton").count()).toBeGreaterThan(0);
+        expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+        expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+        await gateway.resolveDeferred("plugins.catalog.browse");
+        await page
+          .locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)")
+          .first()
+          .waitFor();
+        await named(chips, "button", "Featured").click();
+        await gateway.waitForRequest("plugins.catalog.browse", { match: { intent: "featured" } });
+        expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+      },
+    );
   });
 
   it("redirects the retired discovery URL to the Plugins workspace", async () => {
-    const context = await createContext({ height: 768, width: 1366 });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: [
-        "config.get",
-        "plugins.list",
-        "plugins.catalog.browse",
-        "plugins.catalog.categories",
-      ],
-      methodResponses,
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/plugins/discover?query=calendar#featured`);
-      await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
-      const location = new URL(page.url());
-      expect(`${location.pathname}${location.search}${location.hash}`).toBe(
-        "/plugins?query=calendar#featured",
-      );
-      await named(page, "searchbox", "Search plugins").waitFor();
-    } finally {
-      await context.close();
-    }
+    await withWorkspace(
+      { height: 768, width: 1366 },
+      { featureMethods: ["config.get", ...catalogMethods] },
+      async (page) => {
+        await page.goto(`${suite.server.baseUrl}settings/plugins/discover?query=calendar#featured`);
+        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+        const location = new URL(page.url());
+        expect(`${location.pathname}${location.search}${location.hash}`).toBe(
+          "/plugins?query=calendar#featured",
+        );
+        await named(page, "searchbox", "Search plugins").waitFor();
+      },
+    );
   });
 
   it.each([
@@ -466,103 +372,82 @@ suite.define(() => {
     { label: "narrow", viewport: { height: 852, width: 393 } },
   ])(
     "keeps the Plugins/Skills shell coherent through every $label transition",
-    async ({ label, viewport }) => {
-      const context = await createContext(viewport);
-      const page = await context.newPage();
-      await installMockGateway(page, {
-        featureMethods: [
-          "agents.list",
-          "config.get",
-          "plugins.list",
-          "plugins.catalog.browse",
-          "plugins.catalog.categories",
-          "skills.workshop.changes",
-          "skills.workshop.list",
-          "skills.status",
-          "skills.search",
-          "skills.library.list",
-        ],
-        methodResponses,
-      });
+    async ({ viewport }) => {
+      await withWorkspace(
+        viewport,
+        {
+          featureMethods: [
+            "agents.list",
+            "config.get",
+            ...catalogMethods,
+            "skills.workshop.changes",
+            "skills.workshop.list",
+            "skills.status",
+            "skills.search",
+            "skills.library.list",
+          ],
+        },
+        async (page) => {
+          await page.goto(`${suite.server.baseUrl}plugins`);
+          await page.addStyleTag({
+            content:
+              "*, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }",
+          });
+          await page.evaluate(() => document.fonts.ready.then(() => undefined));
+          await named(page, "searchbox", "Search plugins").waitFor();
+          const pluginsHeader = await expectWorkspace(page, "plugins");
+          expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
+          expect(await named(page, "tab", "Plugins").getAttribute("active")).not.toBeNull();
+          expect(await page.getByRole("tab", { name: /Installed|Discover/u }).count()).toBe(0);
+          expect(await page.locator(".plugins-tabs").count()).toBe(1);
+          expect(await page.locator(".plugins-tabs.oc-segmented").count()).toBe(0);
+          const tabBox = await page.locator(".plugins-tabs").boundingBox();
+          const pluginTabBox = await named(page, "tab", "Plugins").boundingBox();
+          expect(tabBox).not.toBeNull();
+          expect(pluginTabBox).not.toBeNull();
+          expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
+          const pluginInstallPresentation = await installButtonPresentation(page);
 
-      try {
-        await page.goto(`${suite.server.baseUrl}plugins`);
-        await page.addStyleTag({
-          content:
-            "*, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }",
-        });
-        await page.evaluate(() => document.fonts.ready.then(() => undefined));
-        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
-        await named(page, "searchbox", "Search plugins").waitFor();
-        const pluginsHeader = await headerGeometry(page);
-        await captureScreenshot(page, `${label}-01-installed-plugins.png`);
-        expect(pluginsHeader.title).toBe("Plugins");
-        await expectHeaderCopy(page, "plugins");
-        expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
-        expect(await named(page, "tab", "Plugins").getAttribute("active")).not.toBeNull();
-        expect(await page.getByRole("tab", { name: /Installed|Discover/u }).count()).toBe(0);
-        expect(await page.locator(".plugins-tabs").count()).toBe(1);
-        expect(await page.locator(".plugins-tabs.oc-segmented").count()).toBe(0);
-        const tabBox = await page.locator(".plugins-tabs").boundingBox();
-        const pluginTabBox = await named(page, "tab", "Plugins").boundingBox();
-        expect(tabBox).not.toBeNull();
-        expect(pluginTabBox).not.toBeNull();
-        expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
-        await expectActivePanelLabel(page, "plugins-tab-plugins");
-        const pluginInstallPresentation = await installButtonPresentation(page);
+          const skillsTab = named(page.locator(".plugins-hub-tabs"), "tab", "Skills");
+          await skillsTab.focus();
+          await page.keyboard.press("Enter");
+          await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+          await expect
+            .poll(() =>
+              named(page, "searchbox", "Search skills").evaluate(
+                (input) => input === document.activeElement,
+              ),
+            )
+            .toBe(true);
+          await expectWorkspace(page, "skills", pluginsHeader);
+          expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
 
-        const skillsTab = named(page.locator(".plugins-hub-tabs"), "tab", "Skills");
-        await skillsTab.focus();
-        await page.keyboard.press("Enter");
-        await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
-        await expect
-          .poll(() =>
-            named(page, "searchbox", "Search skills").evaluate(
-              (input) => input === document.activeElement,
-            ),
-          )
-          .toBe(true);
-        expectStableHeader(await headerGeometry(page), pluginsHeader);
-        await expectHeaderCopy(page, "skills");
-        await expectActivePanelLabel(page, "plugins-tab-skills");
-        expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
-        await captureScreenshot(page, `${label}-02-skills.png`);
+          const workshopTab = named(page, "tab", "Skill workshop");
+          await workshopTab.focus();
+          await page.keyboard.press("Enter");
+          await waitForControlUiRoute(page, {
+            pathname: "/skills/workshop",
+            routeId: "skill-workshop",
+          });
+          await expect
+            .poll(() =>
+              page.evaluate(
+                () =>
+                  document.activeElement?.id ||
+                  document.activeElement?.getAttribute("aria-label") ||
+                  document.activeElement?.tagName,
+              ),
+            )
+            .toBe("plugins-tab-skill-workshop");
+          await expectWorkspace(page, "skill-workshop", pluginsHeader);
+          expect(await named(page, "tab", "Skill workshop").getAttribute("active")).not.toBeNull();
 
-        const workshopTab = named(page, "tab", "Skill workshop");
-        await workshopTab.focus();
-        await page.keyboard.press("Enter");
-        await waitForControlUiRoute(page, {
-          pathname: "/skills/workshop",
-          routeId: "skill-workshop",
-        });
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.activeElement?.id ||
-                document.activeElement?.getAttribute("aria-label") ||
-                document.activeElement?.tagName,
-            ),
-          )
-          .toBe("plugins-tab-skill-workshop");
-        expectStableHeader(await headerGeometry(page), pluginsHeader);
-        await expectHeaderCopy(page, "skill-workshop");
-        await expectActivePanelLabel(page, "plugins-tab-skill-workshop");
-        expect(await named(page, "tab", "Skill workshop").getAttribute("active")).not.toBeNull();
-        await captureScreenshot(page, `${label}-03-workshop.png`);
-
-        await named(page.locator(".plugins-hub-tabs"), "tab", "Skills").click();
-        await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
-        expectStableHeader(await headerGeometry(page), pluginsHeader);
-        await expectHeaderCopy(page, "skills");
-        await expectActivePanelLabel(page, "plugins-tab-skills");
-        await named(page, "tab", "Plugins").click();
-        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
-        expectStableHeader(await headerGeometry(page), pluginsHeader);
-        await expectHeaderCopy(page, "plugins");
-      } finally {
-        await context.close();
-      }
+          await named(page.locator(".plugins-hub-tabs"), "tab", "Skills").click();
+          await expectWorkspace(page, "skills", pluginsHeader);
+          await named(page, "tab", "Plugins").click();
+          await expectWorkspace(page, "plugins", pluginsHeader);
+        },
+      );
     },
   );
 });

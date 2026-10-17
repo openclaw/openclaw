@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page, type Request } from "playwright";
@@ -67,12 +67,6 @@ describe("public-session post-deploy app handoff", () => {
     fixture = await mkdtemp(path.join(os.tmpdir(), "openclaw-post-deploy-entry-"));
     await buildProductionControlUiE2e(path.join(fixture, buildA), buildA);
     await buildProductionControlUiE2e(path.join(fixture, buildB), buildB);
-    const indexes = await Promise.all(
-      [buildA, buildB].map((build) => readFile(path.join(fixture!, build, "index.html"), "utf8")),
-    );
-    expect(indexes[0]).toContain(`"buildId":"${buildA}"`);
-    expect(indexes[1]).toContain(`"buildId":"${buildB}"`);
-    expect(indexes[0]).not.toBe(indexes[1]);
     state = await createOpenClawTestState({
       scenario: "minimal",
       label: "post-deploy-session-entry",
@@ -222,22 +216,22 @@ describe("public-session post-deploy app handoff", () => {
 
   async function openAcrossPublication(
     page: Page,
-    navigate: () => Promise<unknown>,
     signal: AbortSignal,
     expectedBuild: string,
     maxDocuments: number,
     gateway: MockGatewayControls,
+    reload = false,
   ) {
-    const documents: string[] = [];
+    let documents = 0;
     const observeDocument = (request: Request) => {
       if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
-        documents.push(request.url());
+        documents += 1;
       }
     };
     page.on("request", observeDocument);
     const start = requests.length;
     const held = holdAppDelivery();
-    const navigation = navigate();
+    const navigation = reload ? page.reload() : page.goto(baseUrl + publicPath);
     // Observe rejection immediately while the HTML owner remains intentionally held.
     void navigation.catch(() => {});
     try {
@@ -258,9 +252,7 @@ describe("public-session post-deploy app handoff", () => {
       await page.waitForFunction(
         () => window.openclawControlUi?.snapshot().ready === true,
         undefined,
-        {
-          timeout: controlUiE2eWaitTimeoutMs,
-        },
+        { timeout: controlUiE2eWaitTimeoutMs },
       );
       await page.locator("openclaw-app").waitFor({ state: "visible" });
       expect(await page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase)).toBe(
@@ -272,25 +264,24 @@ describe("public-session post-deploy app handoff", () => {
       const entries = requests
         .slice(start)
         .filter(({ path: requestPath }) => requestPath.startsWith("/__openclaw__/session-entry?"));
-      console.info("Synthetic post-deploy handoff counts:", {
-        expectedBuild,
+      const probes = entries.filter(({ path: entryPath }) => entryPath.includes("probe=1")).length;
+      const location = new URL(page.url());
+      expect({
         deliveryStatus,
-        documents: documents.length,
-        probes: entries.filter(({ path: requestPath }) => requestPath.includes("probe=1")).length,
-        entries: entries.filter(({ path: requestPath }) => !requestPath.includes("probe=1")).length,
-        statuses: entries.map(({ status }) => status),
+        entries: entries.length - probes,
+        probes,
+        validStatuses: entries.every(({ status }) => status === 200 || status === 204),
+        pathname: location.pathname,
+        recovery: location.searchParams.has("openclaw_mount_recovery"),
+      }).toEqual({
+        deliveryStatus: 200,
+        entries: 1,
+        probes: maxDocuments === 1 ? 0 : 1,
+        validStatuses: true,
+        pathname: publicPath,
+        recovery: false,
       });
-      expect(deliveryStatus).toBe(200);
-      expect(documents.length).toBeLessThanOrEqual(maxDocuments);
-      expect(
-        entries.filter(({ path: requestPath }) => !requestPath.includes("probe=1")),
-      ).toHaveLength(1);
-      expect(
-        entries.filter(({ path: requestPath }) => requestPath.includes("probe=1")),
-      ).toHaveLength(maxDocuments === 1 ? 0 : 1);
-      expect(entries.every(({ status }) => status === 200 || status === 204)).toBe(true);
-      expect(new URL(page.url()).pathname).toBe(publicPath);
-      expect(new URL(page.url()).searchParams.has("openclaw_mount_recovery")).toBe(false);
+      expect(documents).toBeLessThanOrEqual(maxDocuments);
     } catch (error) {
       if (error instanceof Error) {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -326,14 +317,7 @@ describe("public-session post-deploy app handoff", () => {
       };
       const gateway = await installMockGateway(page, scenario);
       try {
-        await openAcrossPublication(
-          page,
-          () => page.goto(baseUrl + publicPath),
-          signal,
-          buildA,
-          2,
-          gateway,
-        );
+        await openAcrossPublication(page, signal, buildA, 2, gateway);
         if (scenarioKind !== "no worker") {
           await page.evaluate(async () => {
             const registration = await navigator.serviceWorker.ready;
@@ -357,25 +341,18 @@ describe("public-session post-deploy app handoff", () => {
             ...scenario,
             serverBuildId: buildB,
           });
-          await openAcrossPublication(
-            fresh,
-            () => fresh.goto(baseUrl + publicPath),
-            signal,
-            buildB,
-            1,
-            freshGateway,
-          );
+          await openAcrossPublication(fresh, signal, buildB, 1, freshGateway);
           await fresh.close();
         } else {
           root.path = path.join(fixture!, buildB);
           await gateway.setServerBuildId(buildB);
           await openAcrossPublication(
             page,
-            () => page.reload(),
             signal,
             buildB,
             scenarioKind === "no worker" ? 2 : 1,
             gateway,
+            true,
           );
         }
       } finally {

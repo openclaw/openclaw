@@ -1,21 +1,18 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type {
-  PluginCatalogItem,
-  PluginDiscoveryDetailResult,
-  PluginsInspectResult,
-} from "../lib/plugins/index.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type * as Plugins from "../lib/plugins/index.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { named, objectSchema } from "./plugins-settings-admin.test-support.ts";
+import {
+  configMocks,
+  inspection as baseInspection,
+  named,
+  objectSchema,
+  pluginConfigSchema,
+} from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin request ownership" });
-const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const featureMethods = [
   "config.get",
   "config.schema",
@@ -27,7 +24,7 @@ const featureMethods = [
   "plugins.catalog.get",
   "plugins.install",
 ];
-const workboard: PluginCatalogItem = {
+const workboard: Plugins.PluginCatalogItem = {
   id: "workboard",
   name: "Workboard",
   origin: "global",
@@ -38,7 +35,7 @@ const workboard: PluginCatalogItem = {
   catalogId: "ch_d29ya2JvYXJk",
 };
 
-function detail(id: string, name: string, installed = false): PluginDiscoveryDetailResult {
+function detail(id: string, name: string, installed = false): Plugins.PluginDiscoveryDetailResult {
   return {
     plugin: {
       id,
@@ -63,38 +60,19 @@ function detail(id: string, name: string, installed = false): PluginDiscoveryDet
   };
 }
 
-function inspection(skill: string): PluginsInspectResult {
+function inspection(skill: string): Plugins.PluginsInspectResult {
+  const { id, name, origin, installed, enabled } = workboard;
   return {
     ok: true,
     reviewToken: "synthetic-review",
-    plugin: {
-      id: "workboard",
-      name: "Workboard",
-      origin: "global",
-      installed: true,
-      enabled: true,
-    },
+    plugin: { id, name, origin, installed, enabled },
     source: { kind: "npm", packageName: "workboard" },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    declared: { ...baseInspection.declared, tools: [] },
     components: {
+      ...baseInspection.components,
       mapped: ["skills"],
       skills: [skill],
       mcpServers: [],
-      commands: [],
-      hooks: [],
-      lspServers: [],
-      unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
     },
     grants: {
       hooks: {
@@ -108,30 +86,21 @@ function inspection(skill: string): PluginsInspectResult {
 function configResponse(greeting: string) {
   const config = { plugins: { entries: { workboard: { config: { greeting } } } } };
   return {
+    ...configMocks["config.get"],
     config,
     hash: greeting,
     appliedConfigHash: greeting,
-    issues: [],
     raw: JSON.stringify(config),
-    valid: true,
   };
 }
 
-async function captureSettled(page: Page, name: string, surface: Locator = page.locator(".shell")) {
-  // Delivered RPC callbacks and Lit updates settle before sampling the visible surface.
+async function settleRender(page: Page) {
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
       }),
   );
-  if (capture) {
-    const dir = createControlUiE2eArtifactDir(name);
-    await writeFile(
-      path.join(dir, "result.png"),
-      await takeControlUiViewportScreenshot(page, surface, [page.locator("openclaw-plugins-page")]),
-    );
-  }
 }
 
 suite.define(() => {
@@ -150,15 +119,10 @@ suite.define(() => {
           },
           "config.get": configResponse("Before"),
           "config.schema": {
-            schema: objectSchema({
-              plugins: objectSchema({
-                entries: objectSchema({
-                  workboard: objectSchema({
-                    config: objectSchema({ greeting: { type: "string", title: "Greeting" } }),
-                  }),
-                }),
-              }),
-            }),
+            schema: pluginConfigSchema(
+              "workboard",
+              objectSchema({ greeting: { type: "string", title: "Greeting" } }),
+            ),
             uiHints: {},
             version: "synthetic",
             generatedAt: "2026-09-01T00:00:00.000Z",
@@ -185,7 +149,7 @@ suite.define(() => {
         "plugins.catalog.get",
         detail(workboard.catalogId!, "Workboard", true),
       );
-      await captureSettled(page, "plugin-inspection-ownership");
+      await settleRender(page);
       expect(await rows.allTextContents()).toEqual(["Current skill"]);
       expect(await gateway.getRequests("plugins.inspect")).toHaveLength(2);
     });
@@ -201,17 +165,7 @@ suite.define(() => {
         methodResponses: {
           "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
           "plugins.catalog.browse": { items: [alpha.plugin, beta.plugin] },
-          "plugins.catalog.categories": {
-            categories: [
-              {
-                slug: "productivity",
-                label: "Productivity",
-                description: "Tasks and work organization.",
-                icon: "list-todo",
-                order: 0,
-              },
-            ],
-          },
+          "plugins.catalog.categories": { categories: [] },
           "plugins.catalog.get": beta,
         },
       });
@@ -222,7 +176,7 @@ suite.define(() => {
       const request = await gateway.waitForRequest("plugins.install");
       expect(request.params).toEqual({ source: "clawhub", packageName: "beta" });
       await gateway.resolveDeferred("plugins.catalog.get", alpha);
-      await captureSettled(page, "plugin-installing-ownership");
+      await settleRender(page);
       expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
       expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
       await gateway.rejectDeferred("plugins.install", {

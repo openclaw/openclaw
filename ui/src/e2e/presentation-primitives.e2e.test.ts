@@ -1,13 +1,9 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pauseVirtualClock, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { named } from "./plugins-settings-admin.test-support.ts";
 
-const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const groups = [
   "settings",
   "controls",
@@ -23,26 +19,14 @@ const suite = createControlUiE2eSuite({
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 
-async function captureGroup(page: Page, name: string) {
-  if (!capture) {
-    return;
-  }
-  const surface = page.locator(".presentation-fixture");
-  // Keep the responsive width while fitting the complete, bounded gallery group.
-  // The loading primitives cap their viewport-dependent minimum at 360px.
-  const height = await surface.evaluate(
-    (element) => Math.ceil(element.getBoundingClientRect().height) + 32,
-  );
-  expect(height).toBeLessThan(5000);
-  const frame = await takeControlUiScreenshotFrame(page, surface, [surface.locator("h1").first()], {
-    viewport: { width: page.viewportSize()!.width, height: Math.max(900, height) },
-    elements: [surface],
-    animations: "disabled",
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.elements[0]!.png);
-}
-
 async function assertControlledInputs(page: Page) {
+  const segmented = (title: string) =>
+    page
+      .locator(".settings-row")
+      .filter({
+        has: page.locator(".settings-row__title").filter({ hasText: new RegExp(`^${title}$`) }),
+      })
+      .locator(".settings-segmented");
   const accepted = named(page, "switch", "Accept toggle");
   await page
     .locator(".settings-row__title")
@@ -56,31 +40,16 @@ async function assertControlledInputs(page: Page) {
   expect(await page.locator("#fixture-outcome").textContent()).toBe("toggle:rejected");
   expect(await named(page, "switch", "Disabled toggle").isDisabled()).toBe(true);
 
-  const quality = page
-    .locator(".settings-row")
-    .filter({
-      has: page.locator(".settings-row__title").filter({ hasText: /^Quality$/ }),
-    })
-    .locator(".settings-segmented");
+  const quality = segmented("Quality");
   expect(await named(page, "radiogroup", "Quality").count()).toBe(1);
   await quality.locator(".settings-segmented__btn").filter({ hasText: "Fast" }).click();
   await expect.poll(() => named(quality, "radio", "Fast").isChecked()).toBe(true);
   expect(await named(quality, "radio", "Unavailable").isDisabled()).toBe(true);
-  const rejectedQuality = page
-    .locator(".settings-row")
-    .filter({
-      has: page.locator(".settings-row__title").filter({ hasText: /^Rejected quality$/ }),
-    })
-    .locator(".settings-segmented");
+  const rejectedQuality = segmented("Rejected quality");
   await rejectedQuality.locator(".settings-segmented__btn").filter({ hasText: "Fast" }).click();
   expect(await named(rejectedQuality, "radio", "Balanced").isChecked()).toBe(true);
   expect(await named(rejectedQuality, "radio", "Fast").isChecked()).toBe(false);
-  const disabledQuality = page
-    .locator(".settings-row")
-    .filter({
-      has: page.locator(".settings-row__title").filter({ hasText: /^Disabled quality$/ }),
-    })
-    .locator(".settings-segmented");
+  const disabledQuality = segmented("Disabled quality");
   expect(await named(disabledQuality, "radio", "Fast").isDisabled()).toBe(true);
 }
 
@@ -203,50 +172,42 @@ suite.define(() => {
                 await page.getByRole("button", { name: /Advanced/ }).click();
                 expect(await page.locator("#fixture-outcome").textContent()).toBe("advanced");
               } else if (group === "icons") {
-                expect(
-                  await surface
-                    .locator("svg")
-                    .evaluateAll((icons) =>
-                      icons.every(
-                        (icon) =>
-                          icon.namespaceURI === "http://www.w3.org/2000/svg" &&
-                          icon.getBoundingClientRect().width > 0 &&
-                          icon.childElementCount > 0,
-                      ),
+                const validIcons = await surface
+                  .locator("svg")
+                  .evaluateAll((icons) =>
+                    icons.every(
+                      (icon) =>
+                        icon.namespaceURI === "http://www.w3.org/2000/svg" &&
+                        icon.getBoundingClientRect().width > 0 &&
+                        icon.childElementCount > 0,
                     ),
-                ).toBe(true);
+                  );
+                expect(validIcons).toBe(true);
                 expect(await surface.locator('[data-provider-icon="gemini"]').count()).toBe(1);
                 expect(await surface.locator('[data-provider-icon="gcp"]').count()).toBe(1);
+              } else if (group === "controls") {
+                await assertControlledInputs(page);
+                await assertSecretInput(page);
+              } else if (group === "feedback") {
+                await assertFeedback(page);
+                await assertShadowParentStyles(
+                  page,
+                  "openclaw-panel-empty-state",
+                  ".empty-state__title",
+                );
               } else if (group.startsWith("skeleton-")) {
                 const skeletons = surface.locator("openclaw-panel-loading-skeleton");
                 expect(await skeletons.count()).toBe(
                   group === "skeleton-content" ? 4 : group === "skeleton-conversation" ? 5 : 3,
                 );
                 expect(await skeletons.first().getAttribute("aria-busy")).toBe("true");
-              }
-              await captureGroup(page, `Solid-${theme}-${viewport.name}-${group}`);
-              if (group === "controls") {
-                await assertControlledInputs(page);
-                await assertSecretInput(page);
-                await captureGroup(page, `Solid-${theme}-${viewport.name}-controls-changed`);
-                await page.evaluate(() => {
-                  document.documentElement.dir = "rtl";
-                });
-                await captureGroup(page, `Solid-${theme}-${viewport.name}-controls-rtl`);
-              } else if (group === "feedback") {
-                await assertFeedback(page);
-                await captureGroup(page, `Solid-${theme}-${viewport.name}-feedback-active`);
-                await assertShadowParentStyles(
-                  page,
-                  "openclaw-panel-empty-state",
-                  ".empty-state__title",
-                );
-              } else if (group === "skeleton-content") {
-                await assertShadowParentStyles(
-                  page,
-                  "openclaw-panel-loading-skeleton",
-                  ".skeleton.line",
-                );
+                if (group === "skeleton-content") {
+                  await assertShadowParentStyles(
+                    page,
+                    "openclaw-panel-loading-skeleton",
+                    ".skeleton.line",
+                  );
+                }
               }
             }
           },
