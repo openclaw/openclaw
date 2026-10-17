@@ -53,13 +53,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       senderId: string,
       approvalKind: "exec" | "plugin",
       request?: typeof execRequest,
-    ) =>
-      authorizeActorAction({
-        ...actionInput,
-        senderId,
-        approvalKind,
-        request,
-      });
+    ) => authorizeActorAction({ ...actionInput, senderId, approvalKind, request });
     expect(authorize("exec-owner", "exec")).toEqual({ authorized: true });
     expect(authorize("plugin-owner", "plugin")).toEqual({ authorized: true });
     expect(authorize("someone-else", "plugin")).toEqual({
@@ -85,8 +79,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       resolveOriginTarget: () => ({ to: "origin-chat" }),
       resolveApproverDmTargets: () => [{ to: "approver-1" }],
     });
-    const getActionAvailabilityState = adapter.auth.getActionAvailabilityState;
-    const getExecInitiatingSurfaceState = adapter.auth.getExecInitiatingSurfaceState;
+    const { getActionAvailabilityState, getExecInitiatingSurfaceState } = adapter.auth;
     const hasConfiguredDmRoute = adapter.delivery;
     if (
       !getActionAvailabilityState ||
@@ -108,12 +101,9 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(availability("no-approvers")).toEqual({ kind: "disabled" });
     expect(availability("disabled")).toEqual({ kind: "enabled" });
     expect(availability("disabled", "plugin")).toEqual({ kind: "enabled" });
-    expect(
-      getExecInitiatingSurfaceState({
-        ...actionInput,
-        accountId: "disabled",
-      }),
-    ).toEqual({ kind: "disabled" });
+    expect(getExecInitiatingSurfaceState({ ...actionInput, accountId: "disabled" })).toEqual({
+      kind: "disabled",
+    });
     expect(hasConfiguredDmRoute.hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
     expect(nativeCapabilities).toEqual({
       enabled: true,
@@ -278,20 +268,12 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     } as never;
     const input = { cfg, accountId: "default", approvalKind: "exec", action: "approve" } as const;
 
-    expect(
-      routed.capability.authorizeActorAction?.({
-        ...input,
-        senderId: "owner",
-      }),
-    ).toBe(authResult);
+    expect(routed.capability.authorizeActorAction?.({ ...input, senderId: "owner" })).toBe(
+      authResult,
+    );
     expect(routed.capability.render).toBe(render);
     expect(routed.capability.getActionAvailabilityState?.(input)).toEqual({ kind: "enabled" });
-    expect(
-      routed.capability.native?.describeDeliveryCapabilities({
-        ...input,
-        request,
-      }),
-    ).toEqual({
+    expect(routed.capability.native?.describeDeliveryCapabilities({ ...input, request })).toEqual({
       enabled: true,
       preferredSurface: "origin",
       supportsOriginSurface: true,

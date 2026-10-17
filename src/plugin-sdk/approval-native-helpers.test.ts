@@ -15,9 +15,7 @@ import {
 import type { OpenClawConfig } from "./config-contracts.js";
 
 const EMPTY_SESSION_CFG = {
-  session: {
-    store: ".artifacts/test/approval-native-helpers-empty-sessions.json",
-  },
+  session: { store: ".artifacts/test/approval-native-helpers-empty-sessions.json" },
 } satisfies OpenClawConfig;
 
 function createMatrixRouteGates(options?: {
@@ -68,11 +66,7 @@ const matrixExecRequest = {
 const matrixPluginRequest = {
   ...matrixExecRequest,
   id: "plugin:req-1",
-  request: {
-    ...matrixRoute,
-    description: "Allow access",
-    title: "Plugin approval",
-  },
+  request: { ...matrixRoute, description: "Allow access", title: "Plugin approval" },
 } as const;
 
 function execRequest(request: Partial<ExecApprovalRequest["request"]>) {
@@ -113,11 +107,7 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
       ),
     ).toEqual({ to: "owner", accountId: "work" });
     expect(
-      resolvers.resolveSessionTarget({
-        channel: "signal",
-        to: " OWNER ",
-        accountId: " work ",
-      }),
+      resolvers.resolveSessionTarget({ channel: "signal", to: " OWNER ", accountId: " work " }),
     ).toEqual({ to: "owner", accountId: "work" });
     expect(resolvers.normalizeTarget({ to: " OWNER ", threadId: 42 })).toEqual({
       to: "owner",
@@ -127,11 +117,7 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
 
   it("rejects other channels and invalid destinations", () => {
     expect(
-      resolvers.normalizeForwardTarget({
-        channel: "slack",
-        to: "owner",
-        source: "target",
-      }),
+      resolvers.normalizeForwardTarget({ channel: "slack", to: "owner", source: "target" }),
     ).toBeNull();
     expect(
       resolvers.resolveTurnSourceTarget(
@@ -153,10 +139,7 @@ describe("createNativeApprovalChannelRouteGates", () => {
     const cfg = {
       approvals: {
         ...targetsConfig.approvals,
-        plugin: {
-          enabled: true,
-          mode: "session",
-        },
+        plugin: { enabled: true, mode: "session" },
       },
     } satisfies OpenClawConfig;
 
@@ -273,13 +256,9 @@ describe("createChannelNativeOriginTargetResolver", () => {
   it("uses shared route semantics for the default target matcher", () => {
     const origin = { to: "-100123", threadId: 42.9 };
     const session = { to: "-100123", threadId: "42" };
-    expect(
-      nativeApprovalTargetsMatch({
-        channel: "telegram",
-        left: origin,
-        right: session,
-      }),
-    ).toBe(true);
+    expect(nativeApprovalTargetsMatch({ channel: "telegram", left: origin, right: session })).toBe(
+      true,
+    );
     expect(
       nativeApprovalTargetsMatch({
         channel: "telegram",
@@ -470,10 +449,7 @@ describe("shouldSuppressLocalNativeExecApprovalPrompt", () => {
         payload,
         hint: activeExecHint,
         isNativeDeliveryEnabled: () => enabled,
-        resolveApprovalConfig: () => ({
-          enabled: true,
-          sessionFilter: ["discord:direct"],
-        }),
+        resolveApprovalConfig: () => ({ enabled: true, sessionFilter: ["discord:direct"] }),
         enforceForwardingMode: false,
         fallbackAgentIdFromSessionKey: false,
       });
