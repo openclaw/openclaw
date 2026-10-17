@@ -1796,7 +1796,7 @@ describe("cron method validation", () => {
       expect(context.cron.update).not.toHaveBeenCalled();
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "explicit payload.toolsAllow cap",
+        messageIncludes: "owned by another conversation or account",
       });
     },
   );
@@ -1871,7 +1871,7 @@ describe("cron method validation", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
       client = callerClient("ops", "work", "agent:ops:discord:work:direct:user-2");
       await expect(edit({ message: "another session" })).rejects.toThrow(
-        "explicit payload.toolsAllow cap",
+        "owned by another conversation or account",
       );
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
       client = callerClient("ops", "work", sessionKey);
@@ -1886,6 +1886,109 @@ describe("cron method validation", () => {
     } finally {
       cron.stop();
     }
+  });
+
+  it("adopts the authorized caller when it caps an ownerless legacy job, then keeps others out", async () => {
+    const { storePath } = await makeStorePath();
+    const sessionKey = "agent:ops:telegram:group:-1001";
+    const legacy = createCronJob({
+      enabled: false,
+      agentId: "ops",
+      payload: { kind: "agentTurn", message: "legacy" },
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [legacy] });
+    const cfg: OpenClawConfig = { agents: { entries: { ops: {} } } };
+    await applyLegacyCronStoreRepair({
+      cfg,
+      state: expectDefined(
+        await loadLegacyCronRepairState({ cfg, storePath }),
+        "legacy cron repair state",
+      ),
+    });
+    expect((await loadCronStore(storePath)).jobs[0]?.owner).toBeUndefined();
+    const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "ops",
+      log: cronLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const context = createCronContext();
+    context.cron.readJob.mockImplementation((id) => cron.readJob(id));
+    context.cron.updateWithPrecondition.mockImplementation((...args) =>
+      cron.updateWithPrecondition(...args),
+    );
+    let client = callerClient("ops", "default", sessionKey);
+    const edit = async (patch: Record<string, unknown>) =>
+      await updateCronJobFromAgentTool({
+        id: legacy.id,
+        patch,
+        creatorToolAllowlist: [{ name: "read" }],
+        gatewayOpts: {},
+        callGateway: async (method, _opts, params) => {
+          const { respond } = await invokeCron(method, requireRecord(params, "cron params"), {
+            context,
+            client,
+          });
+          const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
+          if (!ok) {
+            throw new Error(error.message);
+          }
+          return result;
+        },
+      });
+    try {
+      await expect(edit({ payload: { message: "prompt only" } })).rejects.toThrow(
+        "Resend the edit with payload.toolsAllow",
+      );
+      await expect(
+        edit({ enabled: true, payload: { kind: "agentTurn", message: "new", toolsAllow: [] } }),
+      ).resolves.toMatchObject({ enabled: true });
+      const adopted = expectDefined((await loadCronStore(storePath)).jobs[0], "adopted job");
+      expect(adopted).toMatchObject({
+        owner: { agentId: "ops", sessionKey, accountId: "default" },
+        payload: { kind: "agentTurn", message: "new", toolsAllow: [] },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: sessionKey,
+          ownerAccountId: "default",
+        },
+      });
+
+      client = callerClient("ops", "default", "agent:ops:telegram:group:-1002");
+      await expect(
+        edit({ payload: { kind: "agentTurn", message: "takeover", toolsAllow: ["exec"] } }),
+      ).rejects.toThrow("Automation not found: cron-1");
+      expect((await loadCronStore(storePath)).jobs[0]).toEqual(adopted);
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("refuses a cap edit from a session that does not own the job", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { payload: { kind: "agentTurn", message: "takeover", toolsAllow: ["exec"] } },
+      },
+      createCronJob({
+        agentId: "ops",
+        owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
+        payload: { kind: "agentTurn", message: "legacy" },
+      }),
+      { client: callerClient("ops", "default", "agent:ops:telegram:group:-1002") },
+    );
+
+    expect(context.cron.updateWithPrecondition).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "owned by another conversation or account",
+    });
   });
 
   it("rejects a blank cron.update display name", async () => {

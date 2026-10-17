@@ -99,6 +99,13 @@ An explicit permission edit still requires matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
 
+Automations created before owner attribution have no creator at all. A
+conversation that can already manage such a job adopts it when it sets the
+job's tool cap (`payload.toolsAllow`, `[]` for none): the job then runs within
+that conversation's account policy, and other conversations can no longer
+change it. A prompt-only edit to such a job asks for the cap first. Jobs that
+already have a creator session are never adopted by another conversation.
+
 ```bash
 # List enabled jobs
 openclaw automations list

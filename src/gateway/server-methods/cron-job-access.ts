@@ -4,6 +4,7 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobPatch } from "../../cron/types.js";
 import {
   createAgentDatabaseAdmissionErrorShape,
@@ -21,17 +22,10 @@ import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
-export function isLegacyCreatorPromptUpdate(
-  job: CronJob,
-  patch: CronJobPatch,
-  callerScope: CronCallerScope | undefined,
-): boolean {
+function isLegacyCreatorPromptUpdate(job: CronJob, patch: CronJobPatch): boolean {
   // A prompt edit keeps the legacy execution policy; it cannot establish new
   // authority or transfer management to another session/account.
   return (
-    callerScope?.sessionKey !== undefined &&
-    job.owner?.sessionKey === callerScope.sessionKey &&
-    job.owner?.accountId === callerScope.accountId &&
     job.scheduledToolPolicy === undefined &&
     job.payload.kind === "agentTurn" &&
     patch.payload !== undefined &&
@@ -40,6 +34,48 @@ export function isLegacyCreatorPromptUpdate(
     Object.keys(patch.payload).every((key) => key === "kind" || key === "message")
   );
 }
+
+/** Plain refusal a scoped model caller can act on when a tool-runtime edit needs ownership. */
+export function resolveCronScopedToolEditRefusal(params: {
+  job: CronJob;
+  nextJob: CronJob;
+  patch: CronJobPatch;
+  callerScope: CronCallerScope | undefined;
+}): string | undefined {
+  const { job, nextJob, patch, callerScope } = params;
+  if (!callerScope || callerScope.manageAll || !cronJobUsesToolRuntime(nextJob)) {
+    return undefined;
+  }
+  const ownedByCaller =
+    callerScope.sessionKey !== undefined &&
+    job.owner?.sessionKey === callerScope.sessionKey &&
+    job.owner?.accountId === callerScope.accountId;
+  const foreignOwner = job.owner?.sessionKey !== undefined && !ownedByCaller;
+  const setsToolsAllow = patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow");
+  if (foreignOwner && setsToolsAllow) {
+    return CRON_FOREIGN_OWNER_REFUSAL;
+  }
+  if (
+    nextJob.payload.toolsAllow !== undefined ||
+    (ownedByCaller && isLegacyCreatorPromptUpdate(job, patch))
+  ) {
+    return undefined;
+  }
+  if (!job.owner?.sessionKey) {
+    return (
+      "This automation predates tool limits and has no owner yet. Resend the edit with " +
+      "payload.toolsAllow listing the tools it needs (use [] for none); this conversation " +
+      "then becomes its owner."
+    );
+  }
+  return foreignOwner
+    ? CRON_FOREIGN_OWNER_REFUSAL
+    : "Include payload.toolsAllow listing the tools this automation needs (use [] for none).";
+}
+
+const CRON_FOREIGN_OWNER_REFUSAL =
+  "This automation is owned by another conversation or account. Only its owner or an operator " +
+  "can change its prompt or tools; you can create a new automation here instead.";
 
 export function respondRefusedCronAgent(agentId: string | undefined, respond: RespondFn): boolean {
   const refusal = agentId ? readAgentDatabaseAdmissionRefusal(agentId) : undefined;
