@@ -46,26 +46,18 @@ async function waitForTransportExit(pids: number[], signal: AbortSignal): Promis
 async function writeHarnessPlugin(stateDir: string): Promise<void> {
   const pluginDir = path.join(stateDir, "extensions", "exec-proof");
   await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "exec-proof",
-      name: "Agent exec proof harness",
-      activation: { onStartup: false, onAgentHarnesses: ["exec-proof"] },
-      configSchema: { type: "object", additionalProperties: false },
-    }),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "exec-proof",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    }),
-    "utf8",
-  );
+  await writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+    id: "exec-proof",
+    name: "Agent exec proof harness",
+    activation: { onStartup: false, onAgentHarnesses: ["exec-proof"] },
+    configSchema: { type: "object", additionalProperties: false },
+  });
+  await writeJson(path.join(pluginDir, "package.json"), {
+    name: "exec-proof",
+    version: "1.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  });
   await fs.writeFile(
     path.join(pluginDir, "index.js"),
     `export default {
@@ -175,7 +167,11 @@ async function writeConfig(
   stateDir: string,
   config: OpenClawConfig = buildExecProofConfig(),
 ): Promise<void> {
-  await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config), "utf8");
+  await writeJson(path.join(stateDir, "openclaw.json"), config);
+}
+
+async function writeJson(file: string, value: unknown): Promise<void> {
+  await fs.writeFile(file, JSON.stringify(value), "utf8");
 }
 
 function buildChildEnv(stateDir: string): NodeJS.ProcessEnv {
@@ -197,6 +193,15 @@ function buildCliSource(args: string[]): string {
     import { runMainOrRootHelp } from "./dist/entry.js";
     await runMainOrRootHelp(${JSON.stringify(["node", "openclaw", ...args])});
   `;
+}
+
+function runBuiltScript(stateDir: string, source: string) {
+  return execFileAsync(process.execPath, ["--input-type=module", "--eval", source], {
+    cwd: path.resolve(import.meta.dirname, "../.."),
+    encoding: "utf8",
+    env: buildChildEnv(stateDir),
+    timeout: 30_000,
+  });
 }
 
 describe("agent exec built runtime", () => {
@@ -335,18 +340,7 @@ if (process.argv[2] === "--version") {
     await writeHarnessPlugin(stateDir);
     await writeConfig(stateDir);
     const source = buildCliSource(["agent", "exec", "prove plugin discovery", "--json"]);
-    const childEnv = buildChildEnv(stateDir);
-
-    const { stdout, stderr } = await execFileAsync(
-      process.execPath,
-      ["--input-type=module", "--eval", source],
-      {
-        cwd: path.resolve(import.meta.dirname, "../.."),
-        encoding: "utf8",
-        env: childEnv,
-        timeout: 30_000,
-      },
-    );
+    const { stdout, stderr } = await runBuiltScript(stateDir, source);
 
     expect(stdout, stderr).not.toBe("");
     expect(JSON.parse(stdout)).toMatchObject({
@@ -359,27 +353,17 @@ if (process.argv[2] === "--version") {
     let isolatedExitCode: number | undefined;
     let isolatedStdout = "";
     try {
-      await execFileAsync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "--eval",
-          buildCliSource([
-            "agent",
-            "exec",
-            "prove isolated discovery",
-            "--isolated",
-            "--model",
-            "exec-proof/proof-model",
-            "--json",
-          ]),
-        ],
-        {
-          cwd: path.resolve(import.meta.dirname, "../.."),
-          encoding: "utf8",
-          env: childEnv,
-          timeout: 30_000,
-        },
+      await runBuiltScript(
+        stateDir,
+        buildCliSource([
+          "agent",
+          "exec",
+          "prove isolated discovery",
+          "--isolated",
+          "--model",
+          "exec-proof/proof-model",
+          "--json",
+        ]),
       );
     } catch (error) {
       const failure = error as Error & { code?: number; stdout?: string };
@@ -436,14 +420,7 @@ if (process.argv[2] === "--version") {
       });
       fs.writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify(result));
     `;
-    const [completion] = await Promise.allSettled([
-      execFileAsync(process.execPath, ["--input-type=module", "--eval", source], {
-        cwd: path.resolve(import.meta.dirname, "../.."),
-        encoding: "utf8",
-        env: buildChildEnv(stateDir),
-        timeout: 30_000,
-      }),
-    ]);
+    const [completion] = await Promise.allSettled([runBuiltScript(stateDir, source)]);
 
     expect(
       completion,

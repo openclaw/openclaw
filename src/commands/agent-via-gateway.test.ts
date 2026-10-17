@@ -181,6 +181,19 @@ function requireFirstCallOrder(
 
 const requireRecord = createRequireRecord("record", "expected-label-object-short");
 
+function gatewayRequest(index = 0) {
+  return requireRecord(callGateway.mock.calls[index]?.[0], "gateway request");
+}
+
+function gatewayParams(index = 0) {
+  return requireRecord(gatewayRequest(index).params, "gateway request params");
+}
+
+function expectNoSignalListeners(signals: ReturnType<typeof createSignalProcess>) {
+  expect(signals.listenerCount("SIGTERM")).toBe(0);
+  expect(signals.listenerCount("SIGINT")).toBe(0);
+}
+
 function rejectOnGatewayAbort(signal: AbortSignal | undefined, onAbort?: () => Promise<void>) {
   return new Promise<never>((_, reject) => {
     signal?.addEventListener(
@@ -334,10 +347,7 @@ describe("agentCliCommand", () => {
           await agentCliCommand({ message, to: "+1555", timeout: "20" }, runtime);
 
           expect(callGateway).toHaveBeenCalledTimes(1);
-          const request = requireRecord(
-            requireFirstCallArg(callGateway, "gateway"),
-            "gateway request",
-          );
+          const request = gatewayRequest();
           expect(request.clientName).toBe(clientName);
           expect(request.mode).toBe(mode);
           expect(request.scopes).toEqual(["operator.admin"]);
@@ -364,7 +374,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(2);
-      const request = requireRecord(callGateway.mock.calls[1]?.[0], "gateway request");
+      const request = gatewayRequest(1);
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
@@ -398,7 +408,7 @@ describe("agentCliCommand", () => {
     await withTempStore(async () => {
       await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "incident-42" }, runtime);
 
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+      const request = gatewayRequest();
       expect(request.params).toMatchObject({ agentId: "ops", sessionKey: "incident-42" });
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
     }, remoteGatewayConfig);
@@ -439,7 +449,7 @@ describe("agentCliCommand", () => {
 
       await agentCliCommand({ message: "hi" }, runtime);
 
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+      const request = gatewayRequest();
       expect(request.params).toMatchObject({
         agentId: undefined,
         sessionKey,
@@ -492,13 +502,12 @@ describe("agentCliCommand", () => {
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      const params = requireRecord(request.params, "gateway request params");
+      const params = gatewayParams();
       expect(params.message).toBe(messageBody);
       expect(params.sessionKey).toBe("agent:main:incident-42");
       expect(params.sessionId).toBeUndefined();
       expect(params.to).toBeUndefined();
-      expect(request.config).toBe(loadConfig.mock.results[0]?.value);
+      expect(gatewayRequest().config).toBe(loadConfig.mock.results[0]?.value);
       expect(loadConfig).toHaveBeenCalledWith();
       expect(agentCommand).not.toHaveBeenCalled();
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
@@ -630,11 +639,7 @@ describe("agentCliCommand", () => {
         }
 
         expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
+        const params = gatewayParams();
         expect(params.message).toBe("hello from procfs descriptor");
       });
     },
@@ -667,8 +672,7 @@ describe("agentCliCommand", () => {
       await writer;
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      const params = requireRecord(request.params, "gateway request params");
+      const params = gatewayParams();
       expect(params.message).toBe("hello from fifo");
     });
   });
@@ -681,8 +685,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: sessionKey }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      const params = requireRecord(request.params, "gateway request params");
+      const params = gatewayParams();
       expect(params.sessionKey).toBe(sessionKey);
       expect(params.to).toBeUndefined();
       expect(agentCommand).not.toHaveBeenCalled();
@@ -726,11 +729,7 @@ describe("agentCliCommand", () => {
         await agentCliCommand({ message: "hi", sessionKey }, runtime);
 
         expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
+        const params = gatewayParams();
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe(expected);
       },
@@ -798,8 +797,7 @@ describe("agentCliCommand", () => {
       });
       await waitForGatewayCall();
       signals.emit(signalName);
-      expect(signals.listenerCount("SIGTERM")).toBe(0);
-      expect(signals.listenerCount("SIGINT")).toBe(0);
+      expectNoSignalListeners(signals);
 
       await run;
       expect(callGateway).toHaveBeenCalledTimes(1);
@@ -898,8 +896,7 @@ describe("agentCliCommand", () => {
       await run;
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(143);
-      expect(signals.listenerCount("SIGTERM")).toBe(0);
-      expect(signals.listenerCount("SIGINT")).toBe(0);
+      expectNoSignalListeners(signals);
     });
   });
 
@@ -976,8 +973,7 @@ describe("agentCliCommand", () => {
             expect(fallbackAbort?.scopes).toEqual(["operator.admin"]);
           }
         }
-        expect(signals.listenerCount("SIGTERM")).toBe(0);
-        expect(signals.listenerCount("SIGINT")).toBe(0);
+        expectNoSignalListeners(signals);
       });
     },
   );
@@ -1028,8 +1024,7 @@ describe("agentCliCommand", () => {
         expect(fs.existsSync(stateLockPath)).toBe(false);
         expect(callGateway).not.toHaveBeenCalled();
         expect(runtime.exit).toHaveBeenCalledWith(exitCode);
-        expect(signals.listenerCount("SIGTERM")).toBe(0);
-        expect(signals.listenerCount("SIGINT")).toBe(0);
+        expectNoSignalListeners(signals);
       });
     },
   );
@@ -1575,9 +1570,7 @@ describe("agentCliCommand", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
-    expect(
-      requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").timeoutMs,
-    ).toBeNull();
+    expect(gatewayRequest().timeoutMs).toBeNull();
   });
 
   it("stops dispatch and releases signal listeners when the session module fails to load", async () => {

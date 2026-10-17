@@ -41,13 +41,6 @@ const sessionKey = "agent:main:worktree-race";
 const actualWorkspace =
   await vi.importActual<typeof import("../agents/workspace.js")>("../agents/workspace.js");
 
-function recordProof(line: string): void {
-  const out = process.env.OPENCLAW_PROOF_OUT;
-  if (out) {
-    fsSync.appendFileSync(out, `${line}\n`);
-  }
-}
-
 async function git(cwd: string, ...args: string[]): Promise<void> {
   await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 }
@@ -186,17 +179,11 @@ describe("agent command worktree admission", () => {
       await fs.mkdir(nested);
       await seedSession(storePath, nested);
 
-      let releasePause = () => {};
-      const paused = new Promise<void>((resolve) => {
-        releasePause = resolve;
-      });
-      let reachPause = () => {};
-      const pauseReached = new Promise<void>((resolve) => {
-        reachPause = resolve;
-      });
+      const paused = createDeferred();
+      const pauseReached = createDeferred();
       vi.mocked(ensureAgentWorkspace).mockImplementationOnce(async (params) => {
-        reachPause();
-        await paused;
+        pauseReached.resolve();
+        await paused.promise;
         return { dir: params?.dir ?? "" };
       });
 
@@ -204,7 +191,7 @@ describe("agent command worktree admission", () => {
         { message: "resume in worktree", sessionKey },
         runtime,
       );
-      await pauseReached;
+      await pauseReached.promise;
 
       let removalDuringPreparation: string;
       try {
@@ -214,10 +201,7 @@ describe("agent command worktree admission", () => {
         removalDuringPreparation = `rejected: ${(error as Error).message}`;
       }
       const checkoutSurvivedPreparation = fsSync.existsSync(nested);
-      recordProof(`removal during production workspace preparation: ${removalDuringPreparation}`);
-      recordProof(`managed checkout survived preparation: ${checkoutSurvivedPreparation}`);
-
-      releasePause();
+      paused.resolve();
       const prepared = await preparing;
       await prepared.runLease?.release();
 
@@ -256,9 +240,6 @@ describe("agent command worktree admission", () => {
         preparationResult = `preparation fails: ${(error as Error).message}`;
       }
       const workspaceSetupRan = vi.mocked(ensureAgentWorkspace).mock.calls.length > 0;
-      recordProof(`admission for a removed authoritative binding: ${preparationResult}`);
-      recordProof(`workspace setup ran on the removed worktree: ${workspaceSetupRan}`);
-
       expect(preparationResult).toContain("managed worktree was removed");
       expect(workspaceSetupRan).toBe(false);
     });

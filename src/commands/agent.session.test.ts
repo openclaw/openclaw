@@ -17,9 +17,7 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, {
-    prefix: "openclaw-agent-session-",
-  });
+  return withTempHomeBase(fn, { prefix: "openclaw-agent-session-" });
 }
 
 function mockConfig(
@@ -191,59 +189,31 @@ describe("agent session resolution", () => {
 
   it("uses explicit outcomes when a main transcript is newer than the registry", async () => {
     const scenarios = [
-      {
-        label: "canonical done main",
-        mainKey: "main",
-        requestedSessionKey: "agent:main:main",
-        storedSessionKey: "agent:main:main",
-        status: "done" as const,
-        expectNewSession: false,
-      },
-      {
-        label: "raw done main alias",
-        mainKey: "main",
-        requestedSessionKey: "main",
-        storedSessionKey: "agent:main:main",
-        status: "done" as const,
-        expectNewSession: false,
-      },
-      {
-        label: "custom done main alias",
-        mainKey: "work",
-        requestedSessionKey: "agent:main:main",
-        storedSessionKey: "agent:main:work",
-        status: "done" as const,
-        expectNewSession: false,
-      },
-      {
-        label: "killed main",
-        mainKey: "main",
-        requestedSessionKey: "agent:main:main",
-        storedSessionKey: "agent:main:main",
-        status: "killed" as const,
-        expectNewSession: true,
-      },
-      {
-        label: "endedAt-only main",
-        mainKey: "main",
-        requestedSessionKey: "agent:main:main",
-        storedSessionKey: "agent:main:main",
-        status: undefined,
-        expectNewSession: false,
-      },
+      ["canonical done main", "done"],
+      ["raw done main alias", "done", "main", "main"],
+      ["custom done main alias", "done", "work"],
+      ["killed main", "killed"],
+      ["endedAt-only main", undefined],
     ] as const;
-    for (const scenario of scenarios) {
+    for (const [
+      label,
+      status,
+      mainKey = "main",
+      requestedSessionKey = "agent:main:main",
+    ] of scenarios) {
+      const storedSessionKey = `agent:main:${mainKey}`;
+      const expectNewSession = status === "killed";
       await withTempHome(async (home) => {
         const store = path.join(home, "sessions.json");
-        const sessionFile = path.join(home, `session-${scenario.label.replaceAll(" ", "-")}.jsonl`);
-        const sessionId = `stale-terminal-${scenario.label.replaceAll(" ", "-")}`;
+        const sessionFile = path.join(home, `session-${label.replaceAll(" ", "-")}.jsonl`);
+        const sessionId = `stale-terminal-${label.replaceAll(" ", "-")}`;
         const registryUpdatedAt = Date.now() - 10_000;
         await writeSessionStoreSeed(store, {
-          [scenario.storedSessionKey]: {
+          [storedSessionKey]: {
             sessionId,
             sessionFile,
             updatedAt: registryUpdatedAt,
-            ...(scenario.status ? { status: scenario.status } : {}),
+            ...(status ? { status } : {}),
             sessionStartedAt: registryUpdatedAt - 60_000,
             lastInteractionAt: registryUpdatedAt - 30_000,
             startedAt: registryUpdatedAt - 1_000,
@@ -263,37 +233,43 @@ describe("agent session resolution", () => {
           {
             agentId: "main",
             sessionId,
-            sessionKey: scenario.storedSessionKey,
+            sessionKey: storedSessionKey,
             storePath: store,
           },
           { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
         );
         const cfg = mockConfig(home, store);
-        cfg.session = { ...cfg.session, mainKey: scenario.mainKey };
+        cfg.session = { ...cfg.session, mainKey };
 
-        const resolution = await resolveSession({ cfg, sessionKey: scenario.requestedSessionKey });
+        const resolution = await resolveSession({ cfg, sessionKey: requestedSessionKey });
 
-        expect(resolution.sessionKey).toBe(scenario.storedSessionKey);
-        expect(resolution.isNewSession).toBe(scenario.expectNewSession);
-        if (!scenario.expectNewSession) {
+        expect(resolution).toMatchObject({
+          sessionKey: storedSessionKey,
+          isNewSession: expectNewSession,
+        });
+        if (!expectNewSession) {
           expect(resolution.sessionId).toBe(sessionId);
-          expect(resolution.sessionEntry?.status).toBe(scenario.status);
-          if (scenario.status === undefined) {
+          expect(resolution.sessionEntry?.status).toBe(status);
+          if (status === undefined) {
             expect(resolution.sessionEntry?.endedAt).toBe(registryUpdatedAt - 100);
           }
           return;
         }
         expect(resolution.sessionId).not.toBe(sessionId);
-        expect(resolution.sessionEntry?.sessionFile).toBeUndefined();
-        expect(resolution.sessionEntry?.status).toBeUndefined();
-        expect(resolution.sessionEntry?.startedAt).toBeUndefined();
-        expect(resolution.sessionEntry?.endedAt).toBeUndefined();
-        expect(resolution.sessionEntry?.runtimeMs).toBeUndefined();
-        expect(resolution.sessionEntry?.sessionStartedAt).toBeUndefined();
-        expect(resolution.sessionEntry?.lastInteractionAt).toBeUndefined();
-        expect(resolution.sessionEntry?.cliSessionBindings).toBeUndefined();
-        expect(resolution.sessionEntry?.cliSessionIds).toBeUndefined();
-        expect(resolution.sessionEntry?.claudeCliSessionId).toBeUndefined();
+        for (const key of [
+          "sessionFile",
+          "status",
+          "startedAt",
+          "endedAt",
+          "runtimeMs",
+          "sessionStartedAt",
+          "lastInteractionAt",
+          "cliSessionBindings",
+          "cliSessionIds",
+          "claudeCliSessionId",
+        ] as const) {
+          expect(resolution.sessionEntry?.[key], key).toBeUndefined();
+        }
       });
     }
   });
@@ -328,25 +304,27 @@ describe("agent session resolution", () => {
 
       const resolution = await resolveSession({ cfg, sessionId });
 
-      expect(resolution.sessionKey).toBe("agent:main:main");
-      expect(resolution.sessionId).toBe(sessionId);
-      expect(resolution.isNewSession).toBe(false);
+      expect(resolution).toMatchObject({
+        sessionKey: "agent:main:main",
+        sessionId,
+        isNewSession: false,
+      });
       expect(resolution.sessionEntry).not.toHaveProperty("sessionFile");
-      expect(resolution.sessionEntry?.status).toBe("done");
-      expect(resolution.sessionEntry?.startedAt).toBe(registryUpdatedAt - 1_000);
-      expect(resolution.sessionEntry?.endedAt).toBe(registryUpdatedAt - 100);
-      expect(resolution.sessionEntry?.runtimeMs).toBe(900);
 
       const persisted = loadSessionEntry({
         sessionKey: expectDefined(resolution.sessionKey, "resolved session key"),
         storePath: resolution.storePath,
       });
-      expect(persisted?.sessionId).toBe(sessionId);
       expect(persisted).not.toHaveProperty("sessionFile");
-      expect(persisted?.status).toBe("done");
-      expect(persisted?.startedAt).toBe(registryUpdatedAt - 1_000);
-      expect(persisted?.endedAt).toBe(registryUpdatedAt - 100);
-      expect(persisted?.runtimeMs).toBe(900);
+      for (const entry of [resolution.sessionEntry, persisted]) {
+        expect(entry).toMatchObject({
+          sessionId,
+          status: "done",
+          startedAt: registryUpdatedAt - 1_000,
+          endedAt: registryUpdatedAt - 100,
+          runtimeMs: 900,
+        });
+      }
     });
   });
 
