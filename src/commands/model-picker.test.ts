@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
@@ -32,15 +32,10 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 const loadStaticManifestCatalogRowsForList = vi.hoisted(() =>
   vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
 );
-vi.mock("./models/list.manifest-catalog.js", () => ({
-  loadStaticManifestCatalogRowsForList,
-}));
+vi.mock("./models/list.manifest-catalog.js", () => ({ loadStaticManifestCatalogRowsForList }));
 
 const loadScopedModelCatalog = vi.hoisted(() =>
-  vi.fn<(params: LoadPreparedModelCatalogParams) => Promise<ModelCatalogSnapshot>>(async () => ({
-    entries: [],
-    routeVariants: [],
-  })),
+  vi.fn<(params: LoadPreparedModelCatalogParams) => Promise<ModelCatalogSnapshot>>(),
 );
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -115,13 +110,8 @@ const createProviderAuthChecker = vi.hoisted(() =>
 vi.mock("../agents/model-provider-auth.js", () => ({ createProviderAuthChecker }));
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) => {
-    if (provider === "byteplus" || provider === "byteplus-plan") {
-      return ["byteplus"];
-    }
-    if (provider === "volcengine" || provider === "volcengine-plan") {
-      return ["volcengine"];
-    }
-    return undefined;
+    const id = provider.replace(/-plan$/, "");
+    return id === "byteplus" || id === "volcengine" ? [id] : undefined;
   },
 }));
 const pickerRuntime = vi.hoisted(() => ({
@@ -133,15 +123,11 @@ const pickerRuntime = vi.hoisted(() => ({
 }));
 vi.mock("../commands/model-picker.runtime.js", () => ({ modelPickerRuntime: pickerRuntime }));
 
-function createSelectAllMultiselect() {
-  return vi.fn(async (params) => params.options.map((option: { value: string }) => option.value));
-}
-
-function promptDefaultPicker(
+async function promptDefaultPicker(
   params: Partial<Parameters<typeof promptDefaultModel>[0]> = {},
   select = vi.fn(async (prompt) => prompt.initialValue as never),
 ) {
-  const result = promptDefaultModel({
+  const result = await promptDefaultModel({
     allowKeep: false,
     config: agentConfig(),
     prompter: makePrompter({ select }),
@@ -150,12 +136,22 @@ function promptDefaultPicker(
   return { result, select };
 }
 
+async function pickAllowlist(params: Partial<Parameters<typeof promptModelAllowlist>[0]> = {}) {
+  const multiselect = vi.fn(async ({ options }) => options.map(({ value }: PickerOption) => value));
+  const result = await promptModelAllowlist({
+    config: agentConfig(),
+    prompter: makePrompter({ multiselect }),
+    ...params,
+  });
+  return { result, multiselect, values: optionValues(pickerOptions(multiselect)) };
+}
+
 function catalogModel(provider: string, id: string, name: string): ModelCatalogEntry {
   return { provider, id, name };
 }
 
-function providerCatalogSnapshot(entries: ModelCatalogEntry[]): ModelCatalogSnapshot {
-  return { entries, routeVariants: entries };
+function setScopedCatalog(entries: ModelCatalogEntry[]) {
+  loadScopedModelCatalog.mockResolvedValue({ entries, routeVariants: entries });
 }
 
 function agentConfig(
@@ -177,18 +173,12 @@ function configuredTextModel(id: string, name: string) {
 }
 
 function nvidiaConfig(models: ReturnType<typeof configuredTextModel>[]): OpenClawConfig {
-  return {
-    agents: { defaults: {} },
-    models: {
-      providers: {
-        nvidia: {
-          api: "openai-completions",
-          baseUrl: "https://integrate.api.nvidia.com/v1",
-          models,
-        },
-      },
-    },
+  const nvidia = {
+    api: "openai-completions" as const,
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    models,
   };
+  return { agents: { defaults: {} }, models: { providers: { nvidia } } };
 }
 
 function manifestTextRow(
@@ -198,9 +188,7 @@ function manifestTextRow(
   status: NormalizedModelCatalogRow["status"] = "available",
 ): NormalizedModelCatalogRow {
   return {
-    provider,
-    id,
-    name,
+    ...catalogModel(provider, id, name),
     ref: `${provider}/${id}`,
     mergeKey: `${provider}:${id}`,
     source: "manifest",
@@ -210,22 +198,14 @@ function manifestTextRow(
   };
 }
 
-type MockCallSource = {
-  mock: {
-    calls: ReadonlyArray<ReadonlyArray<unknown>>;
-  };
-};
+type MockCallSource = { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } };
 
-type PickerOption = Record<string, unknown> & {
-  value: string;
-};
-
-const requireRecord = createRequireRecord("object", "expected-label");
+type PickerOption = Record<string, unknown> & { value: string };
 
 function pickerOptions(source: MockCallSource, callIndex = 0) {
-  const options = requireRecord(source.mock.calls[callIndex]?.[0], "picker params").options;
-  expect(options, "picker options").toBeInstanceOf(Array);
-  return options as PickerOption[];
+  const params = source.mock.calls[callIndex]?.[0];
+  expect(params).toMatchObject({ options: expect.any(Array) });
+  return (params as { options: PickerOption[] }).options;
 }
 
 function optionValues(options: PickerOption[]) {
@@ -233,11 +213,10 @@ function optionValues(options: PickerOption[]) {
 }
 
 function requireOption(options: PickerOption[], value: string) {
-  const option = options.find((candidate) => candidate.value === value);
-  if (!option) {
-    throw new Error(`expected picker option: ${value}`);
-  }
-  return option;
+  return expectDefined(
+    options.find((candidate) => candidate.value === value),
+    `expected picker option: ${value}`,
+  );
 }
 
 beforeEach(() => {
@@ -270,7 +249,7 @@ beforeEach(() => {
     }),
   });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
-  loadScopedModelCatalog.mockResolvedValue(providerCatalogSnapshot([]));
+  setScopedCatalog([]);
   pickerRuntime.resolveProviderModelPickerEntries.mockReturnValue([]);
   pickerRuntime.resolvePluginProviders.mockReturnValue([]);
 });
@@ -280,318 +259,275 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("promptDefaultModel", () => {
-  it("uses selected ChatGPT capabilities regardless of physical row order", async () => {
-    providerAuthRoute.value = {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      authRequirement: "subscription",
-      requestTransportOverrides: "none",
-    };
-    const platform: ModelCatalogEntry = {
-      provider: "openai",
-      id: "gpt-5.5",
-      name: "Platform GPT-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      contextWindow: 1_000_000,
-      reasoning: true,
-      input: ["text", "image"],
-    };
-    const chatGPT: ModelCatalogEntry = {
-      ...platform,
-      name: "ChatGPT GPT-5.5",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      contextWindow: 400_000,
-      reasoning: false,
-      input: ["text"],
-    };
-    loadModelCatalog.mockResolvedValue([platform]);
-    modelCatalogRouteVariants.value = [platform, chatGPT];
-    const { result, select } = promptDefaultPicker();
-    await result;
-    const option = requireOption(pickerOptions(select as MockCallSource), "openai/gpt-5.5");
-    expect(option.hint).toContain("ChatGPT GPT-5.5");
-    expect(option.hint).toContain("ctx 400k");
-    expect(option.hint).not.toContain("reasoning");
-    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
-      "__manual__",
-      "openai/gpt-5.5",
-    ]);
-  });
-
-  it("shows AWS SDK models but hides unresolved non-OpenAI SecretRefs", async () => {
-    providerAuthEvaluations.set("amazon-bedrock", {
-      availability: true,
-      routeResolution: null,
-      selectedAuthMode: "aws-sdk",
-      evidence: "aws-sdk",
-    });
-    providerAuthEvaluations.set("anthropic", {
-      availability: undefined,
-      routeResolution: null,
-      selectedAuthMode: "api-key",
-      evidence: "provider-config",
-    });
-    loadModelCatalog.mockResolvedValue([
-      {
-        ...catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5", "Bedrock Claude"),
-        api: "bedrock-converse-stream",
-      },
-      {
-        ...catalogModel("anthropic", "claude-sonnet-4-6", "Anthropic Claude"),
-        api: "anthropic-messages",
-      },
-    ]);
-    const { result, select } = promptDefaultPicker();
-    await result;
-    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
-      "__manual__",
-      "amazon-bedrock/us.anthropic.claude-sonnet-4-5",
-    ]);
-  });
-
-  it("keeps provider browsing cold and preserves literal labels through selection", async () => {
-    pickerRuntime.resolvePluginProviders.mockReturnValue([
-      { id: "nvidia", preserveLiteralProviderPrefix: true },
-    ] as never);
-    loadScopedModelCatalog.mockResolvedValue(
-      providerCatalogSnapshot([
-        catalogModel("nvidia", "nvidia/native", "Native"),
-        catalogModel("nvidia", "vendor/model", "Vendor"),
-      ]),
-    );
-    loadStaticManifestCatalogRowsForList.mockReturnValue([
-      manifestTextRow("nvidia", "old-model", "Old", "deprecated"),
-    ]);
-    const select = vi
-      .fn()
-      .mockImplementationOnce(async (params) => {
-        expect(loadModelCatalog).not.toHaveBeenCalled();
-        expect(loadScopedModelCatalog).not.toHaveBeenCalled();
-        expect(params).toMatchObject({ searchable: false, initialValue: "__keep__" });
-        expect(optionValues(params.options)).toEqual(["__keep__", "__manual__", "__browse__"]);
-        expect(requireOption(params.options, "__keep__").label).toBe(
-          "Keep current (nvidia/nvidia/native)",
-        );
-        return "__browse__";
-      })
-      .mockResolvedValueOnce("nvidia/native");
-    const { result: pending } = promptDefaultPicker({
-      config: agentConfig({ model: "nvidia/native" }),
-      prompter: makePrompter({ select }),
-      allowKeep: true,
-      preferredProvider: "nvidia",
-      browseCatalogOnDemand: true,
-    });
-    const result = await pending;
-    expect(result.model).toBe("nvidia/native");
-    expect(loadModelCatalog).not.toHaveBeenCalled();
-    const options = pickerOptions(select, 1);
-    expect(optionValues(options)).toEqual([
-      "__keep__",
-      "__manual__",
-      "nvidia/native",
-      "nvidia/vendor/model",
-    ]);
-    expect(requireOption(options, "nvidia/native").label).toBe("nvidia/nvidia/native");
-    expect(requireOption(options, "nvidia/vendor/model").label).toBe("nvidia/vendor/model");
-  });
-
-  it("keeps empty-default provider browsing off unrelated provider setup surfaces", async () => {
-    loadScopedModelCatalog.mockResolvedValue(
-      providerCatalogSnapshot([
-        catalogModel("ollama", "minimax-m2.7:cloud", "MiniMax M2.7"),
-        catalogModel("ollama", "gemma4", "Gemma 4"),
-      ]),
-    );
-    pickerRuntime.resolveProviderModelPickerEntries.mockReturnValue([
-      {
-        value: "provider-plugin:nvidia:api-key",
-        label: "NVIDIA (custom)",
-      },
-    ] as never);
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => {
-        throw new Error("preferred-provider browsing must not load the full setup registry");
-      },
-    });
-    const select = vi.fn().mockResolvedValueOnce("ollama/gemma4");
-    const config = agentConfig();
-    await promptDefaultPicker({
-      config,
-      prompter: makePrompter({ select }),
-      allowKeep: true,
-      includeProviderPluginSetups: true,
-      preferredProvider: "ollama",
-      browseCatalogOnDemand: true,
-      agentDir: "/tmp/openclaw-agent",
-      runtime: {} as never,
-    }).result;
-    expect(pickerRuntime.resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerRefs: ["ollama"],
-      }),
-    );
-    expect(pickerRuntime.resolveProviderModelPickerEntries).not.toHaveBeenCalled();
-    expect(optionValues(pickerOptions(select as MockCallSource, 0))).not.toContain(
-      "provider-plugin:nvidia:api-key",
-    );
-  });
+it("uses selected ChatGPT capabilities regardless of physical row order", async () => {
+  providerAuthRoute.value = {
+    api: "openai-chatgpt-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    authRequirement: "subscription",
+    requestTransportOverrides: "none",
+  };
+  const platform: ModelCatalogEntry = {
+    provider: "openai",
+    id: "gpt-5.5",
+    name: "Platform GPT-5.5",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    contextWindow: 1_000_000,
+    reasoning: true,
+    input: ["text", "image"],
+  };
+  const chatGPT: ModelCatalogEntry = {
+    ...platform,
+    name: "ChatGPT GPT-5.5",
+    api: "openai-chatgpt-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    contextWindow: 400_000,
+    reasoning: false,
+    input: ["text"],
+  };
+  loadModelCatalog.mockResolvedValue([platform]);
+  modelCatalogRouteVariants.value = [platform, chatGPT];
+  const { select } = await promptDefaultPicker();
+  const option = requireOption(pickerOptions(select), "openai/gpt-5.5");
+  expect(option.hint).toContain("ChatGPT GPT-5.5");
+  expect(option.hint).toContain("ctx 400k");
+  expect(option.hint).not.toContain("reasoning");
+  expect(optionValues(pickerOptions(select))).toEqual(["__manual__", "openai/gpt-5.5"]);
 });
 
-describe("promptModelAllowlist", () => {
-  it("seeds scoped choices with a fallback-only agent's inherited primary", async () => {
-    const multiselect = createSelectAllMultiselect();
-    const config = {
-      agents: {
-        defaults: {
-          model: "openai/global-model",
-          models: { "anthropic/outside-scope": {} },
-        },
-        entries: { ops: { model: { fallbacks: ["openai/backup-model"] } } },
-      },
-    } satisfies OpenClawConfig;
-    const before = structuredClone(config);
-    const allowedKeys = ["openai/global-model", "openai/backup-model"];
-    const result = await promptModelAllowlist({
-      config,
-      prompter: makePrompter({ multiselect }),
-      agentId: "ops",
-      agentDir: "/tmp/ops-agent",
-      allowedKeys,
-      loadCatalog: false,
-    });
-    const prompt = multiselect.mock.calls[0]?.[0];
-    expect(optionValues(prompt.options)).toEqual(allowedKeys);
-    expect(prompt.initialValues).toEqual(allowedKeys);
-    expect(result).toEqual({ models: allowedKeys, scopeKeys: allowedKeys });
-    expect(config).toEqual(before);
+it("shows AWS SDK models but hides unresolved non-OpenAI SecretRefs", async () => {
+  providerAuthEvaluations.set("amazon-bedrock", {
+    availability: true,
+    routeResolution: null,
+    selectedAuthMode: "aws-sdk",
+    evidence: "aws-sdk",
   });
-
-  it("preserves static OpenAI route facts for future model auth checks", async () => {
-    loadStaticManifestCatalogRowsForList.mockReturnValue([
-      {
-        ...manifestTextRow("openai", "gpt-future", "GPT Future"),
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-      },
-    ]);
-    const multiselect = createSelectAllMultiselect();
-    await promptModelAllowlist({
-      config: { agents: { defaults: {} } },
-      prompter: makePrompter({ multiselect }),
-      preferredProvider: "openai",
-    });
-    expect(loadModelCatalog).not.toHaveBeenCalled();
-    const checker = createProviderAuthChecker.mock.results.at(-1)?.value;
-    expect(checker).toHaveBeenCalledWith("openai", {
-      modelId: "gpt-future",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
-      "openai/gpt-future",
-    ]);
+  providerAuthEvaluations.set("anthropic", {
+    availability: undefined,
+    routeResolution: null,
+    selectedAuthMode: "api-key",
+    evidence: "provider-config",
   });
-
-  it("includes stale configured preferred provider models in the scoped cleanup", async () => {
-    loadModelCatalog.mockResolvedValue([
-      catalogModel("openrouter", "meta-llama/llama-3.3-70b:free", "Llama 3.3 70B"),
-      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
-    ]);
-    const activeModel = "openrouter/meta-llama/llama-3.3-70b:free";
-    const staleModel = "openrouter/elephant-alpha";
-    const multiselect = vi.fn(async (params: WizardMultiSelectParams) =>
-      params.options.map((option) => option.value).filter((value) => value === activeModel),
-    );
-    const prompter = makePrompter({
-      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
-    });
-    const config = agentConfig({
-      models: {
-        [activeModel]: { alias: "llama" },
-        [staleModel]: { alias: "elephant" },
-        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-      },
-    });
-    const modelsBefore = structuredClone(config.agents?.defaults?.models);
-    const result = await promptModelAllowlist({
-      config,
-      prompter,
-      preferredProvider: "openrouter",
-    });
-    const options = pickerOptions(multiselect as MockCallSource);
-    expect(optionValues(options)).toEqual([activeModel, staleModel]);
-    expect(requireOption(options, staleModel).hint).toBe("configured (not in catalog)");
-    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual([activeModel, staleModel]);
-    expect(result).toEqual({
-      models: [activeModel],
-      scopeKeys: [activeModel, staleModel],
-    });
-    const next = applyModelAllowlist(config, result.models ?? [], {
-      scopeKeys: result.scopeKeys,
-    });
-    expect(next.agents?.defaults?.models).toEqual(modelsBefore);
-    expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
-      "anthropic/claude-sonnet-4-6",
-      activeModel,
-    ]);
-  });
-
-  it.each([true, false])(
-    "preserves configured NVIDIA models with live catalog available: %s",
-    async (live) => {
-      const deprecated = manifestTextRow("nvidia", "z-ai/glm5", "Bundled GLM5", "deprecated");
-      if (live) {
-        loadScopedModelCatalog.mockResolvedValue(
-          providerCatalogSnapshot([
-            catalogModel("nvidia", "nvidia/native", "Native"),
-            catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
-            catalogModel("nvidia", "z-ai/glm5", "Deprecated GLM5"),
-          ]),
-        );
-      }
-      loadStaticManifestCatalogRowsForList.mockReturnValue(
-        live
-          ? [
-              manifestTextRow("nvidia", "nvidia/native", "Bundled Native"),
-              manifestTextRow("nvidia", "z-ai/glm-5.1", "Bundled GLM 5.1"),
-              deprecated,
-            ]
-          : [deprecated],
-      );
-      const configured = live
-        ? [
-            configuredTextModel("nvidia/native", "Bundled Native"),
-            configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
-            configuredTextModel("private/custom-nvidia", "Private NVIDIA model"),
-          ]
-        : [
-            configuredTextModel("custom-nvidia-model", "Custom NVIDIA model"),
-            configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
-          ];
-      const multiselect = createSelectAllMultiselect();
-      const result = await promptModelAllowlist({
-        config: nvidiaConfig(configured),
-        prompter: makePrompter({ multiselect }),
-        preferredProvider: "nvidia",
-        loadCatalog: true,
-        providerScopedCatalog: true,
-      });
-      const values = optionValues(pickerOptions(multiselect));
-      expect(values).toEqual(
-        live
-          ? ["nvidia/native", "nvidia/z-ai/glm-5.1", "nvidia/private/custom-nvidia"]
-          : ["nvidia/custom-nvidia-model", "nvidia/z-ai/glm5"],
-      );
-      expect(result.scopeKeys).toEqual(values);
-      if (!live) {
-        expect(loadStaticManifestCatalogRowsForList).not.toHaveBeenCalled();
-        expect(loadModelCatalog).not.toHaveBeenCalled();
-      }
+  loadModelCatalog.mockResolvedValue([
+    {
+      ...catalogModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5", "Bedrock Claude"),
+      api: "bedrock-converse-stream",
     },
-  );
+    {
+      ...catalogModel("anthropic", "claude-sonnet-4-6", "Anthropic Claude"),
+      api: "anthropic-messages",
+    },
+  ]);
+  const { select } = await promptDefaultPicker();
+  expect(optionValues(pickerOptions(select))).toEqual([
+    "__manual__",
+    "amazon-bedrock/us.anthropic.claude-sonnet-4-5",
+  ]);
 });
+
+it("keeps provider browsing cold and preserves literal labels through selection", async () => {
+  pickerRuntime.resolvePluginProviders.mockReturnValue([
+    { id: "nvidia", preserveLiteralProviderPrefix: true },
+  ] as never);
+  setScopedCatalog([
+    catalogModel("nvidia", "nvidia/native", "Native"),
+    catalogModel("nvidia", "vendor/model", "Vendor"),
+  ]);
+  loadStaticManifestCatalogRowsForList.mockReturnValue([
+    manifestTextRow("nvidia", "old-model", "Old", "deprecated"),
+  ]);
+  const select = vi
+    .fn()
+    .mockImplementationOnce(async (params) => {
+      expect(loadModelCatalog).not.toHaveBeenCalled();
+      expect(loadScopedModelCatalog).not.toHaveBeenCalled();
+      expect(params).toMatchObject({ searchable: false, initialValue: "__keep__" });
+      expect(optionValues(params.options)).toEqual(["__keep__", "__manual__", "__browse__"]);
+      expect(requireOption(params.options, "__keep__").label).toBe(
+        "Keep current (nvidia/nvidia/native)",
+      );
+      return "__browse__";
+    })
+    .mockResolvedValueOnce("nvidia/native");
+  const { result } = await promptDefaultPicker({
+    config: agentConfig({ model: "nvidia/native" }),
+    prompter: makePrompter({ select }),
+    allowKeep: true,
+    preferredProvider: "nvidia",
+    browseCatalogOnDemand: true,
+  });
+  expect(result.model).toBe("nvidia/native");
+  expect(loadModelCatalog).not.toHaveBeenCalled();
+  const options = pickerOptions(select, 1);
+  expect(optionValues(options)).toEqual([
+    "__keep__",
+    "__manual__",
+    "nvidia/native",
+    "nvidia/vendor/model",
+  ]);
+  expect(requireOption(options, "nvidia/native").label).toBe("nvidia/nvidia/native");
+  expect(requireOption(options, "nvidia/vendor/model").label).toBe("nvidia/vendor/model");
+});
+
+it("keeps empty-default provider browsing off unrelated provider setup surfaces", async () => {
+  setScopedCatalog([
+    catalogModel("ollama", "minimax-m2.7:cloud", "MiniMax M2.7"),
+    catalogModel("ollama", "gemma4", "Gemma 4"),
+  ]);
+  pickerRuntime.resolveProviderModelPickerEntries.mockReturnValue([
+    { value: "provider-plugin:nvidia:api-key", label: "NVIDIA (custom)" },
+  ] as never);
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => {
+      throw new Error("preferred-provider browsing must not load the full setup registry");
+    },
+  });
+  const select = vi.fn().mockResolvedValueOnce("ollama/gemma4");
+  const config = agentConfig();
+  await promptDefaultPicker({
+    config,
+    prompter: makePrompter({ select }),
+    allowKeep: true,
+    includeProviderPluginSetups: true,
+    preferredProvider: "ollama",
+    browseCatalogOnDemand: true,
+    agentDir: "/tmp/openclaw-agent",
+    runtime: {} as never,
+  });
+  expect(pickerRuntime.resolvePluginProviders).toHaveBeenCalledWith(
+    expect.objectContaining({ providerRefs: ["ollama"] }),
+  );
+  expect(pickerRuntime.resolveProviderModelPickerEntries).not.toHaveBeenCalled();
+  expect(optionValues(pickerOptions(select, 0))).not.toContain("provider-plugin:nvidia:api-key");
+});
+
+it("seeds scoped choices with a fallback-only agent's inherited primary", async () => {
+  const config = {
+    agents: {
+      defaults: { model: "openai/global-model", models: { "anthropic/outside-scope": {} } },
+      entries: { ops: { model: { fallbacks: ["openai/backup-model"] } } },
+    },
+  } satisfies OpenClawConfig;
+  const before = structuredClone(config);
+  const allowedKeys = ["openai/global-model", "openai/backup-model"];
+  const { result, multiselect } = await pickAllowlist({
+    config,
+    agentId: "ops",
+    agentDir: "/tmp/ops-agent",
+    allowedKeys,
+    loadCatalog: false,
+  });
+  const prompt = multiselect.mock.calls[0]?.[0];
+  expect(optionValues(prompt.options)).toEqual(allowedKeys);
+  expect(prompt.initialValues).toEqual(allowedKeys);
+  expect(result).toEqual({ models: allowedKeys, scopeKeys: allowedKeys });
+  expect(config).toEqual(before);
+});
+
+it("preserves static OpenAI route facts for future model auth checks", async () => {
+  loadStaticManifestCatalogRowsForList.mockReturnValue([
+    {
+      ...manifestTextRow("openai", "gpt-future", "GPT Future"),
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+    },
+  ]);
+  const { multiselect } = await pickAllowlist({ preferredProvider: "openai" });
+  expect(loadModelCatalog).not.toHaveBeenCalled();
+  const checker = createProviderAuthChecker.mock.results.at(-1)?.value;
+  expect(checker).toHaveBeenCalledWith("openai", {
+    modelId: "gpt-future",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  expect(optionValues(pickerOptions(multiselect))).toEqual(["openai/gpt-future"]);
+});
+
+it("includes stale configured preferred provider models in the scoped cleanup", async () => {
+  loadModelCatalog.mockResolvedValue([
+    catalogModel("openrouter", "meta-llama/llama-3.3-70b:free", "Llama 3.3 70B"),
+    catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+  ]);
+  const activeModel = "openrouter/meta-llama/llama-3.3-70b:free";
+  const staleModel = "openrouter/elephant-alpha";
+  const multiselect = vi.fn(async (params: WizardMultiSelectParams) =>
+    params.options.map((option) => option.value).filter((value) => value === activeModel),
+  );
+  const prompter = makePrompter({
+    multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+  });
+  const config = agentConfig({
+    models: {
+      [activeModel]: { alias: "llama" },
+      [staleModel]: { alias: "elephant" },
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+    },
+  });
+  const modelsBefore = structuredClone(config.agents?.defaults?.models);
+  const result = await promptModelAllowlist({
+    config,
+    prompter,
+    preferredProvider: "openrouter",
+  });
+  const options = pickerOptions(multiselect);
+  expect(optionValues(options)).toEqual([activeModel, staleModel]);
+  expect(requireOption(options, staleModel).hint).toBe("configured (not in catalog)");
+  expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual([activeModel, staleModel]);
+  expect(result).toEqual({ models: [activeModel], scopeKeys: [activeModel, staleModel] });
+  const next = applyModelAllowlist(config, result.models ?? [], { scopeKeys: result.scopeKeys });
+  expect(next.agents?.defaults?.models).toEqual(modelsBefore);
+  expect(next.agents?.defaults?.modelPolicy?.allow).toEqual([
+    "anthropic/claude-sonnet-4-6",
+    activeModel,
+  ]);
+});
+
+it.each([true, false])(
+  "preserves configured NVIDIA models with live catalog available: %s",
+  async (live) => {
+    const deprecated = manifestTextRow("nvidia", "z-ai/glm5", "Bundled GLM5", "deprecated");
+    if (live) {
+      setScopedCatalog([
+        catalogModel("nvidia", "nvidia/native", "Native"),
+        catalogModel("nvidia", "z-ai/glm-5.1", "GLM 5.1"),
+        catalogModel("nvidia", "z-ai/glm5", "Deprecated GLM5"),
+      ]);
+    }
+    loadStaticManifestCatalogRowsForList.mockReturnValue(
+      live
+        ? [
+            manifestTextRow("nvidia", "nvidia/native", "Bundled Native"),
+            manifestTextRow("nvidia", "z-ai/glm-5.1", "Bundled GLM 5.1"),
+            deprecated,
+          ]
+        : [deprecated],
+    );
+    const configured = live
+      ? [
+          configuredTextModel("nvidia/native", "Bundled Native"),
+          configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
+          configuredTextModel("private/custom-nvidia", "Private NVIDIA model"),
+        ]
+      : [
+          configuredTextModel("custom-nvidia-model", "Custom NVIDIA model"),
+          configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
+        ];
+    const { result, values } = await pickAllowlist({
+      config: nvidiaConfig(configured),
+      preferredProvider: "nvidia",
+      loadCatalog: true,
+      providerScopedCatalog: true,
+    });
+    expect(values).toEqual(
+      live
+        ? ["nvidia/native", "nvidia/z-ai/glm-5.1", "nvidia/private/custom-nvidia"]
+        : ["nvidia/custom-nvidia-model", "nvidia/z-ai/glm5"],
+    );
+    expect(result.scopeKeys).toEqual(values);
+    if (!live) {
+      expect(loadStaticManifestCatalogRowsForList).not.toHaveBeenCalled();
+      expect(loadModelCatalog).not.toHaveBeenCalled();
+    }
+  },
+);
