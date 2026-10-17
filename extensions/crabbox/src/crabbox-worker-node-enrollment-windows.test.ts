@@ -13,12 +13,7 @@ const leaseId = "cbx_windows_replay_fixture";
 const stateDir = path.win32.join(home, ".openclaw", "cloud-workers", leaseId);
 const runtimeDir = path.win32.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
 const cli = path.win32.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
-const launcher = path.win32.join(
-  programFiles,
-  "Crabbox",
-  "bin",
-  "Start-CrabboxDetachedProcess.ps1",
-);
+const launcher = path.win32.join(programFiles, "Crabbox/bin/Start-CrabboxDetachedProcess.ps1");
 const startTime = "2026-09-09T12:00:00.1234567Z";
 const session = { sessionId: 2, userSid: "S-1-5-21-1001" };
 const stateFile = (name: string) => path.win32.join(stateDir, name);
@@ -39,6 +34,9 @@ type ReplayOptions = {
 };
 
 async function replay(options: ReplayOptions = {}) {
+  const interruptedPath = options.interrupted
+    ? stateFile(options.interrupted === "receipt-only" ? "node-launch.json" : "runtime")
+    : undefined;
   const identity = { pid: 123, startTime, ...(options.desktop ? session : {}) };
   const files = new Map([
     [
@@ -92,12 +90,7 @@ async function replay(options: ReplayOptions = {}) {
       if (file === runtimeDir) {
         return { isDirectory: () => true };
       }
-      if (
-        (file === stateFile("runtime") &&
-          options.interrupted &&
-          options.interrupted !== "receipt-only") ||
-        (file === stateFile("node-launch.json") && options.interrupted === "receipt-only")
-      ) {
+      if (file === interruptedPath) {
         return { isSymbolicLink: () => file === stateFile("runtime") };
       }
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
@@ -252,11 +245,8 @@ describe("native Windows desktop enrollment replay", () => {
     { name: "a different process account", processEntry: { userSid: "S-1-5-21-2001" } },
     { name: "stale recorded session", launchRecord: { sessionId: 3 } },
     { name: "stale recorded account", launchRecord: { userSid: "S-1-5-21-2001" } },
-    { name: "changed active session", currentSession: { sessionId: 3, userSid: "S-1-5-21-1001" } },
-    {
-      name: "failed active-session lookup",
-      currentSession: { sessionId: 0, userSid: "S-1-5-21-1001" },
-    },
+    { name: "changed active session", currentSession: { ...session, sessionId: 3 } },
+    { name: "failed active-session lookup", currentSession: { ...session, sessionId: 0 } },
   ])("rejects $name", async ({ name: _name, ...options }) => {
     expect(await replay({ desktop: true, ...options })).toMatchObject({
       code: 1,

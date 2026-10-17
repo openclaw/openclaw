@@ -19,6 +19,12 @@ const warmImage = async () => (await listCrabboxWarmImages(crabboxState))[0];
 const captureResult = (argv: string[], id: string) =>
   checkpointResult(id, argv[argv.indexOf("--id") + 1]!, "available");
 const preparedCapture = { seedKey: PROJECT_KEY, cacheHit: false, captureRequired: true as const };
+const cachedPreparation = { seedKey: PROJECT_KEY, cacheHit: true };
+const readyTarget = {
+  machineClass: "fast",
+  platform: "linux",
+  profileKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+};
 
 type Preparation = NonNullable<Parameters<typeof projectOptions>[2]>;
 
@@ -169,10 +175,7 @@ describe("Crabbox prepared image demand and custody", () => {
     await destroyAndWait(provider, { leaseId: changed.leaseId, profile });
     await destroyAndWait(provider, { leaseId: reserve.leaseId, profile });
     current = projectOptions(events, undefined, { ...next, purpose: "session" });
-    current.options.project.prepare.mockResolvedValueOnce({
-      seedKey: PROJECT_KEY,
-      cacheHit: true,
-    });
+    current.options.project.prepare.mockResolvedValueOnce(cachedPreparation);
     calls.length = 0;
     await provider.provision(profile, "prepared-repeat", current.options);
     expect(captures).toBe(2);
@@ -263,10 +266,7 @@ describe("Crabbox prepared image demand and custody", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(interrupted.options.beginNodeEnrollment).not.toHaveBeenCalled();
     const changed = projectOptions([], undefined, next);
-    changed.options.project.prepare.mockResolvedValueOnce({
-      seedKey: PROJECT_KEY,
-      cacheHit: true,
-    });
+    changed.options.project.prepare.mockResolvedValueOnce(cachedPreparation);
     await provider.provision(PROFILE, "capture-policy-changed", changed.options);
     expect(captures).toBe(2);
     expect(changed.options.beginNodeEnrollment).toHaveBeenCalledOnce();
@@ -438,11 +438,7 @@ describe("Crabbox prepared image demand and custody", () => {
     const { provider, calls } = createWarmProvider();
     expect(provider.resolvePreparedIdleTimeoutMs?.(PROFILE)).toBe(3_600_000);
     const target = provider.resolvePreparationTarget?.(PROFILE, "fast");
-    expect(target).toMatchObject({
-      machineClass: "fast",
-      platform: "linux",
-      profileKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
-    });
+    expect(target).toMatchObject(readyTarget);
     expect(
       provider.resolvePreparationTarget?.({ ...PROFILE, ttl: "48h", idleTimeout: "2h" }, "fast"),
     ).toEqual(target);
@@ -457,11 +453,9 @@ describe("Crabbox prepared image demand and custody", () => {
       },
     };
     expect(provider.resolvePreparedIdleTimeoutMs?.(protectedProfile)).toBe(3_600_000);
-    expect(provider.resolvePreparationTarget?.(protectedProfile, "fast")).toMatchObject({
-      machineClass: "fast",
-      platform: "linux",
-      profileKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
-    });
+    expect(provider.resolvePreparationTarget?.(protectedProfile, "fast")).toMatchObject(
+      readyTarget,
+    );
     for (const profile of [
       { ...PROFILE, warmImage: false },
       { ...CLASSLESS_PROFILE, target: "windows/wsl2" },

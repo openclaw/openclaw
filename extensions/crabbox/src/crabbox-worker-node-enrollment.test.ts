@@ -6,7 +6,11 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import {
+  PROXY_FIXTURE_CERTIFICATE,
+  PROXY_FIXTURE_KEY,
+  useAutoCleanupTempDirTracker,
+} from "openclaw/plugin-sdk/test-env";
 import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
@@ -32,7 +36,7 @@ import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import { openCrabboxWarmImageStore } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
-import { PROFILE, checkpointResult } from "./crabbox-worker-warm-image.test-support.js";
+import { PROFILE, checkpointResult, jsonResult } from "./crabbox-worker-warm-image.test-support.js";
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -131,23 +135,10 @@ async function serveArtifact(
     hold?: Promise<void>;
   } = {},
 ) {
-  let tls: { cert: Buffer; key: Buffer } | undefined;
-  if (options.tls && !options.resetBeforeTls) {
-    const directory = tempDirs.make("crabbox-bootstrap-tls-");
-    const cert = path.join(directory, "cert.pem");
-    const key = path.join(directory, "key.pem");
-    execFileSync(
-      "openssl",
-      [
-        ..."req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -keyout".split(" "),
-        key,
-        "-out",
-        cert,
-      ],
-      { stdio: "ignore" },
-    );
-    tls = { cert: fs.readFileSync(cert), key: fs.readFileSync(key) };
-  }
+  const tls =
+    options.tls && !options.resetBeforeTls
+      ? { cert: PROXY_FIXTURE_CERTIFICATE, key: PROXY_FIXTURE_KEY }
+      : undefined;
   const authorizations: Array<string | undefined> = [];
   const requested = Promise.withResolvers<void>();
   const closed = Promise.withResolvers<void>();
@@ -386,12 +377,10 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         snapshots.delete(argv[3]!);
       }
       if (argv[1] === "checkpoint" && argv[2] === "inspect") {
-        return commandResult({
-          stdout: JSON.stringify({
-            localState: "metadata_available",
-            providerState: "completed",
-            nextAction: "fork_or_delete",
-          }),
+        return jsonResult({
+          localState: "metadata_available",
+          providerState: "completed",
+          nextAction: "fork_or_delete",
         });
       }
       if (argv[1] === "checkpoint" && argv[2] === "fork") {
@@ -400,14 +389,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         const home = homeFor(id);
         fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
         forkChoices.push(checkpoint);
-        return commandResult({
-          stdout: JSON.stringify({
-            checkpointId: checkpoint,
-            leaseId: id,
-            provider: "aws",
-            slug: id,
-            workdir: "/workspace",
-          }),
+        return jsonResult({
+          checkpointId: checkpoint,
+          leaseId: id,
+          provider: "aws",
+          slug: id,
+          workdir: "/workspace",
         });
       }
       return commandResult();

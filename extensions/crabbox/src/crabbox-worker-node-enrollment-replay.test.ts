@@ -24,6 +24,9 @@ async function replay(
   const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
   const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
   const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+  const interruptedPath = interrupted
+    ? path.join(stateDir, interrupted === "receipt-only" ? "node-launch.json" : "runtime")
+    : undefined;
   const nodeStart = desktop ? "1788998400:123456" : "Wed Sep 9 12:00:00 2026";
   const hostStart = "1788998399:654321";
   const setup = createCrabboxNodeEnrollmentSetup({
@@ -85,23 +88,14 @@ async function replay(
       if (file === runtimeDir) {
         return { isDirectory: () => true };
       }
-      if (
-        (file === path.join(stateDir, "runtime") &&
-          interrupted &&
-          interrupted !== "receipt-only") ||
-        (file === path.join(stateDir, "node-launch.json") && interrupted === "receipt-only")
-      ) {
+      if (file === interruptedPath) {
         return { isSymbolicLink: () => file.endsWith("/runtime") };
       }
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
     },
     existsSync: (file: string) =>
       file === runtimeDir ||
-      (file === path.join(stateDir, "runtime") &&
-        Boolean(
-          interrupted && interrupted !== "receipt-only" && interrupted !== "dangling-runtime",
-        )) ||
-      (file === path.join(stateDir, "node-launch.json") && interrupted === "receipt-only") ||
+      (file === interruptedPath && interrupted !== "dangling-runtime") ||
       (file === path.join(stateDir, "node.pid") &&
         !interrupted &&
         (!launch || (launched && launch === "ready"))),
@@ -274,15 +268,9 @@ async function replay(
         "-c",
         expect.any(String),
         "openclaw-gui",
-        "/usr/bin/open",
-        "-n",
-        "-g",
-        "-W",
-        "-a",
-        "/Applications/OpenClawCloudWorker.app",
-        "--stdin",
-        "/dev/null",
-        "--stdout",
+        ..."/usr/bin/open -n -g -W -a /Applications/OpenClawCloudWorker.app --stdin /dev/null --stdout".split(
+          " ",
+        ),
         logPath,
         "--stderr",
         logPath,
