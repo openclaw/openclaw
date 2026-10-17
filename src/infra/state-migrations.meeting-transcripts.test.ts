@@ -30,6 +30,25 @@ import {
   recordLegacyMigrationSource,
 } from "./state-migrations.receipts.js";
 
+async function expectFile(file: string, contents: string) {
+  await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
+}
+
+async function expectExists(file: string) {
+  await expect(fs.stat(file)).resolves.toBeDefined();
+}
+
+async function expectMissing(file: string) {
+  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+function jsonLines(body: string) {
+  return body
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
@@ -112,6 +131,19 @@ function harness() {
     detect,
     store: new TranscriptsStore(root, { env }),
     database,
+    expectEmpty(table: "meeting_transcript_sessions" | "migration_sources") {
+      expect(database().prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    },
+    restore(archiveRoot: string, relativeDir: string) {
+      return restoreCanonicalMeetingTranscriptExports({
+        sourceRoot: root,
+        archiveRoot,
+        migratedSourcePaths: [],
+        canonicalRelativeDirs: [relativeDir],
+      });
+    },
     snapshot: () => {
       const db = database();
       const q = migrationDb(db);
@@ -219,8 +251,8 @@ describe("meeting transcript Doctor migration", () => {
       expect(session?.sessionId).toBe(sessionId);
       expect(h.store.sessionDir(session!)).toBe(path.join(h.root, "2026-07-01", expectedSlug));
       const artifacts = await h.store.materializeSessionArtifacts(session!, "transcript");
-      const lines = (await fs.readFile(artifacts.transcriptPath, "utf8")).trim().split("\n");
-      expect(lines.map((line) => JSON.parse(line).text)).toEqual(["First line", "Second line"]);
+      const lines = jsonLines(await fs.readFile(artifacts.transcriptPath, "utf8"));
+      expect(lines.map((line) => line.text)).toEqual(["First line", "Second line"]);
     }
   });
 
@@ -233,14 +265,10 @@ describe("meeting transcript Doctor migration", () => {
 
       const result = await h.migrate();
       expect(result.warnings).toEqual([]);
-      await expect(h.store.readSession("2026-07-01/Capital")).resolves.toMatchObject({
-        sessionId: "Capital",
-      });
-      await expect(h.store.readSession("2026-07-01/capital")).resolves.toMatchObject({
-        sessionId: "capital",
-      });
       const upper = (await h.store.readSession("2026-07-01/Capital"))!;
       const lower = (await h.store.readSession("2026-07-01/capital"))!;
+      expect(upper).toMatchObject({ sessionId: "Capital" });
+      expect(lower).toMatchObject({ sessionId: "capital" });
       const upperArtifacts = await h.store.materializeSessionArtifacts(upper, "metadata");
       await h.store.materializeSessionArtifacts(lower, "metadata");
       await fs.rename(upperArtifacts.sessionDir, path.join(h.root, "2026-07-01", "CAPITAL"));
@@ -256,12 +284,9 @@ describe("meeting transcript Doctor migration", () => {
     const result = await h.migrate();
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("Failed migrating meeting transcripts");
-    await expect(fs.stat(validDir)).resolves.toBeDefined();
-    await expect(fs.stat(invalidDir)).resolves.toBeDefined();
-    const database = h.database();
-    expect(
-      database.prepare("SELECT COUNT(*) AS count FROM meeting_transcript_sessions").get(),
-    ).toEqual({ count: 0 });
+    await expectExists(validDir);
+    await expectExists(invalidDir);
+    h.expectEmpty("meeting_transcript_sessions");
   });
 
   it("detects and recovers a partial-only legacy transcript tree", async () => {
@@ -280,20 +305,16 @@ describe("meeting transcript Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes.join("\n")).toContain("incomplete meeting transcript directory");
-    await expect(fs.stat(path.join(partialDir, "transcript.jsonl"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(
-      fs.stat(
-        path.join(
-          stateDir,
-          "transcripts.partials-recovered-2026-07-02T00-00-00-000Z",
-          "2026-07-01",
-          "partial-only",
-          "transcript.jsonl",
-        ),
+    await expectMissing(path.join(partialDir, "transcript.jsonl"));
+    await expectExists(
+      path.join(
+        stateDir,
+        "transcripts.partials-recovered-2026-07-02T00-00-00-000Z",
+        "2026-07-01",
+        "partial-only",
+        "transcript.jsonl",
       ),
-    ).resolves.toBeDefined();
+    );
   });
 
   it.runIf(process.platform !== "win32")(
@@ -310,9 +331,7 @@ describe("meeting transcript Doctor migration", () => {
         path.join(partialDir, "transcript.jsonl"),
       );
       expect(() => h.detect()).toThrow("regular file");
-      await expect(fs.readFile(path.join(partialDir, "summary.md"), "utf8")).resolves.toBe(
-        "keep me\n",
-      );
+      await expectFile(path.join(partialDir, "summary.md"), "keep me\n");
     },
   );
 
@@ -339,12 +358,9 @@ describe("meeting transcript Doctor migration", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("session tree changed before archive");
-    await expect(fs.stat(sourceDir)).resolves.toBeDefined();
-    await expect(fs.stat(path.join(h.root, "2026-07-03", "late-session"))).resolves.toBeDefined();
-    const database = h.database();
-    expect(
-      database.prepare("SELECT COUNT(*) AS count FROM meeting_transcript_sessions").get(),
-    ).toEqual({ count: 0 });
+    await expectExists(sourceDir);
+    await expectExists(path.join(h.root, "2026-07-03", "late-session"));
+    h.expectEmpty("meeting_transcript_sessions");
   });
 
   it("does not mistake a colliding archive destination for a completed move", async () => {
@@ -365,12 +381,9 @@ describe("meeting transcript Doctor migration", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("Failed archiving verified legacy");
-    await expect(fs.stat(sourceDir)).resolves.toBeDefined();
-    await expect(fs.stat(archiveRoot)).resolves.toBeDefined();
-    const database = h.database();
-    expect(database.prepare("SELECT COUNT(*) AS count FROM migration_sources").get()).toEqual({
-      count: 0,
-    });
+    await expectExists(sourceDir);
+    await expectExists(archiveRoot);
+    h.expectEmpty("migration_sources");
   });
 
   it("restores idempotently when a canonical exporter recreated the destination", async () => {
@@ -387,32 +400,21 @@ describe("meeting transcript Doctor migration", () => {
     await fs.cp(archivedSessionDir, destination, { recursive: true });
 
     await expect(
-      restoreCanonicalMeetingTranscriptExports({
-        sourceRoot,
-        archiveRoot,
-        migratedSourcePaths: [],
-        canonicalRelativeDirs: [path.join("2026-07-01", "recreated-export")],
-      }),
+      h.restore(archiveRoot, path.join("2026-07-01", "recreated-export")),
     ).resolves.toBeUndefined();
-    await expect(fs.stat(path.join(destination, "metadata.json"))).resolves.toBeDefined();
-    await expect(fs.stat(path.join(archivedSessionDir, "metadata.json"))).resolves.toBeDefined();
+    await expectExists(path.join(destination, "metadata.json"));
+    await expectExists(path.join(archivedSessionDir, "metadata.json"));
   });
 
   it("rejects canonical restore paths that normalize outside their roots", async () => {
     const h = harness();
     const { stateDir } = h;
-    const sourceRoot = h.root;
     const archiveRoot = path.join(stateDir, "transcripts.migrated-test");
     await fs.mkdir(archiveRoot, { recursive: true });
 
-    await expect(
-      restoreCanonicalMeetingTranscriptExports({
-        sourceRoot,
-        archiveRoot,
-        migratedSourcePaths: [],
-        canonicalRelativeDirs: [path.join("safe", "..", "..", "outside")],
-      }),
-    ).rejects.toThrow("escaped its root");
+    await expect(h.restore(archiveRoot, path.join("safe", "..", "..", "outside"))).rejects.toThrow(
+      "escaped its root",
+    );
   });
 
   it.runIf(process.platform !== "win32")(
@@ -431,12 +433,7 @@ describe("meeting transcript Doctor migration", () => {
       );
 
       await expect(
-        restoreCanonicalMeetingTranscriptExports({
-          sourceRoot: h.root,
-          archiveRoot,
-          migratedSourcePaths: [],
-          canonicalRelativeDirs: [path.join("2026-07-01", "linked-export")],
-        }),
+        h.restore(archiveRoot, path.join("2026-07-01", "linked-export")),
       ).rejects.toThrow(/symlink/i);
     },
   );
@@ -495,7 +492,7 @@ describe("meeting transcript Doctor migration", () => {
 
     expect(resumed.changes).toEqual([]);
     expect(resumed.warnings.join("\n")).toContain("session tree changed before archive");
-    await expect(fs.stat(lateDir)).resolves.toBeDefined();
+    await expectExists(lateDir);
   });
 
   it("finalizes receipts after interruption following the archive move", async () => {
@@ -514,7 +511,7 @@ describe("meeting transcript Doctor migration", () => {
 
     expect(resumed.warnings).toEqual([]);
     expect(resumed.changes.join("\n")).toContain("Finalized interrupted");
-    await expect(fs.stat(h.store.sessionDir(native))).resolves.toBeDefined();
+    await expectExists(h.store.sessionDir(native));
     const database = h.database();
     expect(
       database
@@ -548,12 +545,7 @@ describe("meeting transcript Doctor migration", () => {
       path.join(h.store.sessionDir(session), "transcript.jsonl"),
       "utf8",
     );
-    expect(
-      exported
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line).text),
-    ).toEqual(["first", "second"]);
+    expect(jsonLines(exported).map((line) => line.text)).toEqual(["first", "second"]);
   });
 
   it("migrates legacy sessions while preserving coexisting SQLite exports", async () => {
@@ -576,8 +568,8 @@ describe("meeting transcript Doctor migration", () => {
 
     const result = await h.migrate();
     expect(result.warnings).toEqual([]);
-    await expect(fs.stat(nativeExport)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(nativeTranscriptExport)).resolves.toBeDefined();
+    await expectMissing(nativeExport);
+    await expectExists(nativeTranscriptExport);
     await expect(h.store.readSession("native-export")).resolves.toMatchObject({
       sessionId: "native-export",
     });
@@ -672,7 +664,7 @@ describe("meeting transcript Doctor oversized projections", () => {
     const seeded = await seedStoredSession(h, sessionId, { historicalSlug });
     await seedStoredSession(h, "ordinary:notes");
     const before = h.snapshot();
-    await expect(fs.stat(h.root)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(h.root);
     expect(detectLegacyMeetingTranscripts({ stateDir: h.stateDir }).hasLegacy).toBe(false);
     expect(h.detect()).toMatchObject({ hasLegacy: true, pendingImportCount: 0 });
     expect(h.snapshot()).toEqual(before);
@@ -713,16 +705,11 @@ describe("meeting transcript Doctor oversized projections", () => {
       expect(Buffer.byteLength(exported.filename)).toBeLessThanOrEqual(255);
       expect(body).toContain("Preserve this note.");
       if (format === "jsonl") {
-        expect(
-          body
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
-        ).toEqual(detail.utterances);
+        expect(jsonLines(body)).toEqual(detail.utterances);
       }
     }
     expect(h.snapshot()).toEqual(expected);
-    await expect(fs.stat(h.root)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(h.root);
     expect(h.detect().hasLegacy).toBe(false);
     await expect(h.migrate()).resolves.toEqual({ changes: [], warnings: [] });
     expect(h.snapshot()).toEqual(expected);
@@ -749,7 +736,7 @@ describe("meeting transcript Doctor oversized projections", () => {
     closeOpenClawStateDatabaseForTest();
     expect(h.snapshot()).toEqual(before);
     expect(h.detect().hasLegacy).toBe(true);
-    await expect(fs.stat(h.root)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(h.root);
   });
 
   it("keeps committed repair messages and receipts when pending import recovery cannot finish", async () => {
