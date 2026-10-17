@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeRecord,
@@ -35,17 +35,26 @@ afterEach(async () => {
   }
 });
 
-function parseCommandJson<T>(
-  label: string,
-  result: CommandResult,
-  parse: (value: unknown) => T = (value) => value as T,
-): T {
+async function worktrees<T>(...args: string[]): Promise<T> {
+  if (!instance) {
+    throw new Error("CLI fixture is not running");
+  }
+  const result: CommandResult = await instance.cli(["worktrees", ...args, "--json"]);
   if (result.code !== 0) {
     throw new Error(
-      `${label} failed with exit ${String(result.code)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      `worktrees ${args.join(" ")} failed with exit ${String(result.code)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
   }
-  return parse(JSON.parse(result.stdout) as unknown);
+  return JSON.parse(result.stdout) as T;
+}
+
+async function expectProvisionedFiles(worktreePath: string) {
+  const env = path.join(worktreePath, ".env.local");
+  const tool = path.join(worktreePath, "generated", "tool.sh");
+  await expect(fs.readFile(env, "utf8")).resolves.toBe("TOKEN=fixture\n");
+  await expect(fs.readFile(tool, "utf8")).resolves.toContain("echo generated");
+  expect((await fs.stat(env)).mode & 0o777).toBe(0o600);
+  expect((await fs.stat(tool)).mode & 0o777).toBe(0o755);
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -83,130 +92,100 @@ async function initializeRepository(root: string): Promise<{ baseCommit: string;
   };
 }
 
-describe("managed worktrees child CLI product proof", () => {
-  it(
-    "provisions, snapshots, restores, and preserves a manual worktree through gc",
-    { timeout: 180_000 },
-    async () => {
-      const canonicalTmp = await fs.realpath(os.tmpdir());
-      tempRoot = await fs.mkdtemp(path.join(canonicalTmp, "openclaw-managed-worktree-cli-"));
-      const { baseCommit, repo } = await initializeRepository(tempRoot);
-      instance = await createOpenClawTestInstance({ name: "qa-managed-worktree-cli" });
-      const stateDir = await fs.realpath(instance.stateDir);
+it(
+  "provisions, snapshots, restores, and preserves a manual worktree through gc",
+  { timeout: 180_000 },
+  async () => {
+    const canonicalTmp = await fs.realpath(os.tmpdir());
+    tempRoot = await fs.mkdtemp(path.join(canonicalTmp, "openclaw-managed-worktree-cli-"));
+    const { baseCommit, repo } = await initializeRepository(tempRoot);
+    instance = await createOpenClawTestInstance({ name: "qa-managed-worktree-cli" });
+    const stateDir = await fs.realpath(instance.stateDir);
 
-      const created = parseCommandJson<ManagedWorktreeRecord>(
-        "worktrees create",
-        await instance.cli([
-          "worktrees",
-          "create",
-          repo,
-          "--name",
-          WORKTREE_NAME,
-          "--base-ref",
-          "HEAD",
-          "--json",
-        ]),
-      );
-      expect(created).toMatchObject({
-        name: WORKTREE_NAME,
-        repoRoot: repo,
-        branch: `openclaw/${WORKTREE_NAME}`,
-        baseRef: "HEAD",
-        ownerKind: "manual",
-      });
-      expect(created.id).toEqual(expect.any(String));
-      expect(created.repoFingerprint).toEqual(expect.any(String));
-      expect(created.createdAt).toEqual(expect.any(Number));
-      expect(created.lastActiveAt).toEqual(expect.any(Number));
-      expect(await fs.realpath(created.path)).toBe(
-        path.join(stateDir, "worktrees", created.repoFingerprint, WORKTREE_NAME),
-      );
-      expect(await git(repo, "rev-parse", `refs/heads/${created.branch}`)).toBe(baseCommit);
+    const created = await worktrees<ManagedWorktreeRecord>(
+      "create",
+      repo,
+      "--name",
+      WORKTREE_NAME,
+      "--base-ref",
+      "HEAD",
+    );
+    expect(created).toMatchObject({
+      name: WORKTREE_NAME,
+      repoRoot: repo,
+      branch: `openclaw/${WORKTREE_NAME}`,
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      id: expect.any(String),
+      repoFingerprint: expect.any(String),
+      createdAt: expect.any(Number),
+      lastActiveAt: expect.any(Number),
+    });
+    expect(await fs.realpath(created.path)).toBe(
+      path.join(stateDir, "worktrees", created.repoFingerprint, WORKTREE_NAME),
+    );
+    expect(await git(repo, "rev-parse", `refs/heads/${created.branch}`)).toBe(baseCommit);
 
-      const provisionedEnv = path.join(created.path, ".env.local");
-      const provisionedTool = path.join(created.path, "generated", "tool.sh");
-      await expect(fs.readFile(provisionedEnv, "utf8")).resolves.toBe("TOKEN=fixture\n");
-      await expect(fs.readFile(provisionedTool, "utf8")).resolves.toContain("echo generated");
-      expect((await fs.stat(provisionedEnv)).mode & 0o777).toBe(0o600);
-      expect((await fs.stat(provisionedTool)).mode & 0o777).toBe(0o755);
+    await expectProvisionedFiles(created.path);
 
-      const setupPaths = (await fs.readFile(path.join(created.path, "setup-marker.txt"), "utf8"))
-        .trim()
-        .split("\n");
-      expect(setupPaths).toHaveLength(2);
-      expect(await fs.realpath(setupPaths[0]!)).toBe(repo);
-      expect(await fs.realpath(setupPaths[1]!)).toBe(await fs.realpath(created.path));
+    const setupPaths = (await fs.readFile(path.join(created.path, "setup-marker.txt"), "utf8"))
+      .trim()
+      .split("\n");
+    expect(setupPaths).toHaveLength(2);
+    expect(await fs.realpath(setupPaths[0]!)).toBe(repo);
+    expect(await fs.realpath(setupPaths[1]!)).toBe(await fs.realpath(created.path));
 
-      await fs.writeFile(path.join(created.path, "README.md"), "dirty tracked change\n");
-      await fs.writeFile(path.join(created.path, "notes.txt"), "restored note\n");
+    await fs.writeFile(path.join(created.path, "README.md"), "dirty tracked change\n");
+    await fs.writeFile(path.join(created.path, "notes.txt"), "restored note\n");
 
-      const removed = parseCommandJson<RemoveManagedWorktreeResult>(
-        "worktrees remove",
-        await instance.cli(["worktrees", "remove", created.id, "--json"]),
-      );
-      const expectedSnapshotRef = `refs/openclaw/snapshots/${created.id}`;
-      expect(removed).toEqual({ removed: true, snapshotRef: expectedSnapshotRef });
-      const snapshotCommit = await git(repo, "rev-parse", expectedSnapshotRef);
-      expect(await git(repo, "show-ref", "--verify", expectedSnapshotRef)).toContain(
-        expectedSnapshotRef,
-      );
-      await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    const removed = await worktrees<RemoveManagedWorktreeResult>("remove", created.id);
+    const expectedSnapshotRef = `refs/openclaw/snapshots/${created.id}`;
+    expect(removed).toEqual({ removed: true, snapshotRef: expectedSnapshotRef });
+    const snapshotCommit = await git(repo, "rev-parse", expectedSnapshotRef);
+    expect(await git(repo, "show-ref", "--verify", expectedSnapshotRef)).toContain(
+      expectedSnapshotRef,
+    );
+    await expect(fs.access(created.path)).rejects.toMatchObject({ code: "ENOENT" });
 
-      const removedList = parseCommandJson<WorktreeListJson>(
-        "worktrees list after remove",
-        await instance.cli(["worktrees", "list", "--json"]),
-      );
-      expect(removedList.worktrees).toContainEqual(
-        expect.objectContaining({ id: created.id, removedAt: expect.any(Number) }),
-      );
+    const removedList = await worktrees<WorktreeListJson>("list");
+    expect(removedList.worktrees).toContainEqual(
+      expect.objectContaining({ id: created.id, removedAt: expect.any(Number) }),
+    );
 
-      const restored = parseCommandJson<ManagedWorktreeRecord>(
-        "worktrees restore",
-        await instance.cli(["worktrees", "restore", created.id, "--json"]),
-      );
-      expect(restored).toMatchObject({
-        id: created.id,
-        branch: created.branch,
-        path: created.path,
-      });
-      expect(restored.removedAt).toBeUndefined();
-      const status = await git(restored.path, "status", "--porcelain");
-      expect(status.split("\n")).toEqual(expect.arrayContaining([" M README.md", "?? notes.txt"]));
-      await expect(fs.readFile(path.join(restored.path, "README.md"), "utf8")).resolves.toBe(
-        "dirty tracked change\n",
-      );
-      await expect(fs.readFile(path.join(restored.path, "notes.txt"), "utf8")).resolves.toBe(
-        "restored note\n",
-      );
-      await expect(fs.readFile(provisionedEnv, "utf8")).resolves.toBe("TOKEN=fixture\n");
-      await expect(fs.readFile(provisionedTool, "utf8")).resolves.toContain("echo generated");
-      expect((await fs.stat(provisionedEnv)).mode & 0o777).toBe(0o600);
-      expect((await fs.stat(provisionedTool)).mode & 0o777).toBe(0o755);
-      expect(await git(repo, "rev-parse", `refs/heads/${created.branch}`)).toBe(baseCommit);
-      expect((await git(repo, "log", "--format=%H", created.branch)).split("\n")).not.toContain(
-        snapshotCommit,
-      );
+    const restored = await worktrees<ManagedWorktreeRecord>("restore", created.id);
+    expect(restored).toMatchObject({
+      id: created.id,
+      branch: created.branch,
+      path: created.path,
+    });
+    expect(restored.removedAt).toBeUndefined();
+    const status = await git(restored.path, "status", "--porcelain");
+    expect(status.split("\n")).toEqual(expect.arrayContaining([" M README.md", "?? notes.txt"]));
+    await expect(fs.readFile(path.join(restored.path, "README.md"), "utf8")).resolves.toBe(
+      "dirty tracked change\n",
+    );
+    await expect(fs.readFile(path.join(restored.path, "notes.txt"), "utf8")).resolves.toBe(
+      "restored note\n",
+    );
+    await expectProvisionedFiles(restored.path);
+    expect(await git(repo, "rev-parse", `refs/heads/${created.branch}`)).toBe(baseCommit);
+    expect((await git(repo, "log", "--format=%H", created.branch)).split("\n")).not.toContain(
+      snapshotCommit,
+    );
 
-      const gc = parseCommandJson<ManagedWorktreeGcResult>(
-        "worktrees gc",
-        await instance.cli(["worktrees", "gc", "--json"]),
-      );
-      expect(gc).toMatchObject({
-        removed: [],
-        orphansDeleted: expect.any(Number),
-        snapshotsPruned: expect.any(Number),
-      });
-      const activeList = parseCommandJson<WorktreeListJson>(
-        "worktrees list after gc",
-        await instance.cli(["worktrees", "list", "--json"]),
-      );
-      expect(activeList.worktrees).toContainEqual(
-        expect.objectContaining({ id: created.id, ownerKind: "manual" }),
-      );
-      expect(
-        activeList.worktrees.find((record) => record.id === created.id)?.removedAt,
-      ).toBeUndefined();
-      await fs.access(created.path);
-    },
-  );
-});
+    const gc = await worktrees<ManagedWorktreeGcResult>("gc");
+    expect(gc).toMatchObject({
+      removed: [],
+      orphansDeleted: expect.any(Number),
+      snapshotsPruned: expect.any(Number),
+    });
+    const activeList = await worktrees<WorktreeListJson>("list");
+    expect(activeList.worktrees).toContainEqual(
+      expect.objectContaining({ id: created.id, ownerKind: "manual" }),
+    );
+    expect(
+      activeList.worktrees.find((record) => record.id === created.id)?.removedAt,
+    ).toBeUndefined();
+    await fs.access(created.path);
+  },
+);
