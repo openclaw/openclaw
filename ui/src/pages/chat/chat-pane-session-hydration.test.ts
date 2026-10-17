@@ -33,10 +33,10 @@ function createSecondaryHydrationPane() {
     "system.info",
   ]);
   const commitEffects: AfterCommitEffect[] = [];
-  const afterCommit = vi.fn((effect: AfterCommitEffect) => {
+  const afterCommit = (effect: AfterCommitEffect) => {
     commitEffects.push(effect);
     return () => undefined;
-  });
+  };
   state.renderLifecycle = { afterCommit };
   const frames = new Map<number, FrameRequestCallback>();
   let nextFrame = 0;
@@ -44,19 +44,12 @@ function createSecondaryHydrationPane() {
     frames.set(++nextFrame, callback);
     return nextFrame;
   });
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-    frames.delete(id);
-  });
-  const paintFrame = () => {
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
+  const paintFrame = async () => {
     const callbacks = [...frames.values()];
     frames.clear();
-    if (callbacks.length === 0) {
-      throw new Error("expected a queued animation frame");
-    }
-    for (const callback of callbacks) {
-      callback(0);
-    }
-    return Promise.resolve();
+    expect(callbacks.length, "queued animation frames").toBeGreaterThan(0);
+    callbacks.forEach((callback) => callback(0));
   };
   const deferTranscript = () => {
     const transcript = deferred<boolean>();
@@ -72,7 +65,6 @@ function createSecondaryHydrationPane() {
     expect(listBranches).not.toHaveBeenCalled();
   };
   return {
-    afterCommit,
     commitEffects,
     pane,
     patch,
@@ -82,42 +74,63 @@ function createSecondaryHydrationPane() {
     deferTranscript,
     expectNoSecondaryReads,
     paintFrame,
+    commit: () => {
+      const complete = vi.fn();
+      commitEffects[0]!(complete);
+      return complete;
+    },
   };
 }
 
 afterEach(() => vi.restoreAllMocks());
 
-it("lets the committed transcript paint before starting secondary RPCs together", async () => {
+it.each([
+  [false, true],
+  [true, true],
+  [true, false],
+])("paint-gated hydration: returning=%s committed=%s", async (returning, committed) => {
   const f = createSecondaryHydrationPane();
+  if (returning) {
+    f.state.sessionsResult = {
+      sessions: [{ key: f.state.sessionKey, kind: "direct", updatedAt: 20, unread: true }],
+    } as never;
+    f.pane.presented = false;
+  }
   const commitTranscript = f.deferTranscript();
-  f.expectNoSecondaryReads();
-  await commitTranscript();
-
-  expect(f.afterCommit).toHaveBeenCalledOnce();
-  f.expectNoSecondaryReads();
-
-  const complete = vi.fn();
-  f.commitEffects[0]!(complete);
+  if (returning) {
+    f.pane.presented = true;
+  }
+  const expectPending = () => {
+    expect(f.patch).not.toHaveBeenCalled();
+    if (!returning) {
+      f.expectNoSecondaryReads();
+    }
+  };
+  expectPending();
+  await commitTranscript(committed);
+  expect(f.commitEffects).toHaveLength(1);
+  expectPending();
+  const complete = f.commit();
   await Promise.resolve();
-
-  f.expectNoSecondaryReads();
+  expectPending();
   expect(complete).not.toHaveBeenCalled();
-
   await f.paintFrame();
-  f.expectNoSecondaryReads();
+  expectPending();
   expect(complete).not.toHaveBeenCalled();
-
   await f.paintFrame();
-  expect(f.listBranches).toHaveBeenCalledOnce();
-  expect(f.request.mock.calls.map(([method]) => method)).toEqual([
-    "system.info",
-    "session.discussion.info",
-    "sessions.companion.state",
-    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  ]);
-  expect(
-    f.request.mock.calls.find(([method]) => method === "sessions.companion.state")?.[1],
-  ).toEqual({ sessionKey: f.state.sessionKey, agentId: "work" });
+  expect(f.patch).toHaveBeenCalledTimes(Number(returning && committed));
+  if (!returning) {
+    expect(f.listBranches).toHaveBeenCalledOnce();
+    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
+      "system.info",
+      "session.discussion.info",
+      "sessions.companion.state",
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+    ]);
+    expect(
+      f.request.mock.calls.find(([method]) => method === "sessions.companion.state")?.[1],
+    ).toEqual({ sessionKey: f.state.sessionKey, agentId: "work" });
+  }
   expect(complete).toHaveBeenCalledOnce();
 });
 
@@ -128,18 +141,17 @@ it("drops a previous session's deferred hydration before it reaches commit", asy
   const commitCurrent = f.deferTranscript();
 
   await commitPrevious();
-  expect(f.afterCommit).not.toHaveBeenCalled();
+  expect(f.commitEffects).toHaveLength(0);
 
   await commitCurrent();
-  expect(f.afterCommit).toHaveBeenCalledOnce();
+  expect(f.commitEffects).toHaveLength(1);
 });
 
 it("drops secondary work when the session changes between commit and paint", async () => {
   const f = createSecondaryHydrationPane();
   await f.deferTranscript()();
 
-  const complete = vi.fn();
-  f.commitEffects[0]!(complete);
+  const complete = f.commit();
   void f.paintFrame();
   f.state.sessionKey = "agent:work:replacement";
   await f.paintFrame();
@@ -160,7 +172,7 @@ it("resumes deferred companion and discussion hydration when a retained pane ret
 
   f.pane.presented = true;
   expect(f.commitEffects).toHaveLength(1);
-  f.commitEffects[0]!(vi.fn());
+  f.commit();
   expect(f.request.mock.calls.map(([method]) => method).toSorted()).toEqual([
     "chat.metadata",
     "models.list",
@@ -172,28 +184,3 @@ it("resumes deferred companion and discussion hydration when a retained pane ret
     expect.arrayContaining(["session.discussion.info", "sessions.companion.state"]),
   );
 });
-
-it.each([true, false])(
-  "acknowledges unread only after deferred transcript hydration commits: %s",
-  async (committed) => {
-    const f = createSecondaryHydrationPane();
-    f.state.sessionsResult = {
-      sessions: [{ key: f.state.sessionKey, kind: "direct", updatedAt: 20, unread: true }],
-    } as never;
-
-    f.pane.presented = false;
-    const commitTranscript = f.deferTranscript();
-    f.pane.presented = true;
-    expect(f.patch).not.toHaveBeenCalled();
-
-    await commitTranscript(committed);
-    expect(f.commitEffects).toHaveLength(1);
-
-    f.commitEffects[0]!(vi.fn());
-    expect(f.patch).not.toHaveBeenCalled();
-    void f.paintFrame();
-    expect(f.patch).not.toHaveBeenCalled();
-    await f.paintFrame();
-    expect(f.patch).toHaveBeenCalledTimes(Number(committed));
-  },
-);

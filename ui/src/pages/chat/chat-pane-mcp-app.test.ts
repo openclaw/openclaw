@@ -1,5 +1,5 @@
 import { createRoot } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
@@ -22,27 +22,14 @@ import {
 } from "./attachment-payload-store.ts";
 import { createChatPaneMcpApps, type ChatPaneMcpAppOwner } from "./chat-pane-mcp-app.ts";
 
-const cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) {
-    cleanup();
-  }
-  document.body.replaceChildren();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function fixture() {
   const element = document.createElement("div");
-  document.body.append(element);
   const client = createTestGatewayClient(async () => ({}));
-  const gateway = createApplicationGateway();
-  gateway.publish({
-    ...gateway.gateway.snapshot,
-    phase: "connected",
-    client,
-    sessionKey: "agent:main:one",
-  });
-  const context = { gateway: gateway.gateway } as ApplicationContext;
+  const { gateway } = createApplicationGateway();
+  Object.assign(gateway.snapshot, { phase: "connected", client, sessionKey: "agent:main:one" });
+  const context = { gateway } as ApplicationContext;
   const state: ChatPaneMcpAppOwner["state"] = {
     sessionKey: "agent:main:one",
     assistantAgentId: "main",
@@ -55,7 +42,6 @@ function fixture() {
     context,
     state,
     presented: true,
-    agentId: "fallback",
     replaceAttachments: (attachments) => {
       state.chatAttachments = attachments;
     },
@@ -68,11 +54,11 @@ function fixture() {
       syncLaunch = createChatPaneMcpApps({ element, current: () => current });
       return stop;
     });
-    cleanups.push(dispose);
+    onTestFinished(dispose);
     return dispose;
   }
   const cleanup = mount();
-  cleanups.push(() => releaseChatAttachmentPayloads(state.chatAttachments));
+  onTestFinished(() => releaseChatAttachmentPayloads(state.chatAttachments));
   const launch: McpAppOpenDetail = {
     sessionKey: state.sessionKey,
     owner: client,
@@ -180,12 +166,9 @@ it.each([true, false])(
     expect(sent.respond).not.toHaveBeenCalled();
     expect(f.state.handleSendChat).toHaveBeenCalledWith(
       "Compare parts",
-      expect.objectContaining({
-        attachmentsOverride: expect.arrayContaining([
-          expect.objectContaining({ fileName: "Part measurements" }),
-        ]),
-      }),
+      expect.objectContaining({ attachmentsOverride: attachments }),
     );
+    expect(attachments).toContainEqual(expect.objectContaining({ fileName: "Part measurements" }));
     if (admitted) {
       f.setCurrent(null);
       f.cleanup();

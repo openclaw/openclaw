@@ -54,8 +54,15 @@ function createHistoryProgressPane(
   const response = { card: progressCard() };
   const request = vi.fn(
     handler ??
-      (async (method: string) =>
-        method === "chat.history" ? readHistory() : { card: response.card }),
+      (async (method: string) => {
+        if (method === "chat.history") {
+          return readHistory();
+        }
+        if (method !== "progressCard.get") {
+          throw new Error(`Unexpected progress-card write: ${method}`);
+        }
+        return { card: response.card };
+      }),
   );
   const client = createGatewayBrowserClientFixture({ request });
   const initial = createInitializationContext();
@@ -103,6 +110,7 @@ function createHistoryProgressPane(
   return Object.assign(response, {
     pane,
     state,
+    setState: (changes: Partial<typeof state>) => Object.assign(state, changes),
     request,
     expectMethods: (...methods: string[]) =>
       expect(request.mock.calls.map(([method]) => method)).toEqual(methods),
@@ -121,15 +129,6 @@ function createHistoryProgressPane(
 it("hides the history owner's card only in this pane without rekeying the composer", async () => {
   const f = createHistoryProgressPane();
   const { pane, state, progress, emit, request } = f;
-  request.mockImplementation(async (method: string) => {
-    if (method === "chat.history") {
-      return history;
-    }
-    if (method !== "progressCard.get") {
-      throw new Error(`Unexpected progress-card write: ${method}`);
-    }
-    return { card: f.card };
-  });
   state.chatMessage = "Retained draft";
   await pane.updateComplete;
   expect(request).not.toHaveBeenCalled();
@@ -276,43 +275,38 @@ it.each([
   expect(state.sessionKey).toBe(target.raw);
 });
 
+type ProgressPane = ReturnType<typeof createHistoryProgressPane>;
 it.each([
-  "navigation",
-  "reconnect",
-  "client replacement",
-  "disconnect",
-  "session replacement",
-  "history reset",
-  "archive",
-] as const)("retires the accepted progress identity after %s", async (transition) => {
-  const f = createHistoryProgressPane();
-  const { pane, state, request, card } = f;
-  await loadChatHistory(state, { deferBranches: true });
-  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
+  ["navigation", (f) => f.setState({ sessionKey: "scratch" })],
+  ["reconnect", (f) => f.setState({ connectionEpoch: f.state.connectionEpoch + 1 })],
+  [
+    "client replacement",
+    ({ pane, state, request }) => {
+      state.client = { request } as unknown as GatewayBrowserClient;
+      pane.context.gateway.snapshot.client = state.client;
+    },
+  ],
+  ["disconnect", (f) => f.setState({ connected: false })],
+  ["session replacement", (f) => f.setState({ currentSessionId: "replacement-notes" })],
+  ["history reset", ({ state }) => resetChatHistoryProjection(state)],
+  ["archive", (f) => f.setState({ selectedChatSessionArchived: true })],
+] satisfies Array<[string, (fixture: ProgressPane) => void]>)(
+  "retires the accepted progress identity after %s",
+  async (transition, retire) => {
+    const f = createHistoryProgressPane();
+    const { pane, state, request, card } = f;
+    await loadChatHistory(state, { deferBranches: true });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
 
-  if (transition === "navigation") {
-    state.sessionKey = "scratch";
-  } else if (transition === "reconnect") {
-    state.connectionEpoch += 1;
-  } else if (transition === "client replacement") {
-    state.client = { request } as unknown as GatewayBrowserClient;
-    pane.context.gateway.snapshot.client = state.client;
-  } else if (transition === "disconnect") {
-    state.connected = false;
-  } else if (transition === "session replacement") {
-    state.currentSessionId = "replacement-notes";
-  } else if (transition === "archive") {
-    state.selectedChatSessionArchived = true;
-  } else {
-    resetChatHistoryProjection(state);
-  }
-  await pane.updateComplete;
-  expect(pane.readProgressCardScope().target).toBeUndefined();
-  expect(pane.chatProps?.progressCard).toEqual(
-    transition === "reconnect" || transition === "disconnect" ? card : null,
-  );
-  expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(1);
-});
+    retire(f);
+    await pane.updateComplete;
+    expect(pane.readProgressCardScope().target).toBeUndefined();
+    expect(pane.chatProps?.progressCard).toEqual(
+      transition === "reconnect" || transition === "disconnect" ? card : null,
+    );
+    expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(1);
+  },
+);
 
 it("does not adopt a stale history reply after navigation", async () => {
   const old = createDeferred<ChatHistoryResult>();

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { SessionMoveTarget } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   sessionPlacementAction,
   sessionPlacementActionReason,
@@ -13,8 +12,7 @@ import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
-import { createPlacementPane } from "./chat-pane-placement.test-support.ts";
-import { activePlacementSession } from "./chat-pane.test-support.ts";
+import { createPlacementPane, retryPlacementSession } from "./chat-pane-placement.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 beforeEach(() => {
@@ -27,23 +25,7 @@ function fixture(target: SessionMoveTarget = { kind: "gateway" }, abandonSource?
     "operator.admin",
     "operator.write",
   ]);
-  const original = activePlacementSession();
-  const session: GatewaySessionRow = {
-    ...original,
-    sessionId: "retry-session",
-    label: "Retry release review",
-    placement: { ...original.placement, state: "draining", generation: 2 },
-    placementMove: {
-      target,
-      updatedAtMs: 2,
-      error: "Workspace reconciliation failed.",
-      retry: {
-        expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
-        target,
-        ...(abandonSource ? { abandonSource } : {}),
-      },
-    },
-  };
+  const session = retryPlacementSession(target, abandonSource);
   state.sessionKey = session.key;
   state.currentSessionId = session.sessionId;
   state.sessionsResult = { ...createSessionsListResult(), sessions: [session] };
@@ -147,11 +129,7 @@ it.each(["source", "target", "disposition"] as const)(
       receipt.expected.generation = 8;
     }
     if (field === "target") {
-      session.placementMove = {
-        ...session.placementMove!,
-        target: { kind: "device", deviceId: "other" },
-        retry: { expected: receipt.expected, target: { kind: "device", deviceId: "other" } },
-      };
+      receipt.target = session.placementMove!.target = { kind: "device", deviceId: "other" };
     }
     if (field === "disposition") {
       receipt.abandonSource = undefined;
@@ -178,27 +156,24 @@ it("preserves a failed retry visibly and permits a required-profile retry only t
   expect(sessionPlacementAction(session)).toBe("retry");
   expect(request).toHaveBeenCalledTimes(1);
 });
-it.each(["failed", "local"] as const)(
-  "blocks %s recovery while a Move is outstanding",
-  async (placementState) => {
-    const { pane, session, request } = fixture();
-    const timestamps = { generation: 3, createdAtMs: 1, updatedAtMs: 3, stateChangedAtMs: 3 };
-    session.placement =
-      placementState === "failed"
-        ? {
-            ...timestamps,
-            state: "failed",
-            recoveryError: "Worker failed",
-            recoveryAction: "restart",
-          }
-        : { ...timestamps, state: "local" };
-    session.repositoryWorkspaceId = "repository-workspace";
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.move", "sessions.dispatch", "sessions.reclaim"],
-      ["operator.admin", "operator.write"],
-    );
-    await pane.changeHeaderPlacement(session, "recover");
-    expect(request).not.toHaveBeenCalled();
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  },
-);
+it.each([
+  { state: "failed", recoveryError: "Worker failed", recoveryAction: "restart" },
+  { state: "local" },
+] as const)("blocks $state recovery while a Move is outstanding", async (placement) => {
+  const { pane, session, request } = fixture();
+  session.placement = {
+    generation: 3,
+    createdAtMs: 1,
+    updatedAtMs: 3,
+    stateChangedAtMs: 3,
+    ...placement,
+  };
+  session.repositoryWorkspaceId = "repository-workspace";
+  pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    ["sessions.move", "sessions.dispatch", "sessions.reclaim"],
+    ["operator.admin", "operator.write"],
+  );
+  await pane.changeHeaderPlacement(session, "recover");
+  expect(request).not.toHaveBeenCalled();
+  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+});

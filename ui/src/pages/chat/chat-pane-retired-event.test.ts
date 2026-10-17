@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -81,10 +82,7 @@ it.each([
       "chat.startup": history,
     });
     const { sessions, mount, emitGatewayEvent } = fixture;
-    if (!fixture.state.client) {
-      throw new Error("Mounted pane fixture must have a connected client");
-    }
-    const request = vi.spyOn(fixture.state.client, "request");
+    const request = vi.spyOn(expectDefined(fixture.state.client, "connected client"), "request");
     const resume = vi.spyOn(chatSendActions, "resumeStoredChatOutboxes");
     await sessions.refresh({ agentId: "main", force: true });
     const visiblePane = mount(foreground.key);
@@ -99,6 +97,7 @@ it.each([
     const observedTranscript = retainedPane ? successorTranscript : [];
     function expectCurrentSession() {
       expect(state.currentSessionId).toBe(observedRow.sessionId);
+      expect(getChatSessionProjection(state).scope.sessionId).toBe(observedRow.sessionId);
       expect(selectedChatSessionRow(state)).toMatchObject(observedRow);
       expect(state.chatMessages).toEqual(observedTranscript);
     }
@@ -169,7 +168,6 @@ it.each([
     );
     // A background history refresh must not hide a transient stale append or reset.
     expect(state.chatMessages).toBe(messagesBefore);
-    expect(getChatSessionProjection(state).scope.sessionId).toBe(observedRow.sessionId);
     expectCurrentSession();
     await Promise.all(
       resume.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
@@ -187,7 +185,6 @@ it.each([
       ],
     ]);
     expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-    expect(getChatSessionProjection(state).scope.sessionId).toBe(observedRow.sessionId);
     expectCurrentSession();
     expect(visiblePane.state.chatMessages).toEqual([]);
   },

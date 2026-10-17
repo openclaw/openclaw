@@ -14,7 +14,11 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { createPlacementPane, type AsyncRequest } from "./chat-pane-placement.test-support.ts";
+import {
+  createPlacementPane,
+  deviceFixture,
+  type AsyncRequest,
+} from "./chat-pane-placement.test-support.ts";
 import {
   activePlacementSession as placementSession,
   offlineDeviceSession,
@@ -28,22 +32,6 @@ function activePlacementSession() {
 
 function moveFixture(handler?: AsyncRequest, scopes?: string[]) {
   return createPlacementPane(dialogs, handler, scopes);
-}
-
-function deviceFixture(
-  id: string,
-  label: string,
-  overrides: Partial<EnvironmentSummary> = {},
-): EnvironmentSummary {
-  return {
-    id: `node:${id}`,
-    type: "node",
-    label,
-    status: "available",
-    sessionHost: true,
-    workerSlots: { total: 1, available: 1 },
-    ...overrides,
-  };
 }
 
 function catalogRequest(

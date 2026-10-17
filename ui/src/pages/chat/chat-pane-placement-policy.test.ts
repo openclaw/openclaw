@@ -8,7 +8,11 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { createPlacementPane } from "./chat-pane-placement.test-support.ts";
+import {
+  createPlacementPane,
+  deviceFixture,
+  retryPlacementSession,
+} from "./chat-pane-placement.test-support.ts";
 import { activePlacementSession } from "./chat-pane.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
@@ -37,15 +41,7 @@ function fixture(row: GatewaySessionRow, fallbackAgentId = "main") {
               },
               { id: "other", providerId: "crabbox" },
             ],
-            environments: [
-              {
-                id: "node:runner",
-                type: "node",
-                status: "available",
-                sessionHost: true,
-                workerSlots: { total: 1, available: 1 },
-              },
-            ],
+            environments: [deviceFixture("runner")],
           }
         : { ok: true },
     ["operator.admin", "operator.read", "operator.write"],
@@ -148,17 +144,13 @@ it.each(["dispatch", "move"] as const)(
     expect(overrides).toHaveLength(0);
     submit();
     await operation;
-    expect(request).toHaveBeenCalledWith(
-      mode === "move" ? "sessions.move" : "sessions.dispatch",
-      mode === "move"
-        ? {
-            key: row.key,
-            agentId: "main",
-            expected,
-            target: { kind: "profile", profileId: "required" },
-          }
-        : { key: row.key, agentId: "main", profileId: "required" },
-    );
+    expect(request).toHaveBeenCalledWith(mode === "move" ? "sessions.move" : "sessions.dispatch", {
+      key: row.key,
+      agentId: "main",
+      ...(mode === "move"
+        ? { expected, target: { kind: "profile", profileId: "required" } }
+        : { profileId: "required" }),
+    });
   },
 );
 
@@ -178,22 +170,13 @@ it.each(["dispatch", "move", "retry", "stop"] as const)(
   "keeps explicit or fallback global-session agent scope for %s",
   async (mode) => {
     for (const agentId of ["writer", undefined]) {
-      const row: GatewaySessionRow =
-        mode === "dispatch"
-          ? { ...localRow(), key: "global", agentId }
-          : { ...activeRow(), key: "global", agentId };
-      if (mode === "retry" && row.placement?.state === "active") {
-        row.placement = { ...row.placement, state: "draining", generation: 2 };
-        row.placementMove = {
-          target: { kind: "gateway" },
-          updatedAtMs: 2,
-          error: "Sync failed",
-          retry: {
-            expected: { ...expected },
-            target: { kind: "gateway" },
-          },
-        };
-      }
+      const row: GatewaySessionRow = {
+        ...{ dispatch: localRow, move: activeRow, retry: retryPlacementSession, stop: activeRow }[
+          mode
+        ](),
+        key: "global",
+        agentId,
+      };
       const { pane, run, request, reconcileMutation } = fixture(row, "writer");
       const operation =
         mode === "stop"
