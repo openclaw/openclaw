@@ -15,7 +15,7 @@ async function writeRawSkill(dir: string, raw: string, filename = "SKILL.md") {
 }
 
 function loadSkillsFromPath(dir: string) {
-  return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir], includeDefaults: false });
+  return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir] });
 }
 
 it("keeps cached content isolated from caller mutations, paths and read limits", async () => {
@@ -74,7 +74,7 @@ it.each(["user", "project"] as const)(
       '---\ndescription: "  Padded metadata.  "\ndisable-model-invocation: true\n---\n# Shared Title\n',
     );
 
-    const session = loadSkills({ cwd, agentDir, skillPaths: [filePath], includeDefaults: false });
+    const session = loadSkills({ cwd, agentDir, skillPaths: [filePath] });
     const location = { path: filePath, baseDir: skillDir, origin: "top-level" };
     const expected = {
       name: " padded-name",
