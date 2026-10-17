@@ -66,7 +66,7 @@ it("recovers resolved provenance for legacy auto-fallback overrides", () => {
 
 it("awaits parent overrides without requiring a whole session store", async () => {
   const loadSessionEntry = vi.fn(async (sessionKey: string) =>
-    sessionKey === "agent:main:telegram:dm:parent"
+    sessionKey === "agent:main:discord:channel:parent"
       ? makeEntry({
           providerOverride: "anthropic",
           modelOverride: "claude-sonnet-4-7",
@@ -78,10 +78,23 @@ it("awaits parent overrides without requiring a whole session store", async () =
     await resolveStoredModelOverrideAsync({
       defaultProvider: "openai",
       loadSessionEntry,
-      sessionKey: "agent:main:telegram:dm:parent:thread:child",
+      sessionKey: "agent:main:discord:channel:parent:thread:child",
     }),
   ).toEqual(parentChoice("anthropic", "claude-sonnet-4-7"));
-  expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
+  expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:discord:channel:parent");
+});
+
+it("does not derive a parent when the channel declares the session has none", () => {
+  const params = {
+    defaultProvider: "openai",
+    sessionKey: "agent:main:main:thread:42001:77",
+    sessionStore: { "agent:main:main": makeEntry(userPin) },
+  };
+
+  expect(resolveStoredModelOverride({ ...params, parentSessionKey: null })).toBeNull();
+  expect(resolveStoredModelOverride(params)).toEqual(
+    parentChoice("anthropic", "claude-sonnet-4-6"),
+  );
 });
 
 it.each([

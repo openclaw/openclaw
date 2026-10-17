@@ -218,6 +218,79 @@ describe("Telegram recorded session destinations", () => {
     }
   });
 
+  it.each([
+    { dmScope: undefined, dmKey: "agent:main:main", explicitParent: false },
+    { dmScope: undefined, dmKey: "agent:main:main", explicitParent: true },
+    { dmScope: "per-peer", dmKey: "agent:main:direct:42001", explicitParent: false },
+    {
+      dmScope: "per-channel-peer",
+      dmKey: "agent:main:telegram:direct:42001",
+      explicitParent: false,
+    },
+    {
+      dmScope: "per-account-channel-peer",
+      dmKey: "agent:main:telegram:default:direct:42001",
+      explicitParent: false,
+    },
+  ] as const)(
+    "resolves the DM topic model for dmScope=$dmScope with explicitParent=$explicitParent",
+    async ({ dmScope, dmKey, explicitParent }) => {
+      const topicKey = `${dmKey}:thread:42001:77`;
+      cfg.session = { ...cfg.session, ...(dmScope ? { dmScope } : {}) };
+      cfg.commands = { native: false, text: true };
+      cfg.agents = {
+        defaults: {
+          workspace: harness.state.workspaceDir,
+          skipBootstrap: true,
+          model: { primary: "openai/gpt-5.4" },
+        },
+      };
+      cfg.plugins = { enabled: false };
+      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+      const bot = await createBot(false, true, cfg, true);
+      await harness.state.writeConfig(cfg);
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: dmKey,
+        entry: {
+          sessionId: "pinned-dm",
+          updatedAt: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+          modelOverrideSource: "user",
+        },
+      });
+      if (explicitParent) {
+        await upsertSessionEntry({
+          storePath,
+          sessionKey: topicKey,
+          entry: { sessionId: "forked-topic", updatedAt: 1, parentSessionKey: dmKey },
+        });
+      }
+      let statusText = "";
+      harness.replySpy.mockImplementation(async (context, options) => {
+        expect(context.SessionKey).toBe(topicKey);
+        const reply = await getReplyFromConfig(context, options, cfg);
+        statusText = (Array.isArray(reply) ? reply : [reply])
+          .map((payload) => payload?.text ?? "")
+          .join("\n");
+        return reply;
+      });
+      await receive(bot, {
+        ...commandMessage("/status"),
+        message_thread_id: 77,
+        is_topic_message: true,
+      });
+      expect(harness.replySpy).toHaveBeenCalledOnce();
+      expect(statusText).toContain(
+        explicitParent ? "anthropic/claude-sonnet-4-6" : "openai/gpt-5.4",
+      );
+      expect(statusText).not.toContain(
+        explicitParent ? "openai/gpt-5.4" : "anthropic/claude-sonnet-4-6",
+      );
+    },
+  );
+
   it("isolates identity-linked senders and recorded destinations across named accounts", async () => {
     cfg.session = { ...cfg.session, identityLinks: { "alice-shared": ["telegram:814912386"] } };
     cfg.channels!.telegram!.accounts = { default: {}, atlas: {}, skynet: {} };

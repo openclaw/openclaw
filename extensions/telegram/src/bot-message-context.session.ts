@@ -179,6 +179,7 @@ export async function buildTelegramInboundContextPayload(
     dmThreadId,
     threadSpec,
     route,
+    modelParentSessionKey,
     historyLimit,
     dmHistoryLimit,
     groupConfig,
@@ -546,6 +547,7 @@ export async function buildTelegramInboundContextPayload(
     route: {
       ...route,
       routeSessionKey: route.sessionKey,
+      modelParentSessionKey,
       mainSessionKey: route.mainSessionKey,
     },
     reply: {

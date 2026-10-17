@@ -53,6 +53,7 @@ How forum topics map to sessions, agents, and ACP bindings.
     Disabling `threadBindings.enabled` globally, for Telegram, or for one account leaves ordinary Telegram messages working.
 
     Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.
+    Each DM topic keeps its own `/model` choice. A topic without one uses the configured default rather than the model pinned in the plain DM or main session; a topic with a persisted parent session, such as a fork, still inherits that parent's choice.
     The retired `dm.threadReplies` and `direct.*.threadReplies` overrides are gone; BotFather threaded mode is the single source of truth. Run `openclaw doctor --fix` to remove stale config keys.
 
   </Accordion>

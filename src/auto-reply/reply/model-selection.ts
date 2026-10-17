@@ -110,7 +110,7 @@ export async function createModelSelectionState(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
   storePath?: string;
   defaultProvider: string;
   defaultModel: string;

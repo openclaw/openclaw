@@ -262,18 +262,18 @@ describe("Telegram native argument menus", () => {
     expect(latest?.text).toContain(sentMenu().text);
   });
 
-  it.each(["parent", "off"] as const)(
+  it.each(["unpinned", "explicit parent", "off"] as const)(
     "uses the %s model settings for a DM-topic keyboard",
     async (thinking) => {
-      const inherited = thinking === "parent";
+      const pinned = thinking !== "off";
       const cfg = commandConfig({
         agents: {
           defaults: {
-            model: inherited ? "native-test/plain" : "native-test/reasoner",
-            thinkingDefault: inherited ? "low" : "medium",
-            models: { "native-test/reasoner": inherited ? {} : { params: { thinking: "low" } } },
+            model: pinned ? "native-test/plain" : "native-test/reasoner",
+            thinkingDefault: pinned ? "low" : "medium",
+            models: { "native-test/reasoner": pinned ? {} : { params: { thinking: "low" } } },
           },
-          ...(inherited
+          ...(pinned
             ? {}
             : {
                 ownership: "explicit" as const,
@@ -283,7 +283,7 @@ describe("Telegram native argument menus", () => {
                 },
               }),
         },
-        ...(inherited
+        ...(pinned
           ? {}
           : {
               bindings: [
@@ -291,10 +291,12 @@ describe("Telegram native argument menus", () => {
               ],
             }),
       });
-      if (inherited) {
+      const pinnedSessionKey =
+        thinking === "explicit parent" ? "agent:main:spawner" : "agent:main:main";
+      if (pinned) {
         await upsertSessionEntry({
           storePath: cfg.session!.store!,
-          sessionKey: "agent:main:main",
+          sessionKey: pinnedSessionKey,
           entry: {
             sessionId: "parent",
             updatedAt: 1,
@@ -304,16 +306,80 @@ describe("Telegram native argument menus", () => {
           },
         });
       }
-      await dispatchCommand(cfg, "/think", 3101, { message_thread_id: 77 }, true);
-      if (inherited) {
-        expect(sentMenu().reply_markup.inline_keyboard.flat()).toContainEqual({
-          text: "max",
-          callback_data: "tgcmd:/think max",
+      if (thinking === "explicit parent") {
+        await upsertSessionEntry({
+          storePath: cfg.session!.store!,
+          sessionKey: "agent:main:main:thread:42001:77",
+          entry: { sessionId: "forked-topic", updatedAt: 1, parentSessionKey: pinnedSessionKey },
         });
-      } else {
+      }
+      await dispatchCommand(cfg, "/think", 3101, { message_thread_id: 77 }, true);
+      const choices = sentMenu().reply_markup.inline_keyboard.flat();
+      if (thinking === "off") {
         expect(sentMenu().text).toContain(`Current thinking level: ${thinking}.\n`);
+      } else if (thinking === "explicit parent") {
+        expect(choices).toContainEqual({ text: "max", callback_data: "tgcmd:/think max" });
+      } else {
+        expect(choices.map((choice) => choice.text)).toEqual(["default", "off", "ultra"]);
       }
       expectSend({ message_thread_id: 77 });
+    },
+  );
+
+  it.each([
+    ["a historical topic that last ran on the DM pin", "native-test/plain", "plain"],
+    ["the channel default", "native-test/reasoner", "reasoner"],
+  ] as const)(
+    "uses %s for an unpinned DM-topic keyboard",
+    async (_case, channelModel, expected) => {
+      const base = commandConfig();
+      const cfg = commandConfig({
+        agents: {
+          defaults: {
+            model: "native-test/plain",
+            thinkingDefault: "low",
+            models: { "native-test/reasoner": {} },
+          },
+        },
+        channels: { ...base.channels, modelByChannel: { telegram: { "*": channelModel } } },
+      });
+      await upsertSessionEntry({
+        storePath: cfg.session!.store!,
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "parent",
+          updatedAt: 1,
+          providerOverride: "native-test",
+          modelOverride: "reasoner",
+          modelOverrideSource: "user",
+        },
+      });
+      if (expected === "plain") {
+        await upsertSessionEntry({
+          storePath: cfg.session!.store!,
+          sessionKey: "agent:main:main:thread:42001:77",
+          entry: {
+            sessionId: "historical-topic",
+            updatedAt: 1,
+            modelProvider: "native-test",
+            model: "reasoner",
+          },
+        });
+      }
+      await (
+        await createBot(true, true, cfg, true)
+      ).handleUpdate({
+        update_id: 3102,
+        message: { ...commandMessage("/think"), message_thread_id: 77 },
+      });
+      const choices = sentMenu()
+        .reply_markup.inline_keyboard.flat()
+        .map((choice) => choice.text);
+      if (expected === "plain") {
+        expect(choices).toEqual(["default", "off", "ultra"]);
+      } else {
+        expect(choices).toContain("max");
+      }
     },
   );
 });
