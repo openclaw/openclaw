@@ -1232,7 +1232,7 @@ it.each([
   ],
 ] satisfies Array<[string, unknown, string, string?]>)(
   "refuses %s without a partial artifact or raw values in logs",
-  (_name, event, error, rawEvent = undefined) => {
+  (_name, event, error, rawEvent?: string) => {
     const { result, bytes } = runDispatchWitness(event, rawEvent);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(error);

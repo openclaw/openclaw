@@ -36,10 +36,9 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
-  const { readSessionTranscriptUpdateVersion } =
-    await importOriginal<typeof import("../sessions/transcript-events.js")>();
+  const actual = await importOriginal<typeof import("../sessions/transcript-events.js")>();
   return {
-    readSessionTranscriptUpdateVersion,
+    ...actual,
     onInternalSessionTranscriptUpdate: (cb: typeof fixture.onUpdate) => {
       fixture.onUpdate = cb;
       return () => {
@@ -51,6 +50,7 @@ vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Drive explicit auth revocation gates without consulting live HTTP auth state.
 vi.mock("./http-utils.js", () => ({
   getHeader: (req: IncomingMessage, name: string) => {
     const value = req.headers[name.toLowerCase()];
@@ -127,6 +127,7 @@ vi.mock("./session-utils.js", () => ({
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
+// mock-isolation: Hold refresh and inline payload admission in memory without opening a transcript store.
 vi.mock("./session-history-state.js", () => ({
   readSessionHistorySnapshotAsync: async () => {
     if (fixture.readError) {

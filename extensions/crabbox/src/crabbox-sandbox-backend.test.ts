@@ -28,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
   runCommandWithTimeout: vi.fn(),
 }));
+// mock-isolation: Exercise command construction with synthetic sessions, not a live sandbox backend.
 vi.mock("openclaw/plugin-sdk/sandbox", () => ({
   createRemoteShellSandboxBackend: async (
     _params: CreateReservedSandboxBackendParamsV1,

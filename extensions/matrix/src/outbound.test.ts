@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   sendPollMatrix: vi.fn(),
 }));
 
+// mock-isolation: Verify outbound translation without opening a Matrix SDK client or network connection.
 vi.mock("./matrix/send.js", () => mocks);
 
 import { matrixOutbound } from "./outbound.js";
