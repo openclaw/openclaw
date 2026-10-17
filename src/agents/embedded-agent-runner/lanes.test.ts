@@ -11,6 +11,14 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { CommandLane } from "../../process/lanes.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 
+function subagentLane(sessionId: string, spawnedBy?: string) {
+  return resolveGlobalLane(CommandLane.Subagent, {
+    sessionId,
+    sessionKey: `agent:main:subagent:${sessionId}`,
+    spawnedBy,
+  });
+}
+
 describe("resolveGlobalLane", () => {
   it("normalizes global lanes and isolates nested cron admission (#44805)", () => {
     const cases: Array<[string | undefined, string, Parameters<typeof resolveGlobalLane>[1]?]> = [
@@ -60,13 +68,8 @@ describe("resolveGlobalLane", () => {
 });
 
 describe("subagent session concurrency", () => {
-  beforeEach(() => {
-    resetCommandQueueStateForTest();
-  });
-
-  afterEach(() => {
-    resetCommandQueueStateForTest();
-  });
+  beforeEach(resetCommandQueueStateForTest);
+  afterEach(resetCommandQueueStateForTest);
 
   it("executes 60 collectors with an independent group cap of 32", async () => {
     const maxConcurrent = 32;
@@ -76,25 +79,17 @@ describe("subagent session concurrency", () => {
       lane: 'subagent:swarm:["main","agent:main:parent","group"]',
       maxConcurrent,
     };
-    const context = {
+    const lane = resolveGlobalLane(CommandLane.Subagent, {
       sessionId: "collector",
       spawnedBy: "agent:main:parent",
       swarmExecutionLane,
-    };
-    const lane = resolveGlobalLane(CommandLane.Subagent, context);
-    const options = { maxConcurrent: swarmExecutionLane.maxConcurrent };
+    });
     const runs = Array.from({ length: 60 }, () =>
-      enqueueCommandInLane(lane, async () => await release.promise, options),
+      enqueueCommandInLane(lane, async () => await release.promise, { maxConcurrent }),
     );
-    const ordinaryLane = resolveGlobalLane(CommandLane.Subagent, {
-      sessionId: "ordinary",
-      spawnedBy: context.spawnedBy,
-    });
+    const ordinaryLane = subagentLane("ordinary", "agent:main:parent");
     runs.push(enqueueCommandInLane(ordinaryLane, async () => await release.promise));
-    const nestedLane = resolveGlobalLane(CommandLane.Subagent, {
-      sessionId: "grandchild",
-      spawnedBy: "agent:main:subagent:collector",
-    });
+    const nestedLane = subagentLane("grandchild", "agent:main:subagent:collector");
     runs.push(enqueueCommandInLane(nestedLane, async () => await release.promise));
     try {
       expect(getCommandLaneSnapshot(lane)).toMatchObject({
@@ -138,20 +133,13 @@ describe("subagent session concurrency", () => {
     const firstChildStarted = createDeferred();
     const started: string[] = [];
     const runChild = (spawnedBy: string, child: string) =>
-      enqueueCommandInLane(
-        resolveGlobalLane(CommandLane.Subagent, {
-          spawnedBy,
-          sessionKey: `agent:main:subagent:${child}`,
-          sessionId: child,
-        }),
-        async () => {
-          started.push(child);
-          if (child === "a1") {
-            firstChildStarted.resolve();
-          }
-          await release.promise;
-        },
-      );
+      enqueueCommandInLane(subagentLane(child, spawnedBy), async () => {
+        started.push(child);
+        if (child === "a1") {
+          firstChildStarted.resolve();
+        }
+        await release.promise;
+      });
     const children = [
       runChild("agent:main:parent-a", "a1"),
       runChild("agent:main:parent-a", "a2"),
@@ -175,31 +163,15 @@ describe("subagent session concurrency", () => {
     const release = createDeferred();
     const cancelQueuedChild = new AbortController();
     const childKey = "agent:main:subagent:child";
-    const grandchildKey = "agent:main:subagent:grandchild";
     const grandchildQueued = createDeferred();
-    const grandchildLane = resolveGlobalLane(CommandLane.Subagent, {
-      spawnedBy: childKey,
-      sessionKey: grandchildKey,
-      sessionId: "grandchild",
+    const grandchildLane = subagentLane("grandchild", childKey);
+    const child = enqueueCommandInLane(subagentLane("child", "agent:main:parent"), async () => {
+      const grandchild = enqueueCommandInLane(grandchildLane, async () => await release.promise, {
+        abortSignal: cancelQueuedChild.signal,
+      });
+      grandchildQueued.resolve();
+      return await grandchild;
     });
-    const child = enqueueCommandInLane(
-      resolveGlobalLane(CommandLane.Subagent, {
-        spawnedBy: "agent:main:parent",
-        sessionKey: childKey,
-        sessionId: "child",
-      }),
-      async () => {
-        const grandchild = enqueueCommandInLane(
-          grandchildLane,
-          async () => {
-            await release.promise;
-          },
-          { abortSignal: cancelQueuedChild.signal },
-        );
-        grandchildQueued.resolve();
-        return await grandchild;
-      },
-    );
 
     try {
       await grandchildQueued.promise;
