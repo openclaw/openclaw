@@ -7,10 +7,10 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
   bindCodexAppServerRuntimeArtifact,
-  captureCodexAppServerRuntimeArtifactBeforeStart,
-  finalizeCodexAppServerRuntimeArtifact,
+  captureCodexAppServerRuntimeArtifactBeforeStart as captureArtifact,
+  finalizeCodexAppServerRuntimeArtifact as finalizeArtifact,
   readCodexAppServerClientRuntimeArtifact,
-  validateCodexAppServerRuntimeArtifact,
+  validateCodexAppServerRuntimeArtifact as validateArtifact,
 } from "./runtime-artifact.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -38,17 +38,31 @@ function spawnIdentity(options: CodexAppServerStartOptions, nativeCommand?: stri
   };
 }
 
+function captureBefore(options: CodexAppServerStartOptions, signal?: AbortSignal) {
+  return captureArtifact({ startOptions: options, spawnIdentity: spawnIdentity(options), signal });
+}
+
+async function expectMutationInvalidates(
+  binding: Awaited<ReturnType<typeof captureBinding>>["binding"],
+  file: string,
+  replacement: string,
+) {
+  await expect(validateArtifact(binding)).resolves.toBe(true);
+  await fs.writeFile(file, replacement);
+  await expect(validateArtifact(binding)).resolves.toBe(false);
+}
+
 async function captureBinding(params: {
   options: CodexAppServerStartOptions;
   nativeCommand?: string;
 }) {
   const client = {} as CodexAppServerClient;
   const identity = spawnIdentity(params.options, params.nativeCommand);
-  const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
+  const before = await captureArtifact({
     startOptions: params.options,
     spawnIdentity: identity,
   });
-  const binding = await finalizeCodexAppServerRuntimeArtifact({
+  const binding = await finalizeArtifact({
     before,
     startOptions: params.options,
     spawnIdentity: identity,
@@ -124,13 +138,7 @@ describe("Codex app-server runtime artifact", () => {
         return handle;
       });
       try {
-        await expect(
-          captureCodexAppServerRuntimeArtifactBeforeStart({
-            startOptions: options,
-            spawnIdentity: spawnIdentity(options),
-            signal: controller.signal,
-          }),
-        ).rejects.toBe(reason);
+        await expect(captureBefore(options, controller.signal)).rejects.toBe(reason);
       } finally {
         opened.mockRestore();
       }
@@ -151,9 +159,7 @@ describe("Codex app-server runtime artifact", () => {
           env: { PATH: binDir },
         });
         const { binding } = await captureBinding({ options });
-        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
-        await fs.writeFile(native, "native-v2");
-        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+        await expectMutationInvalidates(binding, native, "native-v2");
       });
     },
   );
@@ -177,9 +183,7 @@ describe("Codex app-server runtime artifact", () => {
               env: { PATH: binDir },
             }),
           });
-          await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
-          await fs.writeFile(bunPath, "bun-v2");
-          await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+          await expectMutationInvalidates(binding, bunPath, "bun-v2");
         } finally {
           Object.defineProperty(process, "execPath", originalExecPath);
           if (originalBun) {
@@ -236,10 +240,7 @@ describe("Codex app-server runtime artifact", () => {
           options,
           nativeCommand: path.join("native", "codex-native"),
         });
-        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
-
-        await fs.writeFile(interpreter, "interpreter-v2");
-        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+        await expectMutationInvalidates(binding, interpreter, "interpreter-v2");
       });
     },
   );
@@ -249,9 +250,7 @@ describe("Codex app-server runtime artifact", () => {
       const codeModeHost = path.join(root, "codex-code-mode-host");
 
       const { binding } = await captureBinding({ options: startOptions(command) });
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
-      await fs.writeFile(codeModeHost, "host-v1");
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      await expectMutationInvalidates(binding, codeModeHost, "host-v1");
     });
   });
 
@@ -269,10 +268,7 @@ describe("Codex app-server runtime artifact", () => {
       });
 
       const { binding } = await captureBinding({ options: startOptions(command) });
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
-
-      await fs.writeFile(path.join(resourcesDir, "bwrap"), "resource-v2");
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      await expectMutationInvalidates(binding, path.join(resourcesDir, "bwrap"), "resource-v2");
     });
   });
 
@@ -280,14 +276,14 @@ describe("Codex app-server runtime artifact", () => {
     await withNativeArtifact(async (command) => {
       const options = startOptions(command);
       const identity = spawnIdentity(options);
-      const before = await captureCodexAppServerRuntimeArtifactBeforeStart({
+      const before = await captureArtifact({
         startOptions: options,
         spawnIdentity: identity,
       });
       await fs.writeFile(command, "native-v2");
 
       await expect(
-        finalizeCodexAppServerRuntimeArtifact({
+        finalizeArtifact({
           before,
           startOptions: options,
           spawnIdentity: identity,
@@ -310,7 +306,7 @@ describe("Codex app-server runtime artifact", () => {
       await fs.writeFile(retiredOverride, "unused-host");
       expect((await captureBinding({ options })).binding).toEqual(binding);
       await fs.writeFile(codeModeHost, "host-v2");
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      await expect(validateArtifact(binding)).resolves.toBe(false);
     });
   });
 
@@ -334,10 +330,8 @@ describe("Codex app-server runtime artifact", () => {
       });
       const { binding, client } = await captureBinding({ options });
       expect(readCodexAppServerClientRuntimeArtifact(client)).toEqual(binding);
-      await expect(
-        validateCodexAppServerRuntimeArtifact(binding, undefined, options),
-      ).resolves.toBe(true);
-      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      await expect(validateArtifact(binding, undefined, options)).resolves.toBe(true);
+      await expect(validateArtifact(binding)).resolves.toBe(false);
     },
   );
 
@@ -354,10 +348,7 @@ describe("Codex app-server runtime artifact", () => {
     ["invalid boolean value", "--no-warnings=true", "--no-warnings"],
   ])("fails closed for %s NODE_OPTIONS", async (_label, nodeOptions, option) => {
     const options = startOptions("codex", { env: { NODE_OPTIONS: nodeOptions } });
-    const capture = captureCodexAppServerRuntimeArtifactBeforeStart({
-      startOptions: options,
-      spawnIdentity: spawnIdentity(options),
-    });
+    const capture = captureBefore(options);
 
     await expect(capture).rejects.toThrow(`cannot attest NODE_OPTIONS option ${option}`);
     await expect(capture).rejects.not.toThrow("super-secret-inject.js");
@@ -369,12 +360,7 @@ describe("Codex app-server runtime artifact", () => {
     ["tab delimiter", "--no-warnings\t--trace-warnings"],
   ])("fails closed for malformed Node tokenization: %s", async (_label, nodeOptions) => {
     const options = startOptions("codex", { env: { NODE_OPTIONS: nodeOptions } });
-    await expect(
-      captureCodexAppServerRuntimeArtifactBeforeStart({
-        startOptions: options,
-        spawnIdentity: spawnIdentity(options),
-      }),
-    ).rejects.toThrow("cannot safely parse NODE_OPTIONS");
+    await expect(captureBefore(options)).rejects.toThrow("cannot safely parse NODE_OPTIONS");
   });
 
   it("allows bounded Node resource and warning options", async () => {
@@ -454,9 +440,9 @@ describe("Codex app-server runtime artifact", () => {
         ] as const) {
           const original = await fs.readFile(filePath);
           await fs.writeFile(filePath, replacement);
-          await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+          await expect(validateArtifact(binding)).resolves.toBe(false);
           await fs.writeFile(filePath, original);
-          await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+          await expect(validateArtifact(binding)).resolves.toBe(true);
         }
       } finally {
         Object.defineProperty(process, "platform", originalPlatform);
@@ -467,11 +453,11 @@ describe("Codex app-server runtime artifact", () => {
 
   it("rejects malformed and oversized server-minted ids without filesystem access", async () => {
     const fingerprint = "0".repeat(64);
+    await expect(validateArtifact({ id: "codex-app-server:v1:wrong", fingerprint })).resolves.toBe(
+      false,
+    );
     await expect(
-      validateCodexAppServerRuntimeArtifact({ id: "codex-app-server:v1:wrong", fingerprint }),
-    ).resolves.toBe(false);
-    await expect(
-      validateCodexAppServerRuntimeArtifact({
+      validateArtifact({
         id: `codex-app-server:v1:${"a".repeat(32 * 1024)}`,
         fingerprint,
       }),
@@ -492,9 +478,7 @@ describe("Codex app-server runtime artifact", () => {
       try {
         Object.defineProperty(process, "platform", { ...platform, value: "win32" });
         const { binding } = await captureBinding({ options: startOptions(command) });
-        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
-        await fs.writeFile(host, "host-v2");
-        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+        await expectMutationInvalidates(binding, host, "host-v2");
       } finally {
         Object.defineProperty(process, "platform", platform);
       }
@@ -513,12 +497,7 @@ describe("Codex app-server runtime artifact", () => {
       await fs.writeFile(path.join(deep, "resource"), "x");
       const options = startOptions(command);
 
-      await expect(
-        captureCodexAppServerRuntimeArtifactBeforeStart({
-          startOptions: options,
-          spawnIdentity: spawnIdentity(options),
-        }),
-      ).rejects.toThrow("bounded directory depth");
+      await expect(captureBefore(options)).rejects.toThrow("bounded directory depth");
     });
   });
 
@@ -532,12 +511,7 @@ describe("Codex app-server runtime artifact", () => {
       await fs.symlink(command, path.join(root, "linked-runtime"));
       const options = startOptions(command);
 
-      await expect(
-        captureCodexAppServerRuntimeArtifactBeforeStart({
-          startOptions: options,
-          spawnIdentity: spawnIdentity(options),
-        }),
-      ).rejects.toThrow("unsupported entry");
+      await expect(captureBefore(options)).rejects.toThrow("unsupported entry");
     });
   });
 });
