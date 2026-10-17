@@ -71,7 +71,7 @@ async function createNodeState(
 function registerApns(
   nodeId: string,
   overrides: Partial<
-    Extract<Parameters<typeof registerApnsRegistration>[0], { transport: "direct" }>
+    Extract<Parameters<typeof registerApnsRegistration>[0], { transport?: "direct" }>
   > = {},
 ) {
   return registerApnsRegistration({
