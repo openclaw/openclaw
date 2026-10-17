@@ -1,4 +1,3 @@
-// Nodes CLI coverage tests cover node command branches and output formatting.
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
@@ -19,18 +18,7 @@ let lastNodeInvokeCall: NodeInvokeCall | null = null;
 
 const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   if (opts.method === "node.list") {
-    return {
-      nodes: [
-        {
-          nodeId: "mac-1",
-          displayName: "Mac",
-          platform: "macos",
-          caps: ["canvas"],
-          connected: true,
-          permissions: { screenRecording: true },
-        },
-      ],
-    };
+    return { nodes: [{ nodeId: "mac-1" }] };
   }
   if (opts.method === "node.invoke") {
     lastNodeInvokeCall = opts;
@@ -45,6 +33,15 @@ const mocks = await vi.hoisted(async () => {
 });
 
 const { runtimeErrors, defaultRuntime } = mocks;
+const pairingList = (requestId: string) => ({
+  pending: [{ requestId, nodeId: "n1", ts: Date.now() }],
+  paired: [],
+});
+const missingRequest = () =>
+  Object.assign(new Error("unknown requestId"), {
+    name: "GatewayClientRequestError",
+    gatewayCode: "INVALID_REQUEST",
+  });
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
@@ -119,10 +116,7 @@ describe("nodes-cli coverage", () => {
   });
 
   it("explains unknown nodes approve request ids with the current pending requests", async () => {
-    callGateway.mockResolvedValueOnce({
-      pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],
-      paired: [],
-    });
+    callGateway.mockResolvedValueOnce(pairingList("current-request"));
 
     await expectFailure(
       "nodes approve stale-request --url wss://gateway.example.test --token secret-token",
@@ -137,16 +131,8 @@ describe("nodes-cli coverage", () => {
 
   it("explains when a nodes approve request disappears after the preflight", async () => {
     callGateway
-      .mockResolvedValueOnce({
-        pending: [{ requestId: "expired-request", nodeId: "n1", ts: Date.now() }],
-        paired: [],
-      })
-      .mockRejectedValueOnce(
-        Object.assign(new Error("unknown requestId"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-        }),
-      );
+      .mockResolvedValueOnce(pairingList("expired-request"))
+      .mockRejectedValueOnce(missingRequest());
 
     await expectFailure(["nodes", "approve", "expired-request"]);
 
@@ -174,12 +160,7 @@ describe("nodes-cli coverage", () => {
   });
 
   it("explains unknown nodes reject request ids without leaking connection credentials", async () => {
-    callGateway.mockRejectedValueOnce(
-      Object.assign(new Error("unknown requestId"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-      }),
-    );
+    callGateway.mockRejectedValueOnce(missingRequest());
 
     await expectFailure(
       "nodes reject stale-request --url wss://gateway.example.test --token secret-token",
@@ -271,8 +252,7 @@ describe("nodes-cli coverage", () => {
     const invoke = await runNodesCommand(
       "nodes invoke --node mac-1 --command canvas.eval --invoke-timeout 15000 --timeout 5000",
     );
-    expect(invoke.params?.timeoutMs).toBe(15_000);
-    expect(invoke.timeoutMs).toBe(25_000);
+    expect(invoke).toMatchObject({ params: { timeoutMs: 15_000 }, timeoutMs: 25_000 });
     expect(
       callGateway.mock.calls.find(([call]) => call.method === "node.list")?.[0].timeoutMs,
     ).toBe(5_000);
@@ -296,13 +276,13 @@ describe("nodes-cli coverage", () => {
       "nodes location get --node mac-1 --accuracy precise --max-age 1000 --location-timeout 5000 --invoke-timeout 6000",
     );
 
-    expect(invoke.params?.command).toBe("location.get");
-    expect(invoke.params?.params).toEqual({
-      maxAgeMs: 1000,
-      desiredAccuracy: "precise",
-      timeoutMs: 5000,
-    });
-    expect(invoke.params?.timeoutMs).toBe(6000);
+    expect(invoke.params).toEqual(
+      expect.objectContaining({
+        command: "location.get",
+        timeoutMs: 6000,
+        params: { maxAgeMs: 1000, desiredAccuracy: "precise", timeoutMs: 5000 },
+      }),
+    );
   });
 
   it.each([

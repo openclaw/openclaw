@@ -1,4 +1,3 @@
-// Models CLI tests cover model listing command registration and provider output.
 import "../commands/models/accounts.js";
 import "../commands/models/auth-order.js";
 import "../commands/models/fallbacks-shared.js";
@@ -108,21 +107,8 @@ describe("models cli", () => {
     return { label: args, args: args.split(" "), command, field };
   }
 
-  function createProgram() {
-    const program = new Command().enablePositionalOptions();
-    registerModelsCli(program);
-    return program;
-  }
-
-  async function runModelsCommand(args: string[]) {
-    await runRegisteredCli({
-      register: (program: Command) => {
-        program.enablePositionalOptions();
-        registerModelsCli(program);
-      },
-      argv: args,
-    });
-  }
+  const register = (program: Command) => registerModelsCli(program.enablePositionalOptions());
+  const runModelsCommand = (argv: string[]) => runRegisteredCli({ register, argv });
 
   function expectCommandOptions(
     command: ReturnType<typeof vi.fn>,
@@ -137,7 +123,8 @@ describe("models cli", () => {
   }
 
   async function detectJsonOutput(args: string[]) {
-    const program = createProgram();
+    const program = new Command();
+    register(program);
     let detected: boolean | undefined;
     program.hook("preAction", (_command, actionCommand) => {
       detected = isCommandJsonOutputMode(actionCommand, process.argv);
@@ -261,17 +248,23 @@ describe("models cli", () => {
   ];
 
   it.each([
-    { label: "set", args: ["set", "anthropic/claude-sonnet-4-6"], command: mocks.modelsSetCommand },
-  ])("rejects parent --agent for models $label", async ({ args, command }) => {
-    const agent = "poe";
+    [
+      "models --agent poe set anthropic/claude-sonnet-4-6",
+      "Remove --agent",
+      mocks.modelsSetCommand,
+    ],
+    [
+      "models --agent other-person accounts list",
+      "does not support --agent",
+      mocks.modelsAccountsListCommand,
+    ],
+  ] as const)("rejects unsupported agent scope: %s", async (args, message, command) => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
       throw new ExitError(code);
     });
-    await expect(runModelsCommand(["models", "--agent", agent, ...args])).rejects.toMatchObject({
-      code: 1,
-    });
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("Remove --agent"));
+    await expect(runModelsCommand(args.split(" "))).rejects.toMatchObject({ code: 1 });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(message));
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(command).not.toHaveBeenCalled();
   });
@@ -332,19 +325,6 @@ describe("models cli", () => {
       });
     },
   );
-
-  it("rejects agent identity for personal accounts", async () => {
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-      throw new ExitError(code);
-    });
-    await expect(
-      runModelsCommand("models --agent other-person accounts list".split(" ")),
-    ).rejects.toMatchObject({ code: 1 });
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("does not support --agent"));
-    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(mocks.modelsAccountsListCommand).not.toHaveBeenCalled();
-  });
 
   it("lets explicit leaf options override the account group and inherits models JSON", async () => {
     await runModelsCommand(

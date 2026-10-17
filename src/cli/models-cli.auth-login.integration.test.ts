@@ -1,6 +1,7 @@
 // Exercises the shipped models auth login command across shared credential and local order owners.
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createOAuthRefreshCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
@@ -24,13 +25,10 @@ const mocks = vi.hoisted(() => ({
     profiles: [
       {
         profileId: "openai:fresh-login",
-        credential: {
-          type: "oauth" as const,
-          provider: "openai" as const,
+        credential: createOAuthRefreshCredential({
           access: "fresh-access",
           refresh: "fresh-refresh",
-          expires: Date.now() + 60_000,
-        },
+        }),
       },
     ],
   })),
@@ -70,25 +68,7 @@ function makeStdinInteractive(): () => void {
 }
 
 describe("models auth login owner integration", () => {
-  let restoreStdin: (() => void) | undefined;
   let lock: DatabaseSync | undefined;
-
-  const releaseLock = () => {
-    if (lock?.isOpen) {
-      if (lock.isTransaction) {
-        lock.exec("ROLLBACK");
-      }
-      lock.close();
-    }
-    lock = undefined;
-  };
-
-  afterEach(() => {
-    releaseLock();
-    restoreStdin?.();
-    restoreStdin = undefined;
-    vi.clearAllMocks();
-  });
 
   function withLoginState(run: Parameters<typeof withOpenClawTestState>[1]) {
     return withOpenClawTestState(
@@ -99,12 +79,19 @@ describe("models auth login owner integration", () => {
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
-        restoreStdin = makeStdinInteractive();
+        const restoreStdin = makeStdinInteractive();
         try {
           return await run(state);
         } finally {
-          // Restore before the state fixture removes its database files.
-          releaseLock();
+          if (lock?.isOpen) {
+            if (lock.isTransaction) {
+              lock.exec("ROLLBACK");
+            }
+            lock.close();
+          }
+          lock = undefined;
+          restoreStdin();
+          vi.clearAllMocks();
           vi.restoreAllMocks();
         }
       },

@@ -64,13 +64,9 @@ vi.mock("../commands/models/auth.js", () => ({
   modelsAuthPasteTokenCommand: mocks.domain,
   modelsAuthSetupTokenCommand: mocks.domain,
 }));
-// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-list.js", () => ({ modelsAuthListCommand: mocks.domain }));
-// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-activate.js", () => ({ modelsAuthActivateCommand: mocks.domain }));
-// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-logout.js", () => ({ modelsAuthLogoutCommand: mocks.domain }));
-// mock-isolation: Refusal must precede provider prompts, config loads, and store access.
 vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderGetCommand: mocks.domain,
   modelsAuthOrderUpdateCommand: mocks.domain,
@@ -79,6 +75,23 @@ vi.mock("../commands/models/auth-order.js", () => ({
 const roots = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   vi.clearAllMocks();
+  // Exercise auth-none resolution inside the same owner dispatch that verifies its RPC envelope.
+  mocks.gateway.mockImplementation(async (opts) => {
+    const { resolveGatewayCallDeviceAuth } = await import("../gateway/call-device-auth.js");
+    const resolved = await resolveGatewayCallDeviceAuth({
+      opts,
+      url: `ws://127.0.0.1:${opts.localPortOverride}`,
+      authMode: "none",
+      isImplicitLocalTarget: true,
+    });
+    expect(resolved.clientOptions).toMatchObject({
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      requireLocalBackendSharedAuth: true,
+    });
+    expect(resolved.deviceIdentity).toBeNull();
+    return { provider: "openai", profileId: "openai:manual" };
+  });
   const root = roots.make("models-auth-owner-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
@@ -88,10 +101,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function runAuth(args: string[]) {
+async function runAuth(args: string | string[]) {
   const program = new Command().enablePositionalOptions();
   registerModelsCli(program);
-  await program.parseAsync(["models", ...args], { from: "user" });
+  await program.parseAsync(["models", ...(typeof args === "string" ? args.split(" ") : args)], {
+    from: "user",
+  });
 }
 
 function expectNoLocalAdmission() {
@@ -99,22 +114,20 @@ function expectNoLocalAdmission() {
   expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
 }
 
-it.each(
-  [
-    ["add"],
-    ["list"],
-    ["activate", "synthetic:manual"],
-    ["logout", "synthetic:manual", "--yes"],
-    ["setup-token", "--provider", "synthetic"],
-    ["paste-token", "--provider", "synthetic"],
-    ["order", "get", "--provider", "synthetic"],
-    ["order", "set", "--provider", "synthetic", "synthetic:manual"],
-    ["order", "clear", "--provider", "synthetic"],
-  ].map((args) => ({ command: args.join(" "), args })),
-)(
-  "refuses models auth $command before config or credential admission when the Gateway owns state",
-  async ({ args }) => {
-    await expect(runAuth(["auth", ...args])).rejects.toMatchObject({
+it.each([
+  "add",
+  "list",
+  "activate synthetic:manual",
+  "logout synthetic:manual --yes",
+  "setup-token --provider synthetic",
+  "paste-token --provider synthetic",
+  "order get --provider synthetic",
+  "order set --provider synthetic synthetic:manual",
+  "order clear --provider synthetic",
+])(
+  "refuses models auth %s before config or credential admission when the Gateway owns state",
+  async (args) => {
+    await expect(runAuth(`auth ${args}`)).rejects.toMatchObject({
       code: "OWNER_UNAVAILABLE",
       message: expect.stringContaining("stop the Gateway"),
     });
@@ -124,7 +137,7 @@ it.each(
 );
 
 it("delegates paste-api-key to the live owner without local credential admission", async () => {
-  await runAuth(["auth", "paste-api-key", "--provider", "openai"]);
+  await runAuth("auth paste-api-key --provider openai");
   expect(mocks.gateway).toHaveBeenCalledWith(
     expect.objectContaining({
       method: "models.authSetApiKey",
@@ -149,33 +162,34 @@ it("delegates paste-api-key to the live owner without local credential admission
   expectNoLocalAdmission();
 });
 
-it.each([["login", "--provider", "fixture", "--method", "device"], ["login-github-copilot"]])(
-  "delegates %j without loading local credential state",
-  async (...args) => {
-    await runAuth(["--agent", "writer", "auth", ...args]);
-    expect(mocks.gateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "models.authLogin",
-        params: {
-          sessionId: expect.any(String),
-          authChoice: "fixture/device",
-          agentId: "writer",
-          expectedOwnerId: "synthetic-gateway-owner",
-        },
-        requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-login-owner-v1"],
-        scopes: ["operator.admin"],
-        onResponse: expect.any(Function),
-        onSignalAbort: expect.any(Function),
-      }),
-    );
-    expect(mocks.readLogin).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "writer" }),
-      expect.any(String),
-      expect.any(AbortSignal),
-    );
-    expectNoLocalAdmission();
-  },
-);
+it.each([
+  [["login", "--provider", "fixture", "--method", "device"], "writer"],
+  [["login-github-copilot"], "writer"],
+  [["login", "--provider", "openai", "--method", "api-key"], undefined],
+] as const)("delegates %j without loading local credential state", async (args, agent) => {
+  await runAuth([...(agent ? ["--agent", agent] : []), "auth", ...args]);
+  expect(mocks.gateway).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "models.authLogin",
+      params: {
+        sessionId: expect.any(String),
+        authChoice: "fixture/device",
+        agentId: agent,
+        expectedOwnerId: "synthetic-gateway-owner",
+      },
+      requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-login-owner-v1"],
+      scopes: ["operator.admin"],
+      onResponse: expect.any(Function),
+      onSignalAbort: expect.any(Function),
+    }),
+  );
+  expect(mocks.readLogin).toHaveBeenCalledWith(
+    expect.objectContaining({ agent }),
+    expect.any(String),
+    expect.any(AbortSignal),
+  );
+  expectNoLocalAdmission();
+});
 
 it.each(["--profile-id", "--force", "--set-default"])(
   "refuses unrepresentable login option %s before dispatch",
@@ -194,58 +208,21 @@ it.each(["--profile-id", "--force", "--set-default"])(
   },
 );
 
-it("cancels API-key input without calling the Gateway or admitting local credentials", async () => {
-  mocks.readKey.mockRejectedValueOnce(new ExitError(0));
-  await expect(runAuth(["auth", "paste-api-key", "--provider", "openai"])).rejects.toMatchObject({
-    code: 0,
-  });
-  expect(mocks.gateway).not.toHaveBeenCalled();
-  expectNoLocalAdmission();
-});
-
-it("does not fall back locally when the Gateway lacks owner-bound API-key support", async () => {
-  mocks.gateway.mockRejectedValueOnce(
-    new Error('Gateway does not support required capability "models-auth-set-api-key-owner-v1"'),
-  );
-  await expect(runAuth(["auth", "paste-api-key", "--provider", "openai"])).rejects.toMatchObject({
-    code: "OWNER_REFUSED",
-    message: expect.stringContaining("Update the Gateway"),
-  });
-  expectNoLocalAdmission();
-});
-
 it.each([
-  {
-    name: "API-key",
-    args: ["paste-api-key", "--provider", "openai"],
-    method: "models.authSetApiKey",
-  },
-  {
-    name: "login",
-    args: ["login", "--provider", "openai", "--method", "api-key"],
-    method: "models.authLogin",
-  },
-])(
-  "uses the real auth-none resolver for an owner-bound $name command",
-  async ({ args, method }) => {
-    const { resolveGatewayCallDeviceAuth } = await import("../gateway/call-device-auth.js");
-    mocks.gateway.mockImplementationOnce(async (opts) => {
-      expect(opts.method).toBe(method);
-      const resolved = await resolveGatewayCallDeviceAuth({
-        opts,
-        url: `ws://127.0.0.1:${opts.localPortOverride}`,
-        authMode: "none",
-        isImplicitLocalTarget: true,
-      });
-      expect(resolved.clientOptions).toMatchObject({
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        requireLocalBackendSharedAuth: true,
-      });
-      expect(resolved.deviceIdentity).toBeNull();
-      return { provider: "openai", profileId: "openai:manual" };
-    });
-    await runAuth(["auth", ...args]);
+  [true, new ExitError(0), { code: 0 }],
+  [
+    false,
+    new Error('Gateway does not support required capability "models-auth-set-api-key-owner-v1"'),
+    { code: "OWNER_REFUSED", message: expect.stringContaining("Update the Gateway") },
+  ],
+] as const)(
+  "does not admit credentials (input cancellation=%s)",
+  async (input, error, expected) => {
+    (input ? mocks.readKey : mocks.gateway).mockRejectedValueOnce(error);
+    await expect(runAuth("auth paste-api-key --provider openai")).rejects.toMatchObject(expected);
+    if (input) {
+      expect(mocks.gateway).not.toHaveBeenCalled();
+    }
     expectNoLocalAdmission();
   },
 );

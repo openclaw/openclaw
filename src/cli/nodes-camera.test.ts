@@ -255,41 +255,34 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/node remoteip/i);
   });
 
-  it("normalizes valid base64 and preserves the destination mode", async () => {
-    await withCameraTempDir(async (dir) => {
-      const out = path.join(dir, "x.bin");
-      await fs.writeFile(out, "existing-screen");
-      await fs.chmod(out, 0o640);
-
-      await camera.writeBase64ToFile(out, " aGk\n");
-
-      await expectOutput(dir, out, "hi");
-    });
-  });
-
-  it("preserves an existing output when the decoded media write fails", async () => {
-    await withCameraTempDir(async (dir) => {
-      const out = path.join(dir, "x.bin");
-      await fs.writeFile(out, "existing-screen");
-      await fs.chmod(out, 0o640);
-      outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
-        return await publishOutputFileAtomically({
-          ...params,
-          writeTemp: async (tempPath) => {
-            await params.writeTemp(tempPath);
-            await fs.truncate(tempPath, 1);
-            throw new Error("injected node media write failure");
-          },
-        });
+  it.each([false, true])(
+    "preserves output mode and contents on decoded write failure=%s",
+    async (fails) => {
+      await withCameraTempDir(async (dir) => {
+        const out = path.join(dir, "x.bin");
+        await fs.writeFile(out, "existing-screen");
+        await fs.chmod(out, 0o640);
+        if (fails) {
+          outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) =>
+            publishOutputFileAtomically({
+              ...params,
+              writeTemp: async (tempPath) => {
+                await params.writeTemp(tempPath);
+                await fs.truncate(tempPath, 1);
+                throw new Error("injected node media write failure");
+              },
+            }),
+          );
+          await expect(screen.writeScreenRecordToFile(out, "aGk=")).rejects.toThrow(
+            "injected node media write failure",
+          );
+        } else {
+          await camera.writeBase64ToFile(out, " aGk\n");
+        }
+        await expectOutput(dir, out, fails ? "existing-screen" : "hi");
       });
-
-      await expect(screen.writeScreenRecordToFile(out, "aGk=")).rejects.toThrow(
-        "injected node media write failure",
-      );
-
-      await expectOutput(dir, out, "existing-screen");
-    });
-  });
+    },
+  );
 
   it("rejects oversized base64 payloads before writing", async () => {
     await withCameraTempDir(async (dir) => {
@@ -461,10 +454,12 @@ describe("nodes screen helpers", () => {
       screenIndex: "0",
       hasAudio: 1,
     });
-    expect(payload.durationMs).toBeUndefined();
-    expect(payload.fps).toBeUndefined();
-    expect(payload.screenIndex).toBeUndefined();
-    expect(payload.hasAudio).toBeUndefined();
+    expect(payload).toMatchObject({
+      durationMs: undefined,
+      fps: undefined,
+      screenIndex: undefined,
+      hasAudio: undefined,
+    });
   });
 
   it("rejects invalid screen.record payload", () => {
@@ -474,13 +469,12 @@ describe("nodes screen helpers", () => {
   });
 
   it("maps a snapshot output path to the encoding the node should produce", () => {
-    expect(screen.screenSnapshotFormatForPath("/workspace/shot.png")).toBe("png");
-    expect(screen.screenSnapshotFormatForPath("/workspace/shot.PNG")).toBe("png");
-    expect(screen.screenSnapshotFormatForPath("/workspace/shot.jpg")).toBe("jpeg");
-    expect(screen.screenSnapshotFormatForPath("/workspace/shot.jpeg")).toBe("jpeg");
-    // Nothing recognizable is claimed, so the node's own default should stand.
-    expect(screen.screenSnapshotFormatForPath("/workspace/shot")).toBeUndefined();
-    expect(screen.screenSnapshotFormatForPath("/workspace/shot.webp")).toBeUndefined();
+    const suffixes = ["png", "PNG", "jpg", "jpeg", "", "webp"];
+    expect(
+      suffixes.map((ext) =>
+        screen.screenSnapshotFormatForPath(`/workspace/shot${ext ? "." + ext : ""}`),
+      ),
+    ).toEqual(["png", "png", "jpeg", "jpeg", undefined, undefined]);
   });
 
   it("builds screen snapshot temp path from the reported format", () => {
