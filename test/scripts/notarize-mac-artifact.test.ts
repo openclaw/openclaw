@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -17,6 +17,22 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/notarize-mac-artifact.sh";
+const accepted = {
+  id: "11111111-2222-4333-8444-555555555555",
+  status: "Accepted",
+  message: "Apple response",
+};
+function expectSuccess(result: SpawnSyncReturns<string>) {
+  expect(result.status, result.stderr).toBe(0);
+  return result;
+}
+
+function runScript(args: string[], env: NodeJS.ProcessEnv = {}) {
+  return spawnSync("/bin/bash", [scriptPath, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+}
 
 describe("notarize-mac-artifact input validation", () => {
   it.each(["help", "unknown option", "extra artifact", "missing staple app"])(
@@ -34,14 +50,10 @@ describe("notarize-mac-artifact input validation", () => {
             : scenario === "extra artifact"
               ? [artifact, "extra"]
               : [artifact];
-      const result = spawnSync("/bin/bash", [scriptPath, ...args], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ...(scenario === "missing staple app" ? { STAPLE_APP_PATH: missingApp } : {}),
-        },
-      });
+      const result = runScript(
+        args,
+        scenario === "missing staple app" ? { STAPLE_APP_PATH: missingApp } : {},
+      );
       expect(result.status).toBe(scenario === "help" ? 0 : 1);
       if (scenario === "help") {
         expect(result.stdout).toContain("Usage: scripts/notarize-mac-artifact.sh <artifact>");
@@ -67,13 +79,8 @@ describe("notarize-mac-artifact input validation", () => {
     const fixture = notarizationFixture();
     const app = path.join(path.dirname(fixture.artifact), "OpenClaw.app");
     mkdirSync(app);
-    const result = fixture.run(false, app);
-    expect(result.status, result.stderr).toBe(0);
-    expect(readJson(fixture.result)).toEqual({
-      id: submissionId,
-      status: "Accepted",
-      message: "Apple response",
-    });
+    const result = expectSuccess(fixture.run(false, app));
+    expect(readJson(fixture.result)).toEqual(accepted);
     expect(statSync(fixture.result).mode & 0o777).toBe(0o600);
     expect(result.stdout).toContain(submissionId);
     expect(result.stdout).toContain("Notarization complete");
@@ -81,9 +88,9 @@ describe("notarize-mac-artifact input validation", () => {
 });
 
 const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
-const submissionId = "11111111-2222-4333-8444-555555555555";
+const submissionId = accepted.id;
 
-function notarizationFixture(extension = "zip") {
+function notarizationFixture(extension = "zip", settings: Record<string, unknown> = {}) {
   const root = tempDirs.make("openclaw-notary-resume-");
   const artifact = path.join(root, `OpenClaw.${extension}`);
   const submission = path.join(root, "submission.json");
@@ -93,7 +100,7 @@ function notarizationFixture(extension = "zip") {
   const bin = path.join(root, "bin");
   mkdirSync(bin);
   writeFileSync(artifact, "signed artifact");
-  writeFileSync(control, "{}");
+  writeFileSync(control, JSON.stringify(settings));
   const clock = path.join(root, "clock");
   writeFileSync(clock, "0");
   // PATH already isolates external tools; virtual time avoids real retry sleeps.
@@ -170,24 +177,16 @@ if (args[0] === "notarytool") {
             .filter((call) => !method || call[1] === method)
         : [],
     run: (withCheckpoint = true, stapleApp = "") =>
-      spawnSync(
-        "/bin/bash",
-        [scriptPath, artifact, ...(withCheckpoint ? ["--submission-file", submission] : [])],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-            NOTARYTOOL_PROFILE: "test-profile",
-            NOTARY_RESULT_FILE: result,
-            STAPLE_APP_PATH: stapleApp,
-            GITHUB_RUN_ID: "35959639128",
-            GITHUB_RUN_ATTEMPT: "1",
-            APP_VERSION: "2026.9.23",
-            BUILD_ARCHS: "arm64",
-          },
-        },
-      ),
+      runScript([artifact, ...(withCheckpoint ? ["--submission-file", submission] : [])], {
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        NOTARYTOOL_PROFILE: "test-profile",
+        NOTARY_RESULT_FILE: result,
+        STAPLE_APP_PATH: stapleApp,
+        GITHUB_RUN_ID: "35959639128",
+        GITHUB_RUN_ATTEMPT: "1",
+        APP_VERSION: "2026.9.23",
+        BUILD_ARCHS: "arm64",
+      }),
   };
 }
 
@@ -195,10 +194,8 @@ describe("notarization submission recovery", () => {
   it.each([["transport"], ["In Progress", "In Progress", "In Progress"], ["malformed", "missing"]])(
     "retries non-terminal wait responses %j on the checkpointed id",
     (...waitResponses) => {
-      const fixture = notarizationFixture();
-      fixture.configure({ waitResponses });
-      const completed = fixture.run();
-      expect(completed.status, completed.stderr).toBe(0);
+      const fixture = notarizationFixture("zip", { waitResponses });
+      const completed = expectSuccess(fixture.run());
       expect(readJson(fixture.submission)).toMatchObject({
         version: 1,
         submissionId,
@@ -211,37 +208,33 @@ describe("notarization submission recovery", () => {
       expect(waits.every((call) => call[2] === submissionId)).toBe(true);
       expect(completed.stderr).toContain(submissionId);
       expect(completed.stderr).toContain("elapsed");
-      expect(readJson(fixture.result)).toEqual({
-        id: submissionId,
-        status: "Accepted",
-        message: "Apple response",
-      });
+      expect(readJson(fixture.result)).toEqual(accepted);
       expect(statSync(fixture.result).mode & 0o777).toBe(0o600);
     },
   );
 
   it("exhausts the wait budget with an actionable resume command and resumes the same id", () => {
-    const fixture = notarizationFixture();
-    fixture.configure({ status: "transport", waitElapsed: 900 });
+    const fixture = notarizationFixture("zip", { status: "transport", waitElapsed: 900 });
     const first = fixture.run();
     expect(first.status).toBe(1);
-    expect(first.stderr).toContain(submissionId);
-    expect(first.stderr).toContain("still valid at Apple");
-    expect(first.stderr).toContain(fixture.submission);
-    expect(first.stderr).toContain(
+    for (const detail of [
+      submissionId,
+      "still valid at Apple",
+      fixture.submission,
       "gh workflow run openclaw-macos-publish.yml --repo openclaw/releases",
-    );
-    expect(first.stderr).toContain("-f preflight_only=true");
-    expect(first.stderr).toContain("-f tag=v2026.9.23");
+      "-f preflight_only=true",
+      "-f tag=v2026.9.23",
+      "-f resume_notarization_run_id=35959639128",
+      "-f resume_notarization_run_attempt=1",
+      "-f resume_notarization_variant=arm64",
+    ]) {
+      expect(first.stderr).toContain(detail);
+    }
     expect(first.stderr).toMatch(/-f source_ref=[0-9a-f]{40}/u);
-    expect(first.stderr).toContain("-f resume_notarization_run_id=35959639128");
-    expect(first.stderr).toContain("-f resume_notarization_run_attempt=1");
-    expect(first.stderr).toContain("-f resume_notarization_variant=arm64");
     expect(existsSync(fixture.result)).toBe(false);
     expect(readJson(fixture.submission)).toMatchObject({ submissionId });
     fixture.configure();
-    const resumed = fixture.run();
-    expect(resumed.status, resumed.stderr).toBe(0);
+    expectSuccess(fixture.run());
     expect(fixture.calls("submit")).toHaveLength(1);
     expect(fixture.calls("wait")).toHaveLength(3);
   });
@@ -276,8 +269,7 @@ describe("notarization submission recovery", () => {
             ]
           : [otherEntry],
       });
-      const completed = fixture.run();
-      expect(completed.status, completed.stderr).toBe(0);
+      expectSuccess(fixture.run());
       expect(fixture.calls().map((call) => call[1])).toEqual(
         matching
           ? ["submit", "history", "history", "history", "wait"]
@@ -296,8 +288,7 @@ describe("notarization submission recovery", () => {
   );
 
   it("bounds submit retries when Apple never returns a submission id", () => {
-    const fixture = notarizationFixture();
-    fixture.configure({ submitFailures: 10 });
+    const fixture = notarizationFixture("zip", { submitFailures: 10 });
     const completed = fixture.run();
     expect(completed.status).toBe(1);
     expect(completed.stderr).toContain("after 5 attempts");
@@ -333,8 +324,7 @@ describe("notarization submission recovery", () => {
   ])(
     "retains $status and its log without publishing accepted output",
     ({ status, checkpoint, calls }) => {
-      const fixture = notarizationFixture();
-      fixture.configure({ status });
+      const fixture = notarizationFixture("zip", { status });
       const rejected = fixture.run(checkpoint);
       expect(rejected.status).not.toBe(0);
       expect(rejected.stdout).toContain("The signature is invalid.");
@@ -350,25 +340,21 @@ describe("notarization submission recovery", () => {
     "preserves and resumes DMG bytes across failure stage %s without resubmitting",
     (failStage) => {
       const fixture = notarizationFixture("dmg");
-      if (failStage) {
-        fixture.configure({ failStage });
-        expect(fixture.run().status).toBe(1);
-        expect(readFileSync(fixture.artifact, "utf8")).toBe("signed artifact");
-        expect(
-          readdirSync(path.dirname(fixture.artifact)).filter(
-            (name) => name.startsWith(".notary-staple") || name.includes(".tmp."),
-          ),
-        ).toEqual([]);
-      }
+      fixture.configure({ failStage });
+      expect(fixture.run().status).toBe(1);
+      expect(readFileSync(fixture.artifact, "utf8")).toBe("signed artifact");
+      expect(
+        readdirSync(path.dirname(fixture.artifact)).filter(
+          (name) => name.startsWith(".notary-staple") || name.includes(".tmp."),
+        ),
+      ).toEqual([]);
       fixture.configure();
-      const first = fixture.run();
-      expect(first.status, first.stderr).toBe(0);
+      expectSuccess(fixture.run());
       expect(readFileSync(fixture.artifact, "utf8")).toBe("signed artifact stapled ticket");
-      const resumed = fixture.run();
-      expect(resumed.status, resumed.stderr).toBe(0);
+      expectSuccess(fixture.run());
       expect(fixture.calls("submit")).toHaveLength(1);
       expect(fixture.calls("wait")).toHaveLength(1);
-      expect(fixture.calls("staple")).toHaveLength(failStage ? 2 : 1);
+      expect(fixture.calls("staple")).toHaveLength(2);
       writeFileSync(fixture.artifact, "tampered after stapling");
       const calls = fixture.calls();
       expect(fixture.run().status).toBe(1);
@@ -405,35 +391,28 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
     ],
     { encoding: "utf8" },
   );
-  expect(create.status, create.stderr).toBe(0);
+  expectSuccess(create);
   writeFileSync(path.join(root, "symbols.zip"), "symbols");
   const run = (command: string, ...args: string[]) =>
     spawnSync("python3", [script, command, root, ...args], { encoding: "utf8" });
-  const initialized = run("init", sourceSha, version, "202609011", "0", "0");
-  expect(initialized.status, initialized.stderr).toBe(0);
+  expectSuccess(run("init", sourceSha, version, "202609011", "0", "0"));
   return { root, archive, run, manifest: path.join(root, "manifest.json") };
 }
 
 describe("retained macOS notarization artifacts", () => {
   it("seals publication artifacts and retires only after completion while preserving the workflow envelope", () => {
     const fixture = recoveryFixture();
-    writeFileSync(
-      path.join(fixture.root, "workflow-release.json"),
-      JSON.stringify({ runId: "123" }),
-    );
-    writeFileSync(path.join(fixture.root, "sparkle-tools.zip"), "signing tools");
-    writeFileSync(
-      path.join(fixture.root, "app-submission.json"),
-      JSON.stringify({ submissionId: "apple-id" }),
-    );
-    writeFileSync(path.join(fixture.root, "app.dmg"), "signed dmg");
-    writeFileSync(
-      path.join(fixture.root, "dmg-submission.json"),
-      JSON.stringify({ submissionId: "dmg-id" }),
-    );
+    for (const [name, content] of Object.entries({
+      "workflow-release.json": JSON.stringify({ runId: "123" }),
+      "sparkle-tools.zip": "signing tools",
+      "app-submission.json": JSON.stringify({ submissionId: "apple-id" }),
+      "app.dmg": "signed dmg",
+      "dmg-submission.json": JSON.stringify({ submissionId: "dmg-id" }),
+    })) {
+      writeFileSync(path.join(fixture.root, name), content);
+    }
     expect(fixture.run("seal").status).toBe(0);
-    const verified = fixture.run("verify", sourceSha, version);
-    expect(verified.status, verified.stderr).toBe(0);
+    const verified = expectSuccess(fixture.run("verify", sourceSha, version));
     const manifest = JSON.parse(verified.stdout);
     expect(manifest).toMatchObject({
       schemaVersion: 1,
@@ -453,11 +432,9 @@ describe("retained macOS notarization artifacts", () => {
     ]);
     expect(manifest.files["sparkle-tools.zip"]).toMatch(/^[a-f0-9]{64}$/u);
     expect(readJson(fixture.manifest)).toEqual(manifest);
-    const completed = fixture.run("complete");
-    expect(completed.status, completed.stderr).toBe(0);
+    expectSuccess(fixture.run("complete"));
     expect(fixture.run("seal").status).toBe(0);
-    const sealed = fixture.run("verify", sourceSha, version);
-    expect(sealed.status, sealed.stderr).toBe(0);
+    const sealed = expectSuccess(fixture.run("verify", sourceSha, version));
     expect(JSON.parse(sealed.stdout).completed).toBe(true);
     expect(fixture.run("retire-completed").status).toBe(0);
     expect(existsSync(fixture.root)).toBe(false);

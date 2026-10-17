@@ -115,7 +115,6 @@ afterEach(async () => {
     expect(error).toBeInstanceOf(AggregateError);
     expect(error.errors[0]).toMatchObject({ code: 'EPROCESSGROUP_CLEANUP_FAILED', processTreeState: 'indeterminate' });
     expect(fs.existsSync(retained.root)).toBe(true);
-    fs.writeFileSync(file('retained.json'), JSON.stringify({ ...retained, cleanup: error.message, cleanupCode: error.errors[0].code, processTreeState: error.errors[0].processTreeState }));
     ${mode === "swallowed" ? "" : "throw error;"}
   }
 });
@@ -249,7 +248,6 @@ export default {
   };
   const abort = () => killGroup(child.pid!);
   signal.addEventListener("abort", abort, { once: true });
-  let outerClosed = false;
   const taskProcesses = () => {
     let pids: string;
     try {
@@ -303,26 +301,11 @@ export default {
         await withinTest(receipts.waitFor(file("after.json"), "written"), signal);
         const after = read("after.json");
         const observation = {
-          pool,
-          mode,
-          node: process.version,
-          command: [process.execPath, ...args],
-          outer,
-          outerPid: child.pid,
           outerAlive: isProcessAlive(child.pid!),
           workerAlive: isProcessAlive(retained.workerPid),
           leaderAlive: isProcessAlive(retained.leaderPid),
-          retained,
-          before,
-          after,
           writerAlive: isProcessAlive(retained.writerPid),
           rootExists: fs.existsSync(retained.root),
-          namespaceExists: fs.existsSync(retained.namespace),
-          processes: execFileSync(
-            "ps",
-            ["-o", "pid=,ppid=,pgid=,stat=", "-p", String(retained.writerPid)],
-            { encoding: "utf8", timeout: 2000 },
-          ).trim(),
         };
         write("observation.json", JSON.stringify(observation, null, 2));
         if (mode !== "crash") {
@@ -344,15 +327,16 @@ export default {
           expect.stringContaining("retained temporary namespace"),
         );
         expect(output).toContain(`retained temporary namespace ${retained.namespace}`);
-        expect(observation.outerAlive).toBe(false);
-        expect(observation.workerAlive).toBe(false);
-        expect(observation.leaderAlive).toBe(false);
-        expect(observation.writerAlive).toBe(true);
-        expect(after.pid).toBe(before.pid);
         expect(
-          observation.rootExists,
+          observation,
           `nested retained root was deleted while writer ${after.pid} remained live; evidence: ${file("observation.json")}`,
-        ).toBe(true);
+        ).toEqual({
+          outerAlive: false,
+          workerAlive: false,
+          leaderAlive: false,
+          writerAlive: true,
+          rootExists: true,
+        });
         expect(after).toEqual({ pid: before.pid, written: "after" });
       },
       async () => {
@@ -367,7 +351,6 @@ export default {
         }
         await closed;
         await outcome;
-        outerClosed = true;
         for (const { pid } of spawners) {
           await waitForReaped(pid, signal);
         }
@@ -394,18 +377,6 @@ export default {
           }),
         );
         expect(taskProcesses()).toEqual([]);
-        write(
-          "cleanup.json",
-          JSON.stringify(
-            {
-              outerPid: child.pid,
-              outerClosed,
-              pids: pids.map((pid) => ({ pid, alive: isProcessAlive(pid) })),
-            },
-            null,
-            2,
-          ),
-        );
       },
     );
   } finally {
