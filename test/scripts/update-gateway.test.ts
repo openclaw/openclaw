@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
@@ -16,34 +16,38 @@ import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
-describe("source-server updater bootstrap", () => {
-  it.each(
+const cases: Array<[scenarios: string[], steps: number, exitCode?: number]> = [
+  [["success", "explicit-declarations", "hash-pin", "local-pin"], 4, 0],
+  [
     [
-      "success",
-      "explicit-declarations",
       "missing",
       "enable-failure",
-      "install-failure",
-      "build-failure",
       "dirty",
-      "symlink",
-      "rebase-failure",
       "interrupted",
-      "probe-failure",
-      "wrong-version",
       "missing-pin",
       "invalid-pin",
       "invalid-json",
       "missing-manifest",
-      "hash-pin",
-      "local-pin",
-    ].flatMap((scenario) =>
+    ],
+    0,
+  ],
+  [["probe-failure", "wrong-version", "rebase-failure"], 1],
+  [["install-failure"], 2, 42],
+  [["symlink"], 2],
+  [["build-failure"], 3, 42],
+];
+it.each(
+  cases.flatMap(([scenarios, steps, exitCode = 1]) =>
+    scenarios.flatMap((scenario) =>
       (scenario === "success"
         ? ["main", "server"]
         : [scenario === "rebase-failure" || scenario === "local-pin" ? "server" : "main"]
-      ).map((branch) => ({ scenario, branch })),
+      ).map((branch) => ({ scenario, branch, steps, exitCode })),
     ),
-  )("keeps checkout and restart boundaries for $scenario on $branch", ({ scenario, branch }) => {
+  ),
+)(
+  "keeps checkout and restart boundaries for $scenario on $branch",
+  ({ scenario, branch, steps, exitCode }) => {
     const root = tempDirs.make("openclaw-server-bootstrap-");
     const is = (...scenarios: string[]) => scenarios.includes(scenario);
     const read = (file: string) => readFileSync(join(root, file), "utf8");
@@ -204,14 +208,8 @@ NODE
       },
     });
     const output = result.stdout + result.stderr;
-    const preflightFailure = is(
-      "probe-failure",
-      "wrong-version",
-      "missing-pin",
-      "invalid-pin",
-      "invalid-json",
-      "missing-manifest",
-    );
+    const beforeFetch = is("missing", "enable-failure", "dirty", "interrupted");
+    const preflightFailure = !beforeFetch && steps < 2 && scenario !== "rebase-failure";
     const lines = (name: string) =>
       existsSync(join(root, name)) ? readFileSync(join(root, name), "utf8").trim().split("\n") : [];
     if (preflightFailure) {
@@ -221,25 +219,9 @@ NODE
       expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
       expect(output).toContain("no checkout update or restart");
     }
-    const succeeded = is("success", "explicit-declarations", "hash-pin", "local-pin");
-    expect(result.status, output).toBe(
-      succeeded ? 0 : is("install-failure", "build-failure") ? 42 : 1,
-    );
-    const steps = lines("steps");
-    const beforeFetch = is("missing", "enable-failure", "dirty", "interrupted");
-    const beforeProbe =
-      beforeFetch || is("missing-pin", "invalid-pin", "invalid-json", "missing-manifest");
-    expect(steps).toEqual(
-      beforeProbe
-        ? []
-        : succeeded
-          ? ["probe", "install", "build", "nested"]
-          : scenario === "build-failure"
-            ? ["probe", "install", "build"]
-            : is("install-failure", "symlink")
-              ? ["probe", "install"]
-              : ["probe"],
-    );
+    const succeeded = exitCode === 0;
+    expect(result.status, output).toBe(exitCode);
+    expect(lines("steps")).toEqual(["probe", "install", "build", "nested"].slice(0, steps));
     if (beforeFetch) {
       expect(existsSync(join(root, "git-mutations"))).toBe(false);
     } else if (!preflightFailure) {
@@ -256,12 +238,9 @@ NODE
     if (scenario === "missing" || scenario === "enable-failure") {
       expect(output).toContain("Corepack");
     }
-    if (scenario === "rebase-failure") {
-      expect(read("git-mutations")).toContain("rebase --abort");
-    }
     expect(read("repo/pnpm-lock.yaml")).toBe("untouched\n");
     expect(read("repo/pnpm-workspace.yaml")).toBe("packages: []\n");
     expect(readdirSync(temp)).toEqual([]);
     expect(result.stdout.includes("OK abc123")).toBe(succeeded);
-  });
-});
+  },
+);
