@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { loadSettings } from "../../app/settings.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -37,10 +37,11 @@ function queueHost(items: readonly Partial<ChatQueueItem>[], sessionKey = SESSIO
       agents: [{ id: "main" }],
     },
   });
-  const unsubscribe = chatOutboxOwner(host as never).subscribe(host as never);
+  const unsubscribe = chatOutboxOwner(host).subscribe(host);
+  onTestFinished(unsubscribe);
   items.forEach((item, index) => {
     const admitted = admitQueuedMessageForSession(
-      host as never,
+      host,
       captureChatOutboxAdmission(host, sessionKey, item.agentId),
       {
         id: `queued-${index + 1}`,
@@ -57,34 +58,30 @@ function queueHost(items: readonly Partial<ChatQueueItem>[], sessionKey = SESSIO
 }
 
 /** The drain reads the stored outbox, so this is the delivery order, not a view. */
-function storedOrder(host: unknown): string[] {
-  return listStoredChatOutboxes(host as never).flatMap(({ queue }) => queue.map((item) => item.id));
+function storedOrder(host: ReturnType<typeof makeChatHost>): string[] {
+  return listStoredChatOutboxes(host).flatMap(({ queue }) => queue.map((item) => item.id));
 }
 
 describe("queued message reorder", () => {
   it.each(["state", "storage"] as const)(
     "retains equal-time arrival order across a %s update",
     (update) => {
-      const { host, unsubscribe } = queueHost([]);
+      const { host } = queueHost([]);
       const owner = chatOutboxOwner(host);
       const admission = captureChatOutboxAdmission(host, host.sessionKey);
       const first: ChatQueueItem = { id: "first", text: "first", createdAt: 1_000 };
       const second: ChatQueueItem = { id: "second", text: "second", createdAt: 1_000 };
-      try {
-        owner.keep(host, admission.scope, first);
-        owner.keep(host, admission.scope, second);
-        if (update === "state") {
-          owner.keep(host, admission.scope, { ...first, sendState: "waiting-model" });
-        } else {
-          expect(owner.admit(host, admission, second)).toBe("admitted");
-        }
-        expect(host.chatQueue.map((item) => item.id)).toEqual(["first", "second"]);
-        if (update === "storage") {
-          expect(owner.admit(host, admission, first)).toBe("admitted");
-          expect(storedOrder(host)).toEqual(["first", "second"]);
-        }
-      } finally {
-        unsubscribe();
+      owner.keep(host, admission.scope, first);
+      owner.keep(host, admission.scope, second);
+      if (update === "state") {
+        owner.keep(host, admission.scope, { ...first, sendState: "waiting-model" });
+      } else {
+        expect(owner.admit(host, admission, second)).toBe("admitted");
+      }
+      expect(host.chatQueue.map((item) => item.id)).toEqual(["first", "second"]);
+      if (update === "storage") {
+        expect(owner.admit(host, admission, first)).toBe("admitted");
+        expect(storedOrder(host)).toEqual(["first", "second"]);
       }
     },
   );
@@ -92,31 +89,27 @@ describe("queued message reorder", () => {
   it.each([1_000, 900])(
     "appends a new arrival at time %i after the operator's reordered queue",
     (createdAt) => {
-      const { host, unsubscribe } = queueHost([
+      const { host } = queueHost([
         { createdAt: 1_000 },
         { createdAt: 1_000 },
         { createdAt: 1_000 },
       ]);
-      try {
-        moveQueuedChatMessage(host, "queued-3", "queued-1");
-        expect(
-          chatOutboxOwner(host).admit(host, captureChatOutboxAdmission(host, host.sessionKey), {
-            id: "latest",
-            text: "latest",
-            createdAt,
-          }),
-        ).toBe("admitted");
+      moveQueuedChatMessage(host, "queued-3", "queued-1");
+      expect(
+        chatOutboxOwner(host).admit(host, captureChatOutboxAdmission(host, host.sessionKey), {
+          id: "latest",
+          text: "latest",
+          createdAt,
+        }),
+      ).toBe("admitted");
 
-        expect(storedOrder(host)).toEqual(["queued-3", "queued-1", "queued-2", "latest"]);
-        expect(host.chatQueue.map((item) => item.id)).toEqual(storedOrder(host));
-      } finally {
-        unsubscribe();
-      }
+      expect(storedOrder(host)).toEqual(["queued-3", "queued-1", "queued-2", "latest"]);
+      expect(host.chatQueue.map((item) => item.id)).toEqual(storedOrder(host));
     },
   );
 
   it("reorders the captured inactive outbox after current main defaults change", () => {
-    const { host: fixture, unsubscribe } = queueHost([{}, {}], "agent:main:main");
+    const { host: fixture } = queueHost([{}, {}], "agent:main:main");
     const host = Object.assign(fixture, {
       settings: {
         ...loadSettings(),
@@ -124,25 +117,21 @@ describe("queued message reorder", () => {
         gatewayUrl: fixture.settings.gatewayUrl ?? "",
       },
     });
-    try {
-      host.sessionKey = "agent:main:other";
-      host.agentsList = {
-        defaultId: "main",
-        mainKey: "workspace",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      };
-      expect(moveQueuedChatMessage(host, "queued-2", "queued-1")).toBe("moved");
-      expect(listStoredChatOutboxes(host)).toMatchObject([
-        {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          queue: [{ id: "queued-2" }, { id: "queued-1" }],
-        },
-      ]);
-    } finally {
-      unsubscribe();
-    }
+    host.sessionKey = "agent:main:other";
+    host.agentsList = {
+      defaultId: "main",
+      mainKey: "workspace",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    };
+    expect(moveQueuedChatMessage(host, "queued-2", "queued-1")).toBe("moved");
+    expect(listStoredChatOutboxes(host)).toMatchObject([
+      {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        queue: [{ id: "queued-2" }, { id: "queued-1" }],
+      },
+    ]);
   });
 
   it.each(["ordered", "equal-time", "write-failure"] as const)(
@@ -176,11 +165,7 @@ describe("queued message reorder", () => {
       unsubscribe();
       expect(
         storedOrder(
-          makeChatHost({
-            sessionKey: SESSION_KEY,
-            connected: false,
-            requestHandlers: {},
-          }),
+          makeChatHost({ sessionKey: SESSION_KEY, connected: false, requestHandlers: {} }),
         ),
       ).toEqual(expected);
     },
@@ -189,43 +174,39 @@ describe("queued message reorder", () => {
   it.each(["head", "middle", "equal-time-tail"] as const)(
     "keeps the delivery barrier at the %s in place",
     (barrier) => {
-      const { host, unsubscribe } = queueHost(
+      const { host } = queueHost(
         barrier === "equal-time-tail"
           ? []
           : barrier === "head"
             ? [{ sendState: "unconfirmed" }, {}, {}]
             : [{}, { sendState: "unconfirmed" }, {}, {}],
       );
-      try {
-        if (barrier === "equal-time-tail") {
-          for (const id of ["first", "second", "locked"]) {
-            expect(
-              admitStoredChatComposerQueueItem(
-                host,
-                captureChatOutboxAdmission(host, host.sessionKey),
-                {
-                  id,
-                  text: id,
-                  createdAt: 1_000,
-                  sendState: id === "locked" ? "unconfirmed" : "waiting-reconnect",
-                },
-              ),
-            ).toBe(true);
-          }
-          moveQueuedChatMessage(host, "second", "first");
-          expect(storedOrder(host).at(-1)).toBe("locked");
-        } else if (barrier === "head") {
-          moveQueuedChatMessage(host, "queued-1", "queued-3");
-          moveQueuedChatMessage(host, "queued-3", "queued-2");
-          expect(storedOrder(host)).toEqual(["queued-1", "queued-3", "queued-2"]);
-        } else {
-          expect(moveQueuedChatMessage(host, "queued-4", "queued-1")).toBe("noop");
-          moveQueuedChatMessage(host, "queued-4", "queued-3");
-          expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-4", "queued-3"]);
-          expect(host.lastError).toBeNull();
+      if (barrier === "equal-time-tail") {
+        for (const id of ["first", "second", "locked"]) {
+          expect(
+            admitStoredChatComposerQueueItem(
+              host,
+              captureChatOutboxAdmission(host, host.sessionKey),
+              {
+                id,
+                text: id,
+                createdAt: 1_000,
+                sendState: id === "locked" ? "unconfirmed" : "waiting-reconnect",
+              },
+            ),
+          ).toBe(true);
         }
-      } finally {
-        unsubscribe();
+        moveQueuedChatMessage(host, "second", "first");
+        expect(storedOrder(host).at(-1)).toBe("locked");
+      } else if (barrier === "head") {
+        moveQueuedChatMessage(host, "queued-1", "queued-3");
+        moveQueuedChatMessage(host, "queued-3", "queued-2");
+        expect(storedOrder(host)).toEqual(["queued-1", "queued-3", "queued-2"]);
+      } else {
+        expect(moveQueuedChatMessage(host, "queued-4", "queued-1")).toBe("noop");
+        moveQueuedChatMessage(host, "queued-4", "queued-3");
+        expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-4", "queued-3"]);
+        expect(host.lastError).toBeNull();
       }
     },
   );
@@ -237,32 +218,25 @@ describe("queued message reorder", () => {
     unsubscribe();
 
     const storedById = (id: string) =>
-      listStoredChatOutboxes(host as never)
+      listStoredChatOutboxes(host)
         .flatMap(({ queue }) => queue)
         .find((entry) => entry.id === id)!;
     const expectedQueued2 = storedById("queued-2");
     const expectedQueued3 = storedById("queued-3");
 
-    const concurrentWrite = updateStoredChatComposerQueueItems(host as never, SESSION_KEY, [
-      {
-        expected: expectedQueued2,
-        next: {
-          ...expectedQueued2,
-          sendAttempts: (expectedQueued2.sendAttempts ?? 0) + 1,
-        },
-      },
-    ]);
-    expect(concurrentWrite).toBe(true);
+    const update = (expected: ChatQueueItem, changes: Partial<ChatQueueItem>) => ({
+      expected,
+      next: { ...expected, ...changes },
+    });
+    expect(
+      updateStoredChatComposerQueueItems(host, SESSION_KEY, [
+        update(expectedQueued2, { sendAttempts: (expectedQueued2.sendAttempts ?? 0) + 1 }),
+      ]),
+    ).toBe(true);
 
-    const applied = updateStoredChatComposerQueueItems(host as never, SESSION_KEY, [
-      {
-        expected: expectedQueued3,
-        next: { ...expectedQueued3, orderKey: expectedQueued2.createdAt },
-      },
-      {
-        expected: expectedQueued2,
-        next: { ...expectedQueued2, orderKey: expectedQueued3.createdAt },
-      },
+    const applied = updateStoredChatComposerQueueItems(host, SESSION_KEY, [
+      update(expectedQueued3, { orderKey: expectedQueued2.createdAt }),
+      update(expectedQueued2, { orderKey: expectedQueued3.createdAt }),
     ]);
 
     // queued-3 would succeed alone, but its stale sibling rejects the whole batch.
