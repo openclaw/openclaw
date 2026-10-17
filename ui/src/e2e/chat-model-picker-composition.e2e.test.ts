@@ -56,8 +56,8 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
-      await expect.poll(() => picker.locator("[data-chat-model-provider-toggle]").count()).toBe(1);
       await picker.locator("[data-chat-model-select]").click();
+      await expect.poll(() => picker.locator("[data-chat-model-provider-toggle]").count()).toBe(1);
       const account = picker.locator(".chat-controls__account-selection");
       await expect.poll(() => account.textContent()).toContain("previous@example.test");
       const accountToggle = picker.locator("[data-chat-account-group-toggle]");

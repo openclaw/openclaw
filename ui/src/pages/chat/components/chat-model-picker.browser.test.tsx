@@ -215,13 +215,13 @@ it.each(["trigger", "Escape", "selection"])(
   "retains provider toggles after closing through %s",
   async (close) => {
     const { picker, trigger, search, toggle, update, params } = mountPicker();
+    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
     const selectedToggle = picker.querySelector<HTMLButtonElement>(
       '[data-chat-model-provider-group="example"] [data-chat-model-provider-toggle]',
     )!;
     const otherToggle = picker.querySelector<HTMLButtonElement>(
       '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
     )!;
-    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
     await userEvent.click(selectedToggle);
     await userEvent.click(otherToggle);
     expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
