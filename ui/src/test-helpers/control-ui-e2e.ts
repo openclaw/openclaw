@@ -2751,7 +2751,7 @@ export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
   options: {
-    requestHandlers?: Record<string, (params: unknown) => unknown | Promise<unknown>>;
+    requestHandlers?: Record<string, (params: unknown) => unknown>;
   } = {},
 ): Promise<MockGatewayControls> {
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
