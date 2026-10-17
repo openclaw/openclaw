@@ -165,7 +165,7 @@ describe("supervised gateway lock recovery", () => {
   });
 
   it("recognizes only the OpenClaw health response", () => {
-    const health = testing.isGatewayHealthzResponse;
+    const health = (code: number, body: string) => testing.isGatewayHealthzResponse(code, body);
     expect(health(200, '{"ok":true,"status":"live"}')).toBe(true);
     expect(health(200, '{"ok":true,"status":"ready"}')).toBe(false);
     expect(health(404, "not found")).toBe(false);

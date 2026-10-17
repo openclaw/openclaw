@@ -124,7 +124,7 @@ vi.mock("./discover.js", () => ({
   renderBeaconLines: () => [],
 }));
 
-function expectCliError(message: string | ReturnType<typeof expect.stringContaining>) {
+function expectCliError(message: unknown) {
   expect(callGatewayCli).not.toHaveBeenCalled();
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
     ok: false,
