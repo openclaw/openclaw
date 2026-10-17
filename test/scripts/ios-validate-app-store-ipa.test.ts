@@ -44,10 +44,8 @@ function plist(body: Record<string, PlistValue>): string {
   ].join("\n");
 }
 
-function writeFakePlistBuddy(filePath: string): void {
-  writeExecutable(
-    filePath,
-    `#!/usr/bin/env node
+const fakeTools = {
+  plistbuddy: `#!/usr/bin/env node
 const { readFileSync } = require("node:fs");
 const commandIndex = process.argv.indexOf("-c");
 if (commandIndex < 0) process.exit(2);
@@ -110,13 +108,7 @@ if (Array.isArray(current)) {
   process.exit(1);
 }
 `,
-  );
-}
-
-function writeFakePlutil(filePath: string): void {
-  writeExecutable(
-    filePath,
-    `#!/usr/bin/env node
+  plutil: `#!/usr/bin/env node
 const { readFileSync } = require("node:fs");
 if (process.argv[2] === "-convert" && process.argv[3] === "xml1") {
   process.stdout.write(readFileSync(process.argv[process.argv.length - 1], "utf8"));
@@ -136,13 +128,7 @@ const match = xml.match(new RegExp("<key>" + escapedKey + "</key>\\\\s*<string>(
 if (!match) process.exit(1);
 process.stdout.write(match[1]);
 `,
-  );
-}
-
-function writeFakeUnzip(filePath: string): void {
-  writeExecutable(
-    filePath,
-    `#!/usr/bin/env node
+  unzip: `#!/usr/bin/env node
 const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { createRequire } = require("node:module");
 const path = require("node:path");
@@ -175,8 +161,7 @@ if (!ipaPath || !outputDir) process.exit(2);
   }
 })().catch(() => process.exit(1));
 `,
-  );
-}
+};
 
 async function writeValidFixture(
   root: string,
@@ -309,9 +294,9 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
   beforeAll(() => {
     // Interpreters read fixture paths from argv; signing inputs remain case-owned.
     toolsDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-tools-"));
-    writeFakePlistBuddy(path.join(toolsDir, "plistbuddy"));
-    writeFakePlutil(path.join(toolsDir, "plutil"));
-    writeFakeUnzip(path.join(toolsDir, "unzip"));
+    for (const [name, body] of Object.entries(fakeTools)) {
+      writeExecutable(path.join(toolsDir, name), body);
+    }
   });
 
   afterAll(() => {

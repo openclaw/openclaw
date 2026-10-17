@@ -187,8 +187,7 @@ describe("iOS screenshot evidence", () => {
     expect(download.with?.name).toBe(`ios-release-screenshot-capture-${revision}`);
     expect(download.with?.pattern).toBeUndefined();
 
-    const root = tempDirs.make("ios-screenshot-receiver-");
-    const input = collectAll(root);
+    const { root, input, output } = collected();
     const workspace = path.join(root, "workspace");
     const receiverPath = path.join(
       workspace,
@@ -196,7 +195,6 @@ describe("iOS screenshot evidence", () => {
     );
     // download-artifact v8 extracts a single match directly into the requested path.
     fs.cpSync(path.join(input, containerName()), receiverPath, { recursive: true });
-    const output = path.join(root, "reduced");
     reduceAll(path.join(workspace, "apps/ios/build/ScreenshotEvidenceInputs"), output);
 
     expectOutputCounts(output);
@@ -317,31 +315,18 @@ describe("iOS screenshot evidence", () => {
     expect(() => reduceAll(input, output)).toThrow("unexpected attempt model");
   });
 
-  it("rejects changed PNG bytes after collection", () => {
+  it.each([
+    ["PNG", "watch", "screenshots/Apple Watch Ultra 3 (49mm)-01-now-face.png", "screenshot"],
+    [
+      "xcresult",
+      "iphone",
+      "xcresults/iPhone 17 Pro Max-01-control-connected-attempt-1.xcresult/summary.txt",
+      "xcresult",
+    ],
+  ] as const)("rejects changed %s bytes after collection", (_kind, family, file, error) => {
     const { input, output } = collected();
-    const screenshot = path.join(
-      familyDirectory(input, "watch"),
-      "screenshots",
-      "Apple Watch Ultra 3 (49mm)-01-now-face.png",
-    );
-    fs.appendFileSync(screenshot, "changed");
-
-    expect(() => reduceAll(input, output)).toThrow("screenshot digest mismatch");
-  });
-
-  it("rejects changed xcresult bytes after collection", () => {
-    const { input, output } = collected();
-    fs.appendFileSync(
-      path.join(
-        familyDirectory(input, "iphone"),
-        "xcresults",
-        "iPhone 17 Pro Max-01-control-connected-attempt-1.xcresult",
-        "summary.txt",
-      ),
-      "changed",
-    );
-
-    expect(() => reduceAll(input, output)).toThrow("xcresult digest mismatch");
+    fs.appendFileSync(path.join(familyDirectory(input, family), file), "changed");
+    expect(() => reduceAll(input, output)).toThrow(`${error} digest mismatch`);
   });
 
   it("rejects a non-passing final capture attempt", () => {

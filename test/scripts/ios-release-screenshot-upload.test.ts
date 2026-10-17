@@ -14,10 +14,7 @@ require "json"
 require "tmpdir"
 module UI
   def self.user_error!(message); raise message; end
-  def self.message(*); end
-  def self.verbose(*); end
-  def self.important(*); end
-  def self.success(*); end
+  %i[message verbose important success].each { |name| define_singleton_method(name) { |*| } }
 end
 def default_platform(*); end
 def desc(*); end
@@ -190,29 +187,22 @@ describe("iOS App Store screenshot upload", () => {
   });
 
   it.each([
-    ["failed", "IMAGE_REJECTED", 0],
-    ["unknown", "Timed out", 3600],
-    ["lookup-error", "lookup unavailable", 0],
-  ] as const)("does not replace assets for %s processing", (scenario, error, elapsed) => {
-    const result = upload(scenario);
-    expect(result.error).toContain(error);
-    expect(result.elapsed).toBe(elapsed);
-    expect(result.deletes).toEqual([]);
-    expect(result.uploads).toHaveLength(4);
-    expect(result.reorders).toEqual([]);
-  });
-
-  it.each([
-    ["delete-error", "delete response lost", 4],
-    ["upload-error", "upload response lost", 5],
+    ["failed", expect.stringContaining("IMAGE_REJECTED"), 4, [], 0],
+    ["unknown", expect.stringContaining("Timed out"), 4, [], 3600],
+    ["lookup-error", expect.stringContaining("lookup unavailable"), 4, [], 0],
+    ["delete-error", "delete response lost", 4, ["02-chat.png-0"], undefined],
+    ["upload-error", "upload response lost", 5, ["02-chat.png-0"], undefined],
   ] as const)(
-    "stops after an uncertain %s without repeating mutations",
-    (scenario, error, uploads) => {
+    "stops on %s without repeating mutations or reordering assets",
+    (scenario, error, uploads, deletes, elapsed) => {
       const result = upload(scenario);
-      expect(result.error).toBe(error);
-      expect(result.deletes).toEqual(["02-chat.png-0"]);
+      expect(result.error).toEqual(error);
+      expect(result.deletes).toEqual(deletes);
       expect(result.uploads).toHaveLength(uploads);
       expect(result.reorders).toEqual([]);
+      if (elapsed !== undefined) {
+        expect(result.elapsed).toBe(elapsed);
+      }
     },
   );
 

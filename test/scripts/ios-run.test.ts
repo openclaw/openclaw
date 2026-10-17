@@ -6,12 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-run.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
-
 const tempDirs: string[] = [];
-
-function bashArgs(scriptPath: string): string[] {
-  return process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
-}
 
 function writeExecutable(filePath: string, body: string): void {
   writeFileSync(filePath, body, "utf8");
@@ -38,7 +33,7 @@ if [[ -n "\${OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET:-}" || -n "\${CUSTOM_SIMULATOR
   printf '${name}-proof-env leaked\\n' >>"${logFile}"
 fi
 `;
-  const executable = (dir: string, name: string, body: string, guard = false) =>
+  const executable = (name: string, body: string, guard = false, dir = binDir) =>
     writeExecutable(
       path.join(dir, name),
       `#!/usr/bin/env bash
@@ -46,7 +41,7 @@ set -euo pipefail
 ${guard ? proofEnvGuard(name) : ""}${body}`,
     );
   for (const name of ["ios-configure-signing.sh", "ios-write-version-xcconfig.sh"]) {
-    executable(scriptsDir, name, "", true);
+    executable(name, "", true, scriptsDir);
   }
   writeFileSync(
     path.join(scriptsDir, "ios-write-swift-filelist.mjs"),
@@ -59,25 +54,16 @@ appendFileSync(${JSON.stringify(logFile)}, "write-swift-filelist\\n");
     "utf8",
   );
   const commandLog = (name: string) => `printf '${name} %s\\n' "$*" >>"${logFile}"\n`;
-  executable(binDir, "xcodegen", commandLog("xcodegen"), true);
+  executable("xcodegen", commandLog("xcodegen"), true);
   executable(
-    binDir,
     "xcodebuild",
     `${commandLog("xcodebuild")}derived=""
 configuration="Debug"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -derivedDataPath)
-      derived="$2"
-      shift 2
-      ;;
-    -configuration)
-      configuration="$2"
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
+    -derivedDataPath) derived="$2"; shift 2 ;;
+    -configuration) configuration="$2"; shift 2 ;;
+    *) shift ;;
   esac
 done
 app_dir="$derived/Build/Products/$configuration-iphonesimulator/OpenClaw.app"
@@ -91,7 +77,6 @@ PLIST
     true,
   );
   executable(
-    binDir,
     "simctl",
     `${commandLog("simctl")}
 if [[ "$1" == "launch" ]]; then
@@ -102,19 +87,14 @@ if [[ "$1" == "launch" ]]; then
   fi
 fi
 if [[ "$1" == "boot" ]]; then
-  if [[ "\${SIMCTL_BOOT_MODE:-}" == "booted" ]]; then
-    echo "Unable to boot device in current state: Booted" >&2
-    exit 1
-  fi
-  if [[ "\${SIMCTL_BOOT_MODE:-}" == "fail" ]]; then
-    echo "Unable to boot device in current state: Shutdown" >&2
-    exit 1
-  fi
+  case "\${SIMCTL_BOOT_MODE:-}" in
+    booted) echo "Unable to boot device in current state: Booted" >&2; exit 1 ;;
+    fail) echo "Unable to boot device in current state: Shutdown" >&2; exit 1 ;;
+  esac
 fi
 `,
   );
   executable(
-    binDir,
     "plistbuddy",
     `sed -n 's:.*<key>CFBundleIdentifier</key><string>\\([^<]*\\)</string>.*:\\1:p' "$3"\n`,
   );
@@ -127,7 +107,8 @@ function runIosRun(
   extraEnv = {},
   args: string[] = [],
 ): string {
-  return execFileSync(BASH_BIN, [...bashArgs(fixture.script), ...args], {
+  const bashArgs = process.platform === "win32" ? [] : ["--noprofile", "--norc"];
+  return execFileSync(BASH_BIN, [...bashArgs, fixture.script, ...args], {
     env: {
       ...process.env,
       IOS_DERIVED_DATA_DIR: path.join(fixture.root, "DerivedData"),
@@ -149,48 +130,36 @@ describe("scripts/ios-run.sh", () => {
     }
   });
 
-  it("builds simulator sandbox relay mode and injects proof secret only at launch", () => {
+  it.each([true, false])("isolates simulator proof secrets with sandbox mode=%s", (sandbox) => {
     const fixture = makeFixture("ai.openclawfoundation.app");
     const proofSecret = "x".repeat(32);
-
+    const customProofSecret = "y".repeat(32);
     runIosRun(
       fixture,
       {
         OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET: proofSecret,
         SIMCTL_BOOT_MODE: "booted",
+        ...(!sandbox && {
+          OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET_ENV: "CUSTOM_SIMULATOR_PUSH_PROOF_SECRET",
+          CUSTOM_SIMULATOR_PUSH_PROOF_SECRET: customProofSecret,
+        }),
       },
-      ["--push-sandbox-simulator"],
+      sandbox ? ["--push-sandbox-simulator"] : [],
     );
-
     const log = readFileSync(fixture.logFile, "utf8");
-    expect(log).toContain("OPENCLAW_PUSH_MODE=simulatorSandbox");
-    expect(log).toContain(
-      "OPENCLAW_PUSH_RELAY_BASE_URL=https://ios-push-relay-sandbox.openclaw.ai",
-    );
+    if (sandbox) {
+      expect(log).toContain("OPENCLAW_PUSH_MODE=simulatorSandbox");
+      expect(log).toContain(
+        "OPENCLAW_PUSH_RELAY_BASE_URL=https://ios-push-relay-sandbox.openclaw.ai",
+      );
+    }
     expect(log).toContain("simctl launch iPhone 17 ai.openclawfoundation.app");
-    expect(log).toContain("simctl-launch-proof set");
+    expect(log).toContain(`simctl-launch-proof ${sandbox ? "set" : "unset"}`);
     expect(log).not.toContain("proof-env leaked");
     expect(log).not.toContain(proofSecret);
-  });
-
-  it("scrubs exported simulator proof secrets from normal build helpers", () => {
-    const fixture = makeFixture("ai.openclawfoundation.app");
-    const proofSecret = "x".repeat(32);
-    const customProofSecret = "y".repeat(32);
-
-    runIosRun(fixture, {
-      OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET: proofSecret,
-      OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET_ENV: "CUSTOM_SIMULATOR_PUSH_PROOF_SECRET",
-      CUSTOM_SIMULATOR_PUSH_PROOF_SECRET: customProofSecret,
-      SIMCTL_BOOT_MODE: "booted",
-    });
-
-    const log = readFileSync(fixture.logFile, "utf8");
-    expect(log).toContain("simctl launch iPhone 17 ai.openclawfoundation.app");
-    expect(log).toContain("simctl-launch-proof unset");
-    expect(log).not.toContain("proof-env leaked");
-    expect(log).not.toContain(proofSecret);
-    expect(log).not.toContain(customProofSecret);
+    if (!sandbox) {
+      expect(log).not.toContain(customProofSecret);
+    }
   });
 
   it("does not ignore simulator boot failures other than already booted", () => {
