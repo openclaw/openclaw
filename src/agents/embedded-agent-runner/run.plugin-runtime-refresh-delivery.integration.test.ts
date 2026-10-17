@@ -88,6 +88,12 @@ let beforeBuildMessage: () => void;
 let requestRefresh: (signal?: AbortSignal) => Promise<void>;
 let state: OpenClawTestState;
 
+function diagnosticText(value: unknown): string | undefined {
+  return value === undefined
+    ? undefined
+    : String(value instanceof Error ? value.message : value).slice(0, 512);
+}
+
 // Prepared catalogs, auth and external I/O are fixture inputs. Keep the real
 // harness and attempt owners for tool authority, persistence and release.
 installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full", pluginRegistry: registry });
@@ -351,6 +357,23 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             },
           };
         }
+        events.push(
+          JSON.stringify({
+            stream: providerStream.mock.calls.length,
+            generation,
+            action: call?.name ?? "final",
+            control: diagnosticText(details?.status),
+            error: diagnosticText(asOptionalRecord(details?.error)?.message ?? details?.error),
+            toolText:
+              last?.role === "toolResult"
+                ? last.content
+                    .filter((part) => part.type === "text")
+                    .slice(0, 2)
+                    .map((part) => part.text.slice(0, 256))
+                    .join("\n")
+                : undefined,
+          }),
+        );
         const message = buildEmbeddedRunnerAssistant({
           content: call
             ? [
@@ -424,7 +447,37 @@ describe("ordinary source reply across deferred plugin refresh", () => {
         await withinTest(
           awaitGateBeforeSettlement(
             parked.promise,
-            running,
+            running.then((result) => {
+              // Resolved semantic failures need their own diagnostics; leave actual
+              // rejections untouched and retain the original promise for cleanup.
+              throw new Error("run settled before deferred refresh parked", {
+                cause: {
+                  error: result.meta.error && {
+                    kind: result.meta.error.kind,
+                    message: diagnosticText(result.meta.error.message),
+                  },
+                  stopReason: diagnosticText(result.meta.stopReason),
+                  aborted: result.meta.aborted,
+                  attempts: attemptResults.slice(-4).map(({ terminal, lastAssistant }) => ({
+                    terminal: terminal.kind,
+                    source: terminal.kind === "ok" ? undefined : terminal.source,
+                    error: diagnosticText(
+                      terminal.kind === "failed"
+                        ? terminal.error
+                        : terminal.kind === "ok"
+                          ? undefined
+                          : terminal.failure?.error,
+                    ),
+                    stopReason: diagnosticText(lastAssistant?.stopReason),
+                  })),
+                  providerCalls: providerStream.mock.calls.length,
+                  messageCalls: messageExecutions.slice(-4).map((spy) => spy.mock.calls.length),
+                  transportCalls: transport.mock.calls.length,
+                  effects: physicalSend.mock.calls.length,
+                  events: events.slice(-12),
+                },
+              });
+            }),
             "run settled before deferred refresh parked",
           ),
           context.signal,
