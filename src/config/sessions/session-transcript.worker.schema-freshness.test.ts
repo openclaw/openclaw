@@ -95,48 +95,45 @@ it("borrows canonical writer proof without a native reader and still fences fore
       scope: { ...scope, databaseAgentId: "main" },
       validation,
     };
-    const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
-    try {
-      await expect(worker.read(request)).resolves.toMatchObject({
-        ok: true,
-        value: { kind: "session-entry-read", entry: { sessionId: "writer-proof" } },
-      });
-      expect(
-        reads.queries.filter(
-          (sql) =>
-            /\bfrom\s+"?session_nodes"?(?:\s|$)/i.test(sql) &&
-            /\bjoin\s+"?session_windows"?(?:\s|$)/i.test(sql) &&
-            !/\bwhere\b/i.test(sql),
-        ),
-      ).toEqual([]);
-      const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
-      try {
-        const relabel =
-          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?";
-        peer.prepare(relabel).run("foreign label", sessionKey);
-      } finally {
-        peer.close();
-      }
-      await expect(worker.read(request)).resolves.toMatchObject({
-        ok: true,
-        value: { kind: "session-entry-read", entry: { label: "foreign label" } },
-      });
-      const denied = {
-        ok: false,
-        error: { kind: "read-error", message: expect.stringContaining("validation") },
-      };
-      await expect(
-        worker.read({
-          ...request,
-          validation: { ...validation, identity: "different-generation" },
-        }),
-      ).resolves.toMatchObject(denied);
-      await expect(worker.read(request)).resolves.toMatchObject({ ok: true });
-      Atomics.store(new Int32Array(validation.valid), 0, 0);
-      await expect(worker.read(request)).resolves.toMatchObject(denied);
-    } finally {
-      reads.restore();
+    const observation = observeSqliteReadSql(
+      nodeSqlite.requireNodeSqlite().StatementSync.prototype,
+    );
+    using reads = { ...observation, [Symbol.dispose]: observation.restore };
+    await expect(worker.read(request)).resolves.toMatchObject({
+      ok: true,
+      value: { kind: "session-entry-read", entry: { sessionId: "writer-proof" } },
+    });
+    expect(
+      reads.queries.filter(
+        (sql) =>
+          /\bfrom\s+"?session_nodes"?(?:\s|$)/i.test(sql) &&
+          /\bjoin\s+"?session_windows"?(?:\s|$)/i.test(sql) &&
+          !/\bwhere\b/i.test(sql),
+      ),
+    ).toEqual([]);
+    {
+      using peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+      const relabel =
+        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?";
+      peer.prepare(relabel).run("foreign label", sessionKey);
     }
+    await expect(worker.read(request)).resolves.toMatchObject({
+      ok: true,
+      value: { kind: "session-entry-read", entry: { label: "foreign label" } },
+    });
+    const denied = {
+      ok: false,
+      error: { kind: "read-error", message: expect.stringContaining("validation") },
+    };
+    await expect(
+      worker.read({
+        ...request,
+        validation: { ...validation, identity: "different-generation" },
+      }),
+    ).resolves.toMatchObject(denied);
+    await expect(worker.read(request)).resolves.toMatchObject({ ok: true });
+    Atomics.store(new Int32Array(validation.valid), 0, 0);
+    await expect(worker.read(request)).resolves.toMatchObject(denied);
   });
 });
 
@@ -219,15 +216,12 @@ it.for([
       if (deflated) {
         expect(deflated.byteLength).toBe(0);
       }
-      expect(received).toMatchObject({
-        ok: true,
-        value: {
-          kind: "rpc",
-          page: {
-            messages: [],
-            encodedResponse: {
-              messages: new TextEncoder().encode(JSON.stringify(expected.messages)),
-            },
+      expect(historyValue(received)).toMatchObject({
+        kind: "rpc",
+        page: {
+          messages: [],
+          encodedResponse: {
+            messages: new TextEncoder().encode(JSON.stringify(expected.messages)),
           },
         },
       });
@@ -286,11 +280,9 @@ it.for([
         await expect(racePromiseWithAbortSignal(pending, signal)).resolves.toMatchObject(expected);
         expect(countOpens()).toBe(1);
         // A raw native peer reproduces a different worker/process: no local schema publication.
-        const writer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(path);
-        try {
+        {
+          using writer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(path);
           writer.exec(sql);
-        } finally {
-          writer.close();
         }
 
         pending = worker.read(request);
@@ -383,14 +375,11 @@ it("transfers only owned artifact response bytes and leaves HEAD replies payload
       expect(transfers).toEqual([body.buffer]);
       const received = structuredClone(reply, { transfer: transfers });
       expect(body.buffer.byteLength).toBe(0);
-      expect(received).toMatchObject({
-        ok: true,
-        value: {
-          kind: "artifacts",
-          result: {
-            kind: "download-response",
-            response: { body: new Uint8Array([1, 2, 3, 4]) },
-          },
+      expect(historyValue(received)).toMatchObject({
+        kind: "artifacts",
+        result: {
+          kind: "download-response",
+          response: { body: new Uint8Array([1, 2, 3, 4]) },
         },
       });
     }

@@ -102,7 +102,7 @@ function expectRebuilding(read: Promise<unknown>, scope: Scope) {
 }
 
 function trackProjection(database: ReturnType<typeof openDatabase>) {
-  return trackSqliteStatementExecutions(
+  const statements = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(database.db),
     ["projection", "watermark"],
     (sql) =>
@@ -112,6 +112,7 @@ function trackProjection(database: ReturnType<typeof openDatabase>) {
           ? "watermark"
           : null,
   );
+  return { ...statements, [Symbol.dispose]: statements.restore };
 }
 
 function withTranscript(
@@ -404,49 +405,45 @@ it("returns a reply tail and its current watermark from one projection snapshot"
       includeWatermark: true,
     };
     const readMessage = await prepareMessageReader(selection);
-    const statements = trackProjection(database);
+    using statements = trackProjection(database);
     const read = () => readFacts(database, resolved, selection, readMessage);
-    try {
-      const initial = read();
-      expect(initial.watermark?.maxSeq).toBe(4);
-      expectTailMessage(initial.tail?.entries, "answer", "answer");
-      expect(statements.counts).toEqual({ projection: 1, watermark: 0 });
+    const initial = read();
+    expect(initial.watermark?.maxSeq).toBe(4);
+    expectTailMessage(initial.tail?.entries, "answer", "answer");
+    expect(statements.counts).toEqual({ projection: 1, watermark: 0 });
 
-      runSqliteImmediateTransactionSync(database.db, () =>
-        appendTranscriptEventsInTransaction(database, resolved, [
-          message("new-answer", "answer", "new answer", "answer-run"),
-        ]),
-      );
-      const before = { ...statements.counts };
-      const updated = read();
-      expect(updated.watermark).toEqual({ ...initial.watermark, maxSeq: 5 });
-      expectTailMessage(updated.tail?.entries, "new-answer", "new answer");
-      expect(statements.counts.projection - before.projection).toBe(1);
-      expect(statements.counts.watermark - before.watermark).toBe(0);
+    runSqliteImmediateTransactionSync(database.db, () =>
+      appendTranscriptEventsInTransaction(database, resolved, [
+        message("new-answer", "answer", "new answer", "answer-run"),
+      ]),
+    );
+    const before = { ...statements.counts };
+    const updated = read();
+    expect(updated.watermark).toEqual({ ...initial.watermark, maxSeq: 5 });
+    expectTailMessage(updated.tail?.entries, "new-answer", "new answer");
+    expect(statements.counts.projection - before.projection).toBe(1);
+    expect(statements.counts.watermark - before.watermark).toBe(0);
 
-      runSqliteImmediateTransactionSync(database.db, () => {
-        database.db
-          .prepare(
-            `INSERT INTO session_transcript_cold_archives
+    runSqliteImmediateTransactionSync(database.db, () => {
+      database.db
+        .prepare(
+          `INSERT INTO session_transcript_cold_archives
              (session_id, generation, archive_name, archive_sha256, event_count,
               raw_bytes, archive_bytes, last_seq, archived_at, storage)
              VALUES (?, 'archive-generation', 'synthetic', ?, 6, 0, 0, 5, 1, 'file')`,
-          )
-          .run(scope.sessionId, "0".repeat(64));
-      });
-      expect(read).toThrow("is in cold storage");
-      runSqliteImmediateTransactionSync(database.db, () => {
-        database.db
-          .prepare("DELETE FROM session_transcript_cold_archives WHERE session_id = ?")
-          .run(scope.sessionId);
-      });
-      const beforeRestoredRead = { ...statements.counts };
-      expect(read().watermark).toEqual(updated.watermark);
-      expect(statements.counts.projection - beforeRestoredRead.projection).toBe(1);
-      expect(statements.counts.watermark - beforeRestoredRead.watermark).toBe(0);
-    } finally {
-      statements.restore();
-    }
+        )
+        .run(scope.sessionId, "0".repeat(64));
+    });
+    expect(read).toThrow("is in cold storage");
+    runSqliteImmediateTransactionSync(database.db, () => {
+      database.db
+        .prepare("DELETE FROM session_transcript_cold_archives WHERE session_id = ?")
+        .run(scope.sessionId);
+    });
+    const beforeRestoredRead = { ...statements.counts };
+    expect(read().watermark).toEqual(updated.watermark);
+    expect(statements.counts.projection - beforeRestoredRead.projection).toBe(1);
+    expect(statements.counts.watermark - beforeRestoredRead.watermark).toBe(0);
   });
 });
 
@@ -533,73 +530,66 @@ it("borrows one ready projection for anchors and payloads without extending its 
       includeWatermark: true,
     };
     const readMessage = await prepareMessageReader(selection);
-    const peer = new DatabaseSync(database.path);
-    const statements = trackProjection(database);
+    using peer = new DatabaseSync(database.path);
+    using statements = trackProjection(database);
     let borrowed: CurrentTranscriptProjection | undefined;
-    try {
-      const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
-        borrowed = projection;
-        expect(projection.version).toMatchObject({ rawSeq: 4, updatedAt: 41 });
-        peer
-          .prepare("UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?")
-          .run(scope.sessionId);
-        peer
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(scope.sessionId);
-        for (const target of [
-          { ...resolved, sessionId: "another-transcript" },
-          { ...resolved, sessionKey: "agent:main:another-key" },
-          { ...resolved, agentId: "another-agent" },
-        ]) {
-          expect(() => readFacts(database, target, selection, readMessage, projection)).toThrow(
-            "differs from its selected session snapshot",
-          );
-        }
-        expect(() =>
-          readFacts(
-            { ...database, path: `${database.path}.replacement` },
-            resolved,
-            selection,
-            readMessage,
-            projection,
-          ),
-        ).toThrow("differs from its selected session snapshot");
-        return readFacts(database, resolved, selection, readMessage, projection);
-      });
-      expect(result).toMatchObject({
-        kind: "value",
-        value: {
-          watermark: { generation: borrowed?.version.generation, maxSeq: 4 },
-          anchors: [
-            { entryId: "question", rawSeq: 1 },
-            { entryId: "answer", rawSeq: 2 },
+    const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
+      borrowed = projection;
+      expect(projection.version).toMatchObject({ rawSeq: 4, updatedAt: 41 });
+      peer
+        .prepare("UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?")
+        .run(scope.sessionId);
+      peer
+        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+        .run(scope.sessionId);
+      for (const target of [
+        { ...resolved, sessionId: "another-transcript" },
+        { ...resolved, sessionKey: "agent:main:another-key" },
+        { ...resolved, agentId: "another-agent" },
+      ]) {
+        expect(() => readFacts(database, target, selection, readMessage, projection)).toThrow(
+          "differs from its selected session snapshot",
+        );
+      }
+      expect(() =>
+        readFacts(
+          { ...database, path: `${database.path}.replacement` },
+          resolved,
+          selection,
+          readMessage,
+          projection,
+        ),
+      ).toThrow("differs from its selected session snapshot");
+      return readFacts(database, resolved, selection, readMessage, projection);
+    });
+    expect(result).toMatchObject({
+      kind: "value",
+      value: {
+        watermark: { generation: borrowed?.version.generation, maxSeq: 4 },
+        anchors: [
+          { entryId: "question", rawSeq: 1 },
+          { entryId: "answer", rawSeq: 2 },
+        ],
+        tail: {
+          entries: [
+            {
+              entryId: "answer",
+              message: { role: "assistant", content: "answer" },
+              anchor: { entryId: "answer", activeMessagePosition: 1 },
+            },
+            { entryId: "alternate", role: "assistant" },
           ],
-          tail: {
-            entries: [
-              {
-                entryId: "answer",
-                message: { role: "assistant", content: "answer" },
-                anchor: { entryId: "answer", activeMessagePosition: 1 },
-              },
-              { entryId: "alternate", role: "assistant" },
-            ],
-          },
         },
-      });
-      expect(statements.counts).toEqual({ projection: 1, watermark: 0 });
-      expect(borrowed).toBeDefined();
-      expect(() => readActiveTranscriptEntryAnchorFromProjection(borrowed!, "question")).toThrow(
-        "requires its selected session snapshot",
-      );
-      expect(() => readFacts(database, resolved, selection, readMessage)).toThrow(
-        "projection is rebuilding",
-      );
-    } finally {
-      statements.restore();
-      peer.close();
-    }
+      },
+    });
+    expect(statements.counts).toEqual({ projection: 1, watermark: 0 });
+    expect(borrowed).toBeDefined();
+    expect(() => readActiveTranscriptEntryAnchorFromProjection(borrowed!, "question")).toThrow(
+      "requires its selected session snapshot",
+    );
+    expect(() => readFacts(database, resolved, selection, readMessage)).toThrow(
+      "projection is rebuilding",
+    );
   });
 });
 

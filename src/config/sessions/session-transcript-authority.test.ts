@@ -72,6 +72,19 @@ function observe(sessionKey: string) {
   return values;
 }
 
+function observeIdentities(sessionKey: string, run: (mutation: SessionIdentityMutation) => void) {
+  const identities: SessionIdentityMutation[] = [];
+  releases.push(
+    onSessionIdentityMutation((mutation) => {
+      if ("current" in mutation && mutation.current.sessionKeys.includes(sessionKey)) {
+        identities.push(mutation);
+        run(mutation);
+      }
+    }),
+  );
+  return identities;
+}
+
 const message = (content: string, timestamp = 1) => ({ role: "user" as const, content, timestamp });
 type Fixture = Parameters<Parameters<typeof withTranscriptDatabase>[1]>[0];
 function withSeeded(
@@ -96,8 +109,8 @@ const withNativeSeeded = (label: string, run: Parameters<typeof withSeeded>[1]) 
 
 it.each(["native", "worker"] as const)(
   "publishes the committed context through SessionManager %s persistence before completion",
-  async (realm) => {
-    await withTranscriptDatabase(`authority-${realm}`, async ({ database, scope }) => {
+  (realm) =>
+    withTranscriptDatabase(`authority-${realm}`, async ({ database, scope }) => {
       replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const manager =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
@@ -180,12 +193,11 @@ it.each(["native", "worker"] as const)(
           .prepareTranscriptRewriteAsync()
           .then((rewrite) => rewrite.commit(populateRewrite(rewrite.sessionManager)));
       });
-    });
-  },
+    }),
 );
 
-it("publishes bounded worker previews and clears them for nonprojectable and side appends", async () => {
-  await withTranscriptDatabase("authority-preview", async ({ scope }) => {
+it("publishes bounded worker previews and clears them for nonprojectable and side appends", () =>
+  withTranscriptDatabase("authority-preview", async ({ scope }) => {
     const manager = await SessionManager.openAsync(scope);
     const values = observe(scope.sessionKey);
     const entry = (id: string, parentId: string | null, content = "") => ({
@@ -218,11 +230,10 @@ it("publishes bounded worker previews and clears them for nonprojectable and sid
 
     await manager.persistAsync(entry("side-preview", atLimit.id, "side branch"));
     expect(values.at(-1)?.lastMessagePreview).toBeUndefined();
-  });
-});
+  }));
 
-it("installs final transcript facts before entry observers and discards nested rollback contributions", async () => {
-  await withNativeSeeded("rollback", async ({ database, scope, state, manager }) => {
+it("installs final transcript facts before entry observers and discards nested rollback contributions", () =>
+  withNativeSeeded("rollback", async ({ database, scope, state, manager }) => {
     const before = readVersion(database, scope.sessionId);
     const values = observe(scope.sessionKey);
     let observed = false;
@@ -255,11 +266,10 @@ it("installs final transcript facts before entry observers and discards nested r
     values.length = 0;
     rollback("outer-rollback", "Outer rollback");
     expect(values).toEqual([]);
-  });
-});
+  }));
 
-it("does not publish a tentative typed write inside an unmanaged raw outer transaction", async () => {
-  await withNativeSeeded("raw-outer", async ({ database, scope, manager }) => {
+it("does not publish a tentative typed write inside an unmanaged raw outer transaction", () =>
+  withNativeSeeded("raw-outer", async ({ database, scope, manager }) => {
     const before = readVersion(database, scope.sessionId);
     const values = observe(scope.sessionKey);
     database.db.exec("BEGIN IMMEDIATE");
@@ -271,24 +281,17 @@ it("does not publish a tentative typed write inside an unmanaged raw outer trans
     }
     expect(values).toEqual([]);
     expect(readVersion(database, scope.sessionId)).toEqual(before);
-  });
-});
+  }));
 
-it("publishes worker initialization and branched entry metadata with the transcript before observers", async () => {
-  await withTranscriptDatabase("authority-companion", async ({ scope }) => {
+it("publishes worker initialization and branched entry metadata with the transcript before observers", () =>
+  withTranscriptDatabase("authority-companion", async ({ scope }) => {
     const manager = await SessionManager.openAsync(scope);
     const contexts = observe(scope.sessionKey);
-    const identities: SessionIdentityMutation[] = [];
-    releases.push(
-      onSessionIdentityMutation((mutation) => {
-        if ("current" in mutation && mutation.current.sessionKeys.includes(scope.sessionKey)) {
-          identities.push(mutation);
-          if (mutation.kind === "replace") {
-            expect(contexts.at(-1)?.sessionId).toBe(mutation.current.sessionId);
-          }
-        }
-      }),
-    );
+    const identities = observeIdentities(scope.sessionKey, (mutation) => {
+      if (mutation.kind === "replace") {
+        expect(contexts.at(-1)?.sessionId).toBe(mutation.current.sessionId);
+      }
+    });
     let entry: ReturnType<typeof readPreparedSessionEntryChange>;
     listen(
       scope.sessionKey,
@@ -311,11 +314,10 @@ it("publishes worker initialization and branched entry metadata with the transcr
     expect(entry?.entry?.sessionId).toBe(manager.getSessionId());
     expect(entry?.entry?.sessionId).not.toBe(scope.sessionId);
     expect(identities.map((mutation) => mutation.kind)).toEqual(["create", "replace"]);
-  });
-});
+  }));
 
-it("keeps a delayed worker mutation postimage after native content-preserving publication and profile notification", async () => {
-  await withSeeded("delayed", async ({ database, scope, state, manager }) => {
+it("keeps a delayed worker mutation postimage after native content-preserving publication and profile notification", () =>
+  withSeeded("delayed", async ({ database, scope, state, manager }) => {
     const values = observe(scope.sessionKey);
     let interposed = false;
     const observeCommit = workerAdmission.observeSqliteWorkerCommittedFacts;
@@ -345,25 +347,18 @@ it("keeps a delayed worker mutation postimage after native content-preserving pu
     await manager.appendCustomEntryAsync("delayed-authority");
     expect(interposed).toBe(true);
     expect(values).toMatchObject([readVersion(database, scope.sessionId)]);
-  });
-});
+  }));
 
-it("publishes the committed branch identity when its ordinary reply is lost", async () => {
-  await withSeeded("lost-reply", async ({ database, scope, manager, seed }) => {
-    const identities: SessionIdentityMutation[] = [];
+it("publishes the committed branch identity when its ordinary reply is lost", () =>
+  withSeeded("lost-reply", async ({ database, scope, manager, seed }) => {
     const originalTarget = manager.getSessionTarget();
     const observedManagers: unknown[] = [];
-    releases.push(
-      onSessionIdentityMutation((mutation) => {
-        if ("current" in mutation && mutation.current.sessionKeys.includes(scope.sessionKey)) {
-          identities.push(mutation);
-          observedManagers.push({
-            sessionId: manager.getSessionId(),
-            target: manager.getSessionTarget(),
-          });
-        }
-      }),
-    );
+    const identities = observeIdentities(scope.sessionKey, () => {
+      observedManagers.push({
+        sessionId: manager.getSessionId(),
+        target: manager.getSessionTarget(),
+      });
+    });
     const runMetadata = metadataRuntime.withSessionMetadataWorker;
     vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(
       (options, owner, assertCurrent, operation, controls) =>
@@ -402,10 +397,9 @@ it("publishes the committed branch identity when its ordinary reply is lost", as
         target: { ...originalTarget, sessionId: stored?.sessionId },
       },
     ]);
-  });
-});
-it("keeps captured context current after a granted worker append rolls back at COMMIT", async () => {
-  await withSeeded("commit-rollback", async ({ database, scope, manager }) => {
+  }));
+it("keeps captured context current after a granted worker append rolls back at COMMIT", () =>
+  withSeeded("commit-rollback", async ({ database, scope, manager }) => {
     const before = readVersion(database, scope.sessionId);
     rollbackFault.enable();
     let commitGranted = false;
@@ -449,5 +443,4 @@ it("keeps captured context current after a granted worker append rolls back at C
         return "still-current";
       }),
     ).resolves.toBe("still-current");
-  });
-});
+  }));

@@ -39,33 +39,27 @@ import {
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 const sessionId = "eligibility";
-const messageEvent = <R extends "user" | "assistant">(
+const messageEvent = <R extends "user" | "assistant" | "custom">(
   id: string,
   parentId: string | null,
   role: R,
   content: string,
-) => ({ type: "message" as const, id, parentId, message: { role, content } });
+  metadata: {
+    customType?: string;
+    display?: boolean;
+    excludeFromContext?: boolean;
+    usage?: { input: number; output: number };
+  } = {},
+) => ({ type: "message" as const, id, parentId, message: { role, content, ...metadata } });
 const entries = [
   { type: "custom", id: "bootstrap", parentId: null, customType: "bootstrap-completed", data: {} },
   messageEvent("user", "bootstrap", "user", "question"),
-  {
-    type: "message",
-    id: "display",
-    parentId: "user",
-    message: {
-      role: "custom",
-      customType: "activity",
-      display: true,
-      excludeFromContext: true,
-      content: "activity",
-    },
-  },
-  {
-    type: "message",
-    id: "answer",
-    parentId: "display",
-    message: { role: "assistant", content: "answer", usage: { input: 100, output: 10 } },
-  },
+  messageEvent("display", "user", "custom", "activity", {
+    customType: "activity",
+    display: true,
+    excludeFromContext: true,
+  }),
+  messageEvent("answer", "display", "assistant", "answer", { usage: { input: 100, output: 10 } }),
 ] as const;
 
 function projectionFixture(env: NodeJS.ProcessEnv) {
@@ -90,26 +84,23 @@ function projectionFixture(env: NodeJS.ProcessEnv) {
     }
     return prepared;
   };
-  const claim = (prepared: PreparedSessionTranscriptProjection) =>
-    expect(claimProjection(db(), prepared, -1)).toBe(true);
-  const install = (prepared: PreparedSessionTranscriptProjection, partial = false) => {
-    const connection = db();
-    expect(deleteProjectionChunk(connection, { sessionId, maxRowsPerTable: 512 })).toEqual({
-      hasMore: false,
-    });
-    appendProjectionChunk(connection, {
-      sessionId,
-      activeRows: partial ? prepared.activeRows.slice(0, 1) : prepared.activeRows,
-      ...(partial ? {} : { ftsRows: prepared.ftsRows }),
-    });
-  };
   const publish = (
     prepared: PreparedSessionTranscriptProjection,
     partial = false,
     run: (action: () => void) => void = (action) => action(),
   ) => {
-    run(() => claim(prepared));
-    run(() => install(prepared, partial));
+    run(() => expect(claimProjection(db(), prepared, -1)).toBe(true));
+    run(() => {
+      const connection = db();
+      expect(deleteProjectionChunk(connection, { sessionId, maxRowsPerTable: 512 })).toEqual({
+        hasMore: false,
+      });
+      appendProjectionChunk(connection, {
+        sessionId,
+        activeRows: partial ? prepared.activeRows.slice(0, 1) : prepared.activeRows,
+        ...(partial ? {} : { ftsRows: prepared.ftsRows }),
+      });
+    });
   };
   const finalize = (prepared: PreparedSessionTranscriptProjection) =>
     finalizeProjection(db(), prepared, -1);
@@ -121,21 +112,18 @@ function projectionFixture(env: NodeJS.ProcessEnv) {
   return { scope, db, rewrite, write, plan, publish, finalize, indexState, unclassify };
 }
 
-function projectionRows(db: DatabaseSync) {
-  return db
+const projectionRows = (db: DatabaseSync) =>
+  db
     .prepare(
       "SELECT active_position, event_seq, message_position, context_eligible FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
     )
     .all(sessionId);
-}
-
-function rawRows(db: DatabaseSync) {
-  return db
+const rawRows = (db: DatabaseSync) =>
+  db
     .prepare(
       "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
     )
     .all(sessionId);
-}
 
 async function prepareDirtyProjection(env: NodeJS.ProcessEnv, label: string) {
   const f = projectionFixture(env);
@@ -181,8 +169,8 @@ function withDirtyProjection(
   );
 }
 
-it("converges an older current-watermark rebuild and a following append without changing history", async () => {
-  await withOpenClawTestState({ label: "transcript-eligibility" }, async (state) => {
+it("converges an older current-watermark rebuild and a following append without changing history", () =>
+  withOpenClawTestState({ label: "transcript-eligibility" }, async (state) => {
     const { scope, db: open, indexState, unclassify } = projectionFixture(state.env);
     runOpenClawAgentWriteTransaction((database) => {
       expect(appendEvents(database, scope, entries)).toBe(entries.length);
@@ -219,11 +207,10 @@ it("converges an older current-watermark rebuild and a following append without 
     expect(projectionRows(db).slice(0, expectedRows.length)).toEqual(expectedRows);
     expect(readStats(scope).eventCount).toBe(4);
     expect(readMessagePage(scope, { offset: 0, maxMessages: 10 }).totalMessages).toBe(4);
-  });
-});
+  }));
 
-it("reclassifies exact rewrites in both directions and deletes eligibility with the transcript", async () => {
-  await withOpenClawTestState({ label: "transcript-eligibility-rewrite" }, async (state) => {
+it("reclassifies exact rewrites in both directions and deletes eligibility with the transcript", () =>
+  withOpenClawTestState({ label: "transcript-eligibility-rewrite" }, async (state) => {
     const { scope, db: open } = projectionFixture(state.env);
     await replaceTranscriptEvents(scope, [...entries]);
     const db = open();
@@ -249,11 +236,10 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
     expect(projectionRows(db)).toEqual([]);
     expect(rawRows(db)).toEqual([]);
     expect(readStats(scope)).toEqual({ eventCount: 0, sizeBytes: 0 });
-  });
-});
+  }));
 
-it("keeps a prepared projection unpublished after a same-sequence rewrite", async () => {
-  await withOpenClawTestState({ label: "transcript-eligibility-stale" }, async (state) => {
+it("keeps a prepared projection unpublished after a same-sequence rewrite", () =>
+  withOpenClawTestState({ label: "transcript-eligibility-stale" }, async (state) => {
     const f = projectionFixture(state.env);
     await replaceTranscriptEvents(f.scope, [...entries]);
     const plan = f.plan();
@@ -265,13 +251,12 @@ it("keeps a prepared projection unpublished after a same-sequence rewrite", asyn
     expect(() => readStats(f.scope)).toThrow(ProjectionUnavailable);
     await waitForSessionTranscriptIndexReconcile(f.scope);
     expect(readStats(f.scope).eventCount).toBe(4);
-  });
-});
+  }));
 
 it.each(["interrupted", "rewrite", "delete"])(
   "fences partial eligibility publication after %s work",
-  async (change) => {
-    await withOpenClawTestState({ label: "transcript-eligibility-claim" }, async (state) => {
+  (change) =>
+    withOpenClawTestState({ label: "transcript-eligibility-claim" }, async (state) => {
       const f = projectionFixture(state.env);
       const { scope } = f;
       await replaceTranscriptEvents(scope, [...entries]);
@@ -301,8 +286,7 @@ it.each(["interrupted", "rewrite", "delete"])(
         change === "delete" ? 0 : change === "rewrite" ? 4 : 3,
       );
       expect(projectionRows(db).every((row) => row.context_eligible !== null)).toBe(true);
-    });
-  },
+    }),
 );
 
 it("does not claim a session deleted after preparation", () =>

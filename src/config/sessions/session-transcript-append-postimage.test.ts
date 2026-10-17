@@ -26,7 +26,7 @@ let f: ReturnType<typeof createSessionCompoundWorkerFixture>;
 it.aroundEach(async (runTest) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     f = createSessionCompoundWorkerFixture();
-    await runTest();
+    await runTest().finally(() => vi.restoreAllMocks());
   }),
 );
 
@@ -36,26 +36,18 @@ const event = (eventId: string, parentId?: null) => ({
   message: { role: "assistant" as const, content: eventId },
 });
 
-function withReads<T>(run: (queries: string[]) => T): T {
-  const reads = observeSqliteReadSql(StatementSync.prototype);
-  try {
-    return run(reads.queries);
-  } finally {
-    reads.restore();
-  }
-}
+const observeReads = () => observeSqliteReadSql(StatementSync.prototype);
 
 it.each([false, true])(
   "publishes the final append version after a later mutation: %s",
   (mutate) => {
-    const reads = observeSqliteReadSql(StatementSync.prototype);
+    const reads = observeReads();
     let checks = 0;
     const result = appendSnapshot(f.scope, event("message"), undefined, undefined, {
       assertCurrent() {
         if (++checks === 2 && mutate) {
-          f.database.db
-            .prepare("UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?")
-            .run(f.scope.sessionId);
+          const sql = "UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?";
+          f.database.db.prepare(sql).run(f.scope.sessionId);
         }
       },
       onPendingTransaction() {},
@@ -72,16 +64,12 @@ it.each([false, true])(
       mutate ? 2 : 1,
     );
 
-    const foreign = new DatabaseSync(f.database.path);
-    try {
-      foreign
-        .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
-        .run("foreign-generation", f.scope.sessionId);
-    } finally {
-      foreign.close();
+    {
+      using foreign = new DatabaseSync(f.database.path);
+      const sql = "UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?";
+      foreign.prepare(sql).run("foreign-generation", f.scope.sessionId);
     }
-    const next = appendSnapshot(f.scope, event("next"));
-    expect(next).toMatchObject({
+    expect(appendSnapshot(f.scope, event("next"))).toMatchObject({
       ok: true,
       value: {
         before: { generation: "foreign-generation", rawSeq: 1 },
@@ -117,30 +105,24 @@ it("shares committed entry facts with custody while retaining live member and ro
     const readFacts = () =>
       readAuthorityFacts(database, f.scope.sessionKey, f.scope.agentId, postimage);
     const exec = vi.spyOn(database.db, "exec");
-    try {
-      withReads((queries) => {
-        const facts = readFacts();
-        expect(facts).toMatchObject({ entry: { label: "committed" }, members: [] });
-        expect(queries.filter((sql) => sql.includes('from "session_nodes"'))).toEqual([]);
-        expect(exec).not.toHaveBeenCalled();
-        if (facts.entry) {
-          facts.entry.label = "caller-owned";
-        }
-        expect(postimage.entry.label).toBe("committed");
-      });
-    } finally {
-      exec.mockRestore();
+    const reads = observeReads();
+    const facts = readFacts();
+    reads.restore();
+    expect(facts).toMatchObject({ entry: { label: "committed" }, members: [] });
+    expect(reads.queries.filter((sql) => sql.includes('from "session_nodes"'))).toEqual([]);
+    expect(exec).not.toHaveBeenCalled();
+    if (facts.entry) {
+      facts.entry.label = "caller-owned";
     }
+    expect(postimage.entry.label).toBe("committed");
     writeSessionEntry(database, f.scope.sessionKey, {
       ...postimage.entry,
       label: "new writer",
       updatedAt: 3,
     });
-    database.db
-      .prepare(
-        "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
-      )
-      .run(f.scope.sessionKey, "new-member", "owner", 1);
+    const addMember =
+      "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)";
+    database.db.prepare(addMember).run(f.scope.sessionKey, "new-member", "owner", 1);
     expect(readFacts()).toMatchObject({
       entry: { label: "new writer" },
       members: [{ identityId: "new-member" }],
@@ -158,13 +140,12 @@ it.each([false, true])(
       if (replaceBranch) {
         appendMessage(db, scope, event("replacement", null));
       }
-      withReads((queries) => {
-        rememberCursor(db, f.scope.sessionId, [appended.result], readPostimage(appended));
-        expect(readSequence(appended.result)).toBe(replaceBranch ? undefined : 1);
-        if (!replaceBranch) {
-          expect(queries).toEqual([]);
-        }
-      });
+      const reads = observeReads();
+      rememberCursor(db, f.scope.sessionId, [appended.result], readPostimage(appended));
+      expect(readSequence(appended.result)).toBe(replaceBranch ? undefined : 1);
+      if (!replaceBranch) {
+        expect(reads.queries).toEqual([]);
+      }
     }, f.scope);
   },
 );
@@ -179,22 +160,17 @@ it.each([false, true])(
       assert(first && second, "Missing committed messages");
       return [first.result, second.result];
     }, f.scope);
-    const reads = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      await rememberSequences(f.scope, messages);
-      // An explicit branch change invalidates the projection until its owner rebuilds it.
-      expect(messages.map(readSequence)).toEqual(replaceBranch ? [undefined, undefined] : [1, 2]);
-      expect(reads.queries).toEqual([]);
-    } finally {
-      reads.restore();
-    }
+    const reads = observeReads();
+    await rememberSequences(f.scope, messages);
+    // An explicit branch change invalidates the projection until its owner rebuilds it.
+    expect(messages.map(readSequence)).toEqual(replaceBranch ? [undefined, undefined] : [1, 2]);
+    expect(reads.queries).toEqual([]);
   },
 );
 
 it("preserves caller callback results without interpreting postimage-shaped fields", () => {
   const value = { value: 7, postimage: "caller data" };
-  const result = writeSnapshot(f.scope, () => value);
-  expect(result).toMatchObject({ ok: true, value: { result: value } });
+  expect(writeSnapshot(f.scope, () => value)).toMatchObject({ ok: true, value: { result: value } });
 });
 
 it("keeps snapshot versions scoped to the requested session when a callback appends elsewhere", () => {
@@ -216,7 +192,7 @@ it("keeps snapshot versions scoped to the requested session when a callback appe
 it("reuses the write's context postimage and retires it after a raw write or rollback", () => {
   writeTransaction((database) => {
     appendMessage(database, resolveSqliteTranscriptScope(f.scope), event("saved"));
-    const reads = observeSqliteReadSql(StatementSync.prototype);
+    const reads = observeReads();
     const saved = readVersion(database, f.scope.sessionId);
     const changedCopy = readVersion(database, f.scope.sessionId);
     reads.restore();
@@ -227,9 +203,8 @@ it("reuses the write's context postimage and retires it after a raw write or rol
 
     expect(() =>
       writeTransaction((nested) => {
-        nested.db
-          .prepare("UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?")
-          .run(42, f.scope.sessionId);
+        const sql = "UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?";
+        nested.db.prepare(sql).run(42, f.scope.sessionId);
         expect(readVersion(nested, f.scope.sessionId).updatedAt).toBe(42);
         throw new Error("rollback nested context");
       }, f.scope),
