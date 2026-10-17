@@ -1,5 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   attestCodexThreadToolSurface,
   checkCodexThreadAppAvailability,
@@ -60,80 +60,72 @@ function checkApps(
   });
 }
 
-describe("Codex thread app availability", () => {
-  afterEach(() => vi.restoreAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
-  it("records unavailable apps without blocking the remaining tools", async () => {
-    const request = vi.fn(async () => ({
-      apps: [
-        ...installedApps(["working"]).apps,
-        ...installedApps(["disabled"], { enabled: false, callable: false }).apps,
-        ...installedApps(["readonly"], { callable: false }).apps,
-      ],
-    }));
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    await checkApps(
-      request,
-      ["working", "readonly", "missing", "disabled", "missing"],
-      "thread-mixed",
-    );
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "codex apps unavailable; continuing with remaining tools",
-      {
-        threadId: "thread-mixed",
-        failures: ["disabled:disabled", "missing:missing", "readonly:not-callable"],
-      },
-    );
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("does not read the app snapshot when no apps are configured", async () => {
-    const request = vi.fn();
-    await checkApps(request, [], "thread-empty");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each(["failure", "abort-resolve", "abort-reject"])(
-    "preserves the discovery cause for %s",
-    async (outcome) => {
-      const abort = new AbortController();
-      const cause = new Error("app inventory interrupted");
-      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-      const request = vi.fn(async () => {
-        if (outcome !== "failure") {
-          abort.abort(cause);
-        }
-        if (outcome !== "abort-resolve") {
-          throw cause;
-        }
-        return installedApps([]);
-      });
-      const result = checkApps(request, ["plugin-app"], "thread-unavailable", abort.signal);
-      if (outcome === "failure") {
-        await expect(result).rejects.toMatchObject({
-          name: "CodexPluginThreadAppAttestationError",
-          cause,
-        });
-      } else {
-        await expect(result).rejects.toBe(cause);
-      }
-      expect(warn).not.toHaveBeenCalled();
+it("records unavailable apps without blocking the remaining tools", async () => {
+  const request = vi.fn(async () => ({
+    apps: [
+      installedApp("working"),
+      installedApp("disabled", false, false),
+      installedApp("readonly", true, false),
+    ],
+  }));
+  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  await checkApps(
+    request,
+    ["working", "readonly", "missing", "disabled", "missing"],
+    "thread-mixed",
+  );
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "codex apps unavailable; continuing with remaining tools",
+    {
+      threadId: "thread-mixed",
+      failures: ["disabled:disabled", "missing:missing", "readonly:not-callable"],
     },
   );
+  expect(request).toHaveBeenCalledOnce();
 });
 
-it.each([
-  { ephemeral: false, failDelete: false, result: true, methods: ["thread/delete"] },
-  { ephemeral: true, failDelete: false, result: true, methods: ["thread/unsubscribe"] },
-  {
-    ephemeral: false,
-    failDelete: true,
-    result: false,
-    methods: ["thread/delete", "thread/unsubscribe"],
+it("does not read the app snapshot when no apps are configured", async () => {
+  const request = vi.fn();
+  await checkApps(request, [], "thread-empty");
+  expect(request).not.toHaveBeenCalled();
+});
+
+it.each(["failure", "abort-resolve", "abort-reject"])(
+  "preserves the discovery cause for %s",
+  async (outcome) => {
+    const abort = new AbortController();
+    const cause = new Error("app inventory interrupted");
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    const request = vi.fn(async () => {
+      if (outcome !== "failure") {
+        abort.abort(cause);
+      }
+      if (outcome !== "abort-resolve") {
+        throw cause;
+      }
+      return { apps: [] };
+    });
+    const result = checkApps(request, ["plugin-app"], "thread-unavailable", abort.signal);
+    if (outcome === "failure") {
+      await expect(result).rejects.toMatchObject({
+        name: "CodexPluginThreadAppAttestationError",
+        cause,
+      });
+    } else {
+      await expect(result).rejects.toBe(cause);
+    }
+    expect(warn).not.toHaveBeenCalled();
   },
-])(
-  "cleans up ephemeral=$ephemeral, failed deletion=$failDelete",
-  async ({ ephemeral, failDelete, result, methods }) => {
+);
+it.each([
+  [false, false, true, ["thread/delete"]],
+  [true, false, true, ["thread/unsubscribe"]],
+  [false, true, false, ["thread/delete", "thread/unsubscribe"]],
+] as const)(
+  "cleans up ephemeral=%s, failed deletion=%s",
+  async (ephemeral, failDelete, result, methods) => {
     const request = vi.fn(async (method: string) => {
       if (failDelete && method === "thread/delete") {
         throw new Error("thread deletion unavailable");
@@ -153,16 +145,6 @@ it.each([
   },
 );
 
-function installedApps(
-  appIds: string[],
-  state: { enabled?: boolean; callable?: boolean } = {},
-): v2.AppsInstalledResponse {
-  return {
-    apps: appIds.map((id) => ({
-      id,
-      runtimeName: id,
-      enabled: state.enabled ?? true,
-      callable: state.callable ?? true,
-    })),
-  };
+function installedApp(id: string, enabled = true, callable = true): v2.AppInfo {
+  return { id, runtimeName: id, enabled, callable };
 }

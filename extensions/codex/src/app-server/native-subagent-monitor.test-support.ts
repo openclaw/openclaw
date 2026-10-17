@@ -132,12 +132,10 @@ export function observeCompletionAttempts() {
 
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
-  const threadReads = new Map<
-    string,
-    | CodexThreadReadResponse
-    | Error
-    | ((params: ThreadReadParams) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>)
-  >();
+  type ThreadReadFactory = (
+    params: ThreadReadParams,
+  ) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>;
+  const threadReads = new Map<string, CodexThreadReadResponse | Error | ThreadReadFactory>();
   const threadTurns = new Map<string, JsonValue | Error>();
   let loadedThreads: readonly string[] | undefined;
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
@@ -169,6 +167,10 @@ export function createClient() {
     fixture.close();
     await Promise.resolve();
   });
+  const sender =
+    <Args extends unknown[]>(factory: (...args: Args) => CodexServerNotification) =>
+    (...args: Args) =>
+      fixture.notify(factory(...args));
   return {
     client: fixture.client,
     request: fixture.request,
@@ -178,12 +180,7 @@ export function createClient() {
     setThreadRead(childThreadId: string, response: CodexThreadReadResponse | Error) {
       threadReads.set(childThreadId, response);
     },
-    setThreadReadFactory(
-      childThreadId: string,
-      response: (
-        params: ThreadReadParams,
-      ) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>,
-    ) {
+    setThreadReadFactory(childThreadId: string, response: ThreadReadFactory) {
       threadReads.set(childThreadId, response);
     },
     setThreadTurns(childThreadId: string, response: JsonValue | Error) {
@@ -194,6 +191,14 @@ export function createClient() {
     addCloseHandler: fixture.client.addCloseHandler.bind(fixture.client),
     getTransportPid: fixture.client.getTransportPid.bind(fixture.client),
     notify: (notification: CodexServerNotification) => fixture.notify(notification),
+    item: sender(itemNotification),
+    startTurn: sender(turnStartedNotification),
+    completeTurn: sender(childTurnCompletedNotification),
+    finishTurn(turnId: string, ...items: JsonValue[]) {
+      return sender(childTurnCompletedNotification)({ turnId, status: "completed", items });
+    },
+    completeNative: sender(nativeCompletionNotification),
+    sendInputOutput: sender(successfulSendInputOutput),
     close: () => fixture.close(),
   };
 }
@@ -211,6 +216,17 @@ export function createRuntime() {
       path: "direct",
     })),
   };
+}
+
+export function createMonitorFixture(
+  options?: ConstructorParameters<typeof CodexNativeSubagentMonitor>[2],
+) {
+  const client = createClient();
+  const runtime = createRuntime();
+  const monitor = new CodexNativeSubagentMonitor(client.client, runtime, options);
+  const captureSource = async (request: Parameters<typeof monitor.captureModelSource>[0]) =>
+    requireNativeModelSourceCapture(await monitor.captureModelSource(request));
+  return { client, runtime, monitor, captureSource };
 }
 
 export function createCompletionScope(requesterSessionKey = "agent:main:discord:channel:C123") {
@@ -336,19 +352,19 @@ export function closeAgentNotification(params: {
 }): CodexServerNotification {
   const parentThreadId = params.parentThreadId ?? "parent-thread";
   const childThreadId = params.childThreadId ?? "child-thread";
+  const started = params.method === "item/started";
   return itemNotification(
     collabItem("closeAgent", [childThreadId], {
       id: params.itemId ?? `close-${childThreadId}`,
-      status: params.method === "item/started" ? "inProgress" : "completed",
+      status: started ? "inProgress" : "completed",
       senderThreadId: parentThreadId,
-      agentsStates:
-        params.method === "item/completed"
-          ? { [childThreadId]: { status: params.previousStatus ?? "completed" } }
-          : {},
+      agentsStates: started
+        ? {}
+        : { [childThreadId]: { status: params.previousStatus ?? "completed" } },
     }),
     params.turnId ?? "parent-turn",
     parentThreadId,
-    params.method === "item/started" ? "started" : "completed",
+    started ? "started" : "completed",
   );
 }
 
