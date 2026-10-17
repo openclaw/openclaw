@@ -18,6 +18,7 @@ type VoiceChange = {
 
 const VOICE_REQUEST_TIMEOUT_MS = TALK_VOICE_CHANGE_TIMEOUT_MS + 10_000;
 
+// Owns the Gateway voice-change subscription and request timer; dispose releases both.
 export class RealtimeTalkVoiceSelection {
   private active = true;
   private change: VoiceChange | undefined;

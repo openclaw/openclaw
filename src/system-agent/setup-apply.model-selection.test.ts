@@ -78,6 +78,11 @@ describe("projectSetupInferenceConfig", () => {
       const prepared: OpenClawConfig = {
         models: {
           providers: {
+            [provider.toUpperCase()]: {
+              baseUrl: "http://127.0.0.1:8003/v1",
+              apiKey: "stale-prepared-alias",
+              models: [],
+            },
             [provider]: {
               baseUrl: "http://127.0.0.1:8000/v1",
               apiKey:
@@ -92,7 +97,23 @@ describe("projectSetupInferenceConfig", () => {
       };
 
       const projected = projectSetupInferenceConfig({
-        base: {},
+        base: {
+          models: {
+            providers: {
+              [provider.toUpperCase()]: {
+                baseUrl: "http://127.0.0.1:8001/v1",
+                apiKey: "old-alias-key",
+                models: [],
+              },
+              [provider]: {
+                baseUrl: "http://127.0.0.1:8002/v1",
+                apiKey: "old-canonical-key",
+                models: [],
+              },
+              sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
+            },
+          },
+        },
         prepared,
         modelRef: `${provider}/local-model`,
         agentId: "main",
@@ -100,7 +121,10 @@ describe("projectSetupInferenceConfig", () => {
         credential,
       });
 
-      expect(projected.models?.providers?.[provider]?.apiKey).toEqual(expectedApiKey);
+      expect(projected.models?.providers).toEqual({
+        sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
+        [provider]: { ...prepared.models?.providers?.[provider], apiKey: expectedApiKey },
+      });
     },
   );
 });

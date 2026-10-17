@@ -29,6 +29,8 @@ export type TranscriptAppendOptions = {
 };
 
 export type TranscriptAppendCursor = {
+  deferWrites?: boolean;
+  windowUpdatedAt?: number;
   rowTranscript?: SessionRowTranscriptProjection;
   initialized?: boolean;
   readIdentity?: ReturnType<typeof createTranscriptIdentityReader>;

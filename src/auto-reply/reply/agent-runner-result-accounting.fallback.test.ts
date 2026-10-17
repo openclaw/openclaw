@@ -97,7 +97,6 @@ async function createFixture(selected = diagnostic) {
       resolved: selected,
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId: `fallback-run-${id}`,
     runStartedAt: Date.now(),

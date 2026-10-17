@@ -365,7 +365,3 @@ openclaw-sidebar-agent-roster {
   width: 16px;
   height: 16px;
 }
-
-.sidebar-agent-roster__menu .sidebar-customize-menu__item::part(checkmark) {
-  display: none;
-}

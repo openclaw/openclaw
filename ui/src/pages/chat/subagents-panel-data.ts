@@ -153,6 +153,7 @@ export class SubagentsPanelData {
       }),
       context.gateway.subscribeEvents((event) => this.handleEvent(event)),
     ];
+    // This synchronous activity owner binds document visibility until dispose().
     this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);
   }
 

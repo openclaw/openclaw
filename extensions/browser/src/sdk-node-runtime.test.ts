@@ -1,12 +1,26 @@
 // Browser tests cover sdk node runtime plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTimeout } from "./sdk-node-runtime.js";
+import { waitForBrowserStartup, withTimeout } from "./sdk-node-runtime.js";
 
 describe("withTimeout", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("excludes shared startup from nested Gateway and local request deadlines", async () => {
+    vi.useFakeTimers();
+    const ready = Promise.withResolvers<string>();
+    const request = withTimeout(
+      () => withTimeout(() => waitForBrowserStartup(() => ready.promise), 20_000),
+      20_000,
+    );
+    const result = request.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(31_000);
+    ready.resolve("ready");
+    expect(await result).toBe("ready");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("rejects the deadline even when work resolves while handling cancellation", async () => {

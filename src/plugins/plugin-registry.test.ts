@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Covers plugin registry assembly, contribution lookup, and reset behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -639,6 +639,69 @@ describe("plugin registry facade", () => {
       source: "npm",
       spec: "persisted-plugin@1.0.0",
     });
+  });
+
+  it("projects a config policy change over the persisted inventory without rescanning", async () => {
+    const stateDir = makeTempDir();
+    const configDir = makeTempDir();
+    const extensionsDir = path.join(configDir, "extensions");
+    const pluginRoot = path.join(extensionsDir, "demo");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    createCandidate(pluginRoot);
+    const env = hermeticEnv({ OPENCLAW_CONFIG_PATH: path.join(configDir, "openclaw.json") });
+    // Bundled plugins are disabled here, so the default memory slot owner is absent.
+    const enabled: OpenClawConfig = { plugins: { slots: { memory: "none" } } };
+    const installed = loadPluginRegistrySnapshotWithMetadata({ stateDir, env, config: enabled });
+    expect(installed.snapshot.plugins.map((plugin) => [plugin.pluginId, plugin.enabled])).toEqual([
+      ["demo", true],
+    ]);
+    await writePersistedInstalledPluginIndex(installed.snapshot, { stateDir });
+    clearPluginMetadataLifecycleCaches();
+
+    const disabled: OpenClawConfig = {
+      plugins: { slots: { memory: "none" }, entries: { demo: { enabled: false } } },
+    };
+    const readdir = vi.spyOn(fs, "readdirSync");
+    try {
+      const result = loadPluginRegistrySnapshotWithMetadata({ stateDir, env, config: disabled });
+      // Discovery lists the extensions root; freshness checks may still read plugin dirs.
+      expect(readdir.mock.calls.filter(([dir]) => String(dir) === extensionsDir)).toEqual([]);
+      expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+        "persisted-registry-stale-policy",
+      ]);
+      expect(result.snapshot.policyHash).toBe(resolveInstalledPluginIndexPolicyHash(disabled, env));
+      expect(result.snapshot.plugins.map((plugin) => [plugin.pluginId, plugin.enabled])).toEqual([
+        ["demo", false],
+      ]);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it("rediscovers when a policy enables a persisted plugin whose files are gone", async () => {
+    const stateDir = makeTempDir();
+    const configDir = makeTempDir();
+    const pluginRoot = path.join(configDir, "extensions", "demo");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    createCandidate(pluginRoot);
+    const env = hermeticEnv({ OPENCLAW_CONFIG_PATH: path.join(configDir, "openclaw.json") });
+    const disabled: OpenClawConfig = {
+      plugins: { slots: { memory: "none" }, entries: { demo: { enabled: false } } },
+    };
+    const installed = loadPluginRegistrySnapshotWithMetadata({ stateDir, env, config: disabled });
+    await writePersistedInstalledPluginIndex(installed.snapshot, { stateDir });
+    // Freshness tolerates missing files only while the persisted record is disabled.
+    fs.rmSync(pluginRoot, { recursive: true, force: true });
+    clearPluginMetadataLifecycleCaches();
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      env,
+      config: { plugins: { slots: { memory: "none" } } },
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.snapshot.plugins.filter((plugin) => plugin.enabled)).toEqual([]);
   });
 
   it("reloads profile extensions after the metadata lifecycle is cleared", () => {

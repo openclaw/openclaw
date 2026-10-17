@@ -21,6 +21,7 @@ import {
   terminalIntentQueue,
   terminalToggleIntent,
 } from "../../components/terminal/terminal-pending-actions.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -235,6 +236,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       });
   }
 
+  // Deliver buffered shell intents in order after the lazy panel commits.
   function flush(): void {
     const owner = options.current();
     if (!owner) {
@@ -260,24 +262,20 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     }
   }
 
-  const listeners = new AbortController();
-  const listenerOptions = { signal: listeners.signal };
-  for (const [eventName, slot, tagName] of panelToggleEvents) {
-    window.addEventListener(eventName, (event) => handle(slot, tagName, event), listenerOptions);
-  }
-  window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel, listenerOptions);
-  window.addEventListener(
-    TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
-    () => {
+  const stop = panelToggleEvents.map(([eventName, slot, tagName]) =>
+    listen(window, eventName, (event) => handle(slot, tagName, event)),
+  );
+  stop.push(
+    listen(window, PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel),
+    listen(window, TERMINAL_PANEL_DOCK_BOTTOM_EVENT, () => {
       const owner = options.current();
       if (owner) {
         owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
       }
-    },
-    listenerOptions,
+    }),
   );
   onCleanup(() => {
-    listeners.abort();
+    stop.forEach((release) => release());
     options.pending.clear();
   });
   return flush;

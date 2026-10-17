@@ -9,6 +9,7 @@ import {
   getSkillCommandCompletions,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { createNewSessionComposerTextarea } from "./composer-controller.ts";
@@ -140,7 +141,7 @@ describe("new-session composer keyboard submission", () => {
 
   it.each(["keyboard", "pointer"])(
     "submits a selected non-skill command argument with %s",
-    (selection) => {
+    async (selection) => {
       replaceSlashCommands([
         {
           key: "mode",
@@ -172,10 +173,13 @@ describe("new-session composer keyboard submission", () => {
 
       flush();
       expect(onInput).toHaveBeenLastCalledWith("/mode ");
-      const fastOption = Array.from(
-        composer.querySelectorAll<HTMLElement>(".slash-menu-item"),
-      ).find((item) => item.querySelector(".slash-menu-name")?.textContent?.trim() === "fast");
-      expect(fastOption).toBeInstanceOf(HTMLElement);
+      const fastOption = await waitForSolid(() => {
+        const option = Array.from(composer.querySelectorAll<HTMLElement>(".slash-menu-item")).find(
+          (item) => item.querySelector(".slash-menu-name")?.textContent?.trim() === "fast",
+        );
+        expect(option).toBeInstanceOf(HTMLElement);
+        return option;
+      });
       if (selection === "keyboard") {
         textarea.dispatchEvent(
           new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),

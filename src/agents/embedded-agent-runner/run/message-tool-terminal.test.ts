@@ -1,6 +1,12 @@
 // Confirmed final replies end the turn; progress and unconfirmed delivery keep it open.
 import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  commitInternalToolTurnInput,
+  getInternalToolTurnCompletion,
+  getInternalToolTurnInputScope,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
+import { captureAgentToolInputScope } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 
@@ -402,6 +408,48 @@ describe("message-tool-only source replies", () => {
       ),
     ).resolves.toEqual({ ...failure, terminate: true });
   });
+
+  it.each([false, true])(
+    "retains the direct invocation's input through late presentation (new input=%s)",
+    async (newInput) => {
+      const context = createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "Delivered once.", final: true },
+      });
+      const publicationError = new Error("presentation failed");
+      const agent = {
+        afterToolCall: async () => {
+          if (newInput) {
+            commitInternalToolTurnInput(completion);
+          }
+          throw publicationError;
+        },
+      } as unknown as Agent;
+      const onDeliveredSourceReply = vi.fn();
+      installMessageToolTerminalHook({
+        agent,
+        sourceReplyDeliveryMode: "message_tool_only",
+        onDeliveredSourceReply,
+      });
+      const completion = getInternalToolTurnCompletion(agent);
+      if (!completion) {
+        throw new Error("Message completion owner was not installed");
+      }
+      captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
+
+      await expect(agent.afterToolCall?.(context)).rejects.toBe(publicationError);
+
+      expect(onDeliveredSourceReply).toHaveBeenCalledOnce();
+      expect(
+        completion({
+          message: context.assistantMessage,
+          toolResults: [],
+          terminalToolCallIds: new Set(),
+          inputScope: getInternalToolTurnInputScope(completion),
+        }),
+      ).toBe(!newInput);
+    },
+  );
 
   it("preserves existing output for unconfirmed automatic delivery", async () => {
     const previousAfterToolCall = vi.fn(async () => ({

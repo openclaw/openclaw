@@ -37,6 +37,8 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
   "apps/linux/scripts/test-native-control-auth.mjs!",
+  // The proof-video skill invokes these image and video CLIs by path.
+  "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
   // db:postgres:gen/check invoke this generator through the source loader.

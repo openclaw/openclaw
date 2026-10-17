@@ -16,6 +16,8 @@ import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import {
+  createTeamScaleSessionEvents,
+  prepareTeamScaleSessionOwnership,
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
@@ -53,6 +55,7 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  sessionEventChurn?: boolean;
   duplicateBootReads?: boolean;
 };
 
@@ -155,25 +158,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       lastMessagePreview: `Synthetic project ${index + 1}: reviewed the implementation and recorded the next concrete step.`,
     };
   });
-  if (options.sidebarListChurn || options.sidebarLiveChurn) {
-    for (const [index, row] of sessions.entries()) {
-      const owner = people[index % counts.owners]!;
-      row.owner = {
-        actor: {
-          type: "human",
-          id: owner.id,
-          identity: { type: "profile", id: owner.id },
-          label: owner.name,
-        },
-      };
-      row.hiddenFromInvolvingMe = false;
-      if (index < 230 && owner.id !== people[0]!.id) {
-        row.participants = [
-          ...row.participants!,
-          { identity: { type: "profile", id: people[0]!.id }, label: people[0]!.name },
-        ];
-      }
-    }
+  if (options.sidebarListChurn || options.sidebarLiveChurn || options.sessionEventChurn) {
+    prepareTeamScaleSessionOwnership(sessions, people.slice(0, counts.owners));
   }
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
@@ -677,6 +663,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       }
     }
   }
+  if (options.sessionEventChurn) {
+    liveEvents.splice(0, liveEvents.length, ...createTeamScaleSessionEvents(sessions, now));
+  }
   return {
     scenario,
     selectedSessionKey,
@@ -687,15 +676,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sidebarLiveChurn: options.sidebarLiveChurn
       ? { equivalentAfterMs: 14_000, quietAfterMs: 15_000, durationMs: 20_000 }
       : undefined,
-    sidebarListChurn: options.sidebarListChurn
-      ? {
-          rows: sessions,
-          viewerProfileId: people[0]!.id,
-          now,
-          defaults: list([]).defaults,
-          owners: list([]).owners,
-        }
-      : undefined,
+    sidebarListChurn:
+      options.sidebarListChurn || options.sessionEventChurn
+        ? {
+            rows: sessions,
+            viewerProfileId: people[0]!.id,
+            now,
+            defaults: list([]).defaults,
+            owners: list([]).owners,
+          }
+        : undefined,
     liveHistory: options.liveRun
       ? {
           sessionId: pinnedRows[0]!.sessionId,

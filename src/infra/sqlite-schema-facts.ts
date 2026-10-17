@@ -57,6 +57,8 @@ const owners = resolveGlobalSingleton(
 
 /** Schema publications outside DDL (such as a deferred version marker) share this revision. */
 export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
+  // A freshly reopened handle must bind retained physical facts before explicit invalidation.
+  getSqliteDatabaseSchemaRevision(database);
   invalidateSchemaFacts(database, true);
 }
 

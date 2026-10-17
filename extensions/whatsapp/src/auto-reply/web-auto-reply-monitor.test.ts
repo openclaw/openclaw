@@ -6,9 +6,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating } from "./monitor/group-gating.js";
-import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
+import { runGroupGatingTestMessage as runGroupGating } from "./monitor/group-gating.test-harness.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine } from "./monitor/message-line.js";
 
@@ -39,37 +37,6 @@ const makeConfig = (overrides: Record<string, unknown>) =>
     session: { store: sessionStorePath },
     ...overrides,
   }) as unknown as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
-
-async function runGroupGating(params: {
-  cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
-  msg: AdmittedWebInboundMessage;
-  agentId?: string;
-  selfChatMode?: boolean;
-  authDir?: string;
-}) {
-  const groupHistories = new Map<string, GroupHistoryEntry[]>();
-  const conversationId = params.msg.admission?.conversation.id ?? "123@g.us";
-  const agentId = params.agentId ?? "main";
-  const sessionKey = `agent:${agentId}:whatsapp:group:${conversationId}`;
-  const baseMentionConfig = buildMentionConfig(params.cfg, undefined);
-  const verboseLogs: string[] = [];
-  const result = await applyGroupGating({
-    cfg: params.cfg,
-    msg: params.msg,
-    groupHistoryKey: `whatsapp:default:group:${conversationId}`,
-    agentId,
-    sessionKey,
-    baseMentionConfig,
-    authDir: params.authDir,
-    selfChatMode: params.selfChatMode,
-    groupHistories,
-    groupHistoryLimit: 10,
-    groupMemberNames: new Map(),
-    logVerbose: (message) => verboseLogs.push(message),
-    replyLogger: { warn: () => {} },
-  });
-  return { result, groupHistories, verboseLogs };
-}
 
 type TestMessageOverrides = {
   admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
@@ -253,7 +220,6 @@ describe("applyGroupGating", () => {
     });
     const { result } = await runGroupGating({
       cfg,
-      selfChatMode: true,
       msg: createGroupMessage({
         id: "m-self-reply",
         to: "+15550000",
@@ -287,7 +253,6 @@ describe("applyGroupGating", () => {
     });
     const { result } = await runGroupGating({
       cfg,
-      selfChatMode: true,
       msg: createGroupMessage({
         id: "m-other-reply",
         to: "+15550000",
@@ -498,7 +463,6 @@ describe("applyGroupGating", () => {
 
     const { result: globalMention } = await runGroupGating({
       cfg,
-      agentId: route.agentId,
       msg: createGroupMessage({
         id: "g1",
         body: "@global ping",
@@ -510,7 +474,6 @@ describe("applyGroupGating", () => {
 
     const { result: workMention } = await runGroupGating({
       cfg,
-      agentId: route.agentId,
       msg: createGroupMessage({
         id: "g2",
         body: "@workbot ping",

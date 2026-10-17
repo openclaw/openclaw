@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { hasLegacyMemoryRecallMetadataColumns } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import {
   assertSqliteSchemaContains,
@@ -286,10 +287,16 @@ export function finishAgentSchemaMigration(
   schemaSql: string,
   requiresMaintenance: boolean,
   assertMigration: () => void,
+  integrityTables?: readonly string[],
 ): void {
   db.exec(`PRAGMA user_version = ${targetVersion};`);
   persistAgentSchemaMetadata(db, agentId, targetVersion);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
+  for (const table of integrityTables ?? []) {
+    if (tableExists(db, table)) {
+      assertSqliteTableIntegrity(db, pathname, table);
+    }
+  }
   if (requiresMaintenance && db.prepare("PRAGMA foreign_key_check").all().length > 0) {
     throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
   }

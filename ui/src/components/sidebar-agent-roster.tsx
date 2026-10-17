@@ -17,7 +17,10 @@ import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
+import {
+  renderPendingSessionCreateRow,
+  renderSessionTree as SessionTree,
+} from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SidebarPinnedAgent } from "./sidebar-pinned-agent.tsx";
@@ -355,6 +358,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                     </span>
                     <span class="sidebar-agent-roster__actions">{agentMenu(card)}</span>
                   </div>
+                  {renderPendingSessionCreateRow(roster.host, card().id)}
                 </section>
               );
             }}

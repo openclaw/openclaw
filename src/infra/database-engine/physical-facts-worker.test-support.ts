@@ -77,9 +77,6 @@ try {
       const writtenName = db.prepare("SELECT name FROM parents").get()?.name;
       const reusedAdmissionId = admitPostgresPhysicalFacts(params).admissionId;
       counts.push(catalogReads);
-      const identityError = failure(() =>
-        admitPostgresPhysicalFacts({ ...params, storeId: "unmatched" }),
-      );
       db.exec("UPDATE openclaw_schema_meta SET version = 8");
       publishSqliteDatabaseSchemaChange(anchor);
       const versionError = failure(() => admitPostgresPhysicalFacts(params));
@@ -98,7 +95,6 @@ try {
         writtenName,
         reusedAdmissionId,
         renewedAdmissionId,
-        identityError,
         versionError,
         missingError,
       };

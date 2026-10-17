@@ -150,7 +150,10 @@ function projectionFixture(seed = true) {
       message: { role: "user", content: `needle ${eventId}` },
     };
     inserters.get(id)!({ seq, eventJson: JSON.stringify(event), createdAt: seq });
-    expect(appenders.get(id)!({ seq, event, eventId, createdAt: seq })).toBe(false);
+    expect(appenders.get(id)!.append({ seq, event, eventId, createdAt: seq })).toBe(false);
+  }
+  for (const appender of appenders.values()) {
+    appender.flush();
   }
   db.exec("COMMIT");
   return db;

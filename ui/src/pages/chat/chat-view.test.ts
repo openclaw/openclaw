@@ -2356,6 +2356,7 @@ describe("chat slash menu accessibility", () => {
       } else if (selection === "send") {
         keydownComposer(container, "Escape");
         container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
+        flush();
       } else {
         inputDraftAtEnd(container, `/goal ${selection} `);
       }
@@ -2675,6 +2676,7 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu")).not.toBeNull();
 
     document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    flush();
 
     expect(container.querySelector(".slash-menu")).toBeNull();
     container.remove();
@@ -2831,6 +2833,7 @@ describe("chat slash menu accessibility", () => {
     textarea.value = "Use $pro then continue";
     textarea.setSelectionRange("Use $pro".length, "Use $pro".length);
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    flush();
     expect(container.querySelector(".skill-menu")).not.toBeNull();
 
     textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -5041,7 +5044,8 @@ describe("right-click Reply", () => {
         if (mode === "rerendered-live") {
           textarea.value = visibleDraft;
           textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
-          expect(pane.onRequestUpdate.mock.calls.length).toBeGreaterThan(updatesBeforeComposition);
+          flush();
+          pane.redraw();
           expect(pane.onDraftChange).not.toHaveBeenCalled();
         }
         const event = new KeyboardEvent("keydown", {
