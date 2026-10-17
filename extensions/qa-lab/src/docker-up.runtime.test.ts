@@ -1,4 +1,3 @@
-// Qa Lab tests cover docker up plugin behavior.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,27 +31,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-type QaDockerUpDeps = {
-  runCommand?: RunCommand;
-  fetchImpl?: FetchLike;
-  sleepImpl?: (ms: number) => Promise<unknown>;
-  resolveHostPortImpl?: (preferredPort: number, pinned: boolean) => Promise<number>;
-};
-
-async function runQaDockerUp(
-  params: Parameters<typeof runQaDockerUpDefault>[0],
-  deps: QaDockerUpDeps,
-) {
-  const actual = await vi.importActual<typeof import("./docker-runtime.js")>("./docker-runtime.js");
-  io.execCommand.mockReset().mockImplementation(deps.runCommand ?? actual.execCommand);
-  io.fetchHealthUrl.mockReset().mockImplementation(deps.fetchImpl ?? actual.fetchHealthUrl);
-  io.resolveHostPort
-    .mockReset()
-    .mockImplementation(deps.resolveHostPortImpl ?? actual.resolveHostPort);
-  io.sleep.mockReset().mockImplementation(deps.sleepImpl ?? (async () => {}));
-  return await runQaDockerUpDefault(params);
-}
-
 function dockerOutput(args: string[], array = false) {
   const healthy = '{"Health":"healthy","State":"running"}';
   return {
@@ -60,17 +38,6 @@ function dockerOutput(args: string[], array = false) {
       ? `${array ? `[${healthy}]` : healthy}\n`
       : "",
     stderr: "",
-  };
-}
-
-function createHealthyDockerDeps(calls: string[]): QaDockerUpDeps {
-  return {
-    async runCommand(command, args, cwd) {
-      calls.push([command, ...args, `@${cwd}`].join(" "));
-      return dockerOutput(args);
-    },
-    fetchImpl: vi.fn(async () => ({ ok: true })),
-    sleepImpl: vi.fn(async () => {}),
   };
 }
 
@@ -85,11 +52,22 @@ afterEach(async () => {
   await rm(tempRoot, { recursive: true, force: true });
 });
 
-function up(params: Parameters<typeof runQaDockerUp>[0], deps: QaDockerUpDeps = {}) {
-  return runQaDockerUp(
-    { repoRoot, outputDir: tempRoot, ...params },
-    { ...createHealthyDockerDeps(calls), ...deps },
+async function up(
+  params: Parameters<typeof runQaDockerUpDefault>[0],
+  deps: { runCommand?: RunCommand; fetchImpl?: FetchLike } = {},
+) {
+  const actual = await vi.importActual<typeof import("./docker-runtime.js")>("./docker-runtime.js");
+  io.execCommand.mockReset().mockImplementation(
+    deps.runCommand ??
+      (async (command, args, cwd) => {
+        calls.push([command, ...args, `@${cwd}`].join(" "));
+        return dockerOutput(args);
+      }),
   );
+  io.fetchHealthUrl.mockReset().mockImplementation(deps.fetchImpl ?? (async () => ({ ok: true })));
+  io.resolveHostPort.mockReset().mockImplementation(actual.resolveHostPort);
+  io.sleep.mockReset().mockImplementation(async () => {});
+  return runQaDockerUpDefault({ repoRoot, outputDir: tempRoot, ...params });
 }
 
 describe("runQaDockerUp", () => {
@@ -123,10 +101,12 @@ describe("runQaDockerUp", () => {
       "http://127.0.0.1:43124/healthz",
       "http://127.0.0.1:18889/healthz",
     ]);
-    expect(result.qaLabUrl).toBe("http://127.0.0.1:43124");
-    expect(result.gatewayUrl).toBe("http://127.0.0.1:18889/");
-    expect(result.composeFile).toBe(composeFile);
-    expect(result.stopCommand).toBe(`docker compose -f ${shellQuote(composeFile)} down`);
+    expect(result).toMatchObject({
+      qaLabUrl: "http://127.0.0.1:43124",
+      gatewayUrl: "http://127.0.0.1:18889/",
+      composeFile,
+      stopCommand: `docker compose -f ${shellQuote(composeFile)} down`,
+    });
   });
 
   it("quotes the printed stop command when the compose path is shell-sensitive", async () => {
