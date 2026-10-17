@@ -88,8 +88,8 @@ let beforeBuildMessage: () => void;
 let requestRefresh: (signal?: AbortSignal) => Promise<void>;
 let state: OpenClawTestState;
 
-// Only model/runtime preparation and external I/O are scripted. The delegate
-// must retain the real attempt's subscription, persistence and release barrier.
+// Prepared catalogs, auth and external I/O are fixture inputs. Keep the real
+// harness and attempt owners for tool authority, persistence and release.
 installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full", pluginRegistry: registry });
 installEmbeddedRunnerFastRunE2eMocks({
   runEmbeddedAttempt: async (params) => {
@@ -101,8 +101,11 @@ installEmbeddedRunnerFastRunE2eMocks({
     return result;
   },
 });
-// The real attempt consumes prompt, transcript and model-handle defaults that
-// the fast runner mocks intentionally omit; keep those owners on the real path.
+// Restore the whole lifecycle boundary, not isolated exports: selection binds
+// tool authority, while init/registry retain the logical turn's context engine.
+vi.doUnmock("../../context-engine/init.js");
+vi.doUnmock("../../context-engine/registry.js");
+vi.doUnmock("../harness/selection.js");
 vi.doUnmock("../runtime-plan/build.js");
 vi.doUnmock("../../plugins/provider-runtime.js");
 vi.doUnmock("../../plugins/provider-hook-runtime.js");
