@@ -12,27 +12,30 @@ const DASHBOARD_KEY = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6
 function row(displayName?: string, key = SESSION_KEY): GatewaySessionRow {
   return { key, kind: "direct", displayName, updatedAt: Date.now() };
 }
-function publicContext(
-  rows: GatewaySessionRow[] = [],
-  origin = "https://chat.example",
-): ApplicationContext {
-  return {
-    ...sessionContext(rows),
-    runtimeConfig: {
-      state: {
-        configSnapshot: { runtimeConfig: { gateway: { publicOrigin: origin } } },
-      },
-    },
-  } as unknown as ApplicationContext;
+function renderMarkdown(host: HTMLElement, value: string, fileLinks = false) {
+  host.innerHTML = toSanitizedMarkdownHtml(value, { sessionLinks: true, fileLinks });
+  return () => host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+}
+function observe(host: HTMLElement) {
+  const observer = new MutationObserver(() => undefined);
+  observer.observe(host, { attributes: true, childList: true, subtree: true });
+  return observer;
 }
 async function refresh(titler: SessionLinkTitler) {
   titler.refresh();
   await vi.runAllTimersAsync();
 }
 
-function sessionContext(rows: GatewaySessionRow[] = []): ApplicationContext {
+function sessionContext(rows: GatewaySessionRow[] = [], origin?: string): ApplicationContext {
   return {
     basePath: "",
+    ...(origin
+      ? {
+          runtimeConfig: {
+            state: { configSnapshot: { runtimeConfig: { gateway: { publicOrigin: origin } } } },
+          },
+        }
+      : {}),
     sessions: { state: { result: { count: rows.length, sessions: rows } } },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
@@ -108,7 +111,7 @@ describe("SessionLinkTitler", () => {
   );
 
   it.each([false, true])(
-    "caches preview titles without replacing producer labels (existing label: %s)",
+    "caches titles and retains producer labels (existing: %s)",
     async (existingLabel) => {
       const request = vi.fn().mockResolvedValue(previewResponse());
       const { titler } = createTitler([], request);
@@ -130,8 +133,9 @@ describe("SessionLinkTitler", () => {
       await titler.decorate(first, true);
       expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
       expect(first.getAttribute("href")).toBe("/chat/main/research");
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
+      expect(request).toHaveBeenCalledExactlyOnceWith("controlUi.sessionPreview", {
+        sessionKey: SESSION_KEY,
+      });
       if (existingLabel) {
         expect(first.firstElementChild).toBe(label);
         expect(label.textContent).toBe("Research plan");
@@ -203,19 +207,13 @@ describe("SessionLinkTitler", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
-  it("retires a retained URL title when the replacement Gateway cannot resolve it", async () => {
+  it("clears stale URL titles after Gateway replacement", async () => {
     const key = DASHBOARD_KEY;
     const { host, titler, request } = createTitler(
       [row("Previous Gateway", key)],
       vi.fn().mockResolvedValue({ ok: false }),
     );
-    host.innerHTML = toSanitizedMarkdownHtml(
-      "[Contract](/chat/main/d0effac9?view=details#latest)",
-      {
-        sessionLinks: true,
-      },
-    );
-    const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    const link = renderMarkdown(host, "[Contract](/chat/main/d0effac9?view=details#latest)")();
     await titler.decorate(link);
     const label = link.firstElementChild;
     expect(link.textContent).toBe("Previous Gateway");
@@ -236,26 +234,20 @@ describe("SessionLinkTitler", () => {
     });
   });
 
-  it.each([
-    {
-      kind: "full-key URL",
-      markdown: "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`",
-      params: {
-        reference: { key: "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6" },
-        agentId: "main",
-        includeGlobal: true,
-        includeUnknown: true,
-        allowMissing: true,
-      },
-      displayName: "Peter's plan",
-    },
-    {
-      kind: "short URL",
-      markdown: "[Plan](/chat/main/d0effac9?view=details)",
-      params: { shortId: "d0effac9", agentId: "main", allowMissing: true },
-      displayName: undefined,
-    },
-  ])("titles a $kind outside the loaded roster", async ({ markdown, params, displayName }) => {
+  it.each([true, false])("titles unloaded URLs (full key: %s)", async (fullKey) => {
+    const displayName = fullKey ? "Peter's plan" : undefined;
+    const source = fullKey
+      ? "`https://chat.example/chat/main/dashboard/d0effac9-3211-4641-b993-10f619f124e6`"
+      : "[Plan](/chat/main/d0effac9?view=details)";
+    const params = fullKey
+      ? {
+          reference: { key: DASHBOARD_KEY },
+          agentId: "main",
+          includeGlobal: true,
+          includeUnknown: true,
+          allowMissing: true,
+        }
+      : { shortId: "d0effac9", agentId: "main", allowMissing: true };
     const key = DASHBOARD_KEY;
     const request = vi.fn(async (method: string) =>
       method === "sessions.resolve"
@@ -263,19 +255,20 @@ describe("SessionLinkTitler", () => {
         : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
     );
     const { host, titler } = createTitler([], request);
-    titler.context = publicContext();
-    host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true });
+    titler.context = sessionContext([], "https://chat.example");
+    const getLink = renderMarkdown(host, source);
     await refresh(titler);
+    const link = getLink();
 
-    const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
-    expect(link.textContent).toBe(displayName ?? "Derived plan");
-    expect(link.dataset.sessionKey).toBe(key);
+    expect(link).toMatchObject({
+      textContent: displayName ?? "Derived plan",
+      dataset: { sessionKey: key },
+    });
     expect(link.hasAttribute("title")).toBe(false);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", params);
     expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
 
-    const observer = new MutationObserver(() => undefined);
-    observer.observe(host, { attributes: true, childList: true, subtree: true });
+    const observer = observe(host);
     await refresh(titler);
     expect(observer.takeRecords()).toEqual([]);
     observer.disconnect();
@@ -285,10 +278,10 @@ describe("SessionLinkTitler", () => {
   it("leaves ambiguous short URLs plain", async () => {
     const request = vi.fn().mockResolvedValue({
       ok: false,
-      candidates: [
-        { key: "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6", agentId: "main" },
-        { key: "agent:main:dashboard:d0effac9-4322-4641-b993-10f619f124e6", agentId: "main" },
-      ],
+      candidates: [DASHBOARD_KEY, DASHBOARD_KEY.replace("3211", "4322")].map((key) => ({
+        key,
+        agentId: "main",
+      })),
     });
     const { host, titler } = createTitler([], request);
     host.innerHTML = toSanitizedMarkdownHtml("[Plan](/chat/main/d0effac9)", { sessionLinks: true });
@@ -309,34 +302,31 @@ describe("SessionLinkTitler", () => {
     ["inline code", "`/chat/main/d0effac9?view=details#latest`"],
     ["public URL", "https://chat.example/chat/main/d0effac9?view=details#latest"],
     ["public inline code", "`https://chat.example/chat/main/d0effac9?view=details#latest`"],
-  ])(
-    "connects %s to the same hover identity without losing route intent",
-    async (_kind, markdown) => {
-      const key = DASHBOARD_KEY;
-      const session = row("Shared contract", key);
-      const rows: GatewaySessionRow[] = [];
-      const { host, titler, request } = createTitler(rows);
-      titler.context = publicContext(rows, "https://CHAT.example:443/");
-      host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true, fileLinks: true });
-      await titler.decorate(host.querySelector<HTMLElement>("[data-session-href]")!);
-      expect(request).not.toHaveBeenCalled();
-      rows.push(session);
-      titler.connect();
-      await Promise.resolve();
-      const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link");
-      expect(link?.dataset.sessionKey).toBe(key);
-      expect(link?.textContent).toBe("Shared contract");
-      expect(link?.hasAttribute("title")).toBe(false);
-      expect(link?.getAttribute("href")).toMatch(
-        /^\/chat\/main\/(?:.*d0effac9|shared-contract)\?view=details#latest$/,
-      );
-      expect(link?.hasAttribute("target")).toBe(false);
-      expect(request).not.toHaveBeenCalled();
-      titler.disconnect();
-    },
-  );
+  ])("preserves hover identity and route intent for %s", async (_kind, markdown) => {
+    const key = DASHBOARD_KEY;
+    const session = row("Shared contract", key);
+    const rows: GatewaySessionRow[] = [];
+    const { host, titler, request } = createTitler(rows);
+    titler.context = sessionContext(rows, "https://CHAT.example:443/");
+    host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true, fileLinks: true });
+    await titler.decorate(host.querySelector<HTMLElement>("[data-session-href]")!);
+    expect(request).not.toHaveBeenCalled();
+    rows.push(session);
+    titler.connect();
+    await Promise.resolve();
+    const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+    expect(link?.dataset.sessionKey).toBe(key);
+    expect(link?.textContent).toBe("Shared contract");
+    expect(link?.hasAttribute("title")).toBe(false);
+    expect(link?.getAttribute("href")).toMatch(
+      /^\/chat\/main\/(?:.*d0effac9|shared-contract)\?view=details#latest$/,
+    );
+    expect(link?.hasAttribute("target")).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    titler.disconnect();
+  });
 
-  it("resolves newly loaded and ambiguous references without mutating unchanged links", () => {
+  it("reconciles roster changes without redundant mutations", () => {
     const key = DASHBOARD_KEY;
     const rows: GatewaySessionRow[] = [];
     const { host, titler, request } = createTitler(rows, vi.fn().mockResolvedValue({ ok: false }));
@@ -353,8 +343,7 @@ describe("SessionLinkTitler", () => {
     rows.push(row("Shared contract", key));
     titler.refresh();
     expect(links.map((link) => link.dataset.sessionKey)).toEqual([key, key, undefined]);
-    const observer = new MutationObserver(() => undefined);
-    observer.observe(host, { attributes: true, childList: true, subtree: true });
+    const observer = observe(host);
     try {
       rows[0] = { ...rows[0]!, updatedAt: Date.now() + 1 };
       titler.refresh();

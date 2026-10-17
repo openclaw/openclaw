@@ -32,54 +32,52 @@ function descriptor(
   name = "settings",
   effectiveCommunication: GatewaySessionRow["effectiveCommunication"] = policy,
 ) {
+  const {
+    target: { key },
+    sessionId,
+  } = target(name);
   return {
-    session: {
-      key: `agent:main:${name}`,
-      sessionId: `${name}-id`,
-      kind: "direct" as const,
-      updatedAt: 1,
-      effectiveCommunication,
-    },
+    session: { key, sessionId, kind: "direct" as const, updatedAt: 1, effectiveCommunication },
   };
 }
-const keydown = (shiftKey = false) =>
-  new KeyboardEvent("keydown", {
-    key: "Tab",
-    shiftKey,
-    bubbles: true,
-    composed: true,
-    cancelable: true,
-  });
+const keyOptions = { key: "Tab", bubbles: true, composed: true, cancelable: true };
+const keydown = (shiftKey = false) => new KeyboardEvent("keydown", { ...keyOptions, shiftKey });
 async function select(menu: Parameters<typeof selectMenuValue>[0], value: string) {
   await selectMenuValue(menu, value);
   await settleSessionMenu(menu);
 }
 
-function choice(menu: ParentNode, direction: "send" | "receive", mode: "always" | "ask" | "never") {
-  const button = menu.querySelector<HTMLButtonElement>(
-    `button[value="communication:${direction}:${mode}"]`,
+function settingsHarness(read: (params?: unknown) => unknown) {
+  return createSessionOwnerMenuHarness((method, params) =>
+    method === "sessions.describe" ? read(params) : sessionOwnerProfiles("Ada"),
   );
-  if (!button) {
-    throw new Error("Expected inline communication choice");
-  }
-  return button;
+}
+async function setup(options: Parameters<typeof mountMenu>[0] = {}) {
+  const menu = await mountMenu(options);
+  return { menu, advanced: await openSubmenu(menu, "Advanced") };
+}
+function pressed(
+  menu: ParentNode,
+  direction: "send" | "receive",
+  mode: "always" | "ask" | "never",
+) {
+  return choice(menu, direction, mode).getAttribute("aria-pressed");
+}
+function choice(menu: ParentNode, direction: "send" | "receive", mode: "always" | "ask" | "never") {
+  return menu.querySelector<HTMLButtonElement>(
+    `button[value="communication:${direction}:${mode}"]`,
+  )!;
 }
 
 describe("session communication menu", () => {
-  it("loads full settings for compact rows and rejects a late descriptor from a previous target", async () => {
+  it("loads compact settings and ignores the previous target reply", async () => {
     const oldReply = createDeferred<{ session: GatewaySessionRow }>();
     const nextReply = createDeferred<{ session: GatewaySessionRow }>();
-    const { context, request } = createSessionOwnerMenuHarness((method, params) => {
-      if (method === "sessions.describe") {
-        return (isRecord(params) && params.key === "agent:main:old" ? oldReply : nextReply).promise;
-      }
-      return sessionOwnerProfiles("Ada");
-    });
-    const menu = await mountMenu({
-      context,
-      session: target("old"),
-    });
-    const advanced = await openSubmenu(menu, "Advanced");
+    const { context, request } = settingsHarness(
+      (params) =>
+        (isRecord(params) && params.key === "agent:main:old" ? oldReply : nextReply).promise,
+    );
+    const { menu, advanced } = await setup({ context, session: target("old") });
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("sessions.describe", {
         key: "agent:main:old",
@@ -96,28 +94,20 @@ describe("session communication menu", () => {
       }),
     );
     nextReply.resolve(descriptor("next", { send: "ask", receive: "always" }));
-    await waitForFast(() =>
-      expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true"),
-    );
+    await waitForFast(() => expect(pressed(advanced, "send", "ask")).toBe("true"));
     expect(choice(advanced, "send", "always").disabled).toBe(false);
     oldReply.resolve(descriptor("old", { send: "never", receive: "never" }));
     await oldReply.promise;
     await menu.updateComplete;
-    expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true");
-    expect(choice(advanced, "receive", "always").getAttribute("aria-pressed")).toBe("true");
+    expect(pressed(advanced, "send", "ask")).toBe("true");
+    expect(pressed(advanced, "receive", "always")).toBe("true");
     expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(2);
   });
 
-  it("retires pending settings on disconnect and reads the same session from the new connection", async () => {
+  it("retires settings on disconnect and reloads after reconnect", async () => {
     const oldReply = createDeferred<{ session: GatewaySessionRow }>();
-    const { context, publish } = createSessionOwnerMenuHarness((method) =>
-      method === "sessions.describe" ? oldReply.promise : sessionOwnerProfiles("Ada"),
-    );
-    const menu = await mountMenu({
-      context,
-      session: target(),
-    });
-    const advanced = await openSubmenu(menu, "Advanced");
+    const { context, publish } = settingsHarness(() => oldReply.promise);
+    const { menu, advanced } = await setup({ context, session: target() });
     publish({ phase: "reconnecting" });
     await settleSessionMenu(menu);
     oldReply.reject(new Error("Retired connection"));
@@ -130,45 +120,32 @@ describe("session communication menu", () => {
     );
     publish({ phase: "connected", client: createTestGatewayClient(request) });
     await waitForFast(() => {
-      expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true");
+      expect(pressed(advanced, "send", "ask")).toBe("true");
       expect(choice(advanced, "receive", "always").disabled).toBe(false);
     });
     expect(advanced.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("shows descriptor failures and retries through the settings menu", async () => {
-    let failed = false;
-    const { context } = createSessionOwnerMenuHarness((method) => {
-      if (method !== "sessions.describe") {
-        return sessionOwnerProfiles("Ada");
-      }
-      if (!failed) {
-        failed = true;
-        throw new Error("Settings unavailable");
-      }
-      return descriptor();
-    });
-    const menu = await mountMenu({
-      context,
-      session: target(),
-    });
-    const advanced = await openSubmenu(menu, "Advanced");
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Settings unavailable"))
+      .mockResolvedValue(descriptor());
+    const { context } = settingsHarness(read);
+    const { menu, advanced } = await setup({ context, session: target() });
     await waitForFast(() => expect(advanced.textContent).toContain("Settings unavailable"));
     expect(choice(advanced, "send", "always").disabled).toBe(true);
     await selectMenuValue(menu, "reload-settings");
-    await waitForFast(() =>
-      expect(choice(advanced, "send", "never").getAttribute("aria-pressed")).toBe("true"),
-    );
+    await waitForFast(() => expect(pressed(advanced, "send", "never")).toBe("true"));
     expect(advanced.textContent).not.toContain("Settings unavailable");
   });
 
   it("dispatches only the selected direction and resets raw overrides together", async () => {
     const onAction = vi.fn();
-    const menu = await mountMenu({
+    const { menu, advanced } = await setup({
       session: { communication: { send: "never" }, effectiveCommunication: policy },
       onAction,
     });
-    const advanced = await openSubmenu(menu, "Advanced");
     choice(advanced, "receive", "always").click();
     expect(onAction).toHaveBeenLastCalledWith({
       kind: "set-communication",
@@ -182,7 +159,7 @@ describe("session communication menu", () => {
     expect(onAction).toHaveBeenLastCalledWith({ kind: "set-communication", communication: null });
   });
 
-  it("keeps inline choices in compact settings and returns from appearance through settings to root", async () => {
+  it("navigates compact submenus and focuses inline choices", async () => {
     const onAction = vi.fn();
     const menu = await mountMenu({
       compact: true,
@@ -191,7 +168,7 @@ describe("session communication menu", () => {
     });
     await select(menu, "compact:open-advanced");
     expect(menuItem(menu, "Back").getAttribute("data-value")).toBe("compact:back");
-    expect(choice(menu, "receive", "ask").getAttribute("aria-pressed")).toBe("true");
+    expect(pressed(menu, "receive", "ask")).toBe("true");
     expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
     // jsdom has no layout; the communication controls in this fixture are visible.
     for (const control of menu.querySelectorAll<HTMLElement>(
@@ -226,12 +203,11 @@ describe("session communication menu", () => {
   it("preserves denied reasons and refuses disabled controls", async () => {
     const onAction = vi.fn();
     const reason = "Only the session creator or an admin can make this change.";
-    const menu = await mountMenu({
+    const { advanced } = await setup({
       session: { communication: { send: "never" }, effectiveCommunication: policy },
       actionDisabledReasons: { "set-communication": reason },
       onAction,
     });
-    const advanced = await openSubmenu(menu, "Advanced");
     expect(choice(advanced, "send", "always")).toMatchObject({ disabled: true, title: reason });
     choice(advanced, "send", "always").click();
     const reset = menuItem(advanced, "Reset");
@@ -240,10 +216,9 @@ describe("session communication menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("keeps missing metadata visibly unselected and disables edits; batch settings remain unavailable", async () => {
+  it("disables missing metadata and hides batch settings", async () => {
     const onAction = vi.fn();
-    const menu = await mountMenu({ onAction });
-    const advanced = await openSubmenu(menu, "Advanced");
+    const { advanced } = await setup({ onAction });
     expect(choice(advanced, "send", "always").disabled).toBe(true);
     expect(advanced.querySelector('.session-menu__communication [aria-pressed="true"]')).toBeNull();
     choice(advanced, "send", "always").click();

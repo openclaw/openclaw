@@ -58,8 +58,23 @@ function contrastRatio(first: number, second: number): number {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
-const originalTheme = document.documentElement.getAttribute("data-theme-mode");
-const originalPalette = document.documentElement.getAttribute("data-theme");
+const originalAttributes = ["data-theme-mode", "data-theme"].map(
+  (name) => [name, document.documentElement.getAttribute(name)] as const,
+);
+function sidebarFixture(pinned: boolean) {
+  const sidebar = document.createElement("aside");
+  sidebar.className = "sidebar";
+  sidebar.innerHTML = `<div class="sidebar-shell"><section class="sidebar-sessions sidebar-recent-sessions${pinned ? " sidebar-zone-entry" : ""}">
+    <div class="sidebar-recent-session"><a class="sidebar-recent-session__link">
+      <span class="sidebar-session-indicator"></span><span class="sidebar-recent-session__title">Shared session</span>
+    </a></div></section></div>`;
+  document.body.append(sidebar);
+  return {
+    sidebar,
+    row: sidebar.querySelector<HTMLElement>(".sidebar-recent-session")!,
+    indicator: sidebar.querySelector<HTMLElement>(".sidebar-session-indicator")!,
+  };
+}
 async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
   await new Promise<void>((resolve) => {
     syncThemePaletteStylesheet(theme, resolve);
@@ -127,15 +142,12 @@ const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
 afterEach(() => {
   document.body.replaceChildren();
-  if (originalPalette === null) {
-    document.documentElement.removeAttribute("data-theme");
-  } else {
-    document.documentElement.setAttribute("data-theme", originalPalette);
-  }
-  if (originalTheme === null) {
-    document.documentElement.removeAttribute("data-theme-mode");
-  } else {
-    document.documentElement.setAttribute("data-theme-mode", originalTheme);
+  for (const [name, value] of originalAttributes) {
+    if (value === null) {
+      document.documentElement.removeAttribute(name);
+    } else {
+      document.documentElement.setAttribute(name, value);
+    }
   }
 });
 
@@ -170,55 +182,33 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
       ),
     ),
   )(
-    "keeps $ownerCount owners in an equal pair in $theme $mode while $presence (pinned=$pinned)",
+    "lays out $ownerCount owners: $theme/$mode, $presence, pinned=$pinned",
     async ({ theme, mode, ownerCount, presence, pinned }) => {
       await applyTheme(theme, mode);
-      const sidebar = document.createElement("aside");
-      sidebar.className = "sidebar";
-      const shell = document.createElement("div");
-      shell.className = "sidebar-shell";
-      const sessions = document.createElement("section");
-      sessions.className = "sidebar-sessions sidebar-recent-sessions";
-      sessions.classList.toggle("sidebar-zone-entry", pinned);
-      shell.append(sessions);
-      sidebar.append(shell);
-      document.body.append(sidebar);
+      const { sidebar, row, indicator } = sidebarFixture(pinned);
       mountSolid(
-        () => (
-          <div class="sidebar-recent-session">
-            <a class="sidebar-recent-session__link">
-              <span class="sidebar-session-indicator">
-                {
-                  renderSessionLeadingState({
-                    session: {
-                      ...runningRow("agent:main:shared"),
-                      label: "Shared session",
-                      renameValue: "Shared session",
-                      hasActiveRun: presence === "running",
-                      unread: presence === "unread",
-                      participants: [
-                        { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
-                      ],
-                      participantCount: ownerCount - 1,
-                    },
-                    ownerActor: {
-                      type: "human",
-                      id: "profile-ada",
-                      identity: { type: "profile", id: "profile-ada" },
-                      label: "Ada",
-                    },
-                    attribution: "owned",
-                    ownerViewing: presence === "away" ? false : undefined,
-                  }).leadingIndicator
-                }
-              </span>
-              <span class="sidebar-recent-session__title">Shared session</span>
-            </a>
-          </div>
-        ),
-        { container: sessions },
+        () =>
+          renderSessionLeadingState({
+            session: {
+              ...runningRow("agent:main:shared"),
+              label: "Shared session",
+              renameValue: "Shared session",
+              hasActiveRun: presence === "running",
+              unread: presence === "unread",
+              participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
+              participantCount: ownerCount - 1,
+            },
+            ownerActor: {
+              type: "human",
+              id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
+              label: "Ada",
+            },
+            attribution: "owned",
+            ownerViewing: presence === "away" ? false : undefined,
+          }).leadingIndicator,
+        { container: indicator },
       );
-      const row = sidebar.querySelector<HTMLElement>(".sidebar-recent-session")!;
       // Contrast is measured at each interaction endpoint, outside its transition.
       row.style.transition = "none";
       const chip = sidebar.querySelector("openclaw-session-owner-chip")!;
@@ -260,8 +250,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         const stackBounds = stack.getBoundingClientRect();
         expect([stackBounds.width, stackBounds.height]).toEqual([28, 20]);
         for (const bounds of [primaryBounds, peerBounds]) {
-          expect([bounds.width, bounds.height]).toEqual([18, 18]);
-          expect(bounds.top).toBe(stackBounds.top + 1);
+          expect(bounds).toMatchObject({ width: 18, height: 18, top: stackBounds.top + 1 });
           expect(bounds.left).toBeGreaterThanOrEqual(stackBounds.left);
           expect(bounds.right).toBeLessThanOrEqual(stackBounds.right);
         }
@@ -283,8 +272,10 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         }
         if (presence === "running") {
           const traceBounds = row.querySelector(".session-glyph__trace")!.getBoundingClientRect();
-          expect(traceBounds.left).toBe(stackBounds.left - 2);
-          expect(traceBounds.right).toBe(stackBounds.right + 2);
+          expect(traceBounds).toMatchObject({
+            left: stackBounds.left - 2,
+            right: stackBounds.right + 2,
+          });
         }
         if (presence === "unread") {
           const badge = row.querySelector(".session-glyph__badge--unread")!;
@@ -390,10 +381,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
 
   it("keeps the single-owner row avatar at its established size", async () => {
     const chip = await mountOwnerChip({});
-    const owner = chip.querySelector<HTMLElement>(".session-owner-chip--row");
-    if (!owner) {
-      throw new Error("expected single owner row avatar");
-    }
+    const owner = chip.querySelector<HTMLElement>(".session-owner-chip--row")!;
     const bounds = owner.getBoundingClientRect();
     expect([bounds.width, bounds.height]).toEqual([20, 20]);
     expect(chip.querySelector(".session-owner-stack")).toBeNull();
@@ -404,7 +392,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
       [0, 1, 2].map((participantCount) => ({ theme, participantCount })),
     ),
   )(
-    "uses a thin cutout only for stacked owners in $theme with $participantCount participants",
+    "cuts out stacked owners: $theme, $participantCount participants",
     async ({ theme, participantCount }) => {
       document.documentElement.setAttribute("data-theme-mode", theme);
       const sidebar = document.createElement("aside");
