@@ -460,6 +460,11 @@ export function parseBackupManifest(raw: string): BackupManifest {
             : {
                 stateDir: parseBackupManifestSourcePath(parsed.paths.stateDir, "state directory"),
               }),
+          ...(parsed.paths.configPath === undefined
+            ? {}
+            : {
+                configPath: parseBackupManifestSourcePath(parsed.paths.configPath, "configuration"),
+              }),
           agentRoots: parseBackupManifestAgentRoots(parsed.paths.agentRoots),
         }
       : undefined,

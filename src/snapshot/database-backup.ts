@@ -64,7 +64,13 @@ const offlineBackup = new AsyncLocalStorage<{
 export async function runOfflineDatabaseBackup<T>(
   sourcePath: string,
   run: (scope: { config: OpenClawConfig; assertCurrent: () => void }) => Promise<T>,
-  prepared?: { config: OpenClawConfig; selection: DatabaseEngineSelection },
+  prepared?:
+    | { config: OpenClawConfig; selection: DatabaseEngineSelection }
+    | {
+        configPath: string;
+        mapIncludePath?: (absolutePath: string) => string;
+        env?: NodeJS.ProcessEnv;
+      },
 ): Promise<T> {
   const existing = offlineBackup.getStore();
   if (existing) {
@@ -86,22 +92,24 @@ export async function runOfflineDatabaseBackup<T>(
     onForeignOwner: "refuse",
     runLocal: async ({ assertCurrent }) => {
       assertCurrent();
-      let config = prepared?.config;
+      const captured = prepared && "config" in prepared ? prepared : undefined;
+      let config = captured?.config;
       if (!config) {
-      const snapshot = await createConfigIO({
-        observe: false,
-        pluginValidation: "core-only",
-      }).readConfigFileSnapshot();
-      assertCurrent();
-      if (!snapshot.valid) {
-        const details = formatInvalidConfigDetails(snapshot.issues);
-        throw isConfigReadFailure(snapshot)
-          ? createConfigReadError(snapshot, details)
-          : createInvalidConfigError(snapshot.path, details);
+        const snapshot = await createConfigIO({
+          ...(prepared && "configPath" in prepared ? prepared : {}),
+          observe: false,
+          pluginValidation: "core-only",
+        }).readConfigFileSnapshot();
+        assertCurrent();
+        if (!snapshot.valid) {
+          const details = formatInvalidConfigDetails(snapshot.issues);
+          throw isConfigReadFailure(snapshot)
+            ? createConfigReadError(snapshot, details)
+            : createInvalidConfigError(snapshot.path, details);
+        }
+        config = snapshot.config;
       }
-      config = snapshot.config;
-      }
-      const selection = prepared?.selection ?? (await resolveDatabaseEngineSelection(config));
+      const selection = captured?.selection ?? (await resolveDatabaseEngineSelection(config));
       assertCurrent();
       const scope = { config, assertCurrent };
       return withDatabaseEngineSelection(selection, () =>

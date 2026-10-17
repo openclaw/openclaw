@@ -376,11 +376,12 @@ the generated export files after publishing their verified anchors, so a later
 backup does not rediscover the import artifacts as stores. Unmanaged SQLite
 files remain opaque and are copied without opening them.
 
-Configure the recovery installation's PostgreSQL connection and supply its
-external SecretRef before restoring. The configured destination selects the
-server; restore does not silently connect using the archived configuration.
-When activating the archived config, retain or reapply the recovery connection
-settings so the restored anchors still address that destination server.
+Archive restore validates its captured configuration under offline custody and
+uses its family selections. Supply the captured configuration's external
+connection SecretRef before restoring; point that secret at the recovery server
+when recovering to another server. The live installation's selections do not
+override the archive. Restore publishes the recovered configuration last, after
+all stores and their matching anchors pass verification.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded

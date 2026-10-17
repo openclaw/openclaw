@@ -707,13 +707,9 @@ async function createBackupArchiveInScope(
     }).catch((error: unknown) => {
       throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
-    const skippedVolatileCount = [...skippedEntries.values()].filter(
+    result.skippedVolatileCount = [...skippedEntries.values()].filter(
       (reason) => reason === "volatile",
     ).length;
-    result.skippedVolatileCount = skippedVolatileCount;
-    const vanishedWarnings = [...skippedEntries]
-      .filter(([, reason]) => reason === "vanished")
-      .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`);
     const archiveWarnings = [
       ...[...opaqueSqliteSourcePaths]
         .toSorted(([left], [right]) => left.localeCompare(right))
@@ -722,7 +718,9 @@ async function createBackupArchiveInScope(
             ? `Skipped unresolvable opaque SQLite link: ${sourcePath}`
             : `SQLite file archived as opaque bytes without a live snapshot or integrity checks: ${sourcePath}`,
         ),
-      ...vanishedWarnings,
+      ...[...skippedEntries]
+        .filter(([, reason]) => reason === "vanished")
+        .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`),
     ];
     if (archiveWarnings.length) {
       result.warnings = [...(result.warnings ?? []), ...archiveWarnings];
@@ -730,10 +728,10 @@ async function createBackupArchiveInScope(
     if (externalSymbolicLinks.length) {
       result.externalSymbolicLinks = externalSymbolicLinks;
     }
-    if (skippedVolatileCount > 0) {
+    if (result.skippedVolatileCount > 0) {
       opts.log?.(
-        `Backup skipped ${skippedVolatileCount} volatile file${
-          skippedVolatileCount === 1 ? "" : "s"
+        `Backup skipped ${result.skippedVolatileCount} volatile file${
+          result.skippedVolatileCount === 1 ? "" : "s"
         } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
       );
     }

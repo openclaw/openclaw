@@ -64,11 +64,11 @@ never stops it automatically. The requirement also applies to `create --to`.
 Mixed-engine installations use the same commands and archive format. Each
 store's physical engine and selected shared connection determine its capture;
 the default engine alone does not determine backup behavior. Archive restore
-extracts the archived family selections and matching store artifacts into
-staging; it does not restore PostgreSQL rows or activate configuration. Matched
-PostgreSQL restore, including `backup git restore`, verifies the artifacts,
-loads fresh owned namespaces, and produces matching anchors. Activate recovered
-stores with their corresponding family selections before runtime admission.
+validates the archived configuration under offline custody, restores PostgreSQL
+stores into fresh namespaces, and publishes verified matching anchors with the
+recovered family selections last. Git restore also verifies its matched artifacts
+and loads a fresh namespace. Activate recovered stores with their corresponding
+family selections before runtime admission.
 SQLite stores remain SQLite. Config includes, active fragments, and companion
 files retain their existing capture and verification rules.
 
@@ -248,11 +248,12 @@ valid PostgreSQL capsules missing from that inventory. Older archives use their
 matched export manifests. A legacy archive cannot identify a store whose
 entire export was already missing. Unmanaged SQLite files remain opaque.
 
-Before restoring PostgreSQL, configure the recovery installation's connection
-and make its external SecretRef available. Restore uses that configured
-connection, not the archived configuration, to choose its destination server.
-When activating the archived config, retain or reapply the recovery connection
-settings so the restored anchors still address the destination server.
+PostgreSQL archive restore requires its captured configuration and resolves each
+family through that recovered configuration. Make its external connection
+SecretRef available before restoring; point that secret at the recovery server
+when recovering to another server. The live installation's family selections do
+not override the archive. The recovered config is published after every store
+passes verification, with its matching anchors.
 The original PostgreSQL namespaces remain untouched.
 
 <Warning>
@@ -266,9 +267,8 @@ The original PostgreSQL namespaces remain untouched.
   start an agent session after activation to rebuild it from plugin metadata.
 </Warning>
 
-For PostgreSQL stores, archive extraction has not rolled back server rows.
-Complete matched restoration of the PostgreSQL exports into fresh owned
-namespaces before activating the extracted state and its family selections.
+Archive restore completes matched PostgreSQL restoration into fresh namespaces
+before returning. Activate the recovered state together with its family selections.
 
 Activation is a separate offline operator step. Stop the Gateway, move the
 restored state asset into place or point `OPENCLAW_STATE_DIR` at that asset,

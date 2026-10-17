@@ -680,7 +680,6 @@ async function verifyResolvedBackupArchive(
     postgresAnchors: new Set(databaseRestoreCandidates.map(({ anchorPath }) => anchorPath)),
   });
   verifyBackupSqliteCoverage(manifest, requiredSnapshots, verifiedSnapshots);
-  const regularFileExtractionBytes = resolveExtractionBytes(entries);
 
   const result = {
     ok: true as const,
@@ -695,11 +694,15 @@ async function verifyResolvedBackupArchive(
     ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };
 
+  const configPath =
+    manifest.paths?.configPath ??
+    manifest.assets.find((asset) => asset.kind === "config")?.sourcePath;
   return {
     result,
+    recoveryConfigPath: configPath && buildBackupArchivePath(manifest.archiveRoot, configPath),
     hardlinkTargets,
     symbolicLinks: preparedSymbolicLinks,
-    regularFileExtractionBytes,
+    regularFileExtractionBytes: resolveExtractionBytes(entries),
     databaseRestoreCandidates,
   };
 }
