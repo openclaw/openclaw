@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -17,6 +13,7 @@ import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.j
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 
@@ -40,10 +37,7 @@ describe("empty reserve production lifecycle", () => {
       "-m",
       "empty",
     ]);
-    const features = [
-      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-    ];
+    const features = [...WORKER_PROTOCOL_FEATURES];
     vi.mocked(support.testState.prepareInstallation).mockResolvedValue({
       ...support.BUNDLE_ARTIFACT,
       protocolFeatures: features,

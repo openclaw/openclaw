@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +15,12 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR, placementTurnOwner } from "./placement-record.js";
+import {
+  makeClaimInput,
+  expectPlacement,
+  seedReconciliationJournal,
+} from "./placement-lifecycle.test-support.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -38,34 +42,6 @@ describe("forced worker environment destruction", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function seedJournal(
-    active: Awaited<ReturnType<typeof seedActivePlacement>>,
-    nonce: string,
-    currentManifestRef: string,
-  ) {
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
-    await placementStore.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: nonce.repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef,
-      baseEntries: [],
-      appliedEntries: [],
-      baseTree: "f".repeat(40),
-      basePackSha256: createHash("sha256").update("").digest("hex"),
-      basePack: Buffer.alloc(0),
-    });
-    return owner;
-  }
-
   it("serializes with workspace work and abandons an applied result fence", async () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
     const harness = await createHarness(database, placementStore, {
@@ -81,15 +57,12 @@ describe("forced worker environment destruction", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "force-destroy-claim",
-      runId: "force-destroy-run",
-      owner: placementTurnOwner(active),
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "force-destroy-claim", "force-destroy-run"),
+    );
     await placementStore.markWorkspaceResultPending(claim);
     const appliedManifestRef = harness.reconciledManifestRef;
-    const owner = await seedJournal(active, "a", appliedManifestRef);
+    const owner = await seedReconciliationJournal(placementStore, active, appliedManifestRef, "a");
     await placementStore.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
     expect((await placementStore.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
       appliedManifestRef,
@@ -108,8 +81,7 @@ describe("forced worker environment destruction", () => {
       undefined,
       expect.objectContaining({ state: "destroyed" }),
     ]);
-    expect(placementStore.get(REQUEST.sessionId)).toMatchObject({
-      state: "failed",
+    expectPlacement(placementStore, "failed", {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
@@ -152,7 +124,12 @@ describe("forced worker environment destruction", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const owner = await seedJournal(active, "e", `sha256:${"e".repeat(64)}`);
+    const owner = await seedReconciliationJournal(
+      placementStore,
+      active,
+      `sha256:${"e".repeat(64)}`,
+      "e",
+    );
 
     await expect(
       harness.service.forceDestroyEnvironment(active.environmentId),
@@ -218,8 +195,7 @@ describe("forced destruction across Gateway restart", () => {
     await expect(harness.service.forceDestroyEnvironment(environmentId)).rejects.toThrow(
       "provider deletion refused",
     );
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "failed",
+    expectPlacement(placements, "failed", {
       recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
       turnClaim: null,
     });
@@ -243,9 +219,7 @@ describe("forced destruction across Gateway restart", () => {
     expect(pending?.lastError?.length).toBeLessThanOrEqual(1_024);
     expect(summarizeWorkerEnvironment(pending, support.testState.nowMs)).toMatchObject({
       status: "error",
-      worker: {
-        error: expect.stringContaining("provider deletion refused"),
-      },
+      worker: { error: expect.stringContaining("provider deletion refused") },
     });
     const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
     const tunnel = vi.spyOn(service, "startTunnel");
@@ -265,8 +239,7 @@ describe("forced destruction across Gateway restart", () => {
     expect(claimStop).not.toHaveBeenCalled();
     expect(tunnel).not.toHaveBeenCalled();
     expect(restarted.log).not.toContain("workspace");
-    expect(placements.get(REQUEST.sessionId)).toMatchObject({
-      state: "failed",
+    expectPlacement(placements, "failed", {
       recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
       workspaceBaseManifestRef: active.workspaceBaseManifestRef,
       turnClaim: null,
@@ -302,10 +275,7 @@ describe("forced destruction across Gateway restart", () => {
       });
       await expect(harness.service.forceDestroyEnvironment(environmentId)).rejects.toBe(crash);
       reconcile.mockRestore();
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({
-        state: "draining",
-        turnClaim: null,
-      });
+      expectPlacement(placements, "draining", { turnClaim: null });
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
       expect.soft(support.testState.store.get(environmentId)).toMatchObject({
@@ -334,8 +304,7 @@ describe("forced destruction across Gateway restart", () => {
       expect(claimStop).not.toHaveBeenCalled();
       expect(tunnel).not.toHaveBeenCalled();
       expect(restarted.log).not.toContain("workspace");
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({
-        state: "failed",
+      expectPlacement(placements, "failed", {
         turnClaim: null,
         recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
         workspaceBaseManifestRef: active.workspaceBaseManifestRef,
