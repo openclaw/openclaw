@@ -113,7 +113,7 @@ function createAuthorityScenario(change: string, handler: Handler, queued = fals
           })
         : undefined,
     }),
-    revoke() {
+    revoke(this: void) {
       if (change === "shared-auth") {
         generation = "rotated";
       } else if (change === "runtime") {

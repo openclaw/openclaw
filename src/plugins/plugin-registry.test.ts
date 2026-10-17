@@ -133,7 +133,7 @@ function createIndex(
 }
 
 function candidateFixture(
-  options: Omit<Parameters<typeof loadPluginRegistrySnapshot>[0], "candidates"> = {},
+  options: Omit<NonNullable<Parameters<typeof loadPluginRegistrySnapshot>[0]>, "candidates"> = {},
 ) {
   const stateDir = makeTempDir();
   const rootDir = makeTempDir();

@@ -185,6 +185,7 @@ describe("Gateway GitHub publication boundaries", () => {
             ? commandResult("credential.helper ./steal-profile\n")
             : commandResult("", 1);
         }
+        return undefined;
       });
       const coordinator = createLocalCoordinator();
       await expect(publish(coordinator, `unsafe-${scope}-config`)).rejects.toThrow(

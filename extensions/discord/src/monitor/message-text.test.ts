@@ -155,41 +155,35 @@ describe("resolveDiscordMessageText", () => {
   });
 
   it("renders forwarded captions together with their media facts", () => {
-    const text = resolveDiscordMessageText(
-      asForwardedSnapshotMessage({
-        content: "look at this",
-        embeds: [],
-        attachments: [
-          {
-            id: "forwarded-image",
-            filename: "forwarded.png",
-            content_type: "image/png",
-            url: "https://cdn.discordapp.com/forwarded.png",
-          },
-        ],
-      }),
-      { includeForwarded: true },
-    );
+    const text = forwardedText({
+      content: "look at this",
+      embeds: [],
+      attachments: [
+        {
+          id: "forwarded-image",
+          filename: "forwarded.png",
+          content_type: "image/png",
+          url: "https://cdn.discordapp.com/forwarded.png",
+        },
+      ],
+    });
 
     expect(text).toContain("look at this\n<media:image>");
   });
 
   it("preserves audio classification in forwarded text-only previews", () => {
-    const text = resolveDiscordMessageText(
-      asForwardedSnapshotMessage({
-        content: "",
-        embeds: [],
-        attachments: [
-          {
-            id: "forwarded-audio",
-            filename: "voice.ogg",
-            content_type: "audio/ogg",
-            url: "https://cdn.discordapp.com/voice.ogg",
-          },
-        ],
-      }),
-      { includeForwarded: true },
-    );
+    const text = forwardedText({
+      content: "",
+      embeds: [],
+      attachments: [
+        {
+          id: "forwarded-audio",
+          filename: "voice.ogg",
+          content_type: "audio/ogg",
+          url: "https://cdn.discordapp.com/voice.ogg",
+        },
+      ],
+    });
 
     expect(text).toContain("<media:audio>");
   });

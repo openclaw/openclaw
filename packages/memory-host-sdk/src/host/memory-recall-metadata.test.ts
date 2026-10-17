@@ -27,6 +27,7 @@ function recallWriter(db: DatabaseSync) {
     insertMetadata,
     insertProvenance,
     add(
+      this: void,
       id: string,
       text: string,
       importance: number,

@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./session-utils.js", () => ({
   loadIncognitoGatewaySessionEntryReadOnly: (...args: unknown[]) => mocks.session(...args),
 }));
+// mock-isolation: Keep session-worker state outside the worktree-read measurement.
 vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async (
     params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],
@@ -69,6 +70,7 @@ vi.mock("./session-utils-store-worker.js", () => ({
     return loaded;
   },
 }));
+// mock-isolation: Supply fresh row facts from the admitted physical session reader.
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   withSessionEntryReadOnlyInWorker: async <T>(
     scope: Parameters<typeof withSessionEntryReadOnlyInWorker>[0],
@@ -135,6 +137,7 @@ vi.mock("../agents/worktrees/service.js", () => ({
       findLiveRegistryWorktreeByOwner(process.env, kind, id),
   },
 }));
+// mock-isolation: Control identity preparation without credential discovery.
 vi.mock("../agents/github-tool-identity.js", () => ({
   prepareGitHubPublicationIdentity: mocks.identity,
   prepareGitHubPublicationOptionsIdentity: mocks.identity,
@@ -142,10 +145,13 @@ vi.mock("../agents/github-tool-identity.js", () => ({
   resolveConfiguredGitHubToolIdentity: () => undefined,
   onManagedGitHubProfileChanged: () => () => {},
 }));
+// mock-isolation: Exclude OAuth credentials and network activity from this reader fixture.
 vi.mock("./github-oauth-lifecycle.js", () => ({
   requestCurrentGitHubOAuthRefresh: async () => {},
 }));
+// mock-isolation: Use synthetic configuration without loading operator configuration.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
+// mock-isolation: Exclude process-wide secret materialization from this reader fixture.
 vi.mock("../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: () => undefined,
 }));

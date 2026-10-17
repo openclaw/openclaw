@@ -12,7 +12,6 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { Agent, fetch as fetchProvider } from "undici";
 import { expect, type TestContext } from "vitest";
 import { WebSocketServer } from "ws";
-import { MockResponseStream } from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-stream.js";
 import { createExternalAuthRuntime } from "../../../../src/agents/auth-profiles/external-auth.js";
 import {
   readPersistedSharedAuthProfileStateRaw,
@@ -100,7 +99,7 @@ function responseGate(label: string) {
       next = undefined;
       return hold;
     },
-    arm() {
+    arm(this: void) {
       if (next) {
         throw new Error(`A ${label} response hold is already armed`);
       }
@@ -303,9 +302,41 @@ export async function startQuotaProvider(
       }
     }
     const id = randomUUID().replaceAll("-", "");
-    const stream = new MockResponseStream(`resp${id}`);
-    stream.message({ id: `msg${id}`, text: marker, streamDeltas: [marker] });
-    return stream.complete(7);
+    const item = {
+      type: "message",
+      id: `msg${id}`,
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: marker, annotations: [] }],
+    };
+    const response = {
+      id: `resp${id}`,
+      status: "completed",
+      output: [item],
+      usage: {
+        input_tokens: 11,
+        output_tokens: 7,
+        total_tokens: 18,
+        input_tokens_details: { cached_tokens: 0 },
+      },
+    };
+    return [
+      { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { ...item, status: "in_progress", content: [] },
+      },
+      {
+        type: "response.output_text.delta",
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        delta: marker,
+      },
+      { type: "response.output_item.done", output_index: 0, item },
+      { type: "response.completed", response },
+    ];
   };
   async function handleRequest(request: IncomingMessage, response: ServerResponse) {
     const bodyBytes = await buffer(request);

@@ -25,6 +25,7 @@ function mockDispatchStage(
   hold: () => Promise<void>,
   handler: (options: GatewayRequestOptions) => Promise<void>,
 ) {
+  // mock-isolation: Hold dispatch entry so the test can revoke authority before the handler runs.
   vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
     if (stage === "lazy import") {
       await hold();
@@ -48,6 +49,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
     const held = createDeferredCore();
     const full = createDeferredCore();
     const starts: string[] = [];
+    // mock-isolation: Control handler settlement to measure reconnect capacity ownership.
     vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
       handleGatewayRequest: async ({ req, respond }: GatewayRequestOptions) => {
         starts.push(req.id);

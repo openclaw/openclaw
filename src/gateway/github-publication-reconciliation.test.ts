@@ -104,10 +104,11 @@ it.each(["local", "repository"] as const)(
     await recovery;
 
     expect(f.publishedTitles).toHaveLength(1);
-    expect(requests.map((request) => f.readReceipt(request.requestId)?.status).toSorted()).toEqual([
-      "published",
-      "requested",
-    ]);
+    expect(
+      requests
+        .map((request) => f.readReceipt(request.requestId)?.status)
+        .toSorted((left, right) => String(left).localeCompare(String(right))),
+    ).toEqual(["published", "requested"]);
   },
 );
 

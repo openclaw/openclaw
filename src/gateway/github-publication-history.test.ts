@@ -20,12 +20,12 @@ const human = "Co-authored-by: alice <7+alice@users.noreply.github.com>";
 const marker = "OpenClaw-Publication: previous-writer";
 let f: Awaited<ReturnType<typeof historyFixture>>;
 function interceptCommand(
-  handler: (
-    ...args: Parameters<typeof mocks.runCommand>
-  ) => ReturnType<typeof mocks.runCommand> | undefined,
+  handler: (argv: string[]) => ReturnType<typeof commandResult> | undefined,
 ) {
   const fallback = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation((...args) => handler(...args) ?? fallback(...args));
+  mocks.runCommand.mockImplementation(
+    (argv: string[], options?: { input?: string }) => handler(argv) ?? fallback(argv, options),
+  );
 }
 
 async function historyFixture() {
