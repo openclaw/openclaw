@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AgentHarnessSessionPreparationV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as bindingConnection from "./binding-connection.js";
 import { hasCodexAppServerLiveThread } from "./client-runtime.js";
 import { acquireCodexMcpAppRuntime } from "./effective-mcp-catalog.js";
@@ -18,6 +18,9 @@ import {
 } from "./thread-lifecycle.test-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type Lease = Awaited<ReturnType<typeof acquireCodexMcpAppRuntime>>;
+type Params = Parameters<typeof acquireCodexMcpAppRuntime>[0];
+type Policy = Pick<Params, "toolOverrides"> & { requesterId?: string };
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -59,23 +62,16 @@ async function fixture() {
       }),
     );
   const startOptions = wire.acquireOptions.startOptions;
-  if (!startOptions) {
-    throw new Error("The leased lifecycle fixture must supply native start options");
-  }
+  expect(startOptions).toBeDefined();
   vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection").mockResolvedValue({
-    appServer: { ...createAppServerOptions(), start: startOptions },
+    appServer: { ...createAppServerOptions(), start: startOptions! },
     usesSupervisionConnection: false,
     requestAuthProfileId: undefined,
     clientAuthProfileId: null,
   });
   const bindingStore = createCodexTestBindingStore();
-  const requests: Array<Promise<Awaited<ReturnType<typeof acquireCodexMcpAppRuntime>>>> = [];
-  const request = (
-    policy: {
-      requesterId?: string;
-      toolOverrides?: Parameters<typeof acquireCodexMcpAppRuntime>[0]["toolOverrides"];
-    } = {},
-  ) => {
+  const requests: Promise<Lease>[] = [];
+  const request = (policy: Policy = {}) => {
     const controllers = {
       caller: new AbortController(),
       host: new AbortController(),
@@ -116,30 +112,12 @@ async function fixture() {
       },
       { bindingStore, pluginConfig: { codexPlugins: { enabled: false } } },
     );
-    requests.push(pending);
-    // Observe rejection immediately; assertions below still inspect the original promise.
-    void pending.catch(() => undefined);
-    return {
-      pending,
-      prepareSession,
-      revoke: (scope: "caller" | "host" | "abort") => {
-        controllers[scope].abort(
-          new Error(scope === "abort" ? "request aborted" : scope + " source revoked"),
-        );
-      },
-    };
-  };
-  const waitForQueuedRequests = (count: number) => {
-    const queued = createDeferred<void>();
-    const withLease = bindingStore.withLease.bind(bindingStore);
-    let observed = 0;
-    vi.spyOn(bindingStore, "withLease").mockImplementation((identity, operation) => {
-      if (++observed === count) {
-        queued.resolve();
-      }
-      return withLease(identity, operation);
-    });
-    return queued.promise;
+    requests.push(pending.catch(() => undefined));
+    const revoke = (scope: keyof typeof controllers) =>
+      controllers[scope].abort(
+        new Error(scope === "abort" ? "request aborted" : scope + " source revoked"),
+      );
+    return { pending, prepareSession, revoke };
   };
   return {
     wire,
@@ -149,112 +127,105 @@ async function fixture() {
     acquireClient,
     bindingStore,
     identity: sessionBindingIdentity(session),
-    queue: async (
-      firstPolicy: Parameters<typeof request>[0] = {},
-      secondPolicy: Parameters<typeof request>[0] = {},
-      ...more: Parameters<typeof request>[0][]
-    ) => {
+    settle: async (pendingRequest: ReturnType<typeof request>, delay = 1_000) => {
+      proceed.resolve();
+      const lease = await pendingRequest.pending;
+      await vi.advanceTimersByTimeAsync(delay);
+      return lease;
+    },
+    queue: async (firstPolicy: Policy = {}, secondPolicy: Policy = {}, ...more: Policy[]) => {
       const first = request(firstPolicy);
       await entered.promise;
-      const queued = waitForQueuedRequests(1 + more.length);
+      const queued = createDeferred<void>();
+      const withLease = bindingStore.withLease.bind(bindingStore);
+      let observed = 0;
+      vi.spyOn(bindingStore, "withLease").mockImplementation((identity, operation) => {
+        if (++observed === 1 + more.length) {
+          queued.resolve();
+        }
+        return withLease(identity, operation);
+      });
       const second = request(secondPolicy);
       const others = [second, ...more.map((policy) => request(policy))];
-      await queued;
+      await queued.promise;
       return { first, second, pending: others.map(({ pending }) => pending) };
     },
     cleanup: async () => {
       proceed.resolve();
       await vi.advanceTimersByTimeAsync(3_000);
-      for (const result of await Promise.allSettled(requests)) {
-        if (result.status === "fulfilled" && result.value) {
-          result.value.releaseLease();
-          await result.value.runtime.joinCleanup?.();
+      for (const lease of await Promise.all(requests)) {
+        if (lease) {
+          lease.releaseLease();
+          await lease.runtime.joinCleanup?.();
         }
       }
     },
   };
 }
 
-describe("native MCP App acquisition through the real cold lifecycle", () => {
-  let f: Awaited<ReturnType<typeof fixture>>;
-  beforeEach(async () => {
-    f = await fixture();
-    vi.useFakeTimers();
-  });
-  afterEach(async () => f.cleanup());
-  const methods = () => f.wire.request.mock.calls.map(([method]) => method);
-  const expectSingleOwner = () => {
-    expect(f.acquireClient).toHaveBeenCalledOnce();
-    expect(methods().filter((method) => method === "thread/start")).toHaveLength(1);
-  };
-  const expectLiveOwner = () => {
-    expect(hasCodexAppServerLiveThread(f.wire.client, "app-thread")).toBe(true);
-    expect(methods()).not.toContain("thread/unsubscribe");
-  };
-  const catalog = (
-    lease: Awaited<ReturnType<typeof acquireCodexMcpAppRuntime>>,
-    tools: unknown[],
-  ) => {
-    expect(lease).toBeDefined();
-    return expect(lease!.runtime.getCatalog()).resolves.toMatchObject({ tools });
-  };
-  const visibleTools = [{ serverName: "demo", toolName: "show" }];
-  it("shares one native thread across concurrent cold discoveries", async () => {
-    const { first, pending } = await f.queue({}, {}, {});
-    f.proceed.resolve();
-    const firstLease = await first.pending;
-    await vi.advanceTimersByTimeAsync(2_000);
-    const leases = [firstLease, ...(await Promise.all(pending))];
-    for (const lease of leases) {
-      await catalog(lease, visibleTools);
-    }
-    expectSingleOwner();
-    expect(f.bindingStore.read(f.identity)).toMatchObject({ threadId: "app-thread" });
-    expectLiveOwner();
-    expect(methods()).not.toContain("turn/start");
-  });
+let f: Awaited<ReturnType<typeof fixture>>;
+beforeEach(async () => {
+  f = await fixture();
+  vi.useFakeTimers();
+});
+afterEach(async () => f.cleanup());
+const methods = () => f.wire.request.mock.calls.map(([method]) => method);
+const expectSingleOwner = () => {
+  expect(f.acquireClient).toHaveBeenCalledOnce();
+  expect(methods().filter((method) => method === "thread/start")).toHaveLength(1);
+};
+const expectLiveOwner = () => {
+  expect(hasCodexAppServerLiveThread(f.wire.client, "app-thread")).toBe(true);
+  expect(methods()).not.toContain("thread/unsubscribe");
+};
+const catalog = (lease: Lease, tools: unknown[]) =>
+  expect(lease!.runtime.getCatalog()).resolves.toMatchObject({ tools });
+const visibleTools = [{ serverName: "demo", toolName: "show" }];
+it("shares one native thread across concurrent cold discoveries", async () => {
+  const { first, pending } = await f.queue({}, {}, {});
+  const leases = [await f.settle(first, 2_000), ...(await Promise.all(pending))];
+  for (const lease of leases) {
+    await catalog(lease, visibleTools);
+  }
+  expectSingleOwner();
+  expect(f.bindingStore.read(f.identity)).toMatchObject({ threadId: "app-thread" });
+  expectLiveOwner();
+  expect(methods()).not.toContain("turn/start");
+});
 
-  it("keeps queued and warm borrows on the session owner with their own requester and tool limits", async () => {
-    const restricted = { requesterId: "bob", toolOverrides: { mcpToolsDeny: { demo: ["show"] } } };
-    const { first, second } = await f.queue({ requesterId: "alice" }, restricted);
-    f.proceed.resolve();
-    const firstLease = await first.pending;
-    await vi.advanceTimersByTimeAsync(1_000);
-    const secondLease = await second.pending;
-    const warm = f.request(restricted);
-    const warmLease = await warm.pending;
-    await catalog(firstLease, visibleTools);
-    for (const lease of [secondLease, warmLease]) {
-      await catalog(lease, []);
-      expect(lease!.runtime.configFingerprint).toBe(firstLease!.runtime.configFingerprint);
-      expect(lease!.runtime.appRequester).toEqual({ kind: "gateway-profile", profileId: "bob" });
-    }
-    expect(second.prepareSession).toHaveBeenCalledOnce();
-    expect(warm.prepareSession).not.toHaveBeenCalled();
-    expectSingleOwner();
-    expect(methods()).not.toContain("thread/resume");
-  });
+it("isolates requester and tool limits on queued and warm borrows", async () => {
+  const restricted = { requesterId: "bob", toolOverrides: { mcpToolsDeny: { demo: ["show"] } } };
+  const { first, second } = await f.queue({ requesterId: "alice" }, restricted);
+  const firstLease = await f.settle(first);
+  const secondLease = await second.pending;
+  const warm = f.request(restricted);
+  const warmLease = await warm.pending;
+  await catalog(firstLease, visibleTools);
+  for (const lease of [secondLease, warmLease]) {
+    await catalog(lease, []);
+    expect(lease!.runtime.configFingerprint).toBe(firstLease!.runtime.configFingerprint);
+    expect(lease!.runtime.appRequester).toEqual({ kind: "gateway-profile", profileId: "bob" });
+  }
+  expect(second.prepareSession).toHaveBeenCalledOnce();
+  expect(warm.prepareSession).not.toHaveBeenCalled();
+  expectSingleOwner();
+  expect(methods()).not.toContain("thread/resume");
+});
 
-  it.each(["caller", "host", "abort"] as const)(
-    "rejects a queued %s revocation without releasing the winning owner",
-    async (scope) => {
-      const { first, second } = await f.queue();
-      second.revoke(scope);
-      f.proceed.resolve();
-      await expect(first.pending).resolves.toBeDefined();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(second.pending).rejects.toThrow(scope === "abort" ? "aborted" : "revoked");
-      expectLiveOwner();
-      expect(f.acquireClient).toHaveBeenCalledOnce();
-    },
-  );
+it.each(["caller", "host", "abort"] as const)("rejects queued %s revocation", async (scope) => {
+  const { first, second } = await f.queue();
+  second.revoke(scope);
+  expect(await f.settle(first)).toBeDefined();
+  await expect(second.pending).rejects.toThrow(scope === "abort" ? "aborted" : "revoked");
+  expectLiveOwner();
+  expect(f.acquireClient).toHaveBeenCalledOnce();
+});
 
-  it("propagates native startup failure without a replacement runtime", async () => {
-    const first = f.request();
-    await f.entered;
-    f.proceed.reject(new Error("native startup denied"));
-    await expect(first.pending).rejects.toThrow("native startup denied");
-    expect(f.bindingStore.read(f.identity)).toBeUndefined();
-    expectSingleOwner();
-  });
+it("propagates native startup failure without a replacement runtime", async () => {
+  const first = f.request();
+  await f.entered;
+  f.proceed.reject(new Error("native startup denied"));
+  await expect(first.pending).rejects.toThrow("native startup denied");
+  expect(f.bindingStore.read(f.identity)).toBeUndefined();
+  expectSingleOwner();
 });

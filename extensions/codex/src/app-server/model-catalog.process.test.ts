@@ -10,7 +10,7 @@ import {
   awaitGateBeforeSettlement,
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexPluginConfig } from "./config.js";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import {
@@ -27,6 +27,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 describe.skipIf(process.platform === "win32")("Codex model discovery process lifetime", () => {
   const dirs = useSessionStoreTempDirs(afterAll, "codex-model-lifetime-");
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   it("authenticates catalog discovery with environment keys and explicit profiles", async () => {
     const root = dirs.make();
@@ -105,114 +110,97 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 process.stdin.on("end", () => process.exit(0));
 `,
     );
-    try {
-      for (const mode of [
-        "environment",
-        "api-key-profile",
-        "subscription-profile",
-        "account-change",
-        "account-change-after-startup",
-        "absent-key",
-        "existing-account",
-        "native-home",
-        "proxy",
-      ] as const) {
-        const agentDir = path.join(root, mode);
-        vi.stubEnv("OPENAI_API_KEY", mode === "absent-key" ? "" : "synthetic-environment-key");
-        if (mode === "api-key-profile" || mode === "subscription-profile") {
-          upsertAuthProfile({
-            agentDir,
-            profileId: "openai:catalog",
-            credential:
-              mode === "api-key-profile"
-                ? { type: "api_key", provider: "openai", key: "synthetic-profile-key" }
-                : {
-                    type: "token",
-                    provider: "openai",
-                    token: createCodexTestOAuthProfile("synthetic-catalog-account").access,
-                  },
-          });
-        }
-        const config = { auth: { order: { openai: ["openai:catalog"] } } };
-        const existing = mode === "existing-account" || mode === "native-home" || mode === "proxy";
-        const pluginConfig = {
-          appServer: {
-            command: process.execPath,
-            args: [
-              executable,
-              ...(existing ? ["--existing-chatgpt"] : []),
-              ...(mode === "account-change" ? ["--change-during-list"] : []),
-              ...(mode === "account-change-after-startup" ? ["--change-after-startup"] : []),
-              "app-server",
-              ...(mode === "proxy" ? ["proxy"] : []),
-            ],
-            ...(mode === "native-home" ? { homeScope: "user" } : {}),
-          },
-        };
-        const catalogHome = mode === "native-home" ? nativeHome : path.join(agentDir, "codex-home");
-        await fs.mkdir(catalogHome, { recursive: true });
-        const readAccount = async () =>
-          JSON.parse(await fs.readFile(path.join(catalogHome, "catalog-account.json"), "utf8"));
-        const catalog = createCodexAppServerModelCatalog("codex");
-        const params = { config, agentId: "main", agentDir, workspaceDir: root };
-        const check = (value: unknown, label: string = mode) => expect.soft(value, label);
-        try {
-          const result = await catalog.load(params, pluginConfig);
-          const readiness = catalog.read(
-            {
-              ...params,
-              provider: "openai",
-              modelId: "synthetic-model",
-            },
-            pluginConfig,
-          );
-          if (mode === "account-change") {
-            check(result).toEqual({ entries: [] });
-            check(readiness).toBeUndefined();
-            continue;
-          }
-          const accountType =
-            mode === "absent-key"
-              ? undefined
-              : mode === "subscription-profile" ||
-                  mode === "account-change-after-startup" ||
-                  existing
-                ? "chatgpt"
-                : "apiKey";
-          check(readiness?.accountType).toBe(accountType);
-          check(result.outcomes).toEqual([
-            { provider: "openai", status: mode === "absent-key" ? "unavailable" : "ready" },
-          ]);
-          check(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-model" }));
-          check(await readAccount()).toEqual({
-            account: accountType ? { type: accountType } : null,
-            requiresOpenaiAuth: true,
-            logins: mode === "absent-key" || existing ? 0 : 1,
-            keyVersion: mode === "absent-key" || existing ? null : "original",
-          });
-          if (mode === "environment") {
-            vi.stubEnv("OPENAI_API_KEY", "synthetic-rotated-key");
-            await catalog.load(params, pluginConfig);
-            check(await readAccount(), "rotated environment key").toMatchObject({
-              account: { type: "apiKey" },
-              logins: 1,
-              keyVersion: "rotated",
-            });
-          }
-        } finally {
-          catalog.dispose();
-          await clearSharedCodexAppServerClientAndWait();
-        }
+    for (const [mode, accountType, logins, flag] of [
+      ["environment", "apiKey", 1],
+      ["api-key-profile", "apiKey", 1],
+      ["subscription-profile", "chatgpt", 1],
+      ["account-change", undefined, 1, "--change-during-list"],
+      ["account-change-after-startup", "chatgpt", 1, "--change-after-startup"],
+      ["absent-key", undefined, 0],
+      ["existing-account", "chatgpt", 0],
+      ["native-home", "chatgpt", 0],
+      ["proxy", "chatgpt", 0],
+    ] as const) {
+      const agentDir = path.join(root, mode);
+      vi.stubEnv("OPENAI_API_KEY", mode === "absent-key" ? "" : "synthetic-environment-key");
+      if (mode === "api-key-profile" || mode === "subscription-profile") {
+        upsertAuthProfile({
+          agentDir,
+          profileId: "openai:catalog",
+          credential:
+            mode === "api-key-profile"
+              ? { type: "api_key", provider: "openai", key: "synthetic-profile-key" }
+              : {
+                  type: "token",
+                  provider: "openai",
+                  token: createCodexTestOAuthProfile("synthetic-catalog-account").access,
+                },
+        });
       }
-    } finally {
-      vi.unstubAllEnvs();
-      vi.unstubAllGlobals();
+      const config = { auth: { order: { openai: ["openai:catalog"] } } };
+      const existing = mode === "existing-account" || mode === "native-home" || mode === "proxy";
+      const pluginConfig = {
+        appServer: {
+          command: process.execPath,
+          args: [
+            executable,
+            ...(existing ? ["--existing-chatgpt"] : []),
+            ...(flag ? [flag] : []),
+            "app-server",
+            ...(mode === "proxy" ? ["proxy"] : []),
+          ],
+          ...(mode === "native-home" ? { homeScope: "user" } : {}),
+        },
+      };
+      const catalogHome = mode === "native-home" ? nativeHome : path.join(agentDir, "codex-home");
+      await fs.mkdir(catalogHome, { recursive: true });
+      const readAccount = async () =>
+        JSON.parse(await fs.readFile(path.join(catalogHome, "catalog-account.json"), "utf8"));
+      const catalog = createCodexAppServerModelCatalog("codex");
+      const params = { config, agentId: "main", agentDir, workspaceDir: root };
+      const check = (value: unknown, label: string = mode) => expect.soft(value, label);
+      try {
+        const result = await catalog.load(params, pluginConfig);
+        const readiness = catalog.read(
+          { ...params, provider: "openai", modelId: "synthetic-model" },
+          pluginConfig,
+        );
+        if (mode === "account-change") {
+          check(result).toEqual({ entries: [] });
+          check(readiness).toBeUndefined();
+          continue;
+        }
+        check(readiness?.accountType).toBe(accountType);
+        check(result.outcomes).toEqual([
+          { provider: "openai", status: mode === "absent-key" ? "unavailable" : "ready" },
+        ]);
+        check(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-model" }));
+        check(await readAccount()).toEqual({
+          account: accountType ? { type: accountType } : null,
+          requiresOpenaiAuth: true,
+          logins,
+          keyVersion: logins ? "original" : null,
+        });
+        if (mode === "environment") {
+          vi.stubEnv("OPENAI_API_KEY", "synthetic-rotated-key");
+          await catalog.load(params, pluginConfig);
+          check(await readAccount(), "rotated environment key").toMatchObject({
+            account: { type: "apiKey" },
+            logins: 1,
+            keyVersion: "rotated",
+          });
+        }
+      } finally {
+        catalog.dispose();
+        await clearSharedCodexAppServerClientAndWait();
+      }
     }
   });
 
   it("retires timed-out discovery without interrupting a sibling lease, then reaps the pair", async ({
     signal,
   }) => {
+    const bounded = <T>(operation: Promise<T>) => withinTest(operation, signal);
     const root = dirs.make();
     const agentDir = path.join(root, "agent");
     const workspaceDir = path.join(root, "workspace");
@@ -235,16 +223,17 @@ if (process.argv.includes("--native")) {
   fs.writeFileSync(path.join(process.env.CODEX_HOME, "native.pid"), String(process.pid));
   createInterface({ input: process.stdin }).on("line", (line) => {
       const message = JSON.parse(line);
-      if (message.method === "initialize") {
-        process.stdout.write(JSON.stringify({ id: message.id, result: {
+      const results = {
+        initialize: {
           userAgent: "codex-cli/${CODEX_APP_SERVER_VERSION}", codexHome: process.env.CODEX_HOME,
-        } }) + "\\n");
-      } else if (message.method === "account/read") {
-        process.stdout.write(JSON.stringify({ id: message.id, result: { account: null, requiresOpenaiAuth: true } }) + "\\n");
-      } else if (message.method === "model/list") {
+        },
+        "account/read": { account: null, requiresOpenaiAuth: true },
+        "config/read": { config: {} },
+      };
+      if (message.method === "model/list") {
         sendReceipt("discovery", "pending");
-      } else if (message.method === "config/read") {
-        process.stdout.write(JSON.stringify({ id: message.id, result: { config: {} } }) + "\\n");
+      } else if (message.method in results) {
+        process.stdout.write(JSON.stringify({ id: message.id, result: results[message.method] }) + "\\n");
       }
   });
   process.stdin.on("end", () => process.exit(0));
@@ -288,7 +277,7 @@ if (process.argv.includes("--native")) {
         timeoutMs: 5_000,
         authRequirement: "environment-api-key" as const,
       };
-      const sibling = await withinTest(getLeasedSharedCodexAppServerClient(options), signal);
+      const sibling = await bounded(getLeasedSharedCodexAppServerClient(options));
       leases.push(sibling);
       expect(children).toHaveLength(1);
       const first = children[0];
@@ -305,26 +294,20 @@ if (process.argv.includes("--native")) {
         { config, agentId: "main", agentDir, workspaceDir },
         pluginConfig,
       );
-      settled = loading.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      settled = loading.catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(0);
-      await withinTest(
+      await bounded(
         awaitGateBeforeSettlement(
           receipts.waitFor("discovery", "pending"),
           loading,
           "Discovery settled before sending model/list",
         ),
-        signal,
       );
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(await settled).toEqual(
-        expect.objectContaining({ message: expect.stringContaining("timed out") }),
-      );
+      expect(await settled).toMatchObject({ message: expect.stringContaining("timed out") });
       vi.useRealTimers();
       await expect(sibling.request("config/read", {})).resolves.toEqual({ config: {} });
-      const replacement = await withinTest(getLeasedSharedCodexAppServerClient(options), signal);
+      const replacement = await bounded(getLeasedSharedCodexAppServerClient(options));
       leases.push(replacement);
       expect(replacement.getTransportPid(), "timed-out discovery remained pooled").not.toBe(
         sibling.getTransportPid(),
@@ -333,7 +316,7 @@ if (process.argv.includes("--native")) {
       expect(first.child.exitCode).toBeNull();
       releaseLeasedSharedCodexAppServerClient(sibling);
       leases.shift();
-      await withinTest(first.closed, signal);
+      await bounded(first.closed);
       for (const pid of [firstPid, nativePid]) {
         expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
       }
@@ -347,8 +330,6 @@ if (process.argv.includes("--native")) {
       await settled;
       catalog.dispose();
       await receipts.close();
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
     }
   });
 });

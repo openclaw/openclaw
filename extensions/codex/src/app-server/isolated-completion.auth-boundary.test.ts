@@ -71,38 +71,26 @@ function createNativeBoundary(accountType = "chatgpt") {
         );
         return;
       }
+      const cwd = (request.params?.cwds as string[] | undefined)?.[0];
       const replies: Record<string, unknown> = {
         initialize: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
         "account/read": { account: { type: accountType, id: account }, requiresOpenaiAuth: true },
         "model/list": { data: [codexModel()], nextCursor: null },
         get "config/read"() {
+          const name = {
+            type: "user",
+            file: path.join(startedOptions!.env!.CODEX_HOME!, "config.toml"),
+          };
           return {
             config: {
               mcp_servers: {},
               features: { hooks: true, plugins: false },
               project_root_markers: [],
             },
-            layers: [
-              {
-                name: {
-                  type: "user",
-                  file: path.join(startedOptions!.env!.CODEX_HOME!, "config.toml"),
-                },
-                config: {},
-              },
-            ],
+            layers: [{ name, config: {} }],
           };
         },
-        "hooks/list": {
-          data: [
-            {
-              cwd: (request.params?.cwds as string[] | undefined)?.[0],
-              hooks: [],
-              warnings: [],
-              errors: [],
-            },
-          ],
-        },
+        "hooks/list": { data: [{ cwd, hooks: [], warnings: [], errors: [] }] },
         "configRequirements/read": { requirements: null },
         "thread/start": threadStartResult("gpt-5.4"),
         "mcpServerStatus/list": { data: [], nextCursor: null },
@@ -135,15 +123,11 @@ function createPluginConfig(root: string, homeScope: "user" | "agent", proxy = f
   } satisfies CodexPluginConfig;
 }
 
-function readStart(
-  boundary: ReturnType<typeof createNativeBoundary>,
-): Partial<CodexAppServerStartOptions> {
+function readStart(boundary: ReturnType<typeof createNativeBoundary>) {
   expect(boundary.start).toHaveBeenCalledTimes(1);
-  const options = boundary.start.mock.calls[0]?.[0];
-  if (!options) {
-    throw new Error("expected native startup options");
-  }
-  return options;
+  const options = boundary.start.mock.calls[0]![0];
+  expect(options).toBeDefined();
+  return options!;
 }
 
 describe("isolated completion account and daemon ownership", () => {
