@@ -293,7 +293,7 @@ describe("agent command foreground completion", () => {
       await waitForSessionMaintenance(sessionKey);
     }
     expect(compact).toHaveBeenCalledWith(
-      contains({
+      expect.objectContaining({
         compactionRequestBudget: { ...requestBudget, pendingTokens: 0 },
       }),
     );

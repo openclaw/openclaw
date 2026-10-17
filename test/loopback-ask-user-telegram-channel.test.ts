@@ -65,7 +65,9 @@ async function startTelegramAskUserLoopback() {
           promptRequest.resolve(entry);
         }
       })
-      .catch((error: Error) => response.destroy(error));
+      .catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
   });
   await once(server.listen(0, "127.0.0.1"), "listening");
   const { port } = server.address() as AddressInfo;
