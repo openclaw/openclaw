@@ -107,7 +107,7 @@ export function createPluginReloadCleanup({
   const admittedWorkDeadline = () =>
     waitForDrain
       ? undefined
-      : (admittedWorkDeadlineAtMs ??= Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS);
+      : (admittedWorkDeadlineAtMs ??= performance.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS);
   const observeDrain = async (
     label: string,
     signal: AbortSignal,
@@ -123,7 +123,7 @@ export function createPluginReloadCleanup({
         await withPluginHostCleanupTimeout(
           label,
           () => run(currentSignal),
-          Math.max(0, deadlineAtMs - Date.now()),
+          Math.max(0, deadlineAtMs - performance.now()),
         );
       }
     } finally {
@@ -140,7 +140,7 @@ export function createPluginReloadCleanup({
     const deadlineAtMs =
       phase === "reloading"
         ? admittedWorkDeadline()
-        : Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
+        : performance.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
     reportStatus({
       phase,
       pluginIds: [...changedPluginIds],

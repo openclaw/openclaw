@@ -1,4 +1,5 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { PluginHostCleanupTimeoutError } from "../plugins/host-hook-cleanup-timeout.js";
@@ -23,7 +24,10 @@ import {
   makeZeroDebounceHookWrite,
   prepareConfigReloadTest,
 } from "./config-reload.test-support.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
+import {
+  PluginAdmittedWorkTimeoutError,
+  createPluginReloadCleanup,
+} from "./server-plugin-reload-cleanup.js";
 
 const pluginConfig = <T extends NonNullable<OpenClawConfig["plugins"]>["entries"]>(entries: T) => ({
   plugins: { entries },
@@ -173,6 +177,58 @@ describe("plugin drain recovery", () => {
       cleanup.resolve();
       await cleanupCall;
       await registryOwner.close();
+    }
+  });
+
+  it("keeps the admitted-work drain budget on the monotonic clock", async () => {
+    const registry = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
+    registry.registry.plugins.push(record);
+    registry.createApi(record, { config: {} });
+    setActivePluginRegistry(registry.registry);
+    const registryOwner = createPluginRegistryOwner(registry.registry);
+    const instance = getPluginInstance(record);
+    assert(instance);
+    const releaseWork = instance.retainWork();
+    try {
+      const cleanup = createPluginReloadCleanup({
+        previousRegistry: registry.registry,
+        changedPluginIds: new Set(["codex"]),
+        port: 0,
+        pluginWorkspaceDir: undefined,
+        getCron: () => undefined as never,
+        abortSignal: new AbortController().signal,
+        log: createInfoWarnErrorLogger() as never,
+        recordCleanup: () => {},
+        recordWarning: () => {},
+        retainRetirement: () => {},
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      // Seed reads monotonic t=1000; the wall clock rewinds 300_000ms between the
+      // seed (admittedWorkDeadline) and the remaining-budget read (observeDrain).
+      vi.spyOn(performance, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+      vi.spyOn(Date, "now").mockReturnValueOnce(5_000_000).mockReturnValueOnce(4_700_000);
+
+      const drained = cleanup.drainRetainedWork(
+        new Set(["codex"]),
+        new AbortController().signal,
+        () => {},
+      );
+
+      // The retained work never settles, so the drain arms its budget as the single
+      // pending setTimeout. It must follow the monotonic clock (60_000 - 1_000), not
+      // the rewound wall clock (which would inflate it by 300_000ms).
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+      const budget = setTimeoutSpy.mock.calls[0]?.[1] as number;
+      expect(budget).toBeGreaterThanOrEqual(58_000);
+      expect(budget).toBeLessThanOrEqual(60_000);
+      // Let the retained work settle so the drain finishes without a timeout error.
+      releaseWork();
+      await drained;
+    } finally {
+      releaseWork();
+      await registryOwner.close();
+      vi.restoreAllMocks();
     }
   });
 
