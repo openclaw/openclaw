@@ -30,6 +30,7 @@ import { readPendingWorktrees } from "./pending-slots.js";
 import * as registry from "./registry.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { createWithWorktreeAllocation } from "./service-preparation.js";
+import { expectFile, expectMissing, writeFile, atGate } from "./service-scenarios.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -46,6 +47,7 @@ describe("managed worktree pending slots", () => {
   let repoRoot: string;
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
+  const createWorktree = (name: string) => service.create({ repoRoot, name, baseRef: "HEAD" });
   const config = { worktreeMaxCount: 2, worktreeAcceleration: false };
 
   beforeEach(async () => {
@@ -153,39 +155,32 @@ describe("managed worktree pending slots", () => {
     }
   });
 
-  it.each([30])(
-    "publishes after %i minutes of contention and two minutes of preparation",
-    async (admissionMinutes) => {
-      const release = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
-      let clock = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => clock);
-      vi.spyOn(backoff, "sleepWithAbort").mockImplementationOnce(async () => {
-        clock += admissionMinutes * 60_000;
-        await release();
-      });
-      const execute = gitExec.executeGitCommand;
-      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-        const result = await execute(cwd, args, options);
-        if (args[0] === "read-tree" && args.includes("-u")) {
-          clock += 2 * 60_000;
-        }
-        return result;
-      });
-      try {
-        const created = await service.create({
-          repoRoot,
-          name: "slow-preparation",
-          baseRef: "HEAD",
-        });
-        expect(clock).toBe((admissionMinutes + 2) * 60_000);
-        expect(await service.listRegistryRecords()).toEqual([created]);
-        expect(await readPendingWorktrees(env)).toEqual([]);
-        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-      } finally {
-        await release();
+  it("publishes after 30 minutes of contention and two minutes of preparation", async () => {
+    const release = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.spyOn(backoff, "sleepWithAbort").mockImplementationOnce(async () => {
+      clock += 30 * 60_000;
+      await release();
+    });
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      const result = await execute(cwd, args, options);
+      if (args[0] === "read-tree" && args.includes("-u")) {
+        clock += 2 * 60_000;
       }
-    },
-  );
+      return result;
+    });
+    try {
+      const created = await createWorktree("slow-preparation");
+      expect(clock).toBe((30 + 2) * 60_000);
+      expect(await service.listRegistryRecords()).toEqual([created]);
+      expect(await readPendingWorktrees(env)).toEqual([]);
+      await expectFile(created.path, "README.md", "base\n");
+    } finally {
+      await release();
+    }
+  });
 
   it("keeps Git dependency inspection outside capacity admission", async () => {
     const run = gitWorker.runGitWorkerOperation;
@@ -199,8 +194,8 @@ describe("managed worktree pending slots", () => {
       }
       return run(operation, options);
     });
-    const created = await service.create({ repoRoot, name: "source-inspection", baseRef: "HEAD" });
-    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    const created = await createWorktree("source-inspection");
+    await expectFile(created.path, "README.md", "base\n");
     expect(await readPendingWorktrees(env)).toEqual([]);
   });
 
@@ -215,12 +210,9 @@ describe("managed worktree pending slots", () => {
       }
       return execute(cwd, args, options);
     });
-    const creating = service.create({ repoRoot, name: "name-discovery", baseRef: "HEAD" });
+    const creating = createWorktree("name-discovery");
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, creating, "Git name discovery did not start"),
-        signal,
-      );
+      await atGate(entered.promise, creating, "Git name discovery did not start", signal);
       await stateLease.withOpenClawStateLeaseAsync(
         { scope: WORKTREE_CREATE_LEASE_SCOPE, key: "capacity", leaseMs: 60_000, waitMs: 0 },
         captureWorktreeRunEndContext(env),
@@ -231,20 +223,18 @@ describe("managed worktree pending slots", () => {
       await Promise.allSettled([creating]);
     }
     const created = await creating;
-    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    await expectFile(created.path, "README.md", "base\n");
     expect(await readPendingWorktrees(env)).toEqual([]);
   });
 
   it("overlaps materialization after releasing the allocation lease", async ({ signal }) => {
     const held = holdMaterialization();
-    const creating = [service.create({ repoRoot, name: "first", baseRef: "HEAD" })];
+    const creating = [createWorktree("first")];
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          held.entered[0]!.promise,
-          creating[0]!,
-          "First checkout did not materialize",
-        ),
+      await atGate(
+        held.entered[0]!.promise,
+        creating[0]!,
+        "First checkout did not materialize",
         signal,
       );
       // A zero-wait contender makes the old global lease fail directly, without a timing race.
@@ -253,13 +243,11 @@ describe("managed worktree pending slots", () => {
         captureWorktreeRunEndContext(env),
         async () => {},
       );
-      creating.push(service.create({ repoRoot, name: "second", baseRef: "HEAD" }));
-      await withinTest(
-        awaitGateBeforeSettlement(
-          held.entered[1]!.promise,
-          creating[1]!,
-          "Second checkout did not materialize",
-        ),
+      creating.push(createWorktree("second"));
+      await atGate(
+        held.entered[1]!.promise,
+        creating[1]!,
+        "Second checkout did not materialize",
         signal,
       );
       expect(await readPendingWorktrees(env)).toHaveLength(2);
@@ -274,24 +262,17 @@ describe("managed worktree pending slots", () => {
       records.map(({ id }) => id).toSorted(),
     );
     for (const record of records) {
-      expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+      await expectFile(record.path, "README.md", "base\n");
     }
   });
 
   it("publishes a reserved checkout while another creator holds allocation", async ({ signal }) => {
     config.worktreeMaxCount = 1;
     const held = holdMaterialization();
-    const creating = service.create({ repoRoot, name: "publish-reserved", baseRef: "HEAD" });
+    const creating = createWorktree("publish-reserved");
     let releaseAllocation: (() => Promise<void>) | undefined;
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          held.entered[0]!.promise,
-          creating,
-          "Checkout did not materialize",
-        ),
-        signal,
-      );
+      await atGate(held.entered[0]!.promise, creating, "Checkout did not materialize", signal);
       expect(await readPendingWorktrees(env)).toHaveLength(1);
       releaseAllocation = await holdLease(WORKTREE_CREATE_LEASE_SCOPE, "capacity");
       // An occupied allocation lane must not delay the count-neutral pending → live transaction.
@@ -302,7 +283,7 @@ describe("managed worktree pending slots", () => {
       const created = await withinTest(creating, signal);
       expect(await readPendingWorktrees(env)).toEqual([]);
       expect(await service.listRegistryRecords()).toEqual([created]);
-      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      await expectFile(created.path, "README.md", "base\n");
     } finally {
       held.release.resolve();
       await releaseAllocation?.();
@@ -313,33 +294,24 @@ describe("managed worktree pending slots", () => {
   it("counts pending slots at admission and keeps them out of eviction", async ({ signal }) => {
     config.worktreeMaxCount = 1;
     const held = holdMaterialization();
-    const creating = service.create({ repoRoot, name: "pending", baseRef: "HEAD" });
+    const creating = createWorktree("pending");
     const creates = [creating];
     const operations: Promise<unknown>[] = [creating];
     try {
-      const checkoutPath = await withinTest(
-        awaitGateBeforeSettlement(
-          held.entered[0]!.promise,
-          creating,
-          "Checkout did not materialize",
-        ),
+      const checkoutPath = await atGate(
+        held.entered[0]!.promise,
+        creating,
+        "Checkout did not materialize",
         signal,
       );
       const pending = await readPendingWorktrees(env);
       expect(pending).toHaveLength(1);
       expect(pending[0]!.record.path).toBe(checkoutPath);
       const waiting = observePendingWait(pending[0]!.record.id);
-      const overflow = service.create({ repoRoot, name: "overflow", baseRef: "HEAD" });
+      const overflow = createWorktree("overflow");
       creates.push(overflow);
       operations.push(overflow);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          waiting,
-          overflow,
-          "Cap contender did not wait for the pending slot",
-        ),
-        signal,
-      );
+      await atGate(waiting, overflow, "Cap contender did not wait for the pending slot", signal);
       // A native clone may temporarily replace .git; pending custody still owns the whole path.
       const markerPath = path.join(checkoutPath, ".git");
       const marker = await fs.readFile(markerPath);
@@ -402,14 +374,7 @@ describe("managed worktree pending slots", () => {
         ownerId: collision === "name" ? "agent:main:second" : owner.ownerId,
       };
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            held.entered[0]!.promise,
-            creating,
-            "Checkout did not materialize",
-          ),
-          signal,
-        );
+        await atGate(held.entered[0]!.promise, creating, "Checkout did not materialize", signal);
         const pending = await readPendingWorktrees(env);
         expect(pending).toHaveLength(1);
         const waiting =
@@ -417,12 +382,10 @@ describe("managed worktree pending slots", () => {
         const duplicate = service.create(contender);
         operations.push(duplicate);
         if (waiting) {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              waiting,
-              duplicate,
-              "Owner contender did not wait for its pending checkout",
-            ),
+          await atGate(
+            waiting,
+            duplicate,
+            "Owner contender did not wait for its pending checkout",
             signal,
           );
         } else {
@@ -492,10 +455,7 @@ describe("managed worktree pending slots", () => {
     const first = service.create(params);
     const operations: Promise<unknown>[] = [first];
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, first, "First checkout did not materialize"),
-        signal,
-      );
+      await atGate(entered.promise, first, "First checkout did not materialize", signal);
       const pending = await readPendingWorktrees(env);
       expect(pending).toHaveLength(1);
       pendingId = pending[0]!.record.id;
@@ -505,21 +465,14 @@ describe("managed worktree pending slots", () => {
         () => retrySettled.resolve(),
         () => retrySettled.resolve(),
       );
-      await withinTest(
-        awaitGateBeforeSettlement(
-          waiting.promise,
-          retry,
-          "Retry did not wait for the pending checkout",
-        ),
-        signal,
-      );
+      await atGate(waiting.promise, retry, "Retry did not wait for the pending checkout", signal);
       release.resolve();
       await expect(withinTest(first, signal)).rejects.toThrow(failure.message);
       const created = await withinTest(retry, signal);
       expect(created.id).not.toBe(pendingId);
       expect(await readPendingWorktrees(env)).toEqual([]);
       expect((await service.listRegistryRecords()).map(({ id }) => id)).toEqual([created.id]);
-      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      await expectFile(created.path, "README.md", "base\n");
     } finally {
       release.resolve();
       retrySettled.resolve();
@@ -539,7 +492,7 @@ describe("managed worktree pending slots", () => {
       vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
         if (firstMaterialization && args[0] === "read-tree" && args.includes("-u")) {
           firstMaterialization = false;
-          await fs.writeFile(path.join(cwd, "partial.txt"), "uncertain native output\n");
+          await writeFile(cwd, "partial.txt", "uncertain native output\n");
           entered.resolve();
           await release.promise;
           throw failure;
@@ -550,10 +503,7 @@ describe("managed worktree pending slots", () => {
       const crashed = service.create({ repoRoot, name: "crashed", baseRef: "HEAD", ...owner });
       const operations: Promise<unknown>[] = [crashed];
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, crashed, "Checkout did not materialize"),
-          signal,
-        );
+        await atGate(entered.promise, crashed, "Checkout did not materialize", signal);
         const [pending] = await readPendingWorktrees(env);
         expect(pending).toBeDefined();
         const record = pending!.record;
@@ -566,19 +516,14 @@ describe("managed worktree pending slots", () => {
           ownerId: contention === "owner" ? owner.ownerId : "agent:main:replacement",
         });
         operations.push(retry);
-        await withinTest(
-          awaitGateBeforeSettlement(waiting, retry, "Contender did not wait for checkout custody"),
-          signal,
-        );
+        await atGate(waiting, retry, "Contender did not wait for checkout custody", signal);
         markPendingOwnerDead(record);
         release.resolve();
         await expect(withinTest(crashed, signal)).rejects.toThrow(failure.message);
         const replacement = await withinTest(retry, signal);
         expect(replacement.name).toBe("crashed-2");
-        expect(await fs.readFile(path.join(replacement.path, "README.md"), "utf8")).toBe("base\n");
-        expect(await fs.readFile(path.join(record.path, "partial.txt"), "utf8")).toBe(
-          "uncertain native output\n",
-        );
+        await expectFile(replacement.path, "README.md", "base\n");
+        await expectFile(record.path, "partial.txt", "uncertain native output\n");
         expect(await readPendingWorktrees(env)).toEqual([{ record, state: "recovering" }]);
         expect((await service.listRegistryRecords()).map(({ id }) => id)).toEqual([replacement.id]);
       } finally {
@@ -588,97 +533,69 @@ describe("managed worktree pending slots", () => {
     },
   );
 
-  it.each(["publication"] as const)(
-    "rolls back the slot and registration after %s fails",
-    async (stage) => {
-      config.worktreeMaxCount = 1;
-      const execute = gitExec.executeGitCommand;
-      const failure = new Error(`synthetic ${stage} failure`);
-      let failedPath: string | undefined;
-      const injection =
-        stage === "publication"
-          ? vi
-              .spyOn(registry, "insertRegistryWorktree")
-              .mockImplementationOnce(async (_env, record) => {
-                failedPath = record.path;
-                throw failure;
-              })
-          : vi
-              .spyOn(gitExec, "executeGitCommand")
-              .mockImplementation(async (cwd, args, options) => {
-                if (args[0] === "read-tree" && args.includes("-u")) {
-                  failedPath = cwd;
-                  throw failure;
-                }
-                return await execute(cwd, args, options);
-              });
-      await expect(service.create({ repoRoot, name: "retry", baseRef: "HEAD" })).rejects.toThrow(
-        failure.message,
-      );
-      injection.mockRestore();
-      expect(await readPendingWorktrees(env)).toEqual([]);
-      expect(await service.listRegistryRecords()).toEqual([]);
-      expect(failedPath).toBeDefined();
-      await expect(fs.stat(failedPath!)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await requireGit(repoRoot, ["branch", "--list", "openclaw/retry"])).toBe("");
-      const retry = await service.create({ repoRoot, name: "retry", baseRef: "HEAD" });
-      expect(await fs.readFile(path.join(retry.path, "README.md"), "utf8")).toBe("base\n");
-    },
-  );
-
-  it.each(["worker"] as const)(
-    "reclaims a crashed owner's slot while retaining an uncertain %s checkout for recovery",
-    async (kind) => {
-      config.worktreeMaxCount = 1;
-      const execute = gitExec.executeGitCommand;
-      const failure =
-        kind === "worker"
-          ? new SqliteWorkerError("synthetic unknown materialization outcome", "outcome-unknown")
-          : new CommandProcessCleanupError();
-      const materialization = vi
-        .spyOn(gitExec, "executeGitCommand")
-        .mockImplementation(async (cwd, args, options) => {
-          if (args[0] === "read-tree" && args.includes("-u")) {
-            await fs.writeFile(path.join(cwd, "partial.txt"), "uncertain native output\n");
-            throw failure;
-          }
-          return await execute(cwd, args, options);
-        });
-      await expect(service.create({ repoRoot, name: "crashed", baseRef: "HEAD" })).rejects.toThrow(
-        failure.message,
-      );
-      materialization.mockRestore();
-      const pending = await readPendingWorktrees(env);
-      expect(pending).toHaveLength(1);
-      const record = pending[0]!.record;
-      expect(await fs.readFile(path.join(record.path, "partial.txt"), "utf8")).toBe(
-        "uncertain native output\n",
-      );
-      markPendingOwnerDead(record);
-      const recovered = await service.gc();
-      expect(recovered).toMatchObject({
-        removed: [],
-        outcome: "partial",
-        eligibleCount: 0,
-        deferredCount: 0,
-        failedCount: 1,
-        orphansDeleted: 0,
-        orphansRetired: 0,
-        issues: [expect.objectContaining({ stage: "orphans", outcome: "failed", id: record.id })],
+  it("rolls back the slot and registration after publication fails", async () => {
+    config.worktreeMaxCount = 1;
+    const failure = new Error("synthetic publication failure");
+    let failedPath: string | undefined;
+    const injection = vi
+      .spyOn(registry, "insertRegistryWorktree")
+      .mockImplementationOnce(async (_env, record) => {
+        failedPath = record.path;
+        throw failure;
       });
-      expect(recovered.retiredCheckoutPaths).toContain(record.path);
-      expect(await readPendingWorktrees(env)).toEqual([
-        expect.objectContaining({ record, state: "recovering" }),
-      ]);
-      expect(await fs.readFile(path.join(record.path, "partial.txt"), "utf8")).toBe(
-        "uncertain native output\n",
-      );
-      const replacement = await service.create({ repoRoot, name: "replacement", baseRef: "HEAD" });
-      expect(await fs.readFile(path.join(replacement.path, "README.md"), "utf8")).toBe("base\n");
-      expect((await service.listRegistryRecords()).map(({ id }) => id)).toEqual([replacement.id]);
-      expect(await fs.readFile(path.join(record.path, "partial.txt"), "utf8")).toBe(
-        "uncertain native output\n",
-      );
-    },
-  );
+    await expect(createWorktree("retry")).rejects.toThrow(failure.message);
+    injection.mockRestore();
+    expect(await readPendingWorktrees(env)).toEqual([]);
+    expect(await service.listRegistryRecords()).toEqual([]);
+    expect(failedPath).toBeDefined();
+    await expectMissing(failedPath!);
+    expect(await requireGit(repoRoot, ["branch", "--list", "openclaw/retry"])).toBe("");
+    const retry = await createWorktree("retry");
+    await expectFile(retry.path, "README.md", "base\n");
+  });
+
+  it("reclaims a crashed owner's slot while retaining an uncertain worker checkout for recovery", async () => {
+    config.worktreeMaxCount = 1;
+    const execute = gitExec.executeGitCommand;
+    const failure = new SqliteWorkerError(
+      "synthetic unknown materialization outcome",
+      "outcome-unknown",
+    );
+    const materialization = vi
+      .spyOn(gitExec, "executeGitCommand")
+      .mockImplementation(async (cwd, args, options) => {
+        if (args[0] === "read-tree" && args.includes("-u")) {
+          await writeFile(cwd, "partial.txt", "uncertain native output\n");
+          throw failure;
+        }
+        return await execute(cwd, args, options);
+      });
+    await expect(createWorktree("crashed")).rejects.toThrow(failure.message);
+    materialization.mockRestore();
+    const pending = await readPendingWorktrees(env);
+    expect(pending).toHaveLength(1);
+    const record = pending[0]!.record;
+    await expectFile(record.path, "partial.txt", "uncertain native output\n");
+    markPendingOwnerDead(record);
+    const recovered = await service.gc();
+    expect(recovered).toMatchObject({
+      removed: [],
+      outcome: "partial",
+      eligibleCount: 0,
+      deferredCount: 0,
+      failedCount: 1,
+      orphansDeleted: 0,
+      orphansRetired: 0,
+      issues: [expect.objectContaining({ stage: "orphans", outcome: "failed", id: record.id })],
+    });
+    expect(recovered.retiredCheckoutPaths).toContain(record.path);
+    expect(await readPendingWorktrees(env)).toEqual([
+      expect.objectContaining({ record, state: "recovering" }),
+    ]);
+    await expectFile(record.path, "partial.txt", "uncertain native output\n");
+    const replacement = await createWorktree("replacement");
+    await expectFile(replacement.path, "README.md", "base\n");
+    expect((await service.listRegistryRecords()).map(({ id }) => id)).toEqual([replacement.id]);
+    await expectFile(record.path, "partial.txt", "uncertain native output\n");
+  });
 });
