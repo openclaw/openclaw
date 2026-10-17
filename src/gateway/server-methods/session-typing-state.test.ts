@@ -21,6 +21,25 @@ function typingSession(key: string) {
     updateTypingConnections({ key, connectionId, typing, preview, now });
 }
 
+function typingBroadcast<T>(intervalMs: number, state: (value: T) => [boolean, string]) {
+  const updates: T[] = [];
+  const broadcast = (value: T) => {
+    const [typing, preview] = state(value);
+    return broadcastTypingThrottled({
+      key: "typing-broadcast",
+      typing,
+      signature: `${typing}\0${preview}`,
+      intervalMs,
+      now: Date.now(),
+      emit: () => {
+        updates.push(value);
+        return true;
+      },
+    });
+  };
+  return { updates, broadcast };
+}
+
 describe("session typing connection state", () => {
   it("owns idle cleanup, refresh, stop, and reset without further input", () => {
     const update = (key: string, typing = true) =>
@@ -93,54 +112,30 @@ describe("session typing connection state", () => {
 });
 
 describe("session typing broadcast throttle", () => {
-  it.each([true])(
-    "attempts only the latest draft at the trailing edge after delivery=%s",
-    (delivered) => {
-      const previews: string[] = [];
-      const broadcast = (preview: string) =>
-        broadcastTypingThrottled({
-          key: "preview-burst",
-          typing: true,
-          signature: `true\0${preview}`,
-          intervalMs: 250,
-          now: Date.now(),
-          emit: () => {
-            previews.push(preview);
-            return delivered;
-          },
-        });
+  it("attempts only the latest draft at the trailing edge after delivery", () => {
+    const { updates: previews, broadcast } = typingBroadcast(250, (preview: string) => [
+      true,
+      preview,
+    ]);
 
-      broadcast("first");
-      vi.advanceTimersByTime(50);
-      broadcast("second");
-      vi.advanceTimersByTime(50);
-      broadcast("latest");
-      vi.advanceTimersByTime(150);
+    broadcast("first");
+    vi.advanceTimersByTime(50);
+    broadcast("second");
+    vi.advanceTimersByTime(50);
+    broadcast("latest");
+    vi.advanceTimersByTime(150);
 
-      expect(previews).toEqual(["first", "latest"]);
+    expect(previews).toEqual(["first", "latest"]);
 
-      vi.advanceTimersByTime(50);
-      broadcast("after trailing edge");
-      expect(previews).toEqual(["first", "latest"]);
-      vi.advanceTimersByTime(200);
-      expect(previews).toEqual(["first", "latest", "after trailing edge"]);
-    },
-  );
+    vi.advanceTimersByTime(50);
+    broadcast("after trailing edge");
+    expect(previews).toEqual(["first", "latest"]);
+    vi.advanceTimersByTime(200);
+    expect(previews).toEqual(["first", "latest", "after trailing edge"]);
+  });
 
   it("preserves boolean-only cancellation and trailing stop behavior", () => {
-    const updates: boolean[] = [];
-    const broadcast = (typing: boolean) =>
-      broadcastTypingThrottled({
-        key: "boolean-only",
-        typing,
-        signature: `${typing}\0`,
-        intervalMs: 1_000,
-        now: Date.now(),
-        emit: () => {
-          updates.push(typing);
-          return true;
-        },
-      });
+    const { updates, broadcast } = typingBroadcast(1_000, (typing: boolean) => [typing, ""]);
 
     broadcast(true);
     vi.advanceTimersByTime(100);
