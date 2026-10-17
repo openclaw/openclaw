@@ -1,52 +1,34 @@
-// Proves both Gateway pending-work queues across real authenticated WebSockets.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { expect, it, vi } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type {
+  NodePendingDrainResult,
+  NodePendingEnqueueResult,
+} from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../../../../src/infra/device-identity.js";
+import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
-const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
-afterEach(async () => {
-  for (const owner of gatewayOwners.splice(0)) {
-    await stopQaGatewayFixture(owner);
-  }
-});
-
-const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
-const NODE_DISPLAY_NAME = "QA iPad";
 const NODE_COMMANDS = ["camera.snap"];
 
-type GatewayHandle = QaGatewayChild;
 type NodeInvokeFrame = {
   id?: string;
   nodeId?: string;
   command?: string;
   paramsJSON?: string | null;
 };
-type NodeRead = {
-  nodeId: string;
-  approvalState?: string;
-  connected?: boolean;
-  paired?: boolean;
-};
-type PendingWorkItem = {
-  id: string;
-  type: string;
-  priority: string;
-  createdAtMs: number;
-  expiresAtMs?: number | null;
-};
+type NodeRead = { nodeId: string };
 type PendingAction = {
   id: string;
   command: string;
@@ -54,213 +36,181 @@ type PendingAction = {
   enqueuedAtMs: number;
 };
 
-describe("Gateway node pending work", () => {
-  it(
-    "delivers disconnected work and foreground-only actions after same-pairing reconnects",
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const gatewayOwner = createQaGatewayChild();
-      gatewayOwners.push(gatewayOwner);
-      const gateway = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["dist/entry.js"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiEnabled: false,
-        runtimeEnvPatch: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        },
-        mutateConfig: (cfg) => {
-          return {
-            ...cfg,
-            plugins: { enabled: false },
-            gateway: {
-              ...cfg.gateway,
-              nodes: {
-                ...cfg.gateway?.nodes,
-                commands: { allow: NODE_COMMANDS },
-              },
+it(
+  "delivers disconnected work and foreground-only actions after same-pairing reconnects",
+  { timeout: 180_000 },
+  async ({ onTestFinished }) => {
+    const gatewayOwner = createQaGatewayChild();
+    onTestFinished(() => stopQaGatewayFixture(gatewayOwner));
+    const gateway = await gatewayOwner.start({
+      repoRoot: process.cwd(),
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: ["dist/entry.js"],
+        cwd: process.cwd(),
+        usePackagedPlugins: true,
+      },
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      runtimeEnvPatch: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      },
+      mutateConfig: (cfg) => {
+        return {
+          ...cfg,
+          plugins: { enabled: false },
+          gateway: {
+            ...cfg.gateway,
+            nodes: {
+              ...cfg.gateway?.nodes,
+              commands: { allow: NODE_COMMANDS },
             },
-          };
+          },
+        };
+      },
+    });
+    const identity = loadOrCreateDeviceIdentity({
+      path: path.join(gateway.tempRoot, "pending-work-node.sqlite"),
+    });
+    const nodeId = identity.deviceId;
+    const handlerErrors: Error[] = [];
+    const backgroundRequests: NodeInvokeFrame[] = [];
+    let operator: GatewayClient | undefined;
+    let node: GatewayClient | undefined;
+
+    const waitForConnection = (connected: boolean, approve = false) =>
+      waitForNodeConnection(expectConnected(operator), nodeId, connected, gateway.logs, approve);
+    const disconnectNode = async () => {
+      await node?.stopAndWait({ timeoutMs: 1_000 });
+      node = undefined;
+      await waitForConnection(false);
+    };
+    const connectNode = async () => {
+      const connected = await connectPairedNode({
+        gateway,
+        identity,
+        operator: expectConnected(operator),
+        onEvent: (event) => {
+          if (event.event !== "node.invoke.request") {
+            return;
+          }
+          void rejectBackgroundInvocation(node, event.payload, backgroundRequests).catch(
+            (error: unknown) => {
+              handlerErrors.push(error instanceof Error ? error : new Error(String(error)));
+            },
+          );
         },
       });
-      const identity = loadOrCreateDeviceIdentity({
-        path: path.join(gateway.tempRoot, "pending-work-node.sqlite"),
+      await waitForConnection(true, true);
+      return connected;
+    };
+
+    try {
+      operator = await connectOperator(gateway);
+      node = await connectNode();
+      await waitForConnection(true);
+
+      await disconnectNode();
+
+      const work = { type: "location.request", priority: "high" };
+      const enqueued = await operator.request<NodePendingEnqueueResult>("node.pending.enqueue", {
+        nodeId,
+        ...work,
+        wake: false,
       });
-      const handlerErrors: Error[] = [];
-      const backgroundRequests: NodeInvokeFrame[] = [];
-      let operator: GatewayClient | undefined;
-      let node: GatewayClient | undefined;
+      expect(enqueued).toMatchObject({
+        nodeId,
+        queued: work,
+        wakeTriggered: false,
+      });
+      expect(enqueued.queued.id).toBeTruthy();
 
-      const connectNode = async () => {
-        const connected = await connectPairedNode({
-          gateway,
-          identity,
-          operator: expectConnected(operator),
-          onEvent: (event) => {
-            if (event.event !== "node.invoke.request") {
-              return;
-            }
-            void rejectBackgroundInvocation(node, event.payload, backgroundRequests).catch(
-              (error: unknown) => {
-                handlerErrors.push(error instanceof Error ? error : new Error(String(error)));
-              },
-            );
-          },
-        });
-        await waitForNodeConnection(
-          expectConnected(operator),
-          identity.deviceId,
-          true,
-          gateway.logs,
-          true,
-        );
-        return connected;
-      };
-
-      try {
-        operator = await connectOperator(gateway);
-        node = await connectNode();
-        await waitForNodeConnection(operator, identity.deviceId, true, gateway.logs);
-
-        await node.stopAndWait({ timeoutMs: 1_000 });
-        node = undefined;
-        await waitForNodeConnection(operator, identity.deviceId, false, gateway.logs);
-
-        const enqueued = await operator.request<{
-          nodeId: string;
-          revision: number;
-          queued: PendingWorkItem;
-          wakeTriggered: boolean;
-        }>("node.pending.enqueue", {
-          nodeId: identity.deviceId,
-          type: "location.request",
-          priority: "high",
-          wake: false,
-        });
-        expect(enqueued).toMatchObject({
-          nodeId: identity.deviceId,
-          queued: {
-            type: "location.request",
-            priority: "high",
-          },
-          wakeTriggered: false,
-        });
-        expect(enqueued.queued.id).toBeTruthy();
-
-        node = await connectNode();
-        await waitForNodeConnection(operator, identity.deviceId, true, gateway.logs);
-        const drained = await node.request<{
-          nodeId: string;
-          revision: number;
-          items: PendingWorkItem[];
-          hasMore: boolean;
-        }>("node.pending.drain", { maxItems: 2 });
-        expect(drained).toMatchObject({
-          nodeId: identity.deviceId,
-          items: [
-            {
-              id: enqueued.queued.id,
-              type: "location.request",
-              priority: "high",
-            },
-            {
-              id: "baseline-status",
-              type: "status.request",
-              priority: "default",
-            },
-          ],
-          hasMore: false,
-        });
-
-        const cameraParams = { facing: "back", maxWidth: 1280 };
-        let invokeError: unknown;
-        try {
-          await operator.request("node.invoke", {
-            nodeId: identity.deviceId,
-            command: "camera.snap",
-            params: cameraParams,
-            timeoutMs: REQUEST_TIMEOUT_MS,
-            idempotencyKey: randomUUID(),
-          });
-        } catch (error) {
-          invokeError = error;
-        }
-        expect(invokeError).toMatchObject({
-          code: "UNAVAILABLE",
-          retryable: true,
-          details: {
-            code: "QUEUED_UNTIL_FOREGROUND",
-            nodeId: identity.deviceId,
-            command: "camera.snap",
-          },
-        });
-        const queuedActionId = readQueuedActionId(invokeError);
-        expect(backgroundRequests).toMatchObject([
+      node = await connectNode();
+      await waitForConnection(true);
+      const drained = await node.request<NodePendingDrainResult>("node.pending.drain", {
+        maxItems: 2,
+      });
+      expect(drained).toMatchObject({
+        nodeId,
+        items: [
+          { id: enqueued.queued.id, ...work },
           {
-            nodeId: identity.deviceId,
-            command: "camera.snap",
-            paramsJSON: JSON.stringify(cameraParams),
+            id: "baseline-status",
+            type: "status.request",
+            priority: "default",
           },
-        ]);
-        expect(handlerErrors).toEqual([]);
+        ],
+        hasMore: false,
+      });
 
-        await node.stopAndWait({ timeoutMs: 1_000 });
-        node = undefined;
-        await waitForNodeConnection(operator, identity.deviceId, false, gateway.logs);
-        node = await connectNode();
-        await waitForNodeConnection(operator, identity.deviceId, true, gateway.logs);
-
-        const pulled = await node.request<{
-          nodeId: string;
-          actions: PendingAction[];
-        }>("node.pending.pull", {});
-        expect(pulled).toMatchObject({
-          nodeId: identity.deviceId,
-          actions: [
-            {
-              id: queuedActionId,
-              command: "camera.snap",
-              paramsJSON: JSON.stringify(cameraParams),
-            },
-          ],
+      const cameraParams = { facing: "back", maxWidth: 1280 };
+      const cameraAction = { command: "camera.snap", paramsJSON: JSON.stringify(cameraParams) };
+      let invokeError: unknown;
+      try {
+        await operator.request("node.invoke", {
+          nodeId,
+          command: "camera.snap",
+          params: cameraParams,
+          timeoutMs: REQUEST_TIMEOUT_MS,
+          idempotencyKey: randomUUID(),
         });
-        expect(pulled.actions[0]?.enqueuedAtMs).toEqual(expect.any(Number));
-
-        const acked = await node.request<{
-          nodeId: string;
-          ackedIds: string[];
-          remainingCount: number;
-        }>("node.pending.ack", { ids: [queuedActionId] });
-        expect(acked).toEqual({
-          nodeId: identity.deviceId,
-          ackedIds: [queuedActionId],
-          remainingCount: 0,
-        });
-        await expect(
-          node.request<{ nodeId: string; actions: PendingAction[] }>("node.pending.pull", {}),
-        ).resolves.toEqual({
-          nodeId: identity.deviceId,
-          actions: [],
-        });
-      } finally {
-        await Promise.allSettled([
-          ...(node ? [node.stopAndWait({ timeoutMs: 1_000 })] : []),
-          ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
-        ]);
-        const tempRoot = gateway.tempRoot;
-        await gateway.stop();
-        expect(existsSync(tempRoot)).toBe(false);
+      } catch (error) {
+        invokeError = error;
       }
-    },
-  );
-});
+      expect(invokeError).toMatchObject({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: {
+          code: "QUEUED_UNTIL_FOREGROUND",
+          nodeId,
+          command: "camera.snap",
+        },
+      });
+      const queuedActionId = readQueuedActionId(invokeError);
+      expect(backgroundRequests).toMatchObject([{ nodeId, ...cameraAction }]);
+      expect(handlerErrors).toEqual([]);
+
+      await disconnectNode();
+      node = await connectNode();
+      await waitForConnection(true);
+
+      const pulled = await node.request<{
+        nodeId: string;
+        actions: PendingAction[];
+      }>("node.pending.pull", {});
+      expect(pulled).toMatchObject({
+        nodeId,
+        actions: [{ id: queuedActionId, ...cameraAction, enqueuedAtMs: expect.any(Number) }],
+      });
+
+      const acked = await node.request<{
+        nodeId: string;
+        ackedIds: string[];
+        remainingCount: number;
+      }>("node.pending.ack", { ids: [queuedActionId] });
+      expect(acked).toEqual({
+        nodeId,
+        ackedIds: [queuedActionId],
+        remainingCount: 0,
+      });
+      await expect(
+        node.request<{ nodeId: string; actions: PendingAction[] }>("node.pending.pull", {}),
+      ).resolves.toEqual({
+        nodeId,
+        actions: [],
+      });
+    } finally {
+      await Promise.allSettled([
+        ...(node ? [node.stopAndWait({ timeoutMs: 1_000 })] : []),
+        ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
+      ]);
+      await gateway.stop();
+      expect(existsSync(gateway.tempRoot)).toBe(false);
+    }
+  },
+);
 
 function expectConnected(client: GatewayClient | undefined): GatewayClient {
   if (!client) {
@@ -269,7 +219,7 @@ function expectConnected(client: GatewayClient | undefined): GatewayClient {
   return client;
 }
 
-async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
+async function connectOperator(gateway: QaGatewayChild): Promise<GatewayClient> {
   return await connectClient({
     gateway,
     role: "operator",
@@ -282,7 +232,7 @@ async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
 }
 
 async function connectPairedNode(params: {
-  gateway: GatewayHandle;
+  gateway: QaGatewayChild;
   identity: DeviceIdentity;
   operator: GatewayClient;
   onEvent: (event: { event: string; payload?: unknown }) => void;
@@ -292,7 +242,7 @@ async function connectPairedNode(params: {
       gateway: params.gateway,
       role: "node",
       clientName: GATEWAY_CLIENT_NAMES.IOS_APP,
-      clientDisplayName: NODE_DISPLAY_NAME,
+      clientDisplayName: "QA iPad",
       mode: GATEWAY_CLIENT_MODES.NODE,
       platform: "iPadOS 26.4",
       deviceFamily: "iPad",
@@ -314,38 +264,15 @@ async function connectPairedNode(params: {
   }
 }
 
-async function connectClient(params: {
-  gateway: GatewayHandle;
-  role: "operator" | "node";
-  clientName: typeof GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT | typeof GATEWAY_CLIENT_NAMES.IOS_APP;
-  clientDisplayName: string;
-  mode: typeof GATEWAY_CLIENT_MODES.BACKEND | typeof GATEWAY_CLIENT_MODES.NODE;
-  scopes: string[];
-  platform?: string;
-  deviceFamily?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  deviceIdentity: DeviceIdentity | null;
-  onEvent?: (event: { event: string; payload?: unknown }) => void;
-}): Promise<GatewayClient> {
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        client.stop();
-        reject(error);
-        return;
-      }
-      resolve(client);
-    };
-    const { gateway, ...options } = params;
-    const client = new GatewayClient({
+async function connectClient(
+  params: { gateway: QaGatewayChild } & Omit<
+    Parameters<typeof acquireGatewayTestClient>[0],
+    "url" | "token" | "env" | "onHelloOk" | "onClose"
+  >,
+): Promise<GatewayClient> {
+  const { gateway, ...options } = params;
+  return acquireGatewayTestClient(
+    {
       ...options,
       url: gateway.wsUrl,
       token: gateway.token,
@@ -353,17 +280,14 @@ async function connectClient(params: {
       clientVersion: "1.0.0",
       platform: options.platform ?? process.platform,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onHelloOk: () => finish(),
-      onConnectError: (error) => finish(error),
-      onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
-    });
-    const timeout = setTimeout(
-      () => finish(new Error(`Gateway client connection timed out:\n${params.gateway.logs()}`)),
-      REQUEST_TIMEOUT_MS,
-    );
-    timeout.unref();
-    client.start();
-  });
+    },
+    {
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      timeoutMessage: `Gateway client connection timed out:\n${gateway.logs()}`,
+      closeMessage: "Gateway closed",
+      unrefTimeout: true,
+    },
+  );
 }
 
 function isPairingRequired(error: unknown): boolean {

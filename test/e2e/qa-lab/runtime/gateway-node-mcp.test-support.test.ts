@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
@@ -27,6 +27,36 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
   } catch (error) {
     throw new Error(`timed out waiting for fixture descendant ${pid} to exit`, { cause: error });
   }
+}
+
+async function startOwnedFixture(
+  { signal, onTestFinished }: Pick<TestContext, "signal" | "onTestFinished">,
+  prefix: string,
+  source: (pidPath: string) => string,
+) {
+  const root = useAutoCleanupTempDirTracker(onTestFinished).make(prefix);
+  const fixturePath = path.join(root, "fixture.mjs");
+  const pidPath = path.join(root, "fixture.pid");
+  await fs.writeFile(fixturePath, source(pidPath), "utf8");
+  const starting = startHttpFixture({
+    fixturePath,
+    signal,
+    labelPrefix: "node",
+    env: createChildEnv({ home: root, tempDir: os.tmpdir() }),
+  });
+  let pid: number | undefined;
+  const readPid = async () => (pid = Number(await fs.readFile(pidPath, "utf8")));
+  onTestFinished(async () => {
+    const fixture = await starting.catch(() => undefined);
+    if (fixture) {
+      pid ??= await readPid();
+    }
+    await stopChild(fixture);
+    if (pid !== undefined && processIsAlive(pid)) {
+      process.kill(pid, "SIGKILL");
+    }
+  });
+  return { starting, readPid };
 }
 
 describe("gateway node MCP fixture ownership", () => {
@@ -112,93 +142,28 @@ describe("gateway node MCP fixture ownership", () => {
     ).toEqual(fact);
   });
 
-  it("kills a spawned fixture when readiness validation fails", async ({
-    signal,
-    onTestFinished,
-  }) => {
-    const fixtureDirs = useAutoCleanupTempDirTracker(onTestFinished);
-    const root = fixtureDirs.make("mcp-fixture-startup-failure-");
-    const fixturePath = path.join(root, "invalid-fixture.mjs");
-    const pidPath = path.join(root, "fixture.pid");
-    await fs.writeFile(
-      fixturePath,
-      `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); console.log(JSON.stringify({type:"wrong"})); setInterval(() => {}, 1000);`,
-      "utf8",
+  it("kills a spawned fixture when readiness validation fails", async (context) => {
+    const { starting, readPid } = await startOwnedFixture(
+      context,
+      "mcp-fixture-startup-failure-",
+      (pidPath) =>
+        `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); console.log(JSON.stringify({type:"wrong"})); setInterval(() => {}, 1000);`,
     );
-
-    let pid: number | undefined;
-    const startingFixture = startHttpFixture({
-      fixturePath,
-      signal,
-      labelPrefix: "node",
-      env: createChildEnv({ home: root, tempDir: os.tmpdir() }),
-    });
-    let cleanupPromise: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPromise ??= (async () => {
-        await stopChild(await startingFixture.catch(() => undefined));
-        if (pid !== undefined && processIsAlive(pid)) {
-          process.kill(pid, "SIGKILL");
-        }
-      })());
-    onTestFinished(cleanup);
-    try {
-      await expect(startingFixture).rejects.toThrow("invalid readiness");
-      const fixturePid = Number(await fs.readFile(pidPath, "utf8"));
-      pid = fixturePid;
-      expect(processIsAlive(fixturePid)).toBe(false);
-    } finally {
-      await cleanup();
-    }
+    await expect(starting).rejects.toThrow("invalid readiness");
+    expect(processIsAlive(await readPid())).toBe(false);
   });
 
-  it("kills task-owned fixture descendants when stopping the captured root", async ({
-    signal,
-    onTestFinished,
-  }) => {
-    const fixtureDirs = useAutoCleanupTempDirTracker(onTestFinished);
-    const root = fixtureDirs.make("mcp-fixture-descendant-cleanup-");
-    const fixturePath = path.join(root, "fixture.mjs");
-    const descendantPidPath = path.join(root, "descendant.pid");
-    await fs.writeFile(
-      fixturePath,
-      `import {spawn} from "node:child_process"; import fs from "node:fs"; const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(child.pid)); console.log(JSON.stringify({type:"openclaw-mcp-parity-ready",urls:{streamableHttp:"http://127.0.0.1/mcp",sse:"http://127.0.0.1/sse"}})); setInterval(()=>{},1000);`,
-      "utf8",
+  it("kills task-owned fixture descendants when stopping the captured root", async (context) => {
+    const { starting, readPid } = await startOwnedFixture(
+      context,
+      "mcp-fixture-descendant-cleanup-",
+      (pidPath) =>
+        `import {spawn} from "node:child_process"; import fs from "node:fs"; const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); fs.writeFileSync(${JSON.stringify(pidPath)},String(child.pid)); console.log(JSON.stringify({type:"openclaw-mcp-parity-ready",urls:{streamableHttp:"http://127.0.0.1/mcp",sse:"http://127.0.0.1/sse"}})); setInterval(()=>{},1000);`,
     );
-
-    const startingFixture = startHttpFixture({
-      fixturePath,
-      signal,
-      labelPrefix: "node",
-      env: createChildEnv({ home: root, tempDir: os.tmpdir() }),
-    });
-    let descendantPid: number | undefined;
-    let cleanupPromise: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPromise ??= (async () => {
-        const fixture = await startingFixture.catch(() => undefined);
-        if (!fixture) {
-          return;
-        }
-        // The fixture records its descendant before publishing readiness.
-        descendantPid ??= Number(await fs.readFile(descendantPidPath, "utf8"));
-        await stopChild(fixture);
-        if (processIsAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-      })());
-    onTestFinished(cleanup);
-    try {
-      const fixture = await startingFixture;
-      const childPid = Number(await fs.readFile(descendantPidPath, "utf8"));
-      descendantPid = childPid;
-      expect(processIsAlive(childPid)).toBe(true);
-
-      await stopChild(fixture);
-
-      await waitForDescendantExit(childPid, signal);
-    } finally {
-      await cleanup();
-    }
+    const fixture = await starting;
+    const childPid = await readPid();
+    expect(processIsAlive(childPid)).toBe(true);
+    await stopChild(fixture);
+    await waitForDescendantExit(childPid, context.signal);
   });
 });
