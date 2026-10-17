@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hashText as hashStoreKey } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE = "notify-subscribers";
@@ -41,10 +41,6 @@ function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
   } catch {
     return normalized;
   }
-}
-
-function hashStoreKey(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 export function notifySubscriberStoreKey(

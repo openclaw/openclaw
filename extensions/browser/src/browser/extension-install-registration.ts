@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import {
@@ -38,10 +39,6 @@ const OWNED_LAUNCHER_MARKER = "# OpenClaw native messaging bootstrap v1";
 
 function nativeMessagingRoot(): string {
   return path.join(resolveInstallStateDir(), "browser", "native-messaging");
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export async function resolveNativeHostPath(pluginRoot: string): Promise<string> {

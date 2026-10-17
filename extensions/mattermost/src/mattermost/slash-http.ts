@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -80,9 +81,7 @@ const commandValidationFailureCache = new Map<string, { accountId: string; expir
 const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
 
 export function sendSlashCommandResponse(res: ServerResponse, status: number, text: string) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify({ response_type: "ephemeral", text }));
+  sendJson(res, status, { response_type: "ephemeral", text });
 }
 
 export async function readSlashCommandBody(

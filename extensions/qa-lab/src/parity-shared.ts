@@ -1,14 +1,10 @@
-import { createHash } from "node:crypto";
+import { hashText as sha256 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ParityToolCallShape = {
   argsHash: string;
   tool: string;
 };
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 function normalizeForStableHash(value: unknown): unknown {
   if (Array.isArray(value)) {

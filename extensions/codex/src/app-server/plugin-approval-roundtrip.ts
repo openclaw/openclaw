@@ -7,7 +7,7 @@ import type {
   ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
@@ -164,7 +164,7 @@ export async function requestPluginApprovalOutcome(
 }
 
 export function truncateCodexApprovalDisplayText(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
+  return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }
 
 export function stripDanglingCodexApprovalTerminalSequence(value: string): string {

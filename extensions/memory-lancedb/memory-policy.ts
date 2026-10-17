@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hashText as captureFingerprint } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord,
@@ -52,9 +52,7 @@ export type AutoCaptureMessageProgress = {
   visited: boolean;
 };
 
-export function captureFingerprint(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
+export { captureFingerprint };
 
 function autoCaptureMessageFingerprint(message: Record<string, unknown>): string {
   const identity = { ...message };
