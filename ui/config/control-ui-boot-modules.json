@@ -2256,7 +2256,6 @@
   "ui/src/components/solid/person-reference.tsx",
   "ui/src/components/solid/sanitized-html.tsx",
   "ui/src/components/solid/settings-ui.tsx",
-  "ui/src/components/solid/tabs.tsx",
   "ui/src/components/terminal/terminal-controller-lifecycle.ts",
   "ui/src/components/terminal/terminal-pending-actions.ts",
   "ui/src/components/terminal/terminal-session-storage.ts",
@@ -2280,8 +2279,6 @@
   "ui/src/lib/chat/follow-up-mode.ts",
   "ui/src/lib/chat/message-client-source.ts",
   "ui/src/lib/chat/outbox-recovery.ts",
-  "ui/src/lib/chat/session-diff-folds.ts",
-  "ui/src/lib/chat/session-diff-split.ts",
   "ui/src/lib/chat/source-previews.ts",
   "ui/src/lib/chat/tool-call-patch.ts",
   "ui/src/lib/chat/tool-call-view.ts",
@@ -2312,7 +2309,6 @@
   "ui/src/lib/sessions/unread.ts",
   "ui/src/lib/sessions/usage.ts",
   "ui/src/lib/sessions/workspace.ts",
-  "ui/src/lib/tabs.ts",
   "ui/src/lib/widget-theme.ts",
   "ui/src/pages/chat/board-session-surface.tsx",
   "ui/src/pages/chat/browser-annotation-admission.ts",
@@ -2446,7 +2442,7 @@
   "ui/src/pages/chat/components/chat-details-progress.tsx",
   "ui/src/pages/chat/components/chat-details-session.tsx",
   "ui/src/pages/chat/components/chat-details.tsx",
-  "ui/src/pages/chat/components/chat-diff-render.solid.tsx",
+  "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
   "ui/src/pages/chat/components/chat-divider.ts",
   "ui/src/pages/chat/components/chat-divider.tsx",
   "ui/src/pages/chat/components/chat-file-download-button.tsx",
@@ -2603,8 +2599,7 @@
   "ui/src/styles/panel-loading-skeleton.css",
   "ui/src/styles/session-menu-compact.css",
   "ui/src/styles/sidebar-markdown.css",
-  "ui/src/styles/sidebar-menus.css",
-  "ui/src/styles/tabs.css"
+  "ui/src/styles/sidebar-menus.css"
  ],
  "entries": {
   "shared": [

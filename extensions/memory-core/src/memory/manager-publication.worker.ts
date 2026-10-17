@@ -600,17 +600,21 @@ function createPublicationBackend(
       if (command.type === "source.replace.group") {
         const outcome = write(() => {
           const kernel = new MemorySourceIndexKernel(db, command.input.state);
-          for (const { header, fragments } of command.input.sources) {
-            if (
-              header.source === "sessions" &&
-              hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-            ) {
-              throw new Error(
-                "A session was forgotten while memory indexing was running; retry the memory index.",
-              );
+          const inputs = command.input.sources;
+          function* sources() {
+            for (const { header, fragments } of inputs) {
+              if (
+                header.source === "sessions" &&
+                hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+              ) {
+                throw new Error(
+                  "A session was forgotten while memory indexing was running; retry the memory index.",
+                );
+              }
+              yield { header, rows: readPublicationRows<MemorySourceIndexRow>(fragments) };
             }
-            kernel.replaceRows(header, readPublicationRows<MemorySourceIndexRow>(fragments));
           }
+          kernel.replaceGroup(sources());
           return true;
         });
         return outcome.ok
