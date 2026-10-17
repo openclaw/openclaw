@@ -40,7 +40,14 @@ export const runtimeErrors: unknown[] = [];
 
 const cfg = {
   messages: { inbound: { debounceMs: 0 } },
-  channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+  channels: {
+    telegram: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "open",
+      groups: { "*": { requireMention: false } },
+    },
+  },
 } as OpenClawConfig;
 
 export function flushHeldQuietWindow(

@@ -51,6 +51,7 @@ Rapid text messages from the same sender can be batched into one agent turn via 
 
 - Debounce applies to text-only messages; media/attachments flush immediately.
 - Control commands (stop/abort/status, etc.) bypass debouncing so they dispatch immediately.
+- On channels with durable ingress, a message from another sender in the same conversation waits for an earlier buffered batch to reach the agent first, so replies follow arrival order. Control commands skip that wait too.
 - Telegram batches ordinary text by default after a 300ms quiet window. Other channels have no generic debounce delay unless configured.
 - `messages.inbound.byChannel.<channel>` takes precedence over `messages.inbound.debounceMs`; either overrides the channel default. Set `0` to disable ordinary burst batching.
 - For non-forwarded Telegram text, messages of at least 4000 characters allow up to 1500ms for continuations. Short and long messages share the same batch, without requiring consecutive message IDs. This automatic long-paste assembly remains active when ordinary batching is disabled.

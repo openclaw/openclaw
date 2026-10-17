@@ -33,6 +33,10 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   startedAt: number;
   phase: "dispatching" | "deferred" | "adopted" | "settled";
   occupiesLane: boolean;
+  /** Drain-local dispatch order; same-lane admission turns compare it. */
+  dispatchSeq: number;
+  /** A deferred claim is buffered until downstream admission (onDeferred) records it. */
+  admittedDownstream: boolean;
   task: Promise<void>;
   settlement?: Promise<void>;
   settlementFailure?: { error: unknown };
@@ -54,6 +58,13 @@ export function isPreAdoptionState<TPayload, TMetadata>(
     !state.guillotined &&
     !state.superseded
   );
+}
+
+/** A buffered or preflighting claim still owes its lane a downstream admission. */
+export function holdsAdmissionTurn<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): boolean {
+  return isPreAdoptionState(state) && !state.admittedDownstream;
 }
 
 export function createIngressSettleOwner<TPayload, TMetadata>(

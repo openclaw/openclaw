@@ -1,3 +1,4 @@
+import { isExplicitCommandTurnContext } from "../../auto-reply/command-turn-detection.js";
 import {
   withDispatchProcessedOutcomeSink,
   type DispatchProcessedNote,
@@ -213,6 +214,13 @@ async function runPreparedChannelTurnCoreInTrace<
     clearPendingHistoryAfterTurn(params.history);
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
+  }
+  // Durable ingress releases deferred lanes so one sender's burst can keep
+  // coalescing; record and dispatch still follow ingress order. Control
+  // commands keep their immediate dispatch, matching their debounce bypass.
+  const adoption = params.runDispatchLifecycle?.turnAdoptionLifecycle;
+  if (adoption?.admissionTurn && !isExplicitCommandTurnContext(params.ctxPayload, params.cfg)) {
+    await adoption.admissionTurn.wait({ onBlocked: () => adoption.onAdmissionWait?.() });
   }
   // Native commands can execute in an isolated command session while updating the
   // provider-routed target session. Keep that record target separate from dispatch.

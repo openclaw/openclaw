@@ -20,6 +20,8 @@ type TelegramSpooledReplayLifecycle = Omit<
   onAdoptionFinalizing?: () => void;
 };
 
+type TelegramIngressAdmissionTurn = NonNullable<ChannelIngressMonitorLifecycle["admissionTurn"]>;
+
 type TelegramSpooledReplayFrame = {
   deferredWork?: TelegramSpooledReplayDeferredParticipant;
   lifecycle?: TelegramSpooledReplayLifecycle;
@@ -33,6 +35,10 @@ export type TelegramSpooledReplayDeferredParticipant = {
   isSettled: () => boolean;
   heartbeat: () => void;
   heartbeatIntervalMs?: number;
+  /** Await before reply dispatch so earlier same-chat spool rows are admitted first. */
+  admissionTurn?: TelegramIngressAdmissionTurn;
+  /** Records reply-lane admission (queued turn) for every claim this participant owns. */
+  markDeferred: () => void;
   wasOwnerAbortedWhilePending: () => boolean;
   /** Defers external timeout settlement while durable adoption decides ownership. */
   beginSettlementHold: () => TelegramSpooledReplaySettlementHold | undefined;
@@ -119,6 +125,31 @@ export function resolveTelegramSpooledReplayHeartbeatIntervalMs(
   return intervals.length > 0 ? Math.min(...intervals) : undefined;
 }
 
+// One buffered turn is one admission batch: its claims never wait on each other.
+function joinTelegramAdmissionTurns(
+  participants: readonly TelegramSpooledReplayDeferredParticipant[],
+): TelegramIngressAdmissionTurn | undefined {
+  const turns = participants.flatMap((participant) =>
+    participant.admissionTurn ? [participant.admissionTurn] : [],
+  );
+  if (turns.length <= 1) {
+    return turns[0];
+  }
+  return {
+    wait: async (options = {}) => {
+      const batch = [...turns, ...(options.batch ?? [])];
+      let blocked = false;
+      const onBlocked = () => {
+        if (!blocked) {
+          blocked = true;
+          options.onBlocked?.();
+        }
+      };
+      await Promise.all(turns.map((turn) => turn.wait({ batch, onBlocked })));
+    },
+  };
+}
+
 export function createTelegramSpooledReplayParticipant(
   key: string,
   livenessSources?: readonly TelegramSpooledReplayDeferredParticipant[],
@@ -189,6 +220,21 @@ export function createTelegramSpooledReplayParticipant(
     heartbeatIntervalMs: resolveTelegramSpooledReplayHeartbeatIntervalMs(
       livenessSources ?? [{ heartbeatIntervalMs: ownerLifecycle?.deferredHeartbeatIntervalMs }],
     ),
+    admissionTurn: livenessSources
+      ? joinTelegramAdmissionTurns(livenessSources)
+      : ownerLifecycle?.admissionTurn,
+    markDeferred: () => {
+      if (settled) {
+        return;
+      }
+      if (livenessSources) {
+        for (const source of livenessSources) {
+          source.markDeferred();
+        }
+      } else {
+        ownerLifecycle?.onDeferred();
+      }
+    },
     wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,
     beginSettlementHold: () => {
       if (settled || settlementHeld) {
