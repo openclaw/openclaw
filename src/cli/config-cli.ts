@@ -102,7 +102,7 @@ async function runConfigMutation(
         ...opts.localStateOwner,
         params: {},
         onForeignOwner: "refuse",
-        ...(databaseOnly ? { databaseAccess: "none" } : {}),
+        ...(databaseOnly ? { databaseAccess: "none" } : { databaseEngine: "configured" }),
         runLocal,
       });
     }
