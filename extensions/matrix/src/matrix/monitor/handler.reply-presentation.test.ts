@@ -264,7 +264,9 @@ describe("matrix monitor handler reply presentation", () => {
         dispatchInboundMessage: async ({ replyOptions }) => {
           let visible = policy === "revoked";
           if (policy !== "unbound") {
-            replyOptions?.onReasoningVisibility?.(() => visible);
+            (replyOptions?.onReasoningVisibility as GetReplyOptions["onReasoningVisibility"])?.(
+              () => visible,
+            );
           }
           const deliver = await capturedDeliver.promise;
           visible = false;

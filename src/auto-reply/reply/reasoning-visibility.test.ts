@@ -141,7 +141,7 @@ describe("durable reasoning visibility", () => {
         ...entry,
         ...(field === "sessionId"
           ? { sessionId: "replacement-session" }
-          : { lifecycleRevision: (entry.lifecycleRevision ?? 0) + 1 }),
+          : { lifecycleRevision: `${entry.lifecycleRevision ?? ""}-next` }),
       });
       expect(isReplyReasoningVisible(payload)).toBe(false);
     },

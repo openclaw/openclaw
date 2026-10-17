@@ -11,8 +11,10 @@ import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
+import { bindReplyReasoningVisibility } from "./reasoning-visibility.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import { getReplySystemEventContext } from "./system-event-session-key.js";
 
@@ -95,6 +97,29 @@ export async function resolveRunModelHasVision(params: {
     requiredInputRoute: route,
   });
   return modelSupportsInput(findModelInCatalog(catalog, provider, model), "image");
+}
+
+export function buildReasoningParams(
+  params: AgentTurnParams,
+  runId: string,
+  reasoningVisibility: FollowupRun["run"]["reasoningVisibility"],
+): AgentTurnParams {
+  const onBlockReply = params.opts?.onBlockReply;
+  return {
+    ...params,
+    opts: {
+      ...params.opts,
+      runId,
+      ...(onBlockReply
+        ? {
+            onBlockReply: (...args) => {
+              bindReplyReasoningVisibility(args[0], reasoningVisibility);
+              return onBlockReply(...args);
+            },
+          }
+        : {}),
+    },
+  };
 }
 
 /** Project prepared turn facts shared by the CLI and embedded runtime adapters. */

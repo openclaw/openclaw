@@ -178,12 +178,17 @@ describe("performMatrixRequest", () => {
         if (!address || typeof address === "string") {
           throw new Error("expected loopback server address");
         }
-        client = new MatrixClient(`http://127.0.0.1:${address.port}`, "fixture-token", {
-          userId: "@fixture:example.org",
-          encryption: false,
-          autoBootstrapCrypto: false,
-          ssrfPolicy: { allowPrivateNetwork: true },
-        });
+        const initializedClient = new MatrixClient(
+          `http://127.0.0.1:${address.port}`,
+          "fixture-token",
+          {
+            userId: "@fixture:example.org",
+            encryption: false,
+            autoBootstrapCrypto: false,
+            ssrfPolicy: { allowPrivateNetwork: true },
+          },
+        );
+        client = initializedClient;
         const assertBeforeSend = () => {
           if (!allowed) {
             throw new DOMException("Reasoning visibility revoked", "AbortError");
@@ -191,8 +196,8 @@ describe("performMatrixRequest", () => {
         };
 
         await expect(
-          withMatrixSendCurrentness(client, assertBeforeSend, () =>
-            client.sendMessage("!guarded:example.org", {
+          withMatrixSendCurrentness(initializedClient, assertBeforeSend, () =>
+            initializedClient.sendMessage("!guarded:example.org", {
               msgtype: "m.notice",
               body: "Guarded reasoning",
             }),

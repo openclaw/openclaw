@@ -255,7 +255,19 @@ describe("mixed inline directives", () => {
     expect(persistenceMocks.persist).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(lifecycleEvents).toEqual([
-      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
+      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch", reasoningLevel: "on" },
+    ]);
+  });
+
+  it("publishes an explicit off after committing an already-off reasoning setting", async () => {
+    await applyMixedDirectives({
+      body: "/reasoning off",
+      storePath: "/tmp/sessions.json",
+      sessionEntry: createSessionEntry({ reasoningLevel: "off" }),
+    });
+    expect(persistenceMocks.persist).toHaveBeenCalledOnce();
+    expect(lifecycleEvents).toEqual([
+      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch", reasoningLevel: "off" },
     ]);
   });
 
