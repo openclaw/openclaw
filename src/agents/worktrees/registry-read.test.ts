@@ -89,6 +89,29 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const initializeRepository = useManagedWorktreeTestRepository();
+function recordFixture(
+  root: string,
+  id: string,
+  overrides: Partial<ManagedWorktreeRecord> = {},
+): ManagedWorktreeRecord {
+  return {
+    id,
+    name: id,
+    repoFingerprint: "0123456789abcdef",
+    repoRoot: path.join(root, "repo"),
+    path: path.join(root, id),
+    branch: `openclaw/${id}`,
+    baseRef: "HEAD",
+    ownerKind: "manual",
+    createdAt: 1,
+    lastActiveAt: 1,
+    ...overrides,
+  };
+}
+function expectRecent(value: number | undefined, since: number) {
+  expect(value).toBeGreaterThanOrEqual(since);
+  expect(value).toBeLessThanOrEqual(Date.now());
+}
 
 async function serviceFixture() {
   const root = tempDirs.make("worktree-registry-publication-");
@@ -150,19 +173,10 @@ describe("managed worktree registry worker reads", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const gate = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
     writerGate.buffer = gate.buffer;
-    const record: ManagedWorktreeRecord = {
-      id: "independent-read",
-      name: "independent-read",
-      repoFingerprint: "0123456789abcdef",
-      repoRoot: path.join(root, "repo"),
-      path: path.join(root, "independent-read"),
-      branch: "openclaw/independent-read",
-      baseRef: "HEAD",
+    const record = recordFixture(root, "independent-read", {
       ownerKind: "session",
       ownerId: "agent:main:reader",
-      createdAt: 1,
-      lastActiveAt: 1,
-    };
+    });
     await insertRegistryWorktree(env, record);
     const context = captureOpenClawStateWorkerContext({ env });
     Atomics.store(gate, 0, 1);
@@ -198,18 +212,7 @@ describe("managed worktree registry worker reads", () => {
     const replacementRoot = tempDirs.make("worktree-replacement-store-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: originalRoot };
     const replacementEnv = { ...env, OPENCLAW_STATE_DIR: replacementRoot };
-    const record: ManagedWorktreeRecord = {
-      id: "shared-backup-row",
-      name: "shared-backup-row",
-      repoFingerprint: "0123456789abcdef",
-      repoRoot: path.join(originalRoot, "repo"),
-      path: path.join(originalRoot, "shared-backup-row"),
-      branch: "openclaw/shared-backup-row",
-      baseRef: "HEAD",
-      ownerKind: "manual",
-      createdAt: 1,
-      lastActiveAt: 1,
-    };
+    const record = recordFixture(originalRoot, "shared-backup-row");
     await insertRegistryWorktree(env, record);
     await insertRegistryWorktree(replacementEnv, record);
     const entered = createDeferred();
@@ -240,16 +243,10 @@ describe("managed worktree registry worker reads", () => {
   });
 
   it("reads registry records without retiring a temporarily unavailable worktree", async () => {
-    const root = tempDirs.make("worktree-registry-unavailable-");
-    const repo = await initializeRepository(root);
-    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const { env, service, params } = await serviceFixture();
     const started = Date.now();
-    const service = new ManagedWorktreeService({
-      env,
-      getConfig: () => ({ worktreeAcceleration: false }),
-    });
     const created = await service.create({
-      repoRoot: repo,
+      repoRoot: params.repoRoot,
       name: "read-only-list",
       baseRef: "HEAD",
     });
@@ -257,8 +254,7 @@ describe("managed worktree registry worker reads", () => {
     expect(await service.listRegistryRecords()).toEqual([created]);
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     expect(await service.list()).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeGreaterThanOrEqual(started);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeLessThanOrEqual(Date.now());
+    expectRecent(getRegistryWorktree(env, created.id)?.removedAt, started);
   });
 
   it("creates, resolves, lists, and publishes activity without caller-thread registry SQL", async () => {
@@ -292,8 +288,7 @@ describe("managed worktree registry worker reads", () => {
       const activityStarted = Date.now();
       const acquired = await service.acquire(record.id);
       expect(acquired.id).toBe(record.id);
-      expect(acquired.lastActiveAt).toBeGreaterThanOrEqual(activityStarted);
-      expect(acquired.lastActiveAt).toBeLessThanOrEqual(Date.now());
+      expectRecent(acquired.lastActiveAt, activityStarted);
       expect(
         await readRegistryWorktree(captureOpenClawStateWorkerContext({ env }), record.id),
       ).toEqual(acquired);
@@ -330,8 +325,7 @@ describe("managed worktree registry worker reads", () => {
         expect(settled).toBe(false);
         const published = getRegistryWorktree(env, id)!;
         expect(published.id).toBe(id);
-        expect(published.lastActiveAt).toBeGreaterThanOrEqual(publicationStarted);
-        expect(published.lastActiveAt).toBeLessThanOrEqual(Date.now());
+        expectRecent(published.lastActiveAt, publicationStarted);
         publication.release();
         expect(await pending).toEqual(published);
         expect(publication.writes()).toBe(1);
@@ -419,19 +413,19 @@ describe("managed worktree registry worker reads", () => {
     const stateDir = tempDirs.make("worktree-registry-worker-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const service = new ManagedWorktreeService({ env });
+    const snapshot = (id: string) =>
+      Promise.all([
+        getRegistryWorktreeProvisionedPaths(env, id),
+        getRegistryWorktreeProvisionedState(env, id),
+      ]);
+    const chunk = (worktreeId: string, chunkIndex: number) =>
+      getRegistryWorktreeProvisionedChunk(env, { worktreeId, path: "synthetic.bin", chunkIndex });
     requireNodeSqlite();
     const sql = observeMainThreadSql();
     sql.calibrate();
 
-    expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
-    expect(await getRegistryWorktreeProvisionedState(env, "missing")).toBeUndefined();
-    expect(
-      await getRegistryWorktreeProvisionedChunk(env, {
-        worktreeId: "missing",
-        path: "synthetic.bin",
-        chunkIndex: 0,
-      }),
-    ).toBeUndefined();
+    expect(await snapshot("missing")).toEqual([undefined, undefined]);
+    expect(await chunk("missing", 0)).toBeUndefined();
     expect(await service.listRegistryRecords()).toEqual([]);
     expect(await readLiveRegistryWorktreeIds(env)).toEqual([]);
     await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
@@ -439,20 +433,15 @@ describe("managed worktree registry worker reads", () => {
     });
     sql.expectIdle();
 
-    const older: ManagedWorktreeRecord = {
-      id: "older",
-      name: "older",
-      repoFingerprint: "0123456789abcdef",
+    const older = recordFixture(stateDir, "older", {
       repoRoot: path.join(stateDir, "missing-repo"),
       path: path.join(stateDir, "missing-checkouts", "older"),
-      branch: "openclaw/older",
-      baseRef: "HEAD",
       ownerKind: "session",
       ownerId: "agent:main:task",
       createdAt: 10,
       lastActiveAt: 30,
       runEndCleanup: { outcome: "retained-dirty", at: 30 },
-    };
+    });
     const removed: ManagedWorktreeRecord = {
       ...older,
       id: "a-removed",
@@ -506,10 +495,7 @@ describe("managed worktree registry worker reads", () => {
     sql.expectIdle();
 
     env.OPENCLAW_STATE_DIR = stateDir;
-    const snapshotReads = Promise.all([
-      getRegistryWorktreeProvisionedPaths(env, older.id),
-      getRegistryWorktreeProvisionedState(env, older.id),
-    ]);
+    const snapshotReads = snapshot(older.id);
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect(await snapshotReads).toEqual([["synthetic.bin"], provisionedState]);
     env.OPENCLAW_STATE_DIR = stateDir;
@@ -520,26 +506,10 @@ describe("managed worktree registry worker reads", () => {
     env.OPENCLAW_STATE_DIR = path.join(stateDir, "unused-state");
     expect(Array.from((await firstChunk)!)).toEqual(Array.from(chunks[0]!));
     env.OPENCLAW_STATE_DIR = stateDir;
-    expect(
-      Array.from(
-        (await getRegistryWorktreeProvisionedChunk(env, {
-          worktreeId: older.id,
-          path: "synthetic.bin",
-          chunkIndex: 1,
-        }))!,
-      ),
-    ).toEqual(Array.from(chunks[1]!));
-    expect(
-      await getRegistryWorktreeProvisionedChunk(env, {
-        worktreeId: older.id,
-        path: "synthetic.bin",
-        chunkIndex: 2,
-      }),
-    ).toBeUndefined();
-    expect(await getRegistryWorktreeProvisionedPaths(env, newer.id)).toEqual(["legacy.local"]);
-    expect(await getRegistryWorktreeProvisionedState(env, newer.id)).toBeUndefined();
-    expect(await getRegistryWorktreeProvisionedPaths(env, removed.id)).toBeUndefined();
-    expect(await getRegistryWorktreeProvisionedState(env, removed.id)).toBeUndefined();
+    expect(Array.from((await chunk(older.id, 1))!)).toEqual(Array.from(chunks[1]!));
+    expect(await chunk(older.id, 2)).toBeUndefined();
+    expect(await snapshot(newer.id)).toEqual([["legacy.local"], undefined]);
+    expect(await snapshot(removed.id)).toEqual([undefined, undefined]);
     await closeOpenClawStateDatabaseAsync();
     sql.expectIdle();
     await expect(fs.stat(path.join(stateDir, "unused-state"))).rejects.toMatchObject({

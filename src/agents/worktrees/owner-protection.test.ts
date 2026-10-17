@@ -47,6 +47,23 @@ const cleanupRecord = {
   createdAt: 1,
   lastActiveAt: 1,
 } satisfies ManagedWorktreeRecord;
+const key = cleanupRecord.ownerId;
+function ownerEntry(entry?: SessionEntry) {
+  readOwners.mockResolvedValue(new Map([[key, { ...target(), entry }]]));
+}
+const emptyPlacementService = {
+  listAsync: async () => [],
+  prepareMaintenancePlacements: async () => ({
+    placements: [],
+    assertCurrent: () => {},
+    release: () => {},
+  }),
+  prepareSessionPlacement: async () => ({
+    prepareRead: () => undefined,
+    current: () => undefined,
+    release: () => {},
+  }),
+};
 
 // mock-isolation: Tests select the real placement owner or an explicitly empty inventory.
 vi.mock("../../gateway/session-worker-placement-context.js", () => ({
@@ -62,42 +79,30 @@ vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) 
 }));
 
 function target(
-  key = cleanupRecord.ownerId,
+  sessionKey = cleanupRecord.ownerId,
   entry?: SessionEntry,
 ): ResolvedSessionEntryStoreTarget {
   return {
     agentId: "main",
-    canonicalKey: key,
-    requestedKey: key,
-    storeKey: key,
+    canonicalKey: sessionKey,
+    requestedKey: sessionKey,
+    storeKey: sessionKey,
     storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-    entry: entry ?? { sessionId: key, updatedAt: 1, archivedAt: 1 },
+    entry: entry ?? { sessionId: sessionKey, updatedAt: 1, archivedAt: 1 },
   };
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
   setRuntimeConfigSnapshot({});
-  mocks.placementService.mockReturnValue({
-    listAsync: async () => [],
-    prepareMaintenancePlacements: async () => ({
-      placements: [],
-      assertCurrent: () => {},
-      release: () => {},
-    }),
-    prepareSessionPlacement: async () => ({
-      prepareRead: () => undefined,
-      current: () => undefined,
-      release: () => {},
-    }),
-  });
+  mocks.placementService.mockReturnValue(emptyPlacementService);
   mocks.isSessionWorkAdmissionActive.mockReturnValue(false);
   mocks.isSessionLifecycleMutationActive.mockReturnValue(false);
   mocks.runExclusiveSessionLifecycleMutation.mockImplementation(
     (_operation, { run }: { run: () => Promise<unknown> }) => run(),
   );
   readOwners.mockImplementation(({ sessionKeys }: { sessionKeys: readonly string[] }) =>
-    Promise.resolve(new Map(sessionKeys.map((key) => [key, target(key)]))),
+    Promise.resolve(new Map(sessionKeys.map((sessionKey) => [sessionKey, target(sessionKey)]))),
   );
 });
 
@@ -113,23 +118,37 @@ describe("createManagedWorktreeOwnerPolicy", () => {
       cleanup();
     }),
   );
+  let policy: ReturnType<typeof createManagedWorktreeOwnerPolicy>;
+  beforeEach(() => {
+    policy = createManagedWorktreeOwnerPolicy({});
+  });
+  function placementStore(prefix: string) {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make(prefix) };
+    const store = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase({ env }),
+    });
+    mocks.placementService.mockReturnValue(store);
+    return store;
+  }
+  const mutateOwner = (run: () => Promise<void>) =>
+    policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) => withOwnerMutation(run));
+  const expectState = (state: ReturnType<typeof policy.readOwnerState>, ownerId = key) =>
+    expect(policy.readOwnerState("session", ownerId)).toBe(state);
 
   it("uses the worker for cleanup facts and invalidates them after an in-process write", async () => {
     const stateDir = tempDirs.make("worktree-owner-worker-");
     readOwners.mockImplementation(readOwnersInWorker);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const key = cleanupRecord.ownerId;
       const scope = { agentId: "main", sessionKey: key };
       await replaceSessionEntry(scope, { sessionId: "real-owner", updatedAt: 1, archivedAt: 1 });
-      const policy = createManagedWorktreeOwnerPolicy({});
       const sql = observeHostDataSql();
       try {
         await policy.withOwnerCleanup(cleanupRecord, async () => {
-          expect(policy.readOwnerState("session", key)).toBe("retired");
+          expectState("retired");
           expect(sql.queries).toEqual([]);
           sql.restore();
           await replaceSessionEntry(scope, { sessionId: "real-owner", updatedAt: Date.now() });
-          expect(policy.readOwnerState("session", key)).toBe("active");
+          expectState("active");
         });
       } finally {
         sql.restore();
@@ -139,11 +158,7 @@ describe("createManagedWorktreeOwnerPolicy", () => {
   });
 
   it("classifies a large census off thread and allows archived cleanup until a placement write", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-census-") };
-    const store = createWorkerSessionPlacementStore({
-      database: openOpenClawStateDatabase({ env }),
-    });
-    mocks.placementService.mockReturnValue(store);
+    const store = placementStore("worktree-owner-census-");
     const records = Array.from({ length: 609 }, (_, index) => ({
       ...cleanupRecord,
       id: `worktree-${index}`,
@@ -151,7 +166,6 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     }));
     const live = records[0]!.ownerId;
     await store.startDispatch({ sessionId: live, sessionKey: live, agentId: "main" });
-    const policy = createManagedWorktreeOwnerPolicy({});
     const sql = observeHostDataSql();
     try {
       const census = await policy.prepareOwners(records);
@@ -179,48 +193,29 @@ describe("createManagedWorktreeOwnerPolicy", () => {
   });
 
   it("protects an archived owner when an in-process local turn starts after cleanup preparation", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-local-") };
-    const store = createWorkerSessionPlacementStore({
-      database: openOpenClawStateDatabase({ env }),
+    const store = placementStore("worktree-owner-local-");
+    await mutateOwner(async () => {
+      expectState("retired");
+      await store.claimTurn({
+        sessionId: key,
+        sessionKey: key,
+        agentId: "main",
+        claimId: "cleanup-local-claim",
+        runId: "cleanup-local-run",
+        owner: { kind: "local" },
+      });
+      expectState("active");
     });
-    mocks.placementService.mockReturnValue(store);
-    const key = cleanupRecord.ownerId;
-    const policy = createManagedWorktreeOwnerPolicy({});
-    await policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) =>
-      withOwnerMutation(async () => {
-        expect(policy.readOwnerState("session", key)).toBe("retired");
-        await store.claimTurn({
-          sessionId: key,
-          sessionKey: key,
-          agentId: "main",
-          claimId: "cleanup-local-claim",
-          runId: "cleanup-local-run",
-          owner: { kind: "local" },
-        });
-        expect(policy.readOwnerState("session", key)).toBe("active");
-      }),
-    );
   });
 
   it.each(["canonical-key", "shared-key", "session-id"])(
     "protects a remote placement matched by %s",
     async (match) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-owner-missing-") };
-      const store = createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env }),
-      });
-      mocks.placementService.mockReturnValue(store);
-      const key = cleanupRecord.ownerId;
-      readOwners.mockResolvedValue(
-        new Map([
-          [
-            key,
-            {
-              ...target(key, { sessionId: "remote-session", updatedAt: 1, archivedAt: 1 }),
-              ...(match !== "session-id" ? { entry: undefined } : {}),
-            },
-          ],
-        ]),
+      const store = placementStore("worktree-owner-missing-");
+      ownerEntry(
+        match === "session-id"
+          ? { sessionId: "remote-session", updatedAt: 1, archivedAt: 1 }
+          : undefined,
       );
       await store.startDispatch({
         sessionId: "remote-session",
@@ -238,14 +233,11 @@ describe("createManagedWorktreeOwnerPolicy", () => {
         });
         await store.releaseTurn(claim);
       }
-      const policy = createManagedWorktreeOwnerPolicy({});
       const census = await policy.prepareOwners([cleanupRecord]);
       expect(census.readOwnerState?.("session", key)).toBe("active");
-      await policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) =>
-        withOwnerMutation(async () => {
-          expect(policy.readOwnerState("session", key)).toBe("active");
-        }),
-      );
+      await mutateOwner(async () => {
+        expectState("active");
+      });
     },
   );
 
@@ -258,11 +250,8 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     mocks.runExclusiveSessionLifecycleMutation.mockImplementation(
       lifecycle.runExclusiveSessionLifecycleMutation,
     );
-    const key = cleanupRecord.ownerId;
     const sessionId = "queued-cleanup-session";
-    readOwners.mockResolvedValue(
-      new Map([[key, target(key, { sessionId, updatedAt: 1, archivedAt: 1 })]]),
-    );
+    ownerEntry({ sessionId, updatedAt: 1, archivedAt: 1 });
     const cfg = { session: { store: "/worktree-cleanup-policy/sessions.json" } };
     const entered = createDeferred();
     const release = createDeferred();
@@ -295,58 +284,48 @@ describe("createManagedWorktreeOwnerPolicy", () => {
   });
 
   it("uses one worker owner read through cleanup and refuses committed changes before deletion", async () => {
-    const policy = createManagedWorktreeOwnerPolicy({});
-    const key = cleanupRecord.ownerId;
-    await policy.withOwnerCleanup(cleanupRecord, async (withOwnerMutation) => {
-      await withOwnerMutation(async () => {
-        expect(policy.readOwnerState("session", key)).toBe("retired");
-        sessionChanges.emit({
-          sessionKey: `${key}:unrelated`,
-          scope: "session-entry",
-          facts: { kind: "removed" },
-        });
-        expect(policy.readOwnerState("session", key)).toBe("retired");
-        sessionChanges.emit({
-          sessionKey: key,
-          scope: "session-entry",
-          facts: { kind: "removed" },
-        });
-        expect(policy.readOwnerState("session", key)).toBe("active");
+    await mutateOwner(async () => {
+      expectState("retired");
+      sessionChanges.emit({
+        sessionKey: `${key}:unrelated`,
+        scope: "session-entry",
+        facts: { kind: "removed" },
       });
+      expectState("retired");
+      sessionChanges.emit({
+        sessionKey: key,
+        scope: "session-entry",
+        facts: { kind: "removed" },
+      });
+      expectState("active");
     });
     expect(readOwners).toHaveBeenCalledTimes(1);
-    expect(policy.readOwnerState("session", key)).toBe("active");
+    expectState("active");
     // A later cleanup acquires fresh facts instead of retaining the invalidated lifetime.
     await policy.withOwnerCleanup(cleanupRecord, async () => {
-      expect(policy.readOwnerState("session", key)).toBe("retired");
+      expectState("retired");
     });
   });
 
   it("exempts its own cleanup fence while preserving new work admission", async () => {
     mocks.isSessionLifecycleMutationActive.mockReturnValue(true);
-    const policy = createManagedWorktreeOwnerPolicy({});
-    const key = cleanupRecord.ownerId;
     await policy.withOwnerCleanup(cleanupRecord, async (withOwnerMutation) => {
-      expect(policy.readOwnerState("session", key)).toBe("active");
+      expectState("active");
       await withOwnerMutation(async () => {
-        expect(policy.readOwnerState("session", key)).toBe("retired");
-        expect(policy.readOwnerState("session", `${key}:other`)).toBe("active");
+        expectState("retired");
+        expectState("active", `${key}:other`);
         mocks.isSessionWorkAdmissionActive.mockReturnValue(true);
-        expect(policy.readOwnerState("session", key)).toBe("active");
+        expectState("active");
       });
     });
   });
 
   it("defers an owner that became active after the census", async () => {
-    const policy = createManagedWorktreeOwnerPolicy({});
-    const key = cleanupRecord.ownerId;
     const census = await policy.prepareOwners([cleanupRecord]);
     expect(census.readOwnerState?.("session", key)).toBe("retired");
-    readOwners.mockResolvedValue(
-      new Map([[key, target(key, { sessionId: key, updatedAt: Date.now() })]]),
-    );
+    ownerEntry({ sessionId: key, updatedAt: Date.now() });
     await policy.withOwnerCleanup(cleanupRecord, async () => {
-      expect(policy.readOwnerState("session", key)).toBe("active");
+      expectState("active");
     });
   });
 
@@ -376,7 +355,6 @@ describe("createManagedWorktreeOwnerPolicy", () => {
       } else {
         readOwners.mockResolvedValue(new Map());
       }
-      const policy = createManagedWorktreeOwnerPolicy({});
       const census = await policy.prepareOwners([cleanupRecord]);
       expect(census.readOwnerState?.("session", cleanupRecord.ownerId)).toBe("active");
       await expect(policy.withOwnerCleanup(cleanupRecord, async () => {})).rejects.toThrow();
@@ -385,18 +363,12 @@ describe("createManagedWorktreeOwnerPolicy", () => {
 
   it("defers cleanup when placement preparation is unavailable", async () => {
     mocks.placementService.mockReturnValue({
-      listAsync: async () => [],
+      ...emptyPlacementService,
       prepareMaintenancePlacements: async () => {
         throw new Error("unreadable placement");
       },
-      prepareSessionPlacement: async () => ({
-        prepareRead: () => undefined,
-        current: () => undefined,
-        release: () => {},
-      }),
     });
     const remove = vi.fn(async () => {});
-    const policy = createManagedWorktreeOwnerPolicy({});
     await expect(
       policy.withOwnerCleanup(cleanupRecord, (withOwnerMutation) => withOwnerMutation(remove)),
     ).rejects.toThrow("unreadable placement");

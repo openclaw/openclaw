@@ -55,6 +55,7 @@ import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
+import type { WorktreeRegistryPredicate } from "./types.js";
 import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,6 +73,18 @@ function interceptAdmission(
         ...options,
       ),
     );
+}
+function loseReplies(types: string[]) {
+  const writes = new Map<string, number>();
+  const transport = interceptWorktreeWorkerOperation((execute) => async (command, options) => {
+    const result = await execute(command, options);
+    if (types.includes(command.type)) {
+      writes.set(command.type, (writes.get(command.type) ?? 0) + 1);
+      throw new Error("Synthetic lost command reply");
+    }
+    return result;
+  });
+  return { restore: () => transport.mockRestore(), count: (type: string) => writes.get(type) ?? 0 };
 }
 
 beforeEach(() => {
@@ -140,12 +153,22 @@ async function fixture() {
     startTime: null,
     now: 1,
   };
-  return { env, database, claim };
+  const context = captureOpenClawStateWorkerContext({ env });
+  const claimRemoval = (overrides: Partial<Parameters<typeof claimWorktreeRemovalRow>[1]> = {}) =>
+    claimWorktreeRemovalRow(env, { ...claim, ...overrides });
+  const finalize = (token: string) =>
+    finalizeWorktreeRemovalRows(env, {
+      worktreeId: claim.worktreeId,
+      lastActiveAt: 1,
+      token,
+    });
+  const guard = (predicate: WorktreeRegistryPredicate) =>
+    prepareWorktreeRegistryGuard(context, { predicates: [predicate] });
+  return { env, database, claim, context, claimRemoval, finalize, guard };
 }
 
 it("retains SQL-free effect authority across unrelated writes and revokes pending owner changes", async () => {
-  const { env, claim } = await fixture();
-  const context = captureOpenClawStateWorkerContext({ env });
+  const { env, claim, context, guard } = await fixture();
   const acceptSource = captureWorktreeRegistryReadGuard(context, "source-owner");
   const acceptBinding = captureWorktreeRegistryReadGuard(context, "binding");
   const acceptPublication = captureWorktreeRegistryReadGuard(context, "publication");
@@ -157,9 +180,7 @@ it("retains SQL-free effect authority across unrelated writes and revokes pendin
   const assertSource = acceptSource(record);
   const assertBinding = acceptBinding(record);
   const assertPublication = acceptPublication(record);
-  const assertExactOwner = await prepareWorktreeRegistryGuard(context, {
-    predicates: [{ kind: "exact-owner", record }],
-  });
+  const assertExactOwner = await guard({ kind: "exact-owner", record });
   const sql = observeMainThreadSql();
   try {
     await clearRegistryWorktreeProvisionedChunks(env, record.id);
@@ -233,36 +254,30 @@ it("retains SQL-free effect authority across unrelated writes and revokes pendin
 });
 
 it("distinguishes checkout base and retained snapshot in registry binding predicates", async () => {
-  const { env } = await fixture();
-  const context = captureOpenClawStateWorkerContext({ env });
+  const { context, guard } = await fixture();
   const record = (await readRegistryWorktree(context, "synthetic"))!;
   for (const kind of ["binding", "exact-snapshot"] as const) {
     const rejected =
       kind === "binding"
         ? { ...record, baseRef: "another-base" }
         : { ...record, snapshotRef: "refs/openclaw/snapshots/another" };
-    await expect(
-      prepareWorktreeRegistryGuard(context, { predicates: [{ kind, record: rejected }] }),
-    ).rejects.toThrow(
+    await expect(guard({ kind, record: rejected })).rejects.toThrow(
       kind === "binding" ? "owner or binding changed" : "owner or lifecycle changed",
     );
     const accepted =
       kind === "binding"
         ? { ...record, snapshotRef: "refs/openclaw/snapshots/another" }
         : { ...record, baseRef: "another-base" };
-    const assertCurrent = await prepareWorktreeRegistryGuard(context, {
-      predicates: [{ kind, record: accepted }],
-    });
+    const assertCurrent = await guard({ kind, record: accepted });
     expect(assertCurrent).not.toThrow();
   }
 });
 
 it("settles snapshot chunks and exclusive removal claims without caller-thread SQL", async () => {
-  const { env, database, claim } = await fixture();
+  const { env, database, claim, context, claimRemoval, finalize } = await fixture();
   const sql = observeMainThreadSql();
   try {
-    const mismatch = claimWorktreeRemovalRow(env, {
-      ...claim,
+    const mismatch = claimRemoval({
       workerAuthority: {
         predicates: [{ kind: "session-owner", id: claim.worktreeId, sessionKey: "other" }],
       },
@@ -270,16 +285,14 @@ it("settles snapshot chunks and exclusive removal claims without caller-thread S
     await expect(mismatch).rejects.toBeInstanceOf(SessionWorktreeLifecycleError);
     await expect(mismatch).rejects.toMatchObject({ reason: "owner-mismatch" });
     await expect(
-      claimWorktreeRemovalRow(env, {
-        ...claim,
+      claimRemoval({
         workerAuthority: {
           predicates: [{ kind: "activity", id: claim.worktreeId, lastActiveAt: 99 }],
         },
       }),
     ).rejects.toBeInstanceOf(WorktreeRemovalLockError);
     await expect(
-      claimWorktreeRemovalRow(env, {
-        ...claim,
+      claimRemoval({
         workerAuthority: {
           predicates: [
             {
@@ -292,9 +305,9 @@ it("settles snapshot chunks and exclusive removal claims without caller-thread S
         },
       }),
     ).rejects.toBeInstanceOf(SessionWorktreeSourceChangedError);
-    await claimWorktreeRemovalRow(env, claim);
+    await claimRemoval();
     await expect(
-      Promise.resolve().then(() => claimWorktreeRemovalRow(env, { ...claim, token: "second" })),
+      Promise.resolve().then(() => claimRemoval({ token: "second" })),
     ).rejects.toBeInstanceOf(WorktreeRemovalContentionError);
     await insertRegistryWorktreeProvisionedChunk(env, {
       worktreeId: claim.worktreeId,
@@ -305,15 +318,11 @@ it("settles snapshot chunks and exclusive removal claims without caller-thread S
     await clearRegistryWorktreeProvisionedChunks(env, claim.worktreeId);
     await abortWorktreeRemovalRow(env, claim.worktreeId, "second");
     await expect(
-      Promise.resolve().then(() => claimWorktreeRemovalRow(env, { ...claim, token: "second" })),
+      Promise.resolve().then(() => claimRemoval({ token: "second" })),
     ).rejects.toMatchObject({ kind: "busy" });
     await abortWorktreeRemovalRow(env, claim.worktreeId, claim.token);
-    await claimWorktreeRemovalRow(env, { ...claim, token: "second" });
-    await finalizeWorktreeRemovalRows(env, {
-      worktreeId: claim.worktreeId,
-      lastActiveAt: 1,
-      token: "second",
-    });
+    await claimRemoval({ token: "second" });
+    await finalize("second");
     sql.expectIdle();
   } finally {
     sql.restore();
@@ -325,19 +334,9 @@ it("settles snapshot chunks and exclusive removal claims without caller-thread S
     database.db.prepare("SELECT COUNT(*) AS count FROM worktree_provisioned_file_chunks").get(),
   ).toEqual({ count: 0 });
   await updateRegistryWorktree(env, claim.worktreeId, { lastActiveAt: 2 });
-  await admitWorktreeRunLeaseRowAsync(
-    captureOpenClawStateWorkerContext({ env }),
-    { ...claim, token: "successor" },
-    () => {},
-  );
-  await expect(
-    finalizeWorktreeRemovalRows(env, {
-      worktreeId: claim.worktreeId,
-      lastActiveAt: 1,
-      token: "second",
-    }),
-  ).rejects.toMatchObject({ kind: "finalized" });
-  await expect(claimWorktreeRemovalRow(env, claim)).rejects.toMatchObject({
+  await admitWorktreeRunLeaseRowAsync(context, { ...claim, token: "successor" }, () => {});
+  await expect(finalize("second")).rejects.toMatchObject({ kind: "finalized" });
+  await expect(claimRemoval()).rejects.toMatchObject({
     kind: "busy",
     blockedByRun: { worktreeId: claim.worktreeId, pid: process.pid },
   });
@@ -405,7 +404,6 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     chunkIndex: 0,
     data: new Uint8Array([9, 8, 7]),
   };
-  let writes = 0;
   const facts = new Map();
   const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
     if (change.kind === "committed") {
@@ -414,26 +412,13 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
       }
     }
   });
-  const lostReply = interceptWorktreeWorkerOperation(
-    (execute) => async (command, executeOptions) => {
-      const result = await execute(command, executeOptions);
-      if (command.type === "worktrees.writeProvisionedSnapshot") {
-        writes += 1;
-      }
-      if (
-        [
-          "worktrees.writeProvisionedSnapshot",
-          "worktrees.update",
-          "worktrees.deferCleanup",
-          "worktrees.admitRunLease",
-          "worktrees.releaseRunLease",
-        ].includes(command.type)
-      ) {
-        throw new Error("Synthetic lost command reply");
-      }
-      return result;
-    },
-  );
+  const lostReply = loseReplies([
+    "worktrees.writeProvisionedSnapshot",
+    "worktrees.update",
+    "worktrees.deferCleanup",
+    "worktrees.admitRunLease",
+    "worktrees.releaseRunLease",
+  ]);
   try {
     await insertRegistryWorktreeProvisionedChunk(env, input);
     await updateRegistryWorktree(env, "synthetic", { lastActiveAt: 2 });
@@ -467,10 +452,10 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
       facts.get(JSON.stringify(["state_leases", "worktree-run:synthetic", "lost-reply"])),
     ).toEqual({ kind: "absent" });
   } finally {
-    lostReply.mockRestore();
+    lostReply.restore();
     unsubscribe();
   }
-  expect(writes).toBe(1);
+  expect(lostReply.count("worktrees.writeProvisionedSnapshot")).toBe(1);
 
   const revoked = new Error("Synthetic current owner revoked at commit");
   let current = true;
@@ -551,15 +536,7 @@ it("preserves retirement commits when combined facts or the recovery result exce
   const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
     publications.push(change.kind);
   });
-  let writes = 0;
-  const lostReply = interceptWorktreeWorkerOperation((execute) => async (command, options) => {
-    const result = await execute(command, options);
-    if (command.type === "worktrees.retireMissing") {
-      writes += 1;
-      throw new Error("Synthetic lost retirement reply");
-    }
-    return result;
-  });
+  const lostReply = loseReplies(["worktrees.retireMissing"]);
   try {
     // The command stays small: large values are persisted fixture data, not retirement inputs.
     for (const bytes of [
@@ -596,9 +573,9 @@ it("preserves retirement commits when combined facts or the recovery result exce
       ).toEqual({ removed_at: 2 });
       expect(publications).toEqual(["pending", "unknown", "settled"]);
     }
-    expect(writes).toBe(2);
+    expect(lostReply.count("worktrees.retireMissing")).toBe(2);
   } finally {
-    lostReply.mockRestore();
+    lostReply.restore();
     unsubscribe();
   }
 });

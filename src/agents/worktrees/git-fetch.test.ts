@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -20,6 +19,22 @@ const env = { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_CONFIG_NOSYSTEM: "1" }
 
 async function git(cwd: string, args: string[]) {
   return requireGitCommandOutput("fixture git", await executeGitCommand(cwd, args, { env })).trim();
+}
+const fetchArgs = ["fetch", "--no-auto-maintenance", "origin"];
+const fetch = (cwd: string) => runGit(cwd, fetchArgs, { env });
+const ref = (cwd: string, name: string) => git(cwd, ["rev-parse", name]);
+const trackingRefs = (cwd: string) =>
+  git(cwd, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/retired"]);
+function expectBrokenFetch(result: Awaited<ReturnType<typeof runGit>>) {
+  expect(result.code).toBe(128);
+  expect(result.stderr).toContain(
+    "which is in the commit graph file but not in the object database",
+  );
+}
+async function expectRetainedTip(clone: string, tip: string) {
+  expect(await fs.readFile(path.join(clone, ".git", "refs/heads/retained"), "utf8")).toBe(
+    `${tip}\n`,
+  );
 }
 
 async function brokenClone() {
@@ -67,41 +82,27 @@ async function brokenClone() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("shared repository missing-tip recovery", () => {
-  it.each(["--dry-run"])(
-    "keeps a %s fetch read-only even when the clone needs repair",
-    async (dryRun) => {
-      const { clone, retired, tip } = await brokenClone();
-      const fetched = await runGit(clone, ["fetch", dryRun, "--no-auto-maintenance", "origin"], {
-        env,
-      });
-      expect(fetched.code).toBe(128);
-      expect(fetched.stderr).toContain(
-        "which is in the commit graph file but not in the object database",
-      );
-      expect(
-        await fs.readFile(path.join(clone, ".git", "refs/remotes/origin/retired"), "utf8"),
-      ).toBe(`${retired}\n`);
-      expect((await executeGitCommand(clone, ["cat-file", "-t", tip], { env })).code).not.toBe(0);
-    },
-  );
+  it("keeps a dry-run fetch read-only even when the clone needs repair", async () => {
+    const { clone, retired, tip } = await brokenClone();
+    const fetched = await runGit(clone, ["fetch", "--dry-run", "--no-auto-maintenance", "origin"], {
+      env,
+    });
+    expectBrokenFetch(fetched);
+    expect(await fs.readFile(path.join(clone, ".git", "refs/remotes/origin/retired"), "utf8")).toBe(
+      `${retired}\n`,
+    );
+    expect((await executeGitCommand(clone, ["cat-file", "-t", tip], { env })).code).not.toBe(0);
+  });
 
   it.each(["worktree", "renamed project branch", "pinned project commit"] as const)(
     "repairs commit-graph-only tips through %s without removing local branches or detached HEADs",
     async (entry) => {
-      const fixture = await brokenClone();
-      const { clone, source, linked, url, base, tip } = fixture;
+      const { clone, source, linked, url, base, tip } = await brokenClone();
       if (entry === "renamed project branch") {
         await git(source, ["branch", "-m", "main", "renamed"]);
         await git(source, ["branch", "-D", "keep"]);
       }
-      const before = await executeGitCommand(clone, ["fetch", "--no-auto-maintenance", "origin"], {
-        env,
-      });
-      expect(before.code).toBe(128);
-      expect(before.stderr).toContain(
-        "which is in the commit graph file but not in the object database",
-      );
-      const start = performance.now();
+      expectBrokenFetch(await executeGitCommand(clone, fetchArgs, { env }));
       if (entry === "worktree") {
         // The live entry point inherits this variable from its process environment.
         vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
@@ -114,27 +115,17 @@ describe("shared repository missing-tip recovery", () => {
         }
       } else if (entry === "renamed project branch") {
         await refreshProjectCheckout({ target: clone, url }, { env });
-        if (entry === "renamed project branch") {
-          expect(await git(clone, ["rev-parse", "refs/remotes/origin/renamed"])).toBe(tip);
-        }
+        expect(await ref(clone, "refs/remotes/origin/renamed")).toBe(tip);
       } else {
         await ensureProjectCheckoutCommit({ target: clone, url, commit: tip }, { env });
       }
-      const elapsed = performance.now() - start;
       expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
-      expect(await git(clone, ["rev-parse", "refs/heads/main"])).toBe(base);
-      expect(await git(clone, ["rev-parse", "refs/heads/retained"])).toBe(tip);
-      expect(await git(linked, ["rev-parse", "HEAD"])).toBe(tip);
-      expect(
-        await git(clone, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/retired"]),
-      ).toBe("");
-      const after = await executeGitCommand(clone, ["fetch", "--no-auto-maintenance", "origin"], {
-        env,
-      });
+      expect(await ref(clone, "refs/heads/main")).toBe(base);
+      expect(await ref(clone, "refs/heads/retained")).toBe(tip);
+      expect(await ref(linked, "HEAD")).toBe(tip);
+      expect(await trackingRefs(clone)).toBe("");
+      const after = await executeGitCommand(clone, fetchArgs, { env });
       expect(after.code).toBe(0);
-      console.info(
-        `${entry}: before exit=${before.code}, after exit=${after.code}, recovery=${elapsed.toFixed(0)}ms`,
-      );
     },
   );
 
@@ -148,13 +139,9 @@ describe("shared repository missing-tip recovery", () => {
       "remote.origin.fetch",
       "+refs/heads/keep:refs/remotes/origin/main",
     ]);
-    expect((await runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env })).code).toBe(
-      0,
-    );
-    expect(await git(clone, ["rev-parse", "refs/remotes/origin/main"])).toBe(tip);
-    expect(
-      await git(clone, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/retired"]),
-    ).toBe("refs/remotes/origin/retired");
+    expect((await fetch(clone)).code).toBe(0);
+    expect(await ref(clone, "refs/remotes/origin/main")).toBe(tip);
+    expect(await trackingRefs(clone)).toBe("refs/remotes/origin/retired");
   });
 
   it("repairs physical tips hidden by a replacement during project refresh", async () => {
@@ -163,7 +150,7 @@ describe("shared repository missing-tip recovery", () => {
     await git(clone, ["update-ref", replacement, base]);
     await refreshProjectCheckout({ target: clone, url }, { env });
     expect(await git(clone, ["--no-replace-objects", "cat-file", "-t", tip])).toBe("commit");
-    expect(await git(clone, ["rev-parse", replacement])).toBe(base);
+    expect(await ref(clone, replacement)).toBe(base);
   });
 
   it("preserves tags and tracking refs when the caller disables configured pruning", async () => {
@@ -176,8 +163,8 @@ describe("shared repository missing-tip recovery", () => {
       (await runGit(clone, ["fetch", "--no-auto-maintenance", "--no-prune", "origin"], { env }))
         .code,
     ).toBe(0);
-    expect(await git(clone, ["rev-parse", "refs/tags/local-only"])).toBe(base);
-    expect(await git(clone, ["rev-parse", "refs/remotes/origin/retired"])).toBe(retired);
+    expect(await ref(clone, "refs/tags/local-only")).toBe(base);
+    expect(await ref(clone, "refs/remotes/origin/retired")).toBe(retired);
   });
 
   it("does not treat an option value as permission to repair origin", async () => {
@@ -186,10 +173,7 @@ describe("shared repository missing-tip recovery", () => {
     await git(clone, ["config", "branch.main.remote", "upstream"]);
     await git(clone, ["config", "protocol.version", "2"]);
     const fetched = await runGit(clone, ["fetch", "--server-option", "origin"], { env });
-    expect(fetched.code).toBe(128);
-    expect(fetched.stderr).toContain(
-      "which is in the commit graph file but not in the object database",
-    );
+    expectBrokenFetch(fetched);
     expect(await fs.readFile(path.join(clone, ".git", "refs/remotes/origin/retired"), "utf8")).toBe(
       `${retired}\n`,
     );
@@ -208,11 +192,9 @@ describe("shared repository missing-tip recovery", () => {
       }
       return run(argv, options);
     });
-    await runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env });
+    await fetch(clone);
     expect(replaced).toBe(true);
-    expect(await fs.readFile(path.join(clone, ".git", "refs/heads/retained"), "utf8")).toBe(
-      `${tip}\n`,
-    );
+    await expectRetainedTip(clone, tip);
   });
 
   it.each([
@@ -238,11 +220,9 @@ describe("shared repository missing-tip recovery", () => {
       if (operation === "project refresh") {
         await refreshProjectCheckout({ target: clone, url }, { env });
       } else {
-        expect(
-          (await runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env })).code,
-        ).toBe(0);
+        expect((await fetch(clone)).code).toBe(0);
       }
-      expect(await git(clone, ["rev-parse", "refs/remotes/origin/retired"])).toBe(retired);
+      expect(await ref(clone, "refs/remotes/origin/retired")).toBe(retired);
       expect(
         await git(owner === "local symbolic branch" ? clone : linked, [
           "rev-parse",
@@ -254,9 +234,7 @@ describe("shared repository missing-tip recovery", () => {
 
   it("does not follow a tracking alias replaced immediately before project publication", async () => {
     const { clone, tip, url } = await brokenClone();
-    expect((await runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env })).code).toBe(
-      0,
-    );
+    expect((await fetch(clone)).code).toBe(0);
     const replacement = "refs/remotes/origin/retired2";
     await git(clone, ["update-ref", replacement, tip]);
     const run = processExec.runCommandWithTimeout;
@@ -271,7 +249,7 @@ describe("shared repository missing-tip recovery", () => {
     });
     await refreshProjectCheckout({ target: clone, url }, { env });
     expect(replaced).toBe(true);
-    expect(await git(clone, ["rev-parse", "refs/heads/retained"])).toBe(tip);
+    expect(await ref(clone, "refs/heads/retained")).toBe(tip);
   });
 
   it.each(["unavailable", "uncertain"] as const)(
@@ -298,7 +276,7 @@ describe("shared repository missing-tip recovery", () => {
         return run(argv, options);
       });
       try {
-        const operation = runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env });
+        const operation = fetch(clone);
         if (failure === "uncertain") {
           await expect(operation).rejects.toBe(uncertain);
         } else {
@@ -307,10 +285,8 @@ describe("shared repository missing-tip recovery", () => {
             "Local branches and worktree HEADs were preserved",
           );
         }
-        expect(await fs.readFile(path.join(clone, ".git", "refs/heads/retained"), "utf8")).toBe(
-          `${tip}\n`,
-        );
-        expect(await git(linked, ["rev-parse", "HEAD"])).toBe(tip);
+        await expectRetainedTip(clone, tip);
+        expect(await ref(linked, "HEAD")).toBe(tip);
       } finally {
         logs.cleanup();
       }
