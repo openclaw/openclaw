@@ -71,6 +71,29 @@ describe("Hermes migration file and skill items", () => {
   const hermesAccessField = ["access", "token"].join("_");
   const hermesRefreshField = ["refresh", "token"].join("_");
 
+  it.each(["stat", "readdir"] as const)(
+    "rejects an incomplete plan when source directory %s fails",
+    async (operation) => {
+      const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
+      await writeFile(path.join(source, "skills", "review", "SKILL.md"), "# Review\n");
+      const failure = Object.assign(new Error("source directory unavailable"), { code: "EIO" });
+      const read =
+        operation === "stat"
+          ? vi.spyOn(fs, "stat").mockRejectedValueOnce(failure)
+          : vi.spyOn(fs, "readdir").mockRejectedValueOnce(failure);
+      const provider = buildHermesMigrationProvider();
+      const ctx = makeContext({ source, stateDir, workspaceDir });
+
+      await expect(provider.plan(ctx)).rejects.toBe(failure);
+
+      read.mockRestore();
+      const recovered = await provider.plan(ctx);
+      expect(recovered.items).toContainEqual(
+        expect.objectContaining({ id: "skill:review", kind: "skill", status: "planned" }),
+      );
+    },
+  );
+
   it("discovers nested skills while pruning inactive packages", async () => {
     const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(path.join(source, "skills", "coding", "review", "SKILL.md"), "# Review\n");

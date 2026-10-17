@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseDotenv } from "dotenv";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   markMigrationItemError,
   markMigrationItemSkipped,
@@ -25,7 +26,13 @@ export function resolveHomePath(input: string): string {
 export { pathExists as exists } from "openclaw/plugin-sdk/security-runtime";
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
-  const stat = await fs.stat(dirPath).catch(() => undefined);
+  const stat = await fs.stat(dirPath).catch((error: unknown) => {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  });
   return stat?.isDirectory() === true;
 }
 
