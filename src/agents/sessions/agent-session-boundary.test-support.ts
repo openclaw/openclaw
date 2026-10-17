@@ -11,6 +11,14 @@ import { loadExtensionFromFactory } from "./extensions/loader.js";
 import type { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
+export function sessionTarget(
+  storePath: string,
+  sessionId: string,
+  sessionKey = `agent:main:${sessionId}`,
+) {
+  return { agentId: "main", sessionId, sessionKey, storePath };
+}
+
 export async function extensionFixture(
   cwd: string,
   factory: Parameters<typeof loadExtensionFromFactory>[0],

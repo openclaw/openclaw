@@ -1,7 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { compactionSettings } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
@@ -14,14 +14,14 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import { extractTextContent } from "./agent-session-utils.js";
 import { createCompactionRequestBudget } from "./compaction/request-budget.js";
 import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
 function appendPending(manager: SessionManager, content: string, idempotencyKey: string) {
-  const message: PersistedUserTurnMessage = { role: "user", content, timestamp: 3, idempotencyKey };
-  manager.appendMessage(message);
+  manager.appendMessage({ ...makeUserMessage(content, 3), idempotencyKey });
 }
 
 function inputTokens(
@@ -68,10 +68,10 @@ it.each([
       appendPending(sessionManager, pendingInput, pendingKey);
     }
     if (ingress.endsWith("carrier")) {
-      const carrier = buildRuntimeContextCustomMessage("Retained runtime context");
-      if (!carrier) {
-        throw new Error("Expected runtime context carrier");
-      }
+      const carrier = expectDefined(
+        buildRuntimeContextCustomMessage("Retained runtime context"),
+        "runtime context",
+      );
       sessionManager.appendCustomMessageEntry(
         carrier.customType,
         carrier.content,
@@ -86,10 +86,10 @@ it.each([
       systemPrompt,
     });
     if (queued) {
-      const suppressed = buildRuntimeContextCustomMessage("Discarded queued context. ".repeat(35));
-      if (!suppressed) {
-        throw new Error("Expected queued runtime context");
-      }
+      const suppressed = expectDefined(
+        buildRuntimeContextCustomMessage("Discarded queued context. ".repeat(35)),
+        "queued context",
+      );
       await session.sendCustomMessage(suppressed, { deliverAs: "nextTurn" });
       await session.sendCustomMessage(
         { customType: "required-fixture", content: "queue-marker", display: false },
@@ -116,14 +116,7 @@ it.each([
         }
         const pendingPreserved = context.messages.some(
           (message) =>
-            message.role === "user" &&
-            (typeof message.content === "string"
-              ? message.content
-              : message.content
-                  .filter((part) => part.type === "text")
-                  .map((part) => part.text)
-                  .join("")
-            ).includes(pendingInput),
+            message.role === "user" && extractTextContent(message.content).includes(pendingInput),
         );
         calls.push({
           pendingPreserved,

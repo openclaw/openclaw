@@ -45,10 +45,7 @@ it.each([
         : "Core summary without required safeguard headings";
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({
-      ...createAssistant(model, "old answer"),
-      timestamp: 2,
-    });
+    sessionManager.appendMessage({ ...createAssistant(model, "old answer"), timestamp: 2 });
     sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
     const providerStarted = createDeferred();
     const releaseProvider = createDeferred();

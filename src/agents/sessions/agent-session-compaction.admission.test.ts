@@ -22,7 +22,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { compactionSettings } from "./agent-session-boundary.test-support.js";
+import { compactionSettings, sessionTarget } from "./agent-session-boundary.test-support.js";
 import {
   createAssistant,
   createTestSession,
@@ -44,12 +44,7 @@ type BeforeCompactionEvent = Extract<ExtensionEvent, { type: "session_before_com
 
 it("does not append when a compaction extension rejects the finalized summary", async () => {
   const dir = tempDirs.make("openclaw-rejected-compaction-");
-  const target = {
-    agentId: "main",
-    sessionId: "rejected-compaction-reopen",
-    sessionKey: "agent:main:rejected-compaction-reopen",
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const target = sessionTarget(path.join(dir, "sessions.json"), "rejected-compaction-reopen");
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   await appendTranscriptMessage(target, {
     cwd: dir,
@@ -84,12 +79,7 @@ it.each(["compaction", "tree"] as const)(
   "does not publish a cancelled %s while waiting for the writer",
   async (operation) => {
     const root = realpathSync(tempDirs.make("openclaw-context-admission-"));
-    const target = {
-      agentId: "main",
-      sessionId: "context-admission",
-      sessionKey: "agent:main:context-admission",
-      storePath: path.join(root, "sessions.json"),
-    };
+    const target = sessionTarget(path.join(root, "sessions.json"), "context-admission");
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(target, root);
     const firstUser = manager.appendMessage(makeUserMessage("old prompt", 1));

@@ -11,7 +11,11 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { safeguardFixture, textStream } from "./agent-session-boundary.test-support.js";
+import {
+  safeguardFixture,
+  sessionTarget,
+  textStream,
+} from "./agent-session-boundary.test-support.js";
 import {
   collectCompactionEnds,
   createAssistant,
@@ -61,12 +65,10 @@ it.each([
   { name: "existing session", priorBoundary: true },
 ])("reopens and continues from a degraded boundary in a $name", async ({ priorBoundary }) => {
   const dir = tempDirs.make("openclaw-degraded-compaction-reload-");
-  const target = {
-    agentId: "main",
-    sessionId: `degraded-reload-${priorBoundary ? "existing" : "fresh"}`,
-    sessionKey: `agent:main:degraded-reload-${priorBoundary ? "existing" : "fresh"}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const target = sessionTarget(
+    path.join(dir, "sessions.json"),
+    `degraded-reload-${priorBoundary ? "existing" : "fresh"}`,
+  );
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   let sessionManager = SessionManager.open(target, dir);
   if (priorBoundary) {
@@ -91,10 +93,7 @@ it.each([
     content: `${LATEST_ASK} ${OVERSIZED_IDENTIFIER}`,
     timestamp: 3,
   });
-  sessionManager.appendMessage({
-    ...createAssistant(model, "old answer"),
-    timestamp: 4,
-  });
+  sessionManager.appendMessage({ ...createAssistant(model, "old answer"), timestamp: 4 });
   sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 5 });
   streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
     textStream(activeModel, "Summary without headings"),

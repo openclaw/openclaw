@@ -21,7 +21,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { extensionFixture } from "./agent-session-boundary.test-support.js";
+import { extensionFixture, sessionTarget } from "./agent-session-boundary.test-support.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
@@ -75,12 +75,7 @@ vi.mock(
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 let storePath: string;
-const targetFor = (sessionId: string) => ({
-  agentId: "main",
-  sessionId,
-  sessionKey: `agent:main:${sessionId}`,
-  storePath,
-});
+const targetFor = (sessionId: string) => sessionTarget(storePath, sessionId);
 
 beforeEach(() => {
   const root = tempDirs.make("openclaw-session-reclamation-transcript-");
@@ -100,10 +95,7 @@ it("retains a void extension message until its durable append and publication pr
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: Date.now() });
   const cwd = path.dirname(storePath);
   const events: string[] = [];
-  const payload = {
-    customType: "custody-proof",
-    content: "Synthetic message retained through write admission.",
-  };
+  const payload = { customType: "custody-proof", content: "durable message" };
   const { eventBus, resourceLoader } = await extensionFixture(cwd, (api) => {
     api.registerCommand("custody-send", {
       handler: async () => {
@@ -189,6 +181,7 @@ it("queues an unrelated custom-message append behind reclamation writer admissio
   });
   let write: Promise<void> | undefined;
   const published: string[] = [];
+  const payload = { customType: "admission-proof", content: "durable message" };
   let publishedDuringCommitAuthorization: string[] | undefined;
   session.subscribe((event) => {
     if (event.type === "message_end" && event.message.role === "custom") {
@@ -196,11 +189,7 @@ it("queues an unrelated custom-message append behind reclamation writer admissio
     }
   });
   checkpoint.startForeground = vi.fn(() => {
-    const message = {
-      customType: "admission-proof",
-      content: "The unrelated transcript write must settle.",
-      display: true,
-    };
+    const message = { ...payload, display: true };
     write = session.sendCustomMessage(message);
     void write.catch(() => {});
     message.content = "Caller changed the input after submission.";
@@ -223,11 +212,7 @@ it("queues an unrelated custom-message append behind reclamation writer admissio
   expect(publishedDuringCommitAuthorization).toEqual([]);
   expect(published).toEqual(["admission-proof"]);
   expect(await loadTranscriptEvents(unrelated)).toContainEqual(
-    expect.objectContaining({
-      type: "custom_message",
-      customType: "admission-proof",
-      content: "The unrelated transcript write must settle.",
-    }),
+    expect.objectContaining({ type: "custom_message", ...payload }),
   );
   expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   expect(loadSessionEntry(unrelated)).toMatchObject({ sessionId: unrelated.sessionId });

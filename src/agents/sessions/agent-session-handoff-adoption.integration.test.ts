@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { runActiveReplySteer } from "../../auto-reply/reply/agent-runner-steer-adoption.js";
+import { createSteerParams } from "../../auto-reply/reply/agent-runner-steer-adoption.test-support.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -21,12 +22,7 @@ import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-regist
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import {
-  createMockFollowupRun,
-  createMockTypingController,
-} from "../../auto-reply/reply/test-helpers.js";
-import { createTypingSignaler } from "../../auto-reply/reply/typing-mode.js";
-import type { TemplateContext } from "../../auto-reply/templating.js";
+import { createMockFollowupRun } from "../../auto-reply/reply/test-helpers.js";
 import type { EmbeddedAgentQueueHandle } from "../embedded-agent-runner/run-state.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
@@ -147,11 +143,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
       onAbandoned: abandoned,
       onSettled: lifecycleSettled,
     },
-    run: {
-      sessionId,
-      sessionKey: queueKey,
-      messageProvider: "telegram",
-    },
+    run: { sessionId, sessionKey: queueKey, messageProvider: "telegram" },
   });
   const activeOperation = createReplyOperation({
     sessionKey: queueKey,
@@ -200,8 +192,6 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     },
     cancel: () => {},
   };
-  const typing = createMockTypingController();
-  const typingSignals = createTypingSignaler({ typing, mode: "never", isHeartbeat: false });
   const runState: ReplyOperationRunState = {};
   const runFollowup = async (queued: typeof followupRun) => {
     await ownerReleased.promise;
@@ -227,25 +217,11 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
       followupOperation.complete();
     }
   };
-  const steerParams = {
-    followupRun,
-    opts: undefined,
-    providedReplyOperation: activeOperation,
-    queueKey,
-    releaseAdmissionTicket: vi.fn(),
+  const steerParams = createSteerParams(queueKey, followupRun, activeOperation, {
     replyOperationRunState: runState,
-    resolvedQueue: { mode: "steer" as const, debounceMs: 0 },
-    restartRecoverySourceTurnId: undefined,
     runFollowup,
-    sessionCtx: {
-      Provider: "telegram",
-      MessageSid: "handoff-proof-message",
-    } as TemplateContext,
-    sessionKey: queueKey,
-    touchActiveSessionEntry: vi.fn(async () => {}),
-    typing,
-    typingSignals,
-  };
+    sessionCtx: { Provider: "telegram", MessageSid: "handoff-proof-message" },
+  });
 
   try {
     activeOperation.attachBackend(replyBackend);
@@ -304,10 +280,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     scheduleFollowupDrain(queueKey, runFollowup);
     const redelivery = createMockFollowupRun({
       ...followupRun,
-      turnAdoptionLifecycle: {
-        admission: "exclusive",
-        onAdopted: vi.fn(),
-      },
+      turnAdoptionLifecycle: { admission: "exclusive", onAdopted: vi.fn() },
       run: followupRun.run,
     });
     await runActiveReplySteer({
