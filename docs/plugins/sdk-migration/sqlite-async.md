@@ -589,13 +589,13 @@ Use `openOpenClawAgentSqliteWorkerStoreV2` and serializable owner commands for
 ordinary runtime storage. Move the native implementation into the paired worker
 backend using `sqlite-worker-runtime`:
 
-| Before                                                                                                                                 | After                                                             |
-| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Writable `openNodeSqliteDatabase`, `openOpenClawAgentDatabase`, `borrowOpenClawAgentDatabase`                                          | Worker store acquisition, preparation, and data-only commands     |
-| Legacy worker-store `publicationSource.DatabaseSync`                                                                                   | V2 worker-store publication source                                |
-| `withOpenClawAgentDatabaseAsync`, `withOpenClawAgentDatabaseWrite`, `runOpenClawAgentWriteAdmission`                                   | Await V2 worker-store commands; do not pass native host callbacks |
-| `runSqliteImmediateTransaction`, `runSqliteImmediateTransactionSync`                                                                   | Transaction inside the worker backend                             |
-| `executeSqliteQuerySync`, `executeSqliteQueryTakeFirstSync`, `iterateSqliteQuerySync`, `prepareSqliteQuerySync`, `getNodeSqliteKysely` | Worker-local primitives; expose a data-only operation to the host |
+| Before                                                                                                                                 | After                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Writable `openNodeSqliteDatabase`, `openOpenClawAgentDatabase`, `borrowOpenClawAgentDatabase`                                          | Worker store acquisition, preparation, and data-only commands           |
+| `openOpenClawAgentSqliteWorkerStore` with a native database publication source                                                         | Await `openOpenClawAgentSqliteWorkerStoreV2` with retained V2 authority |
+| `withOpenClawAgentDatabaseAsync`, `withOpenClawAgentDatabaseWrite`, `runOpenClawAgentWriteAdmission`                                   | Await V2 worker-store commands; do not pass native host callbacks       |
+| `runSqliteImmediateTransaction`, `runSqliteImmediateTransactionSync`                                                                   | Transaction inside the worker backend                                   |
+| `executeSqliteQuerySync`, `executeSqliteQueryTakeFirstSync`, `iterateSqliteQuerySync`, `prepareSqliteQuerySync`, `getNodeSqliteKysely` | Worker-local primitives; expose a data-only operation to the host       |
 
 ```ts
 // Before: awaiting admission does not move this callback off the host.

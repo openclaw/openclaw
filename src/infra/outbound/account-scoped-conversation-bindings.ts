@@ -147,6 +147,11 @@ type AccountBindingManagerParams<TKind extends string> = {
 export function createAccountScopedConversationBindingManager<TKind extends string>(
   params: AccountBindingManagerParams<TKind>,
 ): AccountScopedConversationBindingManager<TKind> {
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: "createAccountScopedConversationBindingManager",
+    replacement: "createAccountScopedConversationBindingManagerV2",
+  });
   const owner = createAccountBindingManager(params);
   if (owner.legacy) {
     return owner.legacy;
