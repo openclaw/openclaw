@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
@@ -15,10 +15,11 @@ import { domProbe } from "../dom-probe.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
-  questionRequest,
+  publishQuestion,
   confirmQuestion,
   approvalRequest,
   attentionLabel,
+  sessionList,
 } from "./compact.test-support.ts";
 import { mountRoster, settleRoster } from "./roster.test-support.ts";
 
@@ -37,15 +38,7 @@ function setRows(
   harness: ReturnType<typeof createSessionsHarness>,
   rows: GatewaySessionRow[],
 ): void {
-  harness.publishList({
-    result: {
-      ts: 2,
-      path: "",
-      count: rows.length,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: rows,
-    } satisfies SessionsListResult,
-  });
+  harness.publishList({ result: sessionList(rows) });
 }
 
 function failedRow(
@@ -63,11 +56,12 @@ function failedRow(
 function agentAttentionRow(
   key = sessionKey,
   overrides: Partial<GatewaySessionRow> = {},
+  attention: "key" | "hourglass" = "key",
 ): GatewaySessionRow {
   return failedRow(key, {
     agentStatus: {
       note: "Blocked: need the staging password",
-      attention: "key",
+      attention,
       expiresAt: Date.now() + 60_000,
     },
     ...overrides,
@@ -76,9 +70,7 @@ function agentAttentionRow(
 
 async function errorDescription(container: ParentNode): Promise<string> {
   const attention = container.querySelector('[data-session-attention="error"]')!;
-  expect(attention).not.toBeNull();
-  await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
-    .updateComplete;
+  await attention.closest("openclaw-tooltip")!.updateComplete;
   return (attention.getAttribute("aria-describedby") ?? "")
     .split(/\s+/u)
     .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
@@ -97,13 +89,13 @@ async function mountAttention(
   agents: Parameters<typeof mountSidebar>[3] = null,
   approvals: readonly ExecApprovalRequest[] = [],
 ) {
-  const sessionsHarness = createSessionsHarness("main", [rows[0]!.key]);
-  setRows(sessionsHarness, rows);
-  const mounted = await mountSidebar(gateway, sessionsHarness.sessions, "panel", agents, approvals);
+  const sessions = createSessionsHarness("main", [rows[0]!.key]);
+  setRows(sessions, rows);
+  const mounted = await mountSidebar(gateway, sessions.sessions, "panel", agents, approvals);
   return {
     ...mounted,
     dom: domProbe(mounted.sidebar),
-    sessionsHarness,
+    sessions,
   };
 }
 
@@ -111,6 +103,15 @@ function deploymentRow(): GatewaySessionRow {
   return directRow(sessionKey, "Deploy", 2, {
     agentStatus: { note: "Deploying to staging", expiresAt: Date.now() + 60_000 },
   });
+}
+
+function peerRow(updatedAt: number): GatewaySessionRow {
+  return {
+    key: "agent:main:peer",
+    kind: "direct",
+    updatedAt,
+    worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
+  };
 }
 
 describe("AppSidebar session attention", () => {
@@ -127,12 +128,9 @@ describe("AppSidebar session attention", () => {
     );
     const row = dom.query(`[data-session-key="${sessionKey}"]`)!;
     expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
-    gatewayHarness.publishEvent(
-      "question.requested",
-      questionRequest("question-active", sessionKey, {
-        questions: [confirmQuestion([{ label: "Continue" }])],
-      }),
-    );
+    publishQuestion(gatewayHarness, "question-active", sessionKey, {
+      questions: [confirmQuestion([{ label: "Continue" }])],
+    });
     await settleLitElement(sidebar);
     expect(
       row.querySelector('[data-session-attention="question"]')?.getAttribute("aria-label"),
@@ -164,7 +162,7 @@ describe("AppSidebar session attention", () => {
   it("projects canonical main attention onto the agent header across row refresh ordering", async () => {
     const mainKey = "agent:main:main";
     const gatewayHarness = questionsGateway();
-    const { sidebar, context, sessionsHarness, dom } = await mountAttention(
+    const { sidebar, context, sessions, dom } = await mountAttention(
       [agentAttentionRow(mainKey)],
       gatewayHarness.gateway,
       TWO_AGENTS,
@@ -173,7 +171,7 @@ describe("AppSidebar session attention", () => {
     sidebar.sidebarAgentsMode = "roster";
     await settleRoster(sidebar);
     const publishRows = async (rows: GatewaySessionRow[]) => {
-      setRows(sessionsHarness, rows);
+      setRows(sessions, rows);
       await rosterActivityStore(context).refresh();
       await settleRoster(sidebar);
     };
@@ -181,12 +179,9 @@ describe("AppSidebar session attention", () => {
 
     expect(home()?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
 
-    gatewayHarness.publishEvent(
-      "question.requested",
-      questionRequest("question-home", mainKey, {
-        questions: [confirmQuestion([{ label: "Continue", description: "Resume the run." }])],
-      }),
-    );
+    publishQuestion(gatewayHarness, "question-home", mainKey, {
+      questions: [confirmQuestion([{ label: "Continue", description: "Resume the run." }])],
+    });
     await settleLitElement(sidebar);
     expect(home()?.querySelector('[data-session-attention="question"]')).not.toBeNull();
 
@@ -204,11 +199,9 @@ describe("AppSidebar session attention", () => {
       }),
     ]);
     await settleLitElement(sidebar);
-    expect(home()?.querySelector('[data-session-attention="error"]')).not.toBeNull();
     expect(attentionLabel(home(), "error")).toBe(
       "Run failed:   Message failed:  delivery unavailable",
     );
-    expect(attentionLabel(home(), "error")).not.toMatch(/[⚠✉]/u);
 
     await publishRows([directRow(mainKey, "Home", 3, { status: "done" })]);
     await settleLitElement(sidebar);
@@ -219,20 +212,16 @@ describe("AppSidebar session attention", () => {
     const gatewayHarness = questionsGateway();
     const { sidebar, dom } = await mountAttention([agentAttentionRow()], gatewayHarness.gateway);
 
-    gatewayHarness.publishEvent(
-      "question.requested",
-      questionRequest("question-1", sessionKey, {
-        questions: [confirmQuestion([{ label: "Continue", description: "Resume the run." }])],
-      }),
-    );
+    publishQuestion(gatewayHarness, "question-1", sessionKey, {
+      questions: [confirmQuestion([{ label: "Continue", description: "Resume the run." }])],
+    });
     await settleLitElement(sidebar);
 
     const questionAttention = dom.query('[data-session-attention="question"]');
-    expect(questionAttention).not.toBeNull();
-    expect(questionAttention?.getAttribute("aria-label")).toBe(
-      "Waiting for your answer\nContinue?",
-    );
-    expect(questionAttention?.getAttribute("tabindex")).toBe("0");
+    expect(questionAttention).toMatchObject({
+      ariaLabel: "Waiting for your answer\nContinue?",
+      tabIndex: 0,
+    });
     expect(
       questionAttention
         ?.closest("openclaw-tooltip")
@@ -254,18 +243,8 @@ describe("AppSidebar session attention", () => {
   });
 
   it("shows hourglass attention ahead of a run error", async () => {
-    const attention = "hourglass";
-    const { sidebar, dom } = await mountAttention([
-      agentAttentionRow(sessionKey, {
-        agentStatus: {
-          note: "Blocked: need the staging password",
-          attention,
-          expiresAt: Date.now() + 60_000,
-        },
-      }),
-    ]);
+    const { sidebar, dom } = await mountAttention([agentAttentionRow(sessionKey, {}, "hourglass")]);
 
-    expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
     expect(dom.query('[data-session-attention="agent"] svg circle')).not.toBeNull();
     expect(sidebar.textContent).toContain("Blocked: need the staging password");
     expect(sidebar.textContent).not.toContain("Run failed:");
@@ -281,13 +260,13 @@ describe("AppSidebar session attention", () => {
   });
 
   it("defaults to one line without hiding attention", async () => {
-    const { sidebar, sessionsHarness, dom } = await mountAttention([deploymentRow()]);
+    const { sidebar, sessions, dom } = await mountAttention([deploymentRow()]);
 
     const previewRow = dom.query(`[data-session-key="${sessionKey}"]`);
     expect(previewRow?.textContent).not.toContain("Deploying to staging");
     expect(previewRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
 
-    setRows(sessionsHarness, [failedRow()]);
+    setRows(sessions, [failedRow()]);
     await settleLitElement(sidebar);
 
     const attentionRow = dom.query(`[data-session-key="${sessionKey}"]`);
@@ -305,7 +284,7 @@ describe("AppSidebar session attention", () => {
 
   it("keeps status expiry retired through queued updates after disconnect", async () => {
     vi.useFakeTimers();
-    const { sidebar, provider, sessionsHarness, dom } = await mountAttention([agentAttentionRow()]);
+    const { sidebar, provider, sessions, dom } = await mountAttention([agentAttentionRow()]);
     expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
 
     const owner = getAppSidebarOwner(sidebar.hostElement)!;
@@ -320,33 +299,30 @@ describe("AppSidebar session attention", () => {
     await settleLitElement(sidebar);
     expect(dom.query('[data-session-attention="agent"]')).toBeNull();
 
-    setRows(sessionsHarness, [agentAttentionRow()]);
+    setRows(sessions, [agentAttentionRow()]);
     await settleLitElement(sidebar);
     expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
     await vi.advanceTimersByTimeAsync(60_001);
     expect(dom.query('[data-session-attention="agent"]')).toBeNull();
   });
 
-  it.each(["exec", "plugin"] as const)(
-    "shows %s approval request details ahead of a run error",
-    async (kind) => {
-      const approval = approvalRequest(sessionKey, {
-        kind,
-        pluginTitle: kind === "exec" ? undefined : "Enable the calendar plugin",
-      });
-      const { sidebar, dom } = await mountAttention([failedRow()], undefined, null, [approval]);
+  it.each(["exec", "plugin"] as const)("prioritizes %s approvals over run errors", async (kind) => {
+    const approval = approvalRequest(sessionKey, {
+      kind,
+      pluginTitle: kind === "exec" ? undefined : "Enable the calendar plugin",
+    });
+    const { sidebar, dom } = await mountAttention([failedRow()], undefined, null, [approval]);
 
-      const indicator = dom.query('[data-session-attention="approval"]');
-      expect(indicator?.getAttribute("aria-label")).toBe(
-        `Waiting for approval\n${kind === "exec" ? "git status" : "Enable the calendar plugin"}`,
-      );
-      expect(indicator?.getAttribute("tabindex")).toBe("0");
-      const row = dom.query(`[data-session-key="${sessionKey}"]`);
-      expect(row?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
-      expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
-      expect(sidebar.textContent).not.toContain("Run failed:");
-    },
-  );
+    const indicator = dom.query('[data-session-attention="approval"]');
+    expect(indicator?.getAttribute("aria-label")).toBe(
+      `Waiting for approval\n${kind === "exec" ? "git status" : "Enable the calendar plugin"}`,
+    );
+    expect(indicator?.getAttribute("tabindex")).toBe("0");
+    const row = dom.query(`[data-session-key="${sessionKey}"]`);
+    expect(row?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+    expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
+    expect(sidebar.textContent).not.toContain("Run failed:");
+  });
 
   it("uses canonical main attention without duplicating the agent header approval badge", async () => {
     const mainKey = "agent:main:main";
@@ -379,10 +355,10 @@ describe("AppSidebar session attention", () => {
   });
 
   it("keeps a read failure dismissed after the sessions list refreshes", async () => {
-    const { sidebar, sessionsHarness, dom } = await mountAttention([failedRow()]);
+    const { sidebar, sessions, dom } = await mountAttention([failedRow()]);
 
     expect(dom.query('[data-session-attention="error"]')).not.toBeNull();
-    setRows(sessionsHarness, [failedRow(sessionKey, { lastReadAt: 2 })]);
+    setRows(sessions, [failedRow(sessionKey, { lastReadAt: 2 })]);
     await settleLitElement(sidebar);
 
     expect(dom.query('[data-session-attention="error"]')).toBeNull();
@@ -393,27 +369,20 @@ describe("AppSidebar session attention", () => {
     const parentKey = "agent:main:release";
     const childKey = "agent:main:subagent:validation";
     const failedKey = "agent:main:subagent:review";
-    const rows = (
-      [
-        directRow(parentKey, "Release preparation", 4, {
-          status: "done",
-          childSessions: [childKey],
-        }),
-        directRow(childKey, "Validate candidate", 3, {
-          status: "running",
-          hasActiveRun: true,
-          spawnedBy: parentKey,
-          childSessions: [failedKey],
-        }),
-        failedRow(failedKey, { label: "Source review", spawnedBy: childKey }),
-      ] satisfies GatewaySessionRow[]
-    ).map((row) => Object.assign({}, row, { agentId: "main" }));
-    const {
-      sidebar,
-      sessions: sessionsHarness,
-      result,
-      context,
-    } = await mountRoster(TWO_AGENTS, rows);
+    const rows = [
+      directRow(parentKey, "Release preparation", 4, {
+        status: "done",
+        childSessions: [childKey],
+      }),
+      directRow(childKey, "Validate candidate", 3, {
+        status: "running",
+        hasActiveRun: true,
+        spawnedBy: parentKey,
+        childSessions: [failedKey],
+      }),
+      failedRow(failedKey, { label: "Source review", spawnedBy: childKey }),
+    ].map((row) => Object.assign({}, row, { agentId: "main" }));
+    const { sidebar, sessions, result, context } = await mountRoster(TWO_AGENTS, rows);
     const dom = domProbe(sidebar);
     const parentRow = () => dom.query(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
@@ -438,7 +407,7 @@ describe("AppSidebar session attention", () => {
     result.sessions = rows.map((row) =>
       row.key === failedKey ? Object.assign({}, row, { lastReadAt: 2 }) : row,
     );
-    setRows(sessionsHarness, result.sessions);
+    setRows(sessions, result.sessions);
     await rosterActivityStore(context).refresh();
     await waitForFast(() => {
       expect(agentHeader()).not.toBeNull();
@@ -447,12 +416,12 @@ describe("AppSidebar session attention", () => {
   });
 
   it("shows attention again when a later failure follows a read", async () => {
-    const { sidebar, sessionsHarness, dom } = await mountAttention([
+    const { sidebar, sessions, dom } = await mountAttention([
       failedRow(sessionKey, { lastReadAt: 2 }),
     ]);
 
     expect(dom.query('[data-session-attention="error"]')).toBeNull();
-    setRows(sessionsHarness, [failedRow(sessionKey, { endedAt: 3, updatedAt: 3, lastReadAt: 2 })]);
+    setRows(sessions, [failedRow(sessionKey, { endedAt: 3, updatedAt: 3, lastReadAt: 2 })]);
     await settleLitElement(sidebar);
 
     expect(await errorDescription(sidebar)).toContain("Run failed: Provider credits exhausted");
@@ -463,15 +432,7 @@ describe("AppSidebar session attention", () => {
       "openclaw:sidebar:sessions:collapsed-sections",
       JSON.stringify(["ungrouped"]),
     );
-    const { dom } = await mountAttention([
-      agentAttentionRow(),
-      {
-        key: "agent:main:peer",
-        kind: "direct",
-        updatedAt: 1,
-        worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
-      },
-    ]);
+    const { dom } = await mountAttention([agentAttentionRow(), peerRow(1)]);
 
     const section = dom.query('[data-session-section="ungrouped"]');
     expect(dom.query('[data-session-section="work"]')).not.toBeNull();
@@ -488,35 +449,17 @@ describe("AppSidebar session attention", () => {
       localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
       const childKey = `agent:main:subagent:${kind}`;
       const gatewayHarness = questionsGateway();
-      const sessionsHarness = createSessionsHarness("main", [parentKey]);
-      setRows(sessionsHarness, [
-        { key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] },
-        {
-          key: "agent:main:peer",
-          kind: "direct",
-          updatedAt: 0,
-          worktree: { id: "peer", branch: "main", repoRoot: "/repo" },
-        },
-      ]);
       const approval = approvalRequest(childKey, { id: "approval-child" });
-      const { sidebar } = await mountSidebar(
+      const { sidebar, dom } = await mountAttention(
+        [{ key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] }, peerRow(0)],
         gatewayHarness.gateway,
-        sessionsHarness.sessions,
-        "panel",
         null,
         kind === "approval" ? [approval] : [],
       );
-      const dom = domProbe(sidebar);
       if (kind === "question") {
-        gatewayHarness.publishEvent(
-          "question.requested",
-          questionRequest("question-child", childKey),
-        );
+        publishQuestion(gatewayHarness, "question-child", childKey);
         await settleLitElement(sidebar);
       }
-      expect(
-        dom.query(`[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`),
-      ).not.toBeNull();
       expect(
         dom.attr(
           `[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`,
@@ -532,9 +475,7 @@ describe("AppSidebar session attention", () => {
       dom.query<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
       await settleLitElement(sidebar);
       expect(
-        dom
-          .query('[data-session-section="ungrouped"]')
-          ?.querySelector(".sidebar-session-group-attention"),
+        dom.query('[data-session-section="ungrouped"] .sidebar-session-group-attention'),
       ).not.toBeNull();
       sidebar.remove();
     }
@@ -546,28 +487,27 @@ describe("AppSidebar session attention", () => {
       { length: 6 },
       (_, index) => `agent:main:dashboard:child-${index + 1}`,
     );
-    const sessionsHarness = createSessionsHarness("main", [parentKey]);
-    sessionsHarness.list.mockResolvedValue({
-      ts: 3,
-      path: "",
-      count: childKeys.length,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: childKeys.map((key, index) =>
-        index === 5
-          ? { ...agentAttentionRow(key), spawnedBy: parentKey, label: "Attention child" }
-          : directRow(key, `Quiet child ${index + 1}`, index + 1, {
-              spawnedBy: parentKey,
-            }),
+    const sessions = createSessionsHarness("main", [parentKey]);
+    sessions.list.mockResolvedValue(
+      sessionList(
+        childKeys.map((key, index) =>
+          index === 5
+            ? { ...agentAttentionRow(key), spawnedBy: parentKey, label: "Attention child" }
+            : directRow(key, `Quiet child ${index + 1}`, index + 1, {
+                spawnedBy: parentKey,
+              }),
+        ),
+        3,
       ),
-    });
-    setRows(sessionsHarness, [
+    );
+    setRows(sessions, [
       directRow(parentKey, "Parent task", 1, {
         childSessions: childKeys,
       }),
     ]);
     const { sidebar } = await mountSidebar(
       createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
+      sessions.sessions,
     );
     const dom = domProbe(sidebar);
 

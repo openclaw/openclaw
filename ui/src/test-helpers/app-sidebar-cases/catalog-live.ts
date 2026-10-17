@@ -7,6 +7,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   catalogPage,
   createContext,
@@ -21,7 +22,7 @@ import {
 import { domProbe } from "../dom-probe.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
-import { catalogGateway, mountCatalog, startCatalog } from "./compact.test-support.ts";
+import { catalogGateway, mountCatalog, settleCatalog } from "./compact.test-support.ts";
 
 function storedSession(
   threadId: string,
@@ -29,14 +30,17 @@ function storedSession(
   extra: Partial<SessionCatalogSession> = {},
 ): SessionCatalogSession {
   return {
-    threadId,
-    name,
+    ...catalogPage([{ threadId, name }]).catalogs[0]!.hosts[0]!.sessions[0]!,
     status: "stored",
-    archived: false,
-    canContinue: true,
     canArchive: false,
     ...extra,
   };
+}
+
+function expectPullRequest(row: Element | null | undefined, content: string) {
+  const badge = row?.querySelector(".session-row-badge--pull-request");
+  expect(badge?.hasAttribute("title")).toBe(false);
+  expect(badge?.closest("openclaw-tooltip")).toMatchObject({ content });
 }
 
 function catalogHost(
@@ -64,12 +68,11 @@ describe("AppSidebar session catalog pagination", () => {
     vi.useFakeTimers();
     const staleResponse = deferred<SessionsCatalogListResult>();
     const previousRequest = vi.fn().mockReturnValueOnce(staleResponse.promise);
-    const previousGateway = catalogGateway({
-      request: previousRequest,
-    } as unknown as GatewayBrowserClient);
     const sessions = createSessions("main", ["agent:main:main"]);
-    const { provider, sidebar } = await mountSidebar(previousGateway.gateway, sessions);
-    await startCatalog(sidebar);
+    const { provider, sidebar } = await mountCatalog(
+      { request: previousRequest } as unknown as GatewayBrowserClient,
+      { sessions },
+    );
     expect(previousRequest).toHaveBeenCalledTimes(1);
 
     const currentRequest = vi.fn().mockResolvedValue(catalogPage([]));
@@ -81,8 +84,7 @@ describe("AppSidebar session catalog pagination", () => {
     await vi.advanceTimersByTimeAsync(200);
 
     staleResponse.resolve(catalogPage([{ threadId: "thread-stale", name: "Stale session" }]));
-    await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar);
     expect(sidebar.textContent).not.toContain("Stale session");
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(5_000);
@@ -148,12 +150,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
     expect(local?.textContent).not.toContain("Gateway Mac");
     expect(local?.textContent).toContain("Local plan");
-    const pullRequestBadge = local?.querySelector(".session-row-badge--pull-request");
-    expect(pullRequestBadge?.hasAttribute("title")).toBe(false);
-    expect(
-      (pullRequestBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe("#111751, #111772 · Merged");
+    expectPullRequest(local, "#111751, #111772 · Merged");
     expect(local?.textContent).not.toContain("Remote review");
     expect(remote?.textContent).toContain("Build Node");
     expect(remote?.textContent).toContain("Remote review");
@@ -164,6 +161,9 @@ describe("AppSidebar session catalog pagination", () => {
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
+    const rowSelector = `[data-session-key="${backingSessionKey}"]`;
+    const patchRows = (rows: GatewaySessionRow[], patch: Partial<GatewaySessionRow>) =>
+      rows.map((row) => (row.key === backingSessionKey ? { ...row, ...patch } : row));
     const sessions = createSessionsHarness("main", ["agent:main:main", backingSessionKey]);
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions, "panel", {
       defaultId: "main",
@@ -176,7 +176,8 @@ describe("AppSidebar session catalog pagination", () => {
     });
     const dom = domProbe(sidebar);
     sidebar.connected = true;
-    sidebar.sessionData.sessionCatalogs = [
+    const data = sidebar.sessionData;
+    data.sessionCatalogs = [
       {
         id: "claude",
         label: "Claude Code",
@@ -191,36 +192,23 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     ];
-    const backingRows = (sidebar.sessionData.sessionsResult?.sessions ?? []).map((row) =>
-      row.key === backingSessionKey ? Object.assign({}, row, { unread: true }) : row,
-    );
+    const backingRows = patchRows(data.sessionsResult?.sessions ?? [], { unread: true });
     const backingResult = {
-      ...sidebar.sessionData.sessionsResult!,
+      ...data.sessionsResult!,
       sessions: backingRows,
     };
-    sidebar.sessionData.sessionsResult = backingResult;
-    sidebar.sessionData.sessionResultsByAgent = { main: backingResult };
-    sidebar.sessionData.requestSessionDataUpdate();
+    data.sessionsResult = backingResult;
+    data.sessionResultsByAgent = { main: backingResult };
+    data.requestSessionDataUpdate();
     await settleLitElement(sidebar);
 
-    expect(
-      dom.all(`.sidebar-agent-section__body [data-session-key="${backingSessionKey}"]`),
-    ).toHaveLength(0);
-    expect(
-      dom.all(`[data-session-section="catalog:claude"] [data-session-key="${backingSessionKey}"]`),
-    ).toHaveLength(1);
-    expect(dom.all(`[data-session-key="${backingSessionKey}"]`)).toHaveLength(1);
+    expect(dom.all(`.sidebar-agent-section__body ${rowSelector}`)).toHaveLength(0);
+    expect(dom.all(`[data-session-section="catalog:claude"] ${rowSelector}`)).toHaveLength(1);
+    expect(dom.all(rowSelector)).toHaveLength(1);
     const catalogSection = dom.query('[data-session-section="catalog:claude"]');
-    const linkedRow = catalogSection?.querySelector<HTMLElement>(
-      `[data-session-key="${backingSessionKey}"]`,
-    );
+    const linkedRow = catalogSection?.querySelector<HTMLElement>(rowSelector);
     expect(linkedRow?.getAttribute("draggable")).toBe("true");
-    const pullRequestBadge = linkedRow?.querySelector(".session-row-badge--pull-request");
-    expect(pullRequestBadge?.hasAttribute("title")).toBe(false);
-    expect(
-      (pullRequestBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe("#107302 · Draft");
+    expectPullRequest(linkedRow, "#107302 · Draft");
     expect(linkedRow?.querySelector('[data-sidebar-session-pin="true"]')).not.toBeNull();
     expect(linkedRow?.querySelector("[data-sidebar-session-archive]")).not.toBeNull();
     linkedRow?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
@@ -231,31 +219,23 @@ describe("AppSidebar session catalog pagination", () => {
     expect(linkedMenu?.querySelector('[data-shortcut="d"]')).not.toBeNull();
     expect(
       catalogSection?.querySelector(
-        `[data-session-key="${backingSessionKey}"] .sidebar-session-indicator .session-unread-dot`,
+        `${rowSelector} .sidebar-session-indicator .session-unread-dot`,
       ),
     ).not.toBeNull();
     expect(
       catalogSection?.querySelector(".sidebar-recent-sessions__head .session-unread-dot"),
     ).not.toBeNull();
 
-    const runningRows = backingRows.map((row) =>
-      row.key === backingSessionKey
-        ? Object.assign({}, row, { unread: false, hasActiveRun: true })
-        : row,
-    );
+    const runningRows = patchRows(backingRows, { unread: false, hasActiveRun: true });
     const runningResult = {
-      ...sidebar.sessionData.sessionsResult,
+      ...data.sessionsResult,
       sessions: runningRows,
     };
     sessions.publish({ result: runningResult });
     await settleLitElement(sidebar);
 
     const runningCatalogSection = dom.query('[data-session-section="catalog:claude"]');
-    expectRunIndicators(
-      runningCatalogSection,
-      `[data-session-key="${backingSessionKey}"].session-row-host--running`,
-      true,
-    );
+    expectRunIndicators(runningCatalogSection, `${rowSelector}.session-row-host--running`, true);
 
     for (const [phase, seq] of [
       ["finishing", 1],
@@ -274,30 +254,20 @@ describe("AppSidebar session catalog pagination", () => {
           ?.hasActiveRun,
       ).toBe(true);
       const currentSection = dom.query('[data-session-section="catalog:claude"]');
-      expectRunIndicators(currentSection, `[data-session-key="${backingSessionKey}"]`, true);
+      expectRunIndicators(currentSection, rowSelector, true);
     }
 
     sessions.publish({
       result: {
         ...runningResult,
-        sessions: runningRows.map((row) =>
-          row.key === backingSessionKey
-            ? Object.assign({}, row, {
-                hasActiveRun: false,
-                activeRunIds: [],
-                status: "done" as const,
-              })
-            : row,
-        ),
+        sessions: patchRows(runningRows, { hasActiveRun: false, activeRunIds: [], status: "done" }),
       },
     });
     await settleLitElement(sidebar);
     const settledSection = dom.query('[data-session-section="catalog:claude"]');
     expect(settledSection).not.toBeNull();
-    expect(
-      settledSection!.querySelector(`[data-session-key="${backingSessionKey}"]`),
-    ).not.toBeNull();
-    expectRunIndicators(settledSection, `[data-session-key="${backingSessionKey}"]`, false);
+    expect(settledSection!.querySelector(rowSelector)).not.toBeNull();
+    expectRunIndicators(settledSection, rowSelector, false);
   });
 
   it("renders catalog groups inside the shared sessions scroller", async () => {
@@ -310,8 +280,7 @@ describe("AppSidebar session catalog pagination", () => {
     } as unknown as GatewayBrowserClient);
     const dom = domProbe(sidebar);
 
-    // One scroll region: catalog groups live inside the sessions scroller.
-    // Sibling scroll-less sections flex-squeeze and paint over each other.
+    // Separate scroll-less sections flex-squeeze and paint over each other.
     expect(
       dom.query('.sidebar-recent-sessions [data-session-section="catalog:codex"]'),
     ).not.toBeNull();
@@ -328,8 +297,8 @@ describe("AppSidebar session catalog pagination", () => {
 
     const progressId = (request.mock.calls[0]?.[1] as { progressId?: string })?.progressId;
     expect(progressId).toEqual(expect.any(String));
-    const catalog = catalogPage([{ threadId: "thread-fast", name: "Fast host" }]).catalogs[0];
-    if (!progressId || !catalog) {
+    const catalog = catalogPage([{ threadId: "thread-fast", name: "Fast host" }]).catalogs[0]!;
+    if (!progressId) {
       throw new Error("progressive catalog fixture is incomplete");
     }
     gateway.publishEvent("sessions.catalog.host", {
@@ -348,12 +317,8 @@ describe("AppSidebar session catalog pagination", () => {
 
   it("accepts a slow older host when a newer scan has only timed out", async () => {
     vi.useFakeTimers();
-    const timeoutPage = catalogPage([]);
-    const catalog = timeoutPage.catalogs[0];
-    const localHost = catalog?.hosts[0];
-    if (!catalog || !localHost) {
-      throw new Error("slow catalog fixture is incomplete");
-    }
+    const catalog = catalogPage([]).catalogs[0]!;
+    const localHost = catalog.hosts[0]!;
     const timeoutHost = {
       ...localHost,
       hostId: "node:slow",
@@ -381,6 +346,8 @@ describe("AppSidebar session catalog pagination", () => {
     if (!oldProgressId) {
       throw new Error("first catalog request has no progress id");
     }
+    const readyHost = catalogPage([{ threadId: "thread-eventual", name: "Eventually ready" }])
+      .catalogs[0]!.hosts[0]!;
     gateway.publishEvent("sessions.catalog.host", {
       progressId: oldProgressId,
       agentId: "main",
@@ -389,16 +356,7 @@ describe("AppSidebar session catalog pagination", () => {
         hosts: [
           {
             ...timeoutHost,
-            sessions: [
-              {
-                threadId: "thread-eventual",
-                name: "Eventually ready",
-                status: "idle",
-                archived: false,
-                canContinue: true,
-                canArchive: true,
-              },
-            ],
+            sessions: readyHost.sessions,
             error: undefined,
           },
         ],
@@ -408,8 +366,7 @@ describe("AppSidebar session catalog pagination", () => {
 
     expect(sidebar.textContent).toContain("Eventually ready");
     pendingTimeout.resolve(finalPage);
-    await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar);
     expect(sidebar.textContent).toContain("Eventually ready");
   });
 
@@ -432,8 +389,7 @@ describe("AppSidebar session catalog pagination", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(4_999);
     expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar, 1);
     expect(request).toHaveBeenCalledTimes(2);
     expect(sidebar.textContent).toContain("External session");
 

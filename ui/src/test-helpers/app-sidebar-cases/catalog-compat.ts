@@ -5,7 +5,13 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import { catalogPage, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { domProbe } from "../dom-probe.ts";
 import "../../components/app-sidebar.tsx";
-import { agentList, catalogGateway, mountCatalog, startCatalog } from "./compact.test-support.ts";
+import {
+  agentList,
+  catalogGateway,
+  mountCatalog,
+  startCatalog,
+  settleCatalog,
+} from "./compact.test-support.ts";
 
 function offlineHost(
   id: string,
@@ -19,14 +25,12 @@ describe("AppSidebar session catalog pagination", () => {
   beforeEach(() => vi.useFakeTimers());
   it("refreshes catalog creation capability for the expanded agent", async () => {
     const request = vi.fn().mockResolvedValue(catalogPage([]));
-    const gateway = catalogGateway({ request } as unknown as GatewayBrowserClient);
-    const { sidebar, context } = await mountSidebar(
-      gateway.gateway,
-      createSessions("main", ["agent:main:main"]),
-      "panel",
-      agentList([{ id: "main" }, { id: "research" }]),
+    const { sidebar, context } = await mountCatalog(
+      { request } as unknown as GatewayBrowserClient,
+      {
+        agents: agentList([{ id: "main" }, { id: "research" }]),
+      },
     );
-    await startCatalog(sidebar);
 
     expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
       agentId: "main",
@@ -54,7 +58,7 @@ describe("AppSidebar session catalog pagination", () => {
   });
 
   it.each(["empty", "catalog error", "host error", "native start"] as const)(
-    "hides catalog groups that have no sessions with %s",
+    "hides empty catalogs (%s)",
     async (state) => {
       const codex = catalogPage([]);
       const claude = catalogPage([], undefined, "claude");
@@ -147,7 +151,7 @@ describe("AppSidebar session catalog pagination", () => {
   });
 
   it.each(["empty", "other owners"] as const)(
-    "discovers a later matching page while the first page contains %s",
+    "discovers matching sessions after %s pages",
     async (firstPageKind) => {
       const ada = { id: "profile-ada", label: "Ada", type: "human" } as const;
       const bob = { id: "profile-bob", label: "Bob", type: "human" } as const;
@@ -189,8 +193,7 @@ describe("AppSidebar session catalog pagination", () => {
         cursors: { "gateway:local": "page-2" },
       });
       pending.resolve(laterPage);
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      await settleCatalog(sidebar);
       expect(sidebar.textContent).toContain("Later session");
       await sidebar.sessionData.refreshSessionCatalogs();
       await sidebar.updateComplete;
@@ -215,8 +218,7 @@ describe("AppSidebar session catalog pagination", () => {
     const section = () => dom.query('[data-session-section="catalog:codex"]');
     const loadMore = () => dom.query<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
     loadMore()?.click();
-    await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar);
 
     expect(section()?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
     expect(
@@ -227,8 +229,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(loadMore()?.disabled).toBe(false);
 
     loadMore()?.click();
-    await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar);
 
     expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
       agentId: "main",

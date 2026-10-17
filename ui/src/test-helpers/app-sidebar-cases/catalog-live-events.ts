@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.tsx";
-import { mountCatalog, startCatalog } from "./compact.test-support.ts";
+import { mountCatalog, startCatalog, settleCatalog } from "./compact.test-support.ts";
 
 describe("AppSidebar session catalog pagination", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -27,7 +27,7 @@ describe("AppSidebar session catalog pagination", () => {
   });
 
   it.each([false, true])(
-    "queues a fresh scan after tab return during an active scan (discovery: %s)",
+    "rescans after tab return during an active scan (discovery: %s)",
     async (discovery) => {
       let visibility: DocumentVisibilityState = "visible";
       vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
@@ -56,8 +56,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenCalledOnce();
 
       pending.resolve(catalogPage([], discovery ? "page-2" : undefined));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      await settleCatalog(sidebar);
       if (discovery) {
         expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
           agentId: "main",
@@ -68,13 +67,11 @@ describe("AppSidebar session catalog pagination", () => {
         await vi.advanceTimersByTimeAsync(1_000);
         expect(fullScans).toBe(1);
         pendingDiscovery.resolve(catalogPage([]));
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
+        await settleCatalog(sidebar);
       }
       await vi.advanceTimersByTimeAsync(4_999);
       expect(fullScans).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      await sidebar.updateComplete;
+      await settleCatalog(sidebar, 1);
       expect(fullScans).toBe(2);
       expect(sidebar.textContent).toContain("Newly available session");
     },
@@ -93,8 +90,7 @@ describe("AppSidebar session catalog pagination", () => {
     visibility = "hidden";
     document.dispatchEvent(new Event("visibilitychange"));
     pending.resolve(catalogPage([]));
-    await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(request).toHaveBeenCalledTimes(1);
 

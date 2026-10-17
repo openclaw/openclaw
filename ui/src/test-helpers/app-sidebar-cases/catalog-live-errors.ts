@@ -4,50 +4,41 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import { catalogPage, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { domProbe } from "../dom-probe.ts";
 import "../../components/app-sidebar.tsx";
-import { agentList, catalogGateway, mountCatalog, startCatalog } from "./compact.test-support.ts";
+import {
+  agentList,
+  catalogGateway,
+  mountCatalog,
+  startCatalog,
+  settleCatalog,
+} from "./compact.test-support.ts";
 
 describe("AppSidebar session catalog request errors", () => {
   beforeEach(() => vi.useFakeTimers());
-  it("uses the gateway default before the agent roster loads", async () => {
-    const request = vi.fn().mockResolvedValue({ catalogs: [] });
-    await mountCatalog({ request } as unknown as GatewayBrowserClient, {
-      snapshot: { assistantAgentId: "roboclaw" },
-      sessions: createSessions("roboclaw", ["agent:roboclaw:main"]),
-    });
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.catalog.list",
-      expect.objectContaining({ agentId: "roboclaw" }),
-    );
-  });
-
-  it("defers catalog requests while a pre-roster selection conflicts with the hello default", async () => {
-    const request = vi.fn().mockResolvedValue({ catalogs: [] });
-    // Wait for the roster to validate a selection unknown to hello.
-    await mountCatalog({ request } as unknown as GatewayBrowserClient, {
-      snapshot: { assistantAgentId: "roboclaw" },
-    });
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("reconciles an unknown selected agent before catalog requests", async () => {
-    const request = vi.fn().mockResolvedValue({ catalogs: [] });
-    await mountCatalog({ request } as unknown as GatewayBrowserClient, {
-      agents: agentList([{ id: "roboclaw" }], "roboclaw"),
-    });
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.catalog.list",
-      expect.objectContaining({ agentId: "roboclaw" }),
-    );
-    expect(request).not.toHaveBeenCalledWith(
-      "sessions.catalog.list",
-      expect.objectContaining({ agentId: "main" }),
-    );
-  });
+  it.each([
+    ["hello default", "roboclaw", "roboclaw", null, "roboclaw"],
+    ["pre-roster conflict", "roboclaw", "main", null, null],
+    ["unknown selection", "main", "main", agentList([{ id: "roboclaw" }], "roboclaw"), "roboclaw"],
+    ["missing default", null, "main", null, null],
+  ] as const)(
+    "resolves the catalog agent: %s",
+    async (_name, assistantAgentId, selectedId, agents, expected) => {
+      const request = vi.fn().mockResolvedValue({ catalogs: [] });
+      await mountCatalog({ request } as unknown as GatewayBrowserClient, {
+        snapshot: { assistantAgentId },
+        sessions: createSessions(selectedId, [`agent:${selectedId}:main`]),
+        agents,
+      });
+      if (expected) {
+        expect(request).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledWith(
+          "sessions.catalog.list",
+          expect.objectContaining({ agentId: expected }),
+        );
+      } else {
+        expect(request).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("uses the roster default when no agent is selected", async () => {
     const request = vi.fn().mockResolvedValue({ catalogs: [] });
@@ -93,17 +84,6 @@ describe("AppSidebar session catalog request errors", () => {
     );
   });
 
-  it("defers catalog requests without a roster or hello default", async () => {
-    const request = vi.fn().mockResolvedValue({ catalogs: [] });
-    await mountCatalog({ request } as unknown as GatewayBrowserClient, {
-      snapshot: {
-        assistantAgentId: null,
-      },
-    });
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it("queues one recovery when a pending catalog rejects after admission reopens", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const pending = deferred<ReturnType<typeof catalogPage>>();
@@ -112,15 +92,11 @@ describe("AppSidebar session catalog request errors", () => {
       .mockResolvedValueOnce(catalogPage([{ threadId: "thread-one", name: "Retained session" }]))
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValue(catalogPage([{ threadId: "thread-one", name: "Recovered session" }]));
-    const gateway = catalogGateway({ request } as unknown as GatewayBrowserClient, {
-      suspensionPhase: "accepting",
-    });
-    const { sidebar } = await mountSidebar(
-      gateway.gateway,
-      createSessions("main", ["agent:main:main"]),
+    const { sidebar, gateway } = await mountCatalog(
+      { request } as unknown as GatewayBrowserClient,
+      { snapshot: { suspensionPhase: "accepting" } },
     );
     const dom = domProbe(sidebar);
-    await startCatalog(sidebar);
     const refresh = sidebar.sessionData.refreshSessionCatalogs();
     gateway.publish({ suspensionPhase: "draining" });
     gateway.publish({ suspensionPhase: "accepting" });
@@ -135,12 +111,10 @@ describe("AppSidebar session catalog request errors", () => {
       }),
     );
     await refresh;
-    await vi.advanceTimersByTimeAsync(0);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar);
     await vi.advanceTimersByTimeAsync(4_999);
     expect(request).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    await sidebar.updateComplete;
+    await settleCatalog(sidebar, 1);
     expect(request).toHaveBeenCalledTimes(3);
     expect(sidebar.textContent).toContain("Recovered session");
     expect(dom.query(".sidebar-session-catalog-error")).toBeNull();
@@ -154,62 +128,52 @@ describe("AppSidebar session catalog request errors", () => {
     },
     { code: "UNAVAILABLE", reason: undefined, message: "Catalog service unavailable" },
     { code: "INVALID_REQUEST", reason: undefined, message: 'unknown agent id "main"' },
-  ])(
-    "recovers $code/$reason once when the same Gateway accepts work",
-    async ({ code, reason, message }) => {
-      vi.spyOn(console, "warn").mockImplementation(() => undefined);
-      const request = vi
-        .fn()
-        .mockResolvedValue(catalogPage([{ threadId: "thread-one", name: "Retained session" }]));
-      const gateway = catalogGateway({ request } as unknown as GatewayBrowserClient, {
-        suspensionPhase: "accepting",
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      const dom = domProbe(sidebar);
-      await startCatalog(sidebar);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Retained session");
-      request.mockRejectedValue(
-        new GatewayRequestError({
-          code,
-          message,
-          retryable: Boolean(reason),
-          details: reason ? { reason, phase: "draining" } : undefined,
-        }),
-      );
-      if (reason) {
-        gateway.publish({ suspensionPhase: "draining" });
-      }
-      await sidebar.sessionData.refreshSessionCatalogs();
-      await sidebar.updateComplete;
-      const error = dom.query<HTMLElement>(".sidebar-session-catalog-error");
-      if (reason) {
-        expect(error).toBeNull();
-      } else {
-        expect(error?.textContent).toContain(message);
-        expect(error?.textContent).toContain("Showing stale data");
-        expect(error?.querySelector("button")).toBeNull();
-        gateway.publish({ suspensionPhase: "draining" });
-      }
-      expect(sidebar.textContent).toContain("Retained session");
-      expect(request).toHaveBeenCalledTimes(2);
-      request.mockResolvedValue(
-        catalogPage([{ threadId: "thread-one", name: "Recovered session" }]),
-      );
-      gateway.publish({ suspensionPhase: "accepting" });
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      await sidebar.updateComplete;
-      expect(request).toHaveBeenCalledTimes(3);
-      expect(sidebar.textContent).toContain("Recovered session");
-      expect(dom.query(".sidebar-session-catalog-error")).toBeNull();
-      gateway.publish({ assistantAgentId: "main" });
-      await vi.advanceTimersByTimeAsync(50);
-      expect(request).toHaveBeenCalledTimes(3);
-    },
-  );
+  ])("recovers $code/$reason when admission reopens", async ({ code, reason, message }) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const request = vi
+      .fn()
+      .mockResolvedValue(catalogPage([{ threadId: "thread-one", name: "Retained session" }]));
+    const { sidebar, gateway } = await mountCatalog(
+      { request } as unknown as GatewayBrowserClient,
+      { snapshot: { suspensionPhase: "accepting" } },
+    );
+    const dom = domProbe(sidebar);
+    await sidebar.updateComplete;
+    expect(sidebar.textContent).toContain("Retained session");
+    request.mockRejectedValue(
+      new GatewayRequestError({
+        code,
+        message,
+        retryable: Boolean(reason),
+        details: reason ? { reason, phase: "draining" } : undefined,
+      }),
+    );
+    if (reason) {
+      gateway.publish({ suspensionPhase: "draining" });
+    }
+    await sidebar.sessionData.refreshSessionCatalogs();
+    await sidebar.updateComplete;
+    const error = dom.query<HTMLElement>(".sidebar-session-catalog-error");
+    if (reason) {
+      expect(error).toBeNull();
+    } else {
+      expect(error?.textContent).toContain(message);
+      expect(error?.textContent).toContain("Showing stale data");
+      expect(error?.querySelector("button")).toBeNull();
+      gateway.publish({ suspensionPhase: "draining" });
+    }
+    expect(sidebar.textContent).toContain("Retained session");
+    expect(request).toHaveBeenCalledTimes(2);
+    request.mockResolvedValue(catalogPage([{ threadId: "thread-one", name: "Recovered session" }]));
+    gateway.publish({ suspensionPhase: "accepting" });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(request).toHaveBeenCalledTimes(2);
+    await settleCatalog(sidebar, 1);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(sidebar.textContent).toContain("Recovered session");
+    expect(dom.query(".sidebar-session-catalog-error")).toBeNull();
+    gateway.publish({ assistantAgentId: "main" });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 });
