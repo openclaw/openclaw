@@ -53,10 +53,40 @@ function execution() {
   };
   return { binding, controller, release, released };
 }
+function pendingBinding() {
+  const model = execution();
+  const entered = createDeferred<AbortSignal>();
+  const acquired = createDeferred<ModelExecution>();
+  bindModelExecution.mockImplementation(({ signal }) => {
+    entered.resolve(signal);
+    return acquired.promise;
+  });
+  return { model, entered, acquired };
+}
+function holdSends(socket: WebSocket, count = 1) {
+  const uploads = Array.from({ length: count }, () => createDeferred<() => void>());
+  const callbacks: (() => void)[] = [];
+  const sendNow = socket.send.bind(socket);
+  let index = 0;
+  vi.spyOn(socket, "send").mockImplementation((data, options, callback) => {
+    const uploaded = uploads[index++];
+    assert(uploaded);
+    sendNow(data, options, (error) => {
+      const finish = () => callback?.(error);
+      callbacks.push(finish);
+      uploaded.resolve(finish);
+    });
+  });
+  return { uploads, finish: () => callbacks.forEach((finish) => finish()) };
+}
+const expectReleased = async (model: ReturnType<typeof execution>) => {
+  await model.released.promise;
+  expect(model.release).toHaveBeenCalledOnce();
+};
 
 describe("inference transport model authority", () => {
   it.each(["/responses", "/responses/compact", "/images/generations"])(
-    "rejects a forbidden HTTP model on %s before forwarding and accepts an allowed model",
+    "enforces HTTP model authority on %s before forwarding",
     async (path) => {
       const allowed = execution();
       bindModelExecution.mockImplementation(({ body }) => {
@@ -68,21 +98,19 @@ describe("inference transport model authority", () => {
       const image = path.startsWith("/images/");
       const headerMetadata = path !== "/responses";
       const requestKind = path.endsWith("compact") ? "compaction" : "turn";
-      const headers = {
-        authorization: "Bearer synthetic-private-auth",
-        ...(image
-          ? { "x-codex-image-turn-id": "image-turn" }
-          : headerMetadata
-            ? {
-                "thread-id": "child",
-                "x-codex-turn-metadata": JSON.stringify({
-                  thread_id: "child",
-                  parent_thread_id: "parent",
-                  request_kind: requestKind,
-                }),
-              }
-            : {}),
-      };
+      const headers: Record<string, string> = { authorization: "Bearer synthetic-private-auth" };
+      if (image) {
+        headers["x-codex-image-turn-id"] = "image-turn";
+      } else if (headerMetadata) {
+        Object.assign(headers, {
+          "thread-id": "child",
+          "x-codex-turn-metadata": JSON.stringify({
+            thread_id: "child",
+            parent_thread_id: "parent",
+            request_kind: requestKind,
+          }),
+        });
+      }
       const body = {
         ...(headerMetadata ? {} : child),
         model: "forbidden",
@@ -96,9 +124,9 @@ describe("inference transport model authority", () => {
         status: 403,
         error: { type: "invalid_request_error", code: "model_permission_denied" },
       });
-      expect(denied.body).not.toContain("synthetic-private-auth");
-      expect(denied.body).not.toContain("synthetic private prompt");
-      expect(denied.body).not.toContain(proxy.baseUrl);
+      for (const secret of ["synthetic-private-auth", "synthetic private prompt", proxy.baseUrl]) {
+        expect(denied.body).not.toContain(secret);
+      }
       expect(bindModelExecution.mock.calls[0]?.[0]).toMatchObject({
         path,
         transport: "http",
@@ -111,15 +139,14 @@ describe("inference transport model authority", () => {
       expect(
         await post(undefined, false, { path, body: { ...body, model: "allowed" }, headers }),
       ).toMatchObject({ status: 200, body: "synthetic HTTP response" });
-      await allowed.released.promise;
+      await expectReleased(allowed);
       expect(bindModelExecution).toHaveBeenCalledTimes(2);
       expect(transport.fetch).toHaveBeenCalledOnce();
-      expect(allowed.release).toHaveBeenCalledOnce();
     },
   );
 
   it.each(["completed", "revoked"] as const)(
-    "holds HTTP model authority beyond upload until the response is %s and cleanup settles",
+    "holds HTTP authority through response %s and transport cleanup",
     async (ending) => {
       const model = execution();
       const uploaded = createDeferred<AbortSignal>();
@@ -159,8 +186,7 @@ describe("inference transport model authority", () => {
         }
         expect(model.release).not.toHaveBeenCalled();
         cleanup.resolve();
-        await model.released.promise;
-        expect(model.release).toHaveBeenCalledOnce();
+        await expectReleased(model);
       } finally {
         cleanup.resolve();
         proxy.close();
@@ -197,43 +223,60 @@ describe("inference transport model authority", () => {
     expect(model.release).toHaveBeenCalledOnce();
   });
 
-  it("releases a late HTTP binding after its caller closes during acquisition", async () => {
-    const model = execution();
-    const entered = createDeferred<AbortSignal>();
-    const acquired = createDeferred<ModelExecution>();
-    bindModelExecution.mockImplementation(({ signal }) => {
-      entered.resolve(signal);
-      return acquired.promise;
-    });
+  it.each(["HTTP", "WebSocket"])("releases late %s bindings after cancellation", async (kind) => {
+    const { model, entered, acquired } = pendingBinding();
     const caller = new AbortController();
-    const request = post(caller.signal, false, { body: { ...child, model: "allowed" } }).then(
-      (result) => result,
-      () => undefined,
-    );
+    const stream = kind === "WebSocket" ? await open() : undefined;
+    const forwarded = vi.fn();
+    stream?.upstream.on("message", forwarded);
+    const request = stream
+      ? once(stream.upstream, "message")
+      : post(caller.signal, false, { body: { ...child, model: "allowed" } }).catch(() => undefined);
+    if (stream) {
+      stream.client.send(JSON.stringify({ ...child, model: "first" }));
+    }
     try {
       const signal = await Promise.race([
         entered.promise,
         request.then(() => {
-          throw new Error("HTTP dispatch completed without awaiting model authorization");
+          throw new Error("Dispatch bypassed pending model authorization");
         }),
       ]);
-      const closed = once(signal, "abort");
-      caller.abort();
-      await closed;
+      if (stream) {
+        const downstream = transport.downstreams.at(-1);
+        assert(downstream);
+        const closed = once(stream.client, "close");
+        const second = once(downstream, "message");
+        stream.client.send(JSON.stringify({ ...child, model: "second" }));
+        await second;
+        expect(signal.aborted).toBe(true);
+        expect(bindModelExecution).toHaveBeenCalledOnce();
+        expect(forwarded).not.toHaveBeenCalled();
+        await closed;
+      } else {
+        const closed = once(signal, "abort");
+        caller.abort();
+        await closed;
+      }
       acquired.resolve(model.binding);
-      await model.released.promise;
-      expect(await request).toBeUndefined();
-      expect(transport.fetch).not.toHaveBeenCalled();
-      expect(model.release).toHaveBeenCalledOnce();
+      await expectReleased(model);
+      if (!stream) {
+        expect(await request).toBeUndefined();
+        expect(transport.fetch).not.toHaveBeenCalled();
+      }
     } finally {
       acquired.resolve(model.binding);
-      caller.abort();
-      await request;
+      if (stream) {
+        stream.client.terminate();
+      } else {
+        caller.abort();
+        await request;
+      }
     }
   });
 
   it.each(["/responses", "/guardian-classifier"])(
-    "authorizes WebSocket frames on %s and returns a sanitized denial before forwarding",
+    "denies unauthorized WebSocket frames on %s without forwarding or secret leaks",
     async (path) => {
       bindModelExecution.mockImplementation(() => {
         throw new CodexInferenceAuthorizationError("model");
@@ -267,42 +310,6 @@ describe("inference transport model authority", () => {
     },
   );
 
-  it("reserves the WebSocket frame before asynchronous binding and releases a late acquisition", async () => {
-    const model = execution();
-    const entered = createDeferred<AbortSignal>();
-    const acquired = createDeferred<ModelExecution>();
-    bindModelExecution.mockImplementation(({ signal }) => {
-      entered.resolve(signal);
-      return acquired.promise;
-    });
-    const { client, upstream } = await open();
-    const forwarded = vi.fn();
-    upstream.on("message", forwarded);
-    try {
-      const earlyForward = once(upstream, "message").then(() => {
-        throw new Error("WS frame was forwarded without awaiting model authorization");
-      });
-      client.send(JSON.stringify({ ...child, model: "first" }));
-      const signal = await Promise.race([entered.promise, earlyForward]);
-      const downstream = transport.downstreams.at(-1);
-      assert(downstream);
-      const closed = once(client, "close");
-      const second = once(downstream, "message");
-      client.send(JSON.stringify({ ...child, model: "second" }));
-      await second;
-      expect(signal.aborted).toBe(true);
-      expect(bindModelExecution).toHaveBeenCalledOnce();
-      expect(forwarded).not.toHaveBeenCalled();
-      await closed;
-      acquired.resolve(model.binding);
-      await model.released.promise;
-      expect(model.release).toHaveBeenCalledOnce();
-    } finally {
-      acquired.resolve(model.binding);
-      client.terminate();
-    }
-  });
-
   it.each(["terminal", "socket"] as const)(
     "retains each WS binding through its %s and ignores an older send completion",
     async (ending) => {
@@ -310,41 +317,25 @@ describe("inference transport model authority", () => {
       const second = execution();
       bindModelExecution.mockReturnValueOnce(first.binding).mockReturnValueOnce(second.binding);
       const stream = await open();
-      const nativeSend = stream.remote.send.bind(stream.remote);
-      const firstUpload = createDeferred<() => void>();
-      const secondUpload = createDeferred<() => void>();
-      const callbacks: (() => void)[] = [];
-      let uploadCount = 0;
-      vi.spyOn(stream.remote, "send").mockImplementation((data, options, callback) => {
-        const uploaded = ++uploadCount === 1 ? firstUpload : secondUpload;
-        nativeSend(data, options, (error) => {
-          const finish = () => callback?.(error);
-          callbacks.push(finish);
-          uploaded.resolve(finish);
-        });
-      });
+      const uploads = holdSends(stream.remote, 2);
       try {
         await send(stream.client, stream.upstream, { ...child, model: "first" });
-        const oldSendCompleted = await firstUpload.promise;
+        const oldSendCompleted = await uploads.uploads[0]!.promise;
         expect(bindModelExecution).toHaveBeenCalledOnce();
         expect(first.release).not.toHaveBeenCalled();
         await complete(stream.client, stream.upstream);
         await first.released.promise;
         await send(stream.client, stream.upstream, { ...child, model: "second" });
-        const nextSendCompleted = await secondUpload.promise;
+        const nextSendCompleted = await uploads.uploads[1]!.promise;
         oldSendCompleted();
         expect(second.release).not.toHaveBeenCalled();
         expect(stream.client.readyState).toBe(WebSocket.OPEN);
         if (ending === "terminal") {
           const downstream = transport.downstreams.at(-1);
           assert(downstream);
-          const sendNow = downstream.send.bind(downstream);
-          const delivered = createDeferred<() => void>();
-          vi.spyOn(downstream, "send").mockImplementation((data, options, callback) => {
-            sendNow(data, options, (error) => delivered.resolve(() => callback?.(error)));
-          });
+          const delivered = holdSends(downstream);
           await complete(stream.client, stream.upstream);
-          const finishTerminal = await delivered.promise;
+          const finishTerminal = await delivered.uploads[0]!.promise;
           expect(second.release).not.toHaveBeenCalled();
           finishTerminal();
         } else {
@@ -357,9 +348,7 @@ describe("inference transport model authority", () => {
         expect(first.release).toHaveBeenCalledOnce();
         expect(second.release).toHaveBeenCalledOnce();
       } finally {
-        for (const finish of callbacks) {
-          finish();
-        }
+        uploads.finish();
         stream.client.terminate();
       }
     },

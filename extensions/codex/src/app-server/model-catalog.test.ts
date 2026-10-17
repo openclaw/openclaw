@@ -43,8 +43,6 @@ vi.mock("./shared-client.js", () => ({
   },
 }));
 let owner: ReturnType<typeof createCodexAppServerModelCatalog>;
-const loadCodexAppServerModelCatalog = async (...args: Parameters<typeof owner.load>) =>
-  (await owner.load(...args)).entries;
 const nativePluginConfig = { appServer: { homeScope: "user" } };
 const read = (overrides = {}, pluginConfig?: unknown) =>
   owner.read(
@@ -61,12 +59,7 @@ const catalogParams = {
 };
 
 function opaqueModel(id = "synthetic-opaque") {
-  return {
-    id,
-    model: id,
-    inputModalities: ["text"],
-    supportedReasoningEfforts: [],
-  };
+  return { id, model: id, inputModalities: ["text"], supportedReasoningEfforts: [] };
 }
 const opaqueCatalog = () => ({ models: [opaqueModel()] });
 const apiKeyReadiness = { accountType: "apiKey", authMode: "api_key" };
@@ -77,30 +70,29 @@ const catalogRead = (
 ) => owner.read({ ...params, provider: "openai", modelId }, pluginConfig);
 const expectListed = (entries: Awaited<ReturnType<typeof owner.load>>["entries"], id: string) =>
   expect(entries).toContainEqual(expect.objectContaining({ id, nativeRuntime: "codex" }));
+const accountResponse = (type: string | null) => ({
+  account: type === null ? null : { type },
+  requiresOpenaiAuth: true,
+});
 
 describe("Codex app-server model catalog", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
     profiles.store = { version: 1, profiles: {} };
-    vi.mocked(probeCodexNativeAuth).mockReset().mockResolvedValue({
-      apiKey: "native-presence",
-      source: "native login",
-      mode: "api-key",
-    });
-    listModelsMock.mockReset();
+    vi.mocked(probeCodexNativeAuth)
+      .mockReset()
+      .mockResolvedValue({ apiKey: "native-presence", source: "native login", mode: "api-key" });
+    listModelsMock.mockReset().mockResolvedValue(opaqueCatalog());
     vi.mocked(withCodexAppServerJsonClient).mockClear();
     rpc.epoch += 1;
     rpc.retire.mockClear();
-    rpc.request
-      .mockReset()
-      .mockResolvedValue({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
+    rpc.request.mockReset().mockResolvedValue(accountResponse("apiKey"));
     owner = createCodexAppServerModelCatalog("codex");
   });
 
   it("preserves discovery ownership after an unanswered account read", async () => {
     const error = new CodexAppServerLocalRequestCancellationError("account/read", "aborted", true);
-    listModelsMock.mockResolvedValue(opaqueCatalog());
     rpc.request.mockRejectedValueOnce(error);
     await expect(owner.load(catalogParams, undefined)).rejects.toBe(error);
     expect(rpc.retire).toHaveBeenCalledExactlyOnceWith(rpc.client);
@@ -122,11 +114,17 @@ describe("Codex app-server model catalog", () => {
         },
       ],
     });
-    const catalog = await loadCodexAppServerModelCatalog(catalogParams, undefined);
+    const { entries: catalog } = await owner.load(catalogParams, undefined);
+    const basic = {
+      provider: "openai",
+      nativeRuntime: "codex",
+      reasoning: false,
+      input: ["text"],
+      compat: { supportsReasoningEffort: false, supportedReasoningEfforts: [] },
+    };
     expect(catalog).toEqual([
       {
-        provider: "openai",
-        nativeRuntime: "codex",
+        ...basic,
         id: "synthetic-reasoning-model",
         name: "Synthetic reasoning model",
         providerOrder: 0,
@@ -139,17 +137,10 @@ describe("Codex app-server model catalog", () => {
         },
       },
       {
-        provider: "openai",
-        nativeRuntime: "codex",
+        ...basic,
         id: "synthetic-basic-model",
         name: "Synthetic basic model",
         providerOrder: 1,
-        reasoning: false,
-        input: ["text"],
-        compat: {
-          supportsReasoningEffort: false,
-          supportedReasoningEfforts: [],
-        },
       },
     ]);
     expect(listModelsMock).toHaveBeenCalledExactlyOnceWith({
@@ -182,7 +173,6 @@ describe("Codex app-server model catalog", () => {
   ])("uses the $name server account without probing a local login", async ({ appServer }) => {
     vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_ARGS", undefined);
     vi.mocked(probeCodexNativeAuth).mockResolvedValue(undefined);
-    listModelsMock.mockResolvedValue(opaqueCatalog());
     const pluginConfig = { appServer };
     expectListed((await owner.load(catalogParams, pluginConfig)).entries, "synthetic-opaque");
     expect(catalogRead(catalogParams, pluginConfig)).toEqual(apiKeyReadiness);
@@ -228,8 +218,7 @@ describe("Codex app-server model catalog", () => {
       source: "native login",
       mode,
     });
-    rpc.request.mockResolvedValue({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
-    listModelsMock.mockResolvedValue(opaqueCatalog());
+    rpc.request.mockResolvedValue(accountResponse("chatgpt"));
     await owner.load(catalogParams, nativePluginConfig);
     expect(read({}, nativePluginConfig)).toEqual({ accountType: "chatgpt", authMode: mode });
     rpc.epoch += 1;
@@ -319,7 +308,6 @@ describe("Codex app-server model catalog", () => {
   );
 
   it("revokes prior readiness on failed or disabled refresh", async () => {
-    listModelsMock.mockResolvedValue(opaqueCatalog());
     await owner.load(catalogParams, undefined);
     expect(read()).toEqual(apiKeyReadiness);
     rpc.request.mockRejectedValueOnce(new Error("synthetic account failure"));
@@ -330,32 +318,27 @@ describe("Codex app-server model catalog", () => {
     expect(read()).toBeUndefined();
   });
 
-  it("cannot publish superseded or disposed asynchronous observations", async () => {
-    listModelsMock.mockResolvedValue(opaqueCatalog());
-    const pending = createDeferred<unknown>();
-    const pendingStarted = createDeferred<void>();
-    rpc.request.mockImplementationOnce(() => {
-      pendingStarted.resolve();
-      return pending.promise;
-    });
-    const older = owner.load(catalogParams, undefined);
-    await pendingStarted.promise;
-    expect(read()).toBeUndefined();
-    await owner.load(catalogParams, undefined);
-    pending.resolve({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
-    expect(await older).toEqual({ entries: [] });
-    expect(read()).toEqual(apiKeyReadiness);
-    const disposed = createDeferred<unknown>();
-    const disposedStarted = createDeferred<void>();
-    rpc.request.mockImplementationOnce(() => {
-      disposedStarted.resolve();
-      return disposed.promise;
-    });
-    const late = owner.load(catalogParams, undefined);
-    await disposedStarted.promise;
-    owner.dispose();
-    disposed.resolve({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
-    expect(await late).toEqual({ entries: [] });
-    expect(read()).toBeUndefined();
-  });
+  it.each(["superseded", "disposed"])(
+    "cannot publish %s asynchronous observations",
+    async (ending) => {
+      await owner.load(catalogParams, undefined);
+      const pending = createDeferred<unknown>();
+      const pendingStarted = createDeferred<void>();
+      rpc.request.mockImplementationOnce(() => {
+        pendingStarted.resolve();
+        return pending.promise;
+      });
+      const older = owner.load(catalogParams, undefined);
+      await pendingStarted.promise;
+      expect(read()).toBeUndefined();
+      if (ending === "disposed") {
+        owner.dispose();
+      } else {
+        await owner.load(catalogParams, undefined);
+      }
+      pending.resolve(accountResponse("chatgpt"));
+      expect(await older).toEqual({ entries: [] });
+      expect(read()).toEqual(ending === "disposed" ? undefined : apiKeyReadiness);
+    },
+  );
 });

@@ -2,17 +2,12 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  resolveAuthHandoff: vi.fn(),
-  runBoundedTurn: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ resolveAuthHandoff: vi.fn(), runBoundedTurn: vi.fn() }));
 
 vi.mock("./auth-bridge.js", () => ({
   resolveCodexAppServerPreparedAuthHandoff: mocks.resolveAuthHandoff,
 }));
-vi.mock("./bounded-turn.js", () => ({
-  runBoundedCodexAppServerTurn: mocks.runBoundedTurn,
-}));
+vi.mock("./bounded-turn.js", () => ({ runBoundedCodexAppServerTurn: mocks.runBoundedTurn }));
 
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
 import { isolatedParams, type IsolatedParams } from "./isolated-completion.params-test-support.js";
@@ -31,6 +26,9 @@ const authProfileStore: AuthProfileStore = {
 };
 
 const createParams = () => isolatedParams(authProfileStore, "openai:test");
+const authHandoff = { authProfileId: "openai:test", nativeAuthProfile: true };
+const expectCall = (mock: ReturnType<typeof vi.fn>, params: Record<string, unknown>) =>
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(params));
 
 const answer = { id: "answer", type: "agentMessage", text: "Garden Planning" };
 const prompt = {
@@ -56,12 +54,8 @@ const run = (params = createParams()) => runCodexIsolatedCompletion(params, {});
 
 describe("runCodexIsolatedCompletion", () => {
   beforeEach(() => {
-    mocks.resolveAuthHandoff.mockReset();
+    mocks.resolveAuthHandoff.mockReset().mockResolvedValue(authHandoff);
     mocks.runBoundedTurn.mockReset();
-    mocks.resolveAuthHandoff.mockResolvedValue({
-      authProfileId: "openai:test",
-      nativeAuthProfile: true,
-    });
     turn([prompt, { id: "reasoning", type: "reasoning" }, answer]);
   });
 
@@ -78,27 +72,23 @@ describe("runCodexIsolatedCompletion", () => {
         usage: expect.objectContaining({ input: 7, output: 3, cacheRead: 2, totalTokens: 10 }),
       }),
     });
-    expect(mocks.resolveAuthHandoff).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authRequirement: "subscription",
-        authProfileId: "openai:test",
-        authProfileStore,
-        agentDir: "/tmp/agent",
-        homeScope: "agent",
-      }),
-    );
-    expect(mocks.runBoundedTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: { mode: "required", id: "gpt-5.4" },
-        profile: "openai:test",
-        authRequirement: "subscription",
-        isolation: "private-stdio",
-        assertCurrent: params.assertCurrent,
-        requireNoExternalCapabilities: true,
-        developerInstructions: "Name the conversation.",
-        input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
-      }),
-    );
+    expectCall(mocks.resolveAuthHandoff, {
+      authRequirement: "subscription",
+      authProfileId: "openai:test",
+      authProfileStore,
+      agentDir: "/tmp/agent",
+      homeScope: "agent",
+    });
+    expectCall(mocks.runBoundedTurn, {
+      model: { mode: "required", id: "gpt-5.4" },
+      profile: "openai:test",
+      authRequirement: "subscription",
+      isolation: "private-stdio",
+      assertCurrent: params.assertCurrent,
+      requireNoExternalCapabilities: true,
+      developerInstructions: "Name the conversation.",
+      input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+    });
     expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
   });
 
@@ -113,8 +103,7 @@ describe("runCodexIsolatedCompletion", () => {
       },
     };
     mocks.resolveAuthHandoff.mockResolvedValue({
-      authProfileId: "openai:test",
-      nativeAuthProfile: true,
+      ...authHandoff,
       preparedAuth,
     });
 
@@ -131,7 +120,7 @@ describe("runCodexIsolatedCompletion", () => {
     mocks.resolveAuthHandoff.mockImplementationOnce(async () => {
       preparing.resolve();
       await release.promise;
-      return { authProfileId: "openai:test", nativeAuthProfile: true };
+      return authHandoff;
     });
     const retired = new Error("isolated completion caller retired");
     let current = true;

@@ -12,6 +12,7 @@ import * as sharedClient from "./shared-client.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 import {
   createAppServerOptions,
+  createLifecycleRequest,
   createLeasedCodexLifecycleHarness,
   threadStartResult,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -32,13 +33,7 @@ async function fixture() {
   const proceed = createDeferred<void>();
   const wire = await createLeasedCodexLifecycleHarness({
     agentDir,
-    respond: async (method) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
+    respond: createLifecycleRequest(async (method) => {
       if (method === "thread/start") {
         entered.resolve();
         await proceed.promise;
@@ -51,7 +46,7 @@ async function fixture() {
         };
       }
       throw new Error("unexpected method: " + method);
-    },
+    }),
   });
   const acquire = sharedClient.getLeasedSharedCodexAppServerClient;
   const acquireClient = vi
@@ -81,14 +76,12 @@ async function fixture() {
       toolOverrides?: Parameters<typeof acquireCodexMcpAppRuntime>[0]["toolOverrides"];
     } = {},
   ) => {
-    const abort = new AbortController();
-    let callerCurrent = true;
-    let hostCurrent = true;
-    const assertCurrent = () => {
-      if (!callerCurrent) {
-        throw new Error("caller selection revoked");
-      }
+    const controllers = {
+      caller: new AbortController(),
+      host: new AbortController(),
+      abort: new AbortController(),
     };
+    const assertCurrent = () => controllers.caller.signal.throwIfAborted();
     const preparation: AgentHarnessSessionPreparationV1 = {
       version: 1,
       purpose: "mcp-app",
@@ -101,14 +94,10 @@ async function fixture() {
         permissionMode: "full",
         senderId: policy.requesterId,
         toolOverrides: policy.toolOverrides,
-        abortSignal: abort.signal,
+        abortSignal: controllers.abort.signal,
         authProfileStore: { version: 1, profiles: {} },
         hostCapabilities: createCodexTestHostCapabilities({
-          assertActive: () => {
-            if (!hostCurrent) {
-              throw new Error("host source revoked");
-            }
-          },
+          assertActive: () => controllers.host.signal.throwIfAborted(),
         }),
       },
       run: async (operation) => operation(),
@@ -134,13 +123,9 @@ async function fixture() {
       pending,
       prepareSession,
       revoke: (scope: "caller" | "host" | "abort") => {
-        if (scope === "caller") {
-          callerCurrent = false;
-        } else if (scope === "host") {
-          hostCurrent = false;
-        } else {
-          abort.abort(new Error("request aborted"));
-        }
+        controllers[scope].abort(
+          new Error(scope === "abort" ? "request aborted" : scope + " source revoked"),
+        );
       },
     };
   };
@@ -164,7 +149,19 @@ async function fixture() {
     acquireClient,
     bindingStore,
     identity: sessionBindingIdentity(session),
-    waitForQueuedRequests,
+    queue: async (
+      firstPolicy: Parameters<typeof request>[0] = {},
+      secondPolicy: Parameters<typeof request>[0] = {},
+      ...more: Parameters<typeof request>[0][]
+    ) => {
+      const first = request(firstPolicy);
+      await entered.promise;
+      const queued = waitForQueuedRequests(1 + more.length);
+      const second = request(secondPolicy);
+      const others = [second, ...more.map((policy) => request(policy))];
+      await queued;
+      return { first, second, pending: others.map(({ pending }) => pending) };
+    },
     cleanup: async () => {
       proceed.resolve();
       await vi.advanceTimersByTimeAsync(3_000);
@@ -203,16 +200,11 @@ describe("native MCP App acquisition through the real cold lifecycle", () => {
   };
   const visibleTools = [{ serverName: "demo", toolName: "show" }];
   it("shares one native thread across concurrent cold discoveries", async () => {
-    const first = f.request();
-    await f.entered;
-    const queued = f.waitForQueuedRequests(2);
-    const second = f.request();
-    const third = f.request();
-    await queued;
+    const { first, pending } = await f.queue({}, {}, {});
     f.proceed.resolve();
     const firstLease = await first.pending;
     await vi.advanceTimersByTimeAsync(2_000);
-    const leases = [firstLease, ...(await Promise.all([second.pending, third.pending]))];
+    const leases = [firstLease, ...(await Promise.all(pending))];
     for (const lease of leases) {
       await catalog(lease, visibleTools);
     }
@@ -223,15 +215,8 @@ describe("native MCP App acquisition through the real cold lifecycle", () => {
   });
 
   it("keeps queued and warm borrows on the session owner with their own requester and tool limits", async () => {
-    const first = f.request({ requesterId: "alice" });
-    await f.entered;
-    const queued = f.waitForQueuedRequests(1);
-    const restricted = {
-      requesterId: "bob",
-      toolOverrides: { mcpToolsDeny: { demo: ["show"] } },
-    };
-    const second = f.request(restricted);
-    await queued;
+    const restricted = { requesterId: "bob", toolOverrides: { mcpToolsDeny: { demo: ["show"] } } };
+    const { first, second } = await f.queue({ requesterId: "alice" }, restricted);
     f.proceed.resolve();
     const firstLease = await first.pending;
     await vi.advanceTimersByTimeAsync(1_000);
@@ -253,11 +238,7 @@ describe("native MCP App acquisition through the real cold lifecycle", () => {
   it.each(["caller", "host", "abort"] as const)(
     "rejects a queued %s revocation without releasing the winning owner",
     async (scope) => {
-      const first = f.request();
-      await f.entered;
-      const queued = f.waitForQueuedRequests(1);
-      const second = f.request();
-      await queued;
+      const { first, second } = await f.queue();
       second.revoke(scope);
       f.proceed.resolve();
       await expect(first.pending).resolves.toBeDefined();

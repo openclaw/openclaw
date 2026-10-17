@@ -54,6 +54,7 @@ describe.skipIf(process.platform === "win32")("Codex model discovery process lif
       `
 import fs from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 if (process.argv.includes("login")) {
   process.stdout.write("Logged in using ChatGPT\\n");
   process.exit(0);
@@ -65,16 +66,9 @@ let pendingStartupNotification = false;
 function notifyAccountUpdated() {
   process.stdout.write(JSON.stringify({ method: "account/updated", params: { authMode: account.type, planType: null } }) + "\\n");
 }
-let buffer = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  for (;;) {
-    const end = buffer.indexOf("\\n");
-    if (end < 0) break;
-    const message = JSON.parse(buffer.slice(0, end));
-    buffer = buffer.slice(end + 1);
-    if (!message.id) continue;
+createInterface({ input: process.stdin }).on("line", (line) => {
+    const message = JSON.parse(line);
+    if (!message.id) return;
     let result = {};
     let changeAfterRead = false;
     if (message.method === "initialize") {
@@ -107,7 +101,6 @@ process.stdin.on("data", (chunk) => {
       response += JSON.stringify({ method: "account/updated", params: { authMode: "chatgpt", planType: null } }) + "\\n";
     }
     process.stdout.write(response);
-  }
 });
 process.stdin.on("end", () => process.exit(0));
 `,
@@ -236,18 +229,12 @@ process.stdin.on("end", () => process.exit(0));
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 ${fixtureReceiptClientSource(receipts.endpoint)}
 if (process.argv.includes("--native")) {
   fs.writeFileSync(path.join(process.env.CODEX_HOME, "native.pid"), String(process.pid));
-  let buffer = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    buffer += chunk;
-    for (;;) {
-      const end = buffer.indexOf("\\n");
-      if (end < 0) break;
-      const message = JSON.parse(buffer.slice(0, end));
-      buffer = buffer.slice(end + 1);
+  createInterface({ input: process.stdin }).on("line", (line) => {
+      const message = JSON.parse(line);
       if (message.method === "initialize") {
         process.stdout.write(JSON.stringify({ id: message.id, result: {
           userAgent: "codex-cli/${CODEX_APP_SERVER_VERSION}", codexHome: process.env.CODEX_HOME,
@@ -259,7 +246,6 @@ if (process.argv.includes("--native")) {
       } else if (message.method === "config/read") {
         process.stdout.write(JSON.stringify({ id: message.id, result: { config: {} } }) + "\\n");
       }
-    }
   });
   process.stdin.on("end", () => process.exit(0));
 } else {

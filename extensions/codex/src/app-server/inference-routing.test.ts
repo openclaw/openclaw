@@ -14,11 +14,18 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
-import type { CodexConfigReadResponse } from "./protocol.js";
+import type { CodexConfigReadResponse, JsonObject } from "./protocol.js";
 import type { CodexBindingAuthority } from "./session-binding.js";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 
 const clients: ReturnType<typeof createClientHarness>[] = [];
+const openaiUrl = "https://api.openai.com/v1";
+const chatgptUrl = "https://chatgpt.com/backend-api/codex";
+const proxyUrl = "http://proxy.example:80";
+const bothProxies = { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl };
+type ThreadParams = Parameters<typeof prepareCodexInferenceThreadConfig>[0];
+type ModelParams = Parameters<typeof createCodexInferenceModelBinding>[0];
+type ModelRequest = Parameters<ReturnType<typeof createCodexInferenceModelBinding>>[0];
 beforeEach(() => {
   stubCodexInferenceTransportEnv();
 });
@@ -39,10 +46,7 @@ function prepareThread(
 ) {
   return prepareCodexInferenceThreadConfig(threadParams(client, { effectiveConfig }));
 }
-function threadParams(
-  client: ReturnType<typeof createClientHarness>["client"],
-  overrides: Partial<Parameters<typeof prepareCodexInferenceThreadConfig>[0]> = {},
-) {
+function threadParams(client: ThreadParams["client"], overrides: Partial<ThreadParams> = {}) {
   return {
     client,
     binding: undefined,
@@ -53,9 +57,8 @@ function threadParams(
   };
 }
 function modelBinding(
-  client: ReturnType<typeof createClientHarness>["client"],
-  overrides: Pick<Parameters<typeof createCodexInferenceModelBinding>[0], "captureModelSource"> &
-    Partial<Parameters<typeof createCodexInferenceModelBinding>[0]>,
+  client: ModelParams["client"],
+  overrides: Pick<ModelParams, "captureModelSource"> & Partial<ModelParams>,
 ) {
   return createCodexInferenceModelBinding({
     client,
@@ -68,8 +71,8 @@ function modelBinding(
 }
 const modelRequest = (
   signal: AbortSignal,
-  overrides: Partial<Parameters<ReturnType<typeof createCodexInferenceModelBinding>>[0]> = {},
-): Parameters<ReturnType<typeof createCodexInferenceModelBinding>>[0] => ({
+  overrides: Partial<ModelRequest> = {},
+): ModelRequest => ({
   path: "/responses",
   body: { model: "a" },
   metadata: { requestKind: "turn", threadId: "root", turnId: "turn" },
@@ -78,6 +81,10 @@ const modelRequest = (
   signal,
   ...overrides,
 });
+const configFor = (shape: "nested" | "flat", definition: JsonObject): JsonObject =>
+  shape === "nested"
+    ? { model_providers: { configured: definition } }
+    : { "model_providers.configured": definition };
 type RouteArgs = Parameters<typeof assertCodexInferenceRouteConfig>;
 function routeCheck(client: RouteArgs[0], route: RouteArgs[1]) {
   return (config: RouteArgs[2], provider?: RouteArgs[3], providers?: RouteArgs[4]) => () =>
@@ -163,15 +170,24 @@ describe("managed inference route ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "admits only config/account writes and route publications (prepared config=%s)",
-    async (preparedConfig) => {
+  it.each([
+    { preparedConfig: false, rejectAdmission: 0 },
+    { preparedConfig: true, rejectAdmission: 0 },
+    { preparedConfig: true, rejectAdmission: 2 },
+    { preparedConfig: true, rejectAdmission: 3 },
+  ])(
+    "admits only current route owners (config=$preparedConfig, reject=$rejectAdmission)",
+    async ({ preparedConfig, rejectAdmission }) => {
       let retained = false;
       let admissions = 0;
+      let accountType = "apiKey";
+      const failure = new Error("route owner superseded");
       const authority: CodexBindingAuthority = {
         ...createNativeSessionBindingScope(() => {}),
         withCurrent: async (consume) => {
-          admissions += 1;
+          if (++admissions === rejectAdmission) {
+            throw failure;
+          }
           retained = true;
           try {
             return consume();
@@ -184,78 +200,53 @@ describe("managed inference route ownership", () => {
         onWrite(line, send) {
           expect(retained).toBe(true);
           const request = JSON.parse(line);
+          if (request.method !== "config/read") {
+            expect(request.method).toBe("account/read");
+          }
           send({
             id: request.id,
             result:
               request.method === "config/read"
                 ? { config: {}, origins: {} }
-                : { account: { type: "apiKey" } },
+                : { account: { type: accountType } },
           });
         },
       });
       ownCodexInferenceClient(h.client);
       const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
-      const prepared = await prepareCodexInferenceThreadConfig(
-        threadParams(h.client, {
-          ...(preparedConfig ? { effectiveConfig: { config: {}, origins: {} } } : {}),
-          assertCurrent: authority.assertCurrent,
-          authority,
-        }),
-      );
-      expect(prepared?.route).toBeDefined();
-      expect(protect).toHaveBeenCalledOnce();
-      expect(retained).toBe(false);
-      expect(admissions).toBe(preparedConfig ? 3 : 4);
-      expect(h.writes.map((line) => JSON.parse(line).method)).toEqual(
-        preparedConfig ? ["account/read"] : ["config/read", "account/read"],
-      );
-    },
-  );
-
-  it.each([2, 3])(
-    "refuses stale authority at route admission %s before publishing a handle",
-    async (rejectAdmission) => {
-      let admissions = 0;
-      let accountType = "apiKey";
-      const failure = new Error("route owner superseded");
-      const authority: CodexBindingAuthority = {
-        ...createNativeSessionBindingScope(() => {}),
-        withCurrent: async (consume) => {
-          admissions += 1;
-          if (admissions === rejectAdmission) {
-            throw failure;
-          }
-          return consume();
-        },
-      };
-      const h = harness({
-        onWrite(line, send) {
-          const request = JSON.parse(line);
-          expect(request.method).toBe("account/read");
-          send({ id: request.id, result: { account: { type: accountType } } });
-        },
-      });
-      ownCodexInferenceClient(h.client);
-      const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
       const input = threadParams(h.client, {
-        effectiveConfig: { config: { features: { memories: true } }, origins: {} },
+        ...(preparedConfig
+          ? {
+              effectiveConfig: {
+                config: rejectAdmission ? { features: { memories: true } } : {},
+                origins: {},
+              },
+            }
+          : {}),
         assertCurrent: authority.assertCurrent,
         authority,
       });
-      await expect(prepareCodexInferenceThreadConfig(input)).rejects.toBe(failure);
-      expect(protect).not.toHaveBeenCalled();
-      expect(h.writes).toHaveLength(1);
-      if (rejectAdmission === 2) {
-        // Refusing the owner update must not leave the old auth route installed.
-        accountType = "chatgpt";
+      if (rejectAdmission) {
+        await expect(prepareCodexInferenceThreadConfig(input)).rejects.toBe(failure);
+        expect(protect).not.toHaveBeenCalled();
+        expect(h.writes).toHaveLength(1);
+        // A refused owner update must not leave the old auth route installed.
+        if (rejectAdmission === 2) {
+          accountType = "chatgpt";
+        }
       }
       const prepared = await prepareCodexInferenceThreadConfig(input);
-      expect(prepared?.route.upstream).toBe(
-        accountType === "chatgpt"
-          ? "https://chatgpt.com/backend-api/codex"
-          : "https://api.openai.com/v1",
-      );
+      expect(prepared?.route).toBeDefined();
       expect(protect).toHaveBeenCalledOnce();
+      expect(retained).toBe(false);
+      if (rejectAdmission) {
+        expect(prepared?.route.upstream).toBe(accountType === "chatgpt" ? chatgptUrl : openaiUrl);
+      } else {
+        expect(admissions).toBe(preparedConfig ? 3 : 4);
+        expect(h.writes.map((line) => JSON.parse(line).method)).toEqual(
+          preparedConfig ? ["account/read"] : ["config/read", "account/read"],
+        );
+      }
     },
   );
 
@@ -272,29 +263,16 @@ describe("managed inference route ownership", () => {
       const body = {
         model: "phase1-model",
         client_metadata: {
-          "x-codex-installation-id": "fixture-installation",
-          "x-codex-window-id": "seed-thread:0",
-          session_id: "seed-thread",
           thread_id: "seed-thread",
-          turn_id: "extraction-turn",
-          root_turn_id: "extraction-turn",
           "x-codex-turn-metadata": JSON.stringify({
             request_kind: "memory",
             thread_source: "memory_consolidation",
-            turn_trigger: "memory_consolidation",
-            turn_id: "extraction-turn",
-            root_turn_id: "extraction-turn",
           }),
         },
       };
       const metadata = readCodexInferenceMetadata(body);
       expect(metadata.subagent).toBeUndefined();
-      const pending = bind(
-        modelRequest(new AbortController().signal, {
-          body,
-          metadata,
-        }),
-      );
+      const pending = bind(modelRequest(new AbortController().signal, { body, metadata }));
       if (configured) {
         const execution = await pending;
         execution.assertCurrent();
@@ -321,10 +299,7 @@ describe("managed inference route ownership", () => {
       },
       origins: {},
     };
-    const input = threadParams(h.client, {
-      effectiveConfig,
-      operatorBacked: true,
-    });
+    const input = threadParams(h.client, { effectiveConfig, operatorBacked: true });
     const prepared = await prepareCodexInferenceThreadConfig(input);
     if (!prepared) {
       throw new Error("expected the selected provider to remain routable");
@@ -364,10 +339,7 @@ describe("managed inference route ownership", () => {
         nativeReviewRequired: false,
         recordNativeReviewRequirement: () => {},
       }));
-      const bind = modelBinding(h.client, {
-        resolveModelThreadId,
-        captureModelSource,
-      });
+      const bind = modelBinding(h.client, { resolveModelThreadId, captureModelSource });
       const image = path.startsWith("/images/");
       const request = modelRequest(controller.signal, {
         path,
@@ -494,10 +466,7 @@ describe("managed inference route ownership", () => {
       const h = accountHarness("apiKey", snapshot);
       ownCodexInferenceClient(h.client);
       const prepared = await prepareCodexInferenceThreadConfig(
-        threadParams(h.client, {
-          config,
-          operatorBacked,
-        }),
+        threadParams(h.client, { config, operatorBacked }),
       );
       if (!prepared) {
         throw new Error("expected a qualified selected provider");
@@ -557,7 +526,7 @@ describe("managed inference route ownership", () => {
     }
     expect(h.writes).toEqual([]);
     const route = await prepare(h, "apiKey", undefined, true);
-    expect(route.upstream).toBe("https://api.openai.com/v1");
+    expect(route.upstream).toBe(openaiUrl);
   });
   it("leaves unowned native clients completely untouched", async () => {
     const h = harness();
@@ -570,7 +539,7 @@ describe("managed inference route ownership", () => {
     const h = harness();
     ownCodexInferenceClient(h.client);
     const route = await prepare(h, type);
-    expect(route.upstream).toBe("https://chatgpt.com/backend-api/codex");
+    expect(route.upstream).toBe(chatgptUrl);
     expect(new URL(route.baseUrl).pathname.endsWith("/backend-api/codex")).toBe(true);
     const config = { openai_base_url: route.baseUrl };
     const check = routeCheck(h.client, route);
@@ -589,10 +558,7 @@ describe("managed inference route ownership", () => {
     expect(getCodexInferenceThread(h.client, "root")).toBeUndefined();
     expect(getCodexInferenceThread(h.client, "peer") === route).toBe(true);
     expect(() => route.assertCurrent()).not.toThrow();
-    h.send({
-      method: "account/updated",
-      params: { authMode: "chatgptAuthTokens" },
-    });
+    h.send({ method: "account/updated", params: { authMode: "chatgptAuthTokens" } });
     expect(await prepare(h, type)).toBe(route);
     h.client.close();
     expect(check(config)).toThrow();
@@ -602,10 +568,10 @@ describe("managed inference route ownership", () => {
     const h = harness();
     ownCodexInferenceClient(h.client);
     const route = await prepare(h, "chatgpt", {
-      config: { openai_base_url: "https://api.openai.com/v1" },
+      config: { openai_base_url: openaiUrl },
       origins: {},
     });
-    expect(route.upstream).toBe("https://api.openai.com/v1");
+    expect(route.upstream).toBe(openaiUrl);
     h.send({ method: "account/updated", params: { authMode: "apiKey" } });
     expect(() => route.assertCurrent()).toThrow();
     await expect(prepareThread(h.client)).rejects.toThrow("ownership changed");
@@ -641,18 +607,25 @@ describe("managed inference route ownership", () => {
     { openai_base_url: "http://127.0.0.1:1234/v1" },
     { openai_base_url: "https://models.example.com/v1?api-version=synthetic" },
   ];
-  it.each(legacyProfiles)(
-    "preserves unsupported native profiles without redirecting them (%j)",
-    async (config) => {
-      const fake = createFakeCodexAppServerClient(async () => ({ account: { type: "apiKey" } }));
-      ownCodexInferenceClient(fake.client);
-      try {
-        await expect(prepareThread(fake.client, { config, origins: {} })).resolves.toBeUndefined();
-        expect(fake.request).not.toHaveBeenCalled();
-      } finally {
-        fake.close();
-      }
-    },
+  async function expectUnsupported(
+    config: CodexConfigReadResponse["config"],
+    env?: Record<string, string>,
+  ) {
+    const fake = createFakeCodexAppServerClient(async () => ({ account: { type: "apiKey" } }));
+    ownCodexInferenceClient(fake.client, { env });
+    try {
+      await expect(prepareThread(fake.client, { config, origins: {} })).resolves.toBeUndefined();
+      expect(fake.request).not.toHaveBeenCalled();
+    } finally {
+      fake.close();
+    }
+  }
+  it.each(legacyProfiles)("leaves unsupported native config untouched (%j)", (config) =>
+    expectUnsupported(config),
+  );
+  it.each(["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "HTTPS_PROXY"])(
+    "leaves native-specific %s transport untouched",
+    (key) => expectUnsupported({}, { [key]: "synthetic-native-setting" }),
   );
 
   it.each(["nested", "flat"] as const)(
@@ -671,10 +644,7 @@ describe("managed inference route ownership", () => {
       const prepared = await prepareCodexInferenceThreadConfig(
         threadParams(h.client, {
           modelProvider: "configured",
-          config:
-            shape === "nested"
-              ? { model_providers: { configured: definition } }
-              : { "model_providers.configured": definition },
+          config: configFor(shape, definition),
           effectiveConfig: { config: { model_provider: "openai" }, origins: {} },
         }),
       );
@@ -685,15 +655,10 @@ describe("managed inference route ownership", () => {
       expect(prepared.route.upstream).toBe(definition.base_url);
       expect(prepared.route.baseUrl).toContain("/azure-api.");
       expect(prepared.config).toMatchObject(
-        shape === "nested"
-          ? {
-              model_providers: {
-                configured: { ...definition, base_url: prepared.route.baseUrl },
-              },
-            }
-          : {
-              "model_providers.configured": { ...definition, base_url: prepared.route.baseUrl },
-            },
+        configFor(shape, {
+          ...definition,
+          base_url: prepared.route.baseUrl,
+        }),
       );
       const check = routeCheck(h.client, prepared.route);
       expect(check(prepared.config, "configured")).not.toThrow();
@@ -701,41 +666,17 @@ describe("managed inference route ownership", () => {
     },
   );
 
-  it.each(["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "HTTPS_PROXY"])(
-    "leaves a native-specific %s transport untouched",
-    async (key) => {
-      const fake = createFakeCodexAppServerClient(async () => ({ account: { type: "apiKey" } }));
-      ownCodexInferenceClient(fake.client, { env: { [key]: "synthetic-native-setting" } });
-      try {
-        expect(await prepareThread(fake.client, { config: {}, origins: {} })).toBeUndefined();
-        expect(fake.request).not.toHaveBeenCalled();
-      } finally {
-        fake.close();
-      }
-    },
-  );
-
   it.each([
+    { env: { HTTPS_PROXY: proxyUrl, https_proxy: "http://other.example:80" }, supported: false },
+    { env: { HTTP_PROXY: proxyUrl, NO_PROXY: "127.0.0.1" }, supported: false },
+    { env: bothProxies, supported: false },
     {
-      env: { HTTPS_PROXY: "http://proxy.example:80", https_proxy: "http://other.example:80" },
-      supported: false,
-    },
-    { env: { HTTP_PROXY: "http://proxy.example:80", NO_PROXY: "127.0.0.1" }, supported: false },
-    {
-      env: { HTTP_PROXY: "http://proxy.example:80", HTTPS_PROXY: "http://proxy.example:80" },
-      supported: false,
-    },
-    {
-      env: {
-        HTTP_PROXY: "http://proxy.example:80",
-        HTTPS_PROXY: "http://proxy.example:80",
-        NO_PROXY: "127.0.0.1,localhost",
-      },
+      env: { ...bothProxies, NO_PROXY: "127.0.0.1,localhost" },
       supported: true,
     },
-    { env: { HTTPS_PROXY: "http://proxy.example:80" }, supported: true },
-    { env: { HTTPS_PROXY: " http://proxy.example:80 " }, supported: false },
-    { env: { HTTPS_PROXY: "http://proxy.example:80", REQUEST_METHOD: "GET" }, supported: false },
+    { env: { HTTPS_PROXY: proxyUrl }, supported: true },
+    { env: { HTTPS_PROXY: " " + proxyUrl + " " }, supported: false },
+    { env: { HTTPS_PROXY: proxyUrl, REQUEST_METHOD: "GET" }, supported: false },
   ])(
     "qualifies both native and relay proxy routing ($supported): $env",
     async ({ env, supported }) => {
