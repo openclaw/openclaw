@@ -34,25 +34,18 @@ function executeNodes(
   return createNodesTool(options).execute("call1", { node: NODE_ID, ...input });
 }
 type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
-type GatewayMockResult = Record<string, unknown> | null | undefined;
 
 function setupNodeInvokeMock(options: {
   commands?: string[];
   remoteIp?: string;
-  onInvoke?: (params: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
+  onInvoke?: (params: unknown) => { payload: unknown };
   invokePayload?: unknown;
 }) {
   callGateway.mockImplementation(
     async ({ method, params }: { method: string; params?: unknown }) => {
       if (method === "node.list") {
         return {
-          nodes: [
-            {
-              nodeId: NODE_ID,
-              ...(options.commands ? { commands: options.commands } : {}),
-              ...(options.remoteIp ? { remoteIp: options.remoteIp } : {}),
-            },
-          ],
+          nodes: [{ nodeId: NODE_ID, commands: options.commands, remoteIp: options.remoteIp }],
         };
       }
       if (method === "node.invoke") {
@@ -152,44 +145,39 @@ describe("nodes camera_snap", () => {
     );
     expect(captures).toBe(1);
   });
-
-  it("downloads camera_snap url payloads when node remoteIp is available", async () => {
-    stubFetchTextResponse("url-image");
-    setupNodeInvokeMock({
-      remoteIp: "198.51.100.42",
-      invokePayload: { format: "jpg", url: "https://198.51.100.42/snap.jpg", width: 1, height: 1 },
-    });
-    const result = await executeNodes({ action: "camera_snap", facing: "front" });
-    const mediaUrl = firstMediaUrl(result);
-    expect(result.content).toStrictEqual([
-      { type: "text", text: `Camera photo saved to ${mediaUrl}.` },
-    ]);
-    await expect(readFileUtf8AndCleanup(mediaUrl)).resolves.toBe("url-image");
-  });
 });
 
-describe("nodes camera_clip", () => {
-  it("downloads camera_clip url payloads when node remoteIp is available", async () => {
-    stubFetchTextResponse("url-clip");
-    setupNodeInvokeMock({
-      remoteIp: "198.51.100.42",
-      invokePayload: {
-        format: "mp4",
-        url: "https://198.51.100.42/clip.mp4",
-        durationMs: 1200,
-        hasAudio: false,
-      },
-    });
-    const result = await executeNodes({ action: "camera_clip", facing: "front" });
-    await expect(
-      readFileUtf8AndCleanup(
-        firstText(result)
-          .replace(/^FILE:/, "")
-          .trim(),
-      ),
-    ).resolves.toBe("url-clip");
-  });
-});
+it.each([
+  [
+    "camera_snap",
+    { format: "jpg", url: "https://198.51.100.42/snap.jpg", width: 1, height: 1 },
+    "url-image",
+  ],
+  [
+    "camera_clip",
+    { format: "mp4", url: "https://198.51.100.42/clip.mp4", durationMs: 1200, hasAudio: false },
+    "url-clip",
+  ],
+] as const)(
+  "downloads %s URL payloads from the node remoteIp",
+  async (action, invokePayload, text) => {
+    stubFetchTextResponse(text);
+    setupNodeInvokeMock({ remoteIp: "198.51.100.42", invokePayload });
+    const result = await executeNodes({ action, facing: "front" });
+    const mediaUrl =
+      action === "camera_snap"
+        ? firstMediaUrl(result)
+        : firstText(result)
+            .replace(/^FILE:/, "")
+            .trim();
+    if (action === "camera_snap") {
+      expect(result.content).toStrictEqual([
+        { type: "text", text: `Camera photo saved to ${mediaUrl}.` },
+      ]);
+    }
+    await expect(readFileUtf8AndCleanup(mediaUrl)).resolves.toBe(text);
+  },
+);
 
 describe("nodes photos_latest", () => {
   it("rejects a non-array photos collection instead of reporting an empty photo library", async () => {
@@ -250,53 +238,42 @@ describe("nodes photos_latest", () => {
   });
 });
 
-describe("nodes command actions", () => {
-  it("routes device_status and returns its payload", async () => {
-    const payload = { battery: { state: "charging", lowPowerModeEnabled: false } };
-    mockInvoke("device.status", {}, payload, ["device.status"]);
-    const result = await executeNodes({ action: "device_status" });
-    expect(JSON.parse(firstText(result))).toStrictEqual(payload);
-  });
-
-  it("routes notification replies with trimmed reply text", async () => {
-    const payload = { ok: true, key: "n1", action: "reply" };
-    mockInvoke(
-      "notifications.actions",
-      { key: "n1", action: "reply", replyText: "On it" },
-      payload,
-      ["notifications.actions"],
-    );
-    const result = await executeNodes({
+it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>]>([
+  [
+    "device.status",
+    { action: "device_status" },
+    {},
+    { battery: { state: "charging", lowPowerModeEnabled: false } },
+  ],
+  [
+    "notifications.actions",
+    {
       action: "notifications_action",
       notificationKey: "n1",
       notificationAction: "reply",
       notificationReplyText: " On it ",
-    });
-    expect(JSON.parse(firstText(result))).toStrictEqual(payload);
-  });
-
-  it("routes location_get with its parameters and returns its payload", async () => {
-    const payload = {
-      latitude: 37.3346,
-      longitude: -122.009,
-      accuracyMeters: 18,
-      provider: "network",
-    };
-    mockInvoke(
-      "location.get",
-      { maxAgeMs: 12_000, desiredAccuracy: "balanced", timeoutMs: 4_500 },
-      payload,
-      ["location.get"],
-    );
-    const result = await executeNodes({
+    },
+    { key: "n1", action: "reply", replyText: "On it" },
+    { ok: true, key: "n1", action: "reply" },
+  ],
+  [
+    "location.get",
+    {
       action: "location_get",
       maxAgeMs: 12_000,
       desiredAccuracy: "balanced",
       locationTimeoutMs: 4_500,
-    });
-    expect(JSON.parse(firstText(result))).toStrictEqual(payload);
-  });
-});
+    },
+    { maxAgeMs: 12_000, desiredAccuracy: "balanced", timeoutMs: 4_500 },
+    { latitude: 37.3346, longitude: -122.009, accuracyMeters: 18, provider: "network" },
+  ],
+])(
+  "routes %s with normalized parameters and returns its payload",
+  async (command, input, params, payload) => {
+    mockInvoke(command, params, payload, [command]);
+    expect(JSON.parse(firstText(await executeNodes(input)))).toStrictEqual(payload);
+  },
+);
 
 describe("nodes invoke", () => {
   it("blocks media invoke commands to avoid base64 context bloat", async () => {

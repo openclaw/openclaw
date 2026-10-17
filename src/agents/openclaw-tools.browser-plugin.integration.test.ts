@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import type { ChannelOutboundContext } from "../channels/plugins/outbound.types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -92,11 +94,10 @@ function installChannel(plugin: ReturnType<typeof createOutboundTestPlugin>, acc
 }
 
 function firstResolvePluginToolsParams() {
-  const call = hoisted.resolvePluginTools.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected plugin tool resolution");
-  }
-  return call[0];
+  return expectDefined(
+    hoisted.resolvePluginTools.mock.calls[0],
+    "Expected plugin tool resolution",
+  )[0];
 }
 
 function resolveTools(
@@ -193,9 +194,9 @@ describe("createOpenClawTools browser plugin integration", () => {
     const mediaUrl = path.join(workspaceDir, "photo.png");
     const outsideMediaUrl = `${workspaceDir}-outside.png`;
     await fs.copyFile(
-      path.join(
-        process.cwd(),
-        "apps/ios/WatchApp/Assets.xcassets/OpenClawIcon.imageset/openclaw-icon.png",
+      new URL(
+        "../../apps/ios/WatchApp/Assets.xcassets/OpenClawIcon.imageset/openclaw-icon.png",
+        import.meta.url,
       ),
       mediaUrl,
     );
@@ -204,30 +205,23 @@ describe("createOpenClawTools browser plugin integration", () => {
     const transportDispatchStarted = createDeferred();
     const resumeTransportDispatch = createDeferred();
     let deferTransportDispatch = false;
-    const sendMedia = vi.fn(
-      async (params: {
-        mediaLocalRoots?: readonly string[];
-        mediaReadFile?: (filePath: string) => Promise<Buffer>;
-        mediaUrl?: string;
-        onPlatformSendDispatch?: () => Promise<void>;
-      }) => {
-        if (deferTransportDispatch) {
-          transportDispatchStarted.resolve();
-          await resumeTransportDispatch.promise;
-        }
-        if (params.mediaUrl) {
-          await loadWebMediaRaw(
-            params.mediaUrl,
-            buildOutboundMediaLoadOptions({
-              mediaLocalRoots: params.mediaLocalRoots,
-              mediaReadFile: params.mediaReadFile,
-            }),
-          );
-        }
-        await params.onPlatformSendDispatch?.();
-        return await platformSendMedia();
-      },
-    );
+    const sendMedia = vi.fn(async (params: ChannelOutboundContext) => {
+      if (deferTransportDispatch) {
+        transportDispatchStarted.resolve();
+        await resumeTransportDispatch.promise;
+      }
+      if (params.mediaUrl) {
+        await loadWebMediaRaw(
+          params.mediaUrl,
+          buildOutboundMediaLoadOptions({
+            mediaLocalRoots: params.mediaLocalRoots,
+            mediaReadFile: params.mediaReadFile,
+          }),
+        );
+      }
+      await params.onPlatformSendDispatch?.();
+      return await platformSendMedia();
+    });
     const providerNativeSend = vi.fn(async () => jsonResult({ ok: true, native: true }));
     const plugin = createOutboundTestPlugin({
       id: "telegram",
@@ -283,11 +277,9 @@ describe("createOpenClawTools browser plugin integration", () => {
       workspaceDir,
     };
     const requireDelivery = () => {
-      if (!delivery) {
-        throw new Error("expected plugin delivery capability");
-      }
-      return delivery;
+      return expectDefined(delivery, "expected plugin delivery capability");
     };
+    const inactive = "plugin delivery capability is no longer active";
     try {
       createOpenClawTools({
         ...options,
@@ -319,12 +311,10 @@ describe("createOpenClawTools browser plugin integration", () => {
       await transportDispatchStarted.promise;
       revokeMessageActionTurnCapability(turnCapability);
       resumeTransportDispatch.resolve();
-      await expect(pending).rejects.toThrow("plugin delivery capability is no longer active");
+      await expect(pending).rejects.toThrow(inactive);
       expect(platformSendMedia).toHaveBeenCalledTimes(1);
       expect(providerNativeSend).not.toHaveBeenCalled();
-      await expect(activeDelivery.send({ text: "too late" })).rejects.toThrow(
-        "plugin delivery capability is no longer active",
-      );
+      await expect(activeDelivery.send({ text: "too late" })).rejects.toThrow(inactive);
       expect(platformSendMedia).toHaveBeenCalledTimes(1);
       const nextTurnCapability = mintTurn({
         runId: "run-2",
@@ -340,12 +330,10 @@ describe("createOpenClawTools browser plugin integration", () => {
       });
       const replacementDelivery = requireDelivery();
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect(replacementDelivery.send({ text: "stale registry" })).rejects.toThrow(
-        "plugin delivery capability is no longer active",
-      );
+      await expect(replacementDelivery.send({ text: "stale registry" })).rejects.toThrow(inactive);
       setActivePluginRegistry(activeRegistry);
       await expect(replacementDelivery.send({ text: "reactivated registry" })).rejects.toThrow(
-        "plugin delivery capability is no longer active",
+        inactive,
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
@@ -470,9 +458,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       ),
     ).toBe(metadataSnapshot);
     const loadContext = getPluginRuntimeLoadContext(pluginRegistry);
-    if (!loadContext) {
-      throw new Error("expected prepared plugin load context");
-    }
+    expectDefined(loadContext, "expected prepared plugin load context");
     const params = resolveTools({
       config,
       workspaceDir: "/tmp",
@@ -502,70 +488,53 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
   });
 
-  it("keeps provider availability and credential resolution aligned for env-only auth", async () => {
-    const envName = "OPENCLAW_PLUGIN_TOOL_AUTH_TEST_KEY";
-    vi.stubEnv(envName, "env-only-key");
-    const params = resolveTools({
-      config: authConfig(envName),
-      agentDir: TEST_AGENT_DIR,
-      workspaceDir: "/workspace",
-      authProfileStore: { version: 1, profiles: {} },
-    });
-    expect(params.hasAuthForProvider?.("acme")).toBe(true);
-    expect(params.context.hasAuthForProvider?.("acme")).toBe(true);
-    await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("env-only-key");
-  });
-
-  it("does not borrow agent credentials when tool preparation excludes plugin-owned auth", async () => {
-    const config = { ...authConfig("ACME_API_KEY"), auth: { order: { acme: ["acme:profile"] } } };
-    const metadata = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "acme",
-          providers: ["acme"],
-          modelCatalog: { providers: { acme: { authScope: "plugin", models: [] } } },
-        },
-      ],
-    });
-    await withPluginMetadataSnapshotScope(
-      metadata,
-      async () => {
+  it.each(["environment", "profile", "plugin"] as const)(
+    "aligns provider availability and resolution for %s auth without borrowing excluded credentials",
+    async (source) => {
+      const envOnly = source === "environment";
+      const envName = envOnly ? "OPENCLAW_PLUGIN_TOOL_AUTH_TEST_KEY" : "ACME_API_KEY";
+      if (source !== "plugin") {
+        vi.stubEnv(envName, envOnly ? "env-only-key" : "env-key");
+      }
+      const config = authConfig(envName);
+      if (!envOnly) {
+        config.auth = { order: { acme: ["acme:profile"] } };
+      }
+      const check = async () => {
         const params = resolveTools({
           config,
           agentDir: TEST_AGENT_DIR,
+          ...(envOnly ? { workspaceDir: "/workspace" } : {}),
           authProfileStore: {
             version: 1,
-            profiles: { "acme:profile": { type: "api_key", provider: "acme", key: "profile-key" } },
+            profiles: envOnly
+              ? {}
+              : {
+                  "acme:profile": { type: "api_key", provider: "acme", key: "profile-key" }, // pragma: allowlist secret
+                },
           },
         });
-        expect(params.hasAuthForProvider?.("acme")).toBe(false);
-        expect(params.context.hasAuthForProvider?.("acme")).toBe(false);
-        await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBeUndefined();
-      },
-      { config, trustConfigIdentity: true },
-    );
-  });
-
-  it("keeps ordered profile precedence when runtime auth is also available", async () => {
-    vi.stubEnv("ACME_API_KEY", "env-key");
-    const params = resolveTools({
-      config: { ...authConfig("ACME_API_KEY"), auth: { order: { acme: ["acme:profile"] } } },
-      agentDir: TEST_AGENT_DIR,
-      authProfileStore: {
-        version: 1,
-        profiles: {
-          "acme:profile": {
-            type: "api_key",
-            provider: "acme",
-            key: "profile-key", // pragma: allowlist secret
+        expect(params.hasAuthForProvider?.("acme")).toBe(source !== "plugin");
+        expect(params.context.hasAuthForProvider?.("acme")).toBe(source !== "plugin");
+        await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe(
+          source === "plugin" ? undefined : envOnly ? "env-only-key" : "profile-key",
+        );
+      };
+      if (source !== "plugin") {
+        return await check();
+      }
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "acme",
+            providers: ["acme"],
+            modelCatalog: { providers: { acme: { authScope: "plugin", models: [] } } },
           },
-        },
-      },
-    });
-    expect(params.hasAuthForProvider?.("acme")).toBe(true);
-    expect(params.context.hasAuthForProvider?.("acme")).toBe(true);
-    await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("profile-key");
-  });
+        ],
+      });
+      await withPluginMetadataSnapshotScope(metadata, check, { config, trustConfigIdentity: true });
+    },
+  );
 
   it("keeps the plugin tool getter live across authored source reloads", () => {
     const sourceConfig: OpenClawConfig = {
@@ -614,48 +583,32 @@ function requirePluginTool(overrides: Parameters<typeof createOpenClawTools>[0])
     wrapBeforeToolCallHook: false,
     ...overrides,
   }).find((candidate) => candidate.name === name);
-  if (!tool?.execute) {
-    throw new Error(`Expected executable tool ${name}`);
-  }
-  return tool;
+  return expectDefined(tool, `Expected executable tool ${name}`);
 }
 
 describe("createOpenClawTools Gateway caller identity", () => {
-  it("carries trusted turn-source routing with the agent identity", async () => {
-    const tool = requirePluginTool({
+  it.each([
+    [
+      { agentAccountId: "work", agentThreadId: "thread-7" },
+      { turnSourceAccountId: "work", turnSourceThreadId: "thread-7" },
+    ],
+    [
+      { agentAccountId: "delivery-account", gatewayCallerAccountId: "creator-account" },
+      { turnSourceAccountId: "creator-account" },
+    ],
+  ] as const)("binds trusted caller routing for %j", async (options, expected) => {
+    await requirePluginTool({
       agentChannel: "discord",
       agentTo: "channel:123",
-      agentAccountId: "work",
-      agentThreadId: "thread-7",
-    });
-    await tool.execute("tool-call-2", {});
+      ...options,
+    }).execute("caller", {});
     expect(observedGatewayCallerIdentities).toEqual([
       {
         agentId: "main",
         sessionKey: "agent:main:discord:channel:123",
         turnSourceChannel: "discord",
         turnSourceTo: "channel:123",
-        turnSourceAccountId: "work",
-        turnSourceThreadId: "thread-7",
-      },
-    ]);
-  });
-
-  it("uses scheduled creator account authority without changing live delivery routing", async () => {
-    const tool = requirePluginTool({
-      agentChannel: "discord",
-      agentTo: "channel:123",
-      agentAccountId: "delivery-account",
-      gatewayCallerAccountId: "creator-account",
-    });
-    await tool.execute("tool-call-scheduled", {});
-    expect(observedGatewayCallerIdentities).toEqual([
-      {
-        agentId: "main",
-        sessionKey: "agent:main:discord:channel:123",
-        turnSourceChannel: "discord",
-        turnSourceTo: "channel:123",
-        turnSourceAccountId: "creator-account",
+        ...expected,
       },
     ]);
   });

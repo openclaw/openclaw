@@ -18,7 +18,7 @@ import { withOperatorToolGatewayAuthority } from "../gateway/server-plugin-in-pr
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import { sharingPolicyClient } from "../gateway/session-sharing.test-utils.js";
-import type { WorkerSessionPlacementRecord } from "../gateway/worker-environments/placement-record.js";
+import { activePlacement } from "../gateway/worker-environments/placement-suite.test-support.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -52,17 +52,16 @@ vi.mock("./model-catalog.runtime.js", () => ({
 }));
 vi.mock("../status/status-text.js", () => ({ buildStatusText: async () => "Session status" }));
 
-const catalog: ModelCatalogEntry[] = [
-  { provider: "fixture", id: "default", name: "Default", reasoning: false },
-  { provider: "fixture", id: "chosen", name: "Chosen", reasoning: false },
-  {
+function modelEntry(id: string): ModelCatalogEntry {
+  return {
     provider: "fixture",
-    id: "native",
-    name: "Native",
+    id,
+    name: id,
     reasoning: false,
-    nativeRuntime: "status-native",
-  },
-];
+    ...(id === "native" ? { nativeRuntime: "status-native" } : {}),
+  };
+}
+const catalog = ["default", "chosen", "native"].map(modelEntry);
 const nativeHarness: AgentHarness = {
   id: "status-native",
   label: "Status native fixture",
@@ -311,28 +310,14 @@ it.each([
         .mockReturnValue(message),
     });
   } else if (availability === "worker") {
-    const placement: WorkerSessionPlacementRecord = {
-      sessionId: before.sessionId,
+    const placement = activePlacement(before.sessionId, {
       sessionKey: target.scope.sessionKey,
       agentId: target.scope.agentId,
-      state: "active",
-      executionMode: "worker-turn",
       generation: 1,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      stateChangedAtMs: 1,
       environmentId: "status-worker",
       activeOwnerEpoch: 1,
       workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-      remoteWorkspaceDir: "/workspace",
-      workerBundleHash: "a".repeat(64),
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      turnClaim: null,
-    };
+    });
     target.context.workerSessionPlacementService = {
       getMany: () => new Map([[before.sessionId, placement]]),
       prepareSessionPlacement: async () => ({
@@ -377,12 +362,7 @@ it("routes status model changes through the original operator policy and preserv
   const limited = ensureProfileForEmail("limited-model@example.test");
   const unrestricted = ensureProfileForEmail("unrestricted-model@example.test");
   setUserProfileRole(unrestricted.id, "unrestricted");
-  const policyCatalog = ["blocked", "allowed"].map((id) => ({
-    provider: "fixture",
-    id,
-    name: id,
-    reasoning: false,
-  }));
+  const policyCatalog = ["blocked", "allowed"].map(modelEntry);
   cfg = modelConfig(policyCatalog, {
     model: { primary: "fixture/blocked", fallbacks: ["fixture/allowed"] },
     models: { "fixture/blocked": { alias: "blocked" }, "fixture/allowed": { alias: "chosen" } },

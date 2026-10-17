@@ -22,6 +22,18 @@ type SessionsSendTimeoutFixtures = {
   ) => AnyAgentTool;
   callGatewayMock: Mock;
 };
+type GatewayRequest = {
+  method?: string;
+  params?: {
+    sessionKey?: string;
+    runId?: string;
+    extraSystemPrompt?: string;
+    message?: string;
+    inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
+  };
+};
+const requesterKey = "agent:main:main";
+const sendInput = (sessionKey: string) => ({ sessionKey, message: "ping", timeoutSeconds: 1 });
 
 export function observeSessionSendContinuations(options: { trackAllWork?: boolean } = {}) {
   const completions = new Set<Promise<unknown>>();
@@ -94,15 +106,14 @@ export function registerSessionsSendTimeoutTests({
   callGatewayMock,
 }: SessionsSendTimeoutFixtures) {
   it("sessions_send preserves a provider-attributed terminal timeout without a diagnostic through Tool Search without starting A2A", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    const requesterKey = "agent:main:main";
+    const calls: GatewayRequest[] = [];
     const targetKey = "agent:director1:main";
     await upsertSessionEntryCore(
       { agentId: "director1", sessionKey: targetKey },
       { sessionId: "timeout-target", updatedAt: 1 },
     );
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
+      const request = opts as GatewayRequest;
       calls.push(request);
       if (request.method === "agent") {
         return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
@@ -131,11 +142,7 @@ export function registerSessionsSendTimeoutTests({
       { validateInput: true },
     );
 
-    const details = await runtime.callValue("sessions_send", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
+    const details = await runtime.callValue("sessions_send", sendInput(targetKey));
     expect(details).toEqual({
       runId: "run-terminal",
       status: "timeout",
@@ -179,8 +186,7 @@ export function registerSessionsSendLateReplyTests({
   ])(
     "sessions_send delivers the late reply from a $targetKind after the parent root releases",
     async ({ targetKey, spawned, pendingError, failure, stopReason }) => {
-      const calls: Array<{ method?: string; params?: unknown }> = [];
-      const requesterKey = "agent:main:main";
+      const calls: GatewayRequest[] = [];
       await upsertSessionEntryCore(
         { agentId: "director1", sessionKey: targetKey },
         {
@@ -194,10 +200,10 @@ export function registerSessionsSendLateReplyTests({
       let requesterProviderStarts = 0;
       let requesterAdmissionClosed: boolean | undefined;
       callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as { method?: string; params?: unknown };
+        const request = opts as GatewayRequest;
         calls.push(request);
         if (request.method === "agent") {
-          const params = request.params as { sessionKey?: string } | undefined;
+          const params = request.params;
           if (params?.sessionKey === targetKey) {
             return { runId: "run-target", status: "accepted", acceptedAt: 2000 };
           }
@@ -212,7 +218,7 @@ export function registerSessionsSendLateReplyTests({
           }
         }
         if (request.method === "agent.wait") {
-          const params = request.params as { runId?: string } | undefined;
+          const params = request.params;
           if (params?.runId === "run-target") {
             targetWaitCount += 1;
             if (targetWaitCount === 1) {
@@ -252,13 +258,7 @@ export function registerSessionsSendLateReplyTests({
         const parentWork = new asyncWork.AsyncWorkScope();
         const result = await runWithGatewayRootWorkAdmissionForTest(async () => {
           try {
-            return await parentWork.track(() =>
-              tool.execute("call-delayed", {
-                sessionKey: targetKey,
-                message: "ping",
-                timeoutSeconds: 1,
-              }),
-            );
+            return await parentWork.track(() => tool.execute("call-delayed", sendInput(targetKey)));
           } finally {
             await asyncWork.AsyncWorkScope.runWhenAllIdle(
               () => [parentWork],
@@ -287,18 +287,9 @@ export function registerSessionsSendLateReplyTests({
         expect(requesterProviderStarts).toBe(1);
 
         const requesterReplyCall = calls.find(
-          (call) =>
-            call.method === "agent" &&
-            (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
+          (call) => call.method === "agent" && call.params?.sessionKey === requesterKey,
         );
-        const replyParams = requesterReplyCall?.params as
-          | {
-              extraSystemPrompt?: string;
-              inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
-              message?: string;
-              sessionKey?: string;
-            }
-          | undefined;
+        const replyParams = requesterReplyCall?.params;
         expect(replyParams?.sessionKey).toBe(requesterKey);
         expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
         expect(replyParams?.message).toContain(failure ?? "late director reply");
