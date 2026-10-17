@@ -349,34 +349,25 @@ export function pcmToMulaw(pcm: Buffer): Buffer {
 /** Expand G.711 mu-law bytes into little-endian signed 16-bit PCM samples. */
 export function mulawToPcm(mulaw: Buffer): Buffer {
   const pcm = Buffer.alloc(mulaw.length * 2);
-  writeMulawPcm(mulaw, canUseInt16View(pcm) ? int16View(pcm) : pcm, 0);
+  mulawToPcmInto(mulaw, pcm);
   return pcm;
 }
 
-/** Decode chunks into an exact-size destination that does not overlap their input. */
-export function mulawChunksToPcmInto(chunks: readonly Buffer[], pcm: Buffer): void {
-  if (pcm.length !== chunks.reduce((length, chunk) => length + chunk.length * 2, 0)) {
+/** Decode into an exact-size destination that does not overlap the mu-law input. */
+export function mulawToPcmInto(mulaw: Buffer, pcm: Buffer): void {
+  if (pcm.length !== mulaw.length * 2) {
     throw new RangeError("PCM destination must contain two bytes per mu-law sample");
   }
-  // One destination view avoids per-frame heap churn when finalizing long recordings.
-  const destination = canUseInt16View(pcm) ? int16View(pcm) : pcm;
-  let offset = 0;
-  for (const chunk of chunks) {
-    writeMulawPcm(chunk, destination, offset);
-    offset += chunk.length;
-  }
-}
-
-function writeMulawPcm(mulaw: Buffer, pcm: Buffer | Int16Array, offset: number): void {
-  if (Buffer.isBuffer(pcm)) {
+  const pcmView = canUseInt16View(pcm) ? int16View(pcm) : undefined;
+  if (pcmView) {
     for (let i = 0; i < mulaw.length; i += 1) {
-      pcm.writeInt16LE(clamp16(mulawToLinear(mulaw[i] ?? 0)), (offset + i) * 2);
+      pcmView[i] = clamp16(mulawToLinear(mulaw[i] ?? 0));
     }
     return;
   }
 
   for (let i = 0; i < mulaw.length; i += 1) {
-    pcm[offset + i] = clamp16(mulawToLinear(mulaw[i] ?? 0));
+    pcm.writeInt16LE(clamp16(mulawToLinear(mulaw[i] ?? 0)), i * 2);
   }
 }
 

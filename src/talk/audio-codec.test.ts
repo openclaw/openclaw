@@ -1,28 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { createStreamingPcmResampler, mulawChunksToPcmInto, resamplePcm } from "./audio-codec.js";
+import { createStreamingPcmResampler, mulawToPcmInto, resamplePcm } from "./audio-codec.js";
 
-describe("mulawChunksToPcmInto", () => {
-  it.each([2, 3])("writes chunked PCM into a destination at byte offset %i", (offset) => {
+describe("mulawToPcmInto", () => {
+  it.each([2, 3])("writes PCM into a destination at byte offset %i", (offset) => {
     const mulaw = Buffer.from([0x00, 0x80, 0x7f, 0xff, 0x10, 0x90]);
     const storage = Buffer.alloc(offset + mulaw.length * 2 + 1, 0x55);
     const destination = storage.subarray(offset, -1);
 
-    mulawChunksToPcmInto(
-      [mulaw.subarray(0, 1), Buffer.alloc(0), mulaw.subarray(1, 4), mulaw.subarray(4)],
-      destination,
-    );
+    mulawToPcmInto(mulaw, destination);
 
     expect(destination).toEqual(Buffer.from("84827c7d0000000084c17c3e", "hex"));
     expect(storage.subarray(0, offset)).toEqual(Buffer.alloc(offset, 0x55));
     expect(storage.at(-1)).toBe(0x55);
   });
 
-  it.each([3, 5])("rejects a %i-byte destination before writing any chunks", (length) => {
+  it.each([3, 5])("rejects a %i-byte destination before writing a sample", (length) => {
     const destination = Buffer.alloc(length, 0x55);
 
-    expect(() =>
-      mulawChunksToPcmInto([Buffer.from([0x00]), Buffer.from([0x80])], destination),
-    ).toThrow(RangeError);
+    expect(() => mulawToPcmInto(Buffer.from([0x00, 0x80]), destination)).toThrow(RangeError);
     expect(destination).toEqual(Buffer.alloc(length, 0x55));
   });
 });

@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { RealtimeTranscriptionSessionCallbacks } from "../../realtime-transcription/provider-types.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
-import { mulawChunksToPcmInto } from "../../talk/audio-codec.js";
+import { mulawToPcmInto } from "../../talk/audio-codec.js";
 
 export type TalkFileTranscriptionConfig = {
   cfg: OpenClawConfig;
@@ -93,8 +93,8 @@ export async function resolveTalkFileTranscriptionConfig(
   };
 }
 
-function encodeWav(chunks: readonly Buffer[], bytes: number): Buffer {
-  const pcmBytes = bytes * 2;
+function encodeWav(audio: Buffer): Buffer {
+  const pcmBytes = audio.length * 2;
   const wav = Buffer.alloc(44 + pcmBytes);
   wav.write("RIFF", 0);
   wav.writeUInt32LE(36 + pcmBytes, 4);
@@ -108,7 +108,7 @@ function encodeWav(chunks: readonly Buffer[], bytes: number): Buffer {
   wav.writeUInt16LE(16, 34);
   wav.write("data", 36);
   wav.writeUInt32LE(pcmBytes, 40);
-  mulawChunksToPcmInto(chunks, wav.subarray(44));
+  mulawToPcmInto(audio, wav.subarray(44));
   return wav;
 }
 
@@ -142,8 +142,8 @@ export function createTalkFileTranscriptionSession(
       if (cancellation.signal.aborted || bytes === 0) {
         return;
       }
-      // Encode before yielding: close() releases the captured chunks.
-      const wav = encodeWav(chunks, bytes);
+      // Snapshot borrowed frames before yielding; decode after directory setup to preserve I/O overlap.
+      const audio = Buffer.concat(chunks, bytes);
       chunks.length = 0;
       bytes = 0;
       const root = resolvePreferredOpenClawTmpDir();
@@ -151,7 +151,7 @@ export function createTalkFileTranscriptionSession(
       const directory = await fs.mkdtemp(path.join(root, "talk-stt-"));
       try {
         const filePath = path.join(directory, "speech.wav");
-        await fs.writeFile(filePath, wav, { mode: 0o600 });
+        await fs.writeFile(filePath, encodeWav(audio), { mode: 0o600 });
         const { transcribeAudioFile } = await import("../../media-understanding/runtime.js");
         if (cancellation.signal.aborted) {
           return;
