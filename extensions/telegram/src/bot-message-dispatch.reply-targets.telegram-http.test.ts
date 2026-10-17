@@ -88,6 +88,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           message_id: 9001,
           date: 1_700_000_000,
           from: { id: 42, is_bot: false, first_name: "Fixture" },
+          reply_to_message: undefined,
           ...(ancestor === "forum-service"
             ? { forum_topic_created: { name: "Fixture topic", icon_color: 7322096 } }
             : { text: "An earlier message." }),
