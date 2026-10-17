@@ -1,9 +1,8 @@
 import "./update-command-service-maintenance.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import * as ancestry from "../../infra/restart-stale-pids.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import {
   gatewayCommand,
@@ -17,13 +16,7 @@ import {
 const { mocks, withServiceHome, fixtureGatewayPid } =
   await import("./update-command-service-maintenance.test-support.js");
 
-beforeEach(() => {
-  mockProcessPlatform("linux");
-  vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
-    pids: new Set([1, process.ppid, process.pid]),
-    complete: true,
-  });
-});
+beforeEach(() => mockProcessPlatform("linux"));
 
 const params = { ...maintenanceDefaults, phase: "inspect" as const };
 const ownedIdentity = { serviceManagerUid: 2001, serviceUpdateVerdict: { kind: "owned" } };

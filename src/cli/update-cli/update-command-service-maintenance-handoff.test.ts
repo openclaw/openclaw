@@ -11,7 +11,6 @@ import type { GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
-import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
@@ -34,35 +33,12 @@ vi.mock("node:fs", async (importOriginal) => ({
 const { mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
 const nativeHost = process.platform === "linux" || process.platform === "darwin";
-const platforms = ["linux", "darwin", "win32"] as const;
 const blockedTree = (pid: number) =>
   `This command is running inside the gateway process tree (gateway PID ${pid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`;
 function expectNoCalls(...methods: GatewayService[keyof GatewayService][]) {
   for (const method of methods) {
     expect(method).not.toHaveBeenCalled();
   }
-}
-
-async function withHandoff(run: (home: string) => Promise<void>) {
-  return withServiceHome(async (home) => {
-    vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(
-      commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
-    );
-    try {
-      await run(home);
-    } finally {
-      await closeStateDatabaseForTest();
-    }
-  });
-}
-
-function claimLease(root: string, handoffId = "owned-handoff") {
-  const store = createManagedHandoffLeaseStore();
-  const claim = store.acquire(root, handoffId, { kind: "update" });
-  if (claim.kind !== "acquired") {
-    throw new Error("fixture could not acquire its installation lease");
-  }
-  return { store, lease: claim.lease };
 }
 
 function mockHandoffServicePlatform(platform: NodeJS.Platform) {
@@ -73,10 +49,7 @@ function mockHandoffServicePlatform(platform: NodeJS.Platform) {
     existingUri(pathname, hostPlatform),
   );
   mockProcessPlatform(platform);
-  return vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
-    pids: new Set([process.pid, process.ppid, 1]),
-    complete: true,
-  });
+  return vi.mocked(processAncestry.inspectSelfAndAncestorPidsSync);
 }
 
 function handoffService(home: string, overrides: Partial<GatewayService> = {}, pid = process.ppid) {
@@ -109,36 +82,22 @@ function replaceExecutorIdentity(home: string, root: string, identity: string) {
 }
 
 const servingAncestorMaintenanceCases = [
-  ...platforms.flatMap(
-    (platform) =>
-      [
-        { platform, identity: "current updater", phase: "inspect" },
-        { platform, identity: "current updater", phase: "prepare" },
-        { platform, identity: "missing marker", phase: "prepare" },
-        {
-          platform,
-          identity: "missing marker",
-          phase: "prepare",
-          ancestry: "inherited environment",
-        },
-        {
-          platform,
-          identity: "missing marker",
-          phase: "prepare",
-          ancestry: "unavailable ancestry",
-        },
-      ] as const,
+  ...(["linux", "darwin", "win32"] as const).flatMap((platform) =>
+    [
+      { platform, identity: "current updater", phase: "inspect" as const },
+      { platform, identity: "current updater", phase: "prepare" as const },
+      { platform, identity: "replaced at stop", phase: "prepare" as const, splitRoot: false },
+    ].concat(
+      ([undefined, "inherited environment", "unavailable ancestry"] as const).map(
+        (ancestry) =>
+          ({ platform, identity: "missing marker", phase: "prepare", ancestry }) as const,
+      ),
+    ),
   ),
   ...(["linux", "darwin"] as const).flatMap((platform) =>
     (["inside", "unknown"] as const).map(
       (membership) =>
-        ({
-          platform,
-          identity: "missing marker",
-          phase: "prepare",
-          ancestry: "reparented",
-          membership,
-        }) as const,
+        ({ platform, identity: "missing marker", phase: "prepare", membership }) as const,
     ),
   ),
   { platform: "linux", identity: "missing metadata", phase: "prepare" },
@@ -153,194 +112,173 @@ const servingAncestorMaintenanceCases = [
   { platform: "linux", identity: "missing lease", phase: "inspect" },
   { platform: "linux", identity: "current updater", phase: "prepare", splitRoot: false },
 ] as const;
+const caseDefaults: {
+  ancestry?: string;
+  membership?: "inside" | "unknown";
+  splitRoot: boolean;
+} = { splitRoot: true };
 
 it.runIf(nativeHost).each(
   servingAncestorMaintenanceCases
-    .map((scenario) => Object.assign({ splitRoot: true }, scenario))
+    .map((scenario) => Object.assign({}, caseDefaults, scenario))
     .filter(
-      // Binding a foreign PID reads native process identity, so only exercise that
-      // fixture where the simulated Linux policy matches the actual host.
+      // Binding a foreign PID needs the host's actual Linux process identity.
       ({ identity }) => identity !== "parent lease" || process.platform === "linux",
     ),
 )(
   "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase $ancestry split=$splitRoot",
   (scenario) =>
-    withHandoff(async (home) => {
-      const { platform, identity, phase, splitRoot } = scenario;
-      const authorized = identity === "current updater";
-      const unresolved = "ancestry" in scenario && scenario.ancestry === "unavailable ancestry";
-      const external =
-        ("ancestry" in scenario && scenario.ancestry === "inherited environment") ||
-        (platform === "darwin" && unresolved);
-      const inherited = external || unresolved;
-      const reparented = "membership" in scenario;
-      const gatewayPid = external || reparented ? 2 : process.ppid;
-      const root = await fs.realpath(process.cwd());
-      const packageRoot = splitRoot ? path.join(home, "package-B") : root;
-      if (splitRoot) {
-        await fs.mkdir(packageRoot);
-      }
-      const runId = randomUUID();
-      vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      const metaPath = await writeHandoffMeta(
-        home,
-        identity === "different root" ? home : packageRoot,
-        identity === "different run" ? randomUUID() : runId,
-        "owned-handoff",
+    withServiceHome(async (home) => {
+      vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue(
+        commandResult("<Task><Settings><Enabled>false</Enabled></Settings></Task>"),
       );
-      if (identity !== "missing lease") {
-        const { store, lease } = claimLease(
-          packageRoot,
-          identity === "replaced owner" ? "replacement-handoff" : "owned-handoff",
-        );
-        if (identity === "parent lease") {
-          expect(store.bind(lease, process.ppid)).not.toBeNull();
-        } else if (identity === "stale start identity") {
-          replaceExecutorIdentity(home, packageRoot, "stale");
+      try {
+        const { platform, identity, phase, splitRoot = true } = scenario;
+        const replacedAtStop = identity === "replaced at stop";
+        const authorized = identity === "current updater";
+        const unresolved = scenario.ancestry === "unavailable ancestry";
+        const external =
+          scenario.ancestry === "inherited environment" || (platform === "darwin" && unresolved);
+        const inherited = external || unresolved;
+        const reparented = scenario.membership !== undefined;
+        const gatewayPid = external || reparented ? 2 : process.ppid;
+        const root = await fs.realpath(process.cwd());
+        const packageRoot = splitRoot ? path.join(home, "package-B") : root;
+        if (splitRoot) {
+          await fs.mkdir(packageRoot);
         }
-      }
-      // Create the real lease on the host filesystem before simulating its service manager.
-      const ancestryInspection = mockHandoffServicePlatform(platform);
-      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
-        reparented ? scenario.membership : "outside",
-      );
-      if (reparented && platform === "linux") {
-        const nativeMembership = await vi.importActual<typeof serviceMembership>(
-          "../../daemon/service-process-membership.js",
+        const runId = randomUUID();
+        createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
+        const metaPath = await writeHandoffMeta(
+          home,
+          identity === "different root" ? home : packageRoot,
+          identity === "different run" ? randomUUID() : runId,
+          "owned-handoff",
         );
-        vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation(
-          nativeMembership.inspectServiceProcessMembershipSync,
-        );
-        const readFile = fsSync.readFileSync;
-        vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
-          if (file === `/proc/${process.pid}/cgroup` || file === `/proc/${gatewayPid}/cgroup`) {
-            if (scenario.membership === "unknown") {
-              throw new Error("Fixture procfs inspection denied");
-            }
-            return `0::/system.slice/openclaw-gateway.service/${file === `/proc/${gatewayPid}/cgroup` ? "worker.service" : "caller"}`;
-          }
-          return readFile(file, options);
-        });
-      }
-      if (unresolved) {
-        ancestryInspection.mockReturnValue({ pids: new Set([process.pid]), complete: false });
-      }
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
-          OPENCLAW_UPDATE_RUN_ID:
-            identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
-            identity === "missing metadata" ? undefined : metaPath,
-          OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
-          OPENCLAW_SERVICE_KIND: inherited ? "gateway" : undefined,
-          OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
-        },
-        async () => {
-          const service = handoffService(home, {}, gatewayPid);
-          // Candidate admission inspects before supplying the ledger run context.
-          const updateRun = phase === "inspect" ? undefined : { runId, env: process.env };
-          const { recordPhase } = createUpdateCommandExecutionGuards(
-            { run: updateRun },
+        if (identity !== "missing lease") {
+          const store = createManagedHandoffLeaseStore();
+          const claim = store.acquire(
             packageRoot,
+            identity === "replaced owner" ? "replacement-handoff" : "owned-handoff",
+            { kind: "update" },
           );
-          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-            ...maintenanceDefaults,
-            root,
-            handoffRoot: splitRoot ? packageRoot : undefined,
-            phase,
-            updateRun,
-            recordPhase,
-            handoffFromGateway: async () => false,
+          if (claim.kind !== "acquired") {
+            throw new Error("fixture could not acquire its installation lease");
+          }
+          if (identity === "parent lease") {
+            expect(store.bind(claim.lease, process.ppid)).not.toBeNull();
+          } else if (identity === "stale start identity") {
+            replaceExecutorIdentity(home, packageRoot, "stale");
+          }
+        }
+        const ancestryInspection = mockHandoffServicePlatform(platform);
+        vi.mocked(serviceMembership.inspectServiceProcessMembershipSync).mockReturnValue(
+          scenario.membership ?? "outside",
+        );
+        if (reparented && platform === "linux") {
+          const nativeMembership = await vi.importActual<typeof serviceMembership>(
+            "../../daemon/service-process-membership.js",
+          );
+          vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation(
+            nativeMembership.inspectServiceProcessMembershipSync,
+          );
+          const readFile = fsSync.readFileSync;
+          vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
+            if (file === `/proc/${process.pid}/cgroup` || file === `/proc/${gatewayPid}/cgroup`) {
+              if (scenario.membership === "unknown") {
+                throw new Error("Fixture procfs inspection denied");
+              }
+              return `0::/system.slice/openclaw-gateway.service/${file === `/proc/${gatewayPid}/cgroup` ? "worker.service" : "caller"}`;
+            }
+            return readFile(file, options);
           });
-          expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-          if (authorized || external) {
-            expect(inspected.blockMessage).toBeUndefined();
-          } else {
-            expect(inspected.blockFailureFacts).toEqual([
-              expect.objectContaining({
-                check: "managed-service-preflight",
-                code: reparented
-                  ? scenario.membership === "inside"
-                    ? "inside-gateway-service"
-                    : "service-membership-unverified"
-                  : unresolved
-                    ? "service-ancestry-unverified"
-                    : "inside-gateway-process-tree",
-              }),
-            ]);
-            expect(inspected.blockMessage).toEqual(
-              reparented
-                ? expect.stringContaining("service")
-                : unresolved
-                  ? expect.stringContaining("Process ancestry could not be fully inspected")
-                  : blockedTree(gatewayPid),
+        }
+        if (unresolved) {
+          ancestryInspection.mockReturnValue({ pids: new Set([process.pid]), complete: false });
+        }
+        await withEnvAsync(
+          {
+            OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
+            [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
+              identity === "missing metadata" ? undefined : metaPath,
+            ...(!replacedAtStop && {
+              OPENCLAW_UPDATE_RUN_ID:
+                identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
+              OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
+              OPENCLAW_SERVICE_KIND: inherited ? "gateway" : undefined,
+              OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
+            }),
+          },
+          async () => {
+            let runtimeReads = 0;
+            const service = handoffService(home, {}, gatewayPid);
+            if (replacedAtStop) {
+              service.readRuntime = async () => {
+                if (++runtimeReads === 2) {
+                  replaceExecutorIdentity(home, root, "replaced");
+                }
+                return { status: "running", pid: process.ppid, systemd: { managerUid: 2001 } };
+              };
+            }
+            const updateRun = phase === "inspect" ? undefined : { runId, env: process.env };
+            const { recordPhase } = createUpdateCommandExecutionGuards(
+              { run: updateRun },
+              packageRoot,
             );
-          }
-          expect(service.stop).toHaveBeenCalledTimes(
-            (authorized || external) && phase === "prepare" ? 1 : 0,
-          );
-          if ((authorized || external) && phase === "prepare") {
-            expect(service.stop).toHaveBeenCalledWith(
-              expect.objectContaining({
-                updateHandoff: { root: packageRoot, runId },
-              }),
-            );
-          }
-          expectNoCalls(service.start, service.restart, service.stage, service.install);
-        },
-      );
-    }),
-);
-
-it.runIf(nativeHost).each(["linux", "darwin", "win32"] as const)(
-  "rechecks the managed handoff identity immediately before stopping the %s Gateway",
-  (platform) =>
-    withHandoff(async (home) => {
-      const root = await fs.realpath(process.cwd());
-      const runId = randomUUID();
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      const metaPath = await writeHandoffMeta(home, root, runId, "owned-handoff");
-      claimLease(root);
-      mockHandoffServicePlatform(platform);
-      let runtimeReads = 0;
-      const stop = vi.fn(async () => undefined);
-      handoffService(home, {
-        readRuntime: async () => {
-          runtimeReads += 1;
-          if (runtimeReads === 2) {
-            replaceExecutorIdentity(home, root, "replaced");
-          }
-          return {
-            status: "running",
-            pid: process.ppid,
-            systemd: { managerUid: 2001 },
-          };
-        },
-        stop,
-      });
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-        },
-        async () => {
-          const updateRun = { runId, env: process.env };
-          const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, root);
-          await expect(
-            maybeStopManagedServiceBeforeMutableUpdate({
+            const attempt = maybeStopManagedServiceBeforeMutableUpdate({
               ...maintenanceDefaults,
               root,
-              phase: "prepare",
+              handoffRoot: splitRoot ? packageRoot : undefined,
+              phase,
               updateRun,
               recordPhase,
-            }).then(() => undefined),
-          ).rejects.toThrow(blockedTree(process.ppid));
-        },
-      );
-      expect(runtimeReads).toBe(2);
-      expect(stop).not.toHaveBeenCalled();
+              ...(replacedAtStop ? {} : { handoffFromGateway: async () => false }),
+            });
+            if (replacedAtStop) {
+              await expect(attempt).rejects.toThrow(blockedTree(process.ppid));
+              expect(runtimeReads).toBe(2);
+              expect(service.stop).not.toHaveBeenCalled();
+              return;
+            }
+            const inspected = await attempt;
+            expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
+            if (authorized || external) {
+              expect(inspected.blockMessage).toBeUndefined();
+            } else {
+              expect(inspected.blockFailureFacts).toEqual([
+                expect.objectContaining({
+                  check: "managed-service-preflight",
+                  code: reparented
+                    ? scenario.membership === "inside"
+                      ? "inside-gateway-service"
+                      : "service-membership-unverified"
+                    : unresolved
+                      ? "service-ancestry-unverified"
+                      : "inside-gateway-process-tree",
+                }),
+              ]);
+              expect(inspected.blockMessage).toEqual(
+                reparented
+                  ? expect.stringContaining("service")
+                  : unresolved
+                    ? expect.stringContaining("Process ancestry could not be fully inspected")
+                    : blockedTree(gatewayPid),
+              );
+            }
+            expect(service.stop).toHaveBeenCalledTimes(
+              (authorized || external) && phase === "prepare" ? 1 : 0,
+            );
+            if ((authorized || external) && phase === "prepare") {
+              expect(service.stop).toHaveBeenCalledWith(
+                expect.objectContaining({ updateHandoff: { root: packageRoot, runId } }),
+              );
+            }
+            expectNoCalls(service.start, service.restart, service.stage, service.install);
+          },
+        );
+      } finally {
+        await closeStateDatabaseForTest();
+      }
     }),
 );
 

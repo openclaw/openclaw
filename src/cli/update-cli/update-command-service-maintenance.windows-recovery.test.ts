@@ -9,7 +9,6 @@ import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { waitForSignalExitBarriers } from "../signal-exit-barrier.js";
-import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -186,11 +185,11 @@ it.each([
           }
           expect(ownedListeners.flat().length).toBeGreaterThan(0);
           const remaining = readListeners();
-          ownedListeners.forEach((listeners, index) => {
-            for (const listener of listeners) {
-              expect(remaining[index]).not.toContain(listener);
-            }
-          });
+          expect(
+            ownedListeners.map((listeners, index) =>
+              listeners.filter((listener) => remaining[index]?.includes(listener)),
+            ),
+          ).toEqual([[], [], []]);
           await waitForSignalExitBarriers();
         }
         if (lostBefore === "never") {
@@ -202,10 +201,9 @@ it.each([
           expect(String(failure)).toContain("Repair continuation no longer owns this task");
         }
       } finally {
-        await stopped?.windowsTaskAutoStartRecovery?.complete();
-        if (!stopped) {
-          await privateRecovery?.complete(false);
-        }
+        await (stopped?.windowsTaskAutoStartRecovery ?? privateRecovery)?.complete(
+          Boolean(stopped),
+        );
       }
     }),
 );
@@ -215,10 +213,7 @@ it.each(["before-disable", "after-disable"] as const)(
   (interruption) =>
     withServiceHome(async (home) => {
       const root = process.cwd();
-      const run: NonNullable<UpdateCommandOptions["run"]> = {
-        runId: randomUUID(),
-        env: { HOME: home },
-      };
+      const run = { runId: randomUUID(), env: { HOME: home }, interrupted: false };
       const task = mutableTask(
         () => {
           if (interruption === "before-disable") {

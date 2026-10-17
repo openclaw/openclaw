@@ -4,14 +4,10 @@ import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { expect, it, vi } from "vitest";
 import * as serviceFiles from "../../daemon/inspect-files.js";
-import {
-  buildLaunchAgentPlist,
-  readLaunchAgentProgramArgumentsFromFile,
-} from "../../daemon/launchd-plist.js";
+import { readLaunchAgentProgramArgumentsFromFile } from "../../daemon/launchd-plist.js";
 import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import * as gatewayServices from "../../daemon/service.js";
-import { readGatewayServiceState } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
@@ -62,6 +58,14 @@ function selected(
   };
 }
 
+async function expectPublication(admission: Promise<void>, accepted: boolean) {
+  if (accepted) {
+    await expect(admission).resolves.toBeUndefined();
+  } else {
+    await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+  }
+}
+
 it.each([
   "equivalent selected wrapper",
   "unlisted wrapper",
@@ -88,40 +92,32 @@ it.each([
     vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
       { env, scope: "user", windowsStartupEntry: startup },
     ]);
+    const startupCommand = {
+      ...command,
+      sourcePath: "c:/Gateway/gateway.cmd",
+      definitionPaths: [startup, "c:/Gateway/gateway.cmd"],
+      programArguments: [...command.programArguments],
+    };
+    if (scenario === "changed command") {
+      startupCommand.programArguments.push("--verbose");
+    }
+    const selectedCommand: Command = { ...command };
+    if (scenario !== "Task still registered") {
+      selectedCommand.startupEntryPaths = [
+        scenario === "unlisted wrapper" ? "C:\\Startup\\Other.vbs" : startup,
+      ];
+    }
     vi.spyOn(gatewayServices, "readGatewayServiceState").mockImplementation(
       async (_service, args) => ({
         ...state,
-        command: args?.windowsStartupEntry
-          ? {
-              ...command,
-              sourcePath: "c:/Gateway/gateway.cmd",
-              definitionPaths: [startup, "c:/Gateway/gateway.cmd"],
-              programArguments:
-                scenario === "changed command"
-                  ? [...command.programArguments, "--verbose"]
-                  : command.programArguments,
-            }
-          : {
-              ...command,
-              ...(scenario === "Task still registered"
-                ? {}
-                : {
-                    startupEntryPaths: [
-                      scenario === "unlisted wrapper" ? "C:\\Startup\\Other.vbs" : startup,
-                    ],
-                  }),
-            },
+        command: args?.windowsStartupEntry ? startupCommand : selectedCommand,
       }),
     );
     const admission = publish(env, {
       shouldRestart: false,
       selected: selected(command),
     });
-    if (scenario === "equivalent selected wrapper") {
-      await expect(admission).resolves.toBeUndefined();
-    } else {
-      await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-    }
+    await expectPublication(admission, scenario === "equivalent selected wrapper");
   }),
 );
 
@@ -185,11 +181,10 @@ it.each(
         serviceManagerUid: 501,
       }),
     });
-    if (scenario === "changed declared profile" || scenario === "other native unit") {
-      await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-    } else {
-      await expect(admission).resolves.toBeUndefined();
-    }
+    await expectPublication(
+      admission,
+      scenario !== "changed declared profile" && scenario !== "other native unit",
+    );
     expect(state.env).toMatchObject({
       OPENCLAW_SYSTEMD_UNIT: observedUnit,
       OPENCLAW_PROFILE: observedCommand.environment.OPENCLAW_PROFILE,
@@ -237,20 +232,8 @@ it.each(["inventory", "effective command"])(
       const directory = path.join(home, "Library", "LaunchAgents");
       const pathname = path.join(directory, "ai.openclaw.sibling.plist");
       await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(
-        pathname,
-        buildLaunchAgentPlist({
-          label: "ai.openclaw.sibling",
-          programArguments: gatewayCommand(home).programArguments,
-          stdoutPath: path.join(home, "stdout.log"),
-          stderrPath: path.join(home, "stderr.log"),
-          environment: {
-            OPENCLAW_PROFILE: "sibling",
-            OPENCLAW_SERVICE_MARKER: "openclaw",
-            OPENCLAW_SERVICE_KIND: "gateway",
-          },
-        }),
-      );
+      // Native normalization fails before command fields are decoded.
+      await fs.writeFile(pathname, "<plist><dict/></plist>");
       const collect = serviceFiles.collectServiceFiles;
       vi.spyOn(serviceFiles, "collectServiceFiles").mockImplementation((params) =>
         params.dir === directory ? collect(params) : Promise.resolve([]),
@@ -334,7 +317,7 @@ it.each([
       }),
       isLoaded: async () => true,
     });
-    const state = await readGatewayServiceState(service, {
+    const state = await gatewayServices.readGatewayServiceState(service, {
       env: before.serviceEnv,
       requireEffective: true,
       requireLoadedCommand: true,

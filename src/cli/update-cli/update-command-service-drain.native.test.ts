@@ -112,6 +112,22 @@ function params(request: CallGatewayCliOptions): Record<string, unknown> {
   return request.params;
 }
 
+function stringParam(request: CallGatewayCliOptions, name: string) {
+  const value = params(request)[name];
+  if (typeof value !== "string") {
+    throw new Error(`Missing fixture ${name}`);
+  }
+  return value;
+}
+
+function expectCommittedAdmission() {
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  expect(getGatewaySuspendStatus(f.suspensionId, true)).toMatchObject({
+    status: "draining",
+    phase: "interrupting",
+  });
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   resetGatewaySuspendCoordinatorForLifecycleRestart();
@@ -236,12 +252,8 @@ beforeEach(() => {
       return { pid, processInstanceId: "original-process-instance" };
     }
     if (request.method === "gateway.suspend.prepare") {
-      const input = params(request);
-      if (typeof input.requestId !== "string") {
-        throw new Error("Missing fixture request ID");
-      }
       const result = prepareGatewaySuspend({
-        requestId: input.requestId,
+        requestId: stringParam(request, "requestId"),
         drain: true,
         terminalPolicy: "terminate",
         pauseScheduling: () => f.events.push("scheduler:paused"),
@@ -260,16 +272,13 @@ beforeEach(() => {
     }
     if (request.method === "gateway.suspend.handoff") {
       const input = params(request);
-      if (typeof input.suspensionId !== "string") {
-        throw new Error("Missing fixture suspension ID");
-      }
       expect(input.target).toEqual({ pid, processInstanceId: "original-process-instance" });
       const owner = host.capability.externalRestart;
       if (!owner) {
         throw new Error("Fixture host has no process-exit owner");
       }
       const result = armGatewaySuspendHandoff({
-        suspensionId: input.suspensionId,
+        suspensionId: stringParam(request, "suspensionId"),
         owner,
         ...(input.commit === true ? { commit: true } : {}),
       });
@@ -282,11 +291,7 @@ beforeEach(() => {
       return result.value;
     }
     if (request.method === "gateway.suspend.resume") {
-      const input = params(request);
-      if (typeof input.suspensionId !== "string") {
-        throw new Error("Missing fixture suspension ID");
-      }
-      return resumeGatewaySuspend(input.suspensionId);
+      return resumeGatewaySuspend(stringParam(request, "suspensionId"));
     }
     throw new Error(`Unsupported fixture Gateway method: ${request.method}`);
   });
@@ -414,8 +419,7 @@ test.each(["native inspection", "handoff dispatch"] as const)(
     expect(f.events).toContain("native:inspected");
     expect(f.events).not.toContain("host:committed");
     expect(f.events).not.toContain("effect:StopUnit");
-    expect(f.shutdownCommitted).toBe(false);
-    expect(f.alive).toBe(true);
+    expect(f).toMatchObject({ shutdownCommitted: false, alive: true });
   },
 );
 
@@ -426,9 +430,7 @@ test.each(["expiry", "resume", "write custody", "boot replacement"] as const)(
       if (change === "expiry") {
         f.epoch += 120_000;
         f.monotonic += 120_000;
-        expect(getGatewaySuspendStatus(f.suspensionId, true)).toMatchObject({
-          status: "running",
-        });
+        expect(getGatewaySuspendStatus(f.suspensionId, true)).toMatchObject({ status: "running" });
       } else if (change === "resume") {
         expect(resumeGatewaySuspend(f.suspensionId)).toMatchObject({ ok: true, resumed: true });
       } else if (change === "write custody") {
@@ -439,45 +441,36 @@ test.each(["expiry", "resume", "write custody", "boot replacement"] as const)(
     };
     const outcome = await stopWithLiveDrain().catch((error: unknown) => error);
     expect(f.events).toContain("native:inspected");
-    expect(f.events.filter((event) => event === "effect:StopUnit")).toEqual([]);
+    expect(f.events.filter((event) => event === "effect:StopUnit")).toHaveLength(0);
     expect(outcome).toBeInstanceOf(Error);
     expect(f.alive).toBe(true);
   },
 );
 
-test.each(["forward", "backward"] as const)(
-  "keeps shutdown committed after a %s clock jump",
-  async (clock) => {
+test.each(["forward clock jump", "backward clock jump", "resume"] as const)(
+  "keeps shutdown committed after %s before dispatch",
+  async (change) => {
+    let resumed: ReturnType<typeof resumeGatewaySuspend> | undefined;
     f.beforeDispatch = () => {
-      f.epoch += clock === "forward" ? 120_000 : -120_000;
-      f.monotonic += 120_000;
+      if (change === "resume") {
+        resumed = resumeGatewaySuspend(f.suspensionId);
+      } else {
+        f.epoch += change === "forward clock jump" ? 120_000 : -120_000;
+        f.monotonic += 120_000;
+      }
     };
     await stopWithLiveDrain();
     expect(f.events).toContain("native:inspected");
     expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
     expect(f.events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
     expect(f.events).not.toContain("effect:admission-open");
-    expect(isGatewayWorkAdmissionClosed()).toBe(true);
-    expect(getGatewaySuspendStatus(f.suspensionId, true)).toMatchObject({
-      status: "draining",
-      phase: "interrupting",
-    });
+    expectCommittedAdmission();
     expect(f.alive).toBe(false);
+    if (change === "resume") {
+      expect(resumed).toEqual({ ok: false, reason: "gateway-restarting" });
+    }
   },
 );
-
-test("refuses resume while committed native stop is queued", async () => {
-  let resumed: ReturnType<typeof resumeGatewaySuspend> | undefined;
-  f.beforeDispatch = () => {
-    resumed = resumeGatewaySuspend(f.suspensionId);
-  };
-  await stopWithLiveDrain();
-  expect(f.events).not.toContain("effect:admission-open");
-  expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
-  expect(f.events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
-  expect(resumed).toEqual({ ok: false, reason: "gateway-restarting" });
-  expect(isGatewayWorkAdmissionClosed()).toBe(true);
-});
 
 test("settles exit between host commitment and native dispatch", async () => {
   f.beforeDispatch = () => {
@@ -505,13 +498,6 @@ test("keeps lost-reply shutdown committed without native stop", async () => {
   await expect(stopWithLiveDrain()).rejects.toThrow("lost the committed reply");
   expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
   expect(f.events.filter((event) => event === "effect:StopUnit")).toEqual([]);
-  expect(resumeGatewaySuspend(f.suspensionId)).toEqual({
-    ok: false,
-    reason: "gateway-restarting",
-  });
-  expect(getGatewaySuspendStatus(f.suspensionId, true)).toMatchObject({
-    status: "draining",
-    phase: "interrupting",
-  });
-  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  expect(resumeGatewaySuspend(f.suspensionId)).toEqual({ ok: false, reason: "gateway-restarting" });
+  expectCommittedAdmission();
 });
