@@ -2195,6 +2195,7 @@ src/config/sessions/session-accessor.sqlite-read.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
 src/config/sessions/session-accessor.sqlite-transcript-state.ts
+src/config/sessions/session-accessor.sqlite-transcript-state.queries.ts
 src/config/sessions/session-accessor.sqlite-transcript-stats.ts
 src/config/sessions/session-accessor.sqlite-transcript-watermark.ts
 src/config/sessions/session-canonical-validation.ts
