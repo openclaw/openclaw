@@ -11,6 +11,7 @@ import { resolveSessionWorkStartError } from "./lifecycle.js";
 import {
   compareSessionProviderReview,
   readSessionProviderReview,
+  type SessionProviderReviewTarget,
 } from "./provider-review-store.js";
 import type { SessionProviderReview } from "./provider-review.types.js";
 import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
@@ -18,6 +19,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import type { SessionEntry } from "./types.js";
 
 const target = {
   agentId: "main",
@@ -40,6 +42,25 @@ const original = {
   updatedAt: 1,
 };
 
+function compare(
+  selected: SessionProviderReviewTarget,
+  nextReview: SessionProviderReview | undefined,
+  expectedReview: SessionProviderReview | undefined = undefined,
+  authority = assertCurrent,
+) {
+  return compareSessionProviderReview(selected, {
+    expectedReview,
+    nextReview,
+    assertCurrent: authority,
+  });
+}
+
+function pauseError(entry: SessionEntry | undefined) {
+  return resolveSessionWorkStartError(target.sessionKey, entry, {
+    expectedSessionId: target.sessionId,
+  });
+}
+
 it("reopens an existing session and preserves its provider pause without a schema migration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: target.agentId });
@@ -58,11 +79,7 @@ it("reopens an existing session and preserves its provider pause without a schem
     const existing = await readSessionProviderReview(selectedTarget, assertCurrent);
     expect(existing).toMatchObject(existingEntry);
     expect(existing?.providerReview).toBeUndefined();
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, existing, {
-        expectedSessionId: target.sessionId,
-      }),
-    ).toBeUndefined();
+    expect(pauseError(existing)).toBeUndefined();
 
     const retainedReview: SessionProviderReview = {
       ...review,
@@ -75,11 +92,7 @@ it("reopens an existing session and preserves its provider pause without a schem
         errorType: "misalignment_policy_violation",
       },
     };
-    await compareSessionProviderReview(selectedTarget, {
-      expectedReview: undefined,
-      nextReview: retainedReview,
-      assertCurrent,
-    });
+    await compare(selectedTarget, retainedReview);
     await closeOpenClawAgentDatabaseByPathAsync(database.path, target.agentId);
 
     const reopened = openOpenClawAgentDatabase({
@@ -91,11 +104,7 @@ it("reopens an existing session and preserves its provider pause without a schem
     const persisted = await readSessionProviderReview(selectedTarget, assertCurrent);
     expect(persisted).toMatchObject(existingEntry);
     expect(persisted?.providerReview).toEqual(retainedReview);
-    expect(
-      resolveSessionWorkStartError(target.sessionKey, persisted, {
-        expectedSessionId: target.sessionId,
-      }),
-    ).toContain("paused as a precaution");
+    expect(pauseError(persisted)).toContain("paused as a precaution");
   });
 });
 
@@ -134,34 +143,19 @@ it.each(["default", "shared"] as const)(
         expect(await readSessionProviderReview(selectedTarget, assertCurrent)).toMatchObject(
           original,
         );
-        expect(
-          await compareSessionProviderReview(selectedTarget, {
-            expectedReview: undefined,
-            nextReview: review,
-            assertCurrent,
-          }),
-        ).toMatchObject({ ...original, providerReview: review });
-        expect(sharing.readCurrent()?.entry?.providerReview).toEqual(review);
-        expect(
-          resolveSessionWorkStartError(target.sessionKey, sharing.readCurrent()?.entry, {
-            expectedSessionId: target.sessionId,
-          }),
-        ).toContain("paused as a precaution");
-        const newer = { ...review, id: "review-2" };
-        await compareSessionProviderReview(selectedTarget, {
-          expectedReview: review,
-          nextReview: newer,
-          assertCurrent,
+        expect(await compare(selectedTarget, review)).toMatchObject({
+          ...original,
+          providerReview: review,
         });
+        expect(sharing.readCurrent()?.entry?.providerReview).toEqual(review);
+        expect(pauseError(sharing.readCurrent()?.entry)).toContain("paused as a precaution");
+        const newer = { ...review, id: "review-2" };
+        await compare(selectedTarget, newer, review);
         expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
         for (const stale of [review, { ...newer, runId: "changed-run" }]) {
-          await expect(
-            compareSessionProviderReview(selectedTarget, {
-              expectedReview: stale,
-              nextReview: undefined,
-              assertCurrent,
-            }),
-          ).rejects.toThrow("Provider review changed");
+          await expect(compare(selectedTarget, undefined, stale)).rejects.toThrow(
+            "Provider review changed",
+          );
           expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
         }
         for (const staleTarget of [
@@ -170,34 +164,18 @@ it.each(["default", "shared"] as const)(
           { ...selectedTarget, lifecycleRevision: undefined },
         ]) {
           expect(await readSessionProviderReview(staleTarget, assertCurrent)).toBeUndefined();
-          await expect(
-            compareSessionProviderReview(staleTarget, {
-              expectedReview: newer,
-              nextReview: undefined,
-              assertCurrent,
-            }),
-          ).rejects.toThrow("Provider review changed");
+          await expect(compare(staleTarget, undefined, newer)).rejects.toThrow(
+            "Provider review changed",
+          );
           expect(sharing.readCurrent()?.entry?.providerReview).toEqual(newer);
         }
         expect(
           (await readSessionProviderReview(selectedTarget, assertCurrent))?.providerReview,
         ).toEqual(newer);
-        expect(
-          (
-            await compareSessionProviderReview(selectedTarget, {
-              expectedReview: newer,
-              nextReview: undefined,
-              assertCurrent,
-            })
-          ).providerReview,
-        ).toBeUndefined();
+        expect((await compare(selectedTarget, undefined, newer)).providerReview).toBeUndefined();
         expect(sharing.readCurrent()?.entry).toMatchObject(original);
         expect(sharing.readCurrent()?.entry?.providerReview).toBeUndefined();
-        expect(
-          resolveSessionWorkStartError(target.sessionKey, sharing.readCurrent()?.entry, {
-            expectedSessionId: target.sessionId,
-          }),
-        ).toBeUndefined();
+        expect(pauseError(sharing.readCurrent()?.entry)).toBeUndefined();
         for (const method of methods) {
           expect(method).not.toHaveBeenCalled();
         }
@@ -232,14 +210,10 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
     });
     try {
       await expect(
-        compareSessionProviderReview(target, {
-          expectedReview: review,
-          nextReview: undefined,
-          assertCurrent() {
-            if (!current) {
-              throw new Error("Review authority revoked");
-            }
-          },
+        compare(target, undefined, review, () => {
+          if (!current) {
+            throw new Error("Review authority revoked");
+          }
         }),
       ).rejects.toThrow("Review authority revoked");
       expect(current).toBe(false);
