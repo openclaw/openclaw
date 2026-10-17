@@ -28,7 +28,7 @@ import { sleep } from "../utils/sleep.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "./agent-run-terminal-receipt.js";
 import {
-  isAgentRunTerminalReplyAtBound,
+  mayBeTruncatedAgentRunTerminalReply,
   normalizeAgentRunTerminalReplySnapshot,
 } from "./agent-run-terminal-reply.js";
 import type { AgentWaitResult } from "./run-wait.types.js";
@@ -222,18 +222,25 @@ export async function readCompleteAgentRunReply(params: {
   callGateway?: GatewayCaller;
 }): Promise<{ replyText?: string; replyTruncated?: true }> {
   const bounded = params.replyText;
-  if (!bounded || !isAgentRunTerminalReplyAtBound(bounded)) {
+  if (!bounded || !mayBeTruncatedAgentRunTerminalReply(bounded)) {
     return { replyText: bounded };
   }
-  const full = await readLatestAssistantReply({
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    runId: params.runId,
-    callGateway: params.callGateway,
-  }).catch(() => undefined);
+  // The accepted run's stored reply is authoritative: it either extends the
+  // bounded prefix (truncated) or equals it (a reply that ends with "…").
+  const stored = (
+    await readLatestAssistantReply({
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      runId: params.runId,
+      callGateway: params.callGateway,
+    }).catch(() => undefined)
+  )?.trim();
+  if (stored === bounded) {
+    return { replyText: bounded };
+  }
   const prefix = bounded.slice(0, -1).trimEnd();
-  return full && full.length > prefix.length && full.trimStart().startsWith(prefix)
-    ? { replyText: full.trim() }
+  return stored && stored.length > prefix.length && stored.startsWith(prefix)
+    ? { replyText: stored }
     : { replyText: bounded, replyTruncated: true };
 }
 

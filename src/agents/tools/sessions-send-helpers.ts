@@ -44,7 +44,7 @@ export function sendReplyResult(
           ...(replyTruncated
             ? {
                 replyTruncated,
-                note: "The reply was cut at 4,096 characters; read the rest with sessions_history.",
+                note: "The reply may have been cut at 4,096 characters; read the full reply with sessions_history.",
               }
             : {}),
         }

@@ -686,14 +686,48 @@ describe("readCompleteAgentRunReply", () => {
     expect(result).toEqual({ replyText: bounded(), replyTruncated: true });
   });
 
-  it("does not read history for replies below the bound", async () => {
+  it("recovers a truncated reply that trailing whitespace shortened below the bound", async () => {
+    const reply = `${"a".repeat(4_000)}${" ".repeat(100)}TAIL`;
+    const snapshot = sanitizeAgentRunTerminalReply(reply);
+    if (snapshot.disposition !== "visible") {
+      throw new Error("expected visible snapshot");
+    }
+    callGatewayMock.mockResolvedValue({
+      messages: [{ ...textAssistant(reply), __openclaw: { runId: "run-accepted" } }],
+    });
+
     const result = await readCompleteAgentRunReply({
       runId: "run-accepted",
       sessionKey: "agent:helper:main",
-      replyText: "short reply…",
+      replyText: snapshot.text,
     });
 
-    expect(result).toEqual({ replyText: "short reply…" });
+    expect(snapshot.text).toBe(`${"a".repeat(4_000)}…`);
+    expect(result).toEqual({ replyText: reply });
+  });
+
+  it("keeps a complete reply that ends with an ellipsis unflagged", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [{ ...textAssistant("Still thinking…"), __openclaw: { runId: "run-accepted" } }],
+    });
+
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: "Still thinking…",
+    });
+
+    expect(result).toEqual({ replyText: "Still thinking…" });
+  });
+
+  it("does not read history for replies without the truncation marker", async () => {
+    const result = await readCompleteAgentRunReply({
+      runId: "run-accepted",
+      sessionKey: "agent:helper:main",
+      replyText: "short reply.",
+    });
+
+    expect(result).toEqual({ replyText: "short reply." });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });

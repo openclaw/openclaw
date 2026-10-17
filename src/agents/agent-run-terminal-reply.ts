@@ -9,13 +9,13 @@ import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.t
 const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 const AGENT_RUN_TERMINAL_REPLY_MARKER = "…";
 
-/** True when visible terminal evidence may have been cut at its bound. */
-export function isAgentRunTerminalReplyAtBound(text: string): boolean {
-  // Truncation trims trailing whitespace before the marker, so allow a short gap.
-  return (
-    text.endsWith(AGENT_RUN_TERMINAL_REPLY_MARKER) &&
-    text.length >= AGENT_RUN_TERMINAL_REPLY_MAX_CHARS - 64
-  );
+/**
+ * True when visible terminal evidence may have been cut at its bound. Truncation
+ * trims the whole retained prefix before the marker, so length alone cannot
+ * rule it out; only text without the trailing marker is certainly complete.
+ */
+export function mayBeTruncatedAgentRunTerminalReply(text: string): boolean {
+  return text.endsWith(AGENT_RUN_TERMINAL_REPLY_MARKER);
 }
 
 function isMessageToolNotCalledTerminalReply(
