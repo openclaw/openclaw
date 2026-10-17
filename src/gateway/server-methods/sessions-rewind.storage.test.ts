@@ -77,6 +77,39 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 useMessageCutStorageFixture();
 
+function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
+async function authorizeMemberFork(scope: SourceScope) {
+  const client = {
+    authenticatedUserId: "member@example.com",
+    authenticatedUserProfile: {
+      profileId: "member",
+      displayName: "Member",
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+    connect: { role: "operator", scopes: ["operator.write"] },
+  } as GatewayClient;
+  const requestContext = context();
+  await initializeSessionReadContext(requestContext);
+  const request = {
+    client,
+    method: "sessions.fork",
+    requestParams: mutationParams("sessions.fork", scope.sessionKey),
+    context: requestContext,
+  };
+  const admission = await resolveSessionMutationAuthorizationAsync(request);
+  expect(admission.error).toBeNull();
+  const authorization = expectDefined(admission.authorization, "source participation authority");
+  return {
+    authorization,
+    request,
+    options: { client, context: requestContext, sessionMutationAuthorization: authorization },
+  };
+}
+
 it.each(mutationMethods)(
   "rejects %s while its source initializer is still running",
   async (method) => {
@@ -130,14 +163,10 @@ it.each(mutationMethods)(
         // The initializer remains blocked: rejection must not wait on its lifecycle fence.
         await vi.waitFor(() => expect(mutation?.respond).toHaveBeenCalled());
         expect(await mutation.error).toBeUndefined();
-        expect(mutation.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: ErrorCodes.UNAVAILABLE,
-            message: expect.stringContaining("initializing"),
-          }),
-        );
+        expectFailure(mutation.respond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message: expect.stringContaining("initializing"),
+        });
         expect(await readMutationStorage(scope)).toEqual(before);
       } finally {
         release.resolve();
@@ -386,14 +415,10 @@ it.each(
         ? await revokeDuringWriterWait(scope, () => invokeMessageCut(method, scope), lockSource)
         : invokeMessageCut(method, scope);
       expect(await mutation.error).toBeUndefined();
-      expect(mutation.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: "Session history changes are unavailable while model selection is locked.",
-        }),
-      );
+      expectFailure(mutation.respond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Session history changes are unavailable while model selection is locked.",
+      });
       expect(await readMutationStorage(scope)).toEqual(before);
     });
   },
@@ -519,11 +544,7 @@ describe("sessions.fork storage ownership", () => {
         }
         const { respond } = mutation;
         if (kind === "repository-changed") {
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
-          );
+          expectFailure(respond, { code: ErrorCodes.UNAVAILABLE });
           expect(await readMutationStorage(sourceScope)).toEqual(racedStorage);
           await expect(
             getSessionRepositoryWorkspaceStore().get(
@@ -693,42 +714,16 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
           addedBy: "owner",
           expectedSessionId: scope.sessionId,
         });
-        const client = {
-          authenticatedUserId: "member@example.com",
-          authenticatedUserProfile: {
-            profileId: "member",
-            displayName: "Member",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-          connect: { role: "operator", scopes: ["operator.write"] },
-        } as GatewayClient;
-        const requestContext = context();
-        await initializeSessionReadContext(requestContext);
-        const admission = await resolveSessionMutationAuthorizationAsync({
-          client,
-          method: "sessions.fork",
-          requestParams: mutationParams("sessions.fork", scope.sessionKey),
-          context: requestContext,
-        });
-        expect(admission.error).toBeNull();
-        const authorization = expectDefined(
-          admission.authorization,
-          "source participation authority",
-        );
+        const { authorization, options, request } = await authorizeMemberFork(scope);
         const invoke = () => {
           expect(() => authorization.assertCurrent()).not.toThrow();
-          return invokeMessageCut("sessions.fork", scope, {
-            client,
-            context: requestContext,
-            sessionMutationAuthorization: authorization,
-          });
+          return invokeMessageCut("sessions.fork", scope, options);
         };
         try {
           const before = await readMutationStorage(scope);
           const mutation =
             revocation === "public lifecycle predecessor"
-              ? await revokeWithPublicLifecyclePredecessor(scope, requestContext, invoke)
+              ? await revokeWithPublicLifecyclePredecessor(scope, options.context, invoke)
               : await revokeDuringWriterWait(scope, invoke, () => {
                   expect(
                     removeSessionMember(scope, "member", undefined, scope.sessionId),
@@ -736,16 +731,9 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
                   expect(loadSessionEntryReadOnly(scope)).toEqual(before.source);
                 });
 
-          expect(
-            (
-              await resolveSessionMutationAuthorizationAsync({
-                client,
-                method: "sessions.fork",
-                requestParams: mutationParams("sessions.fork", scope.sessionKey),
-                context: requestContext,
-              })
-            ).error,
-          ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+          expect((await resolveSessionMutationAuthorizationAsync(request)).error).toMatchObject({
+            details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+          });
           expect.soft(await readMutationStorage(scope)).toEqual(before);
           expect(await mutation.error).toBeInstanceOf(SessionMutationAuthorizationChangedError);
           expect(await mutation.error).toMatchObject({
@@ -803,38 +791,16 @@ it("sessions.fork retains member authority while restoring cold source history",
       }),
     ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
     expect(readSessionColdTranscript(coldDatabase, scope.sessionId)).toBeDefined();
-    const client = {
-      authenticatedUserId: "member@example.com",
-      authenticatedUserProfile: {
-        profileId: "member",
-        displayName: "Member",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: { role: "operator", scopes: ["operator.write"] },
-    } as GatewayClient;
-    const requestContext = context();
-    await initializeSessionReadContext(requestContext);
-    const admission = await resolveSessionMutationAuthorizationAsync({
-      client,
-      method: "sessions.fork",
-      requestParams: mutationParams("sessions.fork", scope.sessionKey),
-      context: requestContext,
-    });
-    expect(admission.error).toBeNull();
+    const { authorization, options: mutationOptions } = await authorizeMemberFork(scope);
 
     try {
-      const mutation = invokeMessageCut("sessions.fork", scope, {
-        client,
-        context: requestContext,
-        sessionMutationAuthorization: expectDefined(admission.authorization, "source authority"),
-      });
+      const mutation = invokeMessageCut("sessions.fork", scope, mutationOptions);
 
       expect(await mutation.error).toBeUndefined();
       expect(mutation.respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
       expect(readSessionColdTranscript(coldDatabase, scope.sessionId)).toBeUndefined();
     } finally {
-      admission.authorization?.release?.();
+      authorization.release?.();
     }
   });
 });

@@ -47,6 +47,20 @@ function adoptUpstreamSource(scope: SourceScope, threadId = "late-upstream-threa
   );
 }
 
+function withSource(
+  run: (
+    scope: SourceScope,
+    before: Awaited<ReturnType<typeof readMutationStorage>>,
+  ) => Promise<void>,
+  incognito = false,
+) {
+  return withOpenClawTestState({ label: "message-cut-upstream" }, async (state) => {
+    await state.writeConfig(cfg);
+    const scope = await seedMessageCutSource(incognito);
+    await run(scope, await readMutationStorage(scope));
+  });
+}
+
 it.each(
   (["sessions.fork", "sessions.rewind"] as const).flatMap((method) =>
     (["transaction", "commit"] as const).map((boundary) => ({ method, boundary })),
@@ -54,15 +68,10 @@ it.each(
 )(
   "refuses $method when an upstream link appears at the $boundary boundary",
   async ({ method, boundary }) => {
-    await withOpenClawTestState({ label: "message-cut-upstream-commit" }, async (testState) => {
-      await testState.writeConfig(cfg);
-      const scope = await seedMessageCutSource();
-      const before = await readMutationStorage(scope);
+    await withSource(async (scope, before) => {
       openOpenClawStateDatabase();
       const create = workerAdmission.createSqliteWorkerOperationAdmission;
       let linked = false;
-      let stage: workerAdmission.SqliteWorkerAdmissionRequest["stage"] | "outside" = "outside";
-      const guardCalls = { outside: 0, open: 0, prepare: 0, transaction: 0, commit: 0 };
       vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
         (callback, attachment) =>
           create((request, grant) => {
@@ -77,30 +86,15 @@ it.each(
             ) {
               linked = adoptUpstreamSource(scope);
             }
-            const previousStage = stage;
-            stage = request.stage;
-            try {
-              callback(request, grant);
-            } finally {
-              stage = previousStage;
-            }
+            callback(request, grant);
           }, attachment),
       );
-      const mutation = invokeMessageCut(method, scope, {
-        sessionMutationCommitGuard: () => {
-          guardCalls[stage] += 1;
-        },
-      });
+      const mutation = invokeMessageCut(method, scope);
       await mutation.error;
 
       expect(linked).toBe(true);
-      const diagnostic = JSON.stringify({ method, guardCalls });
-      expect.soft(await readMutationStorage(scope), diagnostic).toEqual(before);
-      expect(mutation.respond, diagnostic).not.toHaveBeenCalledWith(
-        true,
-        expect.anything(),
-        undefined,
-      );
+      expect.soft(await readMutationStorage(scope)).toEqual(before);
+      expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
     });
   },
 );
@@ -108,10 +102,7 @@ it.each(
 it.each(["preparation", "current guard"] as const)(
   "refuses a local cut when upstream %s is unavailable",
   async (phase) => {
-    await withOpenClawTestState({ label: "message-cut-upstream-unavailable" }, async (state) => {
-      await state.writeConfig(cfg);
-      const scope = await seedMessageCutSource();
-      const before = await readMutationStorage(scope);
+    await withSource(async (scope, before) => {
       const prepare = upstreamReads.prepareSessionUpstreamPresence;
       vi.spyOn(upstreamReads, "prepareSessionUpstreamPresence").mockImplementationOnce(
         async (...args) => {
@@ -142,10 +133,7 @@ it.each(["preparation", "current guard"] as const)(
 );
 
 it("refuses incognito native context effects after upstream revocation during preparation", async () => {
-  await withOpenClawTestState({ label: "message-cut-native-upstream" }, async (state) => {
-    await state.writeConfig(cfg);
-    const scope = await seedMessageCutSource(true);
-    const before = await readMutationStorage(scope);
+  await withSource(async (scope, before) => {
     openOpenClawStateDatabase();
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -214,13 +202,10 @@ it("refuses incognito native context effects after upstream revocation during pr
         message: expect.stringContaining("external agent harness"),
       }),
     );
-  });
+  }, true);
 });
 it("refuses a shared-state owner retired while rewind waits for the lifecycle lock", async () => {
-  await withOpenClawTestState({ label: "message-cut-upstream-retirement" }, async (state) => {
-    await state.writeConfig(cfg);
-    const scope = await seedMessageCutSource();
-    const before = await readMutationStorage(scope);
+  await withSource(async (scope, before) => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const holding = runExclusiveSessionLifecycleMutation("archive", {

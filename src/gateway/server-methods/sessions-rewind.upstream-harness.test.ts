@@ -25,6 +25,11 @@ const mocks = { upstreamFork: vi.fn() };
 const sessionKey = "agent:main:rewind-handler";
 const sourceSessionId = "rewind-handler-source";
 const cfg = { agents: { entries: { main: {} } } };
+const forkFailure = {
+  status: "failed",
+  code: "upstream-unavailable",
+  message: "Codex is offline. Try again.",
+};
 let state: OpenClawTestState;
 
 beforeEach(async () => {
@@ -36,6 +41,7 @@ beforeEach(async () => {
     { agentId: "main", sessionKey },
     { sessionId: sourceSessionId, updatedAt: Date.now() },
   );
+  linkToUpstreamConversation();
 });
 
 afterEach(async () => {
@@ -49,7 +55,7 @@ async function invoke(
     | "sessions.branches.switch"
     | "sessions.fork"
     | "sessions.rewind",
-  entryId?: string,
+  entryId = "user-entry",
   client: GatewayClient | null = null,
   runtimeConfig?: GatewayRequestContext["getRuntimeConfig"],
 ) {
@@ -130,18 +136,28 @@ function installUpstreamForkHarness(
   setActivePluginRegistry(registry);
 }
 
+function entries() {
+  return readSessionEntrySummariesInWorker({
+    agentId: "main",
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  });
+}
+
+function expectFailure(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
+}
+
+function expectExternalOwner(respond: ReturnType<typeof vi.fn>) {
+  expectFailure(respond, {
+    code: ErrorCodes.INVALID_REQUEST,
+    message: expect.stringContaining("external agent harness"),
+  });
+}
+
 describe("upstream session message-cut methods", () => {
   it("rejects mutation but lists empty branches for externally owned conversations", async () => {
-    linkToUpstreamConversation();
     const respond = await invoke("sessions.branches.switch", "off-path-entry");
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("external agent harness"),
-      }),
-    );
+    expectExternalOwner(respond);
     // Listing is read-only: "no local branches" is the truthful steady state,
     // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
@@ -151,24 +167,13 @@ describe("upstream session message-cut methods", () => {
   it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
     "rejects %s for upstream-linked sessions even with a fork-capable harness",
     async (method) => {
-      linkToUpstreamConversation();
       installUpstreamForkHarness();
-      const respond = await invoke(method, "user-entry");
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("external agent harness"),
-        }),
-      );
+      expectExternalOwner(await invoke(method));
       expect(mocks.upstreamFork).not.toHaveBeenCalled();
     },
   );
 
   it("delegates complete upstream fork materialization to the harness", async () => {
-    linkToUpstreamConversation();
     installUpstreamForkHarness(undefined, "dual");
     mocks.upstreamFork.mockResolvedValue({
       status: "created",
@@ -176,7 +181,7 @@ describe("upstream session message-cut methods", () => {
       editorText: "edit me",
     });
 
-    const respond = await invoke("sessions.fork", "user-entry");
+    const respond = await invoke("sessions.fork");
     expect(respond).toHaveBeenCalledWith(
       true,
       { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" },
@@ -200,7 +205,6 @@ describe("upstream session message-cut methods", () => {
   it.each(["created", "failed"] as const)(
     "expires native-write authority when the upstream fork settles %s",
     async (outcome) => {
-      linkToUpstreamConversation();
       installUpstreamForkHarness();
       let retainedAssertCurrent: (() => void) | undefined;
       mocks.upstreamFork.mockImplementation(
@@ -209,15 +213,11 @@ describe("upstream session message-cut methods", () => {
           retainedAssertCurrent = assertCurrent;
           return outcome === "created"
             ? { status: "created", key: "agent:main:dashboard:forked" }
-            : {
-                status: "failed",
-                code: "upstream-unavailable",
-                message: "Codex is offline. Try again.",
-              };
+            : forkFailure;
         },
       );
 
-      await invoke("sessions.fork", "user-entry");
+      await invoke("sessions.fork");
 
       const nativeWrites = vi.fn();
       expect(() => {
@@ -261,68 +261,38 @@ describe("upstream session message-cut methods", () => {
           },
         },
       });
-      linkToUpstreamConversation();
       installUpstreamForkHarness("host-only", contract);
       const fork = await withPluginRuntimeGatewayRequestScope(
         { client, isWebchatConnect: () => false },
-        () => invoke("sessions.fork", "user-entry", client, runtimeConfig),
+        () => invoke("sessions.fork", undefined, client, runtimeConfig),
       );
-      expect(fork).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: expect.objectContaining({
-            code: "AGENT_RUNTIME_RESTRICTED",
-            reason: "sandbox-required",
-          }),
+      expectFailure(fork, {
+        details: expect.objectContaining({
+          code: "AGENT_RUNTIME_RESTRICTED",
+          reason: "sandbox-required",
         }),
-      );
+      });
       expect(mocks.upstreamFork).not.toHaveBeenCalled();
-      expect(
-        await readSessionEntrySummariesInWorker({
-          agentId: "main",
-          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-        }),
-      ).toHaveLength(1);
+      expect(await entries()).toHaveLength(1);
     },
   );
 
   it("does not mutate the local session when the upstream fork fails", async () => {
-    linkToUpstreamConversation();
     installUpstreamForkHarness();
-    mocks.upstreamFork.mockResolvedValue({
-      status: "failed",
-      code: "upstream-unavailable",
-      message: "Codex is offline. Try again.",
+    mocks.upstreamFork.mockResolvedValue(forkFailure);
+
+    const entryCount = (await entries()).length;
+    const respond = await invoke("sessions.fork");
+
+    expectFailure(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      details: { reason: "upstream-unavailable" },
     });
-
-    const entryCount = (
-      await readSessionEntrySummariesInWorker({
-        agentId: "main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      })
-    ).length;
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        details: { reason: "upstream-unavailable" },
-      }),
-    );
-    expect(
-      await readSessionEntrySummariesInWorker({
-        agentId: "main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      }),
-    ).toHaveLength(entryCount);
+    expect(await entries()).toHaveLength(entryCount);
   });
 
   it("passes through an invalid fork boundary failure", async () => {
     const reason = "drift-mismatch";
-    linkToUpstreamConversation();
     installUpstreamForkHarness();
     mocks.upstreamFork.mockResolvedValue({
       status: "failed",
@@ -330,16 +300,10 @@ describe("upstream session message-cut methods", () => {
       message: `boundary failed: ${reason}`,
     });
 
-    const respond = await invoke("sessions.fork", "user-entry");
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        details: { reason },
-        message: `boundary failed: ${reason}`,
-      }),
-    );
+    expectFailure(await invoke("sessions.fork"), {
+      code: ErrorCodes.INVALID_REQUEST,
+      details: { reason },
+      message: `boundary failed: ${reason}`,
+    });
   });
 });
