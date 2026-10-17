@@ -13,8 +13,9 @@ import {
 } from "./package-lifecycle.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
-  createNpmTarget,
-  createRootRunner,
+  createNpmUpdateOptions,
+  createPnpmTarget,
+  stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
@@ -29,12 +30,18 @@ type StepParams = Parameters<UpdateParams["runStep"]>[0];
 const readText = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
 const writeText = (root: string, file: string, text: string) =>
   fs.writeFile(path.join(root, file), text);
+const writeJson = (root: string, file: string, value: unknown) =>
+  writeText(root, file, JSON.stringify(value));
 const expectMissing = async (file: string) => {
   await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
 };
 
 function successfulStep({ name, argv, cwd }: StepParams, packageRoot: string) {
   return { name, command: argv.join(" "), cwd: cwd ?? packageRoot, durationMs: 0, exitCode: 0 };
+}
+
+function failedStep(step: StepParams, packageRoot: string, stderrTail: string) {
+  return { ...successfulStep(step, packageRoot), exitCode: 1, stderrTail };
 }
 
 async function readPackageBytes(packageRoot: string): Promise<string[]> {
@@ -54,25 +61,18 @@ async function createFixture() {
   const siblingRoot = path.join(globalRoot, ".openclaw.update-stage-sibling");
   await fs.mkdir(siblingRoot);
   await writeText(siblingRoot, "evidence", "unrelated candidate\n");
-  const validateCandidate = vi.fn(async () => []);
-  const beforeActivate = vi.fn(async () => {});
-  const onTransaction = vi.fn();
   return {
     globalRoot,
     packageRoot,
     originalBytes,
     siblingRoot,
     params: {
-      installTarget: createNpmTarget(globalRoot),
-      installSpec: "openclaw@2.0.0",
-      packageName: "openclaw",
+      ...createNpmUpdateOptions(globalRoot),
       packageRoot,
-      runCommand: createRootRunner(globalRoot),
-      validateCandidate,
-      beforeActivate,
-      onTransaction,
+      validateCandidate: vi.fn(async () => []),
+      beforeActivate: vi.fn(async () => {}),
+      onTransaction: vi.fn(),
       postVerifyStep: undefined as UpdateParams["postVerifyStep"],
-      timeoutMs: 1000,
       workTimeoutMs: undefined as UpdateParams["workTimeoutMs"],
     },
   };
@@ -93,11 +93,7 @@ async function runUpdate(
     ...admission,
     runStep: async (step) => {
       if (step.name === "package-install") {
-        const prefixIndex = step.argv.indexOf("--prefix");
-        const prefix = step.argv[prefixIndex + 1];
-        if (prefixIndex < 0 || !prefix) {
-          throw new Error("expected the updater's staged npm prefix");
-        }
+        const prefix = stagedNpmPrefix(step.argv);
         const { globalRoot } = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "2.0.0");
@@ -370,20 +366,18 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       await writePackageRoot(packageRoot, "1.0.0");
       const originalBytes = await readPackageBytes(packageRoot);
       await fs.mkdir(binDir);
-      await writeText(
-        oldOwner,
-        "package.json",
-        JSON.stringify({ dependencies: { openclaw: "1.0.0" } }),
-      );
+      await writeJson(oldOwner, "package.json", { dependencies: { openclaw: "1.0.0" } });
       await writeText(oldOwner, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
       await fs.symlink("old", path.join(globalRoot, "hash-openclaw"));
+      const configArg = (argv: string[], key: string) =>
+        argv
+          .find((arg) => arg.startsWith(`--config.${key}=`))
+          ?.split("=")
+          .slice(1)
+          .join("=");
       const stageArgs = (argv: string[]) => ({
-        project: argv
-          .find((arg) => arg.startsWith("--config.global-dir="))
-          ?.slice("--config.global-dir=".length),
-        bin: argv
-          .find((arg) => arg.startsWith("--config.global-bin-dir="))
-          ?.slice("--config.global-bin-dir=".length),
+        project: configArg(argv, "global-dir"),
+        bin: configArg(argv, "global-bin-dir"),
       });
       const observed: { stage?: string; oldPending?: string; orphan?: string } = {};
       const runStep = vi.fn<UpdateParams["runStep"]>(async (step) => {
@@ -402,22 +396,12 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           await writeText(observed.orphan, pendingName, pendingBytes);
           await fs.mkdir(path.join(observed.orphan, lockName));
         }
-        return {
-          ...successfulStep(step, packageRoot),
-          exitCode: 1,
-          stderrTail: "ordinary settled install failure",
-        };
+        return failedStep(step, packageRoot, "ordinary settled install failure");
       });
       const validateCandidate = vi.fn(async () => []);
       const beforeActivate = vi.fn(async () => {});
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          globalRoot,
-          packageRoot,
-          pnpmIsolated: { layoutVersion: 11 },
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -577,11 +561,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     try {
       const { result, stage, lifecycleCalls } = await runUpdate(fixture, async (packageRoot) => {
         owner = lifecycle.start(packageRoot, async () => {
-          await writeText(
-            packageRoot,
-            "package.json",
-            JSON.stringify({ name: "openclaw", version: "3.0.0" }),
-          );
+          await writeJson(packageRoot, "package.json", { name: "openclaw", version: "3.0.0" });
         });
         await lifecycle.entered;
         vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => {
@@ -617,20 +597,14 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
     const { result, stage, lifecycleCalls } = await runUpdate(
       fixture,
       async () => {},
-      async ({ name, argv, cwd }) => {
+      async (step) => {
+        const { cwd } = step;
         if (!cwd) {
           throw new Error("expected the staged package root");
         }
         await fs.rename(path.join(cwd, lockName), path.join(cwd, "original-generation"));
         await writeText(cwd, lockName, "replacement generation\n");
-        return {
-          name,
-          command: argv.join(" "),
-          cwd,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: "former owner's script failed",
-        };
+        return failedStep(step, fixture.packageRoot, "former owner's script failed");
       },
     );
     expect(result).toMatchObject({
@@ -653,18 +627,11 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       const { result, stage, lifecycleCalls } = await runUpdate(
         fixture,
         async () => {},
-        async ({ name, argv, cwd }) => {
+        async (step) => {
           if (failure === "ownership error for another root") {
             throw new PackageLifecycleOwnershipError(fixture.siblingRoot, "unrelated owner");
           }
-          return {
-            name,
-            command: argv.join(" "),
-            cwd: cwd ?? fixture.packageRoot,
-            durationMs: 0,
-            exitCode: 1,
-            stderrTail: "preinstall exited with a settled failure",
-          };
+          return failedStep(step, fixture.packageRoot, "preinstall exited with a settled failure");
         },
       );
 

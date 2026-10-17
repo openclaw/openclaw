@@ -12,6 +12,8 @@ const exec = promisify(execFile);
 const readText = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
 const writeText = (root: string, file: string, text: string) =>
   fs.writeFile(path.join(root, file), text);
+const writeJson = (root: string, file: string, value: unknown) =>
+  writeText(root, file, JSON.stringify(value));
 const script = (message: string) =>
   `#!/usr/bin/env node\nconsole.log(${JSON.stringify(message)});\n`;
 const scenarios = [
@@ -47,24 +49,18 @@ it.each(scenarios)(
       async function pack(version: string, source: string, legacy = false) {
         const root = path.join(base, version);
         await fs.mkdir(path.join(root, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(root, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version,
-            type: "module",
-            files: ["dist"],
-            bin: { openclaw: "dist/index.js" },
-          }),
-        );
+        await writeJson(root, "package.json", {
+          name: "openclaw",
+          version,
+          type: "module",
+          files: ["dist"],
+          bin: { openclaw: "dist/index.js" },
+        });
         await fs.writeFile(path.join(root, "dist/index.js"), source, { mode: 0o755 });
         await writePackageDistInventory(root);
         if (legacy) {
           await fs.rm(path.join(root, "dist/postinstall-content-inventory.json"));
-          await fs.writeFile(
-            path.join(root, "dist/postinstall-inventory.json"),
-            JSON.stringify(["dist/index.js"]),
-          );
+          await writeJson(root, "dist/postinstall-inventory.json", ["dist/index.js"]);
         }
         await run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", base], root);
         return path.join(base, `openclaw-${version}.tgz`);
@@ -87,9 +83,8 @@ it.each(scenarios)(
         "--no-fund",
         old,
       ]);
-      const modified = scenario !== "unchanged";
-      if (modified) {
-        await fs.writeFile(path.join(root, "dist/index.js"), local);
+      if (scenario !== "unchanged") {
+        await writeText(root, "dist/index.js", local);
         await writeText(root, "dist/local.js", "local payload\n");
       }
       const outside = path.join(base, "outside");
@@ -106,6 +101,7 @@ it.each(scenarios)(
         scenario === "late replay" ||
         scenario === "preserve only" ||
         scenario === "late recovery refusal";
+      const doctorFails = scenario === "doctor failure" || scenario === "late recovery refusal";
       let activationEntered = false;
       let transaction: PackageUpdateTransaction | undefined;
       const npmVersion = (await run("npm", ["--version"])).stdout.trim();
@@ -170,17 +166,14 @@ it.each(scenarios)(
         onTransaction: (value) => {
           transaction = value;
         },
-        postVerifyStep: async (packageRoot) => {
-          const fails = scenario === "doctor failure" || scenario === "late recovery refusal";
-          return {
-            name: "fixture doctor",
-            command: "fixture doctor",
-            cwd: packageRoot,
-            durationMs: 0,
-            exitCode: fails ? 1 : 0,
-            stderrTail: fails ? "injected doctor failure" : null,
-          };
-        },
+        postVerifyStep: async (packageRoot) => ({
+          name: "fixture doctor",
+          command: "fixture doctor",
+          cwd: packageRoot,
+          durationMs: 0,
+          exitCode: doctorFails ? 1 : 0,
+          stderrTail: doctorFails ? "injected doctor failure" : null,
+        }),
       });
       if (scenario === "unsafe topology" || scenario === "install failure") {
         expect(result.failedStep).not.toBeNull();
@@ -192,7 +185,7 @@ it.each(scenarios)(
         return;
       }
       expect(transaction).toBeDefined();
-      if (scenario === "doctor failure" || scenario === "late recovery refusal") {
+      if (doctorFails) {
         expect(result.failedStep?.name).toBe("fixture doctor");
         expect(result.recovery.serviceRestartSafe).toBe(false);
         const rollback = await transaction!.rollback(() => {});
