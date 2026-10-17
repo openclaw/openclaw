@@ -46,6 +46,7 @@ const realGatewayFiles = [
   "chat-project-media.real-gateway",
   "chat-reconnect-continuity.real-gateway",
   "chat-session-diff-folding.real-gateway",
+  "chat-steer-deferred-custody.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-stop-owned-exec.real-gateway",
   "chat-thinking-metadata.real-gateway",
@@ -458,6 +459,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

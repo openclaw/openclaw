@@ -8,7 +8,10 @@ import {
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
 } from "../../infra/diagnostic-events.js";
-import type { GatewayWsSessionEventAttribution } from "../../infra/diagnostic-rpc-types.js";
+import type {
+  GatewayWsPresenceMode,
+  GatewayWsSessionEventAttribution,
+} from "../../infra/diagnostic-rpc-types.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { GATEWAY_EVENTS } from "../events.js";
@@ -89,6 +92,7 @@ export function recordGatewayWsEvent(
   event: string,
   bytes: number,
   sessionEvent?: GatewayWsSessionEventAttribution,
+  presenceMode?: GatewayWsPresenceMode,
 ): void {
   if (
     !areDiagnosticsEnabledForProcess() ||
@@ -111,7 +115,11 @@ export function recordGatewayWsEvent(
       }).unref(),
     );
   }
-  const key = sessionEvent ? `${name}:${sessionEvent.reason}:${sessionEvent.delivery}` : name;
+  const key = sessionEvent
+    ? `${name}:${sessionEvent.reason}:${sessionEvent.delivery}`
+    : presenceMode
+      ? `${name}:${presenceMode}`
+      : name;
   const observation = pendingEventTraffic.get(key);
   if (observation) {
     observation.count++;
@@ -123,6 +131,7 @@ export function recordGatewayWsEvent(
       count: 1,
       bytes,
       ...(sessionEvent ? { sessionEvent } : {}),
+      ...(presenceMode ? { presenceMode } : {}),
     });
   }
 }

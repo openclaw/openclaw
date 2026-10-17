@@ -19,6 +19,7 @@ import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
@@ -116,6 +117,7 @@ async function preparePermissionPrompt(
     toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
+    requireExplicitMessageTarget,
     ...attemptOverrides,
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
@@ -131,7 +133,6 @@ async function preparePermissionPrompt(
       workspaceNotes: [],
     },
     capabilityToolNames,
-    requireExplicitMessageTarget,
     effectiveTools: skills?.initialToolNames
       ? tools.filter(({ name }) => skills.initialToolNames?.includes(name))
       : tools,
@@ -561,14 +562,55 @@ describe("buildAttemptSystemPrompt", () => {
   });
 });
 
-describe("embedded prepared message-target guidance", () => {
-  it.each([false, true])(
-    "carries the prepared target requirement (%s) through prompt assembly",
-    async (required) => {
-      const { prepared } = await preparePermissionPrompt(false, undefined, required);
-      expect(prepared.systemPromptText).toContain(
-        required ? "target required this turn" : "current source is default target",
-      );
-    },
-  );
+describe("embedded session prompt delivery", () => {
+  // Provider prefix caches need one system prompt per session; turn delivery rules
+  // that differ (heartbeats, completions) travel in the turn's runtime context.
+  it.each([
+    [
+      "source-only completion",
+      {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        requireExplicitMessageTarget: false,
+      },
+    ],
+    [
+      "explicit-target heartbeat",
+      { sourceReplyDeliveryMode: "message_tool_only" as const, requireExplicitMessageTarget: true },
+    ],
+  ])("keeps the user turn's system prompt on a %s turn", async (_kind, turn) => {
+    const user = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        sourceReplyDeliveryMode: "automatic",
+      },
+    );
+    const synthetic = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      turn,
+    );
+    expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
+    expect(
+      buildTurnDeliveryContextFragments({
+        sessionKey: synthetic.attempt.sessionKey,
+        sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
+      })
+        .map((fragment) => fragment.text)
+        .join("\n"),
+    ).toMatch(
+      turn.requireExplicitMessageTarget
+        ? /final text is private[\s\S]*target required this turn/u
+        : /final text is private/u,
+    );
+  });
 });

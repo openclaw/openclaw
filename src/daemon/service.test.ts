@@ -6,11 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { admitUpdateCommandRun } from "../cli/update-cli/update-command-run.js";
 import * as containerEnvironment from "../infra/container-environment.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveNodeService } from "./node-service.js";
+import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import type { GatewayService } from "./service.js";
 import { readGatewayServiceState, resolveGatewayService, startGatewayService } from "./service.js";
 import {
@@ -698,26 +700,40 @@ describe("startGatewayService", () => {
     );
   });
 
-  it("falls back to missing-install when start fails and install artifacts are gone", async () => {
-    const readCommand = vi
-      .fn<GatewayService["readCommand"]>()
-      .mockResolvedValueOnce({
-        programArguments: ["openclaw", "gateway", "run"],
-      })
-      .mockResolvedValueOnce(null);
-    const service = createService({
-      readCommand,
-      start: vi.fn(async () => {
-        throw new Error("launchctl bootstrap failed");
-      }),
-    });
+  it.each(["ordinary", "cleanup", "ownership"] as const)(
+    "keeps %s start failure distinct if artifacts disappear",
+    async (kind) => {
+      const failure =
+        kind === "cleanup"
+          ? new CommandProcessCleanupError()
+          : kind === "ownership"
+            ? new ServiceOwnershipRefusalError("systemd-manager-changed")
+            : new Error("launchctl bootstrap failed");
+      const readCommand = vi
+        .fn<GatewayService["readCommand"]>()
+        .mockResolvedValueOnce({
+          programArguments: ["openclaw", "gateway", "run"],
+        })
+        .mockResolvedValueOnce(null);
+      const service = createService({
+        readCommand,
+        start: vi.fn(async () => {
+          throw failure;
+        }),
+      });
 
-    const result = await startGatewayService(service, {
-      env: {},
-      stdout: process.stdout,
-    });
-
-    expect(result.outcome).toBe("missing-install");
-    expect(result.state.installed).toBe(false);
-  });
+      const operation = startGatewayService(service, {
+        env: {},
+        stdout: process.stdout,
+      });
+      if (kind === "ordinary") {
+        await expect(operation).resolves.toMatchObject({
+          outcome: "missing-install",
+          state: { installed: false },
+        });
+      } else {
+        await expect(operation).rejects.toBe(failure);
+      }
+    },
+  );
 });

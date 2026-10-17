@@ -331,7 +331,6 @@ async function runEmbeddedAttemptOwned(
         setup,
         bootstrap: preparedBootstrap,
         capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-        requireExplicitMessageTarget: preparedToolBase.requireExplicitMessageTarget,
         effectiveTools,
         isRawModelRun,
         modelToolsEnabled: toolsEnabled,

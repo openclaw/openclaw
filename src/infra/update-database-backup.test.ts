@@ -151,6 +151,33 @@ it.each(["legacy", "current"] as const)(
   },
 );
 
+it.each([undefined, "quick", "full"] as const)(
+  "checks manual captures with requested integrity %s and keeps generic backups full",
+  async (integrityCheck) => {
+    const f = await fixture();
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const backup = await createUpdateDatabaseBackupInProcess({
+      ...f.input,
+      inspectionPlan: f.inspectionPlan,
+      preserveSourceArtifacts: true,
+      originalCaptureSourcePaths: [f.shared],
+      integrityCheck,
+    });
+    expect(
+      prepare.mock.calls
+        .map(([sql]) => sql)
+        .filter((sql) => /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)\b/u.test(sql)),
+    ).toEqual([
+      integrityCheck === "quick" ? "PRAGMA quick_check;" : "PRAGMA integrity_check;",
+      "PRAGMA foreign_key_check;",
+    ]);
+    using retained = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+    expect(retained.prepare("SELECT rowid,value FROM payload").all()).toEqual([
+      { rowid: 42, value: "retained" },
+    ]);
+  },
+);
+
 it.each(["auto", "off"] as const)(
   "captures stopped databases without a payload audit (native copy %s)",
   async (mode) => {

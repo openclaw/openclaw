@@ -17,6 +17,7 @@ export type SqliteReadOnlyWorkerMode =
   | "content-version"
   | "file-generation"
   | "async"
+  | "metadata"
   | "consolidated"
   | "reclaim"
   | "auth-profile-rows"
@@ -83,10 +84,8 @@ export function sqliteReadOnlyWorkerRequestArgs(
       ? undefined
       : options.expectedSourceIdentity;
   if (expected !== undefined) {
-    if (options.mode !== "sync") {
-      throw new Error(
-        "SQLite source identity is supported only for artifact-preserving sync copies",
-      );
+    if (options.mode !== "sync" && options.mode !== "metadata") {
+      throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
     }
     args.push(stagingRoot ?? "", JSON.stringify(readDatabaseFileIdentity(expected)));
   } else if (stagingRoot) {
@@ -165,7 +164,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "async" | "consolidated" | "content-version" | "file-generation",
+  mode: "sync" | "async" | "metadata" | "consolidated" | "content-version" | "file-generation",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -217,6 +216,7 @@ export function readSqliteReadOnlyWorkerValue(
   if (
     (mode === "sync" ||
       mode === "async" ||
+      mode === "metadata" ||
       mode === "consolidated" ||
       isSqliteSnapshotStagingMode(mode)) &&
     "location" in result

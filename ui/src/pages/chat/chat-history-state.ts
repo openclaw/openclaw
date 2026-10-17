@@ -27,6 +27,7 @@ type ChatHistoryLoadState =
       connectionEpoch: number;
       key: string;
       sessions: ChatHistorySessions;
+      request: Promise<ObservedChatHistoryResult | undefined>;
       promise: Promise<ObservedChatHistoryResult | undefined>;
       refresh?: {
         promise: Promise<ObservedChatHistoryResult | undefined>;

@@ -5,9 +5,18 @@ export function recordSessionRetention(
   store: PrometheusMetricStore,
   evt: Extract<
     DiagnosticEventPayload,
-    { type: "sessions.list.retention" | "sessions.event.retention" }
+    { type: "sessions.list.retention" | "sessions.event.retention" | "sessions.event.rows.reset" }
   >,
 ) {
+  if (evt.type === "sessions.event.rows.reset") {
+    store.counter(
+      "openclaw_session_event_rows_reset_total",
+      "Retained session-event wire baselines retired by cause.",
+      { cause: evt.cause },
+      evt.count,
+    );
+    return;
+  }
   if (evt.type === "sessions.list.retention") {
     store.gauge(
       "openclaw_sessions_list_retained_views",

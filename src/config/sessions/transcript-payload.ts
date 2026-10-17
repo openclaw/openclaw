@@ -354,7 +354,7 @@ export function prepareTranscriptPayload(
     return identity;
   }
   const codec = resolveZstdCodec();
-  if (!codec || rawBytes < MIN_COMPRESS_BYTES) {
+  if (rawBytes < MIN_COMPRESS_BYTES) {
     return identity;
   }
   const bytes = Buffer.from(eventJson, "utf8");

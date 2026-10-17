@@ -27,22 +27,18 @@ export async function copyUpdateCandidatePluginFile(
   request: UpdateCandidatePluginFileRequest,
   destinationRoot: Root,
 ): Promise<void> {
-  const { entry, privateRoot, rootIdentity } = request;
-  const assertEntry = async () =>
-    assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
-  await assertEntry();
-  await copyUpdateCandidatePluginFileBytes(request, destinationRoot, {
+  const { privateRoot, rootIdentity } = request;
+  await copyUpdateCandidatePluginFileBytes(request, destinationRoot, () => {
     // A worker must retain the parent's admitted root, not admit a newer one.
-    assertBeforeMutation: () => assertDirectoryIdentitySync(privateRoot, rootIdentity),
-    assertAfterCopy: assertEntry,
+    assertDirectoryIdentitySync(privateRoot, rootIdentity);
   });
 }
 
-/** Shared byte publication; each owner supplies its live authority and post-copy inspection. */
+/** Shared byte publication; each owner supplies its live authority. */
 export async function copyUpdateCandidatePluginFileBytes(
   { entry, privateRoot, destination }: Omit<UpdateCandidatePluginFileRequest, "rootIdentity">,
   destinationRoot: Root,
-  checks: { assertBeforeMutation: () => void; assertAfterCopy: () => Promise<void> },
+  assertBeforeMutation: () => void,
 ): Promise<void> {
   await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
     overwrite: false,
@@ -55,11 +51,10 @@ export async function copyUpdateCandidatePluginFileBytes(
     mode: entry.mode | 0o600,
     sourceHardlinks: "allow",
     assertBeforeMutation: () => {
-      checks.assertBeforeMutation();
+      assertBeforeMutation();
       assertUpdateCandidatePluginEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
     },
   });
-  await checks.assertAfterCopy();
   const copiedStat = await fs.lstat(destination, { bigint: true });
   if (hashFileMutationSnapshotSync(destination, copiedStat) !== entry.sha256) {
     throw new Error(`Copied plugin bytes differ from snapshot inventory: ${entry.path}`);

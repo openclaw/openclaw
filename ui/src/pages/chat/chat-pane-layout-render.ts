@@ -53,16 +53,16 @@ type ChatPaneLayoutRenderParams = {
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
   private toolIcons?: PluginToolIcons;
 
-  mountToolIcons(revision: () => unknown): void {
+  mountToolIcons(readGateway: () => unknown): void {
     this.toolIcons = createChatToolIcons(() => {
-      revision();
+      readGateway();
       return {
         context: this.context,
         session: this.state && !this.history.catalogHost ? this.resolveChatReadTarget() : undefined,
       };
     });
   }
-  private desktopFocus: {
+  desktopFocus: {
     key: string;
     client: ChatPageHost["client"];
     href: string;
@@ -134,7 +134,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             ]),
             onRestored: () => {
               this.chatState.composerPersistence.restore();
-              state.requestUpdate?.();
+              this.chatState.composerPersistence.persistChangedState();
             },
           };
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
@@ -258,7 +258,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       subagentsPresented: slotPresentation("subagents"),
       processesPresented: slotPresentation("processes"),
       subagentsAvailable: !catalog,
-      subagentsShowRequest: this.subagentsShowRequest,
+      subagentsShowRequest: this.companionIntents.subagentsShowRequest,
       onSubagentSessionSelect: (sessionKey, options) =>
         this.onPaneSessionChange?.(this.paneId, sessionKey, options),
       panePresentation,
@@ -273,11 +273,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onCloseLinkReader: () => closePanelSlot("link-reader"),
       terminalTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "terminal",
       onCloseTerminal: () => closePanelSlot("terminal"),
-      browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
+      browserRefreshOnPresentation: !this.pendingPanelToggles.requests.has("browser"),
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
       desktopPresented,
-      desktopRefreshOnPresentation: !this.pendingPanelToggleRequests.has("desktop"),
+      desktopRefreshOnPresentation: !this.pendingPanelToggles.requests.has("desktop"),
       desktopAvailable,
       desktopSource,
       portalPresented: slotPresentation("portal"),
@@ -285,9 +285,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onDesktopFocusTargetChange: (target) => {
         // A retained callback cannot publish a previous presentation's source or control state.
         const href = buildControlUiFocusPath(target, state.basePath);
-        if (this.desktopFocus === desktopFocus && desktopFocus.href !== href) {
-          desktopFocus.href = href;
-          this.invalidate();
+        if (
+          this.desktopFocus?.key === desktopFocus.key &&
+          this.desktopFocus.client === desktopFocus.client &&
+          this.desktopFocus.href !== href
+        ) {
+          this.desktopFocus = { ...this.desktopFocus, href };
         }
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
@@ -297,7 +300,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
-      companionFocusRequest: this.sessionCompanionFocusRequest,
+      companionFocusRequest: this.companionIntents.focusRequest,
       companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
@@ -368,8 +371,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       layout: sidebarLayout,
       sideFocusLocked: sidebarLayout !== savedLayout,
       sideFocusManaged:
-        companionPresented.isPresented() && Boolean(this.sessionCompanionFocusRequest),
-      sideFocusOrigin: this.sideFocusOrigin,
+        companionPresented.isPresented() && Boolean(this.companionIntents.focusRequest),
+      sideFocusOrigin: this.companionIntents.sideFocusOrigin,
       panelDefinitions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
     });

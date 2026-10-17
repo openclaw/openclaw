@@ -6,6 +6,7 @@ import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js
 import { withinTest } from "../../../test/helpers/promise.js";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
@@ -206,7 +207,7 @@ describe("worker desktop tunnels", () => {
   }) => {
     vi.useFakeTimers();
     const fake = fakeRunner();
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner, lingerMs: 50 });
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
     onTestFinished(() => manager.stopAll());
     const starting = acquire(manager);
     await waitForStarts(fake.starts, 1);
@@ -217,9 +218,9 @@ describe("worker desktop tunnels", () => {
     }
     const identityDirectory = path.dirname(result.attachment.socketPath);
     await access(identityDirectory);
-    await vi.advanceTimersByTimeAsync(49);
+    await vi.advanceTimersByTimeAsync(59_999);
     await expect(acquire(manager)).resolves.toEqual(result);
-    await vi.advanceTimersByTimeAsync(49);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(fake.starts[0]!.process.stopCount).toBe(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(fake.starts[0]!.process.stopCount).toBe(1);
@@ -540,7 +541,7 @@ describe("worker desktop tunnels", () => {
   it("lingers after the last observer and closes observers on child exit", async () => {
     vi.useFakeTimers();
     const fake = fakeRunner();
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner, lingerMs: 50 });
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
     const starting = acquire(manager, 1, { protocol: "rfb", port: 5900 });
     await vi.waitFor(() => expect(fake.starts).toHaveLength(1));
     fake.starts[0]?.process.becomeReady();
@@ -548,14 +549,14 @@ describe("worker desktop tunnels", () => {
     const close = vi.fn();
     const observer = manager.attachObserver("worker:one", { control: false, ownerEpoch: 1, close });
     observer?.release();
-    await vi.advanceTimersByTimeAsync(49);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(fake.starts[0]?.process.stopCount).toBe(0);
     const replacement = manager.attachObserver("worker:one", {
       control: false,
       ownerEpoch: 1,
       close,
     });
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(fake.starts[0]?.process.stopCount).toBe(0);
     fake.starts[0]?.process.exit();
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed"));
@@ -606,7 +607,9 @@ describe("worker desktop tunnels", () => {
 
   it("rejects Windows gateway hosts before spawning SSH", async () => {
     const fake = fakeRunner();
-    const manager = createWorkerDesktopTunnels({ runner: fake.runner, platform: "win32" });
+    const manager = withMockedWindowsPlatform(() =>
+      createWorkerDesktopTunnels({ runner: fake.runner }),
+    );
     await expect(acquire(manager)).rejects.toMatchObject({ code: "unsupported_platform" });
     await expect(acquire(manager)).rejects.toThrow(
       "desktop observe is not supported on Windows gateway hosts",
@@ -702,10 +705,9 @@ describe("worker desktop tunnels", () => {
   });
 
   it("reports unsupported launcher platforms and nonzero launcher exits", async () => {
-    const unsupported = createWorkerDesktopTunnels({
-      runner: fakeRunner().runner,
-      platform: "win32",
-    });
+    const unsupported = withMockedWindowsPlatform(() =>
+      createWorkerDesktopTunnels({ runner: fakeRunner().runner }),
+    );
     await expect(launchApp(unsupported)).rejects.toMatchObject({ code: "unsupported_platform" });
     await expect(launchApp(unsupported)).rejects.toThrow(
       "desktop app launch is not supported on Windows gateway hosts",

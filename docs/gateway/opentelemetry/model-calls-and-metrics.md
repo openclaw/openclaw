@@ -202,6 +202,12 @@ session, user, or connection identifiers are exported. These metrics use the
 same bounded diagnostic queue as Gateway RPC observations; check
 `openclaw.diagnostic.async_queue.dropped` when interpreting traffic totals.
 
+`openclaw.gateway.ws.presence_frames` (counter, unit `1`) and
+`openclaw.gateway.ws.presence_bytes` (counter, unit `By`) split presence traffic
+by `openclaw.gateway.ws.mode`: `delta`, `reset` (full snapshots for capable
+clients), or `legacy` (full frames without delta negotiation). They count the
+same accepted per-socket frames and encoded bytes as the aggregate counters.
+
 `openclaw.gateway.ws.session_event_frames` (counter, unit `1`) and
 `openclaw.gateway.ws.session_event_bytes` (counter, unit `By`) attribute the same
 session event traffic. Their attributes are `openclaw.gateway.ws.event`,

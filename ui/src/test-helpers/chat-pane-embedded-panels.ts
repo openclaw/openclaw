@@ -135,11 +135,7 @@ export function createReviewFixture() {
   });
   const mount = document.body.appendChild(document.createElement("div"));
   const context = { ...createInitializationContext(), sessions };
-  const state = createPageState(
-    context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    mount,
-  );
+  const state = createPageState(context, { afterCommit: () => () => {} }, mount);
   state.client = createGatewayBrowserClientFixture();
   state.connected = true;
   state.connectionEpoch = 1;

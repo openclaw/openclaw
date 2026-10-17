@@ -809,8 +809,11 @@ integrity scan; the migration's source integrity admission runs a whole-database
 quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
-Historical migrations without a declared table scope and legacy transformed
-recovery archives retain full integrity checks.
+Historical migrations keep their full-file backup when no scoped backup is
+declared, while integrity admission uses the same quick-plus-affected-tables
+policy. Backup eligibility and integrity coverage are separate contracts.
+Legacy transformed recovery archives and automatic rollback images retain full
+integrity checks.
 The shared database accompanying agent
 migrations retains its full backup for registry and receipt recovery.
 

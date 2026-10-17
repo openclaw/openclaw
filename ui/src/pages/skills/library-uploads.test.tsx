@@ -2,6 +2,7 @@ import { createRoot, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillLibraryFile,
+  SkillsLibraryListResult,
   SkillsLibraryReadResult,
   SkillsLibraryReceipt,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.ts";
@@ -113,6 +114,32 @@ describe("skill library upload policy", () => {
     flush();
     expect(submit.disabled).toBe(true);
     expect(library.state.importSelection).toHaveLength(1);
+  });
+
+  it("keeps a replacement list loading when the previous connection's list fails", async () => {
+    const { library, request, connection } = harness();
+    const oldList = createDeferred<SkillsLibraryListResult>();
+    const newList = createDeferred<SkillsLibraryListResult>();
+    const replacement = { ...library.state.list!, profileId: "bob" };
+    request.mockReturnValueOnce(oldList.promise).mockReturnValueOnce(newList.promise);
+    const loadingOld = library.load();
+    connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
+    library.reset();
+    connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+    const loadingNew = library.load();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(library.state.loading).toBe(true);
+
+    oldList.reject(new Error("Previous connection list failed"));
+    await loadingOld;
+    expect(library.state.loading).toBe(true);
+    expect(library.state.error).toBeNull();
+
+    newList.resolve(replacement);
+    await loadingNew;
+    expect(library.state.loading).toBe(false);
+    expect(library.state.error).toBeNull();
+    expect(library.state.list?.profileId).toBe("bob");
   });
 
   it("keeps a replacement save locked when a previous connection's save fails", async () => {

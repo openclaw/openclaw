@@ -15,6 +15,8 @@ import { createWorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
+const cleanups: Array<() => Promise<void>> = [];
+
 type LeasedEnvironmentRecord = Extract<WorkerEnvironmentRecord, { leaseId: string }>;
 
 function deferred<T>() {
@@ -114,7 +116,6 @@ function desktopHarness(
   options: {
     getRecord?: () => WorkerEnvironmentRecord | undefined;
     isProofCurrent?: () => boolean;
-    registry?: ReturnType<typeof createDesktopSessionRegistry>;
   } = {},
 ) {
   const proof = nodeProof(record.nodeDeviceId!);
@@ -123,18 +124,22 @@ function desktopHarness(
     isProofCurrent: options.isProofCurrent ?? (() => true),
   });
   const streamed = fakeBroker();
-  const registry = options.registry ?? createDesktopSessionRegistry();
+  const registry = createDesktopSessionRegistry();
   const carrier = createWorkerNodeDesktopCarrier({
     store: options.getRecord ? { get: options.getRecord } : support.testState.store,
     desktopRegistry: registry,
   });
   carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+  cleanups.push(() => registry.stopAll());
   return { carrier, registry, proof, transport, streamed };
 }
 
 describe("worker node desktop carrier", () => {
   support.setupWorkerEnvironmentServiceSuite();
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+    vi.restoreAllMocks();
+  });
 
   it("reloads desktop policy without replacing workers or closing other desktop sources", async () => {
     const record = await support.seedReadyNodeDesktop("worker-desktop-policy");
@@ -390,7 +395,6 @@ describe("worker node desktop carrier", () => {
       const { carrier, transport, streamed } = desktopHarness(record, {
         getRecord: () => current,
         isProofCurrent: () => proofCurrent,
-        registry: createDesktopSessionRegistry({ lingerMs: 1 }),
       });
 
       const observing = carrier.observe({ record, control: false, requester });
@@ -518,7 +522,6 @@ describe("worker node desktop carrier", () => {
     const { carrier, transport, streamed } = desktopHarness(record, {
       ...(_name === "pairing proof" ? {} : { getRecord: () => current }),
       isProofCurrent: () => proofCurrent,
-      registry: createDesktopSessionRegistry({ lingerMs: 1 }),
     });
 
     const observing = carrier.observe({ record, control: true });
@@ -537,9 +540,7 @@ describe("worker node desktop carrier", () => {
 
   it("deduplicates one exact launch and aborts it on owner teardown", async () => {
     const record = await support.seedReadyNodeDesktop("worker-node-desktop-launch");
-    const { carrier, transport } = desktopHarness(record, {
-      registry: createDesktopSessionRegistry({ lingerMs: 1 }),
-    });
+    const { carrier, transport } = desktopHarness(record);
     const app = support.DESKTOP.apps![0]!;
 
     await expect(
@@ -594,7 +595,6 @@ describe("worker node desktop carrier", () => {
     const { carrier, transport } = desktopHarness(record, {
       ...(stale ? { getRecord: () => current } : {}),
       isProofCurrent: () => proofCurrent,
-      registry: createDesktopSessionRegistry({ lingerMs: 1 }),
     });
     const invocation = deferred<{ ok: boolean; payloadJSON: string | null }>();
     transport.invoke.mockImplementation(async () =>

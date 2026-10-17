@@ -47,16 +47,15 @@ function quarantineStorePath(stateDir: string): string {
 }
 
 describe("OpenClaw database quarantine", () => {
-  it("expires a generation-bound process latch after the database changes", () => {
+  it("revalidates a latched integrity failure after external repair", () => {
     const stateDir = tempDirs.make("openclaw-database-verify-latch-generation-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     closeOpenClawAgentDatabasesForTest();
-    const generation = readStableSqliteFileGeneration(agentPath);
     const error = new Error("verified corrupt generation");
     error.name = "SqliteIntegrityError";
 
-    expect(recordOpenClawAgentDatabaseOpenFailure(agentPath, error, generation)).toBe(true);
+    recordOpenClawAgentDatabaseOpenFailure(agentPath, error);
     const { DatabaseSync } = requireNodeSqlite();
     const changed = new DatabaseSync(agentPath);
     try {

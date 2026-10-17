@@ -37,7 +37,7 @@ function createSecondaryHydrationPane() {
     commitEffects.push(effect);
     return () => undefined;
   });
-  state.renderLifecycle = { invalidate: vi.fn(), afterCommit } satisfies RenderLifecycle;
+  state.renderLifecycle = { afterCommit };
   const frames = new Map<number, FrameRequestCallback>();
   let nextFrame = 0;
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
@@ -125,7 +125,7 @@ describe("chat pane session hydration", () => {
       sessions: {} as SessionCapability,
     });
     const afterCommit = vi.fn<RenderLifecycle["afterCommit"]>(() => () => undefined);
-    state.renderLifecycle = { invalidate: vi.fn(), afterCommit };
+    state.renderLifecycle = { afterCommit };
     const previousTranscript = deferred<boolean>();
     const currentTranscript = deferred<boolean>();
 

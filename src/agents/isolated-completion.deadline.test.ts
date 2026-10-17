@@ -1,5 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as manifestRegistry from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -344,6 +346,8 @@ it("does not acquire a runtime after an already-expired deadline", async () => {
 });
 
 it("clears the deadline after success without canceling retained cleanup", async () => {
+  clearPluginMetadataLifecycleCaches();
+  const loadRegistry = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore");
   const finish = createDeferredCore();
   let signal: AbortSignal | undefined;
   registerIsolatedHarness({
@@ -355,6 +359,7 @@ it("clears the deadline after success without canceling retained cleanup", async
   });
   try {
     await work.run(() => runIsolatedCompletion(isolatedRequest()));
+    expect(loadRegistry).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
     clock = 2_000;
     await vi.advanceTimersByTimeAsync(2_000);

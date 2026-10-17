@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -313,13 +314,13 @@ describe("managed service update handoff command", () => {
     },
   );
 
-  it.each(
+  it.for(
     (["readiness", "park"] as const).flatMap((phase) =>
       [30_000, 120_000].map((budgetMs) => ({ phase, budgetMs })),
     ),
   )(
     "waits for delayed $phase ACKs within the owning $budgetMs ms budget",
-    async ({ phase, budgetMs }) => {
+    async ({ phase, budgetMs }, { signal }) => {
       const { requestManagedServiceUpdateHandoffPark, startManagedServiceUpdateHandoff } =
         await import("./update-managed-service-handoff.js");
       const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
@@ -344,7 +345,18 @@ describe("managed service update handoff command", () => {
           (value) => ({ kind: "ready" as const, value }),
           (error: unknown) => ({ kind: "rejected" as const, error }),
         );
-        child = await spawned.promise;
+        child = await withinTest(
+          awaitGateBeforeSettlement(
+            spawned.promise,
+            starting.then((result) => {
+              if (result.kind === "rejected") {
+                throw result.error;
+              }
+            }),
+            "handoff settled before spawning its helper",
+          ),
+          signal,
+        );
         if (phase === "readiness") {
           await vi.advanceTimersByTimeAsync(31_000);
         }
@@ -374,7 +386,14 @@ describe("managed service update handoff command", () => {
             kind: "managed-update-handoff",
             ...started.value,
           });
-          await requested.promise;
+          await withinTest(
+            awaitGateBeforeSettlement(
+              requested.promise,
+              parked,
+              "handoff park settled before sending its request",
+            ),
+            signal,
+          );
           await vi.advanceTimersByTimeAsync(31_000);
           expect(await parked).toBe(budgetMs === 120_000);
         }

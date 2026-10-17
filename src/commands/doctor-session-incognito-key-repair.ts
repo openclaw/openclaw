@@ -51,6 +51,7 @@ export async function repairReservedIncognitoSessionKeys(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   targets?: readonly ExistingAgentDatabaseTarget[];
+  integrityCheck?: "quick" | "full";
 }): Promise<ReservedIncognitoKeyRepairReport> {
   const targets = (params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)).map(
     (target) => ({
@@ -123,10 +124,14 @@ export async function repairReservedIncognitoSessionKeys(params: {
       runOpenClawAgentWriteTransaction(
         (database) => applyReservedIncognitoKeyRenameColumns(database, renames),
         databaseOptions,
-        { operationLabel: "doctor.rename-reserved-incognito-session-keys" },
+        {
+          operationLabel: "doctor.rename-reserved-incognito-session-keys",
+          repairAdmission: { integrityCheck: params.integrityCheck ?? "quick" },
+        },
       );
       rewriteDoctorSessionEntries({
         scope: { agentId: target.agentId, env: params.env, storePath: target.storePath },
+        integrityCheck: params.integrityCheck ?? "quick",
         sessionKeys: await listSessionEntryKeysReadOnly({
           agentId: target.agentId,
           env: params.env,

@@ -1,5 +1,13 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
-import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createReaction,
+  createRoot,
+  createSignal,
+  flush,
+  onCleanup,
+} from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { ShellLayoutOwner } from "../app/shell-layout-owner.ts";
@@ -163,7 +171,17 @@ it("batches property bursts without invalidating unrelated Solid computations", 
     "openclaw-solid-granular-test",
     (props) => {
       mount();
-      readLabel = () => props.label;
+      // Sample the live prop in a tracked scope without flushing the pending render.
+      readLabel = () =>
+        createRoot((dispose) => {
+          let value = "";
+          const track = createReaction(() => undefined);
+          track(() => {
+            value = props.label;
+          });
+          dispose();
+          return value;
+        });
       const label = createMemo(() => labels(props.label));
       const count = createMemo(() => counts(props.count));
       return (
