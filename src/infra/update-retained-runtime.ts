@@ -217,11 +217,14 @@ async function runWithRetainedUpdateRuntime<T>(
             onProgress: ({ phase }) => log.info(phase),
           });
           assertCurrent();
-          const { plan, inventoryMs, materializationMs, ...counts } =
-            parseUpdateStateInspectionWorker(retainedFiles, RetainedRuntimeFilesSchema);
+          const {
+            relocations: retainedRelocations,
+            files,
+            ...metrics
+          } = parseUpdateStateInspectionWorker(retainedFiles, RetainedRuntimeFilesSchema);
           const relocations = prepareRuntimeRelocations(
             [
-              ...plan.relocations,
+              ...retainedRelocations,
               ...(root === sourceRoot
                 ? []
                 : [{ sourceRoot: root, destinationRoot: candidateRoot }]),
@@ -232,18 +235,9 @@ async function runWithRetainedUpdateRuntime<T>(
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
-          retainUpdateRuntimeImports(
-            relocations.rules,
-            plan.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
-          );
+          retainUpdateRuntimeImports(relocations.rules, files);
           prepared = true;
-          return {
-            inventoryMs,
-            materializationMs,
-            entries: plan.entries.length,
-            estimatedBytes: plan.bytes,
-            ...counts,
-          };
+          return metrics;
         })();
         return preparation;
       }),

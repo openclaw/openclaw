@@ -1,12 +1,13 @@
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 // Control UI tests cover usage detail behavior through the rendered panel.
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { SessionLogEntry, TimeSeriesPoint, UsageProps, UsageSessionEntry } from "./types.ts";
+import type { SessionLogEntry, UsageProps, UsageSessionEntry } from "./types.ts";
 import { SessionDetailPanel } from "./view-details.tsx";
 
 afterEach(() => {
@@ -14,7 +15,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function point(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
+function point(overrides: Partial<SessionUsageTimePoint> = {}): SessionUsageTimePoint {
   return {
     timestamp: 1000,
     totalTokens: 100,
@@ -61,7 +62,7 @@ function session(): UsageSessionEntry & { usage: NonNullable<UsageSessionEntry["
 }
 
 function mount(
-  points: TimeSeriesPoint[],
+  points: SessionUsageTimePoint[],
   start: number | null,
   end: number | null,
   breakdownMode: "total" | "by-type" = "total",

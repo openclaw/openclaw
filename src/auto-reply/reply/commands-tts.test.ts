@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { setTtsMaxLength as persistTtsMaxLength } from "../../tts/tts-settings-writes.js";
 
 const ttsMocks = vi.hoisted(() => ({
   getResolvedSpeechProviderConfig: vi.fn(),
@@ -53,6 +55,7 @@ const FALLBACK_TTS_PROVIDER = "backup-speech";
 type TtsCommandResult = Awaited<ReturnType<typeof handleTtsCommands>>;
 
 afterEach(() => memorySessionActorOwners.reset());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function buildTtsParams(
   commandBodyNormalized: string,
@@ -121,6 +124,19 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     expect(expectReply(result).text).toBe("❌ Limit must be between 100 and 4096 characters.");
     expect(ttsMocks.setTtsMaxLength).not.toHaveBeenCalled();
+  });
+
+  it("replies with repair guidance without overwriting malformed preferences", async () => {
+    const prefsPath = path.join(tempDirs.make("openclaw-tts-command-prefs-"), "tts.json");
+    const malformed = '{"tts":{"provider":"custom",';
+    fs.writeFileSync(prefsPath, malformed);
+    ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue(prefsPath);
+    ttsMocks.setTtsMaxLength.mockImplementationOnce(persistTtsMaxLength);
+
+    const result = await handleTtsCommands(buildTtsParams("/tts limit 2000"), true);
+
+    expect(expectReply(result).text).toContain("Repair the preference file or its permissions");
+    expect(fs.readFileSync(prefsPath, "utf8")).toBe(malformed);
   });
 
   it("shows attempted provider chain for failed attempts", async () => {

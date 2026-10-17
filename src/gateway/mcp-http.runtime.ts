@@ -1,5 +1,3 @@
-// MCP loopback runtime scope cache.
-// Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   readAdmittedRunOperatorAuthority,

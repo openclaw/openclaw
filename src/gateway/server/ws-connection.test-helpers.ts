@@ -110,6 +110,7 @@ export function attachGatewayWsForTest(params: {
     socket:
       params.requestSocket ??
       Object.assign(transportEvents, {
+        write: vi.fn(() => true),
         cork: vi.fn(),
         uncork: vi.fn(),
         remoteAddress: socket["_socket"].remoteAddress,

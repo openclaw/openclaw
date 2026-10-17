@@ -63,7 +63,7 @@ import {
   type SetupCredentialActivationReceipt,
 } from "./setup-inference-credential-access.js";
 import { stageProviderAuthCandidate } from "./setup-inference-credentials.js";
-import { pluginRecord } from "./verified-inference.test-support.js";
+import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
 const installRuntime = vi.hoisted(() =>
   vi.fn<typeof OnboardingPluginInstall.ensureOnboardingPluginInstalled>(),
@@ -468,14 +468,7 @@ it.each([
     };
     setup.deps.resolveManifestProviderAuthChoice = () => choice;
     setup.deps.resolvePluginProviders = () => [provider];
-    setup.deps.loadPluginRegistrySnapshot = () => ({
-      plugins: [
-        pluginRecord("meta"),
-        pluginRecord("muse"),
-        pluginRecord("codex"),
-        pluginRecord("openai"),
-      ],
-    });
+    mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     const phases: string[] = [];
     const verifySetup = vi.fn(async () => {
       phases.push("verify");

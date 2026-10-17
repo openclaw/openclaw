@@ -889,6 +889,13 @@ newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
 
+After migration, recovery checks the installed candidate's schemas before
+restarting a Gateway stopped by the update, even when normal Doctor completion
+did not need a process-settlement receipt. A later verification error does not
+make the previous package compatible with migrated state. Obsolete package
+backup cleanup is best effort: locked files or denied renames produce warnings
+with the retained path and filesystem cause, without failing verified activation.
+
 Rollback snapshots settle local SQLite writers under maintenance ownership before
 capture, so writer shutdown during rollback is not mistaken for intervening writes.
 The installed updater owns snapshot capture; staging a newer candidate cannot

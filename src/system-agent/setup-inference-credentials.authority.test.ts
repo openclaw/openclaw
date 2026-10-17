@@ -34,7 +34,7 @@ import {
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
-import { pluginRecord } from "./verified-inference.test-support.js";
+import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -253,9 +253,7 @@ process.exit(1);
     setup.deps.resolvePluginProviders = () => [provider];
     setup.deps.resolveManifestProviderAuthChoice = () =>
       authChoice("meta", "device-code", "Muse Code");
-    setup.deps.loadPluginRegistrySnapshot = () => ({
-      plugins: ["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)),
-    });
+    mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     vi.spyOn(runtimePluginInstall, "ensureModelSelectionRuntimePlugins").mockImplementation(
       async ({ cfg }) => ({ ok: true, cfg, codexInstalled: false }),
     );

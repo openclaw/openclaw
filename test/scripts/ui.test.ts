@@ -30,6 +30,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const procSafeRoot = fs.realpathSync(
@@ -90,7 +91,8 @@ function copyUiFixture(root: string, extra: string[] = []): void {
   // Resolve native optional dependencies from their installed package owner.
   fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
-  fs.writeFileSync(path.join(root, "scripts/tsx.mjs"), "export {};\n");
+  fs.mkdirSync(path.join(root, ".git"));
+  installDistArtifactScripts(root, [], { compiler: false });
   fs.writeFileSync(
     path.join(root, "scripts/generate-control-ui-validators.mts"),
     'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
@@ -426,11 +428,6 @@ process.exitCode = 0;\n`,
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "src/shared/non-packaged-plugin-dirs.ts",
     ]);
-    fs.symlinkSync(
-      path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
-      path.join(root, "node_modules/@openclaw/fs-safe"),
-      "junction",
-    );
     fs.mkdirSync(path.join(root, "extensions"));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
@@ -753,10 +750,11 @@ childProcess.spawnSync = function(command, args, options) {
   if (args.includes(path.join(${JSON.stringify(root)}, "scripts/generate-control-ui-validators.mts"))) {
     return spawnSync(command, args, options);
   }
-  if (args[0] === ${JSON.stringify(vite)}) {
-    assert.deepEqual(args.slice(1, 3), ["build", "--outDir"]);
-    assert.equal(path.dirname(args[3]), ${JSON.stringify(path.join(root, "dist"))});
-    assert.equal(require("node:fs").existsSync(args[3]), true);
+  const viteIndex = args.indexOf(require("node:url").pathToFileURL(${JSON.stringify(vite)}).href);
+  if (viteIndex !== -1) {
+    assert.deepEqual(args.slice(viteIndex + 1, viteIndex + 3), ["build", "--outDir"]);
+    assert.equal(path.dirname(args[viteIndex + 3]), ${JSON.stringify(path.join(root, "dist"))});
+    assert.equal(require("node:fs").existsSync(args[viteIndex + 3]), true);
     return { status: 0 };
   }
   const validatorIndex = args.findIndex(arg => validators.includes(path.basename(arg)));

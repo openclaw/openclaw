@@ -9,7 +9,6 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { closeOwnedStdioProcess } from "../../owned-stdio.js";
 import type { ProcessExtinctionResult } from "../types.js";
 import {
-  createChildAdapterHarness,
   createStubChild,
   createWindowsNpmShim,
   firstSpawnAndWaitParams,
@@ -57,11 +56,16 @@ function createSecretChild(secret: Writable) {
   spawnMock.mockResolvedValue(child.child);
   return child;
 }
-function setup(input: Input = {}) {
+async function setup(input: Input = {}) {
   const { argv = ["node", "worker"], ...options } = input;
-  return createChildAdapterHarness((params) => start({ ...params, ...options }), spawnMock, {
+  const stub = createStubChild();
+  spawnMock.mockResolvedValue(stub.child);
+  const adapter = await start({
     argv,
+    stdinMode: "pipe-open",
+    ...options,
   });
+  return { ...stub, adapter };
 }
 
 const spawnArgs = () => firstSpawnAndWaitParams(spawnMock);

@@ -234,6 +234,10 @@ or protocol-version change.
   `chat` stream. Subscribe to one text projection for a display; consuming both
   streams into one accumulator duplicates output. In-process agent observers
   retain their cumulative-text contract.
+  Non-tool agent events carry run/session identity and stream data, without a
+  session-row snapshot. Use `sessions.changed` and `session.message` for roster
+  metadata, including when observing channel-routed runs through an exact
+  session subscription.
   A client that renders assistant text solely from `chat` can advertise
   `chat-only-assistant-text` in its connect `caps`. The Gateway then omits
   text-bearing `agent` events with `stream: "assistant"` from that connection,
@@ -245,6 +249,15 @@ or protocol-version change.
   agent text separately from cumulative chat text should not advertise it.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
+  `session.tool` carries the tool event's run identity, session address, sequence,
+  timestamp, and `data`; session-row metadata arrives through `session.message`
+  and `sessions.changed`. Exec tool results and updates retain their bounded
+  text in `content`, omitting the redundant `details.aggregated` output when text
+  content is present. Results with no text content retain bounded aggregated
+  output. Live `dispatch_action` results omit the raw target-result and tool
+  mirrors from `details`, keeping the existing bounded display content and
+  other details. Stored transcripts and internal tool-result callbacks keep the full
+  output; recipient subscription and native delivery rules are unchanged.
 - `session.narration`: bounded assistant-text snapshots for subscriptions with
   narration intent, paced and settled as described above.
 - `session.approval`: sanitized pending and terminal approval truth for an

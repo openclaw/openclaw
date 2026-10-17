@@ -1,4 +1,3 @@
-// Runtime plugin health tests cover state shared across runtime processes.
 import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -25,12 +24,18 @@ vi.mock("../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
-const resolveReadOnlyChannelPluginsForConfigMock = vi.mocked(
-  resolveReadOnlyChannelPluginsForConfig,
-);
+const channelsMock = vi.mocked(resolveReadOnlyChannelPluginsForConfig);
+const toolQuarantine = (toolName: string, failedAt: number, owner?: string) => ({
+  toolName,
+  reason: "unsupported schema",
+  failedAt: new Date(failedAt),
+  ...(owner ? { owner } : {}),
+});
+const activate = (registry = createEmptyPluginRegistry(), key = "empty") =>
+  setActivePluginRegistry(registry, key, "default", "/tmp/ws");
 
 afterEach(() => {
-  resolveReadOnlyChannelPluginsForConfigMock.mockReset();
+  channelsMock.mockReset();
   resetPluginRuntimeStateForTest();
   resetPluginStateStoreForTests();
 });
@@ -47,15 +52,13 @@ async function deadProcessId(): Promise<number> {
   return pid;
 }
 
-function seedPersistedToolQuarantineForTest(record: {
-  toolName: string;
-  owner?: string;
-  reason: string;
-  failedAtMs: number;
-  processId: number;
-  processToken: string;
-  processStartTime: number | null;
-}): void {
+function seedPersistedToolQuarantineForTest(
+  record: ReturnType<typeof createRuntimeHealthRecordEnvelope> & {
+    toolName: string;
+    owner?: string;
+    reason: string;
+  },
+): void {
   createCorePluginStateSyncKeyedStore<typeof record>({
     ownerId: "core:runtime-tool-quarantine-health",
     namespace: "schema-quarantines",
@@ -77,11 +80,8 @@ describe("runtime plugin health snapshot", () => {
           failedAt: new Date(123),
         };
         await recordPersistedContextEngineQuarantine(quarantine);
-        await recordPersistedRuntimeToolSchemaQuarantine({
-          toolName: "still-quarantined-tool",
-          reason: "unsupported schema",
-          failedAt: new Date(456),
-        });
+        const tool = toolQuarantine("still-quarantined-tool", 456);
+        await recordPersistedRuntimeToolSchemaQuarantine(tool);
         const captured = createDeferredCore<unknown>();
         const release = createDeferredCore();
         const listEntries = pluginStateWorker.listPluginStateInWorker;
@@ -112,13 +112,7 @@ describe("runtime plugin health snapshot", () => {
           release.resolve();
           const snapshot = await pending;
           expect(snapshot.contextEngineQuarantines).toEqual([quarantine]);
-          expect(snapshot.runtimeToolQuarantines).toEqual([
-            {
-              toolName: "still-quarantined-tool",
-              reason: "unsupported schema",
-              failedAt: new Date(456),
-            },
-          ]);
+          expect(snapshot.runtimeToolQuarantines).toEqual([tool]);
           const nextSnapshot = await collectRuntimePluginHealthSnapshot();
           expect(nextSnapshot.contextEngineQuarantines).toEqual(
             change === "replace" ? [replacement] : [],
@@ -184,8 +178,7 @@ describe("runtime plugin health snapshot", () => {
 
   it("drops runtime tool quarantines from dead or unverifiable recorder processes", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-liveness-", async () => {
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
-      // Dead sibling: no current start time exists, so the record fails closed.
+      activate();
       seedPersistedToolQuarantineForTest({
         toolName: "stale_tool",
         reason: "unsupported schema",
@@ -201,18 +194,14 @@ describe("runtime plugin health snapshot", () => {
       });
 
       expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([
-        {
-          toolName: "live_tool",
-          reason: "unsupported schema",
-          failedAt: new Date(456),
-        },
+        toolQuarantine("live_tool", 456),
       ]);
     });
   });
 
   it("drops runtime tool quarantines from a previous incarnation of this PID", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-pid-reuse-", async () => {
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
+      activate();
       seedPersistedToolQuarantineForTest({
         toolName: "reused_pid_tool",
         reason: "unsupported schema",
@@ -226,32 +215,20 @@ describe("runtime plugin health snapshot", () => {
 
   it("suppresses persisted plugin-owned runtime tool quarantines after the owner plugin is gone", async () => {
     await withStateDirEnv("openclaw-status-tool-quarantine-owner-", async () => {
-      await recordPersistedRuntimeToolSchemaQuarantine({
-        toolName: "bad_tool",
-        owner: "plugin:bad-tools",
+      const tool = {
+        ...toolQuarantine("bad_tool", 456, "plugin:bad-tools"),
         reason: "unsupported anyOf",
-        failedAt: new Date(456),
-      });
+      };
+      await recordPersistedRuntimeToolSchemaQuarantine(tool);
 
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
+      activate();
       expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([]);
 
       const registry = createEmptyPluginRegistry();
-      registry.plugins.push({
-        id: "bad-tools",
-        status: "loaded",
-        enabled: true,
-      } as never);
-      setActivePluginRegistry(registry, "bad-tools", "default", "/tmp/ws");
+      registry.plugins.push({ id: "bad-tools", status: "loaded", enabled: true } as never);
+      activate(registry, "bad-tools");
 
-      expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([
-        {
-          toolName: "bad_tool",
-          owner: "plugin:bad-tools",
-          reason: "unsupported anyOf",
-          failedAt: new Date(456),
-        },
-      ]);
+      expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([tool]);
     });
   });
 
@@ -263,7 +240,7 @@ describe("runtime plugin health snapshot", () => {
       code: "channel-setup-failure",
       message: "failed to load setup entry: boom",
     });
-    setActivePluginRegistry(registry, "broken-channel", "default", "/tmp/ws");
+    activate(registry, "broken-channel");
 
     const snapshot = await collectRuntimePluginHealthSnapshot();
 
@@ -275,7 +252,7 @@ describe("runtime plugin health snapshot", () => {
         source: "diagnostic",
       },
     ]);
-    expect(resolveReadOnlyChannelPluginsForConfigMock).not.toHaveBeenCalled();
+    expect(channelsMock).not.toHaveBeenCalled();
   });
 
   it("records only runtime status:loaded plugins as runtime-loaded", async () => {

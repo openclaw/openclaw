@@ -506,7 +506,7 @@ export async function handleToolExecutionEnd(
         },
       });
     } else {
-      const output = extractLiveExecOutput(eventResult);
+      const output = extractLiveExecOutput(sanitizedResult);
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
         execDetails?.status === "failed" || isToolError ? terminalErrorStatus : "completed";

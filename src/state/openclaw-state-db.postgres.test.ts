@@ -14,6 +14,7 @@ import {
   withDaemonRuntimePinMigration,
 } from "../daemon/runtime-pin-state.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
+import { createWorkerEnvironmentStore } from "../gateway/worker-environments/store.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
@@ -71,6 +72,73 @@ const legacyWriteIndexesSql = `
 `;
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
+  it("prunes worker history with bounded UTF-8 ordering and placement protection", async () => {
+    const directory = tempDirs.make("state-worker-retention-postgres-");
+    const pathname = path.join(directory, "state.sqlite");
+    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    const client = new pg.Client({ connectionString: connection });
+    await client.connect();
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "state_worker_retention" },
+    });
+    let namespace: string | undefined;
+    const referencedId = "worker-000-reference";
+    const laterId = "worker-\u{10000}";
+    const firstId = "worker-\ue000";
+    try {
+      const database = withEngineStoreAdmission(() => openOpenClawStateDatabase(options));
+      namespace = getPostgresPhysicalFacts(database.db)?.namespace;
+      expect(namespace).toBeDefined();
+      let store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+      for (const environmentId of [referencedId, laterId, firstId]) {
+        await store.createIntent({
+          environmentId,
+          providerId: "fixture",
+          profileId: "development",
+          profileSnapshot: { settings: {} },
+          provisionOperationId: `provision:${environmentId}`,
+        });
+        await store.transition({ environmentId, from: "requested", to: "failed" });
+      }
+      await store.close();
+      withEngineStoreAdmission(() =>
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(`INSERT INTO worker_session_placements (
+              session_id, agent_id, session_key, state, environment_id, recovery_error,
+              created_at_ms, updated_at_ms, state_changed_at_ms
+            ) VALUES ('retained-session', 'main', 'retained-key', 'failed', ?,
+              'worker unavailable', 1, 1, 1)`).run(referencedId);
+          },
+          { database },
+        ),
+      );
+      store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+      const nowMs = 10 * 24 * 60 * 60 * 1_000;
+      expect(await store.pruneTerminalEnvironments({ nowMs, limit: 1 })).toBe(1);
+      expect(store.get(firstId)).toBeUndefined();
+      expect(store.get(laterId)?.state).toBe("failed");
+      expect(store.get(referencedId)?.state).toBe("failed");
+      expect(await store.pruneTerminalEnvironments({ nowMs })).toBe(1);
+      expect(store.list().map((record) => record.environmentId)).toEqual([referencedId]);
+      expect(
+        (await client.query(`SELECT environment_id FROM "${namespace}".worker_environments`)).rows,
+      ).toEqual([{ environment_id: referencedId }]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      resetDatabaseEngineSelectionForTest();
+      try {
+        if (namespace) {
+          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
+        }
+      } finally {
+        await client.end();
+      }
+    }
+  });
+
   it("retains one discovery generation across awaited, nested and native reads", async () => {
     const directory = tempDirs.make("state-composite-snapshot-postgres-");
     const pathname = path.join(directory, "state.sqlite");
