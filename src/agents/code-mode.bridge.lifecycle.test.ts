@@ -11,7 +11,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   estimateParentForkPromptTokens,
   resolveParentForkSourceTranscript,
@@ -64,6 +63,20 @@ function createSubscribedCodeModeHarness(params: Parameters<typeof subscribeHarn
     wait: expectDefined(harness.tools[1], "Code Mode wait"),
     catalog: (...targets: AnyAgentTool[]) =>
       applyCodeModeCatalog({ ...harness, tools: [...harness.tools, ...targets] }),
+    call: (
+      tool: AnyAgentTool,
+      toolCallId: string,
+      overrides: Partial<Parameters<typeof harness.executeTool>[0]> = {},
+    ) =>
+      harness.executeTool({
+        tool,
+        toolName: tool.name,
+        toolCallId,
+        source: "openclaw",
+        input: {},
+        acceptResultBeforeProjection: async (result) => result,
+        ...overrides,
+      }),
   };
 }
 
@@ -77,8 +90,7 @@ function sessionScope(name: string, sessionId = `session-code-mode-${name}`) {
 }
 
 function expectNoRuns() {
-  expect(testing.activeRuns.size).toBe(0);
-  expect(testing.resumingRunIds.size).toBe(0);
+  expect([testing.activeRuns.size, testing.resumingRunIds.size]).toEqual([0, 0]);
 }
 
 function parkedState(result: Record<string, unknown>) {
@@ -93,6 +105,51 @@ function pendingRequest(state: ReturnType<typeof parkedState>, method: string) {
   );
 }
 
+async function invoke(
+  tool: AnyAgentTool,
+  id: string,
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+) {
+  return resultDetails(await tool.execute(id, input, signal));
+}
+
+async function withSessionHarness(
+  name: string,
+  content: string,
+  run: (
+    harness: ReturnType<typeof createSubscribedCodeModeHarness>,
+    scope: ReturnType<typeof sessionScope>,
+    dir: string,
+  ) => Promise<void>,
+) {
+  await withStateDirEnv(`openclaw-code-mode-${name}-`, async ({ stateDir: dir }) => {
+    const scope = sessionScope(name);
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sessionManager = SessionManager.open(scope, dir);
+    sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+    const harness = createSubscribedCodeModeHarness({ name, sessionManager });
+    try {
+      await run(harness, scope, dir);
+    } finally {
+      harness.dispose();
+    }
+  });
+}
+
+function sessionMessages(manager: SessionManager) {
+  return manager.getBranch().flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+}
+
+async function displayedCalls(scope: ReturnType<typeof sessionScope>, ordered = false) {
+  const projected = projectChatDisplayMessages(
+    await readSessionMessagesAsync(scope, { mode: "full", reason: "nested lifecycle proof" }),
+  );
+  return (ordered ? composeTranscriptDisplay(projected) : projected)
+    .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+    .filter((block) => block.type === "toolCall");
+}
+
 describe("Code Mode subscribed bridge lifecycle", () => {
   afterEach(async () => {
     harnessDisposers.splice(0).forEach((dispose) => dispose());
@@ -102,71 +159,50 @@ describe("Code Mode subscribed bridge lifecycle", () => {
   });
 
   it("admits nested activity when consecutive assistant responses reuse exec_0", async () => {
-    await withStateDirEnv("openclaw-code-mode-reused-id-", async () => {
-      const name = "reused-exec-id";
-      const scope = sessionScope(name);
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope);
-      manager.appendMessage({ role: "user", content: "Read both records", timestamp: 1 });
-      const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
+    await withSessionHarness("reused-exec-id", "Read both records", async (harness, scope) => {
+      const manager = harness.sessionManager;
       const target = fakeTool("read_record", "Read a record");
       harness.catalog(target);
-      try {
-        for (const value of ["first", "second"]) {
-          const toolCall = {
-            type: "toolCall" as const,
-            id: "exec_0",
-            name: "exec",
-            arguments: { code: `return await read_record({ value: "${value}" });` },
-          };
-          const assistantMessage = makeAssistantMessageFixture({
-            responseId: `chatcmpl-${value}`,
-            content: [toolCall],
-            stopReason: "toolUse",
-          });
-          manager.appendMessage(assistantMessage);
-          const details = resultDetails(
-            await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, () =>
-              harness.execute(toolCall.arguments.code, toolCall.id),
-            ),
-          );
-          const result = await waitUntilCompleted({ details, waitTool: harness.wait });
-          expectCompleted(result, { input: { value } });
-        }
-
-        const activities = await harness.readNestedActivities();
-        expect(activities.map(({ details }) => details.input)).toEqual([
-          { value: "first" },
-          { value: "second" },
-        ]);
-        expect(new Set(activities.map(({ details }) => details.toolCallId)).size).toBe(2);
-        expect(activities.map(({ details }) => details.parentToolCallId)).toEqual([
-          "exec_0",
-          "exec_0",
-        ]);
-        const admitted = SessionManager.open(scope)
-          .getEntries()
-          .flatMap((entry) =>
-            entry.type === "message" ? [readNestedToolActivity(entry.message)] : [],
-          )
-          .filter(Boolean);
-        expect(admitted).toEqual(activities);
-      } finally {
-        harness.dispose();
+      for (const value of ["first", "second"]) {
+        const toolCall = {
+          type: "toolCall" as const,
+          id: "exec_0",
+          name: "exec",
+          arguments: { code: `return await read_record({ value: "${value}" });` },
+        };
+        const assistantMessage = makeAssistantMessageFixture({
+          responseId: `chatcmpl-${value}`,
+          content: [toolCall],
+          stopReason: "toolUse",
+        });
+        manager.appendMessage(assistantMessage);
+        const details = resultDetails(
+          await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, () =>
+            harness.execute(toolCall.arguments.code, toolCall.id),
+          ),
+        );
+        const result = await waitUntilCompleted({ details, waitTool: harness.wait });
+        expectCompleted(result, { input: { value } });
       }
+
+      const activities = await harness.readNestedActivities();
+      expect(activities).toMatchObject(
+        ["first", "second"].map((value) => ({
+          details: { input: { value }, parentToolCallId: "exec_0" },
+        })),
+      );
+      expect(new Set(activities.map(({ details }) => details.toolCallId)).size).toBe(2);
+      const admitted = sessionMessages(SessionManager.open(scope))
+        .map(readNestedToolActivity)
+        .filter(Boolean);
+      expect(admitted).toEqual(activities);
     });
   });
 
   it("returns a committed source reply after recording its nested tool activity", async () => {
-    await withStateDirEnv("openclaw-code-mode-source-reply-", async () => {
+    await withSessionHarness("source-reply", "Review this format", async (harness, scope) => {
       const config = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(config);
-      const name = "source-reply";
-      const scope = sessionScope(name);
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope);
-      manager.appendMessage({ role: "user", content: "Review this format", timestamp: 1 });
-      const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
       const target = createMessageTool({
         config,
         preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
@@ -185,35 +221,31 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         }),
       });
       harness.catalog(target);
-      try {
-        // Await transcript persistence through the real catalog without a guest wall-clock budget.
-        const runtime = new ToolSearchRuntime(
-          harness,
-          toToolSearchConfig(resolveCodeModeConfig(harness.config)),
-          { prepareInput: true, validateInput: true },
-        );
-        const { result } = await runtime.callExactId(
-          "openclaw:core:message",
-          { action: "send", message: "Review complete", final: true },
-          { parentToolCallId: "code-call-1" },
-        );
-        const messages = SessionManager.open(scope)
-          .getEntries()
-          .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-        expect(messages.filter((message) => message.role === "assistant")).toEqual([
-          expect.objectContaining({ content: [{ type: "text", text: "Review complete" }] }),
-        ]);
-        expect(result.details).toMatchObject({
-          deliveryStatus: "sent",
-          sourceReplyTranscriptOwner: true,
-        });
-        const activities = await harness.readNestedActivities();
-        expect(messages.map(readNestedToolActivity).filter(Boolean)).toEqual(activities);
-        expect(activities).toMatchObject([{ details: { toolName: "message", isError: false } }]);
-        expect(manager.buildSessionContext().messages.some(readNestedToolActivity)).toBe(false);
-      } finally {
-        harness.dispose();
-      }
+      // Await transcript persistence through the real catalog without a guest wall-clock budget.
+      const runtime = new ToolSearchRuntime(
+        harness,
+        toToolSearchConfig(resolveCodeModeConfig(harness.config)),
+        { prepareInput: true, validateInput: true },
+      );
+      const { result } = await runtime.callExactId(
+        "openclaw:core:message",
+        { action: "send", message: "Review complete", final: true },
+        { parentToolCallId: "code-call-1" },
+      );
+      const messages = sessionMessages(SessionManager.open(scope));
+      expect(messages.filter((message) => message.role === "assistant")).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "Review complete" }] }),
+      ]);
+      expect(result.details).toMatchObject({
+        deliveryStatus: "sent",
+        sourceReplyTranscriptOwner: true,
+      });
+      const activities = await harness.readNestedActivities();
+      expect(messages.map(readNestedToolActivity).filter(Boolean)).toEqual(activities);
+      expect(activities).toMatchObject([{ details: { toolName: "message", isError: false } }]);
+      expect(
+        harness.sessionManager.buildSessionContext().messages.some(readNestedToolActivity),
+      ).toBe(false);
     });
   });
 
@@ -232,12 +264,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           },
         }),
       );
-      const result = harness.executeTool({
-        tool: target,
-        toolName: "message",
-        source: "openclaw",
+      const result = harness.call(target, "nested-source-reply", {
         sourceName: "core",
-        toolCallId: "nested-source-reply",
         parentToolCallId: "outer-exec",
         input: { action: "send", message: "Delivered once" },
         acceptResultBeforeProjection: async () => {
@@ -254,8 +282,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       }
       expect(target.execute).toHaveBeenCalledOnce();
       expect(harness.subscription.getSourceReplyDelivered()).toBe(true);
-      expect(harness.subscription.toolMetas).toEqual([
-        expect.objectContaining({ toolName: "message", isError: projection === "rejected" }),
+      expect(harness.subscription.toolMetas).toMatchObject([
+        { toolName: "message", isError: projection === "rejected" },
       ]);
       expect(harness.subscription.getItemLifecycle()).toMatchObject({
         startedCount: 1,
@@ -266,21 +294,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
   );
 
   it("persists concurrent nested starts in order across wait without changing replay or pairing", async () => {
-    await withStateDirEnv("nested-tool-history-", async ({ stateDir: dir }) => {
+    await withSessionHarness("nested-history", "Read three times", async (harness, scope, dir) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(42);
-      const scope = sessionScope("nested-history", "nested-history");
       setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
-      const initialEntry = { sessionId: scope.sessionId, updatedAt: 1 };
-      await patchSessionEntryCore(scope, () => initialEntry, {
-        fallbackEntry: initialEntry,
-        replaceEntry: true,
-        skipMaintenance: true,
-      });
-      const manager = SessionManager.open(scope, dir);
-      const harness = createSubscribedCodeModeHarness({
-        name: "nested-history",
-        sessionManager: manager,
-      });
+      const manager = harness.sessionManager;
       const firstStarted = createDeferred();
       const finishFirst = createDeferred();
       const ids = [1, 2, 3].map((index) => `tool_call:exec|fc-original:read:${index}`);
@@ -291,15 +308,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         }
         return jsonResult({ text: "same result" });
       });
-      const call = (index: number, executeTool = harness.executeTool) =>
-        executeTool({
-          tool: target,
-          toolName: "read",
-          source: "openclaw",
-          toolCallId: expectDefined(ids[index], "nested invocation id"),
+      const call = (index: number, owner = harness) =>
+        owner.call(target, expectDefined(ids[index], "nested invocation id"), {
           parentToolCallId: "exec|fc-original",
           input: { path: "repeat-proof.txt" },
-          acceptResultBeforeProjection: async (result) => result,
         });
       const appendCall = (name: string) =>
         manager.appendMessage({
@@ -318,7 +330,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           timestamp: Date.now(),
         });
       try {
-        manager.appendMessage({ role: "user", content: "Read three times", timestamp: 1 });
         appendCall("exec");
         const first = call(0);
         await firstStarted.promise;
@@ -333,27 +344,17 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         await call(2);
         appendResult("wait");
         const reopened = SessionManager.open(scope, dir);
-        const messages = reopened
-          .getBranch()
-          .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+        const messages = sessionMessages(reopened);
         const activities = messages.filter((message) => message.role === "custom");
         expect(activities).toHaveLength(3);
-        expect((await harness.readNestedActivities()).map(({ details }) => details.runId)).toEqual([
-          harness.runId,
-          harness.runId,
-          harness.runId,
-        ]);
-        const history = await readSessionMessagesAsync(scope, {
-          mode: "full",
-          reason: "nested activity lifecycle proof",
-        });
-        const calls = composeTranscriptDisplay(projectChatDisplayMessages(history))
-          .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-          .filter((block) => block.type === "toolCall");
-        expect(calls.map((block) => block.name)).toEqual(["exec", "read", "read", "wait", "read"]);
-        expect(calls.filter((block) => block.name === "read").map((block) => block.id)).toEqual(
-          ids,
+        const nested = await harness.readNestedActivities();
+        expect(nested).toMatchObject(
+          Array.from({ length: 3 }, () => ({
+            details: { runId: harness.runId, toolName: "read" },
+          })),
         );
+        const calls = await displayedCalls(scope, true);
+        expect(calls.map((block) => block.name)).toEqual(["exec", "read", "read", "wait", "read"]);
         expect(calls.filter((block) => block.name === "read")).toEqual(
           ids.map((id) =>
             expect.objectContaining({
@@ -393,30 +394,20 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         });
         await harness.subscription.waitForPendingEvents();
         expect(harness.subscription.toolMetas).toEqual([]);
-        expect(
-          (await harness.readNestedActivities()).map(({ details }) => details.toolName),
-        ).toEqual(["read", "read", "read"]);
+        expect(await harness.readNestedActivities()).toEqual(nested);
         const other = createSubscribedCodeModeHarness({
           name: "reused-child",
           sessionManager: manager,
         });
         try {
-          await call(0, other.executeTool);
-          const repeated = projectChatDisplayMessages(
-            await readSessionMessagesAsync(scope, {
-              mode: "full",
-              reason: "reused child identity proof",
-            }),
-          )
-            .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-            .filter((block) => block.type === "toolCall" && block.id === ids[0]);
+          await call(0, other);
+          const repeated = (await displayedCalls(scope)).filter((block) => block.id === ids[0]);
           expect(repeated.map((block) => block.runId)).toEqual([harness.runId, other.runId]);
         } finally {
           other.dispose();
         }
       } finally {
         finishFirst.resolve();
-        harness.dispose();
         clock.mockRestore();
       }
     });
@@ -444,14 +435,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       },
     }));
     try {
-      const pending = harness.executeTool({
-        tool: target,
-        toolName: "read",
-        source: "openclaw",
-        toolCallId: "stalled-terminal",
-        input: {},
-        acceptResultBeforeProjection: async (result) => result,
-      });
+      const pending = harness.call(target, "stalled-terminal");
       await observing.promise;
       harness.runAbortController.abort();
       await expect(pending).rejects.toThrow("Aborted");
@@ -498,15 +482,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const browser = jsonTool("browser", { pullRequests: [123] });
       // Exercise the executor used by hidden Code Mode calls without a worker-startup deadline.
       const callNestedTool = (tool: typeof shell, toolCallId: string) =>
-        harness.executeTool({
-          tool,
-          toolName: tool.name,
-          source: "openclaw",
+        harness.call(tool, toolCallId, {
           sourceName: "fixture-plugin",
-          toolCallId,
           parentToolCallId: `code-${toolCallId}`,
-          input: {},
-          acceptResultBeforeProjection: async (result) => result,
         });
 
       await callNestedTool(shell, "approval");
@@ -637,17 +615,16 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     owner.catalog();
     const { exec, wait } = owner;
     let controller = new AbortController();
-    let result = resultDetails(
-      await exec.execute(
-        "transfer-exec",
-        {
-          code: `await yield_control("first");
+    let result = await invoke(
+      exec,
+      "transfer-exec",
+      {
+        code: `await yield_control("first");
                 await yield_control("second");
                 await yield_control("third");
                 return "done";`,
-        },
-        controller.signal,
-      ),
+      },
+      controller.signal,
     );
     expect(result.status, JSON.stringify(result)).toBe("waiting");
     const runId = result.runId as string;
@@ -667,9 +644,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const previous = parkedState(result);
       const previousController = controller;
       controller = new AbortController();
-      result = resultDetails(
-        await wait.execute(`transfer-wait-${index}`, { runId }, controller.signal),
-      );
+      result = await invoke(wait, `transfer-wait-${index}`, { runId }, controller.signal);
       expect(result).toMatchObject({ status: "waiting", runId });
       const replacement = parkedState(result);
       expect(replacement).not.toBe(previous);
@@ -682,10 +657,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
 
     const finalState = parkedState(result);
     const pending = finalState.pending;
-    expect(resultDetails(await wait.execute("transfer-complete", { runId }))).toMatchObject({
-      status: "completed",
-      value: "done",
-    });
+    expectCompleted(await invoke(wait, "transfer-complete", { runId }), "done");
     expectNoRuns();
     await waitForPendingBridgeSettlement(pending, {
       kind: "draining",
@@ -734,19 +706,19 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     const { tool: stalled, started } = controlledTool(jsonTool("stalled", {}));
     owner.catalog(stalled);
     try {
-      const execution = owner.exec.execute("deadline-exec", {
+      const execution = invoke(owner.exec, "deadline-exec", {
         code: "return await stalled({});",
       });
       await started.promise;
       await vi.advanceTimersByTimeAsync(1_500);
-      const parked = resultDetails(await execution);
+      const parked = await execution;
       expect(parked.status).toBe("waiting");
-      const waiting = owner.wait.execute("deadline-wait", {
+      const waiting = invoke(owner.wait, "deadline-wait", {
         runId: parked.runId,
       });
       vi.advanceTimersByTime(1_499);
       owner.runAbortController.abort();
-      expect(resultDetails(await waiting)).toMatchObject({ status: "failed", code: "aborted" });
+      expect(await waiting).toMatchObject({ status: "failed", code: "aborted" });
       expectNoRuns();
       // Abort returns before nested transcript and terminal finalization; join its owner.
       expect(lifecycle).toHaveBeenCalledOnce();
@@ -790,25 +762,26 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     harness.catalog(target);
     const { exec, wait } = harness;
     try {
-      const first = exec.execute(
+      const first = invoke(
+        exec,
         "cancelled-cell",
         { code: "return await ordered_target({});" },
         controller.signal,
       );
       await started.promise;
       controller.abort();
-      expect(resultDetails(await first)).toMatchObject({ status: "failed", code: "aborted" });
+      expect(await first).toMatchObject({ status: "failed", code: "aborted" });
       expect(harness.runAbortController.signal.aborted).toBe(false);
       expect(events).toEqual(["1:start"]);
 
       // A second real cell must reach the shared catalog while the first source
       // still owns its write. Its observer deadline does not release that write.
-      const second = exec.execute("following-cell", {
+      const second = invoke(exec, "following-cell", {
         code: "return await ordered_target({});",
       });
       // The worker uses performance.now(), so wait on the real cell deadline
       // instead of advancing only its host timers ahead of that clock.
-      const following = resultDetails(await second);
+      const following = await second;
       expect(following.status).toBe("waiting");
       expect(events).toEqual(["1:start"]);
       expect(target.execute).toHaveBeenCalledOnce();

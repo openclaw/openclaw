@@ -40,12 +40,12 @@ import {
   testing,
   waitUntilCompleted,
   createHeadlessCodeModeHarness,
-  pluginToolWithExecute,
   codeModeRunner,
   expectCompleted,
   expectToolCalls,
   expectFailure,
   createCatalogCodeModeHarness,
+  jsonTool,
 } from "./code-mode.test-support.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
@@ -102,6 +102,10 @@ function contractedTool(name: string, pluginId?: string) {
   return Object.assign(pluginTool(name, "Deferred", pluginId), {
     outputSchema: Type.Object({ ok: Type.Boolean() }, { additionalProperties: false }),
   });
+}
+
+function skillBody(location: string, content: string) {
+  return `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`;
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
@@ -177,50 +181,56 @@ describe("Code Mode catalog and model-visible surface", () => {
       alpha,
       { ...fakeTool("read", "Read file"), parameters: readToolInputSchema },
     ]);
-    expect(catalogPrompt()).toContain(
+    const prompt = catalogPrompt();
+    for (const fragment of [
       "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
-    );
-    expect(catalogPrompt()).toContain("- zeta_tool { value?: string } -> ?");
-    expect(catalogPrompt()).toContain(
+      "- zeta_tool { value?: string } -> ?",
       "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
-    );
-    expect(catalogPrompt().indexOf("alpha_tool")).toBeLessThan(
-      catalogPrompt().indexOf("zeta_tool"),
-    );
-    expect(catalogPrompt()).not.toContain("Description stays deferred.");
-    expect(catalogPrompt()).not.toContain("openclaw:fake-code-mode");
-    expect(catalogPrompt()).not.toContain("paired Gateway nodes");
-    expect(catalogPrompt()).not.toContain("MCP tools use the `MCP` namespace");
+    ]) {
+      expect(prompt).toContain(fragment);
+    }
+    for (const fragment of [
+      "Description stays deferred.",
+      "openclaw:fake-code-mode",
+      "paired Gateway nodes",
+      "MCP tools use the `MCP` namespace",
+    ]) {
+      expect(prompt).not.toContain(fragment);
+    }
+    expect(prompt.indexOf("alpha_tool")).toBeLessThan(prompt.indexOf("zeta_tool"));
   });
+
+  function catalogIndex(targets: AnyAgentTool[]) {
+    const prompt = catalog(targets).catalogPrompt();
+    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    return index;
+  }
 
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
     const pluginId = `fake-${"x".repeat(120)}`;
-    const contracted = contractedTool("zzz_contracted_tool", pluginId);
-    const { catalogPrompt } = catalog([
-      ...Array.from({ length: 500 }, (_, index) =>
-        pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    const index = catalogIndex([
+      ...Array.from({ length: 500 }, (_, position) =>
+        pluginTool(`fake_${position.toString().padStart(3, "0")}`, "Deferred", pluginId),
       ),
-      contracted,
+      contractedTool("zzz_contracted_tool", pluginId),
     ]);
-    const prompt = catalogPrompt();
-    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
-    expect(index).toContain("additional tools omitted");
-    expect(index).toContain("zzz_contracted_tool");
-    expect(index).toContain("-> { ok: boolean }");
-    expect(index.length).toBeLessThanOrEqual(8_000);
+    for (const fragment of [
+      "additional tools omitted",
+      "zzz_contracted_tool",
+      "-> { ok: boolean }",
+    ]) {
+      expect(index).toContain(fragment);
+    }
   });
 
   it("skips a single oversized entry instead of blanking the whole index", () => {
-    const names = [
-      `a_${"z".repeat(9_000)}`,
-      ...Array.from({ length: 4 }, (_, index) => `b_short_${index}`),
-    ];
-    const { catalogPrompt } = catalog(names.map((name) => contractedTool(name)));
-    const prompt = catalogPrompt();
-    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
-    expect(index.length).toBeLessThanOrEqual(8_000);
+    const shortNames = Array.from({ length: 4 }, (_, index) => `b_short_${index}`);
+    const index = catalogIndex(
+      [`a_${"z".repeat(9_000)}`, ...shortNames].map((name) => contractedTool(name)),
+    );
     expect(index).not.toContain("z".repeat(9_000));
-    for (const name of names.slice(1)) {
+    for (const name of shortNames) {
       expect(index).toContain(name);
     }
   });
@@ -229,11 +239,7 @@ describe("Code Mode catalog and model-visible surface", () => {
 describe("Code Mode search", () => {
   it("round-trips exact plugin and client callable names that differ only in case", async () => {
     const plugin = pluginTool("listURL", "List plugin URLs");
-    const client = {
-      ...fakeTool("listUrl", "List client URLs"),
-      parameters: Type.Object({}),
-      execute: vi.fn(async () => jsonResult({ name: "listUrl" })),
-    };
+    const client = { ...jsonTool("listUrl", { name: "listUrl" }), parameters: Type.Object({}) };
     const { ctx, catalogRef } = createCatalogCodeModeHarness([plugin]);
     addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const code = `
@@ -334,12 +340,7 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
       { agentId: "main", codeModeSkills },
     );
     const result = await h.complete('return await skills.read("learned");');
-    expectCompleted(
-      result,
-      "Skill location: /skills/learned/SKILL.md\n" +
-        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-        "# Learned instructions\n",
-    );
+    expectCompleted(result, skillBody("/skills/learned/SKILL.md", "# Learned instructions\n"));
     expect(consumeRunSkillUsage("run-code-mode")).toEqual([
       {
         name: "learned",
@@ -371,15 +372,14 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
     withTempDir("code-mode-skill-authority-", async (dir) => {
       const denied = scenario === "transported" ? undefined : scenario;
       const filePath = path.join(dir, "SKILL.md");
+      const identity = { name: "guide", description: "Guide", location: filePath };
       await writeFile(filePath, "Private instructions");
       const readStarted = createDeferred();
       const releaseRead = createDeferred();
       let reads = 0;
       const skills = [
         {
-          name: "guide",
-          description: "Guide",
-          location: filePath,
+          ...identity,
           source: { filePath },
           readSearchContent: async (maxBytes: number) => {
             reads += 1;
@@ -419,11 +419,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
                 ...createToolSurfacePresentationForTest({
                   tools: { codeMode: true, toolSearch: false },
                 }),
-                skills: skills.map(({ name, description, location }) => ({
-                  name,
-                  description,
-                  location,
-                })),
+                skills: [identity],
               }
             : undefined,
         modelToolsEnabled: true,
@@ -481,10 +477,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         const result = await pending;
         const unavailable = `${denied} is not available in this run.`;
         expectCompleted(result, {
-          listed:
-            denied === "skills_search"
-              ? unavailable
-              : [{ name: "guide", description: "Guide", location: filePath }],
+          listed: denied === "skills_search" ? unavailable : [identity],
           found: denied === "skills_search" ? unavailable : { skills: [{ name: "guide" }] },
           bodyMatch:
             denied === "skills_search"
@@ -499,9 +492,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
                 ? expect.stringContaining("Unknown tool id: skills_read.")
                 : denied === "shadowed"
                   ? expect.stringContaining("Shadowed reader")
-                  : `Skill location: ${filePath}\n` +
-                    "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-                    "Private instructions",
+                  : skillBody(filePath, "Private instructions"),
         });
         expect(reads).toBe(denied === undefined || denied === "revoked" ? 1 : 0);
         if (denied === undefined) {
@@ -525,9 +516,6 @@ it.each([undefined, "read", "skills_read"])(
     const guide = createFixtureSkillEntry("guide");
     const hidden = createFixtureSkillEntry("hidden");
     const body = `${"x".repeat(256 * 1024)}complete tail`;
-    const context =
-      "Skill location: /skills/guide/SKILL.md\n" +
-      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n";
     guide.skill.readContent = body;
     hidden.skill.readContent = body;
     const skills = prepareInstalledSkillCatalog({
@@ -558,7 +546,7 @@ it.each([undefined, "read", "skills_read"])(
     expectCompleted(result, {
       body: denied
         ? "skills_read is not available in this run."
-        : { length: context.length + body.length, tail: "complete tail" },
+        : { length: skillBody("/skills/guide/SKILL.md", body).length, tail: "complete tail" },
       hidden: denied
         ? "skills_read is not available in this run."
         : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
@@ -684,20 +672,26 @@ function sessionStoreHarness(
   catalogs.push(h.ctx);
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
   bindCodeModeSessionStore(h.catalogRef, manager);
+  const runner = codeModeRunner(h.tools);
+  const exec = (code: string, restartSafe = false) =>
+    runner.run(code, "store-cell", { restartSafe });
   return {
     ...h,
     manager,
-    exec: (code: string, restartSafe = false) =>
-      codeModeRunner(h.tools).run(code, "store-cell", { restartSafe }),
-    wait: (runId: unknown) => codeModeRunner(h.tools).resume({ runId }, "store-wait"),
-    execute: codeModeRunner(h.tools).execute,
+    execute: runner.execute,
+    exec,
+    check: async (code: string, value: unknown) => expectCompleted(await exec(code), value),
+    wait: (runId: unknown) => runner.resume({ runId }, "store-wait"),
   };
 }
 
-describe.each(["node", "quickjs"] as const)("%s session store bridge", (executor) => {
-  it("keeps detached JSON across cells, deletes keys, and rejects invalid keys", async () => {
+it.each(["node", "quickjs"] as const)(
+  "%s store keeps detached JSON across cells, deletes keys, and rejects invalid keys",
+  async (executor) => {
     const h = sessionStoreHarness(executor);
-    const saved = await h.exec(`
+    const detached = JSON.parse('{"nested":[1],"__proto__":"data"}');
+    await h.check(
+      `
       const original = { nested: [1], ["__proto__"]: "data" };
       const saved = await store("key", original);
       original.nested.push(2);
@@ -710,35 +704,34 @@ describe.each(["node", "quickjs"] as const)("%s session store bridge", (executor
       }
       return { saved: saved === undefined, missing: (await load("missing")) === undefined,
         value: await load("key"), nullable: await load("nullable"), errors };
-    `);
-    expectCompleted(saved, {
-      saved: true,
-      missing: true,
-      value: JSON.parse('{"nested":[1],"__proto__":"data"}'),
-      nullable: null,
-      errors: Array(10).fill(true),
-    });
-    expectCompleted(
-      await h.exec(`
+    `,
+      {
+        saved: true,
+        missing: true,
+        value: detached,
+        nullable: null,
+        errors: Array(10).fill(true),
+      },
+    );
+    await h.check(
+      `
       const value = await load("key");
       await store("key", undefined);
       return { value, deleted: (await load("key")) === undefined };
-    `),
-      {
-        value: JSON.parse('{"nested":[1],"__proto__":"data"}'),
-        deleted: true,
-      },
+    `,
+      { value: detached, deleted: true },
     );
-    expectCompleted(await h.exec('return (await load("key")) === undefined;'), true);
-  });
-});
+    await h.check('return (await load("key")) === undefined;', true);
+  },
+);
 
 describe("session store bridge", () => {
   const executor = "node";
 
   it("enforces encoded value and total limits atomically with guest RangeErrors", async () => {
     const h = sessionStoreHarness(executor);
-    const result = await h.exec(`
+    await h.check(
+      `
       const max = "x".repeat(256 * 1024 - 2);
       for (const key of ["a", "b", "c", "d"]) await store(key, max);
       const errors = [];
@@ -749,13 +742,14 @@ describe("session store bridge", () => {
       await store("b", undefined);
       await store("e", 1);
       return { errors, unchanged, deleted: (await load("b")) === undefined, added: await load("e") };
-    `);
-    expectCompleted(result, {
-      errors: [true, true, true],
-      unchanged: 256 * 1024 - 2,
-      deleted: true,
-      added: 1,
-    });
+    `,
+      {
+        errors: [true, true, true],
+        unchanged: 256 * 1024 - 2,
+        deleted: true,
+        added: 1,
+      },
+    );
   });
 
   it.each([
@@ -807,22 +801,17 @@ describe("session store bridge", () => {
     `);
     expect(first.status).toBe("waiting");
     expect(h.manager.getBranch()).toEqual([]);
-    expectCompleted(await h.exec('return (await load("key")) === undefined;'), true);
+    await h.check('return (await load("key")) === undefined;', true);
     expectCompleted(await h.wait(first.runId), 7);
     expect(h.manager.getBranch().filter((entry) => entry.type === "custom")).toHaveLength(1);
-    expectCompleted(await h.exec('return await load("key");'), 8);
+    await h.check('return await load("key");', 8);
   });
 
   it("carries network provenance through a persisted key into a later reply", async () => {
-    const network = pluginToolWithExecute("network_fixture", "Read network fixture", async () =>
-      jsonResult({ text: "untrusted fixture" }),
-    );
+    const network = jsonTool("network_fixture", { text: "untrusted fixture" });
     network.resultContentSource = "network";
     const h = sessionStoreHarness(executor, undefined, [network]);
-    expectCompleted(
-      await h.exec('await store("network", await network_fixture({})); return true;'),
-      true,
-    );
+    await h.check('await store("network", await network_fixture({})); return true;', true);
     clearToolSearchCatalog(h.ctx);
     const next = sessionStoreHarness(executor, h.manager);
     const loaded = await next.execute('return (await load("network")).text;', "store-cell", {
@@ -845,7 +834,7 @@ describe("session store bridge", () => {
       warnings: [expect.stringContaining("persistence could not be confirmed")],
     });
     expect(h.manager.getBranch()).toEqual([]);
-    expectCompleted(await h.exec('return (await load("key")) === undefined;'), true);
+    await h.check('return (await load("key")) === undefined;', true);
   });
 
   it("rejects unbound, restartSafe, and headless session-store access", async () => {
@@ -903,6 +892,6 @@ it.each(["aborted", "timeout"] as const)(
     await resetCodeModeTestState();
     expect(h.manager.getBranch()).toEqual([]);
     const next = sessionStoreHarness("node", h.manager);
-    expectCompleted(await next.exec('return (await load("key")) === undefined;'), true);
+    await next.check('return (await load("key")) === undefined;', true);
   },
 );
