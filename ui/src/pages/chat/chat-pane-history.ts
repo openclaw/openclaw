@@ -78,7 +78,7 @@ import { maybeResetToolStream } from "./stream-reconciliation.ts";
 export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
-  private historyViewportFillPages = 0;
+  private historyViewportFillAttempted = false;
   private readonly historyInput = new TranscriptHistoryInput();
   // Staged prefetch: after a consumed older page, the next page is fetched in
   // the background and parked here, so the following boundary crossing
@@ -185,7 +185,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   protected resetOlderMessagesViewport(): void {
     this.olderLoadGeneration += 1;
     this.activeOlderLoad = null;
-    this.historyViewportFillPages = 0;
+    this.historyViewportFillAttempted = false;
     this.stagedOlder = { page: null, load: null };
     this.resetReplyNavigation();
     if (this.history.loadingOlder) {
@@ -226,7 +226,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       document.visibilityState === "hidden" ||
       !this.state?.connected ||
       !this.hasOlderMessages() ||
-      (!this.historyObserverArmed && this.historyViewportFillPages >= 3) ||
+      (!this.historyObserverArmed && this.historyViewportFillAttempted) ||
       !this.transcript.isPositionSettled ||
       this.transcript.isProgrammaticScroll ||
       this.transcript.isMaintenanceScroll ||
@@ -270,18 +270,17 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         }
         const readerIntent = this.historyObserverArmed;
         if (!readerIntent) {
-          // Start only with a genuinely short settled window. Subsequent pages
-          // fill the prefetch margin too, without staging a fourth boot request.
-          const edge = this.historyViewportFillPages > 0 ? CHAT_HISTORY_PREFETCH_EDGE_PX : 0;
+          // One page may fill a short boot window; further paging and the
+          // prefetch margin belong to reader intent, even if it stays short.
           if (
-            this.historyViewportFillPages >= 3 ||
+            this.historyViewportFillAttempted ||
             root.clientHeight <= 0 ||
-            root.scrollHeight > root.clientHeight + edge
+            root.scrollHeight > root.clientHeight
           ) {
             this.clearHistoryObserver();
             return;
           }
-          this.historyViewportFillPages += 1;
+          this.historyViewportFillAttempted = true;
         }
         this.clearHistoryObserver();
         this.historyObserverArmed = false;

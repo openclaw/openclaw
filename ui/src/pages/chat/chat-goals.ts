@@ -130,7 +130,7 @@ function rejectedGoalReason(error: unknown): string | undefined {
 }
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
-  setChatError(host, message, true);
+  setChatError(host, message);
   return false;
 }
 

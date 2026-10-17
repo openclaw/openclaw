@@ -196,6 +196,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
       GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
       GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS,
+      GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
       GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
@@ -204,6 +205,22 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("leaves the native-auth capability list unchanged", async () => {
+    client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      nativeConnectAuth: async ({ nonce, signedAt }) => ({
+        client: { id: "openclaw-macos", mode: "ui", platform: "darwin", version: "test" },
+        scopes: ["operator.read"],
+        auth: { deviceToken: "native-device-token" },
+        device: { id: "native-device", publicKey: "test", signature: "test", nonce, signedAt },
+      }),
+    });
+    const { connectFrame } = await startConnect(client);
+    expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS);
+    expect(connectFrame.params.client.id).toBe("openclaw-macos");
+    expect(connectFrame.params.auth).toEqual({ deviceToken: "native-device-token" });
   });
 
   it.each([

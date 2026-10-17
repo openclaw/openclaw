@@ -511,6 +511,11 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
         gateway: { roles: { default: "reader", definitions: { reader } } },
       });
       await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      // Start from requested rows so the test isolates the between-key alias change.
+      for (const key of keys.slice(0, 2)) {
+        expect(projection.describe({ agentId: "main", key })).toBeDefined();
+      }
       const pending = sessionReadHandlers["sessions.preview"]?.({
         params: { keys: keys.slice(0, 2) },
         client: identifiedClient(callerId),

@@ -20,6 +20,7 @@ import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -281,6 +282,7 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    const expireDeadline = captureUpdateCandidateDeadline();
     const operation = readUpdateStateSchemaVersions({
       stateDir,
       config: {},
@@ -295,6 +297,7 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
           controller.abort();
         } else {
           elapsed = 400_000;
+          expireDeadline();
         }
       }
       const failure = await rejected;
@@ -305,7 +308,7 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
         expect(failure).toHaveProperty(
           "message",
           expect.stringMatching(
-            outcome === "timeout" ? /made no progress/ : /native header (read|close) failed/,
+            outcome === "timeout" ? /exceeded its/ : /native header (read|close) failed/,
           ),
         );
         expect.soft(failure).toHaveProperty("message", expect.stringContaining(file));

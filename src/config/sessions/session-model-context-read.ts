@@ -1,5 +1,6 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { isTranscriptArtifactProvider } from "../../../packages/agent-core/src/harness/session/transcript-model.js";
 import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
 import type {
@@ -58,8 +59,10 @@ export function projectSessionModelContext(
   if (limits) {
     const model = entries.findLast(
       (entry) =>
-        entry.type === "model_change" ||
-        (entry.type === "message" && entry.message.role === "assistant"),
+        (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) ||
+        (entry.type === "message" &&
+          entry.message.role === "assistant" &&
+          !isTranscriptArtifactProvider(entry.message.provider)),
     );
     const thinking = entries.findLast((entry) => entry.type === "thinking_level_change");
     const detached = entries.flatMap((entry) => {

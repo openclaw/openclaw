@@ -19,6 +19,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
@@ -45,6 +46,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   projectChatFields(runtime.repository);
   projectChatFields(runtime.headerPresentation);
   projectChatFields(runtime.collaboration);
+  projectChatFields(runtime.swarm);
   const [ready, setReady] = createSignal(false);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let disposed = false;
@@ -128,6 +130,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     });
     const presence = projectOwner(runtime.presence, (owner) => owner.snapshot);
     const gateway = projectGateway(context.gateway);
+    const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.readState();
     const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
@@ -145,6 +148,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
     const companion = projectOwner(runtime.sessionCompanionThreads, (owner) => owner);
+    const swarm = createMemo(() => {
+      const hydrator = runtime.swarm.hydrator;
+      return hydrator ? projectOwner(hydrator, (owner) => owner) : undefined;
+    });
     const boardProvider = createMemo(() => {
       revision();
       return runtime.subscribedBoardProvider;
@@ -216,11 +223,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         composerCapabilities.read();
         realtime()?.read();
         projects.read();
+        theme.preferences.read();
         workspace?.read();
         goals?.read();
         resources.read();
         discussion.read();
         companion.read();
+        swarm()?.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());

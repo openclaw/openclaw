@@ -24,7 +24,7 @@ export interface RequestBody {
   tool_choice?: "auto";
   parallel_tool_calls?: boolean;
   temperature?: number;
-  reasoning?: { effort?: string; summary?: string };
+  reasoning?: { effort?: string; summary?: string | null };
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
   text?: ResponseCreateParamsStreaming["text"];
   include?: string[];

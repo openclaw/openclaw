@@ -12,6 +12,7 @@ import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { foldSqliteIdentifierCase, quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import type { PublishedSqliteFileGuard } from "./sqlite-snapshot.types.js";
 import { withSqliteForeignKeysDisabled } from "./sqlite-strict.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -241,6 +242,7 @@ export async function createScopedMigrationSnapshot(params: {
   tables: readonly string[];
   inspection?: ScopedMigrationInspection;
   beforePublish: () => void;
+  afterPublish?: (guard: PublishedSqliteFileGuard) => void;
 }): Promise<{ path: string; userVersion: number }> {
   const inspection =
     params.inspection ?? inspectScopedMigrationTables(params.sourcePath, params.tables);
@@ -304,6 +306,7 @@ export async function createScopedMigrationSnapshot(params: {
         sizeBytes: Number(sourceIdentity.size),
       },
       beforePublish: params.beforePublish,
+      afterPublish: params.afterPublish,
     });
     return { path: params.targetPath, userVersion: inspection.userVersion };
   } finally {

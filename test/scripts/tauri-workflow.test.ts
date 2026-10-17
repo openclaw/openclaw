@@ -54,6 +54,28 @@ it.each(["build_linux", "build_windows", "build_macos"])(
   },
 );
 
+it("uses fast NSIS compression only for Windows validation", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const build = workflow.jobs["test-windows-power"].steps.find((step: { run?: string }) =>
+    step.run?.includes("@tauri-apps/cli"),
+  );
+  const override = JSON.parse(build.run.match(/--config '([^']+)'/)[1]);
+  expect(override).toEqual({
+    bundle: { createUpdaterArtifacts: false, windows: { nsis: { compression: "zlib" } } },
+  });
+
+  const release = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const releaseBuild = release.jobs.build_windows.steps.find((step: { run?: string }) =>
+    step.run?.includes("@tauri-apps/cli"),
+  );
+  const releaseOverride = JSON.parse(
+    releaseBuild.run.match(/--config "(.+)"/)[1].replaceAll('\\"', '"'),
+  );
+  expect(releaseOverride.bundle.windows?.nsis?.compression).toBeUndefined();
+  const config = JSON.parse(readFileSync("apps/linux/src-tauri/tauri.conf.json", "utf8"));
+  expect(config.bundle.windows?.nsis?.compression).toBeUndefined();
+});
+
 it.each([
   ["build", "Build native inline browser candidate"],
   ["test-windows-power", "Build Windows installer without publishing"],

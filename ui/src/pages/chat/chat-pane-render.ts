@@ -578,7 +578,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       // so an active follow lock stays pinned to the latest message.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
-      onRequestUpdate: state.requestUpdate,
+      mediaOwner: state,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
       onSlashCommand: nativeConversation

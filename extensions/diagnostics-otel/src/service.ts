@@ -562,6 +562,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
                   "gateway.ws.event",
                   "gateway.ws.connections",
                   "sessions.list.retention",
+                  "sessions.event.retention",
                 ],
               }
             : { include: ["log.record", "security.event"] },

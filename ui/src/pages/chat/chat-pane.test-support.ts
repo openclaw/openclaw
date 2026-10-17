@@ -133,6 +133,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly collaboration: ChatPaneRuntime["collaboration"];
   readonly presence: ChatPaneRuntime["presence"];
   readonly sessionDiscussion: ChatPaneRuntime["sessionDiscussion"];
+  readonly swarm: ChatPaneRuntime["swarm"];
   active: boolean;
   presented: boolean;
   presentationId: string;

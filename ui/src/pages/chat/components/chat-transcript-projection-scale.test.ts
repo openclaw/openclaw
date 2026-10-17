@@ -386,7 +386,6 @@ it("opens the visible forwarded disclosure when replying across search after a p
   const props = threadProps("projection-reply-owner", "agent:main:main", [later, answer]);
   const state = getTranscriptState(props.paneId);
   const view = drawThread(props);
-  props.onRequestUpdate = view.draw;
   try {
     view.draw();
     props.messages = [forwarded("earlier", "Hidden original", 1), later, answer];

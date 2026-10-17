@@ -713,7 +713,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
+  it("skips hidden and transcript-only assistant entries when reading latest assistant text", async () => {
     await writeTranscriptStore();
     const finalResult = await appendText("Complete final answer");
     assertOk(finalResult);
@@ -725,6 +725,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         model: "gateway-injected",
       }),
     });
+    const hiddenAssistant = {
+      ...createExactAssistantMessage({ text: "Hidden internal completion" }),
+      display: false,
+    };
+    await appendExact({ message: hiddenAssistant });
     const latestAssistantText =
       await readLatestAssistantTextFromSessionTranscript(transcriptScope());
     expect(latestAssistantText).toMatchObject({

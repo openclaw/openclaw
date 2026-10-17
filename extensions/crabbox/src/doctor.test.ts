@@ -24,7 +24,7 @@ const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 const listPluginStateEntries: CrabboxDoctorRegistrationHost["listPluginStateEntries"] = <T>(
   options: OpenKeyedStoreOptions,
-) => crabboxState.openKeyedStore<T>(options).entries();
+) => crabboxState.openKeyedStoreV2<T>(options).entries();
 
 function captureCrabboxDoctorCheck(
   id = CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,

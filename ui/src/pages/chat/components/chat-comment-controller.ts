@@ -74,7 +74,6 @@ export const ChatCommentController = defineSolidBridge<ChatCommentControllerProp
         return false;
       }
       releaseDisplacedChatAttachmentPayloads(current, [next]);
-      view.props.onRequestUpdate?.();
       return true;
     }
 
