@@ -17,49 +17,36 @@ const branch = "extended-stable/2026.6.33";
 describe("npm preflight publication channels", () => {
   it("allows only qualified regular releases with both SDK receipts to cross beta/latest", () => {
     const receipt = { schema: "openclaw.plugin-sdk-api-release-evidence/v1" };
+    const sdk = {
+      schema: "openclaw.plugin-sdk-api-release-evidence-set/v1",
+      selectors: { beta: receipt, latest: receipt },
+    };
     const manifest = {
       version: 3,
       packageVersion: "2026.8.1",
       npmDistTag: "beta",
-      pluginSdkApi: {
-        schema: "openclaw.plugin-sdk-api-release-evidence-set/v1",
-        selectors: { beta: receipt, latest: receipt },
-      },
+      pluginSdkApi: sdk,
     };
-    expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "latest" })).not.toThrow();
+    const preflight = (changes = {}, npmDistTag = "latest") =>
+      validateNpmPreflightDistTag({ manifest: { ...manifest, ...changes }, npmDistTag });
+    expect(() => preflight()).not.toThrow();
     expect(() =>
-      validateNpmPreflightDistTag({
-        manifest: {
-          ...manifest,
-          pluginSdkApi: {
-            ...manifest.pluginSdkApi,
-            schema: "openclaw.plugin-sdk-api-release-evidence-set/v2",
-          },
-        },
-        npmDistTag: "latest",
+      preflight({
+        pluginSdkApi: { ...sdk, schema: "openclaw.plugin-sdk-api-release-evidence-set/v2" },
       }),
     ).not.toThrow();
-    expect(() =>
-      validateNpmPreflightDistTag({
-        manifest: { ...manifest, pluginSdkApi: encodePluginSdkApiArtifact(manifest.pluginSdkApi) },
-        npmDistTag: "latest",
-      }),
-    ).not.toThrow();
+    expect(() => preflight({ pluginSdkApi: encodePluginSdkApiArtifact(sdk) })).not.toThrow();
     for (const changed of [
-      { ...manifest, version: 2 },
-      { ...manifest, version: 1 },
-      { ...manifest, pluginSdkApi: receipt },
-      { ...manifest, packageVersion: "2026.8.1-beta.1" },
-      { ...manifest, packageVersion: "2026.6.33", npmDistTag: "extended-stable" },
-      { ...manifest, pluginSdkApi: { ...manifest.pluginSdkApi, selectors: { beta: receipt } } },
+      { version: 2 },
+      { version: 1 },
+      { pluginSdkApi: receipt },
+      { packageVersion: "2026.8.1-beta.1" },
+      { packageVersion: "2026.6.33", npmDistTag: "extended-stable" },
+      { pluginSdkApi: { ...sdk, selectors: { beta: receipt } } },
     ]) {
-      expect(() =>
-        validateNpmPreflightDistTag({ manifest: changed, npmDistTag: "latest" }),
-      ).toThrow("dist-tag mismatch");
+      expect(() => preflight(changed)).toThrow("dist-tag mismatch");
     }
-    expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "alpha" })).toThrow(
-      "Alpha releases are retired;",
-    );
+    expect(() => preflight({}, "alpha")).toThrow("Alpha releases are retired;");
     expect(() =>
       validateNpmPreflightDistTag({
         manifest: { version: 1, npmDistTag: "beta" },
