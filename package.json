@@ -367,6 +367,7 @@
     "!dist/extensions/slack-huddles/**",
     "!dist/extensions/sms/**",
     "!dist/extensions/stepfun/**",
+    "!dist/extensions/subq/**",
     "!dist/extensions/synthetic/**",
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tavily/**",

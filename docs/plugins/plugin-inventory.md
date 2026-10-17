@@ -200,7 +200,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-97 plugins
+98 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -351,6 +351,8 @@ Each entry lists the package, distribution route, and description.
 - **[sms](/plugins/reference/sms)** (`@openclaw/sms`) - npm or ClawHub: `@openclaw/sms`. Twilio SMS/MMS channel plugin for OpenClaw messages.
 
 - **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - npm or ClawHub: `@openclaw/stepfun-provider`. Adds StepFun, StepFun Plan model provider support to OpenClaw.
+
+- **[subq](/plugins/reference/subq)** (`@openclaw/subq`) - npm or ClawHub: `@openclaw/subq`. SubQ Snap typed decisions (not a conversational model).
 
 - **[synology-chat](/plugins/reference/synology-chat)** (`@openclaw/synology-chat`) - npm or ClawHub: `@openclaw/synology-chat`. Synology Chat channel plugin for OpenClaw channels and direct messages.
 
