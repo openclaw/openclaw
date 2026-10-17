@@ -6,24 +6,12 @@ import { afterEach, expect, it } from "vitest";
 import {
   createRequestReceipt,
   createTelegramFailureDiagnostic,
-  requestIdentitySchema,
 } from "../../scripts/mantis/request-proof.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { makeIngress } from "./mantis-telegram.test-support.js";
+import { identity, makeIngress } from "./mantis-telegram.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const identity = requestIdentitySchema.parse({
-  request_id: "a".repeat(64),
-  plan_sha256: "d".repeat(64),
-  repository: { id: "123", full_name: "openclaw/openclaw" },
-  pull_request: 42,
-  candidate_sha: "b".repeat(40),
-  scenario: "telegram-bot-e2e-proof",
-  workflow: { path: ".github/workflows/mantis-telegram-bot-e2e-proof.yml", sha: "c".repeat(40) },
-  harness: { sha: "c".repeat(40) },
-  run: { id: "456", attempt: 1 },
-});
 const evidence = { artifact_id: "789", artifact_name: "fixture", sha256: "e".repeat(64) };
 const encode = (value: unknown) => ({
   "telegram-failure.json": Buffer.from(JSON.stringify(value)).toString("base64"),

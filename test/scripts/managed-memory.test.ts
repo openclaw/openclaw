@@ -2,7 +2,10 @@ import type { StdioOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import {
+  runManagedCommand,
+  type RunManagedCommandOptions,
+} from "../../scripts/lib/managed-child-process.mts";
 import { runLinuxMemoryCommand } from "../../scripts/lib/managed-memory.mts";
 import * as memory from "../../scripts/lib/managed-memory.mts";
 import { hasLinuxMemoryContainment } from "../../scripts/lib/process-memory.mts";
@@ -23,10 +26,7 @@ afterEach(() => {
   mocks.resourceOwner.mockReset();
 });
 
-const command = {
-  bin: "fixture",
-  memoryLimitBytes: 256 * 1024 ** 2,
-};
+const command = { bin: "fixture", memoryLimitBytes: 256 * 1024 ** 2 };
 const memoryScope = "openclaw-check-abcd.scope";
 const response = (stdout: string) => ({ stdout, stderr: "", status: 0 });
 beforeEach(() => mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n")));
@@ -39,8 +39,12 @@ function probeCleanup(probe: unknown) {
     .mockReturnValueOnce(response("LoadState=not-found\n"));
 }
 const cleanupFailure = { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" };
-const linuxCommand = (options: Partial<Parameters<typeof runManagedCommand>[0]> = {}) =>
+const linuxCommand = (options: Partial<RunManagedCommandOptions> = {}) =>
   runManagedCommand({ ...command, platform: "linux", ...options });
+const contained = (
+  run: Parameters<typeof runLinuxMemoryCommand>[1],
+  options: Partial<RunManagedCommandOptions> = {},
+) => runLinuxMemoryCommand({ ...command, ...options }, run);
 
 it("removes signal listeners when receipt release throws", async () => {
   vi.spyOn(memory, "runLinuxMemoryCommand").mockResolvedValue(0);
@@ -73,30 +77,22 @@ it.for([
   const previousListeners = new Set(process.listeners("SIGTERM"));
   const onSignal = vi.fn();
   const result = linuxCommand({ signal: abort.signal, onSignal });
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void result.then(markSettled, markSettled);
+  const settled = vi.fn();
+  void result.then(settled, settled);
   await enteredCleanup.promise;
   if (params.kind === "abort") {
     abort.abort();
   } else {
     // Invoke only this command's listener; never signal the shared test process.
-    const handler = process
-      .listeners("SIGTERM")
-      .find((listener) => !previousListeners.has(listener));
+    const handler = process.listeners("SIGTERM").find((fn) => !previousListeners.has(fn));
     expect(handler).toBeTypeOf("function");
     handler!("SIGTERM");
     expect(onSignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
   }
   await Promise.resolve();
-  expect(settled).toBe(false);
-  expect(release).not.toHaveBeenCalled();
+  expect([settled.mock.calls, release.mock.calls]).toEqual([[], []]);
   if (params.uncertain) {
-    const failure = Object.assign(new Error("scope still populated"), {
-      processTreeState: "live",
-    });
+    const failure = Object.assign(new Error("scope still populated"), { processTreeState: "live" });
     cleanup.reject(failure);
     await expect(result).rejects.toBe(failure);
     expect(release).not.toHaveBeenCalled();
@@ -159,9 +155,7 @@ it("isolates concurrent cleanup identities", async () => {
   const scopes: string[] = [];
   const run = vi.fn(async () => 0);
   await Promise.all(
-    [0, 1].map(() =>
-      runLinuxMemoryCommand({ ...command, onMemoryScope: (unit) => scopes.push(unit) }, run),
-    ),
+    [0, 1].map(() => contained(run, { onMemoryScope: (unit) => scopes.push(unit) })),
   );
   expect(scopes).toEqual(["openclaw-check-aaaa.scope", "openclaw-check-bbbb.scope"]);
   expect(run.mock.calls).toHaveLength(2);
@@ -183,95 +177,82 @@ it.each([
 ])("refuses $reason without launching or stopping it", async ({ probe }) => {
   mocks.control.mockReset().mockReturnValue(probe);
   const run = vi.fn();
-  await expect(runLinuxMemoryCommand(command, run)).rejects.toThrow("user manager");
+  await expect(contained(run)).rejects.toThrow("user manager");
   expect(run).not.toHaveBeenCalled();
   expect(mocks.control).toHaveBeenCalledTimes(1);
 });
 
 it("rejects unqualified darwin containment before launch", async () => {
-  mocks.control.mockClear();
   await expect(runManagedCommand({ ...command, platform: "darwin" })).rejects.toThrow(
     "not qualified",
   );
   expect(mocks.control).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "preserves failure after cgroup extinction (unjoined=%s)",
-  async (unjoined) => {
-    const original = unjoined
-      ? Object.assign(new Error("detached descendant held output"), { processTreeState: "live" })
-      : Object.assign(new Error("systemd-run missing"), { code: "ENOENT" });
-    const result = runLinuxMemoryCommand(command, async () => {
-      throw original;
+it.each([false, true])("preserves failure after extinction (unjoined=%s)", async (unjoined) => {
+  const original = unjoined
+    ? Object.assign(new Error("detached descendant held output"), { processTreeState: "live" })
+    : Object.assign(new Error("systemd-run missing"), { code: "ENOENT" });
+  const result = contained(async () => {
+    throw original;
+  });
+  if (unjoined) {
+    await expect(result).rejects.toMatchObject({
+      message: original.message,
+      code: "EPROCESSGROUP_CLEANUP_FAILED",
+      processTreeState: "terminated",
     });
-    if (unjoined) {
-      await expect(result).rejects.toMatchObject({
-        message: original.message,
-        code: "EPROCESSGROUP_CLEANUP_FAILED",
-        processTreeState: "terminated",
-      });
-      await expect(result).rejects.not.toHaveProperty("cause");
-    } else {
-      await expect(result).rejects.toBe(original);
-    }
-  },
-);
+    await expect(result).rejects.not.toHaveProperty("cause");
+  } else {
+    await expect(result).rejects.toBe(original);
+  }
+});
 
 const failedScope = response(
   "LoadState=loaded\nActiveState=failed\nControlGroup=/user.slice/openclaw-check-abcd.scope\n",
 );
-it.each<{ label: string; probe: unknown; populated?: string; original?: Error }>([
-  { label: "populated kernel group", probe: failedScope, populated: "1" },
-  { label: "empty kernel group", probe: failedScope, populated: "0" },
-  {
-    label: "missing group with failed workload",
-    probe: response("LoadState=loaded\nActiveState=failed\n"),
-    original: Object.assign(new Error("workload failed"), { code: "ENOENT" }),
-  },
-  {
-    label: "failed manager probe",
-    probe: {
-      error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }),
-      stdout: undefined,
-    },
-  },
-])(
-  "releases admission only with verified extinction: $label",
-  async ({ probe, original, populated }) => {
-    probeCleanup(probe);
-    if (populated !== undefined) {
-      vi.spyOn(fs, "readFileSync").mockReturnValue(`populated ${populated}\n`);
+it.each<[string, unknown, string?, Error?]>([
+  ["populated kernel group", failedScope, "1"],
+  ["empty kernel group", failedScope, "0"],
+  [
+    "missing group with failed workload",
+    response("LoadState=loaded\nActiveState=failed\n"),
+    undefined,
+    Object.assign(new Error("workload failed"), { code: "ENOENT" }),
+  ],
+  [
+    "failed manager probe",
+    { error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }), stdout: undefined },
+  ],
+])("verifies extinction: %s", async (_label, probe, populated, original) => {
+  probeCleanup(probe);
+  if (populated !== undefined) {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(`populated ${populated}\n`);
+  }
+  const result = contained(async () => {
+    if (original) {
+      throw original;
     }
-    const result = runLinuxMemoryCommand(command, async () => {
-      if (original) {
-        throw original;
-      }
-      return populated === undefined ? 0 : 137;
+    return populated === undefined ? 0 : 137;
+  });
+  if (populated === "0") {
+    await expect(result).resolves.toBe(137);
+  } else {
+    await expect(result).rejects.toMatchObject({
+      ...cleanupFailure,
+      ...(populated === undefined ? { cause: original } : {}),
     });
-    if (populated === "0") {
-      await expect(result).resolves.toBe(137);
-    } else {
-      await expect(result).rejects.toMatchObject({
-        ...cleanupFailure,
-        ...(populated === undefined ? { cause: original } : {}),
-      });
-    }
-  },
-);
+  }
+});
 
 it("bounds arguments and preloads without owning deadlines", async () => {
-  const run = vi.fn(async (_options: Parameters<typeof runLinuxMemoryCommand>[0]) => 0);
+  const run = vi.fn(async (_options: RunManagedCommandOptions) => 0);
   await expect(
-    runLinuxMemoryCommand(
-      {
-        ...command,
-        timeoutMs: 1_001,
-        args: ["$LITERAL"],
-        env: { NODE_OPTIONS: "--require=workload" },
-      },
-      run,
-    ),
+    contained(run, {
+      timeoutMs: 1_001,
+      args: ["$LITERAL"],
+      env: { NODE_OPTIONS: "--require=workload" },
+    }),
   ).resolves.toBe(0);
   expect(run).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -289,48 +270,40 @@ it("bounds arguments and preloads without owning deadlines", async () => {
   expect(
     run.mock.calls[0]?.[0]?.args?.filter((arg) => arg.startsWith("--property=RuntimeMaxSec=")),
   ).toEqual([]);
-  expect(mocks.control.mock.calls.map((call) => call[1])).toEqual([
-    ["--user", "show", "--property=LoadState", memoryScope],
-    ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", memoryScope],
-    ["--user", "stop", memoryScope],
-    [
-      "--user",
-      "show",
-      "--property=LoadState",
-      "--property=ActiveState",
-      "--property=ControlGroup",
-      memoryScope,
-    ],
-  ]);
+  const controls = [
+    ["show", "--property=LoadState"],
+    ["kill", "--kill-whom=all", "--signal=SIGKILL"],
+    ["stop"],
+    ["show", ...["LoadState", "ActiveState", "ControlGroup"].map((name) => "--property=" + name)],
+  ];
+  expect(mocks.control.mock.calls.map((call) => call[1])).toEqual(
+    controls.map((args) => ["--user"].concat(args, memoryScope)),
+  );
 });
 
 it.each([
-  { scope: "openclaw-check-abcd.scope", swap: "0", group: "1", expected: true },
-  { scope: "other.scope", swap: "0", group: "1", expected: false },
-  { scope: "openclaw-check-abcd.scope", swap: "max", group: "1", expected: false },
-  { scope: "openclaw-check-abcd.scope", swap: "0", group: "0", expected: false },
-])(
-  "qualifies the owned kernel cgroup only: $scope/$swap/$group",
-  ({ scope, swap, group, expected }) => {
-    const files: Record<string, string> = {
-      "/proc/self/cgroup": "0::/user.slice/" + scope + "\n",
-      "/proc/self/mountinfo": "29 23 0:26 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n",
-      ["/sys/fs/cgroup/user.slice/" + scope + "/memory.max"]: "268435456",
-      ["/sys/fs/cgroup/user.slice/" + scope + "/memory.swap.max"]: swap,
-      ["/sys/fs/cgroup/user.slice/" + scope + "/memory.oom.group"]: group,
-      "/sys/fs/cgroup/user.slice/memory.max": "268435456",
-      "/sys/fs/cgroup/user.slice/memory.swap.max": "0",
-      "/sys/fs/cgroup/user.slice/memory.oom.group": "1",
-    };
-    const readFileSync = (file: string) => {
-      if (!(file in files)) {
-        throw Object.assign(new Error(file), { code: "ENOENT" });
-      }
-      return files[file]!;
-    };
-    const options = { platform: "linux", fs: { readFileSync } } as const;
-    expect(hasLinuxMemoryContainment(command.memoryLimitBytes, options, memoryScope)).toBe(
-      expected,
-    );
-  },
-);
+  [memoryScope, "0", "1", true],
+  ["other.scope", "0", "1", false],
+  [memoryScope, "max", "1", false],
+  [memoryScope, "0", "0", false],
+] as const)("qualifies owned cgroup %s/%s/%s", (scope, swap, group, expected) => {
+  const root = "/sys/fs/cgroup/user.slice";
+  const files: Record<string, string> = {
+    "/proc/self/cgroup": "0::/user.slice/" + scope + "\n",
+    "/proc/self/mountinfo": "29 23 0:26 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n",
+    [`${root}/${scope}/memory.max`]: "268435456",
+    [`${root}/${scope}/memory.swap.max`]: swap,
+    [`${root}/${scope}/memory.oom.group`]: group,
+    [`${root}/memory.max`]: "268435456",
+    [`${root}/memory.swap.max`]: "0",
+    [`${root}/memory.oom.group`]: "1",
+  };
+  const readFileSync = (file: string) => {
+    if (!(file in files)) {
+      throw Object.assign(new Error(file), { code: "ENOENT" });
+    }
+    return files[file]!;
+  };
+  const options = { platform: "linux", fs: { readFileSync } } as const;
+  expect(hasLinuxMemoryContainment(command.memoryLimitBytes, options, memoryScope)).toBe(expected);
+});

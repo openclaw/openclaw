@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { startTelegramProofIngress } from "../../scripts/mantis/telegram-proof-ingress.mts";
 import type { TelegramProofPlan } from "../../scripts/mantis/telegram-proof-plan.ts";
+import { telegramProofIdentitySchema } from "../../scripts/mantis/telegram-request-proof.ts";
 
 export const plan: TelegramProofPlan = {
   claim: "A selected reply is observed",
@@ -12,6 +13,20 @@ export const plan: TelegramProofPlan = {
   maxDurationMs: 1000,
   expectations: ["The bot answers reply"],
 };
+export const canonicalPlan =
+  '{"actions":[{"atMs":0,"text":"hello","type":"send"}],"claim":"A selected reply is observed","expectations":["The bot answers reply"],"maxDurationMs":1000,"modelReplies":["reply"],"settings":{"nativeCommands":false,"streaming":"off"}}';
+export const planDigest = createHash("sha256").update(canonicalPlan).digest("hex");
+export const identity = telegramProofIdentitySchema.parse({
+  request_id: "a".repeat(64),
+  plan_sha256: planDigest,
+  repository: { id: "1", full_name: "openclaw/openclaw" },
+  pull_request: 1,
+  candidate_sha: "b".repeat(40),
+  scenario: "telegram-bot-e2e-proof",
+  workflow: { path: ".github/workflows/mantis-telegram-bot-e2e-proof.yml", sha: "c".repeat(40) },
+  harness: { sha: "c".repeat(40) },
+  run: { id: "2", attempt: 1 },
+});
 
 export async function makeIngress(
   root: string,
