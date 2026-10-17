@@ -242,10 +242,6 @@ export function bindBoundedSeed(
               senderE164: attempt.senderE164 ?? undefined,
               contextEngineRuntimeContext: runtimeContext,
               trigger: "budget",
-              force: true,
-              forcePreflight: true,
-              preflightRequired: true,
-              preflightCompactionTrigger: "transcript_bytes",
               abortSignal: signal,
             },
             (prepared) =>

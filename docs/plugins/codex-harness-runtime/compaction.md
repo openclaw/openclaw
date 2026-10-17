@@ -35,7 +35,7 @@ history not already covered by a host summary, OpenClaw makes one host
 compaction attempt and seeds from the bounded result. Oversized history may
 still be omitted, with a notice in the seed and a user-facing bounded-context
 event. System instructions and the current request, including refresh handoffs, stay intact.
-With compaction disabled, the byte bound still applies without a summary.
+With compaction disabled, the configured byte cap still omits older history with a notice; no-cap defaults are unaffected.
 Stored transcript history is not deleted.
 
 Native rollout-size and token fuses remain unchanged. An owning context engine
