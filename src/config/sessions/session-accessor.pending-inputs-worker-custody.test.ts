@@ -45,14 +45,37 @@ import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-t
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
+function message(runId: string, content: string): PersistedUserTurnMessage {
+  return { role: "user", content, timestamp: 100, idempotencyKey: `${runId}:user` };
+}
+async function finish(receipt: SessionPendingInputReceipt | undefined) {
+  receipt?.finish("interrupted");
+  await receipt?.settled?.();
+}
+function authorizedInput(
+  authorization: NonNullable<
+    Awaited<ReturnType<typeof resolveSessionMutationAuthorizationAsync>>["authorization"]
+  >,
+  runId: string,
+  content: string,
+  assertCurrent = authorization.assertCurrent,
+) {
+  return {
+    runId,
+    message: message(runId, content),
+    assertCurrent,
+    assertAdmittedCurrent: assertCurrent,
+    authority: authorization.admittedInputAuthority,
+  };
+}
+
 describe("accepted input worker custody", () => {
   afterAll(clearRuntimeConfigSnapshot);
   const fixture = useTempSessionsFixture("openclaw-pending-worker-custody-");
   let receipt: SessionPendingInputReceipt | undefined;
 
   afterEach(async () => {
-    receipt?.finish("interrupted");
-    await receipt?.settled?.();
+    await finish(receipt);
     receipt = undefined;
     closeOpenClawAgentDatabasesForTest();
   });
@@ -69,15 +92,10 @@ describe("accepted input worker custody", () => {
       sessionKey: "agent:alias-agent:pending-inputs",
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const message: PersistedUserTurnMessage = {
-      role: "user",
-      content: "Continue through worker custody",
-      timestamp: 100,
-      idempotencyKey: "worker-alias:user",
-    };
+    const input = message("worker-alias", "Continue through worker custody");
     receipt = await stageSessionPendingInput(scope, {
       runId: "worker-alias",
-      message,
+      message: input,
       assertCurrent: () => {},
     });
     if (!receipt) {
@@ -105,7 +123,7 @@ describe("accepted input worker custody", () => {
     receipt = undefined;
 
     expect(await loadTranscriptEvents(scope)).toContainEqual(
-      expect.objectContaining({ message: expect.objectContaining({ content: message.content }) }),
+      expect.objectContaining({ message: expect.objectContaining({ content: input.content }) }),
     );
     expect(await listSessionPendingInputs(scope)).toMatchObject({ items: [], total: 0 });
   });
@@ -143,20 +161,9 @@ describe("accepted input worker custody", () => {
         });
         expect(resolved.error).toBeNull();
         const authorization = resolved.authorization!;
-        const message: PersistedUserTurnMessage = {
-          role: "user",
-          content: "Continue in memory",
-          timestamp: 100,
-          idempotencyKey: "incognito-memory:user",
-        };
+        const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
         try {
-          receipt = await stageSessionPendingInput(scope, {
-            runId: "incognito-memory",
-            message,
-            assertCurrent: authorization.assertCurrent,
-            assertAdmittedCurrent: authorization.assertCurrent,
-            authority: authorization.admittedInputAuthority,
-          });
+          receipt = await stageSessionPendingInput(scope, input);
           const admitted = receipt;
           if (!admitted?.runAsync) {
             throw new Error("Expected incognito pending input custody");
@@ -182,13 +189,12 @@ describe("accepted input worker custody", () => {
 
           expect(await loadTranscriptEvents(scope)).toContainEqual(
             expect.objectContaining({
-              message: expect.objectContaining({ content: message.content }),
+              message: expect.objectContaining({ content: input.message.content }),
             }),
           );
           expect(await listSessionPendingInputs(scope)).toMatchObject({ items: [], total: 0 });
         } finally {
-          receipt?.finish("interrupted");
-          await receipt?.settled?.();
+          await finish(receipt);
           receipt = undefined;
         }
       },
@@ -226,30 +232,20 @@ it("refreshes every collected source after a non-revoking profile change", async
         });
         expect(result.error).toBeNull();
         const authorization = result.authorization!;
-        const receipt = await stageSessionPendingInput(scope, {
-          runId: `collected-${index}`,
-          message: {
-            role: "user",
-            content: `Source ${index}`,
-            timestamp: 100,
-            idempotencyKey: `collected-${index}:user`,
-          },
-          assertCurrent: authorization.assertCurrent,
-          assertAdmittedCurrent: authorization.assertCurrent,
-          authority: authorization.admittedInputAuthority,
-        });
+        const receipt = await stageSessionPendingInput(
+          scope,
+          authorizedInput(authorization, `collected-${index}`, `Source ${index}`),
+        );
         if (!receipt) {
           throw new Error("Expected accepted collected source");
         }
         receipts.push(receipt);
       }
       setUserProfileRole(second.id, "write");
-      const collected = bindSessionPendingInputSources(receipts, {
-        role: "user",
-        content: "Collected sources",
-        timestamp: 100,
-        idempotencyKey: "collected:user",
-      });
+      const collected = bindSessionPendingInputSources(
+        receipts,
+        message("collected", "Collected sources"),
+      );
       if (!collected?.runAsync) {
         throw new Error("Expected collected input authority");
       }
@@ -318,18 +314,15 @@ it.each(["turn", "locked"] as const)(
       let admitted: SessionPendingInputReceipt | undefined;
       let unsettled: SessionPendingInputReceipt | undefined;
       try {
-        admitted = await stageSessionPendingInput(scope, {
-          runId: "prepared-custody",
-          message: {
-            role: "user",
-            content: "Continue with captured custody",
-            timestamp: 100,
-            idempotencyKey: "prepared-custody:user",
-          },
-          assertCurrent,
-          assertAdmittedCurrent: assertCurrent,
-          authority: authorization.admittedInputAuthority,
-        });
+        admitted = await stageSessionPendingInput(
+          scope,
+          authorizedInput(
+            authorization,
+            "prepared-custody",
+            "Continue with captured custody",
+            assertCurrent,
+          ),
+        );
         expect(admitted?.state).toBe("queued");
         unsettled = await stageSessionPendingInput(scope, {
           runId: "pending-settlement",
@@ -406,10 +399,8 @@ it.each(["turn", "locked"] as const)(
           update.run(original.entry_json, original.entry_valid, scope.sessionKey);
         }
       } finally {
-        unsettled?.finish("interrupted");
-        await unsettled?.settled?.();
-        admitted?.finish("interrupted");
-        await admitted?.settled?.();
+        await finish(unsettled);
+        await finish(admitted);
       }
     });
   },
