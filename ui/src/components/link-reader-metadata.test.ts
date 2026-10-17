@@ -7,7 +7,7 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import "./link-reader-panel.ts";
+import "./link-reader-panel.tsx";
 
 const tag = "test-reader-metadata-" + crypto.randomUUID();
 customElements.define(tag, class extends LinkReaderHovercardProvider {});
