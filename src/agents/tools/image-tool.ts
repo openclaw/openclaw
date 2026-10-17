@@ -311,10 +311,7 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-        if (Array.isArray(record.paths)) {
-          record.paths = [...record.paths];
-        }
+        const record: Record<string, unknown> = args && typeof args === "object" ? args : {};
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),

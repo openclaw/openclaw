@@ -574,10 +574,7 @@ export function createPdfTool(options?: {
     description,
     parameters: PdfToolSchema,
     execute: async (_toolCallId, args, signal) => {
-      const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-      if (Array.isArray(record.pdfs)) {
-        record.pdfs = [...record.pdfs];
-      }
+      const record: Record<string, unknown> = args && typeof args === "object" ? args : {};
       return runWithAsyncWorkResources(async (onAcquired) => {
         const runtimeResources = new AsyncDisposableStack();
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({
