@@ -129,7 +129,7 @@ async function openChatAndSubmitProbe(
   const probeText = opts.probeText ?? PROBE_TEXT;
   await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
   await currentPage
-    .locator(".chat-thread")
+    .locator(".chat-bubble")
     .getByText("Ready.", { exact: true })
     .waitFor({ timeout: 10_000 });
   await gateway.waitForRequest("sessions.list");
@@ -259,7 +259,10 @@ suite.define(() => {
           historyMessages: [ready],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByText("The PR is ready to land.", { exact: true }).waitFor();
+        await page
+          .locator(".chat-bubble")
+          .getByText("The PR is ready to land.", { exact: true })
+          .waitFor();
         await gateway.deferNext("chat.send");
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -348,6 +351,7 @@ suite.define(() => {
           ]),
         );
         await page
+          .locator(".chat-bubble")
           .getByText("All checks passed. Finishing the landing.", { exact: true })
           .waitFor();
         const before = await readQualification();
@@ -528,7 +532,9 @@ suite.define(() => {
         await gateway.waitForRequest("chat.history", {
           match: { inputRunIds: [runId], limit: 1000 },
         });
-        await currentPage.getByText(finalText, { exact: true }).waitFor();
+        // Scope transcript waits to the message bubble: the aria-live announcement
+        // region can carry the same text, which makes a wider locator ambiguous.
+        await currentPage.locator(".chat-bubble").getByText(finalText, { exact: true }).waitFor();
         await expect.poll(() => currentPage.locator(".chat-send-status").count()).toBe(0);
         await gateway.emitGatewayEvent("session.message", {
           sessionKey: "main",
@@ -617,7 +623,10 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("chat.history")).length)
           .toBeGreaterThan(historyRequestsBefore);
-        await currentPage.getByText("Later history window.", { exact: true }).waitFor();
+        await currentPage
+          .locator(".chat-bubble")
+          .getByText("Later history window.", { exact: true })
+          .waitFor();
         const probe = currentPage.locator(".chat-bubble").getByText(PROBE_TEXT, { exact: true });
         await expect.poll(() => probe.count()).toBe(0);
         await captureProof("03-later-page.png");
