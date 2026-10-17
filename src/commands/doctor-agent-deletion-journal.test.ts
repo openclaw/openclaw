@@ -310,13 +310,7 @@ it.each([
             .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
             .get(),
         ).toBeUndefined();
-        expect(
-          unchanged
-            .prepare(
-              "SELECT * FROM migration_sources WHERE migration_kind = 'agent-deletion-journal-reconstruction'",
-            )
-            .all(),
-        ).toEqual([]);
+        expect(reconstructionRow(unchanged)).toBeUndefined();
       }
       expect(readFiles(stores)).toEqual(bytes);
       writeJson(configPath, cfg);

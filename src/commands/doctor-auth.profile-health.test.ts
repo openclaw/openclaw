@@ -40,13 +40,10 @@ let tempDir: string;
 let mainDir: string;
 
 function configForAgents(...ids: string[]): OpenClawConfig {
-  return {
-    agents: {
-      entries: Object.fromEntries(
-        ids.map((id) => [id, { agentDir: path.join(tempDir, `${id}-agent`) }]),
-      ),
-    },
-  };
+  const entries = Object.fromEntries(
+    ids.map((id) => [id, { agentDir: path.join(tempDir, `${id}-agent`) }]),
+  );
+  return { agents: { entries } };
 }
 
 beforeEach(() => {
@@ -113,69 +110,56 @@ it("keeps expiring warnings for static and custom Claude CLI profiles", async ()
       "anthropic:custom-cli": oauthCredential(now + 3 * 60 * 60_000, "claude-cli"),
     },
   });
-
-  const findings = await findingsForMain();
-
-  expect(findings.map((finding) => finding.target)).toEqual([
-    "anthropic:custom-cli",
-    "anthropic:static-cli",
+  expect(await findingsForMain()).toMatchObject([
+    { target: "anthropic:custom-cli" },
+    { target: "anthropic:static-cli" },
   ]);
 });
 
-it("maps disabled auth profiles to structured findings", async () => {
-  writeAuthStore(mainDir);
-  useLocalStore({
-    version: 1,
-    profiles: {},
-    usageStats: {
-      "openai:billing": {
-        disabledUntil: now + 5 * 60_000,
-        disabledReason: "billing",
+it.each(["disabled:billing", "cooldown:wham_token_expired"] as const)(
+  "maps %s profiles to structured findings with the canonical recovery hint",
+  async (kind) => {
+    const billing = kind === "disabled:billing";
+    const profileId = billing ? "openai:billing" : "openai:expired";
+    if (billing) {
+      writeAuthStore(mainDir);
+    }
+    useLocalStore({
+      version: 1,
+      profiles: billing
+        ? {}
+        : {
+            [profileId]: {
+              ...oauthCredential(now + 365 * 24 * 60 * 60_000, "openai"),
+              access: "secret",
+              refresh: "refresh-secret",
+            },
+          },
+      usageStats: {
+        [profileId]: billing
+          ? { disabledUntil: now + 5 * 60_000, disabledReason: "billing" }
+          : {
+              cooldownUntil: now + 5 * 60_000,
+              cooldownReason: "auth",
+              cooldownClassification: "wham_token_expired",
+            },
       },
-    },
-  } satisfies AuthProfileStore);
-
-  const findings = await findingsForMain();
-
-  expect(findings).toEqual([
-    expect.objectContaining({
-      checkId: "core/doctor/auth-profiles",
-      message: "Auth profile openai:billing is disabled:billing (5m).",
-      path: path.join(mainDir, "openclaw-agent.sqlite"),
-      target: "openai:billing",
-      fixHint: "Top up credits (provider billing) or switch provider.",
-    }),
-  ]);
-});
-
-it("shows exact WHAM classification while retaining canonical recovery policy", async () => {
-  useLocalStore({
-    version: 1,
-    profiles: {
-      "openai:expired": {
-        ...oauthCredential(now + 365 * 24 * 60 * 60_000, "openai"),
-        access: "secret",
-        refresh: "refresh-secret",
-      },
-    },
-    usageStats: {
-      "openai:expired": {
-        cooldownUntil: now + 5 * 60_000,
-        cooldownReason: "auth",
-        cooldownClassification: "wham_token_expired",
-      },
-    },
-  } satisfies AuthProfileStore);
-
-  const findings = await findingsForMain();
-
-  expect(findings).toMatchObject([
-    {
-      message: "Auth profile openai:expired is cooldown:wham_token_expired (5m).",
-      fixHint: expect.stringContaining("Re-authenticate with"),
-    },
-  ]);
-});
+    });
+    const expected = billing
+      ? {
+          checkId: "core/doctor/auth-profiles",
+          message: "Auth profile openai:billing is disabled:billing (5m).",
+          path: path.join(mainDir, "openclaw-agent.sqlite"),
+          target: "openai:billing",
+          fixHint: "Top up credits (provider billing) or switch provider.",
+        }
+      : {
+          message: "Auth profile openai:expired is cooldown:wham_token_expired (5m).",
+          fixHint: expect.stringContaining("Re-authenticate with"),
+        };
+    expect(await findingsForMain()).toMatchObject([expected]);
+  },
+);
 it("skips external auth profile resolution when no auth source exists", async () => {
   await noteAuthProfileHealth({
     cfg: {

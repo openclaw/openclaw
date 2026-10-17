@@ -5,10 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import {
-  runAuthProfileWriteTransaction,
-  writePersistedAuthProfileStoreRaw,
-} from "../agents/auth-profiles/sqlite.js";
+import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { makeModel } from "../agents/embedded-agent-runner/model.test-harness.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -239,7 +236,6 @@ it.each([
         const config: OpenClawConfig = {
           gateway: {
             mode: "local",
-            // A privileged port cannot be verified free by an unprivileged Doctor process.
             port: await getFreePort(),
             auth: { mode: "token", token: "synthetic-doctor-token" },
             controlUi: { enabled: false, sessionObserver: false },
@@ -270,14 +266,7 @@ it.each([
                 baseUrl: "http://127.0.0.1:1",
                 api: "anthropic-messages",
                 apiKey: reference,
-                models: [
-                  {
-                    ...makeModel("test-model"),
-                    name: "Fixture model",
-                    contextWindow: 8192,
-                    maxTokens: 1024,
-                  },
-                ],
+                models: [makeModel("test-model")],
               },
               "literal-fixture": {
                 baseUrl: "http://127.0.0.1:1",
@@ -335,13 +324,8 @@ it.each([
           version: 1,
           jobs: [
             makeCronJob({
-              id: "profile-consumer",
               agentId: "main",
-              name: "Synthetic reminder",
               enabled: false,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              wakeMode: "now",
               payload: {
                 kind: "agentTurn",
                 message: "Synthetic reminder",
@@ -357,24 +341,15 @@ it.each([
             profiles: { "claude-cli:work": apiKeyProfile("synthetic-work-key") },
           });
         }
-        runAuthProfileWriteTransaction(
-          undefined,
-          (database) =>
-            writePersistedAuthProfileStoreRaw(
-              {
-                version: 1,
-                profiles: {
-                  [interactive ? "anthropic:control" : "claude-cli:work"]: apiKeyProfile(
-                    interactive ? "synthetic-control-key" : "synthetic-work-key",
-                  ),
-                  ...(occupied ? { "anthropic:work": apiKeyProfile("synthetic-other-key") } : {}),
-                },
-              },
-              undefined,
-              database,
+        writePersistedAuthProfileStoreRaw({
+          version: 1,
+          profiles: {
+            [interactive ? "anthropic:control" : "claude-cli:work"]: apiKeyProfile(
+              interactive ? "synthetic-control-key" : "synthetic-work-key",
             ),
-          { env: state.env },
-        );
+            ...(occupied ? { "anthropic:work": apiKeyProfile("synthetic-other-key") } : {}),
+          },
+        });
         const person = ensureProfileForEmail("account-owner@example.test");
         setUserProfileAuthLink({
           profileId: person.id,

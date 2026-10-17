@@ -169,106 +169,86 @@ it("blocks runtime admission until a lost Doctor repair releases maintenance", a
   }
 });
 
-it("is idempotent on a second doctor fix run", async () => {
-  const { databasePath, env } = createRegisteredAgentDatabase();
-  recreateUnreleasedInlineMemoryMetadata(databasePath);
-  await repairMemory(env);
-  const options = { agentId: "worker-1", env };
-  const admitted = openOpenClawAgentDatabase(options);
-  const writeNote = vi.fn();
-
-  const report = await repairMemory(env, true, writeNote);
-
-  expect(report).toEqual({ repaired: [], warnings: [] });
-  expect(writeNote).not.toHaveBeenCalled();
-  expect(admitted.db.isOpen).toBe(true);
-  expect(openOpenClawAgentDatabase(options)).toBe(admitted);
-});
-
-it.each(["already-repaired", "new-repair"])(
-  "rediscovers memory repairs after acquiring maintenance: %s",
+it.each(["already-repaired", "new-repair", "before-doctor", "before-lease"])(
+  "rediscovers memory repairs across maintenance acquisition: %s",
   async (change) => {
-    const { databasePath, env } = createRegisteredAgentDatabase();
-    const laterPath = openOpenClawAgentDatabase({ agentId: "worker-2", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    recreateUnreleasedInlineMemoryMetadata(databasePath);
-    const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
-    const agentMaintenanceLease = await import("../state/openclaw-agent-db-maintenance-lease.js");
-    const withLease = agentMaintenanceLease.withAgentDatabaseMaintenanceLease;
-    vi.spyOn(agentMaintenanceLease, "withAgentDatabaseMaintenanceLease").mockImplementationOnce(
-      (options, run) =>
-        withLease(options, async (maintenance) => {
-          if (change === "already-repaired") {
-            await agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance(
-              { agentId: "worker-1", pathname: databasePath },
-              maintenance,
-            );
-          } else {
-            recreateUnreleasedInlineMemoryMetadata(laterPath);
-          }
-          return run(maintenance);
-        }),
-    );
-    const report = await repairMemory(env);
-    expect(report.warnings).toEqual([]);
-    expect(report.repaired.map((repair) => repair.path)).toEqual(
-      change === "already-repaired" ? [] : [databasePath, laterPath],
-    );
-    for (const pathname of [databasePath, laterPath]) {
-      expect(readMemoryChunkColumns(pathname)).not.toContain("importance");
-    }
-  },
-);
-
-it.each(["before-doctor", "before-lease"])(
-  "discovers a peer registration committed %s despite cached inventory",
-  async (timing) => {
     const { databasePath, env } = createRegisteredAgentDatabase();
     const peerPath = openOpenClawAgentDatabase({ agentId: "worker-2", env }).path;
     closeOpenClawAgentDatabasesForTest();
-    recreateUnreleasedInlineMemoryMetadata(peerPath);
-    if (timing === "before-lease") {
+    const peerRegistration = change === "before-doctor" || change === "before-lease";
+    if (change !== "before-doctor") {
       recreateUnreleasedInlineMemoryMetadata(databasePath);
     }
-    const state = openOpenClawStateDatabase({ env });
-    const row = state.db
-      .prepare(
-        "SELECT agent_id,path,schema_version,last_seen_at,size_bytes FROM agent_databases WHERE agent_id = ?",
-      )
-      .get("worker-2");
-    if (!row) {
-      throw new Error("missing peer fixture registration");
-    }
-    state.db.prepare("DELETE FROM agent_databases WHERE agent_id = ?").run("worker-2");
-    invalidateRegisteredAgentDatabasesMemo({ env });
-    expect(listOpenClawRegisteredAgentDatabases({ env }).map((entry) => entry.agentId)).toEqual([
-      "worker-1",
-    ]);
-    const publishPeerRegistration = () => {
-      // A peer commit does not invalidate this process's registry memo.
-      using peer = openNodeSqliteDatabase(state.path);
-      peer
+    let publishPeer = () => {};
+    if (peerRegistration) {
+      recreateUnreleasedInlineMemoryMetadata(peerPath);
+      const state = openOpenClawStateDatabase({ env });
+      const row = state.db
         .prepare(
-          "INSERT INTO agent_databases(agent_id,path,schema_version,last_seen_at,size_bytes) VALUES(?,?,?,?,?)",
+          "SELECT agent_id,path,schema_version,last_seen_at,size_bytes FROM agent_databases WHERE agent_id = ?",
         )
-        .run(...Object.values(row));
-    };
-    const agentMaintenanceLease = await import("../state/openclaw-agent-db-maintenance-lease.js");
-    const withLease = agentMaintenanceLease.withAgentDatabaseMaintenanceLease;
-    const lease = vi.spyOn(agentMaintenanceLease, "withAgentDatabaseMaintenanceLease");
-    if (timing === "before-doctor") {
-      publishPeerRegistration();
-    } else {
-      lease.mockImplementationOnce((options, run) => {
-        publishPeerRegistration();
-        return withLease(options, run);
+        .get("worker-2");
+      if (!row) {
+        throw new Error("missing peer fixture registration");
+      }
+      state.db.prepare("DELETE FROM agent_databases WHERE agent_id = ?").run("worker-2");
+      invalidateRegisteredAgentDatabasesMemo({ env });
+      expect(listOpenClawRegisteredAgentDatabases({ env }).map((entry) => entry.agentId)).toEqual([
+        "worker-1",
+      ]);
+      publishPeer = () => {
+        // A peer commit does not invalidate this process's registry memo.
+        using peer = openNodeSqliteDatabase(state.path);
+        peer
+          .prepare(
+            "INSERT INTO agent_databases(agent_id,path,schema_version,last_seen_at,size_bytes) VALUES(?,?,?,?,?)",
+          )
+          .run(...Object.values(row));
+      };
+    }
+    const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
+    const leaseOwner = await import("../state/openclaw-agent-db-maintenance-lease.js");
+    const withLease = leaseOwner.withAgentDatabaseMaintenanceLease;
+    const lease = vi.spyOn(leaseOwner, "withAgentDatabaseMaintenanceLease");
+    lease.mockImplementationOnce((options, run) => {
+      if (change === "before-lease") {
+        publishPeer();
+      }
+      return withLease(options, async (maintenance) => {
+        if (change === "already-repaired") {
+          await agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance(
+            { agentId: "worker-1", pathname: databasePath },
+            maintenance,
+          );
+        } else if (change === "new-repair") {
+          recreateUnreleasedInlineMemoryMetadata(peerPath);
+        }
+        return run(maintenance);
       });
+    });
+    if (change === "before-doctor") {
+      publishPeer();
     }
     const report = await repairMemory(env);
     expect(report.warnings).toEqual([]);
     expect(report.repaired.map((repair) => repair.path)).toEqual(
-      timing === "before-doctor" ? [peerPath] : [databasePath, peerPath],
+      change === "already-repaired"
+        ? []
+        : change === "before-doctor"
+          ? [peerPath]
+          : [databasePath, peerPath],
     );
-    expect(readMemoryChunkColumns(peerPath)).not.toContain("importance");
+    for (const pathname of peerRegistration ? [peerPath] : [databasePath, peerPath]) {
+      expect(readMemoryChunkColumns(pathname)).not.toContain("importance");
+    }
+    if (change === "new-repair") {
+      const options = { agentId: "worker-1", env };
+      const admitted = openOpenClawAgentDatabase(options);
+      const writeNote = vi.fn();
+      expect(await repairMemory(env, true, writeNote)).toEqual({ repaired: [], warnings: [] });
+      expect(writeNote).not.toHaveBeenCalled();
+      expect(admitted.db.isOpen).toBe(true);
+      expect(openOpenClawAgentDatabase(options)).toBe(admitted);
+    }
   },
 );
