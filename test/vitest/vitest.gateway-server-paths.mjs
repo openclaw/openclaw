@@ -533,6 +533,7 @@ export const gatewayServerSerialTestFiles = [
 
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
 export const gatewayServerBackedHttpTestFiles = [
+  "src/gateway/embeddings-http.role-ceiling.test.ts",
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
   "src/gateway/openai-http.test.ts",
@@ -629,6 +630,7 @@ export const gatewayCoreTestExclude = [
   "src/gateway/**/*gateway-cli-backend*.test.ts",
   "src/gateway/**/*server*.test.ts",
   "src/gateway/gateway.test.ts",
+  "src/gateway/embeddings-http.role-ceiling.test.ts",
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
   "src/gateway/openai-http.test.ts",
