@@ -24,7 +24,7 @@ vi.mock("../infra/shell-env.js", () => shellEnvMocks);
 const tempDirs: string[] = [];
 
 beforeEach(() => {
-  shellEnvMocks.loadShellEnvFallback.mockReset().mockReturnValue([]);
+  shellEnvMocks.loadShellEnvFallback.mockReset().mockReturnValue({ ok: true, applied: [] });
   shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset().mockReturnValue(50);
   shellEnvMocks.shouldDeferShellEnvFallback.mockReset().mockReturnValue(false);
   shellEnvMocks.shouldEnableShellEnvFallback.mockReset().mockReturnValue(false);
@@ -169,12 +169,13 @@ describe("readGatewayDispatchConfig", () => {
     const env: NodeJS.ProcessEnv = { OPENCLAW_CONFIG_PATH: configPath };
     shellEnvMocks.loadShellEnvFallback.mockImplementation(({ env: targetEnv }) => {
       targetEnv.OPENCLAW_GATEWAY_TOKEN = "shell-token";
-      return ["OPENCLAW_GATEWAY_TOKEN"];
+      return { ok: true, applied: ["OPENCLAW_GATEWAY_TOKEN"] };
     });
 
     const config = await readGatewayDispatchConfigWithShellEnvFallback({ env });
 
     expect(shellEnvMocks.loadShellEnvFallback).toHaveBeenCalledWith({
+      enabled: true,
       env,
       expectedKeys: ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"],
       logger: console,

@@ -113,7 +113,10 @@ export function restoreRuntimeTerminalState(
 export const defaultRuntime: OutputRuntimeEnv = {
   ...createRuntimeIo(),
   exit: (code, opts) => {
-    restoreRuntimeTerminalState("runtime exit", opts);
+    restoreRuntimeTerminalState("runtime exit", {
+      resumeStdinIfPaused: false,
+      ...(opts?.resetStream ? { resetStream: opts.resetStream } : {}),
+    });
     // Native process.exit skips finally cleanup and can deadlock V8 compiler
     // workers waiting for main-thread GC: https://github.com/nodejs/node/issues/64274.
     throw new ExitError(code);

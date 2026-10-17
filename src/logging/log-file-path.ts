@@ -41,19 +41,26 @@ function resolveLogProfileSegment(env: NodeJS.ProcessEnv): string | null {
 }
 
 /** Resolves today's default rolling log path for the active CLI profile. */
-export function resolveDefaultRollingLogFile(): string {
-  const logDir = canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
-  const profileSegment = resolveLogProfileSegment(process.env);
+export function resolveDefaultRollingLogFile(options?: {
+  date?: Date;
+  env?: NodeJS.ProcessEnv;
+  logDir?: string;
+}): string {
+  const date = options?.date ?? new Date();
+  const env = options?.env ?? process.env;
+  const logDir =
+    options?.logDir ?? (canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT);
+  const profileSegment = resolveLogProfileSegment(env);
   const profileSuffix = profileSegment ? `-${profileSegment}` : "";
-  return path.join(
-    logDir,
-    `${LOG_PREFIX}${profileSuffix}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
-  );
+  return path.join(logDir, `${LOG_PREFIX}${profileSuffix}-${formatLocalDate(date)}${LOG_SUFFIX}`);
 }
 
 /** Resolves the configured log file or today's rolling default log path. */
-export function resolveConfiguredLogFilePath(config?: OpenClawConfig | null): string {
-  return config?.logging?.file ?? resolveDefaultRollingLogFile();
+export function resolveConfiguredLogFilePath(
+  config?: OpenClawConfig | null,
+  options?: { date?: Date; env?: NodeJS.ProcessEnv; logDir?: string },
+): string {
+  return config?.logging?.file ?? resolveDefaultRollingLogFile(options);
 }
 
 /** Returns whether a configured path had the legacy default rolling filename shape. */

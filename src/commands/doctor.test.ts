@@ -532,7 +532,7 @@ describe("doctorCommand", () => {
       status: "browser-fallback",
       url: "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text",
     });
-    mocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: false });
+    mocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: false, reason: "no-display" });
     const runtime = createDoctorRuntime();
 
     await expect(doctorCommand(runtime, approvedRecoveryOptions)).rejects.toThrow("exit:0");

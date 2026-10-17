@@ -32,6 +32,9 @@ const log = createSubsystemLogger("agents/tools/music-generate");
 const GENERATED_MUSIC_MEDIA_SUBDIR = "tool-music-generation";
 const DEFAULT_MUSIC_GENERATION_TIMEOUT_MS = 300_000;
 const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
+const GENERATED_MUSIC_PROBE_BUDGET_MS = 3000;
+const GENERATED_MUSIC_PROBE_CONCURRENCY = 2;
+const MAX_GENERATED_MUSIC_PROBES = 8;
 
 type MusicGenerationTimeoutNormalization = {
   requested: number;
@@ -104,6 +107,11 @@ export async function executeMusicGenerationJob(params: {
   );
   const savedTrackMetadata = await probeMediaFilesWithinBudget(
     savedTracks.map((track) => ({ filePath: track.path, kind: "audio" })),
+    {
+      budgetMs: GENERATED_MUSIC_PROBE_BUDGET_MS,
+      concurrency: GENERATED_MUSIC_PROBE_CONCURRENCY,
+      maxProbes: MAX_GENERATED_MUSIC_PROBES,
+    },
   );
   const attachments: AgentGeneratedAttachment[] = savedTracks.map((track, index) => ({
     ...buildSavedMediaAttachment("audio", track),

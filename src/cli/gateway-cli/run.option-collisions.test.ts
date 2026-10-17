@@ -528,6 +528,7 @@ describe("gateway run option collisions", () => {
       }
 
       expect(loadShellEnvFallback).toHaveBeenCalledWith({
+        enabled: true,
         env: process.env,
         expectedKeys: ["OPENCLAW_GATEWAY_TOKEN"],
         logger: expect.any(Object),

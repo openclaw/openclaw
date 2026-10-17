@@ -874,6 +874,7 @@ describe("GatewayChatClient streaming", () => {
         setActivityStatus,
         updateFooter: vi.fn(),
         loadHistory: () => loadHistory(),
+        streamingWatchdogMs: 0,
       });
       const actions = createTestSessionActions({
         client,

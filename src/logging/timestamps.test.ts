@@ -13,6 +13,12 @@ describe("formatDiagnosticFilenameTimestamp", () => {
 describe("formatTimestamp", () => {
   const testDate = new Date("2024-01-15T14:30:45.123Z");
 
+  it("formats medium style with milliseconds and offset", () => {
+    expect(formatTimestamp(testDate, { style: "medium", timeZone: "UTC" })).toBe(
+      "14:30:45.123+00:00",
+    );
+  });
+
   it("keeps milliseconds and calendar boundaries fresh across consecutive timestamps", () => {
     for (const [time, timeZone, expected] of [
       ["1969-12-31T23:59:59.001Z", "UTC", "1969-12-31T23:59:59.001+00:00"],

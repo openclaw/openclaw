@@ -23,7 +23,7 @@ export async function runInteractiveOnboarding(
     throw error;
   } finally {
     // Keep stdin paused so non-daemon runs can exit cleanly (e.g. Docker setup).
-    restoreTerminalState("setup finish");
+    restoreTerminalState("setup finish", { resumeStdinIfPaused: false });
     if (exitCode !== null) {
       runtime.exit(exitCode);
     }
@@ -37,7 +37,7 @@ async function launchHatchTui(workspace: string, local: boolean, agentId?: strin
     import("node:fs"),
   ]);
   const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
-  restoreTerminalState("guided hatch tui");
+  restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
   try {
     // Fresh setup already started the Gateway; local mode would contend for its state lock.
     // No timeoutMs: the run-level TUI timeout overrides the configured agent
@@ -51,7 +51,7 @@ async function launchHatchTui(workspace: string, local: boolean, agentId?: strin
       ...(hasBootstrap ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
     });
   } finally {
-    restoreTerminalState("post guided hatch tui");
+    restoreTerminalState("post guided hatch tui", { resumeStdinIfPaused: false });
   }
 }
 

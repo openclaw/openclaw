@@ -35,6 +35,9 @@ import {
 } from "./media-tool-shared.js";
 
 const GENERATED_VIDEO_MEDIA_SUBDIR = "tool-video-generation";
+const GENERATED_VIDEO_PROBE_BUDGET_MS = 3000;
+const GENERATED_VIDEO_PROBE_CONCURRENCY = 2;
+const MAX_GENERATED_VIDEO_PROBES = 8;
 
 export function normalizeResolution(
   raw: string | undefined,
@@ -186,6 +189,11 @@ export async function executeVideoGenerationJob(params: {
     deliveredVideos.flatMap((video) =>
       "path" in video ? [{ filePath: video.path, kind: "video" as const }] : [],
     ),
+    {
+      budgetMs: GENERATED_VIDEO_PROBE_BUDGET_MS,
+      concurrency: GENERATED_VIDEO_PROBE_CONCURRENCY,
+      maxProbes: MAX_GENERATED_VIDEO_PROBES,
+    },
   );
   let savedMetadataIndex = 0;
   const attachments: AgentGeneratedAttachment[] = deliveredVideos.map((video) =>

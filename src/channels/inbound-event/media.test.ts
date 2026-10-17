@@ -187,10 +187,13 @@ describe("channel inbound media facts", () => {
       expect.objectContaining({ path: "/tmp/photo.png" }),
       expect.objectContaining({ url: "https://example.test/remote.mp3" }),
     ]);
-    expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith([
-      { filePath: path.resolve("/tmp/voice.ogg"), kind: "audio" },
-      { filePath: path.resolve("/tmp/clip.mp4"), kind: "video" },
-    ]);
+    expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith(
+      [
+        { filePath: path.resolve("/tmp/voice.ogg"), kind: "audio" },
+        { filePath: path.resolve("/tmp/clip.mp4"), kind: "video" },
+      ],
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
   });
 
   it("formats placeholders by kind precedence and attachment cardinality", () => {

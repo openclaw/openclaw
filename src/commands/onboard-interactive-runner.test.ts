@@ -54,6 +54,10 @@ it.each([
     ...(scenario.agentId ? { session: `agent:${scenario.agentId}:main` } : {}),
     ...(scenario.bootstrap ? { message: expect.any(String) } : {}),
   });
-  expect(restoreTerminalState).toHaveBeenNthCalledWith(1, "guided hatch tui");
-  expect(restoreTerminalState).toHaveBeenNthCalledWith(2, "post guided hatch tui");
+  expect(restoreTerminalState).toHaveBeenNthCalledWith(1, "guided hatch tui", {
+    resumeStdinIfPaused: false,
+  });
+  expect(restoreTerminalState).toHaveBeenNthCalledWith(2, "post guided hatch tui", {
+    resumeStdinIfPaused: false,
+  });
 });

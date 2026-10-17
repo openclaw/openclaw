@@ -147,9 +147,11 @@ describe("browser support and launch", () => {
 
     await expect(detectBrowserOpenSupport()).resolves.toEqual({
       ok: false,
+      reason: "no-display",
     });
     await expect(detectBrowserOpenSupport()).resolves.toEqual({
       ok: false,
+      reason: "no-display",
     });
 
     expect(readFileMock).toHaveBeenCalledTimes(1);
@@ -171,6 +173,7 @@ describe("browser support and launch", () => {
     detectBinaryMock.mockResolvedValue(false);
     await expect(detectBrowserOpenSupport()).resolves.toEqual({
       ok: false,
+      reason: "wsl-no-wslview",
     });
   });
 
@@ -213,6 +216,7 @@ describe("browser support and launch", () => {
 
     await expect(detectBrowserOpenSupport()).resolves.toEqual({
       ok: false,
+      reason: "ssh-no-display",
     });
     await expect(openUrl("https://example.com/")).resolves.toBe(false);
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();

@@ -76,9 +76,10 @@ describe.runIf(process.platform === "win32")("Windows local media file URLs", ()
           durationMs: 1250,
         }),
       ]);
-      expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith([
-        { filePath: sourcePath, kind: "audio" },
-      ]);
+      expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith(
+        [{ filePath: sourcePath, kind: "audio" }],
+        { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+      );
     });
   });
 

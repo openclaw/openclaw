@@ -69,7 +69,9 @@ describe("process error handlers", () => {
       expect(await waitForCliSignalExit()).toBe(exitCode);
       expect(process.exitCode).toBe(exitCode);
       expect(exitCalls).toEqual([]);
-      expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(reason);
+      expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith(reason, {
+        resumeStdinIfPaused: false,
+      });
       expect(errorSpy).toHaveBeenCalledWith(
         `[openclaw] ${label}`,
         expect.stringContaining("expected failure"),

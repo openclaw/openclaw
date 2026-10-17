@@ -105,10 +105,13 @@ function coerceNoteMessage(message: unknown): string {
   return "";
 }
 
-export function wrapNoteMessage(message: unknown, options: { columns?: number } = {}): string {
+export function wrapNoteMessage(
+  message: unknown,
+  options: { maxWidth?: number; columns?: number } = {},
+): string {
   const text = coerceNoteMessage(message);
   const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
-  const maxWidth = Math.max(40, Math.min(88, columns - 10));
+  const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
   return text
     .split(/\r\n?|[\n\u2028\u2029]/u)
     .flatMap((line) => wrapLine(line, maxWidth))

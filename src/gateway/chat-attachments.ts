@@ -123,6 +123,9 @@ type PersistInboundImagesResult = {
 };
 
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
+const MAX_CHAT_ATTACHMENT_MEDIA_PROBES = 8;
+const CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY = 2;
+const CHAT_ATTACHMENT_MEDIA_PROBE_BUDGET_MS = 3000;
 
 async function enrichOffloadedMediaMetadata(refs: OffloadedRef[]): Promise<void> {
   const candidates = refs.flatMap((ref) => {
@@ -131,6 +134,11 @@ async function enrichOffloadedMediaMetadata(refs: OffloadedRef[]): Promise<void>
   });
   const metadata = await probeMediaFilesWithinBudget(
     candidates.map(({ kind, ref }) => ({ filePath: ref.path, kind })),
+    {
+      budgetMs: CHAT_ATTACHMENT_MEDIA_PROBE_BUDGET_MS,
+      concurrency: CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY,
+      maxProbes: MAX_CHAT_ATTACHMENT_MEDIA_PROBES,
+    },
   );
   for (const [index, candidate] of candidates.entries()) {
     Object.assign(candidate.ref, metadata[index]);

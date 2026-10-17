@@ -67,13 +67,14 @@ const createHarness = (
   params?: Partial<TuiStateAccess> & {
     localMode?: boolean;
     refreshSessionInfo?: () => Promise<void>;
+    streamingWatchdogMs?: number;
   },
   loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(async () => ({
     loaded: true,
     runOutcome: { state: "completed" },
   })),
 ) => {
-  const { localMode, refreshSessionInfo, ...overrides } = params ?? {};
+  const { localMode, refreshSessionInfo, streamingWatchdogMs, ...overrides } = params ?? {};
   const state = makeTuiState({ activeChatRunId: "run-1", ...overrides });
   const localRunIds = new Set<string>();
   const localBtwRunIds = new Set<string>();
@@ -102,6 +103,7 @@ const createHarness = (
     ...context,
     localMode,
     refreshSessionInfo,
+    streamingWatchdogMs,
   });
   onTestFinished(rawHandlers.dispose);
   const handlers = {
@@ -1309,15 +1311,18 @@ describe("tui-event-handlers: streaming watchdog", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  const createWatchdog = () =>
-    createHarness({ activeChatRunId: null }, vi.fn<() => Promise<TuiHistoryLoadResult>>());
+  const createWatchdog = (streamingWatchdogMs: number) =>
+    createHarness(
+      { activeChatRunId: null, streamingWatchdogMs },
+      vi.fn<() => Promise<TuiHistoryLoadResult>>(),
+    );
 
   it("keeps the watchdog busy until authoritative idle ownership settles", () => {
-    const h = createWatchdog();
+    const h = createWatchdog(5_000);
     h.handleChatEvent(contentEvent("run-stuck", "hello"));
     expect(h.status).toHaveBeenLastCalledWith("streaming");
     expect(h.state.activeChatRunId).toBe("run-stuck");
-    vi.advanceTimersByTime(30_001);
+    vi.advanceTimersByTime(5_001);
     expect(h.status).not.toHaveBeenCalledWith("idle");
     expect(h.state.activeChatRunId).toBe("run-stuck");
     expect(h.log.addPendingSystem).toHaveBeenCalledWith("run-stuck", expectedTimeoutMessage);
@@ -1336,12 +1341,12 @@ describe("tui-event-handlers: streaming watchdog", () => {
   it.each(["replacement", "queued refresh", "lifecycle end"] as const)(
     "recovers once after reconnect with %s",
     (recovery) => {
-      const h = createWatchdog();
+      const h = createWatchdog(5_000);
       h.handleChatEvent(contentEvent("run-reconnect", "hello"));
       if (recovery === "queued refresh") {
         h.noteLocalRunId("run-local-empty");
         h.handleChatEvent({ runId: "run-local-empty", state: "final" });
-        vi.advanceTimersByTime(30_001);
+        vi.advanceTimersByTime(5_001);
         expect(h.state.activeChatRunId).toBe("run-reconnect");
         expect(h.status).not.toHaveBeenCalledWith("idle");
         expect(h.loadHistory).not.toHaveBeenCalled();
@@ -1360,7 +1365,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
       } else if (recovery === "lifecycle end") {
         h.handleAgentEvent({ runId: "run-reconnect", data: { phase: "end" } });
       }
-      vi.advanceTimersByTime(30_001);
+      vi.advanceTimersByTime(5_001);
       expect(h.state.activeChatRunId).toBeNull();
       expect(h.status).toHaveBeenLastCalledWith("idle");
       expect(h.loadHistory).toHaveBeenCalledTimes(1);
@@ -1370,18 +1375,27 @@ describe("tui-event-handlers: streaming watchdog", () => {
     },
   );
 
+  it("is disabled when streamingWatchdogMs is 0", () => {
+    const h = createWatchdog(0);
+    h.handleChatEvent(contentEvent("run-no-watchdog", "hi"));
+    vi.advanceTimersByTime(60_000);
+    expect(h.status).not.toHaveBeenCalledWith("idle");
+    expect(h.log.addPendingSystem).not.toHaveBeenCalled();
+    expect(h.state.activeChatRunId).toBe("run-no-watchdog");
+  });
+
   it.each(["delta", "final"] as const)("dismisses a watchdog notice on a late %s", (event) => {
-    const h = createWatchdog();
+    const h = createWatchdog(5_000);
     h.handleChatEvent(contentEvent("run-old", "old"));
-    vi.advanceTimersByTime(30_001);
+    vi.advanceTimersByTime(5_001);
     expect(h.state.activeChatRunId).toBe("run-old");
     expect(h.log.addPendingSystem).toHaveBeenCalledWith("run-old", expectedTimeoutMessage);
     if (event === "delta") {
       h.handleChatEvent(contentEvent("run-new", "new"));
       expect(h.state.activeChatRunId).toBe("run-old");
-      vi.advanceTimersByTime(18_000);
+      vi.advanceTimersByTime(3_000);
       h.handleChatEvent(contentEvent("run-old", "old again"));
-      vi.advanceTimersByTime(12_001);
+      vi.advanceTimersByTime(2_001);
       expect(h.status).not.toHaveBeenCalledWith("idle");
       expect(h.state.activeChatRunId).toBe("run-old");
       expect(h.log.addPendingSystem).toHaveBeenCalledTimes(1);

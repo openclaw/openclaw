@@ -751,8 +751,12 @@ describe("finalizeSetupWizard", () => {
       ),
     ).rejects.toThrow("TUI exited with code 1");
 
-    expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui");
-    expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui");
+    expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
+      resumeStdinIfPaused: false,
+    });
+    expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui", {
+      resumeStdinIfPaused: false,
+    });
   });
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {

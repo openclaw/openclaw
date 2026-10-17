@@ -10,6 +10,10 @@ import {
 import { probeMediaFilesWithinBudget, type MediaProbeKind } from "../../media/media-probe.js";
 import type { InboundMediaFacts } from "../turn/types.js";
 
+const MAX_INBOUND_MEDIA_PROBES = 8;
+const INBOUND_MEDIA_PROBE_CONCURRENCY = 2;
+const INBOUND_MEDIA_PROBE_BUDGET_MS = 3000;
+
 /** Attachment metadata accepted from channel plugins before core normalization. */
 export type ChannelInboundMediaInput = {
   path?: string | null;
@@ -130,6 +134,11 @@ export async function toInboundMediaFactsWithMetadata(
   }
   const metadata = await probeMediaFilesWithinBudget(
     candidates.map((candidate) => ({ filePath: candidate.localPath, kind: candidate.kind })),
+    {
+      budgetMs: INBOUND_MEDIA_PROBE_BUDGET_MS,
+      concurrency: INBOUND_MEDIA_PROBE_CONCURRENCY,
+      maxProbes: MAX_INBOUND_MEDIA_PROBES,
+    },
   );
   for (const [candidateIndex, candidate] of candidates.entries()) {
     facts[candidate.index] = { ...candidate.fact, ...metadata[candidateIndex] };

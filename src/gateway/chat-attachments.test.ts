@@ -611,9 +611,10 @@ describe("parseMessageWithAttachments validation errors", () => {
       { supportsInlineImages: false },
     );
 
-    expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith([
-      { filePath: parsed.offloadedRefs[0]?.path, kind: "audio" },
-    ]);
+    expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith(
+      [{ filePath: parsed.offloadedRefs[0]?.path, kind: "audio" }],
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
     expect(parsed.offloadedRefs[0]).toMatchObject({ durationMs: 2345 });
     expect(parsed.media[0]).toMatchObject({ durationMs: 2345 });
   });

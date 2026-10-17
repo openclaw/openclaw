@@ -272,7 +272,7 @@ export function installUnhandledRejectionHandler(): void {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
       console.error("[openclaw]", message);
     }
-    restoreRuntimeTerminalState(reason);
+    restoreRuntimeTerminalState(reason, { resumeStdinIfPaused: false });
     exitAfterSignalExitBarriers(exitCode, reason);
   };
 
