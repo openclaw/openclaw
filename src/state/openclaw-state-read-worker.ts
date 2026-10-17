@@ -10,6 +10,7 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -297,6 +298,7 @@ function createReadTransport(
     authority: OpenClawStateReadAuthority,
     expectedIdentity?: string,
     snapshotRoot?: string,
+    postgresSnapshot?: string,
   ) => {
     const inContext = AsyncLocalStorage.snapshot();
     let task: ReadTask | undefined;
@@ -346,6 +348,7 @@ function createReadTransport(
         checkFreshAdmission,
         expectedIdentity,
         snapshotRoot,
+        postgresSnapshot,
         command: { ...readCommand },
       };
       const pool = readPool(state, ownsAdmission(), awaitedOnly);
@@ -354,16 +357,23 @@ function createReadTransport(
       task = startReadTask(
         pool,
         () => {
-          const turn = acquireSqliteDatabaseAdmissionTurn(resolveSqliteDatabaseFilePath(location));
-          if (!turn) {
+          const physicalLocation = resolveSqliteDatabaseFilePath(location);
+          const requestForDispatch = () => {
             authority.assertCurrent();
+            // Queue admission can outlive the captured file at this pathname.
+            if (expectedIdentity !== undefined) {
+              assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
+            }
             return request;
+          };
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+          if (!turn) {
+            return requestForDispatch();
           }
           return turn.then((release) => {
             releaseAdmission = release;
             try {
-              authority.assertCurrent();
-              return request;
+              return requestForDispatch();
             } catch (error) {
               releaseAdmission();
               releaseAdmission = undefined;
@@ -449,6 +459,7 @@ function createReadTransport(
       authority,
       source.expectedIdentity,
       source.snapshotRoot,
+      source.postgresSnapshot,
     ).operation;
   const startClose = (): RetainedOperation<void> => {
     closed = true;

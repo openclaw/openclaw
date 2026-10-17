@@ -256,8 +256,14 @@ export function installGatewayDeflateCodec(
         }
         let piece = windows.get(windowBits);
         if (!piece) {
-          // Copy out of the shared deflater's output chunk so the memo retains only its bytes.
-          piece = Buffer.from(compressPiece(bytes));
+          // Avoid retaining pooled slabs for small copies; keep Node's native large-copy path.
+          const compressed = compressPiece(bytes);
+          if (compressed.length < Buffer.poolSize >>> 1) {
+            piece = Buffer.allocUnsafeSlow(compressed.length);
+            compressed.copy(piece);
+          } else {
+            piece = Buffer.from(compressed);
+          }
           windows.set(windowBits, piece);
         }
         pieces.push(piece);

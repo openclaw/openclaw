@@ -4,7 +4,6 @@ import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { SettingsSidebarLoader } from "../components/settings-sidebar-lazy.tsx";
 import type { SettingsSidebarProps } from "../components/settings-sidebar.tsx";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -36,7 +35,11 @@ import {
   type ShellNavigationElements,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
-import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
+import {
+  isCustodianPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
@@ -117,23 +120,10 @@ export function readShellView(host: ShellViewHost) {
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
-  const custodianPanelAvailable =
-    // Scope-aware to match the store: admin-only, never advertisement alone.
-    canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
+  const custodianPanelAvailable = isCustodianPanelAvailable(context.gateway);
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
-  // Session routes have an offline outbox, New Session keeps a local draft, and
-  // Appearance persists local preference intent for replay. Connection settings
-  // must remain usable to replace an unreachable Gateway. Their server actions
-  // are independently gated; other pages cannot submit useful disconnected work.
   const reloadRequired = gatewaySnapshot.phase === "reload-required";
-  const pageActionsBlocked =
-    !reloadRequired &&
-    !gatewayConnected &&
-    !sessionRoute &&
-    activeRoute !== "new-session" &&
-    activeRoute !== "appearance" &&
-    activeRoute !== "connection";
   // Plugin tabs share one route; the URL picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -364,7 +354,6 @@ export function readShellView(host: ShellViewHost) {
       !host.routeState.sessionRouteNotice &&
       isSessionRouteId(host.routeState.routeId),
     reloadRequired,
-    pageActionsBlocked,
     nativeEmbed,
     embedSettings,
     settingsTakeover,

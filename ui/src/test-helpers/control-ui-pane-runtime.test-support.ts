@@ -27,7 +27,7 @@ function installControlUiPaneRuntimeTestAdapter() {
       "catalogMessages",
       "loadingOlder",
       "historyIntentTimer",
-      "presencePayload",
+      "presence",
       "boardProviderLease",
     ] as const) {
       Object.defineProperty(element, key, {

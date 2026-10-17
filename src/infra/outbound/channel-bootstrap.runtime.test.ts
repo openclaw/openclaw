@@ -206,51 +206,41 @@ describe("bootstrapOutboundChannelPlugin", () => {
     expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it.each([true])(
-    "activates the scoped setup shell without borrowing a same-id root sender (cached=%s)",
-    (cached) => {
-      const base = createChannelTestPluginBase({ id: "discord" });
-      const root = {
-        ...base,
-        ...(!cached ? { outbound: { deliveryMode: "direct" as const, sendText: vi.fn() } } : {}),
-      };
-      const activated = {
-        ...base,
-        outbound: { deliveryMode: "direct" as const, sendText: vi.fn() },
-      };
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "root", source: "root", plugin: root }]),
-      );
-      const setupRegistry = createTestRegistry([
-        { pluginId: "selected", source: "setup", plugin: base },
-      ]);
-      const runtimeRegistry = createTestRegistry([
-        { pluginId: "selected", source: "runtime", plugin: activated },
-      ]);
-      if (cached) {
-        const prior = createTestRegistry([
-          { pluginId: "root", source: "prior", plugin: activated },
-        ]);
-        loaderMocks.loadPluginRegistryHandle.mockReturnValue(prior);
-        expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(
-          prior,
-        );
-        loaderMocks.loadPluginRegistryHandle.mockClear();
-      }
-      loaderMocks.loadPluginRegistryHandle.mockReturnValue(runtimeRegistry);
+  it("activates the scoped setup shell without borrowing a cached same-id root sender", () => {
+    const base = createChannelTestPluginBase({ id: "discord" });
+    const root = {
+      ...base,
+    };
+    const activated = {
+      ...base,
+      outbound: { deliveryMode: "direct" as const, sendText: vi.fn() },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "root", source: "root", plugin: root }]),
+    );
+    const setupRegistry = createTestRegistry([
+      { pluginId: "selected", source: "setup", plugin: base },
+    ]);
+    const runtimeRegistry = createTestRegistry([
+      { pluginId: "selected", source: "runtime", plugin: activated },
+    ]);
+    const prior = createTestRegistry([{ pluginId: "root", source: "prior", plugin: activated }]);
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(prior);
+    expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(prior);
+    loaderMocks.loadPluginRegistryHandle.mockClear();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(runtimeRegistry);
 
-      expect(
-        withPluginRuntimeRegistryScope(setupRegistry, () =>
-          bootstrapOutboundChannelPlugin({
-            channel: "discord",
-            cfg: discordConfig,
-          }),
-        ),
-      ).toBe(runtimeRegistry);
-      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledOnce();
-      expect(getActivePluginRegistry()?.channels[0]?.plugin).toBe(root);
-    },
-  );
+    expect(
+      withPluginRuntimeRegistryScope(setupRegistry, () =>
+        bootstrapOutboundChannelPlugin({
+          channel: "discord",
+          cfg: discordConfig,
+        }),
+      ),
+    ).toBe(runtimeRegistry);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(getActivePluginRegistry()?.channels[0]?.plugin).toBe(root);
+  });
 
   it("resolves durable message capabilities inside the scoped handle", async () => {
     installDiscordSetupShell();

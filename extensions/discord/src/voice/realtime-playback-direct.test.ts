@@ -3,6 +3,7 @@ import { loadLibopus } from "libopus-wasm";
 import { createRealtimeVoiceAudioPortSender } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { DiscordAudioEvent } from "./audio-worker-protocol.js";
+import { DiscordRealtimeOutput } from "./realtime-output.runtime.js";
 import { createRealtimePlaybackFixture } from "./realtime-playback.integration.test-support.js";
 
 async function createDirectPlaybackFixture() {
@@ -20,6 +21,45 @@ async function createDirectPlaybackFixture() {
   });
   return { fixture, audio, output, sender, successor };
 }
+
+it.each([0, 3])("preserves transferred PCM view bounds at offset %i", async (offset) => {
+  const { audio, output, sender } = await createDirectPlaybackFixture();
+  audio.send({ type: "output-hold", hold: true });
+  const append = vi.spyOn(DiscordRealtimeOutput.prototype, "append");
+  onTestFinished(() => append.mockRestore());
+  const expected = Buffer.alloc(9_600);
+  for (let index = 0; index < expected.length; index++) {
+    expected[index] = index % 251;
+  }
+  const storage = new ArrayBuffer(offset + expected.length + 7);
+  new Uint8Array(storage).fill(0xfe);
+  const transferred = new Uint8Array(storage, offset, expected.length);
+  transferred.set(expected);
+  const admitted = once(output.port, "message");
+  output.port.postMessage({ type: "audio", audio: transferred }, [storage]);
+  expect(storage.byteLength).toBe(0);
+  await admitted;
+  expect(append).toHaveBeenCalledTimes(1);
+  expect(append.mock.calls[0]?.[0]).toEqual(expected);
+
+  // Clear must retire the old converter before the next caller-owned chunk arrives.
+  sender.clear();
+  const borrowed = Buffer.from(expected);
+  const next = once(output.port, "message");
+  sender.sendAudio(borrowed);
+  borrowed.fill(0);
+  await next;
+  expect(append).toHaveBeenCalledTimes(2);
+  expect(append.mock.calls[1]?.[0]).toEqual(expected);
+  expect(append.mock.contexts[1]).not.toBe(append.mock.contexts[0]);
+
+  Atomics.store(new Int32Array(output.state), 0, 1);
+  const rejected = once(output.port, "message");
+  const late = Uint8Array.from(expected);
+  output.port.postMessage({ type: "audio", audio: late }, [late.buffer]);
+  await rejected;
+  expect(append).toHaveBeenCalledTimes(2);
+});
 
 it.each([
   { playback: "unheard", hold: true, delayEvents: false },

@@ -24,11 +24,19 @@ describe("ChatStartupParamsSchema", () => {
     expect(
       Value.Check(ChatStartupParamsSchema, { sessionKey: "agent:main:main", cursor: "cursor" }),
     ).toBe(true);
+    expect(
+      Value.Check(ChatStartupParamsSchema, {
+        sessionKey: "agent:main:main",
+        cursor: "cursor",
+        knownState: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+      }),
+    ).toBe(true);
     expect(Value.Check(ChatHistoryParamsSchema, short)).toBe(false);
     for (const invalid of [
       { ...short, sessionKey: "agent:main:main" },
       { ...short, cursor: "cursor" },
       { shortId: "12345678" },
+      { sessionKey: "agent:main:main", knownState: { pendingInputs: "x".repeat(65) } },
     ]) {
       expect(Value.Check(ChatStartupParamsSchema, invalid)).toBe(false);
     }
@@ -46,6 +54,14 @@ describe("ChatHistoryCursorResultSchema", () => {
       sessionInfo,
     };
     expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
+    expect(
+      Value.Check(ChatHistoryCursorResultSchema, {
+        kind: "delta",
+        messages: [],
+        deltaCursor: "cursor-2",
+        stateRevision: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+      }),
+    ).toBe(true);
     expect(
       Value.Check(ChatHistoryCursorResultSchema, {
         ...delta,

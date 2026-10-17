@@ -404,7 +404,7 @@ suite.define(() => {
 
     const modelSelect = control(main, "model-select").first();
     await modelSelect.waitFor(visible);
-    expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
+    await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.5");
     await modelSelect.click();
     await expect
       .poll(() => control(main, "model-default").first().getAttribute("aria-selected"))
@@ -498,7 +498,7 @@ suite.define(() => {
     const expectedThinkingValues = thinkingLevels.map((level) => level.id).join(",");
 
     await modelSelect.waitFor(visible);
-    expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
+    await expect.poll(() => modelSelect.textContent()).toContain("GPT-5.6 Sol");
     expect(await modelSelect.textContent()).not.toContain("@openai:");
     const inspectProfile = async () => {
       await modelSelect.click();

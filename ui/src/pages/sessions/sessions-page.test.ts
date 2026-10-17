@@ -113,6 +113,26 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("disables refresh during transport loss and restores it after reconnect", async () => {
+    const { page, connection, sessions } = await mountMutation();
+    const refreshList = vi.mocked(sessions.refreshList);
+    const refresh = () => page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!;
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    for (const phase of ["reconnecting", "offline"] as const) {
+      connection.emit({ phase });
+      await page.updateComplete;
+      const requests = refreshList.mock.calls.length;
+      expect(refresh().disabled).toBe(true);
+      refresh().click();
+      expect(refreshList).toHaveBeenCalledTimes(requests);
+    }
+    connection.emit({ phase: "connected", hello: sessionMutationGatewayHello() });
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    const requests = refreshList.mock.calls.length;
+    refresh().click();
+    await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(requests + 1));
+  });
+
   it("pins from the page menu without changing shared pin metadata", async () => {
     const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer" });
     const sessions = createSessions();

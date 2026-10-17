@@ -1,9 +1,11 @@
 import { channel } from "node:diagnostics_channel";
+import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { quarantineAgentDeletionJournal } from "../commands/doctor-agent-deletion-journal-quarantine.js";
 import {
   commitDaemonRuntimePin,
   readDaemonRuntimePin,
@@ -28,14 +30,32 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
+import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease.js";
+import { repairOpenClawAgentDatabasePaths } from "./openclaw-agent-db-path-repair.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+  withExistingOpenClawStateDatabaseReadOnly,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "./openclaw-state-db-readonly.js";
+import {
+  ensureAgentDatabaseLeaseSchema,
+  ensureAgentDeletionJournalPhaseSchema,
+} from "./openclaw-state-db-schema-additive.js";
+import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseByPathAsync,
+  detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
+  prepareOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseIndexesForDoctor,
+  repairOpenClawStateDatabaseReadabilityForDoctor,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { statePostgresRuntime } from "./postgres-schema.generated/runtime.js";
 import { ensureUserBackgroundSchema } from "./user-background.store.js";
 
@@ -51,6 +71,79 @@ const legacyWriteIndexesSql = `
 `;
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
+  it("retains one discovery generation across awaited, nested and native reads", async () => {
+    const directory = tempDirs.make("state-composite-snapshot-postgres-");
+    const pathname = path.join(directory, "state.sqlite");
+    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "state_composite_snapshot" },
+    });
+    const writer = new pg.Client({ connectionString: connection });
+    await writer.connect();
+    let namespace: string | undefined;
+    const stateKey = "discovery.generation";
+    const read = async (current = false) =>
+      (
+        await executeExistingOpenClawStateRead(
+          options,
+          { type: "tui.lastSession.read", stateKey },
+          { current },
+        )
+      )?.row?.value_json;
+    try {
+      namespace = withEngineStoreAdmission(() =>
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+            stateKey,
+            "before",
+            1,
+          );
+          return getPostgresPhysicalFacts(db)?.namespace;
+        }, options),
+      );
+      expect(namespace).toBeDefined();
+      const anchor = fs.readFileSync(pathname);
+      await withOpenClawStateDatabaseReadSnapshot(async () => {
+        expect(await read()).toBe("before");
+        await writer.query(
+          `UPDATE "${namespace}".config_machine_state SET value_json = $1 WHERE state_key = $2`,
+          ["after", stateKey],
+        );
+        expect(await read()).toBe("before");
+        await withOpenClawStateDatabaseReadSnapshot(async () => {
+          expect(await read()).toBe("before");
+          expect(
+            withEngineStoreAdmission(() =>
+              withExistingOpenClawStateDatabaseReadOnly(
+                ({ db }) =>
+                  db
+                    .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+                    .get(stateKey)?.value_json,
+                options,
+              ),
+            ),
+          ).toBe("before");
+        }, options);
+        expect(await read(true)).toBe("after");
+      }, options);
+      expect(await read()).toBe("after");
+      expect(fs.readFileSync(pathname)).toEqual(anchor);
+      expect(fs.readdirSync(directory)).toEqual(["state.sqlite"]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      resetDatabaseEngineSelectionForTest();
+      try {
+        if (namespace) {
+          await writer.query(`DROP SCHEMA "${namespace}" CASCADE`);
+        }
+      } finally {
+        await writer.end();
+      }
+    }
+  });
+
   it("reads an existing PostgreSQL store while another connection reserves its SQLite anchor", async () => {
     const directory = tempDirs.make("state-anchor-reader-postgres-");
     const pathname = path.join(directory, "state.sqlite");
@@ -83,6 +176,174 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       }
     } finally {
       await closeOpenClawStateDatabaseByPathAsync(pathname);
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      resetDatabaseEngineSelectionForTest();
+      try {
+        if (namespace) {
+          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
+        }
+      } finally {
+        await client.end();
+      }
+    }
+  });
+
+  it("leaves healthy Doctor journal and registry state alone and refuses native repairs", async () => {
+    const directory = tempDirs.make("state-doctor-postgres-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
+    const options = { env };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const ordinary = path.join(directory, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const sentinel = path.join(directory, "(multiple).sqlite");
+    const client = new pg.Client({ connectionString: connection });
+    await client.connect();
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "state_doctor_conformance" },
+    });
+    let namespace: string | undefined;
+    const inspectJournal = () => {
+      let inspection: ReturnType<typeof quarantineAgentDeletionJournal> | undefined;
+      withEngineStoreAdmission(() => {
+        inspection = quarantineAgentDeletionJournal({ inventory: [], configuredTargets: [], env });
+      });
+      return inspection;
+    };
+    try {
+      namespace = withEngineStoreAdmission(() =>
+        runOpenClawStateWriteTransaction(({ db }) => {
+          ensureAgentDeletionJournalPhaseSchema(db);
+          db.prepare(`INSERT INTO agent_deletion_journal
+            (agent_id, operation_id, agent_dir, workspace_dir, sessions_dir, created_at)
+            VALUES ('retired', 'doctor-fixture', ?, ?, ?, 1)`).run(
+            path.join(directory, "agents", "retired", "agent"),
+            path.join(directory, "workspace"),
+            path.join(directory, "agents", "retired", "sessions"),
+          );
+          db.prepare("INSERT INTO agent_databases VALUES ('main', ?, 26, 1, 0)").run(ordinary);
+          return getPostgresPhysicalFacts(db)?.namespace;
+        }, options),
+      );
+      expect(namespace).toBeDefined();
+      const anchorBytes = fs.readFileSync(pathname);
+      await expect(inspectJournal()).resolves.toBeUndefined();
+      expect(
+        withEngineStoreAdmission(() =>
+          runOpenClawStateWriteTransaction(repairOpenClawAgentDatabasePaths, options),
+        ),
+      ).toEqual({ repaired: 0, warnings: [] });
+
+      fs.writeFileSync(sentinel, "preserved native repair candidate");
+      await client.query(
+        `INSERT INTO "${namespace}".agent_databases VALUES ('main', $1, 26, 1, 0)`,
+        [sentinel],
+      );
+      const registrations = await client.query(`SELECT * FROM "${namespace}".agent_databases`);
+      expect(() =>
+        withEngineStoreAdmission(() =>
+          runOpenClawStateWriteTransaction(repairOpenClawAgentDatabasePaths, options),
+        ),
+      ).toThrow("PostgreSQL cannot use SQLite repair");
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved native repair candidate");
+      expect((await client.query(`SELECT * FROM "${namespace}".agent_databases`)).rows).toEqual(
+        registrations.rows,
+      );
+
+      await client.query(
+        `UPDATE "${namespace}".agent_deletion_journal SET database_paths_json = '[1]'`,
+      );
+      const journal = await client.query(`SELECT * FROM "${namespace}".agent_deletion_journal`);
+      await expect(inspectJournal()).rejects.toThrow("PostgreSQL cannot use SQLite repair");
+      expect(
+        (await client.query(`SELECT * FROM "${namespace}".agent_deletion_journal`)).rows,
+      ).toEqual(journal.rows);
+      expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
+      expect(fs.existsSync(path.join(directory, "agents"))).toBe(false);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      retireSqliteDatabaseAdmissionForPath(pathname);
+      resetDatabaseEngineSelectionForTest();
+      try {
+        if (namespace) {
+          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
+        }
+      } finally {
+        await client.end();
+      }
+    }
+  });
+
+  it("reads warm and cold discovery state without copying or changing the PostgreSQL anchor", async () => {
+    const directory = tempDirs.make("state-discovery-postgres-");
+    const pathname = path.join(directory, "state.sqlite");
+    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+    const client = new pg.Client({ connectionString: connection });
+    await client.connect();
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "state_discovery_conformance" },
+    });
+    let namespace: string | undefined;
+    const stateKey = "discovery.fixture";
+    const valueJson = JSON.stringify({ source: "PostgreSQL" });
+    try {
+      namespace = withEngineStoreAdmission(() =>
+        runOpenClawStateWriteTransaction(({ db }) => {
+          ensureAgentDatabaseLeaseSchema(db);
+          db.prepare(
+            "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, NULL, ?)",
+          ).run("diagnostic-lease", "main", path.join(directory, "agent.sqlite"), process.pid, 1);
+          db.prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+          ).run(stateKey, valueJson, 1);
+          return getPostgresPhysicalFacts(db)?.namespace;
+        }, options),
+      );
+      expect(namespace).toBeDefined();
+      const anchorBytes = fs.readFileSync(pathname);
+      let prepared: Promise<{ changes: string[]; warnings: string[] }> | undefined;
+      withEngineStoreAdmission(() => {
+        prepared = prepareOpenClawStateDatabaseSchema(options, "doctor-preparation");
+        expect(repairOpenClawStateDatabaseIndexesForDoctor(options)).toEqual({
+          changes: [],
+          warnings: [],
+        });
+        expect(repairOpenClawStateDatabaseReadabilityForDoctor(options)).toEqual({
+          changes: [],
+          warnings: [],
+        });
+      });
+      expect(await prepared).toEqual({ changes: [], warnings: [] });
+      for (const source of ["warm", "cold"]) {
+        if (source === "cold") {
+          await closeOpenClawStateDatabaseAsync();
+        }
+        withEngineStoreAdmission(() => {
+          expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+          expect(
+            readActiveOpenClawAgentDatabaseLeasesReadOnly(
+              options,
+              openDoctorStateSchemaReadAdmission,
+            ).map((row) => row.lease_id),
+          ).toEqual(["diagnostic-lease"]);
+        });
+        const reply = await withArtifactPreservingStateReads(() =>
+          withOpenClawStateDatabaseReadSnapshot(
+            () =>
+              executeExistingOpenClawStateRead(options, { type: "tui.lastSession.read", stateKey }),
+            options,
+          ),
+        );
+        expect(reply?.row).toEqual({ value_json: valueJson, updated_at_ms: 1 });
+        expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
+        expect(fs.readdirSync(directory)).toEqual(["state.sqlite"]);
+      }
+      using anchor = openNodeSqliteDatabase(pathname, { readOnly: true });
+      expect(
+        anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
+      ).toEqual([{ name: "openclaw_engine_anchor" }]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
       retireSqliteDatabaseAdmissionForPath(pathname);
       resetDatabaseEngineSelectionForTest();
       try {

@@ -6,6 +6,7 @@ import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
@@ -26,6 +27,7 @@ import {
 } from "./entry.compile-cache.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
+import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
 import { normalizeEnv } from "./infra/env.js";
 import { fsSafeEnvInput } from "./infra/fs-safe-env.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -129,6 +131,7 @@ if (isEntryMain) {
 }
 
 async function runEntryMain(): Promise<void> {
+  installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
   watchCliRespawnParent();
   if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
     await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));

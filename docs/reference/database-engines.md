@@ -613,11 +613,37 @@ replacement facts after committed DDL. Optional SQLite WAL, checkpoint, and
 page-reclamation work does not apply to PostgreSQL. Explicit SQLite integrity,
 repair, and file-snapshot requests refuse with a PostgreSQL recovery instruction.
 
-Runtime PostgreSQL queries run in workers. Physical open and boot migration code
+Gateway runtime PostgreSQL queries run in workers. Physical open and boot migration code
 may use the synchronous `withEngineStoreAdmission` scope from
 `openclaw/plugin-sdk/database-engine-worker-runtime`; retaining a connection after
 that scope ends does not authorize main-thread queries. The callback must remain
-synchronous. Close remains available to settle resources. The store owner supplies
+synchronous. CLI processes classified as one-shots may use the synchronous bridge
+for offline commands and Doctor repairs; an unset process role still refuses
+main-thread access. One-shot CLI dispatch selects the engine after profile, dotenv,
+and config-directed path routing, before commands read shared state. Help, version,
+log retrieval, package authoring, and database-only connection repairs remain usable
+without database credentials. Gateway processes retain their final-target admission
+owner, including interactive onboarding that can start an embedded Gateway.
+Updater admission and recovery commands retain their context, receipt, or explicit
+path selection. QA fixtures, database tooling, and agent execution likewise keep
+their existing target owners.
+
+Gateway RPC commands defer local engine selection until paired-device authentication
+needs state. Loopback calls with shared credentials do not require database credentials.
+Runtime-intent service status and Gateway discovery also run without a database.
+Config validation reports source parse and include errors before selecting storage;
+valid config validation and config mutation previews still select the engine before
+reading installed-plugin metadata. A channel status config fallback follows the same
+metadata requirement.
+
+When Doctor cannot parse config, it attempts the requested file-only config repair
+before selecting an engine. If the target remains unresolved, Doctor completes a
+best-effort report with database checks marked **unknown**, a config repair next
+step, and no database access. It never creates fallback SQLite state. Recovery
+that requires database metadata, including verification of a last-known-good
+promotion, remains deferred until the target is resolved.
+
+Close remains available to settle resources. The store owner supplies
 `openEngineStore` with `inspectSqlite(): { hasExistingData, hasEngineAnchor }`,
 so partially initialized stores are also protected from an accidental engine
 switch. See the canonical

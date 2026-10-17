@@ -53,10 +53,13 @@ job. Open the page that matches your task.
 Storage-engine PRs, scheduled main runs, and manual CI validations include two hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 The infrastructure/state and integration groups run in parallel with separate
-databases and 30-minute budgets. Database-engine `*.integration.test.ts` suites
-run with integrations, balancing the real command/recovery work across the two jobs.
-Inspect either assignment with the conformance runner's `--list` option. Their combined inventory matches the local full
-suite; a failure in either shard leaves the other running and fails the aggregate gate.
+databases. Infrastructure/state has a 60-minute budget because full port/recovery
+coverage can exceed 30 minutes; integrations retains a 30-minute budget.
+Database-engine `*.integration.test.ts` suites run with integrations, balancing
+real command/recovery work across the two jobs. Inspect either assignment with
+the conformance runner's `--list` option. Their combined inventory matches the
+local full suite; a failure in either shard leaves the other running and fails
+the aggregate gate.
 
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 

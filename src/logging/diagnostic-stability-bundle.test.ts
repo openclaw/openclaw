@@ -769,6 +769,58 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
+  it.each([
+    {
+      name: "legacy bundle without build identity",
+      identity: {},
+      expected: {},
+    },
+    {
+      name: "public version metadata and maximum generated build id",
+      identity: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+      expected: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+    },
+    {
+      name: "unsafe imported identity",
+      identity: {
+        openclawVersion: "version\nsecret",
+        buildId: "/private/build",
+        commit: "not-a-commit",
+      },
+      expected: {},
+    },
+    {
+      name: "overlong imported identity",
+      identity: {
+        openclawVersion: "v".repeat(257),
+        buildId: "b".repeat(97),
+        commit: "a".repeat(41),
+      },
+      expected: {},
+    },
+  ])("preserves only recorded safe build identity: $name", ({ identity, expected }) => {
+    const file = path.join(tempDir, "imported.json");
+    const bundle = createImportedBundle();
+    const originalProcess = bundle.process as Record<string, unknown>;
+    bundle.process = { ...originalProcess, ...identity };
+    fs.writeFileSync(file, JSON.stringify(bundle), "utf8");
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      throw new Error("Expected readable stability bundle");
+    }
+    expect(result.bundle.process).toEqual({ ...originalProcess, ...expected });
+  });
+
   it("rejects oversized bundle files before reading them", () => {
     const file = path.join(tempDir, "oversized.json");
     fs.closeSync(fs.openSync(file, "w"));

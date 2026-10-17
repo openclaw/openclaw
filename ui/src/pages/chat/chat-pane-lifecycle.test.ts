@@ -259,9 +259,12 @@ it.each(["absent", "open"] as const)(
 
 function createSuggestionPane(request = vi.fn()) {
   const fixture = barePane(request);
-  fixture.pane.presencePayload = {
-    presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
-  };
+  fixture.pane.presence.update({
+    presence: [
+      { ts: 1, user: { id: "owner" } },
+      { ts: 1, user: { id: "alice" } },
+    ],
+  });
   return fixture;
 }
 
@@ -278,11 +281,13 @@ it("does not let a stale add completion clear a newer session operation", async 
 
   first.resolve({ suggestion: pendingSuggestion(state, "first") });
   await firstPending;
-  expect(pane.sessionSuggestionAddOperation).toBeDefined();
-  expect(pane.sessionSuggestions.some((suggestion) => suggestion.id === "first")).toBe(false);
+  expect(pane.collaboration.addOperation).toBeDefined();
+  expect(pane.collaboration.suggestions.some((suggestion) => suggestion.id === "first")).toBe(
+    false,
+  );
   second.resolve({ suggestion: pendingSuggestion(state, "second") });
   await secondPending;
-  expect(pane.sessionSuggestionAddOperation).toBeUndefined();
+  expect(pane.collaboration.addOperation).toBeUndefined();
 });
 
 it.each(["attachments", "mentions"] as const)(
@@ -331,9 +336,9 @@ it("coalesces overlapping refreshes and applies the event-invalidated follow-up"
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   second.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
   await vi.waitFor(() =>
-    expect(pane.sessionSuggestions).toEqual([existingSuggestion, eventSuggestion]),
+    expect(pane.collaboration.suggestions).toEqual([existingSuggestion, eventSuggestion]),
   );
-  expect(pane.sessionSuggestionRole).toBe("viewer");
+  expect(pane.collaboration.role).toBe("viewer");
   await Promise.resolve();
   expect(request).toHaveBeenCalledTimes(2);
 });
@@ -348,16 +353,16 @@ it("clears cached suggestions until a rotated session instance list resolves", a
 
   pane.syncSessionSuggestionTarget("main", row("session-a"));
   await pane.refreshSessionSuggestions();
-  pane.sessionSuggestions = [stale];
+  pane.collaboration.suggestions = [stale];
   state.sessionsResultAgentId = "main";
   selectSuggestionRows(state, row("session-b"));
 
   pane.syncSessionSuggestionTarget("main", row("session-b"));
 
-  expect(pane.sessionSuggestions).toEqual([]);
+  expect(pane.collaboration.suggestions).toEqual([]);
   expect(request).toHaveBeenCalledTimes(1);
   listed.resolve({ suggestions: [fresh], role: "owner" });
-  await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([fresh]));
+  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([fresh]));
 });
 
 it("clears displayed typing actors when the session instance rotates", () => {
@@ -400,22 +405,22 @@ it("keeps an owner's self-authored resolved suggestion through the following lis
   selectSuggestionRows(state, suggestionRow(state));
   const pending = pendingSuggestion(state, "owner", "resolved suggestion", suggestionOwner);
   const resolved = { ...pending, state: "accepted" as const };
-  pane.sessionSuggestionRole = "owner";
-  pane.sessionSuggestions = [pending];
+  pane.collaboration.role = "owner";
+  pane.collaboration.suggestions = [pending];
 
   const resolving = pane.resolveCurrentSessionSuggestion(pending, "queue");
   expect(request).toHaveBeenCalledTimes(1);
   pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: resolved });
-  expect(pane.sessionSuggestions).toEqual([resolved]);
+  expect(pane.collaboration.suggestions).toEqual([resolved]);
   expect(request).toHaveBeenCalledTimes(2);
 
   listed.resolve({ suggestions: [resolved], role: "owner" });
-  await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([resolved]));
+  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([resolved]));
   resolvedResponse.resolve({ suggestion: resolved });
   await resolving;
 
-  expect(pane.sessionSuggestions).toEqual([resolved]);
-  expect(pane.sessionSuggestionRole).toBe("owner");
+  expect(pane.collaboration.suggestions).toEqual([resolved]);
+  expect(pane.collaboration.role).toBe("owner");
 });
 
 it("drops a resolve completion after the same session key rotates instances", async () => {
@@ -425,14 +430,14 @@ it("drops a resolve completion after the same session key rotates instances", as
   const suggestion = pendingSuggestion(state, "old", "old suggestion", suggestionOwner);
   pane.context.gateway.snapshot.selfUser = { id: "owner" } as never;
   pane.syncSessionSuggestionTarget("main", session("session-a"));
-  pane.sessionSuggestions = [suggestion];
+  pane.collaboration.suggestions = [suggestion];
 
   const resolving = pane.resolveCurrentSessionSuggestion(suggestion, "queue");
   pane.syncSessionSuggestionTarget("main", session("session-b"));
   response.resolve({ suggestion: { ...suggestion, state: "accepted" } });
   await resolving;
 
-  expect(pane.sessionSuggestions).toEqual([]);
+  expect(pane.collaboration.suggestions).toEqual([]);
   expect(state.chatError).toBeNull();
 });
 

@@ -168,7 +168,14 @@ Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitive
 are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
 it cannot return a Promise, and a retained connection does not extend it.
-PostgreSQL rejects construction and SQL on the main thread outside that scope.
+PostgreSQL rejects construction and SQL on the Gateway main thread outside that
+scope. The CLI entry records an immutable process role before state access;
+one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
+An unset role still refuses main-thread access. Gateway-capable interactive
+onboarding, `setup` (including `crestodian`), and bare-root launch use the Gateway
+role; non-interactive onboarding uses the one-shot role. The embedded Gateway
+entry also requires the Gateway role and refuses a process already classified
+as a one-shot.
 Each `openEngineStore` caller supplies `inspectSqlite()` with explicit
 `hasExistingData` and `hasEngineAnchor` facts; table-name prefixes cannot decide
 whether an engine switch is safe. See
