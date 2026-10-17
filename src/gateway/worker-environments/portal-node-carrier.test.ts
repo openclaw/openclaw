@@ -16,20 +16,34 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 describe("worker node portal carrier", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  async function fixture(name: string, options: { unbound?: boolean; mutable?: boolean } = {}) {
+    const record = await support.seedReadyNodeDesktop(`worker-node-portal-${name}`);
+    const state: { record: WorkerEnvironmentRecord | undefined; proofCurrent: boolean } = {
+      record,
+      proofCurrent: true,
+    };
+    const proof = portalNodeProof(record.nodeDeviceId!);
+    const transport = pendingPortalTransport({ proof, isProofCurrent: () => state.proofCurrent });
+    const streamed = fakePortalBroker();
+    const carrier = createWorkerNodePortalCarrier({
+      store: options.mutable ? { get: () => state.record } : support.testState.store,
+    });
+    const bindRuntime = () =>
+      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+    if (!options.unbound) {
+      bindRuntime();
+    }
+    const { environmentId, ownerEpoch } = record;
+    const open = () => carrier.open({ environmentId, ownerEpoch, remotePort: 4321 });
+    const supports = (epoch = ownerEpoch) => carrier.supports(environmentId, epoch);
+    return { record, state, proof, transport, streamed, carrier, bindRuntime, open, supports };
+  }
+
   it.each(["discovery", "dispatch"] as const)(
     "rejects resource revocation during %s before node I/O",
     async (stage) => {
-      const record = await support.seedReadyNodeDesktop("worker-node-portal-authority");
-      const proof = portalNodeProof(record.nodeDeviceId!);
-      const transport = pendingPortalTransport({ proof, isProofCurrent: () => true });
-      const streamed = fakePortalBroker();
-      const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
-      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
-      const portal = await carrier.open({
-        environmentId: record.environmentId,
-        ownerEpoch: record.ownerEpoch,
-        remotePort: 4321,
-      });
+      const { proof, transport, open } = await fixture("authority");
+      const portal = await open();
       const entered = createDeferred();
       const finish = createDeferred();
       const nodeIo = vi.fn();
@@ -66,94 +80,56 @@ describe("worker node portal carrier", () => {
   );
 
   it("advertises only current node placements with the versioned portal stream capability", async () => {
-    const record = await support.seedReadyNodeDesktop("worker-node-portal-capability");
-    let current: WorkerEnvironmentRecord | undefined = record;
-    let proofCurrent = true;
-    const proof = portalNodeProof(record.nodeDeviceId!);
-    const transport = pendingPortalTransport({ proof, isProofCurrent: () => proofCurrent });
-    const carrier = createWorkerNodePortalCarrier({ store: { get: () => current } });
-
-    await expect(carrier.supports(record.environmentId, record.ownerEpoch)).resolves.toBe(false);
-    carrier.bindRuntime({
-      transport: transport.transport,
-      streamBroker: fakePortalBroker().broker,
-    });
-    await expect(carrier.supports(record.environmentId, record.ownerEpoch)).resolves.toBe(true);
-    await expect(carrier.supports(record.environmentId, record.ownerEpoch + 1)).resolves.toBe(
-      false,
+    const { record, state, proof, transport, bindRuntime, open, supports } = await fixture(
+      "capability",
+      { unbound: true, mutable: true },
     );
+    await expect(supports()).resolves.toBe(false);
+    bindRuntime();
+    await expect(supports()).resolves.toBe(true);
+    await expect(supports(record.ownerEpoch + 1)).resolves.toBe(false);
 
     proof.workerHost.portalStream = undefined;
-    await expect(carrier.supports(record.environmentId, record.ownerEpoch)).resolves.toBe(false);
-    await expect(
-      carrier.open({
-        environmentId: record.environmentId,
-        ownerEpoch: record.ownerEpoch,
-        remotePort: 4321,
-      }),
-    ).rejects.toThrow("reconnect or update the worker node, then retry");
+    await expect(supports()).resolves.toBe(false);
+    await expect(open()).rejects.toThrow("reconnect or update the worker node, then retry");
     proof.workerHost.portalStream = NODE_WORKER_PORTAL_STREAM_VERSION;
-    proofCurrent = false;
-    await expect(carrier.supports(record.environmentId, record.ownerEpoch)).resolves.toBe(false);
-    current = undefined;
-    await expect(carrier.supports(record.environmentId, record.ownerEpoch)).resolves.toBe(false);
+    state.proofCurrent = false;
+    await expect(supports()).resolves.toBe(false);
+    state.record = undefined;
+    await expect(supports()).resolves.toBe(false);
     expect(transport.invoke).not.toHaveBeenCalled();
   });
 
-  it.each(["owner retires"] as const)(
-    "destroys an attached stream when %s while recording activity",
-    async () => {
-      const record = await support.seedReadyNodeDesktop("worker-node-portal-touch");
-      const transport = pendingPortalTransport({
-        proof: portalNodeProof(record.nodeDeviceId!),
-        isProofCurrent: () => true,
-      });
-      const streamed = fakePortalBroker();
-      const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
-      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
-      const portal = await carrier.open({
-        environmentId: record.environmentId,
-        ownerEpoch: record.ownerEpoch,
-        remotePort: 4321,
-      });
-      const invoked = createDeferred();
-      const originalInvoke = transport.invoke.getMockImplementation()!;
-      transport.invoke.mockImplementation((request) => {
-        invoked.resolve();
-        return originalInvoke(request);
-      });
-      let current = true;
-      const connection = portal.connect(
-        () => {
-          if (!current) {
-            throw new Error("owner retired");
-          }
-        },
-        async () => {
-          current = false;
-        },
-      );
-      await invoked.promise;
-      const stream = streamed.attachNext();
-      await expect(connection).rejects.toThrow("owner retired");
-      expect(stream.destroyed).toBe(true);
-      await portal.close();
-    },
-  );
+  it("destroys an attached stream when its owner retires while recording activity", async () => {
+    const { transport, streamed, open } = await fixture("touch");
+    const portal = await open();
+    const invoked = createDeferred();
+    const originalInvoke = transport.invoke.getMockImplementation()!;
+    transport.invoke.mockImplementation((request) => {
+      invoked.resolve();
+      return originalInvoke(request);
+    });
+    let current = true;
+    const connection = portal.connect(
+      () => {
+        if (!current) {
+          throw new Error("owner retired");
+        }
+      },
+      async () => {
+        current = false;
+      },
+    );
+    await invoked.promise;
+    const stream = streamed.attachNext();
+    await expect(connection).rejects.toThrow("owner retired");
+    expect(stream.destroyed).toBe(true);
+    await portal.close();
+  });
 
   it("opens one ticketed node duplex per portal connection and closes its owned streams", async () => {
-    const record = await support.seedReadyNodeDesktop("worker-node-portal-streams");
-    const proof = portalNodeProof(record.nodeDeviceId!);
-    const transport = pendingPortalTransport({ proof, isProofCurrent: () => true });
-    const streamed = fakePortalBroker();
-    const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
-    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
-
-    const portal = await carrier.open({
-      environmentId: record.environmentId,
-      ownerEpoch: record.ownerEpoch,
-      remotePort: 4321,
-    });
+    const { transport, streamed, open } = await fixture("streams");
+    const portal = await open();
     expect(transport.invoke).not.toHaveBeenCalled();
 
     const firstConnection = portal.connect();
@@ -201,24 +177,14 @@ describe("worker node portal carrier", () => {
       (record: WorkerEnvironmentRecord) => ({ ...record, destroyRequestedAtMs: 2_000 }),
     ],
   ] as const)("rejects the attached stream when its durable %s changes", async (_name, mutate) => {
-    const record = await support.seedReadyNodeDesktop(`worker-node-portal-stale-${_name}`);
-    let current: WorkerEnvironmentRecord | undefined = record;
-    const transport = pendingPortalTransport({
-      proof: portalNodeProof(record.nodeDeviceId!),
-      isProofCurrent: () => true,
+    const { record, state, transport, streamed, open } = await fixture(`stale-${_name}`, {
+      mutable: true,
     });
-    const streamed = fakePortalBroker();
-    const carrier = createWorkerNodePortalCarrier({ store: { get: () => current } });
-    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
-    const portal = await carrier.open({
-      environmentId: record.environmentId,
-      ownerEpoch: record.ownerEpoch,
-      remotePort: 4321,
-    });
+    const portal = await open();
 
     const connection = portal.connect();
     await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
-    current = mutate(record) as WorkerEnvironmentRecord;
+    state.record = mutate(record);
     const stream = streamed.attachNext();
 
     await expect(connection).rejects.toThrow("owner changed before attachment");
@@ -227,24 +193,10 @@ describe("worker node portal carrier", () => {
   });
 
   it("aborts an owner that is stopped while node discovery is still pending", async () => {
-    const record = await support.seedReadyNodeDesktop("worker-node-portal-pending-discovery");
+    const { record, transport, carrier, open } = await fixture("pending-discovery");
     const pendingNodes = deferredPortalValue<readonly NodeWorkerSupervisorNodeProof[]>();
-    const transport = pendingPortalTransport({
-      proof: portalNodeProof(record.nodeDeviceId!),
-      isProofCurrent: () => true,
-    });
     transport.transport.listCurrentNodes = () => pendingNodes.promise;
-    const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
-    carrier.bindRuntime({
-      transport: transport.transport,
-      streamBroker: fakePortalBroker().broker,
-    });
-
-    const opening = carrier.open({
-      environmentId: record.environmentId,
-      ownerEpoch: record.ownerEpoch,
-      remotePort: 4321,
-    });
+    const opening = open();
     await carrier.stop(record.environmentId, record.ownerEpoch);
 
     await expect(opening).rejects.toThrow("owner stopped");
