@@ -66,14 +66,12 @@ describe("gateway suspend handlers", () => {
       requestId: "request-1",
     });
 
-    expect(coordinator.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestId: "request-1",
-        terminalPolicy: "preserve",
-        pauseScheduling: expect.any(Function),
-        resumeScheduling: expect.any(Function),
-      }),
-    );
+    expect(coordinator.prepare.mock.calls[0]?.[0]).toMatchObject({
+      requestId: "request-1",
+      terminalPolicy: "preserve",
+      pauseScheduling: expect.any(Function),
+      resumeScheduling: expect.any(Function),
+    });
     const options = coordinator.prepare.mock.calls[0]?.[0];
     options.pauseScheduling();
     options.resumeScheduling();
@@ -109,12 +107,8 @@ describe("gateway suspend handlers", () => {
       : { requestId: "request-draining", drain: true };
     const blockers = held
       ? [
-          { kind: "root-request", count: 1, message: "1 active gateway request(s): http:openai" },
-          {
-            kind: "terminal-persistence",
-            count: 1,
-            message: "1 pending terminal session write(s): run=run-1 session=agent:main:chat-1",
-          },
+          { kind: "root-request", count: 1, message: "http request" },
+          { kind: "terminal-persistence", count: 1, message: "pending write" },
         ]
       : [{ kind: "terminal-session", count: 1, message: "one preserved terminal" }];
     const result = {
@@ -138,7 +132,7 @@ describe("gateway suspend handlers", () => {
     expect(respond).toHaveBeenCalledWith(true, result);
     expect(info).toHaveBeenCalledWith(
       held
-        ? 'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["1 active gateway request(s): http:openai","1 pending terminal session write(s): run=run-1 session=agent:main:chat-1"] custody=held'
+        ? 'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["http request","pending write"] custody=held'
         : 'DRAINING activeCount=1 blockers=terminal-session:1 holders=["one preserved terminal"] custody=clear',
     );
   });

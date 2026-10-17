@@ -361,31 +361,21 @@ describe("skill upload gateway handlers", () => {
   it("rejects upload archive RPCs and upload installs when disabled by config", async () => {
     const { handlers, stateDir } = await makeHarness();
     const config = { skills: { install: { allowUploadedArchives: false } } };
-    const begin = await call(
-      handlers,
-      "skills.upload.begin",
-      {
-        kind: "skill-archive",
-        slug: "disabled-skill",
-        sizeBytes: 1,
-      },
-      { config },
-    );
-
-    expectRejected(begin, "UNAVAILABLE", "skills.install.allowUploadedArchives");
-    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads"));
-
-    const install = await call(
-      handlers,
-      "skills.install",
-      {
-        source: "upload",
-        uploadId: randomUUID(),
-        slug: "disabled-skill",
-      },
-      { config },
-    );
-    expectRejected(install, "UNAVAILABLE", "skills.install.allowUploadedArchives");
+    for (const [method, params] of [
+      ["skills.upload.begin", { kind: "skill-archive", sizeBytes: 1 }],
+      ["skills.install", { source: "upload", uploadId: randomUUID() }],
+    ] as const) {
+      const result = await call(
+        handlers,
+        method,
+        { ...params, slug: "disabled-skill" },
+        { config },
+      );
+      expectRejected(result, "UNAVAILABLE", "skills.install.allowUploadedArchives");
+      if (method === "skills.upload.begin") {
+        await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads"));
+      }
+    }
   });
 
   it("uploads, installs, cleans up, and reports the skill from status", async () => {

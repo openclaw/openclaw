@@ -446,6 +446,8 @@ describe("session skill library projection and activation", () => {
     );
     const call = (method: string, params: Record<string, unknown>) =>
       direct(method, params, bob.id);
+    const readRevision = (revision: string) =>
+      call("skills.library.read", { sessionKey: key, skillId: saved.entry.skillId, revision });
     const executeRead = stateReads.executeExistingOpenClawStateRead;
     using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const listed = await call("skills.library.list", { sessionKey: key, scope: "team" });
@@ -472,20 +474,8 @@ describe("session skill library projection and activation", () => {
       pins,
     );
     expect((await call("skills.library.read", { skillId: saved.entry.skillId }))[0]).toBe(false);
-    expect(
-      (
-        await call("skills.library.read", {
-          sessionKey: key,
-          skillId: saved.entry.skillId,
-          revision: newer.entry.revision,
-        })
-      )[0],
-    ).toBe(false);
-    const read = await call("skills.library.read", {
-      sessionKey: key,
-      skillId: saved.entry.skillId,
-      revision: saved.entry.revision,
-    });
+    expect((await readRevision(newer.entry.revision))[0]).toBe(false);
+    const read = await readRevision(saved.entry.revision);
     expect(read[0]).toBe(true);
     expect(read[1] as SkillsLibraryReadResult).toMatchObject({
       content,
@@ -512,11 +502,7 @@ describe("session skill library projection and activation", () => {
     expect(revokedList[0]).toBe(false);
     expect(revokedList[1]).toBeUndefined();
     expect(revokedList[2]).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-    const missingPin = await call("skills.library.read", {
-      sessionKey: key,
-      skillId: saved.entry.skillId,
-      revision: newer.entry.revision,
-    });
+    const missingPin = await readRevision(newer.entry.revision);
     expect(missingPin[2]).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
     await patchSessionEntryCore({ agentId: "main", sessionKey: key }, () => ({
       visibility: "draft",

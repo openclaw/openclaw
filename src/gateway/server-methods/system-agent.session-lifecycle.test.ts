@@ -237,9 +237,7 @@ describe("openclaw.chat session lifecycle", () => {
     expect(sessions.get("s1")?.engine).not.toBe(engine);
     expect(reset.ok).toBe(true);
     expect(transcriptStoreMocks.appendReset).toHaveBeenCalledOnce();
-    expect(
-      expectDefined(createdEngines[0], "replacement engine").seedHistory,
-    ).not.toHaveBeenCalled();
+    expect(createdEngines[0]?.seedHistory).not.toHaveBeenCalled();
 
     const turns = [
       { role: "user", text: "After reset" },
@@ -249,10 +247,9 @@ describe("openclaw.chat session lifecycle", () => {
       turns.map((turn, at) => ({ ...turn, at })),
     );
     const fresh = await callChat(context, { sessionId: "fresh-after-reset" });
-    const freshEngine = expectDefined(createdEngines.at(-1), "fresh engine");
 
     expect(fresh.ok).toBe(true);
-    expect(freshEngine.seedHistory).toHaveBeenCalledWith(turns);
+    expect(createdEngines.at(-1)?.seedHistory).toHaveBeenCalledWith(turns);
     expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenLastCalledWith(30, {
       afterLastReset: true,
     });

@@ -50,6 +50,14 @@ function expectReplyParts(payload: unknown, ...parts: string[]) {
   }
 }
 
+const expiredGuidance = [
+  "expired without a decision",
+  "approve it in the Control UI or OpenClaw apps",
+  "Retrying alone does not approve the change",
+];
+const failedGuidance = ["application status is unconfirmed", "before retrying"];
+const cancelledGuidance = ["approval request is no longer active", "No change was made"];
+
 const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference: vi.fn() }));
 // mock-isolation: Exercise delegated approval without loading the machine's config CLI.
 vi.mock("../../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
@@ -344,13 +352,9 @@ describe("Full Access delegated chat", () => {
       }
       expect(await fixture.manager.resolve(correction.id, "allow-once", "operator")).toBe(true);
       const result = await pending;
-      expect(result.payload).toMatchObject({
-        reply: expect.stringContaining("gateway.port: Invalid input"),
-      });
+      expectReplyParts(result.payload, "gateway.port: Invalid input");
       if (outcome === "failed-correction") {
-        expect(result.payload).toMatchObject({
-          reply: expect.stringContaining("stopped after one corrective attempt"),
-        });
+        expectReplyParts(result.payload, "stopped after one corrective attempt");
         fixture.expectRequests(2);
       }
       expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
@@ -396,19 +400,19 @@ describe("Full Access delegated chat", () => {
   );
 
   it.each([
-    "allow",
-    "deny",
-    "expired",
-    "run-cancelled",
-    "tool-cancelled",
-    "apply-failed",
-    "queued-cancelled",
-    "precommit-cancelled",
-    "afterDecision-failed",
-    "gateway-close",
+    ["allow", "[openclaw] done: config.set", 1, []],
+    ["deny", "Denied", 0, []],
+    ["expired", "expired", 0, expiredGuidance],
+    ["run-cancelled", "cancelled", 0, cancelledGuidance],
+    ["tool-cancelled", "cancelled", 0, cancelledGuidance],
+    ["apply-failed", "failed", 1, failedGuidance],
+    ["queued-cancelled", "cancelled", 0, cancelledGuidance],
+    ["precommit-cancelled", "cancelled", 0, cancelledGuidance],
+    ["afterDecision-failed", "failed", 0, failedGuidance],
+    ["gateway-close", "", 0, []],
   ] as const)(
     "keeps delegated chat pending without blocking other work until %s settles",
-    async (outcome) => {
+    async (outcome, expected, writes, guidance) => {
       const fixture = await createDelegatedChatFixture(
         createTestGatewayScheduler(outcome === "expired" ? "fake-timers" : undefined),
         "typed",
@@ -538,39 +542,12 @@ describe("Full Access delegated chat", () => {
             false,
           );
         }
-        const expected =
-          outcome === "allow"
-            ? "[openclaw] done: config.set"
-            : outcome === "deny"
-              ? "Denied"
-              : outcome === "expired"
-                ? "expired"
-                : outcome === "apply-failed" || outcome === "afterDecision-failed"
-                  ? "failed"
-                  : "cancelled";
         expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
-        if (outcome === "expired") {
-          expectReplyParts(
-            result.payload,
-            "expired without a decision",
-            "approve it in the Control UI or OpenClaw apps",
-            "Retrying alone does not approve the change",
-          );
-        } else if (outcome === "apply-failed" || outcome === "afterDecision-failed") {
-          expectReplyParts(result.payload, "application status is unconfirmed", "before retrying");
-        } else if (outcome !== "allow" && outcome !== "deny") {
-          expectReplyParts(
-            result.payload,
-            "approval request is no longer active",
-            "No change was made",
-          );
-        }
+        expectReplyParts(result.payload, ...guidance);
         expect.soft(result.payload).not.toHaveProperty("needsApproval");
         expect.soft(result.payload).not.toHaveProperty("proposalId");
         await vi.waitFor(() => expect(fixture.engine.getPendingOperatorProposal()).toBeNull());
-        expect(fixture.runConfigSet).toHaveBeenCalledTimes(
-          outcome === "allow" || outcome === "apply-failed" ? 1 : 0,
-        );
+        expect(fixture.runConfigSet).toHaveBeenCalledTimes(writes);
         if (outcome === "allow" || outcome === "afterDecision-failed") {
           expect(
             transcriptStoreMocks.appendTurn.mock.calls.filter(([turn]) =>
@@ -714,18 +691,14 @@ describe("Full Access delegated chat", () => {
       const readOnlyReply = await readOnly();
       expect(readOnlyReply.error).toBeUndefined();
       expect.soft(fixture.runConfigSet).toHaveBeenCalledOnce();
-      expect(readOnlyReply.payload).toMatchObject({
-        reply: expect.stringContaining("logging.level: not set"),
-      });
+      expectReplyParts(readOnlyReply.payload, "logging.level: not set");
       expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
       expect(await fixture.manager.listPendingRecords()).toEqual([]);
       if (pending) {
         expect(await fixture.manager.resolve(pending.id, "allow-once", "late-operator")).toBe(
           false,
         );
-        expect((await proposalCall).payload).toMatchObject({
-          reply: expect.stringContaining("cancelled"),
-        });
+        expectReplyParts((await proposalCall).payload, "cancelled");
       }
       expect(validateAgentRunDelegatedAuthority(fixture.authority)).toBe(previousAuthorityActive);
     },

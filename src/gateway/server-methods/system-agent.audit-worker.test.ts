@@ -43,12 +43,9 @@ function makeEngine() {
     historyLength: () => history.length,
     historySince: (index: number) => history.slice(index),
     noteAssistantMessage: (text: string) => history.push({ role: "assistant", text }),
-    getPendingOperatorProposal: () => null,
-    resolveOperatorApproval: async () => null,
     dispose: vi.fn(async () => undefined),
     loadOverview: async () => overview,
     planGreeting: vi.fn(async () => ({ text: "I'm OpenClaw.", modelRef: "openai/gpt-5.5" })),
-    decorateRejoinReply: (reply: unknown) => reply,
   };
 }
 
