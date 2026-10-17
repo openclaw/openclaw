@@ -2,13 +2,13 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
-import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
-import { installQueueTestPlugin } from "./deliver.custody.test-support.js";
+import { installQueueTestPlugin, matrixDeliveryResult } from "./deliver.custody.test-support.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -56,9 +56,7 @@ async function startBlockedDelivery(params: {
   const entered = createDeferred();
   const release = createDeferred();
   const queueIdReady = createDeferred<string>();
-  const messageId = params.deliveryIntentId
-    ? `${params.deliveryIntentId}-message`
-    : "fresh-live-message";
+  const messageId = "delivered-message";
   const hold = async () => {
     entered.resolve();
     await release.promise;
@@ -75,13 +73,7 @@ async function startBlockedDelivery(params: {
     if (phase === "provider") {
       await hold();
     }
-    return {
-      messageId,
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [{ channel: "matrix", messageId }],
-        kind: "text",
-      }),
-    };
+    return matrixDeliveryResult(messageId);
   });
   installQueueTestPlugin({
     outbound: {
@@ -100,22 +92,15 @@ async function startBlockedDelivery(params: {
     },
   });
   if (params.deliveryIntentId) {
+    const payload: ReplyPayload = { text: "queued" };
+    if (phase === "presentation") {
+      payload.presentation = { blocks: [{ type: "text", text: "rendered" }] };
+    }
     await enqueueDeliveryOnce(
       {
         channel: "matrix",
         to: "!room:example",
-        payloads: [
-          {
-            text: "queue-owned stable content",
-            ...(phase === "presentation"
-              ? {
-                  presentation: {
-                    blocks: [{ type: "text" as const, text: "rendered stable content" }],
-                  },
-                }
-              : {}),
-          },
-        ],
+        payloads: [payload],
         queuePolicy: "required",
         completionRetention: boundedCronCompletionRetention,
         ...(params.requiresProducerClaim !== false ? { requiresProducerClaim: true } : {}),
@@ -128,13 +113,7 @@ async function startBlockedDelivery(params: {
     cfg: {},
     channel: "matrix",
     to: "!room:example",
-    payloads: [
-      {
-        text: params.deliveryIntentId
-          ? "regenerated content must not replace queue custody"
-          : "fresh live content",
-      },
-    ],
+    payloads: [{ text: params.deliveryIntentId ? "regenerated" : "fresh" }],
     ...(params.deliveryIntentId
       ? {
           queuePolicy: "required" as const,
@@ -254,109 +233,77 @@ describe("delivery producer lease integration", () => {
     expect(queuedStatus(deliveryIntentId)).toBe("completed");
   });
 
-  it("stops before provider I/O when the exact owner is replaced", async () => {
-    const heartbeat = useLeaseHeartbeatTimers();
-    const deliveryIntentId = "cron-direct-delivery:v1:lose-owner-before-provider";
-    const blocked = await start({
-      deliveryIntentId,
-      requiresProducerClaim: true,
-    });
-    expect(read(deliveryIntentId).producerClaimId).toEqual(expect.any(String));
-    setQueuedEntryState(tmpDir, deliveryIntentId, {
-      retryCount: 0,
-      producerClaimId: "replacement-owner",
-    });
-    expect(await heartbeat()).toBeUndefined();
-
-    const rejected = expect(blocked.delivery).rejects.toMatchObject({
-      message: `Delivery platform claim was lost: ${deliveryIntentId}`,
-      queueCustody: "held",
-    });
-    blocked.release();
-    await rejected;
-
-    expect(blocked.sendText).not.toHaveBeenCalled();
-    expect(read(deliveryIntentId)).toMatchObject({
-      recoveryState: "producer_claimed",
-      producerClaimId: "replacement-owner",
-      retryCount: 0,
-    });
-  });
-
-  it("preserves lease loss through presentation preparation before provider I/O", async () => {
-    const heartbeat = useLeaseHeartbeatTimers();
-    const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-during-presentation";
-    const blocked = await start({ deliveryIntentId, phase: "presentation" });
-    const producerClaimId = read(deliveryIntentId).producerClaimId;
-    expect(producerClaimId).toEqual(expect.any(String));
-    setQueuedEntryState(tmpDir, deliveryIntentId, {
-      retryCount: 0,
-      availableAt: Date.now() - 1,
-    });
-    expect(await heartbeat()).toBeUndefined();
-
-    const rejected = expect(blocked.delivery).rejects.toThrow(
-      `Delivery platform claim was lost: ${deliveryIntentId}`,
-    );
-    blocked.release();
-    await rejected;
-
-    expect(blocked.renderPresentation).toHaveBeenCalledOnce();
-    expect(blocked.sendText).not.toHaveBeenCalled();
-    expect(queuedStatus(deliveryIntentId)).toBe("pending");
-    expect(read(deliveryIntentId)).toMatchObject({
-      recoveryState: "producer_claimed",
-      producerClaimId,
-      retryCount: 0,
-    });
-    expect(read(deliveryIntentId)).not.toHaveProperty("lastError");
-    const replacementClaimId = await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir);
-    expect(replacementClaimId).toEqual(expect.any(String));
-    expect(replacementClaimId).not.toBe(producerClaimId);
-  });
-
-  it("does not settle a queue row when the lease expires after provider dispatch", async () => {
-    const heartbeat = useLeaseHeartbeatTimers();
-    const deliveryIntentId = "cron-direct-delivery:v1:expire-owner-after-dispatch";
-    const auditEvents: Array<{ outcome: string }> = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    try {
-      const blocked = await start({ deliveryIntentId, phase: "provider" });
-      const dispatched = read(deliveryIntentId);
-      const platformSendAttemptId = dispatched.platformSendAttemptId;
-      expect(dispatched).toMatchObject({
-        recoveryState: "send_attempt_started",
-        platformSendAttemptId: expect.any(String),
-        retryCount: 0,
-      });
-      setQueuedEntryState(tmpDir, deliveryIntentId, {
-        retryCount: 0,
-        recoveryState: "send_attempt_started",
-        platformSendStartedAt: dispatched.platformSendStartedAt as number,
-        availableAt: Date.now() - 1,
-      });
-      expect(await heartbeat()).toBeUndefined();
-
-      const rejected = expect(blocked.delivery).rejects.toThrow(
-        `Delivery platform claim was lost: ${deliveryIntentId}`,
-      );
-      blocked.release();
-      await rejected;
-
-      expect(blocked.sendText).toHaveBeenCalledOnce();
-      expect(blocked.onDeliveryResult).not.toHaveBeenCalled();
-      expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
-      expect(queuedStatus(deliveryIntentId)).toBe("pending");
-      expect(read(deliveryIntentId)).toMatchObject({
-        recoveryState: "send_attempt_started",
-        platformSendAttemptId,
-        retryCount: 0,
-      });
-      expect(read(deliveryIntentId)).not.toHaveProperty("lastError");
-    } finally {
-      unsubscribe();
-    }
-  });
+  it.each(["preparation", "presentation", "provider"] as const)(
+    "preserves lost ownership during %s",
+    async (phase) => {
+      const heartbeat = useLeaseHeartbeatTimers();
+      const deliveryIntentId = `cron-direct-delivery:v1:lose-owner-${phase}`;
+      const auditEvents: Array<{ outcome: string }> = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+      try {
+        const blocked = await start({ deliveryIntentId, phase });
+        const initial = read(deliveryIntentId);
+        const afterDispatch = phase === "provider";
+        if (afterDispatch) {
+          expect(initial).toMatchObject({
+            recoveryState: "send_attempt_started",
+            platformSendAttemptId: expect.any(String),
+            retryCount: 0,
+          });
+        } else {
+          expect(initial.producerClaimId).toEqual(expect.any(String));
+        }
+        setQueuedEntryState(tmpDir, deliveryIntentId, {
+          retryCount: 0,
+          ...(phase === "preparation"
+            ? { producerClaimId: "replacement-owner" }
+            : {
+                availableAt: Date.now() - 1,
+                ...(afterDispatch
+                  ? {
+                      recoveryState: "send_attempt_started",
+                      platformSendStartedAt: initial.platformSendStartedAt as number,
+                    }
+                  : {}),
+              }),
+        });
+        expect(await heartbeat()).toBeUndefined();
+        const message = `Delivery platform claim was lost: ${deliveryIntentId}`;
+        const rejected =
+          phase === "preparation"
+            ? expect(blocked.delivery).rejects.toMatchObject({ message, queueCustody: "held" })
+            : expect(blocked.delivery).rejects.toThrow(message);
+        blocked.release();
+        await rejected;
+        expect(blocked.sendText).toHaveBeenCalledTimes(afterDispatch ? 1 : 0);
+        expect(read(deliveryIntentId)).toMatchObject({
+          retryCount: 0,
+          recoveryState: afterDispatch ? "send_attempt_started" : "producer_claimed",
+          ...(afterDispatch
+            ? { platformSendAttemptId: initial.platformSendAttemptId }
+            : {
+                producerClaimId:
+                  phase === "preparation" ? "replacement-owner" : initial.producerClaimId,
+              }),
+        });
+        if (phase !== "preparation") {
+          expect(queuedStatus(deliveryIntentId)).toBe("pending");
+          expect(read(deliveryIntentId)).not.toHaveProperty("lastError");
+        }
+        if (afterDispatch) {
+          expect(blocked.onDeliveryResult).not.toHaveBeenCalled();
+          expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
+        } else if (phase === "presentation") {
+          expect(blocked.renderPresentation).toHaveBeenCalledOnce();
+          const replacement = await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir);
+          expect(replacement).toEqual(expect.any(String));
+          expect(replacement).not.toBe(initial.producerClaimId);
+        }
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("settles one exact Matrix send without restart replay", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
@@ -366,13 +313,7 @@ describe("delivery producer lease integration", () => {
     const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
       expect(ctx.deliveryQueueId).toBe(deliveryIntentId);
       await ctx.onPlatformSendDispatch?.();
-      return {
-        messageId,
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: "matrix", messageId }],
-          kind: "text",
-        }),
-      };
+      return matrixDeliveryResult(messageId);
     });
     installQueueTestPlugin({
       message: {

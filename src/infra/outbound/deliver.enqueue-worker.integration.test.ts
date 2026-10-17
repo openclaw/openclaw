@@ -7,7 +7,6 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
-import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
   ChannelMessageSendMediaContext,
   ChannelMessageSendTextContext,
@@ -20,7 +19,7 @@ import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
 import * as queueAdmission from "./deliver-queue-admission.js";
-import { installQueueTestPlugin } from "./deliver.custody.test-support.js";
+import { installQueueTestPlugin, matrixDeliveryResult } from "./deliver.custody.test-support.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
 import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./delivery-queue-namespaces.js";
@@ -40,23 +39,48 @@ import {
   createUnmodifiedPreparedOutboundBatch,
 } from "./prepared-batch.js";
 
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
-let deliverStructuredOutboundPayloadsInternal: typeof import("./deliver.js").deliverStructuredOutboundPayloadsInternal;
+let deliver: typeof import("./deliver.js").deliverOutboundPayloads;
+let deliverStructured: typeof import("./deliver.js").deliverStructuredOutboundPayloadsInternal;
 
 describe("enqueue publication custody through the real sender", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   let stateDir: string;
+  const textBody = "synthetic retained text",
+    mediaBody = "synthetic retained media";
+  const messageId = "synthetic-delivered";
+  const pending: Promise<unknown>[] = [];
+  const release: Array<() => void> = [];
+  const unsubscribe: Array<() => void> = [];
+  function heldReply() {
+    const reply = holdEnqueueReply();
+    release.push(() => {
+      reply.release();
+      reply.restore();
+    });
+    return reply;
+  }
+  function observe<T>(delivery: Promise<T>) {
+    const outcome = delivery.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    pending.push(outcome);
+    return outcome;
+  }
   beforeEach(() => {
     stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   });
-  let unsubscribeEnqueued = () => {};
   beforeAll(async () => {
-    ({ deliverOutboundPayloads, deliverStructuredOutboundPayloadsInternal } =
-      await import("./deliver.js"));
+    ({
+      deliverOutboundPayloads: deliver,
+      deliverStructuredOutboundPayloadsInternal: deliverStructured,
+    } = await import("./deliver.js"));
   });
-  afterEach(() => {
-    unsubscribeEnqueued();
+  afterEach(async () => {
+    release.splice(0).forEach((dispose) => dispose());
+    await Promise.allSettled(pending.splice(0));
+    unsubscribe.splice(0).forEach((dispose) => dispose());
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     resetPluginRuntimeStateForTest();
@@ -65,7 +89,7 @@ describe("enqueue publication custody through the real sender", () => {
 
   async function source() {
     const mediaUrl = path.join(stateDir, "synthetic.txt");
-    await fs.writeFile(mediaUrl, "synthetic retained media");
+    await fs.writeFile(mediaUrl, mediaBody);
     return mediaUrl;
   }
 
@@ -76,7 +100,7 @@ describe("enqueue publication custody through the real sender", () => {
       to: "!synthetic:example",
       mediaAccess: { localRoots: [stateDir] },
       queuePolicy: "best_effort",
-    } satisfies Omit<Parameters<typeof deliverOutboundPayloads>[0], "payloads">;
+    } satisfies Omit<Parameters<typeof deliver>[0], "payloads">;
   }
 
   async function expectReleasedMedia() {
@@ -91,17 +115,11 @@ describe("enqueue publication custody through the real sender", () => {
         await context.onPlatformSendDispatch?.();
         const isMedia = "mediaUrl" in context;
         if (isMedia) {
-          expect(await fs.readFile(context.mediaUrl, "utf8")).toBe("synthetic retained media");
+          expect(await fs.readFile(context.mediaUrl, "utf8")).toBe(mediaBody);
         } else {
-          expect(context.text).toBe("synthetic retained text");
+          expect(context.text).toBe(textBody);
         }
-        return {
-          messageId: "synthetic-delivered",
-          receipt: createMessageReceiptFromOutboundResults({
-            results: [{ channel: "matrix", messageId: "synthetic-delivered" }],
-            kind: isMedia ? "media" : "text",
-          }),
-        };
+        return matrixDeliveryResult(messageId, isMedia ? "media" : "text");
       },
     );
     installQueueTestPlugin({
@@ -119,72 +137,62 @@ describe("enqueue publication custody through the real sender", () => {
       signal,
     }) => {
       const send = installSender();
-      const reply = holdEnqueueReply();
+      const reply = heldReply();
       const reloadEntered = createDeferred();
       const releaseReload = createDeferred();
+      release.push(releaseReload.resolve);
       const recoverySend = vi.fn(async () => []);
-      const delivery = deliverOutboundPayloads({
+      const delivery = deliver({
         ...deliveryParams(),
-        payloads: [{ text: "synthetic retained text" }],
+        payloads: [{ text: textBody }],
       });
-      const outcome = delivery.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
+      observe(delivery);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          reply.held,
+          delivery,
+          "Delivery settled before committed enqueue reply",
+        ),
+        signal,
       );
-      let recovery: Promise<unknown> | undefined;
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            reply.held,
-            delivery,
-            "Delivery settled before committed enqueue reply",
-          ),
-          signal,
-        );
-        const [entry] = await withinTest(queueStorage.loadUnfinishedDeliveries(stateDir), signal);
-        expect(entry).toMatchObject({
-          requiresProducerClaim: true,
-          recoveryState: "producer_claimed",
-          producerClaimId: expect.any(String),
-        });
-        expect(entry!.availableAt).toBeGreaterThan(Date.now());
+      const [entry] = await withinTest(queueStorage.loadUnfinishedDeliveries(stateDir), signal);
+      expect(entry).toMatchObject({
+        requiresProducerClaim: true,
+        recoveryState: "producer_claimed",
+        producerClaimId: expect.any(String),
+      });
+      expect(entry!.availableAt).toBeGreaterThan(Date.now());
 
-        // Keep the real authoritative read suspended after it observes the
-        // committed row, while the producer's writer reply is still held.
-        const load = queueStorage.loadUnfinishedDelivery;
-        vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockImplementation(async (...args) => {
-          const current = await load(...args);
-          if (args[0] === entry!.id) {
-            reloadEntered.resolve();
-            await releaseReload.promise;
-          }
-          return current;
-        });
-        const options = { cfg: {}, stateDir, log: createRecoveryLog(), deliver: recoverySend };
-        recovery =
-          mode === "startup"
-            ? recoverPendingDeliveries(options)
-            : drainPendingDeliveriesCore({
-                ...options,
-                drainKey: stateDir,
-                logLabel: "live producer recovery",
-                selectEntry: () => ({ match: true }),
-              });
-        // Recovery may finish without inspecting a row owned by a live producer.
-        await withinTest(Promise.race([reloadEntered.promise, recovery]), signal);
-        reply.release();
-        await withinTest(
-          expect(delivery).resolves.toMatchObject([{ messageId: "synthetic-delivered" }]),
-          signal,
-        );
-        expect(send).toHaveBeenCalledOnce();
-        expect(recoverySend).not.toHaveBeenCalled();
-      } finally {
-        reply.release();
-        reply.restore();
-        releaseReload.resolve();
-        await Promise.allSettled([outcome, ...(recovery ? [recovery] : [])]);
-      }
+      // Keep the real authoritative read suspended after it observes the
+      // committed row, while the producer's writer reply is still held.
+      const load = queueStorage.loadUnfinishedDelivery;
+      vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockImplementation(async (...args) => {
+        const current = await load(...args);
+        if (args[0] === entry!.id) {
+          reloadEntered.resolve();
+          await releaseReload.promise;
+        }
+        return current;
+      });
+      const options = { cfg: {}, stateDir, log: createRecoveryLog(), deliver: recoverySend };
+      const recovery =
+        mode === "startup"
+          ? recoverPendingDeliveries(options)
+          : drainPendingDeliveriesCore({
+              ...options,
+              drainKey: stateDir,
+              logLabel: "live producer recovery",
+              selectEntry: () => ({ match: true }),
+            });
+      pending.push(recovery);
+      // Recovery may finish without inspecting a row owned by a live producer.
+      await withinTest(Promise.race([reloadEntered.promise, recovery]), signal);
+      reply.release();
+      await withinTest(expect(delivery).resolves.toMatchObject([{ messageId }]), signal);
+      expect(send).toHaveBeenCalledOnce();
+      expect(recoverySend).not.toHaveBeenCalled();
+      releaseReload.resolve();
+      await Promise.allSettled([recovery]);
       expect(await queueStorage.loadUnfinishedDeliveries(stateDir)).toEqual([]);
     });
   }
@@ -193,70 +201,58 @@ describe("enqueue publication custody through the real sender", () => {
     const mediaUrl = await source();
     const send = installSender();
     const enqueued = vi.fn();
-    unsubscribeEnqueued = onOutboundDeliveryEnqueued(enqueued);
+    unsubscribe.push(onOutboundDeliveryEnqueued(enqueued));
     const terminals: string[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => {
-      if (event.action === "message.outbound.finished") {
-        terminals.push(event.outcome);
-      }
+    unsubscribe.push(
+      onTrustedMessageAuditEvent((event) => {
+        if (event.action === "message.outbound.finished") {
+          terminals.push(event.outcome);
+        }
+      }),
+    );
+    const reply = heldReply();
+    const delivery = deliverStructured({
+      ...deliveryParams(),
+      plan: createStructuredOutboundPayloadPlan([{ mediaUrl }]),
     });
-    try {
-      const reply = holdEnqueueReply();
-      const delivery = deliverStructuredOutboundPayloadsInternal({
-        ...deliveryParams(),
-        plan: createStructuredOutboundPayloadPlan([{ mediaUrl }]),
-      });
-      const outcome = delivery.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        expect(
-          await Promise.race([
-            reply.held,
-            outcome.then((settled) => {
-              throw new Error("Delivery settled before committed reply", { cause: settled });
-            }),
-          ]),
-        ).toBe("created");
-        await reply.lose();
-        expect(enqueued).toHaveBeenCalledExactlyOnceWith(stateDir);
-        const settled = await outcome;
-        expect("error" in settled && isDeliveryRecoveryOwnedRetry(settled.error)).toBe(true);
-        expect(send).not.toHaveBeenCalled();
-        expect(terminals).toEqual([]);
-        expect(reply.attempts()).toBe(1);
-      } finally {
-        reply.release();
-        await outcome;
-        reply.restore();
-      }
-      const [entry] = await loadPendingDeliveries(stateDir);
-      expect(entry).toBeDefined();
-      const artifact = acceptedPreparedOutboundEntries(entry!.preparedBatch)[0]!.payload.mediaUrl!;
-      expect(artifact).not.toBe(mediaUrl);
-      expect(await fs.readFile(artifact, "utf8")).toBe("synthetic retained media");
-      expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual(
-        [],
-      );
-      await fs.unlink(mediaUrl);
-      // Simulate lease expiry after the interrupted producer, without waiting for wall time.
-      setQueuedEntryState(stateDir, entry!.id, { retryCount: 0, availableAt: 1 });
-      await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-      await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-      expect(send).toHaveBeenCalledOnce();
-      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-      await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(terminals).toEqual(["sent"]);
-    } finally {
-      unsubscribe();
-    }
+    const outcome = observe(delivery);
+    expect(
+      await Promise.race([
+        reply.held,
+        outcome.then((settled) => {
+          throw new Error("Delivery settled before committed reply", { cause: settled });
+        }),
+      ]),
+    ).toBe("created");
+    await reply.lose();
+    expect(enqueued).toHaveBeenCalledExactlyOnceWith(stateDir);
+    const settled = await outcome;
+    expect("error" in settled && isDeliveryRecoveryOwnedRetry(settled.error)).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+    expect(terminals).toEqual([]);
+    expect(reply.attempts()).toBe(1);
+    reply.restore();
+    const [entry] = await loadPendingDeliveries(stateDir);
+    expect(entry).toBeDefined();
+    const artifact = acceptedPreparedOutboundEntries(entry!.preparedBatch)[0]!.payload.mediaUrl!;
+    expect(artifact).not.toBe(mediaUrl);
+    expect(await fs.readFile(artifact, "utf8")).toBe(mediaBody);
+    expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual([]);
+    await fs.unlink(mediaUrl);
+    // Simulate lease expiry after the interrupted producer, without waiting for wall time.
+    setQueuedEntryState(stateDir, entry!.id, { retryCount: 0, availableAt: 1 });
+    await drainMatrixReconnect({ stateDir, deliver });
+    await drainMatrixReconnect({ stateDir, deliver });
+    expect(send).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+    await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(terminals).toEqual(["sent"]);
   });
 
   it("releases media staging after native rollback and permits best-effort live sending", async () => {
     const mediaUrl = await source();
     const enqueued = vi.fn();
-    unsubscribeEnqueued = onOutboundDeliveryEnqueued(enqueued);
+    unsubscribe.push(onOutboundDeliveryEnqueued(enqueued));
     await fs.mkdir(path.join(stateDir, "delivery-queue-media"), { recursive: true });
     const databasePath = openOpenClawStateDatabase().path;
     const armPath = path.join(stateDir, "arm-rollback");
@@ -301,7 +297,7 @@ if (!isMainThread) {
     enqueued.mockClear();
     const send = installSender();
     const queued = vi.fn();
-    const reply = holdEnqueueReply();
+    const reply = heldReply();
     const admit = queueAdmission.stageAndEnqueueOutboundDelivery;
     let admissionFailure: unknown;
     vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockImplementation(
@@ -314,34 +310,31 @@ if (!isMainThread) {
         }
       },
     );
-    try {
-      await deliverOutboundPayloads({
-        ...deliveryParams(),
-        payloads: [{ mediaUrl }],
-        onDeliveryIntent: queued,
-      });
-      expect(admissionFailure).toMatchObject({
-        name: "OutboundDeliveryError",
-        stage: "queue",
-        queueCustody: "released",
-        sentBeforeError: false,
-        results: [],
-        payloadOutcomes: [],
-        cause: {
-          name: "PlatformMessageNotDispatchedError",
-          code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
-          retryable: true,
-          cause: { message: "synthetic enqueue transaction rejected" },
-        },
-      });
-      expect(reply.attempts()).toBe(1);
-      expect(send).toHaveBeenCalledOnce();
-      expect(queued).not.toHaveBeenCalled();
-      expect(enqueued).not.toHaveBeenCalled();
-      await expectReleasedMedia();
-    } finally {
-      reply.restore();
-    }
+    await deliver({
+      ...deliveryParams(),
+      payloads: [{ mediaUrl }],
+      onDeliveryIntent: queued,
+    });
+    expect(admissionFailure).toMatchObject({
+      name: "OutboundDeliveryError",
+      stage: "queue",
+      queueCustody: "released",
+      sentBeforeError: false,
+      results: [],
+      payloadOutcomes: [],
+      cause: {
+        name: "PlatformMessageNotDispatchedError",
+        code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+        retryable: true,
+        cause: { message: "synthetic enqueue transaction rejected" },
+      },
+    });
+    expect(reply.attempts()).toBe(1);
+    expect(send).toHaveBeenCalledOnce();
+    expect(queued).not.toHaveBeenCalled();
+    expect(enqueued).not.toHaveBeenCalled();
+    await expectReleasedMedia();
+    reply.restore();
   });
 
   it("does not resume a lost preparation when independent cleanup errors wrap it", async () => {
@@ -354,7 +347,7 @@ if (!isMainThread) {
     });
     vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockRejectedValueOnce(failure);
     await expect(
-      deliverOutboundPayloads({
+      deliver({
         ...deliveryParams(),
         payloads: [{ mediaUrl }],
       }),

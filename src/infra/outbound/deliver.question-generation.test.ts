@@ -1,9 +1,8 @@
-// Generic outbound delivery binds question finalization before asynchronous send work.
 import {
   createQuestionReactionTargetStore,
   questionGatewayRuntime,
 } from "openclaw/plugin-sdk/question-gateway-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { Question } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
@@ -29,8 +28,9 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
-
-let runOutboundDeliveryInternal: typeof import("./deliver-queue.js").runOutboundDeliveryInternal;
+let deliver: typeof import("./deliver-queue.js").runOutboundDeliveryInternal;
+let manager: QuestionManager;
+let adapter: ReturnType<typeof installQuestionAdapter>;
 
 const questionId = "ask_0123456789abcdef0123456789abcdef";
 const questions: Question[] = [
@@ -43,7 +43,7 @@ const questions: Question[] = [
 ];
 const payload = { text: "Deploy where?", channelData: { askUser: { questionId } } };
 
-function request(manager: QuestionManager, timeoutMs: number): void {
+function request(timeoutMs: number): void {
   handleQuestionChannelRequested(
     manager.request({
       id: questionId,
@@ -55,15 +55,15 @@ function request(manager: QuestionManager, timeoutMs: number): void {
   );
 }
 
-async function expireAndReuse(manager: QuestionManager, reuseAfterMs = 15_000): Promise<void> {
+async function expireAndReuse(reuseAfterMs = 15_000): Promise<void> {
   await vi.advanceTimersByTimeAsync(50);
   expect(manager.get(questionId)?.status).toBe("expired");
   await vi.advanceTimersByTimeAsync(reuseAfterMs);
   expect(manager.get(questionId)).toBeNull();
-  request(manager, 10_000);
+  request(10_000);
 }
 
-function installQuestionAdapter(manager: QuestionManager) {
+function installQuestionAdapter() {
   const finalized = vi.fn<(messageId: string, statusLine: string) => void>();
   const resolveReaction = vi.fn<typeof questionGatewayRuntime.resolveReaction>(async (params) => {
     if (params.optionValue === undefined) {
@@ -121,8 +121,6 @@ const destination = {
 const unavailable = "Unavailable: request a new question.";
 
 async function assertStaleReaction(
-  manager: QuestionManager,
-  adapter: ReturnType<typeof installQuestionAdapter>,
   messageId: string,
   statusLine: string,
   finalizedBeforeReaction = false,
@@ -138,12 +136,7 @@ async function assertStaleReaction(
   expect(adapter.finalized).toHaveBeenCalledExactlyOnceWith(messageId, statusLine);
 }
 
-async function assertFreshReaction(
-  manager: QuestionManager,
-  adapter: ReturnType<typeof installQuestionAdapter>,
-  previousMessageId: string,
-  statusLine: string,
-) {
+async function assertFreshReaction(previousMessageId: string, statusLine: string) {
   expect(adapter.afterDeliverPayload).toHaveBeenCalledTimes(2);
   await expect(adapter.react("message-b", 1)).resolves.toBe(true);
   expect(adapter.resolveReaction).toHaveBeenCalledExactlyOnceWith(
@@ -159,151 +152,135 @@ async function assertFreshReaction(
   ]);
 }
 
-describe("generic outbound question generation", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  let manager: QuestionManager;
-  let adapter: ReturnType<typeof installQuestionAdapter>;
+const fixtures = installDeliveryQueueTmpDirHooks();
 
-  beforeAll(async () => {
-    ({ runOutboundDeliveryInternal } = await import("./deliver-queue.js"));
-  });
-
-  beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    scheduler = createTestGatewayScheduler("fake-timers");
-    manager = new QuestionManager(scheduler);
-    adapter = installQuestionAdapter(manager);
-  });
-
-  afterEach(async () => {
-    manager.close();
-    await drainGlobalSingletonLifecycleState("restart");
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    vi.unstubAllEnvs();
-    vi.useRealTimers();
-  });
-
-  it.each([
-    {
-      delivery: "queued",
-      retention: "manager grace",
-      reuseAfterMs: 15_000,
-      skipQueue: false,
-      statusLine: "Expired",
-    },
-    {
-      delivery: "direct",
-      retention: "channel retention",
-      reuseAfterMs: 24 * 60 * 60 * 1_000,
-      skipQueue: true,
-      statusLine: unavailable,
-    },
-  ])(
-    "keeps old reactions inert for a held $delivery send after $retention",
-    async ({ reuseAfterMs, skipQueue, statusLine }) => {
-      const sendEntered = createDeferredCore();
-      const releaseSend = createDeferredCore();
-      const sendMatrix = vi
-        .fn(async () => ({ messageId: "message-b" }))
-        .mockImplementationOnce(async () => {
-          sendEntered.resolve();
-          await releaseSend.promise;
-          return { messageId: "message-a" };
-        });
-      const send = () =>
-        runOutboundDeliveryInternal({
-          ...destination,
-          payloads: [payload],
-          deps: { matrix: sendMatrix },
-          skipQueue,
-        });
-      let firstSend: ReturnType<typeof send> | undefined;
-      try {
-        request(manager, 50);
-        firstSend = send();
-        await sendEntered.promise;
-        expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(skipQueue ? 0 : 1);
-        await expireAndReuse(manager, reuseAfterMs);
-        releaseSend.resolve();
-        await expect(firstSend).resolves.toMatchObject([{ messageId: "message-a" }]);
-
-        await assertStaleReaction(manager, adapter, "message-a", statusLine);
-        await expect(send()).resolves.toMatchObject([{ messageId: "message-b" }]);
-        expect(adapter.finalized).toHaveBeenCalledOnce();
-        await assertFreshReaction(manager, adapter, "message-a", statusLine);
-        expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-      } finally {
-        releaseSend.resolve();
-        await Promise.allSettled([firstSend]);
-      }
-    },
-  );
-
-  it.each(["recovered id-only payload", "restored stable-intent custody"])(
-    "does not bind %s to a newer question generation, while a fresh send still binds",
-    async (custody) => {
-      const stableIntent = custody === "restored stable-intent custody";
-      const deliveryId = "question-generation-recovery";
-      const oldPayload = stableIntent
-        ? { ...payload, text: "Original deployment question" }
-        : payload;
-      const newPayload = stableIntent
-        ? { ...payload, text: "Replacement deployment question" }
-        : payload;
-      const oldMessageId = stableIntent ? "retried-message-a" : "recovered-message-a";
-      const sendMatrix = vi
-        .fn(async () => ({ messageId: "message-b" }))
-        .mockResolvedValueOnce({ messageId: oldMessageId });
-      const send = (deliveryIntentId?: string) =>
-        runOutboundDeliveryInternal({
-          ...destination,
-          payloads: [newPayload],
-          deps: { matrix: sendMatrix },
-          ...(stableIntent ? { deliveryIntentId, reusePendingDeliveryIntent: true } : {}),
-        });
-      request(manager, 50);
-      await expect(
-        enqueueDeliveryOnce(
-          { ...destination, payloads: [oldPayload] },
-          deliveryId,
-          fixtures.tmpDir(),
-        ),
-      ).resolves.toEqual({ id: deliveryId, created: true });
-      await expireAndReuse(manager);
-      if (stableIntent) {
-        await expect(send(deliveryId)).resolves.toMatchObject([{ messageId: oldMessageId }]);
-        expect(sendMatrix).toHaveBeenCalledExactlyOnceWith(
-          "!room:example",
-          oldPayload.text,
-          expect.any(Object),
-        );
-      } else {
-        const deliver = vi.fn<DeliverFn>(async (params) =>
-          runOutboundDeliveryInternal({ ...params, deps: { matrix: sendMatrix } }),
-        );
-        await drainMatrixReconnect({ deliver, stateDir: fixtures.tmpDir() });
-        expect(deliver).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
-        );
-        expect(sendMatrix).toHaveBeenCalledOnce();
-      }
-      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-      await assertStaleReaction(manager, adapter, oldMessageId, unavailable, true);
-      await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
-        { messageId: "message-b" },
-      ]);
-      if (stableIntent) {
-        expect(sendMatrix).toHaveBeenNthCalledWith(
-          2,
-          "!room:example",
-          newPayload.text,
-          expect.any(Object),
-        );
-      }
-      await assertFreshReaction(manager, adapter, oldMessageId, unavailable);
-      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-    },
-  );
+beforeAll(async () => {
+  ({ runOutboundDeliveryInternal: deliver } = await import("./deliver-queue.js"));
 });
+
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  scheduler = createTestGatewayScheduler("fake-timers");
+  manager = new QuestionManager(scheduler);
+  adapter = installQuestionAdapter();
+});
+
+afterEach(async () => {
+  manager.close();
+  await drainGlobalSingletonLifecycleState("restart");
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
+
+it.each([
+  ["queued", "manager grace", 15_000, false, "Expired"],
+  ["direct", "channel retention", 24 * 60 * 60 * 1_000, true, unavailable],
+] as const)(
+  "keeps old reactions inert for a held %s send after %s",
+  async (_delivery, _retention, reuseAfterMs, skipQueue, statusLine) => {
+    const sendEntered = createDeferredCore();
+    const releaseSend = createDeferredCore();
+    const sendMatrix = vi
+      .fn(async () => ({ messageId: "message-b" }))
+      .mockImplementationOnce(async () => {
+        sendEntered.resolve();
+        await releaseSend.promise;
+        return { messageId: "message-a" };
+      });
+    const send = () =>
+      deliver({
+        ...destination,
+        payloads: [payload],
+        deps: { matrix: sendMatrix },
+        skipQueue,
+      });
+    let firstSend: ReturnType<typeof send> | undefined;
+    try {
+      request(50);
+      firstSend = send();
+      await sendEntered.promise;
+      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(skipQueue ? 0 : 1);
+      await expireAndReuse(reuseAfterMs);
+      releaseSend.resolve();
+      await expect(firstSend).resolves.toMatchObject([{ messageId: "message-a" }]);
+
+      await assertStaleReaction("message-a", statusLine);
+      await expect(send()).resolves.toMatchObject([{ messageId: "message-b" }]);
+      expect(adapter.finalized).toHaveBeenCalledOnce();
+      await assertFreshReaction("message-a", statusLine);
+      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+    } finally {
+      releaseSend.resolve();
+      await Promise.allSettled([firstSend]);
+    }
+  },
+);
+
+it.each(["recovered id-only payload", "restored stable-intent custody"])(
+  "does not bind %s to a newer question generation, while a fresh send still binds",
+  async (custody) => {
+    const stableIntent = custody === "restored stable-intent custody";
+    const deliveryId = "question-generation-recovery";
+    const oldPayload = stableIntent
+      ? { ...payload, text: "Original deployment question" }
+      : payload;
+    const newPayload = stableIntent
+      ? { ...payload, text: "Replacement deployment question" }
+      : payload;
+    const oldMessageId = stableIntent ? "retried-message-a" : "recovered-message-a";
+    const sendMatrix = vi
+      .fn(async () => ({ messageId: "message-b" }))
+      .mockResolvedValueOnce({ messageId: oldMessageId });
+    const send = (deliveryIntentId?: string) =>
+      deliver({
+        ...destination,
+        payloads: [newPayload],
+        deps: { matrix: sendMatrix },
+        ...(stableIntent ? { deliveryIntentId, reusePendingDeliveryIntent: true } : {}),
+      });
+    request(50);
+    await expect(
+      enqueueDeliveryOnce(
+        { ...destination, payloads: [oldPayload] },
+        deliveryId,
+        fixtures.tmpDir(),
+      ),
+    ).resolves.toEqual({ id: deliveryId, created: true });
+    await expireAndReuse();
+    if (stableIntent) {
+      await expect(send(deliveryId)).resolves.toMatchObject([{ messageId: oldMessageId }]);
+      expect(sendMatrix).toHaveBeenCalledExactlyOnceWith(
+        "!room:example",
+        oldPayload.text,
+        expect.any(Object),
+      );
+    } else {
+      const recover = vi.fn<DeliverFn>(async (params) =>
+        deliver({ ...params, deps: { matrix: sendMatrix } }),
+      );
+      await drainMatrixReconnect({ deliver: recover, stateDir: fixtures.tmpDir() });
+      expect(recover).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
+      );
+      expect(sendMatrix).toHaveBeenCalledOnce();
+    }
+    expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+    await assertStaleReaction(oldMessageId, unavailable, true);
+    await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
+      { messageId: "message-b" },
+    ]);
+    if (stableIntent) {
+      expect(sendMatrix).toHaveBeenNthCalledWith(
+        2,
+        "!room:example",
+        newPayload.text,
+        expect.any(Object),
+      );
+    }
+    await assertFreshReaction(oldMessageId, unavailable);
+    expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+  },
+);
